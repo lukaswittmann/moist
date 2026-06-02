@@ -9,7 +9,7 @@ MOIST Documentation
    :target: https://github.com/lukaswittmann/moist/releases/latest
    :alt: Version
 
-.. image:: https://github.com/lukaswittmann/moist/workflows/CI/badge.svg
+.. image:: https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main
    :target: https://github.com/lukaswittmann/moist/actions
    :alt: CI
 
