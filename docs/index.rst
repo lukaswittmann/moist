@@ -5,7 +5,7 @@ MOIST Documentation
    :target: https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER
    :alt: License
 
-.. image:: https://img.shields.io/github/v/release/lukaswittmann/moist
+.. image:: https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases
    :target: https://github.com/lukaswittmann/moist/releases/latest
    :alt: Version
 
