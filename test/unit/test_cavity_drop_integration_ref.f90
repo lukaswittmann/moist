@@ -177,7 +177,6 @@ contains
          return
       end if
 
-      write(*, "(A)") trim(case_to_string(cases(case_idx)))
       cavity_area = cavity%total_area
       cavity_volume = cavity%total_volume
 
