@@ -1,0 +1,54 @@
+name: Coverage
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  coverage:
+    name: coverage (gnu14)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install compiler
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: '14'
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev gcovr
+
+      - name: Set compiler environment
+        run: |
+          echo "FC=gfortran" >> "$GITHUB_ENV"
+          echo "CC=gcc" >> "$GITHUB_ENV"
+
+      - name: Point gcov at the gcc 14 toolchain
+        # gcovr calls the bare `gcov`, which on ubuntu-24.04 is the gcc 13 build
+        # and cannot read gcc 14 .gcno files. Shim it to the matching version.
+        run: |
+          sudo ln -sf "$(command -v gcov-14)" /usr/local/bin/gcov
+          gcov --version | head -n1
+
+      - name: Build with coverage instrumentation
+        run: |
+          meson setup build -Db_coverage=true
+          meson compile -C build
+
+      - name: Run tests
+        run: meson test -C build --suite moist --print-errorlogs
+
+      - name: Generate Cobertura XML coverage report
+        run: ninja -C build coverage-xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: build/meson-logs/coverage.xml
+          flags: fortran
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false

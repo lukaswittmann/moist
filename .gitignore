@@ -36,6 +36,12 @@
 /install*/
 /_*/
 
+# Coverage artifacts
+*.gcda
+*.gcno
+*.gcov
+coverage.xml
+
 # Meson subproject artifacts (transitive wraps + lock are auto-generated)
 subprojects/toml-f.wrap
 .wraplock

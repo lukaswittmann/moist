@@ -1,6 +1,8 @@
 MOIST: Modular and Open-source Implicit Solvation Toolkit
 ==============
 
+[![Coverage](https://codecov.io/gh/lukaswittmann/moist/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
+
 > [!Note]
 >  MOIST is currently in a pre-release state.
 > This version only includes the cavity construction capabilities of the Modular and Open-source Implicit Solvation Toolkit.

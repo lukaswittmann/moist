@@ -1,0 +1,23 @@
+# Codecov configuration for MOIST.
+# Coverage is reported for the core Fortran library (src/) only and is purely
+# informational — it never blocks a merge.
+# Reference: https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# Vendored subprojects, the test suite, the CLI driver and the Python wrapper
+# are not part of the core library coverage.
+ignore:
+  - "subprojects"
+  - "test"
+  - "app"
+  - "python"
+  - "config"
+  - "build"
