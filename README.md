@@ -173,7 +173,7 @@ These checks will eventually be enforced by GitHub Actions, so running them loca
 
 - The FORD project file is `ford.md` in the repo root.
 - Build locally with `pip install ford` (or your package manager) and then `ford ford.md`.
-- Generated HTML lands in `doc/ford/index.html` (ignored by git); open that file in a browser to browse the API.
+- Generated HTML lands in `docs/ford/index.html` (ignored by git); open that file in a browser to browse the API.
 - Adjust the `src_dir` or add extra Markdown pages inside `ford.md` if you extend the code layout.
 
 

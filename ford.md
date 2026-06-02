@@ -7,7 +7,7 @@ github: lukaswittmann/moist
 license: LGPL-3.0-or-later
 authors:
   - Lukas Wittmann
-output_dir: doc/ford
+output_dir: docs/ford
 src_dir:
   - src
   - app
@@ -39,7 +39,7 @@ exclude_dir:
 FORD consumes this file to produce browsable API pages for the Fortran
 components. The defaults above expose the source under `src/`, the CLI entry
 points in `app/`, and the Fortran unit tests in `test/unit/`. The generated HTML
-is written to `doc/ford`.
+is written to `docs/ford`.
 
 ## Quick start
 
@@ -49,7 +49,7 @@ sudo apt-get install graphviz # or equivalent, needed for graphs
 ford ford.md
 ```
 
-Open `doc/ford/index.html` in your browser to view the rendered documentation.
+Open `docs/ford/index.html` in your browser to view the rendered documentation.
 
 ## Customizing
 

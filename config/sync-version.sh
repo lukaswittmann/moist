@@ -65,7 +65,7 @@ TARGETS=(
    python/meson.build
    python/pyproject.toml
    src/moist/version.f90
-   doc/src/version.f90
+   docs/src/version.f90
 )
 
 echo "Syncing version $FULL (base $BASE, wheel $PEP440) to all targets..."
@@ -84,7 +84,7 @@ sub "s/^\(  version: '\)[0-9][^']*'/\1$PEP440'/" "$REPO_ROOT/python/meson.build"
 sub "s/^version = \"[^\"]*\"/version = \"$PEP440\"/" "$REPO_ROOT/python/pyproject.toml"
 
 # 5 & 6. version.f90 (src + doc) -- display string (full) + compact array (base ints)
-for f90 in "$REPO_ROOT/src/moist/version.f90" "$REPO_ROOT/doc/src/version.f90"; do
+for f90 in "$REPO_ROOT/src/moist/version.f90" "$REPO_ROOT/docs/src/version.f90"; do
    if [ -f "$f90" ]; then
       sub "s/moist_version_string = \"[^\"]*\"/moist_version_string = \"$FULL\"/" "$f90"
       sub "s/moist_version_compact(3) = \[[0-9, ]*\]/moist_version_compact(3) = [$MAJOR, $MINOR, $PATCH]/" "$f90"

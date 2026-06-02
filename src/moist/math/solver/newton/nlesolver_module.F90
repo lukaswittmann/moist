@@ -12,7 +12,7 @@
 !  * https://en.wikipedia.org/wiki/Backtracking_line_search
 !  * http://projecteuclid.org/download/pdf_1/euclid.pjm/1102995080
 !  * http://help.agi.com/stk/index.htm#gator/eq-diffcorr.htm
-!  * http://gmat.sourceforge.net/doc/R2015a/html/DifferentialCorrector.html
+!  * http://gmat.sourceforge.net/docs/R2015a/html/DifferentialCorrector.html
 !  * https://openmdao.org/newdocs/versions/latest/features/building_blocks/solvers/bounds_enforce.html
 !
 !### Author

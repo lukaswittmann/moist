@@ -48,16 +48,16 @@ __pycache__
 
 # Project-specific runtime outputs
 
-# Docs (generated output only; doc/ source is tracked)
-doc/_build/
-doc/build/
-doc/ford/
-doc/search/
-ford_doc/
-doc/css/
-doc/js/
-doc/webfonts/
-doc/favicon.png
+# Docs (generated output only; docs/ source is tracked)
+docs/_build/
+docs/build/
+docs/ford/
+docs/search/
+ford_docs/
+docs/css/
+docs/js/
+docs/webfonts/
+docs/favicon.png
 *.html
 
 # environment
