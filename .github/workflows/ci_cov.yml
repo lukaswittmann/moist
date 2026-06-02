@@ -6,7 +6,7 @@ on:
 
 jobs:
   coverage:
-    name: coverage (gnu14)
+    name: coverage
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -28,8 +28,6 @@ jobs:
           echo "CC=gcc" >> "$GITHUB_ENV"
 
       - name: Point gcov at the gcc 14 toolchain
-        # gcovr calls the bare `gcov`, which on ubuntu-24.04 is the gcc 13 build
-        # and cannot read gcc 14 .gcno files. Shim it to the matching version.
         run: |
           sudo ln -sf "$(command -v gcov-14)" /usr/local/bin/gcov
           gcov --version | head -n1
@@ -43,7 +41,12 @@ jobs:
         run: meson test -C build --suite moist --print-errorlogs
 
       - name: Generate Cobertura XML coverage report
-        run: ninja -C build coverage-xml
+        run: |
+          mkdir -p build/meson-logs
+          gcovr -r . build \
+            -e subprojects \
+            --gcov-ignore-errors=no_working_dir_found \
+            -x -o build/meson-logs/coverage.xml
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
