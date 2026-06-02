@@ -1,7 +1,11 @@
 MOIST: Modular and Open-source Implicit Solvation Toolkit
 ==============
 
-[![Coverage](https://codecov.io/gh/lukaswittmann/moist/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
+[![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER) 
+[![Version](https://img.shields.io/github/v/release/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/releases/latest)
+[![CI](https://github.com/lukaswittmann/moist/workflows/CI/badge.svg)](https://github.com/lukaswittmann/moist/actions)
+[![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
+[![Coverage](https://codecov.io/gh/lukaswittmann/moist/branch/main/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
 
 > [!Note]
 >  MOIST is currently in a pre-release state.
