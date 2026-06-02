@@ -21,7 +21,6 @@ program tester
    use test_cavity_drop_cpcm, only : collect_cavity_drop_cpcm
    use test_cavity_numsa, only : collect_cavity_numsa
    use test_math_solvers, only : collect_math_solvers
-   use test_math_numdiff, only : collect_math_numdiff
 #ifdef WITH_RISM
    ! use test_rism_1d, only : collect_rism_1d
    ! use test_rism_thermo, only : collect_rism_thermo
@@ -58,7 +57,6 @@ implicit none
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
       & new_testsuite("math_grid", collect_math_grid), &
-      & new_testsuite("math_numdiff", collect_math_numdiff), &
 
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc_kernel", collect_cavity_drop_cfc_kernel), &

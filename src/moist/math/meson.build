@@ -3,7 +3,6 @@ subdir('blas')
 subdir('linalg')
 subdir('solver')
 subdir('sorter')
-subdir('numdiff')
 subdir('grid')
 
 srcs += files(
@@ -15,7 +14,6 @@ srcs += files(
   'boys.f90',
   'solver.f90',
   'sorter.f90',
-  'numdiff.f90',
   'smoothing_kernels.f90',
   'packed_sym.f90',
   'trigonometry.f90',

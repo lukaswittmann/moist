@@ -9,7 +9,6 @@ module test_cavity_numsa
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_radii, only : static_radius_type
    use moist_radii, only : new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
-   use moist_math_numdiff
 
    implicit none
    private
@@ -212,7 +211,8 @@ contains
       grad_analytic = cav%area_grad
 
       allocate(grad_numeric(3, mol%nat))
-      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric)
+      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
+      if (allocated(error)) return
 
       do i = 1, mol%nat
          do j = 1, 3
@@ -256,7 +256,8 @@ contains
       grad_analytic = cav%area_grad
 
       allocate(grad_numeric(3, mol%nat))
-      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric)
+      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
+      if (allocated(error)) return
 
       do i = 1, mol%nat
          do j = 1, 3
@@ -300,7 +301,8 @@ contains
       grad_analytic = cav%area_grad
 
       allocate(grad_numeric(3, mol%nat))
-      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric)
+      call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
+      if (allocated(error)) return
 
       do i = 1, mol%nat
          do j = 1, 3
@@ -312,75 +314,64 @@ contains
    end subroutine test_mb03_grad
 
 
-   !> Compute gradient of total cavity area using numdiff module
-   subroutine compute_total_area_gradient_fd(cav, mol, stepsize, grad)
+   !> Compute gradient of total cavity area via 4-point central finite differences
+   !>
+   !> Uses the 4-point central difference stencil (4th-order accurate):
+   !>
+   !>   f'(x) = (f(x-2h) - 8 f(x-h) + 8 f(x+h) - f(x+2h)) / (12 h)
+   !>
+   !> Each atomic coordinate is perturbed in turn, the cavity is re-evaluated,
+   !> and the corresponding total-area derivative is assembled.
+   subroutine compute_total_area_gradient_fd(cav, mol, stepsize, grad, error)
       type(cavity_type_numsa), intent(inout) :: cav
       type(structure_type), intent(inout) :: mol
       real(wp), intent(in) :: stepsize
       real(wp), intent(out) :: grad(:, :)
+      type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: cavity_error
 
-      type(numdiff_type) :: jac_calc
-      real(wp), allocatable :: xyz_flat(:), jac_vec(:)
-      real(wp), allocatable :: xlow(:), xhigh(:), dpert_vec(:)
-      integer :: n_vars
+      integer :: iat, ic
+      real(wp) :: x0
+      real(wp) :: am2, am1, ap1, ap2
 
-      ! Flatten the 3D coordinates into a 1D vector for numdiff
-      n_vars = 3 * mol%nat
-      allocate(xyz_flat(n_vars))
-      xyz_flat = reshape(mol%xyz, [n_vars])
+      do iat = 1, mol%nat
+         do ic = 1, 3
+            x0 = mol%xyz(ic, iat)
 
-      ! Set bounds (generous bounds to allow finite difference perturbations)
-      allocate(xlow(n_vars), xhigh(n_vars))
-      xlow = xyz_flat - 100.0_wp * stepsize
-      xhigh = xyz_flat + 100.0_wp * stepsize
+            mol%xyz(ic, iat) = x0 - 2.0_wp * stepsize
+            call cav%update(mol, error=cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
+            am2 = cav%total_area
+            mol%xyz(ic, iat) = x0 - stepsize
+            call cav%update(mol, error=cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
+            am1 = cav%total_area
+            mol%xyz(ic, iat) = x0 + stepsize
+            call cav%update(mol, error=cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
+            ap1 = cav%total_area
+            mol%xyz(ic, iat) = x0 + 2.0_wp * stepsize
+            call cav%update(mol, error=cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
+            ap2 = cav%total_area
 
-      ! Set perturbation size for all variables
-      allocate(dpert_vec(n_vars))
-      dpert_vec = stepsize
+            mol%xyz(ic, iat) = x0
 
-      ! Initialize numdiff with 5-point central difference (same as original)
-      call jac_calc%initialize( &
-         n=n_vars, &                           ! number of variables (3*nat)
-         m=1, &                                ! number of functions (just total_area)
-         xlow=xlow, &
-         xhigh=xhigh, &
-         perturb_mode=numdiff_perturb_absolute, &  ! absolute perturbation
-         dpert=dpert_vec, &
-         problem_func=area_function, &
-         sparsity_mode=numdiff_sparsity_dense, &  ! dense gradient (all coordinates matter)
-         jacobian_method=numdiff_method_5point_central)  ! 5-point central difference
-
-      ! Compute the gradient (Jacobian is 1 x n_vars for scalar function)
-      call jac_calc%compute_jacobian(xyz_flat, jac_vec)
-
-      ! Reshape gradient back to (3, nat) form
-      grad = reshape(jac_vec, [3, mol%nat])
-
-      ! Cleanup
-      call jac_calc%destroy()
-
-   contains
-
-      !> Function interface for numdiff: evaluates total cavity area
-      subroutine area_function(me, x, f, funcs_to_compute)
-         class(numdiff_type), intent(inout) :: me
-         real(wp), dimension(:), intent(in) :: x
-         real(wp), dimension(:), intent(out) :: f
-         integer, dimension(:), intent(in) :: funcs_to_compute
-
-         ! Reshape flat coordinate vector back to (3, nat)
-         mol%xyz = reshape(x, [3, mol%nat])
-
-         ! Update cavity with new geometry
-         call cav%update(mol, error=cavity_error)
-         ! Fixed-signature numdiff callback
-         ! As we no access to the testdrive error we abort hard on failure
-         if (allocated(cavity_error)) error stop cavity_error%message
-
-         ! Return the total area as the function value
-         f(1) = cav%total_area
-      end subroutine area_function
+            grad(ic, iat) = (am2 - 8.0_wp*am1 + 8.0_wp*ap1 - ap2) / (12.0_wp*stepsize)
+         end do
+      end do
 
    end subroutine compute_total_area_gradient_fd
 

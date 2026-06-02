@@ -8,7 +8,6 @@ tests = [
   'math_sorters',
   'math_trig',
   'math_grid',
-  'math_numdiff',
   'cavity_iswig',
   'cavity_numsa',
   'component_pcm_cpcm',
