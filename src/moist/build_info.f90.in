@@ -1,0 +1,16 @@
+! This file is generated from build_info.f90.in at build time. The version
+! control placeholder below is replaced with the short git commit hash by
+! meson (vcs_tag) or by fpm_build.sh; DO NOT edit the generated copy.
+
+!> Build-time provenance for the moist library.
+module moist_build_info
+   implicit none
+   private
+
+   public :: git_commit
+
+   !> Short git commit hash of the build, or "unknown" when built
+   !> outside a git checkout (e.g. from a release tarball).
+   character(len=*), parameter :: git_commit = "@VCS_TAG@"
+
+end module moist_build_info

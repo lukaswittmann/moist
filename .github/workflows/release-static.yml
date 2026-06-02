@@ -1,0 +1,110 @@
+name: Release Static-ish Binary
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Optional existing tag to build and publish to'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-22.04
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install dependencies
+        run: |
+          dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-gfortran lapack-devel
+          /opt/python/cp310-cp310/bin/pip install meson ninja
+          echo "/opt/rh/gcc-toolset-11/root/usr/bin" >> "$GITHUB_PATH"
+          echo "/opt/python/cp310-cp310/bin" >> "$GITHUB_PATH"
+
+      - name: Configure with Meson
+        env:
+          FC: gfortran
+          CC: gcc
+          LDFLAGS: -static-libgfortran -static-libgcc
+        run: |
+          meson setup build \
+            --buildtype=release \
+            -Ddefault_library=static \
+            -Dopenmp=true
+
+      - name: Build with Meson
+        run: meson compile -C build
+
+      - name: Prepare distributable bundle
+        id: prepare
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name || 'manual' }}
+        run: |
+          set -euo pipefail
+
+          tag="${TAG_NAME}"
+          arch="$(uname -m)"
+          asset_base="moist-${tag}-linux-${arch}"
+
+          rm -rf dist
+          mkdir -p dist/lib
+
+          cp build/app/moist dist/moist
+
+          # Bundle non-glibc runtime dependencies for easier redistribution.
+          ldd dist/moist \
+            | awk '/=> \/.*/ { print $(NF-1) } /^\// { print $1 }' \
+            | grep -Ev '/(ld-linux|libc\.so\.6|libm\.so|libpthread\.so|librt\.so|libdl\.so|libresolv\.so|libnss_|libutil\.so)' \
+            | sort -u \
+            | while read -r lib; do
+                if [ -f "$lib" ]; then
+                  cp -L "$lib" dist/lib/
+                fi
+              done
+
+          cat > dist/run-moist.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          this_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="${this_dir}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          exec "${this_dir}/moist" "$@"
+          EOF
+          chmod +x dist/run-moist.sh
+
+          tar -C dist -czf "${asset_base}.tar.gz" .
+          sha256sum "${asset_base}.tar.gz" > "${asset_base}.sha256"
+
+          {
+            echo "asset_tar=${asset_base}.tar.gz"
+            echo "asset_sha=${asset_base}.sha256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: moist-release-${{ github.event.inputs.tag || github.ref_name || 'manual' }}
+          path: |
+            ${{ steps.prepare.outputs.asset_tar }}
+            ${{ steps.prepare.outputs.asset_sha }}
+
+      - name: Publish GitHub release assets
+        if: github.event_name == 'push' || github.event.inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          append_body: true
+          files: |
+            ${{ steps.prepare.outputs.asset_tar }}
+            ${{ steps.prepare.outputs.asset_sha }}

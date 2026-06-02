@@ -1,0 +1,50 @@
+name = "moist"
+version = "0.6.0"
+license = "LGPL-3.0-or-later"
+maintainer = ["@lukaswittmann"]
+author = ["Lukas Wittmann"]
+description = "Modular and Open-source Implicit Solvation Toolkit"
+keywords = ["quantum-chemistry", "solvation"]
+copyright = "Copyright 2025 L. Wittmann"
+
+[build]
+link = ["lapack", "blas"]
+auto-tests = false
+
+# Preprocess .F90 so fpm honors the #ifdef WITH_FFTW / WITH_RISM / WITH_HDF5
+# guards when scanning dependencies; without a feature enabled, those blocks are
+# excluded.
+[preprocess]
+[preprocess.cpp]
+
+# NOTE: fpm has no manifest-level feature/option system -- it rejects the
+# `[features]` and `[profiles]` tables outright (`Key features is not allowed`).
+# Optional builds are therefore selected with flags at invocation:
+#   * OpenMP: fpm build --flag -fopenmp --link-flag -fopenmp
+#   * FFTW:   add --flag -DWITH_FFTW and --link-flag -lfftw3
+#   * HDF5:   add --flag -DWITH_HDF5 and --link-flag "-lhdf5_fortran -lhdf5"
+#   * RISM:   implies FFTW + HDF5, so combine all three:
+#             --flag "-DWITH_RISM -DWITH_FFTW -DWITH_HDF5"
+#             --link-flag "-lfftw3 -lhdf5_fortran -lhdf5"
+# (config/meson.build remains the canonical option set; the #ifdef guards in the
+# .F90 sources keep the optional subtrees inert unless their macro is defined.)
+
+[dependencies]
+mctc-lib.git = "https://github.com/grimme-lab/mctc-lib.git"
+mctc-lib.tag = "v0.5.1"
+test-drive.git = "https://github.com/fortran-lang/test-drive.git"
+test-drive.tag = "v0.6.0"
+dftd4.git = "https://github.com/dftd4/dftd4.git"
+dftd4.tag = "v4.0.1"
+multicharge.git = "https://github.com/grimme-lab/multicharge.git"
+multicharge.tag = "v0.5.0"
+fclap.git = "https://github.com/chselz/fclap.git"
+
+[dev-dependencies]
+mstore.git = "https://github.com/lukaswittmann/mstore.git"
+mstore.rev = "large-structures"
+
+[[test]]
+name = "tester"
+source-dir = "test/unit"
+main = "main.F90"

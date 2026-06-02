@@ -1,0 +1,64 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# Build directories
+/build*/
+/install*/
+/_*/
+
+# Meson subproject artifacts (transitive wraps + lock are auto-generated)
+subprojects/toml-f.wrap
+.wraplock
+
+# Python files
+__pycache__
+.idea/
+.DS_Store
+*.pyc
+
+# Project-specific runtime outputs
+
+# Docs (generated output only; doc/ source is tracked)
+doc/_build/
+doc/build/
+doc/ford/
+doc/search/
+ford_doc/
+doc/css/
+doc/js/
+doc/webfonts/
+doc/favicon.png
+*.html
+
+# environment
+.envrc

@@ -1,0 +1,18 @@
+srcs += files(
+  'kinds.F90',
+  'type.f90',
+  'getrf.f90',
+  'getri.f90',
+  'getrs.f90',
+  'gesv.F90',
+  'gesvd.F90',
+  'sptrs.f90',
+  'gels.F90',
+  'potrf.f90',
+  'potrs.f90',
+  'solver.f90',
+  'syev.f90',
+  'sygst.f90',
+  'sygvd.f90',
+  'sygvr.f90',
+)

@@ -1,0 +1,17 @@
+name: Lint
+
+on:
+  # push:
+  pull_request:
+
+jobs:
+  fortitude:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install fortitude
+        run: pip install fortitude-lint
+
+      - name: Run fortitude
+        run: fortitude check --output-format=concise src/ app/ test/

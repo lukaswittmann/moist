@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  version-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run version sync check
+        run: bash config/sync-version.sh --check
+
+  ubuntu:
+    name: ubuntu (${{ matrix.toolchain.build }}, ${{ matrix.toolchain.name }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - {build: meson, name: gnu13,   compiler: gcc,   version: '13',     fc: gfortran, cc: gcc}
+          - {build: meson, name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
+          - {build: meson, name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
+          - {build: fpm,   name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
+          - {build: fpm,   name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install compiler
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: ${{ matrix.toolchain.compiler }}
+          version: ${{ matrix.toolchain.version }}
+
+      - name: Install dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev
+
+      - name: Install Intel MKL
+        if: matrix.toolchain.compiler == 'intel'
+        run: |
+          sudo apt-get install -y \
+            intel-oneapi-mkl-${{ matrix.toolchain.mkl_version }} \
+            intel-oneapi-mkl-devel-${{ matrix.toolchain.mkl_version }}
+
+      - name: Setup Intel oneAPI environment
+        if: matrix.toolchain.compiler == 'intel'
+        run: |
+          source /opt/intel/oneapi/setvars.sh --force
+          printenv >> "$GITHUB_ENV"
+
+      - name: Set compiler environment
+        run: |
+          echo "FC=${{ matrix.toolchain.fc }}" >> "$GITHUB_ENV"
+          echo "CC=${{ matrix.toolchain.cc }}" >> "$GITHUB_ENV"
+
+      - name: Install fpm
+        if: matrix.toolchain.build == 'fpm'
+        uses: fortran-lang/setup-fpm@v10
+        with:
+          fpm-version: 'v0.13.0'
+
+      - name: Build and test (meson)
+        if: matrix.toolchain.build == 'meson'
+        run: |
+          meson setup build
+          meson compile -C build
+          meson test -C build --suite moist --print-errorlogs
+
+      - name: Build and test (fpm)
+        if: matrix.toolchain.build == 'fpm'
+        run: |
+          # test-drive runs a suite's tests on OpenMP worker threads; some hold
+          # large automatic arrays, which overflow the small default worker stack
+          # (fatal under ifx). The meson legs set this via test_env; fpm needs it
+          # in the environment here.
+          export OMP_STACKSIZE=128M
+          # ifx defaults to a fast FP model; pin precise
+          fflags="-fopenmp"
+          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
+          fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
+          fpm test  --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
+
+  macos:
+    name: macos (${{ matrix.toolchain.build }}, ${{ matrix.toolchain.name }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - {build: meson, name: gnu13, compiler: gcc, version: '13'}
+          - {build: meson, name: gnu14, compiler: gcc, version: '14'}
+          - {build: fpm,   name: gnu14, compiler: gcc, version: '14'}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install compiler
+        id: setup-fortran
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: ${{ matrix.toolchain.compiler }}
+          version: ${{ matrix.toolchain.version }}
+
+      - name: Install dependencies (macOS)
+        run: brew install meson ninja
+
+      - name: Install fpm
+        if: matrix.toolchain.build == 'fpm'
+        uses: fortran-lang/setup-fpm@v10
+        with:
+          fpm-version: 'v0.13.0'
+
+      - name: Install netlib LAPACK (macOS fpm)
+        if: matrix.toolchain.build == 'fpm'
+        run: brew install lapack
+
+      - name: Set compiler environment
+        run: |
+          # Resolve `gcc`/`gfortran` on macOS
+          echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
+          echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+
+      - name: Build and test (meson)
+        if: matrix.toolchain.build == 'meson'
+        run: |
+          meson setup build -Dlapack=accelerate
+          meson compile -C build
+          meson test -C build --suite moist --print-errorlogs
+
+      - name: Build and test (fpm)
+        if: matrix.toolchain.build == 'fpm'
+        run: |
+          # Generous OpenMP worker-thread stack: test-drive runs a suite's tests
+          # on worker threads, and some hold large automatic arrays that overflow
+          # the small default stack. (meson legs set this via test_env.)
+          export OMP_STACKSIZE=128M
+          export DYLD_LIBRARY_PATH="$(dirname "$("$FC" -print-file-name=libgfortran.dylib)")"
+          link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
+          fpm build --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
+          fpm test  --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
