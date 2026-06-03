@@ -4,7 +4,7 @@ module moist_data_radii_legacy
    use mctc_env, only: error_type, fatal_error
    use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: symbol_to_number
-   use moist_utils, only: lowercase
+   use mctc_io_utils, only: to_lower
    implicit none
    private
 
@@ -239,14 +239,14 @@ contains
 
    !> Resolve a model name string to its integer tag.
    !> Returns -1 for unknown names.
-   !> @param[in]  name   lowercase model name
+   !> @param[in]  name   to_lower model name
    !> @param[out] tag    integer tag or -1
    subroutine resolve_model_name(name, tag)
       character(len=*), intent(in) :: name
       integer, intent(out) :: tag
       character(len=:), allocatable :: mstr
 
-      mstr = adjustl(lowercase(trim(name)))
+      mstr = adjustl(to_lower(trim(name)))
       select case (mstr)
       case ("cpcm"); tag = rad_type%cpcm
       case ("smd"); tag = rad_type%smd

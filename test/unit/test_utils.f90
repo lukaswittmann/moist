@@ -3,7 +3,7 @@ module test_utils
    use testdrive, only : new_unittest, unittest_type, error_type, check, test_failed
    use moist_data_solvents, only : solvation_system_parameters, &
       & new_solvation_system_parameters, get_solvent_id, max_solvents
-   use moist_utils, only : lowercase, is_exceptional
+   use moist_utils, only : is_exceptional
    use mctc_env_error, only : moist_error_type => error_type
    use, intrinsic :: ieee_arithmetic
    implicit none

@@ -9,7 +9,7 @@ module moist_radii
    use moist_radii_draco, only: draco_radius_type, new_draco_radii
    use moist_radii_custom, only: custom_radius_type
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
-   use moist_utils, only: lowercase
+   use mctc_io_utils, only: to_lower
    implicit none
    private
 
@@ -168,7 +168,7 @@ contains
       character(len=32) :: mstr
       character(len=128) :: msg
 
-      mstr = lowercase(trim(adjustl(model_name)))
+      mstr = to_lower(trim(adjustl(model_name)))
       select case (mstr)
       case ("cpcm")
          model_tag = rad_type%cpcm

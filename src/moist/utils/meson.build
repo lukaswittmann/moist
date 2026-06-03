@@ -5,7 +5,6 @@ srcs += files(
    'number.f90',
    'prettylistprint.f90',
    'prettyprint.f90',
-   'string.f90',
    'timer.f90',
 )
 

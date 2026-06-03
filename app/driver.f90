@@ -4,7 +4,7 @@ module moist_driver
    use, intrinsic :: iso_fortran_env, only: output_unit, input_unit
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type, read_structure, filetype
-   use moist_utils, only: lowercase
+   use mctc_io_utils, only: to_lower
    use moist_cli, only: run_config
    use moist_output_ascii, only: moist_header, moist_build_header, gems_header, cavity_header
    use moist_data_solvents, only: get_solvent_id
@@ -100,7 +100,7 @@ contains
       end if
 
       !* ---------------------------- Solvent inspection ----------------------------- *!
-      if (lowercase(config%mode) == "solvent") then
+      if (to_lower(config%mode) == "solvent") then
          if (len_trim(config%solvent) == 0) then
             call fatal_error(error, "No solvent specified")
             return
@@ -158,9 +158,9 @@ contains
       !* ================================================================================= *!
 
       ! Cavity-only modes: build cavity grid and optionally write output
-      if (lowercase(config%mode) == "numsa" .or. &
-          lowercase(config%mode) == "drop" .or. &
-          lowercase(config%mode) == "iswig") then
+      if (to_lower(config%mode) == "numsa" .or. &
+          to_lower(config%mode) == "drop" .or. &
+          to_lower(config%mode) == "iswig") then
 
          block
             class(cavity_type), allocatable :: cavity
@@ -170,7 +170,7 @@ contains
             call cavity_header(output_unit, trim(config%mode))
 
             ! Instantiate the appropriate cavity type
-            if (lowercase(config%mode) == "numsa") then
+            if (to_lower(config%mode) == "numsa") then
                block
                   type(cavity_type_numsa), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
@@ -181,7 +181,7 @@ contains
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
-            else if (lowercase(config%mode) == "iswig") then
+            else if (to_lower(config%mode) == "iswig") then
                block
                   type(cavity_type_iswig), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
@@ -192,13 +192,13 @@ contains
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
-            else if (lowercase(config%mode) == "drop") then
+            else if (to_lower(config%mode) == "drop") then
                block
                   type(cavity_type_drop), allocatable :: tmp_cavity
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  if (lowercase(config%drop_variant) == "svdw") then
+                  if (to_lower(config%drop_variant) == "svdw") then
                      block
                         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                         !> The cavity couples the LSF screening threshold to
@@ -217,7 +217,7 @@ contains
                                             radius_model=radius_model, &
                                             lsf_model=svdw_template, error=error)
                      end block
-                  else if (lowercase(config%drop_variant) == "cfc") then
+                  else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
@@ -303,14 +303,14 @@ contains
       !* ================================================================================= *!
 
       ! Exit, no models implemented in the current preview version
-      if ((lowercase(config%mode) == "gems") .or. lowercase(config%mode) == "rism1d" .or. &
-          lowercase(config%mode) == "rism3d" .or. lowercase(config%mode) == "alpb") then
+      if ((to_lower(config%mode) == "gems") .or. to_lower(config%mode) == "rism1d" .or. &
+          to_lower(config%mode) == "rism3d" .or. to_lower(config%mode) == "alpb") then
          call fatal_error(error, "No solvation models implemented in the current preview version")
          return
       end if
 
 !       ! gems model
-!       if (lowercase(config%mode) == "gems") then
+!       if (to_lower(config%mode) == "gems") then
 !          call gems_header(output_unit)
 !          block
 !             type(gems_model), allocatable :: tmp
@@ -326,7 +326,7 @@ contains
 !          end block
 
 !          ! rism1d model
-!       else if (lowercase(config%mode) == "rism1d") then
+!       else if (to_lower(config%mode) == "rism1d") then
 ! #ifdef WITH_RISM
 !          block
 !             type(rism1d_model), allocatable :: tmp
@@ -344,7 +344,7 @@ contains
 ! #endif
 
 !          ! rism3d model
-!       else if (lowercase(config%mode) == "rism3d") then
+!       else if (to_lower(config%mode) == "rism3d") then
 ! #ifdef WITH_RISM
 !          block
 !             type(rism3d_model), allocatable :: tmp
@@ -362,11 +362,11 @@ contains
 ! #endif
 
 !          ! alpb model
-!       else if (lowercase(config%mode) == "alpb") then
+!       else if (to_lower(config%mode) == "alpb") then
 !          call fatal_error(error, "ALPB not implemented yet")
 !          return
 
-!          ! else if(lowercase(config%mode) == "smd") then
+!          ! else if(to_lower(config%mode) == "smd") then
 !          !    block
 !          !       type(smd_model), allocatable :: tmp
 !          !       allocate(tmp)

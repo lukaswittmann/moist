@@ -8,7 +8,7 @@ module moist_data_solvents
    use mctc_io_codata2018, only: Hartree_energy, atomic_unit_of_mass
    use mctc_env_error, only: error_type, fatal_error
    use moist_data_mass, only: get_mass
-   use moist_utils, only: lowercase
+   use mctc_io_utils, only: to_lower
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_radii_static, only: static_radius_type, new_bondi_radii
@@ -97,9 +97,9 @@ contains
       include "solvents.inc"
       do i = 1, max_solvents
          do j = 1, 10
-            if (trim(lowercase(alias)) == trim(alias_list(j, i))) then
+            if (trim(to_lower(alias)) == trim(alias_list(j, i))) then
                solvent_id = id_list(i)
-               name = lowercase(name_list(i))
+               name = to_lower(name_list(i))
                return
             end if
          end do
@@ -136,7 +136,7 @@ contains
       do i = 1, max_solvents
          if (solvent_id == id_list(i)) then
             epsilon = eps(i)
-            solvent_name = trim(lowercase(name_list(i)))
+            solvent_name = trim(to_lower(name_list(i)))
             return
          end if
       end do
@@ -214,7 +214,7 @@ contains
       do i = 1, max_solvents
          if (solvent_id == id_list(i)) then
             self%solvent_id = id_list(i)
-            self%solvent_name = trim(lowercase(name_list(i)))
+            self%solvent_name = trim(to_lower(name_list(i)))
             self%solvent_epsilon = eps(i)
             self%solvent_refractive_index = refr(i)
             self%solvent_alpha = A(i)
