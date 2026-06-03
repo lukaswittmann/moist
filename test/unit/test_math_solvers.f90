@@ -11,6 +11,7 @@
 !>  2. Constrained circle: Minimize distance with constraint (Lagrangian/explicit/penalty)
 module test_math_solvers
    use mctc_env, only: wp
+   use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_type, only: solver_base_type
    use moist_math_solver_newton
@@ -1220,7 +1221,6 @@ contains
       real(wp) :: x(n)
       integer :: istat, iterations, gradient_mode
       logical :: status_ok
-      character(len=64) :: msg
 
       do gradient_mode = 1, 3
          x = [0.1_wp, 0.1_wp]
@@ -1230,20 +1230,20 @@ contains
                                 slsqp_rosenbrock_grad, xl, xu, status_ok=status_ok, &
                                 linesearch_mode=1, iprint=0, gradient_mode=gradient_mode, &
                                 gradient_delta=gradient_delta)
-         write (msg, '(a,i0)') "slsqp initialize failed, gradient_mode=", gradient_mode
-         call check(error, status_ok, trim(msg))
+         call check(error, status_ok, &
+                    "slsqp initialize failed, gradient_mode="//to_string(gradient_mode))
          if (allocated(error)) return
 
          call solver%optimize(x, istat, iterations)
-         write (msg, '(a,i0)') "slsqp did not converge, gradient_mode=", gradient_mode
-         call check(error, istat == 0, trim(msg))
+         call check(error, istat == 0, &
+                    "slsqp did not converge, gradient_mode="//to_string(gradient_mode))
          if (allocated(error)) return
 
-         write (msg, '(a,i0)') "x(1) mismatch, gradient_mode=", gradient_mode
-         call check(error, x(1), slsqp_rosen_x(1), thr=1.0e-3_wp, message=trim(msg))
+         call check(error, x(1), slsqp_rosen_x(1), thr=1.0e-3_wp, &
+                    message="x(1) mismatch, gradient_mode="//to_string(gradient_mode))
          if (allocated(error)) return
-         write (msg, '(a,i0)') "x(2) mismatch, gradient_mode=", gradient_mode
-         call check(error, x(2), slsqp_rosen_x(2), thr=1.0e-3_wp, message=trim(msg))
+         call check(error, x(2), slsqp_rosen_x(2), thr=1.0e-3_wp, &
+                    message="x(2) mismatch, gradient_mode="//to_string(gradient_mode))
          if (allocated(error)) return
 
          call solver%destroy()
@@ -1265,31 +1265,30 @@ contains
       real(wp) :: x(n), f
       integer :: istat, iterations, nnls_mode, i
       logical :: status_ok
-      character(len=64) :: msg
 
       do nnls_mode = 1, 2
          x = [1.0_wp, 5.0_wp, 5.0_wp, 1.0_wp, -24.0_wp]
          call solver%initialize(n, m, meq, max_iter, acc, slsqp_hs71_func, slsqp_hs71_grad, &
                                 xl, xu, status_ok=status_ok, linesearch_mode=1, iprint=0, &
                                 nnls_mode=nnls_mode)
-         write (msg, '(a,i0)') "slsqp initialize failed, nnls_mode=", nnls_mode
-         call check(error, status_ok, trim(msg))
+         call check(error, status_ok, &
+                    "slsqp initialize failed, nnls_mode="//to_string(nnls_mode))
          if (allocated(error)) return
 
          call solver%optimize(x, istat, iterations)
-         write (msg, '(a,i0)') "slsqp did not converge, nnls_mode=", nnls_mode
-         call check(error, istat == 0, trim(msg))
+         call check(error, istat == 0, &
+                    "slsqp did not converge, nnls_mode="//to_string(nnls_mode))
          if (allocated(error)) return
 
          do i = 1, 4
-            write (msg, '(a,i0,a,i0)') "x(", i, ") mismatch, nnls_mode=", nnls_mode
-            call check(error, x(i), x_ref(i), thr=1.0e-3_wp, message=trim(msg))
+            call check(error, x(i), x_ref(i), thr=1.0e-3_wp, &
+                       message="x("//to_string(i)//") mismatch, nnls_mode="//to_string(nnls_mode))
             if (allocated(error)) return
          end do
 
          f = x(1)*x(4)*(x(1) + x(2) + x(3)) + x(3)
-         write (msg, '(a,i0)') "objective mismatch, nnls_mode=", nnls_mode
-         call check(error, f, f_ref, thr=1.0e-4_wp, message=trim(msg))
+         call check(error, f, f_ref, thr=1.0e-4_wp, &
+                    message="objective mismatch, nnls_mode="//to_string(nnls_mode))
          if (allocated(error)) return
 
          call solver%destroy()
@@ -1600,13 +1599,12 @@ contains
 
       integer :: step_mode, b
       logical :: use_broyden
-      character(len=64) :: label
 
       do step_mode = 1, 4
          do b = 0, 1
             use_broyden = (b == 1)
-            write (label, '(a,i0,a,l1)') "dense step_mode=", step_mode, " broyden=", use_broyden
-            call run_newton_dense(step_mode, use_broyden, trim(label), error)
+            call run_newton_dense(step_mode, use_broyden, &
+               "dense step_mode="//to_string(step_mode)//" broyden="//merge("T", "F", use_broyden), error)
             if (allocated(error)) return
          end do
       end do
@@ -1620,7 +1618,6 @@ contains
       integer :: modes(3), k, step_mode, b
       logical :: use_broyden
       character(len=16) :: names(3)
-      character(len=80) :: label
 
       modes = [NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR]
       names = ["LSQR ", "LUSOL", "LSMR "]
@@ -1629,9 +1626,9 @@ contains
          do step_mode = 1, 4
             do b = 0, 1
                use_broyden = (b == 1)
-               write (label, '(a,a,a,i0,a,l1)') "sparse ", trim(names(k)), &
-                  " step_mode=", step_mode, " broyden=", use_broyden
-               call run_newton_sparse(modes(k), step_mode, use_broyden, trim(label), error)
+               call run_newton_sparse(modes(k), step_mode, use_broyden, &
+                  "sparse "//trim(names(k))//" step_mode="//to_string(step_mode)// &
+                  " broyden="//merge("T", "F", use_broyden), error)
                if (allocated(error)) return
             end do
          end do
@@ -1648,15 +1645,15 @@ contains
       type(nlesolver_type) :: solver
       real(wp) :: x(newton_n)
       integer :: istat
-      character(len=:), allocatable :: message
+      character(len=:), allocatable :: msg
 
       call solver%initialize(n=newton_n, m=newton_m, max_iter=newton_max_iter, tol=newton_tol, &
                              func=newton_func, grad=newton_grad, step_mode=step_mode, &
                              use_broyden=use_broyden, n_intervals=2, fmin_tol=1.0e-2_wp, &
                              verbose=.false., bounds_mode=NLESOLVER_SCALAR_BOUNDS, &
                              xlow=[0.0_wp, -5.0_wp], xupp=[1.0_wp, 0.0_wp])
-      call solver%status(istat, message)
-      call check(error, istat == 0, label//": initialize failed: "//message)
+      call solver%status(istat, msg)
+      call check(error, istat == 0, label//": initialize failed: "//msg)
       if (allocated(error)) return
 
       x = [1.0_wp, 2.0_wp]
@@ -1677,7 +1674,7 @@ contains
       type(nlesolver_type) :: solver
       real(wp) :: x(newton_n)
       integer :: istat
-      character(len=:), allocatable :: message
+      character(len=:), allocatable :: msg
 
       call solver%initialize(n=newton_n, m=newton_m, max_iter=newton_max_iter, tol=newton_tol, &
                              atol=newton_tol, btol=newton_tol, func=newton_func, &
@@ -1685,8 +1682,8 @@ contains
                              use_broyden=use_broyden, n_intervals=2, fmin_tol=1.0e-2_wp, &
                              verbose=.false., sparsity_mode=sparsity_mode, &
                              irow=newton_irow, icol=newton_icol, damp=0.0_wp)
-      call solver%status(istat, message)
-      call check(error, istat == 0, label//": initialize failed: "//message)
+      call solver%status(istat, msg)
+      call check(error, istat == 0, label//": initialize failed: "//msg)
       if (allocated(error)) return
 
       x = [1.0_wp, 2.0_wp]

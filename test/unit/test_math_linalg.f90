@@ -1,6 +1,7 @@
 !> Test suite for linalg utilities in moist_math_linalg
 module test_math_linalg
    use mctc_env, only: wp
+   use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
       outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
@@ -39,43 +40,43 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("mat3x3_inv_identity", test_mat3x3_inv_identity), &
-         new_unittest("mat3x3_inv_diagonal", test_mat3x3_inv_diagonal), &
-         new_unittest("mat3x3_inv_full", test_mat3x3_inv_full), &
-         new_unittest("mat3x3_inv_singular", test_mat3x3_inv_singular), &
-         new_unittest("mat3x3_inv_lapack", test_mat3x3_inv_vs_lapack), &
-         new_unittest("tangent_frame_orthonormal", test_tangent_frame_orthonormal), &
-         new_unittest("tangent_frame_axes", test_tangent_frame_axes), &
-         new_unittest("sym3_21", test_sym3_21), &
-         new_unittest("outer3", test_outer3), &
-         new_unittest("outer3_linear", test_outer3_linear), &
-         new_unittest("outer_matrix", test_outer_matrix), &
-         new_unittest("logaddexp_stability", test_logaddexp_stability), &
-         new_unittest("logaddexp_values", test_logaddexp_values), &
-         new_unittest("eig_2x2_symmetric", test_eig_2x2_symmetric), &
-         new_unittest("outer4_brute_force",      test_outer4_brute_force), &
-         new_unittest("outer4_full_symmetry",    test_outer4_full_symmetry), &
-         new_unittest("outer4_outer_matrix",     test_outer4_outer_matrix), &
-         new_unittest("outer4_zero_vector",      test_outer4_zero_vector), &
-         new_unittest("sym4_31_brute_force",     test_sym4_31_brute_force), &
-         new_unittest("sym4_31_symmetric_input", test_sym4_31_symmetric_input), &
-         new_unittest("sym4_31_linearity",       test_sym4_31_linearity), &
-         new_unittest("sym4_22_brute_force",     test_sym4_22_brute_force), &
-         new_unittest("sym4_22_left_biased",     test_sym4_22_left_biased), &
-         new_unittest("sym4_22_jkl_symmetry",    test_sym4_22_jkl_symmetry), &
-         new_unittest("sym4_22_full_symmetric",  test_sym4_22_full_symmetric), &
-         new_unittest("sym4_22_contraction",     test_sym4_22_contraction), &
-         new_unittest("sym4_211_brute_force",    test_sym4_211_brute_force), &
-         new_unittest("sym4_211_full_symmetry",  test_sym4_211_full_symmetry), &
-         new_unittest("sym4_211_scaling",        test_sym4_211_scaling), &
+         new_unittest("mat3x3_inv_identity",      test_mat3x3_inv_identity), &
+         new_unittest("mat3x3_inv_diagonal",      test_mat3x3_inv_diagonal), &
+         new_unittest("mat3x3_inv_full",          test_mat3x3_inv_full), &
+         new_unittest("mat3x3_inv_singular",      test_mat3x3_inv_singular), &
+         new_unittest("mat3x3_inv_lapack",        test_mat3x3_inv_vs_lapack), &
+         new_unittest("tangent_frame_orthonormal",test_tangent_frame_orthonormal), &
+         new_unittest("tangent_frame_axes",       test_tangent_frame_axes), &
+         new_unittest("sym3_21",                  test_sym3_21), &
+         new_unittest("outer3",                   test_outer3), &
+         new_unittest("outer3_linear",            test_outer3_linear), &
+         new_unittest("outer_matrix",             test_outer_matrix), &
+         new_unittest("logaddexp_stability",      test_logaddexp_stability), &
+         new_unittest("logaddexp_values",         test_logaddexp_values), &
+         new_unittest("eig_2x2_symmetric",        test_eig_2x2_symmetric), &
+         new_unittest("outer4_brute_force",       test_outer4_brute_force), &
+         new_unittest("outer4_full_symmetry",     test_outer4_full_symmetry), &
+         new_unittest("outer4_outer_matrix",      test_outer4_outer_matrix), &
+         new_unittest("outer4_zero_vector",       test_outer4_zero_vector), &
+         new_unittest("sym4_31_brute_force",      test_sym4_31_brute_force), &
+         new_unittest("sym4_31_symmetric_input",  test_sym4_31_symmetric_input), &
+         new_unittest("sym4_31_linearity",        test_sym4_31_linearity), &
+         new_unittest("sym4_22_brute_force",      test_sym4_22_brute_force), &
+         new_unittest("sym4_22_left_biased",      test_sym4_22_left_biased), &
+         new_unittest("sym4_22_jkl_symmetry",     test_sym4_22_jkl_symmetry), &
+         new_unittest("sym4_22_full_symmetric",   test_sym4_22_full_symmetric), &
+         new_unittest("sym4_22_contraction",      test_sym4_22_contraction), &
+         new_unittest("sym4_211_brute_force",     test_sym4_211_brute_force), &
+         new_unittest("sym4_211_full_symmetry",   test_sym4_211_full_symmetry), &
+         new_unittest("sym4_211_scaling",         test_sym4_211_scaling), &
          ! Raw-kernel ports (vendored sparse linear solvers):
-         new_unittest("lusol-dense-3x3",         test_lusol_dense_3x3), &
-         new_unittest("lusol-rectangular-3x4",   test_lusol_rectangular_3x4), &
-         new_unittest("lsqr-dense-3x3",          test_lsqr_dense_3x3), &
-         new_unittest("lsqr-rectangular-3x4",    test_lsqr_rectangular_3x4), &
-         new_unittest("lsmr-over-determined",    test_lsmr_over_determined), &
-         new_unittest("lsmr-square",             test_lsmr_square), &
-         new_unittest("lsmr-under-determined",   test_lsmr_under_determined) &
+         new_unittest("lusol-dense-3x3",          test_lusol_dense_3x3), &
+         new_unittest("lusol-rectangular-3x4",    test_lusol_rectangular_3x4), &
+         new_unittest("lsqr-dense-3x3",           test_lsqr_dense_3x3), &
+         new_unittest("lsqr-rectangular-3x4",     test_lsqr_rectangular_3x4), &
+         new_unittest("lsmr-over-determined",     test_lsmr_over_determined), &
+         new_unittest("lsmr-square",              test_lsmr_square), &
+         new_unittest("lsmr-under-determined",    test_lsmr_under_determined) &
       ]
    end subroutine collect_math_linalg
 
@@ -959,7 +960,6 @@ contains
       real(wp) :: damp, atol, btol, conlim, normA, condA, normr, normAr, normx
       real(wp) :: norme
       integer(ip) :: istop, itn, itnlim, j, ndamp, npower
-      character(len=64) :: msg
 
       do ndamp = 3, 8
          npower = ndamp
@@ -980,13 +980,13 @@ contains
          call lsmr(m, n, lsmr_aprod1, lsmr_aprod2, b, damp, atol, btol, conlim, itnlim, &
                    0_ip, 0_ip, x, istop, itn, normA, condA, normr, normAr, normx)
 
-         write (msg, '(a,a,i0)') label, ": LSMR error istop, ndamp=", ndamp
-         call check(error, istop >= 0 .and. istop <= 7, trim(msg))
+         call check(error, istop >= 0 .and. istop <= 7, &
+                    label//": LSMR error istop, ndamp="//to_string(ndamp))
          if (allocated(error)) return
 
          norme = sqrt(dot_product(x - xtrue, x - xtrue))/(1.0_wp + sqrt(dot_product(xtrue, xtrue)))
-         write (msg, '(a,a,i0)') label, ": solution error too large, ndamp=", ndamp
-         call check(error, norme < lsmr_etol, trim(msg))
+         call check(error, norme < lsmr_etol, &
+                    label//": solution error too large, ndamp="//to_string(ndamp))
          if (allocated(error)) return
       end do
 
