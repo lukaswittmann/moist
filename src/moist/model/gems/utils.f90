@@ -57,9 +57,9 @@ contains
       ! apply a large offset to the solvent block
       if (present(no_displacement)) then
          if (.not. no_displacement) then
-            xyz(1, ns + 1:ntot) = xyz(1, ns + 1:ntot) + 3000.0_wp
-            xyz(2, ns + 1:ntot) = xyz(2, ns + 1:ntot) + 3000.0_wp
-            xyz(3, ns + 1:ntot) = xyz(3, ns + 1:ntot) + 3000.0_wp
+            xyz(1, ns + 1:ntot) = xyz(1, ns + 1:ntot)
+            xyz(2, ns + 1:ntot) = xyz(2, ns + 1:ntot)
+            xyz(3, ns + 1:ntot) = xyz(3, ns + 1:ntot)
          end if
       else
          xyz(1, ns + 1:ntot) = xyz(1, ns + 1:ntot) + 3000.0_wp
