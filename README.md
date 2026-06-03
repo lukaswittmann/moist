@@ -19,17 +19,11 @@ To build this project from the source code in this repository you need to have
   - [meson](https://mesonbuild.com) version 0.57 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.7 or newer
   - [cmake](https://cmake.org) version 3.18 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
   - [fpm](https://github.com/fortran-lang/fpm) version 0.11.0 or newer
+- a LAPACK / BLAS provider, like MKL or OpenBLAS
 
 Currently this project supports GCC and Intel compilers.
 
-
 #### Building with meson
-
-To build this project from the source code in this repository you need to have
-- a Fortran compiler supporting Fortran 2008
-- [meson](https://mesonbuild.com) version 0.57 or newer
-- a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.7 or newer
-- a LAPACK / BLAS provider, like MKL or OpenBLAS
 
 Optional dependencies are
 - [FFTW3](https://www.fftw.org) (version 3.3 or newer); required by the RISM models and any FFT-based routines; discovered via `pkg-config` (`fftw3`)
