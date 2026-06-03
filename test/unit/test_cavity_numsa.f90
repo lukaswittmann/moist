@@ -7,8 +7,8 @@ module test_cavity_numsa
    use mstore, only: get_structure
    use moist_data_radii_legacy, only: get_radius_func
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_radii, only : static_radius_type
-   use moist_radii, only : new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
+   use moist_radii, only: static_radius_type
+   use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
 
    implicit none
    private
@@ -33,7 +33,6 @@ contains
          & ]
    end subroutine collect_cavity_numsa
 
-
    subroutine test_mb01(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -42,7 +41,7 @@ contains
       type(static_radius_type) :: radii
       integer :: i
 
-      real(wp), parameter :: probe = 1.4_wp * aatoau
+      real(wp), parameter :: probe = 1.4_wp*aatoau
       integer, parameter :: nleb = 110
       real(wp), parameter :: ref(16) = [&
          & 1.98249964603498E+02_wp, &
@@ -82,7 +81,6 @@ contains
 
    end subroutine test_mb01
 
-
    subroutine test_mb02(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -90,7 +88,7 @@ contains
       type(mctc_error), allocatable :: cavity_error
       type(static_radius_type) :: radii
       integer :: i
-      real(wp), parameter :: probe = 1.2_wp * aatoau
+      real(wp), parameter :: probe = 1.2_wp*aatoau
       integer, parameter :: nleb = 230
       real(wp), parameter :: ref(16) = [&
          & 2.86084867868854E+01_wp, &
@@ -130,7 +128,6 @@ contains
 
    end subroutine test_mb02
 
-
    subroutine test_mb03(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -138,7 +135,7 @@ contains
       type(mctc_error), allocatable :: cavity_error
       type(static_radius_type) :: radii
       integer :: i
-      real(wp), parameter :: probe = 0.2_wp * aatoau
+      real(wp), parameter :: probe = 0.2_wp*aatoau
       integer, parameter :: nleb = 110
       real(wp), parameter :: ref(16) = [&
          & 4.93447390726497E+01_wp, &
@@ -178,7 +175,6 @@ contains
 
    end subroutine test_mb03
 
-
    subroutine test_mb01_grad(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -189,7 +185,7 @@ contains
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
-      real(wp), parameter :: probe = 1.4_wp * aatoau
+      real(wp), parameter :: probe = 1.4_wp*aatoau
       integer, parameter :: nleb = 110
 
       call get_structure(mol, "MB16-43", "01")
@@ -207,10 +203,10 @@ contains
       end if
       call cav%get_gradient()
 
-      allocate(grad_analytic(3, mol%nat))
+      allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
 
-      allocate(grad_numeric(3, mol%nat))
+      allocate (grad_numeric(3, mol%nat))
       call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
       if (allocated(error)) return
 
@@ -223,7 +219,6 @@ contains
 
    end subroutine test_mb01_grad
 
-
    subroutine test_mb05_grad(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -234,7 +229,7 @@ contains
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
-      real(wp), parameter :: probe = 1.2_wp * aatoau
+      real(wp), parameter :: probe = 1.2_wp*aatoau
       integer, parameter :: nleb = 110
 
       call get_structure(mol, "MB16-43", "05")
@@ -252,10 +247,10 @@ contains
       end if
       call cav%get_gradient()
 
-      allocate(grad_analytic(3, mol%nat))
+      allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
 
-      allocate(grad_numeric(3, mol%nat))
+      allocate (grad_numeric(3, mol%nat))
       call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
       if (allocated(error)) return
 
@@ -268,7 +263,6 @@ contains
 
    end subroutine test_mb05_grad
 
-
    subroutine test_mb03_grad(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -279,7 +273,7 @@ contains
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
-      real(wp), parameter :: probe = 0.2_wp * aatoau
+      real(wp), parameter :: probe = 0.2_wp*aatoau
       integer, parameter :: nleb = 110
 
       call get_structure(mol, "MB16-43", "03")
@@ -297,10 +291,10 @@ contains
       end if
       call cav%get_gradient()
 
-      allocate(grad_analytic(3, mol%nat))
+      allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
 
-      allocate(grad_numeric(3, mol%nat))
+      allocate (grad_numeric(3, mol%nat))
       call compute_total_area_gradient_fd(cav, mol, step, grad_numeric, error)
       if (allocated(error)) return
 
@@ -312,7 +306,6 @@ contains
       end do
 
    end subroutine test_mb03_grad
-
 
    !> Compute gradient of total cavity area via 4-point central finite differences
    !>
@@ -338,7 +331,7 @@ contains
          do ic = 1, 3
             x0 = mol%xyz(ic, iat)
 
-            mol%xyz(ic, iat) = x0 - 2.0_wp * stepsize
+            mol%xyz(ic, iat) = x0 - 2.0_wp*stepsize
             call cav%update(mol, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -359,7 +352,7 @@ contains
                return
             end if
             ap1 = cav%total_area
-            mol%xyz(ic, iat) = x0 + 2.0_wp * stepsize
+            mol%xyz(ic, iat) = x0 + 2.0_wp*stepsize
             call cav%update(mol, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -369,7 +362,7 @@ contains
 
             mol%xyz(ic, iat) = x0
 
-            grad(ic, iat) = (am2 - 8.0_wp*am1 + 8.0_wp*ap1 - ap2) / (12.0_wp*stepsize)
+            grad(ic, iat) = (am2 - 8.0_wp*am1 + 8.0_wp*ap1 - ap2)/(12.0_wp*stepsize)
          end do
       end do
 

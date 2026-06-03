@@ -41,7 +41,7 @@ module test_cavity_drop_lsf
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, &
-      center_at_origin, fd4_scalar
+                           center_at_origin, fd4_scalar
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_ssd, only: ssd0
@@ -57,14 +57,14 @@ module test_cavity_drop_lsf
 
    !> Concrete LSF selector strings; used by [[init_lsf]]
    character(len=*), parameter :: kind_svdw = "svdw"
-   character(len=*), parameter :: kind_cfc  = "cfc"
+   character(len=*), parameter :: kind_cfc = "cfc"
 
    real(wp), parameter :: STEP_SIZE = 5.0e-4_wp
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
 
-   integer,  parameter :: n_svdw_blends = 5
-   integer,  parameter :: n_svdw_gammas = 2
+   integer, parameter :: n_svdw_blends = 5
+   integer, parameter :: n_svdw_gammas = 2
    real(wp), parameter :: svdw_blend_k_values(n_svdw_blends) = [0.1_wp, 0.5_wp, 1.0_wp, 2.0_wp, 3.0_wp]
    real(wp), parameter :: svdw_gamma_values(n_svdw_gammas) = [0.0_wp, 0.7_wp]
 
@@ -74,36 +74,36 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         !> Common
-         new_unittest("svdw_sign_convention", test_svdw_sign_convention), &
-         new_unittest("cfc_sign_convention", test_cfc_sign_convention), &
-         new_unittest("svdw_screening_separation", test_svdw_screening_separation), &
-         new_unittest("cfc_screening_separation", test_cfc_screening_separation), &
-         !> LSF
-         new_unittest("svdw_f1_r_fd", test_svdw_f1_r_fd), &
-         new_unittest("cfc_f1_r_fd", test_cfc_f1_r_fd), &
-         new_unittest("svdw_f2_rr_fd", test_svdw_f2_rr_fd), &
-         new_unittest("cfc_f2_rr_fd", test_cfc_f2_rr_fd), &
-         new_unittest("svdw_f3_rrr_fd", test_svdw_f3_rrr_fd), &
-         new_unittest("cfc_f3_rrr_fd", test_cfc_f3_rrr_fd), &
-         new_unittest("svdw_f1_rA_fd", test_svdw_f1_rA_fd), &
-         new_unittest("cfc_f1_rA_fd", test_cfc_f1_rA_fd), &
-         new_unittest("svdw_f2_r_rA_fd", test_svdw_f2_r_rA_fd), &
-         new_unittest("cfc_f2_r_rA_fd", test_cfc_f2_r_rA_fd), &
-         new_unittest("svdw_f3_rr_rA_fd", test_svdw_f3_rr_rA_fd), &
-         new_unittest("cfc_f3_rr_rA_fd", test_cfc_f3_rr_rA_fd), &
-         !> SvdW-only
-         new_unittest("svdw_f2_rArB", test_svdw_f2_rArB), &
-         new_unittest("svdw_f3_r_rArB", test_svdw_f3_r_rArB), &
-         new_unittest("svdw_f4_rrrr", test_svdw_f4_rrrr), &
-         new_unittest("svdw_f4_rrr_rA", test_svdw_f4_rrr_rA), &
-         new_unittest("svdw_f4_rr_rArB", test_svdw_f4_rr_rArB), &
-         new_unittest("svdw_pou_f1_r", test_svdw_pou_f1_r), &
-         new_unittest("svdw_pou_f2_rr", test_svdw_pou_f2_rr), &
-         new_unittest("svdw_pou_f2_r_rA", test_svdw_pou_f2_r_rA), &
-         new_unittest("svdw_normalized_f1_rA", test_svdw_normalized_f1_rA), &
-         new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling) &
-         ]
+                  !> Common
+                  new_unittest("svdw_sign_convention", test_svdw_sign_convention), &
+                  new_unittest("cfc_sign_convention", test_cfc_sign_convention), &
+                  new_unittest("svdw_screening_separation", test_svdw_screening_separation), &
+                  new_unittest("cfc_screening_separation", test_cfc_screening_separation), &
+                  !> LSF
+                  new_unittest("svdw_f1_r_fd", test_svdw_f1_r_fd), &
+                  new_unittest("cfc_f1_r_fd", test_cfc_f1_r_fd), &
+                  new_unittest("svdw_f2_rr_fd", test_svdw_f2_rr_fd), &
+                  new_unittest("cfc_f2_rr_fd", test_cfc_f2_rr_fd), &
+                  new_unittest("svdw_f3_rrr_fd", test_svdw_f3_rrr_fd), &
+                  new_unittest("cfc_f3_rrr_fd", test_cfc_f3_rrr_fd), &
+                  new_unittest("svdw_f1_rA_fd", test_svdw_f1_rA_fd), &
+                  new_unittest("cfc_f1_rA_fd", test_cfc_f1_rA_fd), &
+                  new_unittest("svdw_f2_r_rA_fd", test_svdw_f2_r_rA_fd), &
+                  new_unittest("cfc_f2_r_rA_fd", test_cfc_f2_r_rA_fd), &
+                  new_unittest("svdw_f3_rr_rA_fd", test_svdw_f3_rr_rA_fd), &
+                  new_unittest("cfc_f3_rr_rA_fd", test_cfc_f3_rr_rA_fd), &
+                  !> SvdW-only
+                  new_unittest("svdw_f2_rArB", test_svdw_f2_rArB), &
+                  new_unittest("svdw_f3_r_rArB", test_svdw_f3_r_rArB), &
+                  new_unittest("svdw_f4_rrrr", test_svdw_f4_rrrr), &
+                  new_unittest("svdw_f4_rrr_rA", test_svdw_f4_rrr_rA), &
+                  new_unittest("svdw_f4_rr_rArB", test_svdw_f4_rr_rArB), &
+                  new_unittest("svdw_pou_f1_r", test_svdw_pou_f1_r), &
+                  new_unittest("svdw_pou_f2_rr", test_svdw_pou_f2_rr), &
+                  new_unittest("svdw_pou_f2_r_rA", test_svdw_pou_f2_r_rA), &
+                  new_unittest("svdw_normalized_f1_rA", test_svdw_normalized_f1_rA), &
+                  new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling) &
+                  ]
    end subroutine collect_cavity_drop_lsf
 
    !* ================================================================================= *!
@@ -126,14 +126,14 @@ contains
    !> @param[in]  blend_3b            optional svdw 3-body weight override
    !> @param[in]  screening_threshold optional screening cutoff (default 0)
    subroutine init_lsf(lsf, mol, radii, max_deriv, kind, blend_k, blend_3b, &
-         screening_threshold)
+                       screening_threshold)
       class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
       !> Molecular structure to bind to the LSF
       type(structure_type), intent(in) :: mol
       !> Per-atom radii (size mol%nat)
       real(wp), intent(in) :: radii(:)
       !> Highest spatial derivative order to enable
-      integer,  intent(in) :: max_deriv
+      integer, intent(in) :: max_deriv
       !> Concrete kind selector: "svdw" or "cfc"
       character(len=*), intent(in) :: kind
       !> Optional SvdW blend_k override (ignored for CFC)
@@ -156,13 +156,13 @@ contains
          call tmp_svdw%new(blend_k=blend_k, blend_3b=blend_3b)
          call tmp_svdw%update(mol, radii)
          call tmp_svdw%set_max_deriv(max_deriv)
-         allocate(lsf, source=tmp_svdw)
+         allocate (lsf, source=tmp_svdw)
       case (kind_cfc)
          tmp_cfc%screening_threshold = thr
          call tmp_cfc%new()
          call tmp_cfc%update(mol, radii)
          call tmp_cfc%set_max_deriv(max_deriv)
-         allocate(lsf, source=tmp_cfc)
+         allocate (lsf, source=tmp_cfc)
       case default
          error stop "init_lsf: unknown kind '"//kind//"'"
       end select
@@ -290,9 +290,9 @@ contains
       integer :: icase, ithr, istep, ip, nc, ntot, min_nact, n_mov_pts
 
       real(wp), parameter :: separation_thresholds(6) = [ &
-         1.0e-8_wp, 1.0E-9_wp, 1.0e-10_wp, 1.0e-11_wp, 1.0e-12_wp, 1.0e-13_wp]
+                             1.0e-8_wp, 1.0E-9_wp, 1.0e-10_wp, 1.0e-11_wp, 1.0e-12_wp, 1.0e-13_wp]
 
-      integer,  parameter :: separation_n_steps = 100
+      integer, parameter :: separation_n_steps = 100
       real(wp), parameter :: separation_gap_step = 0.25_wp
 
       call get_test_structures(mols, 12)
@@ -308,14 +308,14 @@ contains
             thr = separation_thresholds(ithr)
 
             do istep = 0, separation_n_steps
-               gap = real(istep, wp) * separation_gap_step
+               gap = real(istep, wp)*separation_gap_step
 
                ! Create superstructure from two molecules
                moving_mol = center_mol
                shift = maxval(center_mol%xyz(1, :)) - minval(moving_mol%xyz(1, :)) + gap
                moving_mol%xyz(1, :) = moving_mol%xyz(1, :) + shift
                call BuildSuperStructure(center_mol, moving_mol, super_mol, &
-                  no_displacement=.true.)
+                                        no_displacement=.true.)
                ntot = super_mol%nat
 
                call get_test_radii(super_mol, radii)
@@ -330,12 +330,12 @@ contains
 
                   ! The three body term introduces the largest errors prop. to thr * natoms^2
                   ! This is because the three body term is inside ntot^2 terms; thus we use this as the thr
-                  call check(error, val_scr, val_ref, thr=real(ntot, wp) ** 2 * thr, &
-                     more = "screened lsf diverged from unscreened during separation (lower than natoms^2*thr)")
+                  call check(error, val_scr, val_ref, thr=real(ntot, wp)**2*thr, &
+                             more="screened lsf diverged from unscreened during separation (lower than natoms^2*thr)")
                   if (allocated(error)) return
 
                end do
-               deallocate(lsf_ref, lsf_scr)
+               deallocate (lsf_ref, lsf_scr)
             end do
          end do
       end do
@@ -398,8 +398,8 @@ contains
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 1, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call lsf%prepare(point)
@@ -417,11 +417,11 @@ contains
                   end do
                   do i = 1, ndim
                      call check(error, analytic(i), numeric(i), &
-                        thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
-               deallocate(lsf)
+               deallocate (lsf)
             end do
          end do
       end do
@@ -462,8 +462,8 @@ contains
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 2, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call lsf%prepare(point)
@@ -484,12 +484,12 @@ contains
                   do j = 1, ndim
                      do i = 1, ndim
                         call check(error, analytic(i, j), numeric(i, j), &
-                           thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
                end do
-               deallocate(lsf)
+               deallocate (lsf)
             end do
          end do
       end do
@@ -535,8 +535,8 @@ contains
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call lsf%prepare(point)
@@ -557,7 +557,7 @@ contains
                      do j = 1, ndim
                         do i = 1, ndim
                            numeric(i, j, axis) = fd4_scalar( &
-                              hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
+                                                 hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
                         end do
                      end do
                   end do
@@ -565,13 +565,13 @@ contains
                      do j = 1, ndim
                         do i = 1, ndim
                            call check(error, analytic(i, j, k), numeric(i, j, k), &
-                              thr_abs=ABS_THR, thr_rel=REL_THR)
+                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
                   end do
                end do
-               deallocate(lsf)
+               deallocate (lsf)
             end do
          end do
       end do
@@ -618,14 +618,14 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate(analytic(ndim, mol%nat))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               allocate (analytic(ndim, mol%nat))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
@@ -651,15 +651,15 @@ contains
                         call lsf%prepare(point); call lsf%f0_screened(f_mm)
                         numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
                         call check(error, analytic(axis, atom), numeric, &
-                           thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
                end do
-               deallocate(analytic, lsf)
+               deallocate (analytic, lsf)
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine run_f1_rA_fd
 
@@ -700,14 +700,14 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
-               allocate(analytic(ndim, ndim, mol%nat))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               allocate (analytic(ndim, ndim, mol%nat))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
@@ -734,16 +734,16 @@ contains
                         do i = 1, ndim
                            numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
                            call check(error, analytic(i, axis, atom), numeric, &
-                              thr_abs=ABS_THR, thr_rel=REL_THR)
+                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
                   end do
                end do
-               deallocate(analytic, lsf)
+               deallocate (analytic, lsf)
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine run_f2_r_rA_fd
 
@@ -784,13 +784,13 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
-                  blend_k=svdw_sweep_blend(kind, iblend), &
-                  blend_3b=svdw_sweep_gamma(kind, igamma))
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
@@ -818,17 +818,17 @@ contains
                            do i = 1, ndim
                               numeric = fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
                               call check(error, analytic(i, j, axis, atom), numeric, &
-                                 thr_abs=ABS_THR, thr_rel=REL_THR)
+                                         thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
                      end do
                   end do
                end do
-               deallocate(lsf)
+               deallocate (lsf)
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine run_f3_rr_rA_fd
 
@@ -906,16 +906,16 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          !* FD buffers are sized by mol%nat only and reused across the
          !* (iblend, igamma, ipt) sweep.
-         if (allocated(rA_fwd))  deallocate(rA_fwd)
-         if (allocated(rA_fwd2)) deallocate(rA_fwd2)
-         if (allocated(rA_bwd))  deallocate(rA_bwd)
-         if (allocated(rA_bwd2)) deallocate(rA_bwd2)
-         allocate(rA_fwd(ndim, mol%nat), rA_fwd2(ndim, mol%nat))
-         allocate(rA_bwd(ndim, mol%nat), rA_bwd2(ndim, mol%nat))
+         if (allocated(rA_fwd)) deallocate (rA_fwd)
+         if (allocated(rA_fwd2)) deallocate (rA_fwd2)
+         if (allocated(rA_bwd)) deallocate (rA_bwd)
+         if (allocated(rA_bwd2)) deallocate (rA_bwd2)
+         allocate (rA_fwd(ndim, mol%nat), rA_fwd2(ndim, mol%nat))
+         allocate (rA_bwd(ndim, mol%nat), rA_bwd2(ndim, mol%nat))
          do iblend = 1, n_svdw_blends
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
@@ -953,9 +953,9 @@ contains
                         do atomA = 1, mol%nat
                            do axisA = 1, ndim
                               numeric = fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), &
-                                 rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), STEP_SIZE)
+                                                   rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), STEP_SIZE)
                               call check(error, analytic(axisA, atomA, axisB, atomB), numeric, &
-                                 thr_abs=ABS_THR, thr_rel=REL_THR)
+                                         thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
@@ -964,7 +964,7 @@ contains
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_f2_rArB
 
@@ -989,20 +989,20 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          !* f3_r_rArB_screened declares lsf1_rA and lsf2_r_rA as intent(in)
          !* non-allocatable assumed-shape; passing unallocated allocatables
          !* is undefined behavior, so size the dummies up front. All
          !* buffers depend only on mol%nat, so allocate once per icase.
-         if (allocated(dummy_rA))  deallocate(dummy_rA)
-         if (allocated(r_rA_fwd))  deallocate(r_rA_fwd)
-         if (allocated(r_rA_fwd2)) deallocate(r_rA_fwd2)
-         if (allocated(r_rA_bwd))  deallocate(r_rA_bwd)
-         if (allocated(r_rA_bwd2)) deallocate(r_rA_bwd2)
-         allocate(dummy_rA(ndim, mol%nat))
-         allocate(r_rA_fwd(ndim, ndim, mol%nat), r_rA_fwd2(ndim, ndim, mol%nat))
-         allocate(r_rA_bwd(ndim, ndim, mol%nat), r_rA_bwd2(ndim, ndim, mol%nat))
+         if (allocated(dummy_rA)) deallocate (dummy_rA)
+         if (allocated(r_rA_fwd)) deallocate (r_rA_fwd)
+         if (allocated(r_rA_fwd2)) deallocate (r_rA_fwd2)
+         if (allocated(r_rA_bwd)) deallocate (r_rA_bwd)
+         if (allocated(r_rA_bwd2)) deallocate (r_rA_bwd2)
+         allocate (dummy_rA(ndim, mol%nat))
+         allocate (r_rA_fwd(ndim, ndim, mol%nat), r_rA_fwd2(ndim, ndim, mol%nat))
+         allocate (r_rA_bwd(ndim, ndim, mol%nat), r_rA_bwd2(ndim, ndim, mol%nat))
          dummy_rA = 0.0_wp
          r_rA_fwd = 0.0_wp
          do iblend = 1, n_svdw_blends
@@ -1043,10 +1043,10 @@ contains
                            do axisA = 1, ndim
                               do jdir = 1, ndim
                                  numeric = fd4_scalar(r_rA_fwd2(jdir, axisA, iA), &
-                                    r_rA_fwd(jdir, axisA, iA), r_rA_bwd(jdir, axisA, iA), &
-                                    r_rA_bwd2(jdir, axisA, iA), STEP_SIZE)
+                                                      r_rA_fwd(jdir, axisA, iA), r_rA_bwd(jdir, axisA, iA), &
+                                                      r_rA_bwd2(jdir, axisA, iA), STEP_SIZE)
                                  call check(error, analytic(jdir, axisA, iA, axisB, iB), numeric, &
-                                    thr_abs=ABS_THR, thr_rel=REL_THR)
+                                            thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
                               end do
                            end do
@@ -1056,7 +1056,7 @@ contains
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_f3_r_rArB
 
@@ -1111,9 +1111,9 @@ contains
                         do j = 1, ndim
                            do kk = 1, ndim
                               numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                 t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                                                   t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
                               call check(error, analytic(i, j, kk, axis), numeric, &
-                                 thr_abs=ABS_THR, thr_rel=REL_THR)
+                                         thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
@@ -1148,10 +1148,10 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         if (allocated(atomic_numbers)) deallocate(atomic_numbers)
-         allocate(atomic_numbers(mol%nat))
+         if (allocated(atomic_numbers)) deallocate (atomic_numbers)
+         allocate (atomic_numbers(mol%nat))
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
@@ -1202,9 +1202,9 @@ contains
                            do j = 1, ndim
                               do kk = 1, ndim
                                  numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                    t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                                                      t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
                                  call check(error, analytic(i, j, kk, axis, atom), numeric, &
-                                    thr_abs=ABS_THR, thr_rel=REL_THR)
+                                            thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
                               end do
                            end do
@@ -1214,7 +1214,7 @@ contains
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_f4_rrr_rA
 
@@ -1242,10 +1242,10 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         if (allocated(atomic_numbers)) deallocate(atomic_numbers)
-         allocate(atomic_numbers(mol%nat))
+         if (allocated(atomic_numbers)) deallocate (atomic_numbers)
+         allocate (atomic_numbers(mol%nat))
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
@@ -1253,9 +1253,9 @@ contains
          !* non-allocatable assumed-shape; passing unallocated allocatables
          !* is undefined behavior, so size the dummies to the active-atom
          !* count up front. Both depend only on mol%nat.
-         if (allocated(dummy_rA))   deallocate(dummy_rA)
-         if (allocated(dummy_r_rA)) deallocate(dummy_r_rA)
-         allocate(dummy_rA(ndim, mol%nat), dummy_r_rA(ndim, ndim, mol%nat))
+         if (allocated(dummy_rA)) deallocate (dummy_rA)
+         if (allocated(dummy_r_rA)) deallocate (dummy_r_rA)
+         allocate (dummy_rA(ndim, mol%nat), dummy_r_rA(ndim, ndim, mol%nat))
          dummy_rA = 0.0_wp
          dummy_r_rA = 0.0_wp
          do iblend = 1, n_svdw_blends
@@ -1306,10 +1306,10 @@ contains
                               do j = 1, ndim
                                  do kk = 1, ndim
                                     numeric = fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), &
-                                       rr_rA_fwd(j, kk, axisA, iA), rr_rA_bwd(j, kk, axisA, iA), &
-                                       rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE)
+                                                         rr_rA_fwd(j, kk, axisA, iA), rr_rA_bwd(j, kk, axisA, iA), &
+                                                         rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE)
                                     call check(error, analytic(j, kk, axisA, iA, axisB, iB), &
-                                       numeric, thr_abs=ABS_THR, thr_rel=REL_THR)
+                                               numeric, thr_abs=ABS_THR, thr_rel=REL_THR)
                                     if (allocated(error)) return
                                  end do
                               end do
@@ -1320,7 +1320,7 @@ contains
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_f4_rr_rArB
 
@@ -1373,9 +1373,9 @@ contains
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight_backward2)
                         numeric = fd4_scalar(weight_forward2, weight_forward, &
-                           weight_backward, weight_backward2, STEP_SIZE)
+                                             weight_backward, weight_backward2, STEP_SIZE)
                         call check(error, dweight_r(axis), numeric, &
-                           thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -1435,9 +1435,9 @@ contains
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_backward2)
                         do axisA = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axisA), grad_forward(axisA), &
-                              grad_backward(axisA), grad_backward2(axisA), STEP_SIZE)
+                                                grad_backward(axisA), grad_backward2(axisA), STEP_SIZE)
                            call check(error, d2weight_rr(axisA, axisB), numeric, &
-                              thr_abs=ABS_THR, thr_rel=REL_THR)
+                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -1473,15 +1473,15 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         if (allocated(atomic_numbers)) deallocate(atomic_numbers)
-         allocate(atomic_numbers(mol%nat))
+         if (allocated(atomic_numbers)) deallocate (atomic_numbers)
+         allocate (atomic_numbers(mol%nat))
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
-         if (allocated(d2weight_r_rA)) deallocate(d2weight_r_rA)
-         allocate(d2weight_r_rA(ndim, ndim, mol%nat))
+         if (allocated(d2weight_r_rA)) deallocate (d2weight_r_rA)
+         allocate (d2weight_r_rA(ndim, ndim, mol%nat))
          do iblend = 1, n_svdw_blends
             do igamma = 1, n_svdw_gammas
                prim%screening_threshold = 0.0_wp
@@ -1527,9 +1527,9 @@ contains
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_backward2)
                         do axis = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axis), grad_forward(axis), &
-                              grad_backward(axis), grad_backward2(axis), STEP_SIZE)
+                                                grad_backward(axis), grad_backward2(axis), STEP_SIZE)
                            call check(error, d2weight_r_rA(axis, axisA, atomA), numeric, &
-                              thr_abs=ABS_THR, thr_rel=REL_THR)
+                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -1537,7 +1537,7 @@ contains
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_pou_f2_r_rA
 
@@ -1563,10 +1563,10 @@ contains
          mol = mols(icase)
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
-         allocate(centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         if (allocated(atomic_numbers)) deallocate(atomic_numbers)
-         allocate(atomic_numbers(mol%nat))
+         if (allocated(atomic_numbers)) deallocate (atomic_numbers)
+         allocate (atomic_numbers(mol%nat))
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
@@ -1615,14 +1615,14 @@ contains
                         call prim%normalized_f01_rA_screened(f_backward2)
                         numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE)
                         call check(error, deriv_rA(axis, atom), numeric, &
-                           thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
                end do
             end do
          end do
-         deallocate(centers_base, centers_local)
+         deallocate (centers_base, centers_local)
       end do
    end subroutine test_svdw_normalized_f1_rA
 
@@ -1644,8 +1644,8 @@ contains
       atomic_numbers = 1
 
       centers2 = reshape([ &
-         -1.20_wp,  0.10_wp,  0.00_wp, &
-          1.10_wp, -0.20_wp,  0.30_wp], [ndim, n2])
+                         -1.20_wp, 0.10_wp, 0.00_wp, &
+                         1.10_wp, -0.20_wp, 0.30_wp], [ndim, n2])
       radii2 = [0.85_wp, 1.05_wp]
       point2 = [0.35_wp, 0.45_wp, -0.25_wp]
 
@@ -1664,9 +1664,9 @@ contains
       if (allocated(error)) return
 
       centers3 = reshape([ &
-         -1.40_wp,  0.20_wp, -0.10_wp, &
-          1.25_wp, -0.30_wp,  0.35_wp, &
-          0.15_wp,  1.10_wp, -0.45_wp], [ndim, n3])
+                         -1.40_wp, 0.20_wp, -0.10_wp, &
+                         1.25_wp, -0.30_wp, 0.35_wp, &
+                         0.15_wp, 1.10_wp, -0.45_wp], [ndim, n3])
       radii3 = [0.80_wp, 1.00_wp, 0.75_wp]
       point3 = [0.10_wp, 0.25_wp, 0.40_wp]
 
@@ -1684,6 +1684,5 @@ contains
       expected = sum(d3)/3.0_wp
       call check(error, lsf0, expected, thr_abs=ABS_THR, thr_rel=REL_THR)
    end subroutine test_svdw_body_order_scaling
-
 
 end module test_cavity_drop_lsf

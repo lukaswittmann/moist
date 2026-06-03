@@ -6,7 +6,7 @@ module test_cavity_drop_cpcm
    use testdrive, only: to_string, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_radii, only : default_cpcm_radii
+   use moist_radii, only: default_cpcm_radii
    use moist_data_radii_legacy, only: get_radius_func
    use mstore, only: get_structure
    use moist_math_lapack, only: getrf, getri
@@ -296,9 +296,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=k, blend_3b=gamma)
          call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
+                              debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -338,7 +338,7 @@ contains
             do igrid = 1, ngrid
                do jgrid = 1, ngrid
                   grad_ref(iaxis, iat) = grad_ref(iaxis, iat) &
-                     + q1(igrid) * Amat1_rA(iaxis, iat, igrid, jgrid) * q2(jgrid)
+                                         + q1(igrid)*Amat1_rA(iaxis, iat, igrid, jgrid)*q2(jgrid)
                end do
             end do
          end do
@@ -353,10 +353,10 @@ contains
       do iat = 1, mol%nat
          do iaxis = 1, 3
             call check(error, &
-                                          grad_ctr(iaxis, iat), &
-                                          grad_ref(iaxis, iat), &
-                                          thr_abs=5.0e-11_wp, thr_rel=5.0e-11_wp, &
-                                          more="contract_amat1_q1q2_rA mismatch")
+                       grad_ctr(iaxis, iat), &
+                       grad_ref(iaxis, iat), &
+                       thr_abs=5.0e-11_wp, thr_rel=5.0e-11_wp, &
+                       more="contract_amat1_q1q2_rA mismatch")
             if (allocated(error)) return
          end do
       end do
@@ -390,10 +390,10 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=k, blend_3b=gamma)
          call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             wleb_prune_level=3, &
-                             debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
+                              wleb_prune_level=3, &
+                              debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -485,10 +485,10 @@ contains
       do iat = 1, mol%nat
          do iaxis = 1, 3
             call check(error, &
-                                          grad_ctr(iaxis, iat), &
-                                          grad_num(iaxis, iat), &
-                                          thr_abs=2.0e-6_wp, thr_rel=2.0e-5_wp, &
-                                          more="contract_nuc_elec_qefield_rA point-charge FD mismatch")
+                       grad_ctr(iaxis, iat), &
+                       grad_num(iaxis, iat), &
+                       thr_abs=2.0e-6_wp, thr_rel=2.0e-5_wp, &
+                       more="contract_nuc_elec_qefield_rA point-charge FD mismatch")
             if (allocated(error)) return
          end do
       end do
@@ -510,7 +510,7 @@ contains
             r_vec(:) = cavity%xyz(:, igrid) - mol%xyz(:, katom)
             r = sqrt(dot_product(r_vec, r_vec))
             if (r > 1.0e-12_wp) then
-               value = value + surface_q(igrid) * za(katom) / r
+               value = value + surface_q(igrid)*za(katom)/r
             end if
          end do
       end do
@@ -566,10 +566,10 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=blend_k_local, blend_3b=gamma)
          call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             debug=.false., verbose=0, do_cpcm=.true., &
-                             radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
+                              debug=.false., verbose=0, do_cpcm=.true., &
+                              radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -641,23 +641,23 @@ contains
 
       ! Remap analytical gradient using numbering (do this BEFORE FD loop while cavity is at reference)
       do iat = 1, mol%nat
-            do idir = 1, ndim
-               do igrid = 1, cavity%ngrid
-                  num_idn = cavity%numbering(igrid)
-                  if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-                  idx_i = numbering_to_idx(num_idn)
-                  if (idx_i <= 0) cycle
-                  do jgrid = 1, cavity%ngrid
-                     num_jdn = cavity%numbering(jgrid)
-                     if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                     idx_j = numbering_to_idx(num_jdn)
-                     if (idx_j <= 0) cycle
-                     ! Store analytical gradient (mapped by numbering)
-                     en_Amat1_rA(idir, iat, idx_i, idx_j) = Amat1_rA(idir, iat, igrid, jgrid)
-                  end do
+         do idir = 1, ndim
+            do igrid = 1, cavity%ngrid
+               num_idn = cavity%numbering(igrid)
+               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
+               idx_i = numbering_to_idx(num_idn)
+               if (idx_i <= 0) cycle
+               do jgrid = 1, cavity%ngrid
+                  num_jdn = cavity%numbering(jgrid)
+                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
+                  idx_j = numbering_to_idx(num_jdn)
+                  if (idx_j <= 0) cycle
+                  ! Store analytical gradient (mapped by numbering)
+                  en_Amat1_rA(idir, iat, idx_i, idx_j) = Amat1_rA(idir, iat, igrid, jgrid)
                end do
             end do
          end do
+      end do
 
       !> Test inversion of A matrix using LAPACK
 
@@ -950,10 +950,10 @@ contains
                   if (num_pp(idir, iat, igrid) == 0 .or. num_pp(idir, iat, jgrid) == 0) cycle
 
                   call check(error, &
-                     en_Amat1_rA(idir, iat, igrid, jgrid), &
-                     num_Amat1_rA(idir, iat, igrid, jgrid), &
-                     thr_abs=ATHR_OFFDIAG, thr_rel=RTHR_OFFDIAG, &
-                     more="Off-diagonal A matrix gradient error")
+                             en_Amat1_rA(idir, iat, igrid, jgrid), &
+                             num_Amat1_rA(idir, iat, igrid, jgrid), &
+                             thr_abs=ATHR_OFFDIAG, thr_rel=RTHR_OFFDIAG, &
+                             more="Off-diagonal A matrix gradient error")
                   if (allocated(error)) return
                end do
             end do
@@ -982,10 +982,10 @@ contains
                if (ref_f(igrid) < 1.0e-4_wp) cycle
 
                call check(error, &
-                  en_Amat1_rA(idir, iat, igrid, jgrid), &
-                  num_Amat1_rA(idir, iat, igrid, jgrid), &
-                  thr_abs=ATHR_DIAG, thr_rel=RTHR_DIAG, &
-                  more="Diagonal A matrix gradient error")
+                          en_Amat1_rA(idir, iat, igrid, jgrid), &
+                          num_Amat1_rA(idir, iat, igrid, jgrid), &
+                          thr_abs=ATHR_DIAG, thr_rel=RTHR_DIAG, &
+                          more="Diagonal A matrix gradient error")
                if (allocated(error)) return
             end do
          end do

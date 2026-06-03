@@ -3,12 +3,12 @@ module test_cavity_drop_primitives
    use mctc_io, only: structure_type
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
    use moist_cavity_drop_lsf_svdw_ssd, only: ssd0, ssd1_r, ssd2_rr, ssd3_rrr, ssd4_rrrr, &
-                                    ssd012_r, ssd2_r_rA, ssd1_rA, ssd2_rArB
+                                             ssd012_r, ssd2_r_rA, ssd1_rA, ssd2_rArB
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_switching, only: moist_cavity_drop_smooth_step_swif, &
-                                         new_smooth_step_swif
+                                          new_smooth_step_swif
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none
    private
@@ -96,7 +96,7 @@ contains
 
                do i = 1, ndim
                   call check(error, analytic(i), numeric(i), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -153,7 +153,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -206,7 +206,7 @@ contains
                   do i = 1, ndim
                      do j = 1, ndim
                         numeric(i, j, axis) = fd4_scalar( &
-                           hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
+                                              hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
                      end do
                   end do
                end do
@@ -215,7 +215,7 @@ contains
                   do j = 1, ndim
                      do k = 1, ndim
                         call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                                      thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -271,7 +271,7 @@ contains
                      do j = 1, ndim
                         do k = 1, ndim
                            numeric(i, j, k, axis) = fd4_scalar( &
-                              third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
+                                                    third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
                         end do
                      end do
                   end do
@@ -282,7 +282,7 @@ contains
                      do k = 1, ndim
                         do m = 1, ndim
                            call check(error, analytic(i, j, k, m), numeric(i, j, k, m), &
-                              thr_abs=ABS_THR, thr_rel=REL_THR)
+                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -342,7 +342,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -397,7 +397,7 @@ contains
 
                do i = 1, ndim
                   call check(error, analytic(i), numeric(i), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -454,7 +454,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -523,13 +523,13 @@ contains
                if (allocated(error)) return
                do i = 1, ndim
                   call check(error, analytic_grad(i), numeric_grad(i), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic_hess(i, j), numeric_hess(i, j), &
-                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -702,8 +702,8 @@ contains
       integer :: i, j, k, axis
       real(wp) :: h
       real(wp), parameter :: points(ndim, 2) = reshape([ &
-         -1.24_wp,  0.56_wp,  0.20_wp, &
-          0.60_wp, -0.90_wp,  0.80_wp], [ndim, 2])
+                                                       -1.24_wp, 0.56_wp, 0.20_wp, &
+                                                       0.60_wp, -0.90_wp, 0.80_wp], [ndim, 2])
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
@@ -728,7 +728,7 @@ contains
          do i = 1, ndim
             do j = 1, ndim
                numeric(i, j, axis) = fd4_scalar( &
-                  hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
+                                     hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
             end do
          end do
       end do
@@ -737,7 +737,7 @@ contains
          do j = 1, ndim
             do k = 1, ndim
                call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                             thr_abs=ABS_THR, thr_rel=REL_THR)
+                          thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
             end do
          end do
@@ -757,8 +757,8 @@ contains
       integer :: i, j, k, m, axis
       real(wp) :: h
       real(wp), parameter :: points(ndim, 2) = reshape([ &
-         -1.24_wp,  0.56_wp,  0.20_wp, &
-          0.60_wp, -0.90_wp,  0.80_wp], [ndim, 2])
+                                                       -1.24_wp, 0.56_wp, 0.20_wp, &
+                                                       0.60_wp, -0.90_wp, 0.80_wp], [ndim, 2])
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
@@ -784,7 +784,7 @@ contains
             do j = 1, ndim
                do k = 1, ndim
                   numeric(i, j, k, axis) = fd4_scalar( &
-                     third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
+                                           third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
                end do
             end do
          end do
@@ -795,7 +795,7 @@ contains
             do k = 1, ndim
                do m = 1, ndim
                   call check(error, analytic(i, j, k, m), numeric(i, j, k, m), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -905,7 +905,7 @@ contains
                do i = 1, ndim
                   do atom_a = 1, mol%nat
                      numeric(i, axis, atom_a, owner) = fd4_scalar( &
-                        g_pp(i, atom_a), g_p(i, atom_a), g_m(i, atom_a), g_mm(i, atom_a), h)
+                                                       g_pp(i, atom_a), g_p(i, atom_a), g_m(i, atom_a), g_mm(i, atom_a), h)
                   end do
                end do
             end do
@@ -915,7 +915,7 @@ contains
                   do atom_a = 1, mol%nat
                      do atom_b = 1, mol%nat
                         call check(error, analytic(i, j, atom_a, atom_b), numeric(i, j, atom_a, atom_b), &
-                                                      thr_abs=ABS_THR, thr_rel=REL_THR)
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -976,7 +976,7 @@ contains
                do j = 1, ndim
                   do atom = 1, mol%nat
                      call check(error, analytic(i, j, atom), numeric(i, j, atom), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1049,13 +1049,13 @@ contains
                if (allocated(error)) return
                do i = 1, ndim
                   call check(error, analytic_grad(i), numeric_grad(i), &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic_hess(i, j), numeric_hess(i, j), &
-                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1160,8 +1160,8 @@ contains
                   numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
 
                   call check(error, &
-                                                analytic(axis, atom), numeric, &
-                                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                             analytic(axis, atom), numeric, &
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do

@@ -4,8 +4,8 @@ module test_math_linalg
    use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame, sym3_21, &
-      outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
-      outer4, sym4_31, sym4_22, sym4_211
+                                outer3, outer3_linear, outer_matrix, logaddexp, eig_2x2_symmetric, &
+                                outer4, sym4_31, sym4_22, sym4_211
    use moist_math_lapack, only: getrf, getri
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_lapack_syev, only: dsyev
@@ -14,7 +14,7 @@ module test_math_linalg
    use moist_math_linalg_lusol_ez, only: solve
    use moist_math_linalg_lsmr, only: lsmr
    use moist_math_linalg_lsqr, only: lsqr_solver_ez
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_math_linalg
@@ -40,57 +40,57 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("mat3x3_inv_identity",      test_mat3x3_inv_identity), &
-         new_unittest("mat3x3_inv_diagonal",      test_mat3x3_inv_diagonal), &
-         new_unittest("mat3x3_inv_full",          test_mat3x3_inv_full), &
-         new_unittest("mat3x3_inv_singular",      test_mat3x3_inv_singular), &
-         new_unittest("mat3x3_inv_lapack",        test_mat3x3_inv_vs_lapack), &
-         new_unittest("tangent_frame_orthonormal",test_tangent_frame_orthonormal), &
-         new_unittest("tangent_frame_axes",       test_tangent_frame_axes), &
-         new_unittest("sym3_21",                  test_sym3_21), &
-         new_unittest("outer3",                   test_outer3), &
-         new_unittest("outer3_linear",            test_outer3_linear), &
-         new_unittest("outer_matrix",             test_outer_matrix), &
-         new_unittest("logaddexp_stability",      test_logaddexp_stability), &
-         new_unittest("logaddexp_values",         test_logaddexp_values), &
-         new_unittest("eig_2x2_symmetric",        test_eig_2x2_symmetric), &
-         new_unittest("outer4_brute_force",       test_outer4_brute_force), &
-         new_unittest("outer4_full_symmetry",     test_outer4_full_symmetry), &
-         new_unittest("outer4_outer_matrix",      test_outer4_outer_matrix), &
-         new_unittest("outer4_zero_vector",       test_outer4_zero_vector), &
-         new_unittest("sym4_31_brute_force",      test_sym4_31_brute_force), &
-         new_unittest("sym4_31_symmetric_input",  test_sym4_31_symmetric_input), &
-         new_unittest("sym4_31_linearity",        test_sym4_31_linearity), &
-         new_unittest("sym4_22_brute_force",      test_sym4_22_brute_force), &
-         new_unittest("sym4_22_left_biased",      test_sym4_22_left_biased), &
-         new_unittest("sym4_22_jkl_symmetry",     test_sym4_22_jkl_symmetry), &
-         new_unittest("sym4_22_full_symmetric",   test_sym4_22_full_symmetric), &
-         new_unittest("sym4_22_contraction",      test_sym4_22_contraction), &
-         new_unittest("sym4_211_brute_force",     test_sym4_211_brute_force), &
-         new_unittest("sym4_211_full_symmetry",   test_sym4_211_full_symmetry), &
-         new_unittest("sym4_211_scaling",         test_sym4_211_scaling), &
-         ! Raw-kernel ports (vendored sparse linear solvers):
-         new_unittest("lusol-dense-3x3",          test_lusol_dense_3x3), &
-         new_unittest("lusol-rectangular-3x4",    test_lusol_rectangular_3x4), &
-         new_unittest("lsqr-dense-3x3",           test_lsqr_dense_3x3), &
-         new_unittest("lsqr-rectangular-3x4",     test_lsqr_rectangular_3x4), &
-         new_unittest("lsmr-over-determined",     test_lsmr_over_determined), &
-         new_unittest("lsmr-square",              test_lsmr_square), &
-         new_unittest("lsmr-under-determined",    test_lsmr_under_determined) &
-      ]
+                  new_unittest("mat3x3_inv_identity", test_mat3x3_inv_identity), &
+                  new_unittest("mat3x3_inv_diagonal", test_mat3x3_inv_diagonal), &
+                  new_unittest("mat3x3_inv_full", test_mat3x3_inv_full), &
+                  new_unittest("mat3x3_inv_singular", test_mat3x3_inv_singular), &
+                  new_unittest("mat3x3_inv_lapack", test_mat3x3_inv_vs_lapack), &
+                  new_unittest("tangent_frame_orthonormal", test_tangent_frame_orthonormal), &
+                  new_unittest("tangent_frame_axes", test_tangent_frame_axes), &
+                  new_unittest("sym3_21", test_sym3_21), &
+                  new_unittest("outer3", test_outer3), &
+                  new_unittest("outer3_linear", test_outer3_linear), &
+                  new_unittest("outer_matrix", test_outer_matrix), &
+                  new_unittest("logaddexp_stability", test_logaddexp_stability), &
+                  new_unittest("logaddexp_values", test_logaddexp_values), &
+                  new_unittest("eig_2x2_symmetric", test_eig_2x2_symmetric), &
+                  new_unittest("outer4_brute_force", test_outer4_brute_force), &
+                  new_unittest("outer4_full_symmetry", test_outer4_full_symmetry), &
+                  new_unittest("outer4_outer_matrix", test_outer4_outer_matrix), &
+                  new_unittest("outer4_zero_vector", test_outer4_zero_vector), &
+                  new_unittest("sym4_31_brute_force", test_sym4_31_brute_force), &
+                  new_unittest("sym4_31_symmetric_input", test_sym4_31_symmetric_input), &
+                  new_unittest("sym4_31_linearity", test_sym4_31_linearity), &
+                  new_unittest("sym4_22_brute_force", test_sym4_22_brute_force), &
+                  new_unittest("sym4_22_left_biased", test_sym4_22_left_biased), &
+                  new_unittest("sym4_22_jkl_symmetry", test_sym4_22_jkl_symmetry), &
+                  new_unittest("sym4_22_full_symmetric", test_sym4_22_full_symmetric), &
+                  new_unittest("sym4_22_contraction", test_sym4_22_contraction), &
+                  new_unittest("sym4_211_brute_force", test_sym4_211_brute_force), &
+                  new_unittest("sym4_211_full_symmetry", test_sym4_211_full_symmetry), &
+                  new_unittest("sym4_211_scaling", test_sym4_211_scaling), &
+                  ! Raw-kernel ports (vendored sparse linear solvers):
+                  new_unittest("lusol-dense-3x3", test_lusol_dense_3x3), &
+                  new_unittest("lusol-rectangular-3x4", test_lusol_rectangular_3x4), &
+                  new_unittest("lsqr-dense-3x3", test_lsqr_dense_3x3), &
+                  new_unittest("lsqr-rectangular-3x4", test_lsqr_rectangular_3x4), &
+                  new_unittest("lsmr-over-determined", test_lsmr_over_determined), &
+                  new_unittest("lsmr-square", test_lsmr_square), &
+                  new_unittest("lsmr-under-determined", test_lsmr_under_determined) &
+                  ]
    end subroutine collect_math_linalg
 
    !> Invert the identity matrix.
    subroutine test_mat3x3_inv_identity(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), Ainv(3,3), det
+      real(wp) :: A(3, 3), Ainv(3, 3), det
       logical :: success
       integer :: i
 
       ! Identity matrix.
       A = 0.0_wp
       do i = 1, 3
-         A(i,i) = 1.0_wp
+         A(i, i) = 1.0_wp
       end do
 
       success = mat3x3_inv(A, Ainv, det)
@@ -99,7 +99,7 @@ contains
       if (allocated(error)) return
 
       do i = 1, 3
-         call check(error, abs(Ainv(i,i) - 1.0_wp) < 1.0e-12_wp, "Diagonal should be 1")
+         call check(error, abs(Ainv(i, i) - 1.0_wp) < 1.0e-12_wp, "Diagonal should be 1")
          if (allocated(error)) return
       end do
    end subroutine test_mat3x3_inv_identity
@@ -107,39 +107,39 @@ contains
    !> Invert a diagonal matrix.
    subroutine test_mat3x3_inv_diagonal(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), Ainv(3,3), det
+      real(wp) :: A(3, 3), Ainv(3, 3), det
       logical :: success
 
       A = 0.0_wp
-      A(1,1) = 2.0_wp
-      A(2,2) = 3.0_wp
-      A(3,3) = 4.0_wp
+      A(1, 1) = 2.0_wp
+      A(2, 2) = 3.0_wp
+      A(3, 3) = 4.0_wp
 
       success = mat3x3_inv(A, Ainv, det)
 
       call check(error, abs(det - 24.0_wp) < 1.0e-12_wp, "Determinant should be 24")
       if (allocated(error)) return
 
-      call check(error, abs(Ainv(1,1) - 0.5_wp) < 1.0e-12_wp, "Ainv(1,1) should be 0.5")
+      call check(error, abs(Ainv(1, 1) - 0.5_wp) < 1.0e-12_wp, "Ainv(1,1) should be 0.5")
       if (allocated(error)) return
-      call check(error, abs(Ainv(2,2) - 1.0_wp/3.0_wp) < 1.0e-12_wp, "Ainv(2,2) should be 1/3")
+      call check(error, abs(Ainv(2, 2) - 1.0_wp/3.0_wp) < 1.0e-12_wp, "Ainv(2,2) should be 1/3")
       if (allocated(error)) return
-      call check(error, abs(Ainv(3,3) - 0.25_wp) < 1.0e-12_wp, "Ainv(3,3) should be 0.25")
+      call check(error, abs(Ainv(3, 3) - 0.25_wp) < 1.0e-12_wp, "Ainv(3,3) should be 0.25")
    end subroutine test_mat3x3_inv_diagonal
 
    !> Invert a dense matrix.
    subroutine test_mat3x3_inv_full(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), Ainv(3,3), det, prod(3,3)
+      real(wp) :: A(3, 3), Ainv(3, 3), det, prod(3, 3)
       logical :: success
       integer :: i, j
 
       ! Dense nonsingular matrix.
       A = reshape([ &
-         1.0_wp, 2.0_wp, 3.0_wp, &
-         0.0_wp, 4.0_wp, 5.0_wp, &
-         1.0_wp, 0.0_wp, 6.0_wp &
-      ], [3, 3])
+                  1.0_wp, 2.0_wp, 3.0_wp, &
+                  0.0_wp, 4.0_wp, 5.0_wp, &
+                  1.0_wp, 0.0_wp, 6.0_wp &
+                  ], [3, 3])
 
       success = mat3x3_inv(A, Ainv, det)
 
@@ -148,11 +148,11 @@ contains
       do i = 1, 3
          do j = 1, 3
             if (i == j) then
-               call check(error, abs(prod(i,j) - 1.0_wp) < 1.0e-10_wp, &
-                  "Product diagonal should be 1")
+               call check(error, abs(prod(i, j) - 1.0_wp) < 1.0e-10_wp, &
+                          "Product diagonal should be 1")
             else
-               call check(error, abs(prod(i,j)) < 1.0e-10_wp, &
-                  "Product off-diagonal should be 0")
+               call check(error, abs(prod(i, j)) < 1.0e-10_wp, &
+                          "Product off-diagonal should be 0")
             end if
             if (allocated(error)) return
          end do
@@ -162,15 +162,15 @@ contains
    !> Detect a singular matrix.
    subroutine test_mat3x3_inv_singular(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), Ainv(3,3), det
+      real(wp) :: A(3, 3), Ainv(3, 3), det
       logical :: success
 
       ! Two identical rows.
       A = reshape([ &
-         1.0_wp, 2.0_wp, 3.0_wp, &
-         1.0_wp, 2.0_wp, 3.0_wp, &
-         4.0_wp, 5.0_wp, 6.0_wp &
-      ], [3, 3])
+                  1.0_wp, 2.0_wp, 3.0_wp, &
+                  1.0_wp, 2.0_wp, 3.0_wp, &
+                  4.0_wp, 5.0_wp, 6.0_wp &
+                  ], [3, 3])
 
       success = mat3x3_inv(A, Ainv, det)
 
@@ -184,16 +184,16 @@ contains
    !> Compare inversion with LAPACK.
    subroutine test_mat3x3_inv_vs_lapack(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), Ainv_analytic(3,3), Ainv_lapack(3,3), det
+      real(wp) :: A(3, 3), Ainv_analytic(3, 3), Ainv_lapack(3, 3), det
       logical :: success
       integer :: ipiv(3), info
 
       ! Symmetric positive definite matrix.
       A = reshape([ &
-         4.0_wp, 1.0_wp, 2.0_wp, &
-         1.0_wp, 5.0_wp, 3.0_wp, &
-         2.0_wp, 3.0_wp, 6.0_wp &
-      ], [3, 3])
+                  4.0_wp, 1.0_wp, 2.0_wp, &
+                  1.0_wp, 5.0_wp, 3.0_wp, &
+                  2.0_wp, 3.0_wp, 6.0_wp &
+                  ], [3, 3])
 
       ! Analytic inversion.
       success = mat3x3_inv(A, Ainv_analytic, det)
@@ -213,7 +213,7 @@ contains
 
       ! Compare inverses.
       call check(error, maxval(abs(Ainv_analytic - Ainv_lapack)) < 1.0e-10_wp, &
-         "Analytic and LAPACK inversions should match")
+                 "Analytic and LAPACK inversions should match")
    end subroutine test_mat3x3_inv_vs_lapack
 
    !> Check tangent-frame orthonormality.
@@ -224,7 +224,7 @@ contains
 
       ! Generic normal.
       normal = [1.0_wp, 2.0_wp, 3.0_wp]
-      normal = normal / sqrt(sum(normal**2))
+      normal = normal/sqrt(sum(normal**2))
 
       call setup_tangent_frame(normal, t1, t2)
 
@@ -268,7 +268,7 @@ contains
    !> Check selected sym3_21 entries.
    subroutine test_sym3_21(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: hess(3,3), grad(3), tensor(3,3,3)
+      real(wp) :: hess(3, 3), grad(3), tensor(3, 3, 3)
       real(wp) :: expected
 
       ! Diagonal Hessian.
@@ -281,37 +281,37 @@ contains
 
       ! Diagonal entry.
       expected = 3.0_wp
-      call check(error, abs(tensor(1,1,1) - expected) < 1.0e-12_wp, "T_111 should be 3")
+      call check(error, abs(tensor(1, 1, 1) - expected) < 1.0e-12_wp, "T_111 should be 3")
       if (allocated(error)) return
 
       ! Off-diagonal entry.
-      call check(error, abs(tensor(1,2,3)) < 1.0e-12_wp, "T_123 should be 0")
+      call check(error, abs(tensor(1, 2, 3)) < 1.0e-12_wp, "T_123 should be 0")
    end subroutine test_sym3_21
 
    !> Check selected outer3 entries.
    subroutine test_outer3(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: vec(3), tensor(3,3,3)
+      real(wp) :: vec(3), tensor(3, 3, 3)
 
       vec = [1.0_wp, 2.0_wp, 3.0_wp]
       tensor = outer3(vec)
 
       ! First diagonal entry.
-      call check(error, abs(tensor(1,1,1) - 1.0_wp) < 1.0e-12_wp, "T_111 should be 1")
+      call check(error, abs(tensor(1, 1, 1) - 1.0_wp) < 1.0e-12_wp, "T_111 should be 1")
       if (allocated(error)) return
 
       ! Mixed entry.
-      call check(error, abs(tensor(1,2,3) - 6.0_wp) < 1.0e-12_wp, "T_123 should be 6")
+      call check(error, abs(tensor(1, 2, 3) - 6.0_wp) < 1.0e-12_wp, "T_123 should be 6")
       if (allocated(error)) return
 
       ! Second diagonal entry.
-      call check(error, abs(tensor(2,2,2) - 8.0_wp) < 1.0e-12_wp, "T_222 should be 8")
+      call check(error, abs(tensor(2, 2, 2) - 8.0_wp) < 1.0e-12_wp, "T_222 should be 8")
    end subroutine test_outer3
 
    !> Check selected outer3_linear entries.
    subroutine test_outer3_linear(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: vec(3), dvec(3), dtensor(3,3,3)
+      real(wp) :: vec(3), dvec(3), dtensor(3, 3, 3)
 
       vec = [1.0_wp, 2.0_wp, 3.0_wp]
       dvec = [0.1_wp, 0.2_wp, 0.3_wp]
@@ -319,17 +319,17 @@ contains
       dtensor = outer3_linear(vec, dvec)
 
       ! First diagonal derivative.
-      call check(error, abs(dtensor(1,1,1) - 0.3_wp) < 1.0e-12_wp, "dT_111 should be 0.3")
+      call check(error, abs(dtensor(1, 1, 1) - 0.3_wp) < 1.0e-12_wp, "dT_111 should be 0.3")
       if (allocated(error)) return
 
       ! Mixed derivative.
-      call check(error, abs(dtensor(1,2,3) - 1.8_wp) < 1.0e-12_wp, "dT_123 should be 1.8")
+      call check(error, abs(dtensor(1, 2, 3) - 1.8_wp) < 1.0e-12_wp, "dT_123 should be 1.8")
    end subroutine test_outer3_linear
 
    !> Check selected outer_matrix entries.
    subroutine test_outer_matrix(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: left(3), right(3), mat(3,3)
+      real(wp) :: left(3), right(3), mat(3, 3)
 
       left = [1.0_wp, 2.0_wp, 3.0_wp]
       right = [4.0_wp, 5.0_wp, 6.0_wp]
@@ -337,15 +337,15 @@ contains
       mat = outer_matrix(left, right)
 
       ! First entry.
-      call check(error, abs(mat(1,1) - 4.0_wp) < 1.0e-12_wp, "M_11 should be 4")
+      call check(error, abs(mat(1, 1) - 4.0_wp) < 1.0e-12_wp, "M_11 should be 4")
       if (allocated(error)) return
 
       ! Mixed entry.
-      call check(error, abs(mat(2,3) - 12.0_wp) < 1.0e-12_wp, "M_23 should be 12")
+      call check(error, abs(mat(2, 3) - 12.0_wp) < 1.0e-12_wp, "M_23 should be 12")
       if (allocated(error)) return
 
       ! Last diagonal entry.
-      call check(error, abs(mat(3,3) - 18.0_wp) < 1.0e-12_wp, "M_33 should be 18")
+      call check(error, abs(mat(3, 3) - 18.0_wp) < 1.0e-12_wp, "M_33 should be 18")
    end subroutine test_outer_matrix
 
    !> Check logaddexp at large magnitudes.
@@ -384,16 +384,16 @@ contains
       result = logaddexp(x)
       expected = log(1.0_wp + exp(1.0_wp))
       call check(error, abs(result - expected) < 1.0e-12_wp, &
-         "logaddexp(1) should match direct computation")
+                 "logaddexp(1) should match direct computation")
    end subroutine test_logaddexp_values
 
    !> Compare eig_2x2_symmetric with LAPACK.
    subroutine test_eig_2x2_symmetric(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: R(2,2), R_lapack(2,2)
+      real(wp) :: R(2, 2), R_lapack(2, 2)
       real(wp) :: lambda_min_analytic, lambda_max_analytic
       real(wp) :: v_min_analytic(2), v_max_analytic(2)
-      real(wp) :: evals_lapack(2), evecs_lapack(2,2)
+      real(wp) :: evals_lapack(2), evecs_lapack(2, 2)
       real(wp) :: work_lapack(8)
       integer(lapack_ik) :: info
       real(wp) :: dot1, dot2
@@ -404,13 +404,13 @@ contains
       R = reshape([4.0_wp, 1.0_wp, 1.0_wp, 3.0_wp], [2, 2])
 
       ! Analytic solution.
-      call eig_2x2_symmetric(R(1,1), R(1,2), R(2,2), &
-         lambda_min_analytic, lambda_max_analytic, v_min_analytic, v_max_analytic)
+      call eig_2x2_symmetric(R(1, 1), R(1, 2), R(2, 2), &
+                             lambda_min_analytic, lambda_max_analytic, v_min_analytic, v_max_analytic)
 
       ! LAPACK solution.
       R_lapack = R
       call dsyev('V', 'U', int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
-         work_lapack, int(8, lapack_ik), info)
+                 work_lapack, int(8, lapack_ik), info)
       if (info /= 0) then
          call check(error, .false., "LAPACK dsyev failed for test case 1")
          return
@@ -419,22 +419,22 @@ contains
 
       ! Compare eigenvalues.
       call check(error, abs(lambda_min_analytic - evals_lapack(1)) < 1.0e-12_wp, &
-         "Case 1: Smallest eigenvalue should match LAPACK")
+                 "Case 1: Smallest eigenvalue should match LAPACK")
       if (allocated(error)) return
 
       call check(error, abs(lambda_max_analytic - evals_lapack(2)) < 1.0e-12_wp, &
-         "Case 1: Largest eigenvalue should match LAPACK")
+                 "Case 1: Largest eigenvalue should match LAPACK")
       if (allocated(error)) return
 
       ! Compare eigenvectors up to sign.
-      dot1 = abs(dot_product(v_min_analytic, evecs_lapack(:,1)))
+      dot1 = abs(dot_product(v_min_analytic, evecs_lapack(:, 1)))
       call check(error, abs(dot1 - 1.0_wp) < 1.0e-10_wp, &
-         "Case 1: Smallest eigenvector should match LAPACK (up to sign)")
+                 "Case 1: Smallest eigenvector should match LAPACK (up to sign)")
       if (allocated(error)) return
 
-      dot2 = abs(dot_product(v_max_analytic, evecs_lapack(:,2)))
+      dot2 = abs(dot_product(v_max_analytic, evecs_lapack(:, 2)))
       call check(error, abs(dot2 - 1.0_wp) < 1.0e-10_wp, &
-         "Case 1: Largest eigenvector should match LAPACK (up to sign)")
+                 "Case 1: Largest eigenvector should match LAPACK (up to sign)")
       if (allocated(error)) return
 
       ! Diagonal matrix.
@@ -443,13 +443,13 @@ contains
       R = reshape([5.0_wp, 0.0_wp, 0.0_wp, 2.0_wp], [2, 2])
 
       ! Analytic solution.
-      call eig_2x2_symmetric(R(1,1), R(1,2), R(2,2), &
-         lambda_min_analytic, lambda_max_analytic, v_min_analytic, v_max_analytic)
+      call eig_2x2_symmetric(R(1, 1), R(1, 2), R(2, 2), &
+                             lambda_min_analytic, lambda_max_analytic, v_min_analytic, v_max_analytic)
 
       ! LAPACK solution.
       R_lapack = R
       call dsyev('V', 'U', int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
-         work_lapack, int(8, lapack_ik), info)
+                 work_lapack, int(8, lapack_ik), info)
       if (info /= 0) then
          call check(error, .false., "LAPACK dsyev failed for test case 2")
          return
@@ -458,22 +458,22 @@ contains
 
       ! Compare eigenvalues.
       call check(error, abs(lambda_min_analytic - evals_lapack(1)) < 1.0e-12_wp, &
-         "Case 2: Smallest eigenvalue should match LAPACK")
+                 "Case 2: Smallest eigenvalue should match LAPACK")
       if (allocated(error)) return
 
       call check(error, abs(lambda_max_analytic - evals_lapack(2)) < 1.0e-12_wp, &
-         "Case 2: Largest eigenvalue should match LAPACK")
+                 "Case 2: Largest eigenvalue should match LAPACK")
       if (allocated(error)) return
 
       ! Compare eigenvectors up to sign.
-      dot1 = abs(dot_product(v_min_analytic, evecs_lapack(:,1)))
+      dot1 = abs(dot_product(v_min_analytic, evecs_lapack(:, 1)))
       call check(error, abs(dot1 - 1.0_wp) < 1.0e-10_wp, &
-         "Case 2: Smallest eigenvector should match LAPACK (up to sign)")
+                 "Case 2: Smallest eigenvector should match LAPACK (up to sign)")
       if (allocated(error)) return
 
-      dot2 = abs(dot_product(v_max_analytic, evecs_lapack(:,2)))
+      dot2 = abs(dot_product(v_max_analytic, evecs_lapack(:, 2)))
       call check(error, abs(dot2 - 1.0_wp) < 1.0e-10_wp, &
-         "Case 2: Largest eigenvector should match LAPACK (up to sign)")
+                 "Case 2: Largest eigenvector should match LAPACK (up to sign)")
    end subroutine test_eig_2x2_symmetric
 
    ! outer4(v) = v_i v_j v_k v_l.
@@ -481,24 +481,24 @@ contains
    !> Compare outer4 with an explicit reference.
    subroutine test_outer4_brute_force(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: v(3), t(3,3,3,3), ref(3,3,3,3)
+      real(wp) :: v(3), t(3, 3, 3, 3), ref(3, 3, 3, 3)
       integer :: i, j, k, l
 
       v = [1.5_wp, -2.0_wp, 0.75_wp]
 
       t = outer4(v)
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         ref(i,j,k,l) = v(i) * v(j) * v(k) * v(l)
-      end do; end do; end do; end do
+            ref(i, j, k, l) = v(i)*v(j)*v(k)*v(l)
+         end do; end do; end do; end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
-         "outer4: element-wise mismatch vs brute-force reference")
+                 "outer4: element-wise mismatch vs brute-force reference")
    end subroutine test_outer4_brute_force
 
    !> Check full outer4 symmetry.
    subroutine test_outer4_full_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: v(3), t(3,3,3,3)
+      real(wp) :: v(3), t(3, 3, 3, 3)
       integer :: i, j, k, l
 
       v = [0.7_wp, 1.3_wp, -0.4_wp]
@@ -506,19 +506,19 @@ contains
 
       ! Adjacent swaps generate S_4.
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         call check(error, abs(t(i,j,k,l) - t(j,i,k,l)) < tensor_tol, "outer4: i<->j")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,k,j,l)) < tensor_tol, "outer4: j<->k")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,j,l,k)) < tensor_tol, "outer4: k<->l")
-         if (allocated(error)) return
-      end do; end do; end do; end do
+            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, "outer4: i<->j")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, "outer4: j<->k")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, "outer4: k<->l")
+            if (allocated(error)) return
+         end do; end do; end do; end do
    end subroutine test_outer4_full_symmetry
 
    !> Cross-check outer4 with outer_matrix.
    subroutine test_outer4_outer_matrix(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: v(3), vvT(3,3), t(3,3,3,3), ref(3,3,3,3)
+      real(wp) :: v(3), vvT(3, 3), t(3, 3, 3, 3), ref(3, 3, 3, 3)
       integer :: i, j, k, l
 
       v = [-1.1_wp, 2.2_wp, 0.3_wp]
@@ -526,17 +526,17 @@ contains
       t = outer4(v)
 
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         ref(i,j,k,l) = vvT(i,j) * vvT(k,l)
-      end do; end do; end do; end do
+            ref(i, j, k, l) = vvT(i, j)*vvT(k, l)
+         end do; end do; end do; end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
-         "outer4(v) should factor as outer_matrix(v,v) on (i,j) and (k,l)")
+                 "outer4(v) should factor as outer_matrix(v,v) on (i,j) and (k,l)")
    end subroutine test_outer4_outer_matrix
 
    !> Check outer4 for the zero vector.
    subroutine test_outer4_zero_vector(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: v(3), t(3,3,3,3)
+      real(wp) :: v(3), t(3, 3, 3, 3)
 
       v = 0.0_wp
       t = outer4(v)
@@ -548,29 +548,29 @@ contains
    !> Compare sym4_31 with an explicit reference.
    subroutine test_sym4_31_brute_force(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), h3(3,3,3), t(3,3,3,3), ref(3,3,3,3)
+      real(wp) :: g(3), h3(3, 3, 3), t(3, 3, 3, 3), ref(3, 3, 3, 3)
       integer :: i, j, k, l, a, b, c
 
       g = [0.4_wp, -0.6_wp, 1.2_wp]
       ! Asymmetric h3 separates the four terms.
       do c = 1, 3; do b = 1, 3; do a = 1, 3
-         h3(a,b,c) = real(a, wp) + 0.5_wp * real(b, wp) - 0.25_wp * real(c, wp)
-      end do; end do; end do
+            h3(a, b, c) = real(a, wp) + 0.5_wp*real(b, wp) - 0.25_wp*real(c, wp)
+         end do; end do; end do
 
       t = sym4_31(g, h3)
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         ref(i,j,k,l) = g(i) * h3(j,k,l) + g(j) * h3(i,k,l) &
-                      + g(k) * h3(i,j,l) + g(l) * h3(i,j,k)
-      end do; end do; end do; end do
+            ref(i, j, k, l) = g(i)*h3(j, k, l) + g(j)*h3(i, k, l) &
+                              + g(k)*h3(i, j, l) + g(l)*h3(i, j, k)
+         end do; end do; end do; end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
-         "sym4_31: element-wise mismatch vs brute-force reference")
+                 "sym4_31: element-wise mismatch vs brute-force reference")
    end subroutine test_sym4_31_brute_force
 
    !> Symmetric h3 should give full output symmetry.
    subroutine test_sym4_31_symmetric_input(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), v(3), h3(3,3,3), t(3,3,3,3)
+      real(wp) :: g(3), v(3), h3(3, 3, 3), t(3, 3, 3, 3)
       integer :: i, j, k, l
 
       g = [1.1_wp, -0.3_wp, 0.7_wp]
@@ -579,38 +579,38 @@ contains
       t = sym4_31(g, h3)
 
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         call check(error, abs(t(i,j,k,l) - t(j,i,k,l)) < tensor_tol, &
-            "sym4_31 with symmetric h3: must be symmetric in i<->j")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,k,j,l)) < tensor_tol, &
-            "sym4_31 with symmetric h3: must be symmetric in j<->k")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,j,l,k)) < tensor_tol, &
-            "sym4_31 with symmetric h3: must be symmetric in k<->l")
-         if (allocated(error)) return
-      end do; end do; end do; end do
+            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
+                       "sym4_31 with symmetric h3: must be symmetric in i<->j")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                       "sym4_31 with symmetric h3: must be symmetric in j<->k")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                       "sym4_31 with symmetric h3: must be symmetric in k<->l")
+            if (allocated(error)) return
+         end do; end do; end do; end do
    end subroutine test_sym4_31_symmetric_input
 
    !> Check sym4_31 scaling in each argument.
    subroutine test_sym4_31_linearity(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), h3(3,3,3), t(3,3,3,3), t_scaled_g(3,3,3,3), t_scaled_h(3,3,3,3)
+      real(wp) :: g(3), h3(3, 3, 3), t(3, 3, 3, 3), t_scaled_g(3, 3, 3, 3), t_scaled_h(3, 3, 3, 3)
       integer :: a, b, c
 
       g = [0.2_wp, -1.0_wp, 0.5_wp]
       do c = 1, 3; do b = 1, 3; do a = 1, 3
-         h3(a,b,c) = 0.3_wp * a - 0.1_wp * b + 0.7_wp * c
-      end do; end do; end do
+            h3(a, b, c) = 0.3_wp*a - 0.1_wp*b + 0.7_wp*c
+         end do; end do; end do
 
-      t          = sym4_31(g,            h3)
-      t_scaled_g = sym4_31(2.5_wp * g,   h3)
-      t_scaled_h = sym4_31(g,            -3.0_wp * h3)
+      t = sym4_31(g, h3)
+      t_scaled_g = sym4_31(2.5_wp*g, h3)
+      t_scaled_h = sym4_31(g, -3.0_wp*h3)
 
-      call check(error, maxval(abs(t_scaled_g - 2.5_wp * t)) < tensor_tol, &
-         "sym4_31 must be linear in g")
+      call check(error, maxval(abs(t_scaled_g - 2.5_wp*t)) < tensor_tol, &
+                 "sym4_31 must be linear in g")
       if (allocated(error)) return
-      call check(error, maxval(abs(t_scaled_h - (-3.0_wp) * t)) < tensor_tol, &
-         "sym4_31 must be linear in h3")
+      call check(error, maxval(abs(t_scaled_h - (-3.0_wp)*t)) < tensor_tol, &
+                 "sym4_31 must be linear in h3")
    end subroutine test_sym4_31_linearity
 
    ! sym4_22(A, B): three 2+2 pair partitions.
@@ -618,109 +618,109 @@ contains
    !> Compare sym4_22 with its 3-term reference.
    subroutine test_sym4_22_brute_force(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), B(3,3), t(3,3,3,3), ref(3,3,3,3)
+      real(wp) :: A(3, 3), B(3, 3), t(3, 3, 3, 3), ref(3, 3, 3, 3)
       integer :: i, j, k, l
 
       call build_symmetric_pair(A, B)
 
       t = sym4_22(A, B)
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         ref(i,j,k,l) = A(i,j) * B(k,l) + A(i,k) * B(j,l) + A(i,l) * B(j,k)
-      end do; end do; end do; end do
+            ref(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k)
+         end do; end do; end do; end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
-         "sym4_22: element-wise mismatch vs documented 3-term reference")
+                 "sym4_22: element-wise mismatch vs documented 3-term reference")
    end subroutine test_sym4_22_brute_force
 
    !> Pin the partial, left-biased contract.
    subroutine test_sym4_22_left_biased(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), B(3,3), t_partial(3,3,3,3), t_full(3,3,3,3)
+      real(wp) :: A(3, 3), B(3, 3), t_partial(3, 3, 3, 3), t_full(3, 3, 3, 3)
 
       call build_symmetric_pair(A, B)
       ! Avoid accidental equality with the full symmetrisation.
       B = B + reshape([0.0_wp, 0.4_wp, 0.0_wp, &
                        0.4_wp, 0.0_wp, 0.0_wp, &
-                       0.0_wp, 0.0_wp, 0.0_wp], [3,3])
+                       0.0_wp, 0.0_wp, 0.0_wp], [3, 3])
 
       t_partial = sym4_22(A, B)
-      t_full    = sym4_22_full_ref(A, B)
+      t_full = sym4_22_full_ref(A, B)
 
       call check(error, maxval(abs(t_partial - t_full)) > 1.0e-3_wp, &
-         "sym4_22 must be left-biased (partial != fully symmetric) for A /= B")
+                 "sym4_22 must be left-biased (partial != fully symmetric) for A /= B")
    end subroutine test_sym4_22_left_biased
 
    !> Check j/k/l symmetry for symmetric inputs.
    subroutine test_sym4_22_jkl_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), B(3,3), t(3,3,3,3)
+      real(wp) :: A(3, 3), B(3, 3), t(3, 3, 3, 3)
       integer :: i, j, k, l
 
       call build_symmetric_pair(A, B)
       t = sym4_22(A, B)
 
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         call check(error, abs(t(i,j,k,l) - t(i,k,j,l)) < tensor_tol, &
-            "sym4_22: must be symmetric in j<->k")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,j,l,k)) < tensor_tol, &
-            "sym4_22: must be symmetric in k<->l")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,l,k,j)) < tensor_tol, &
-            "sym4_22: must be symmetric in j<->l")
-         if (allocated(error)) return
-      end do; end do; end do; end do
+            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                       "sym4_22: must be symmetric in j<->k")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                       "sym4_22: must be symmetric in k<->l")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, l, k, j)) < tensor_tol, &
+                       "sym4_22: must be symmetric in j<->l")
+            if (allocated(error)) return
+         end do; end do; end do; end do
    end subroutine test_sym4_22_jkl_symmetry
 
    !> Swapped calls should produce the full 6-term tensor.
    subroutine test_sym4_22_full_symmetric(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), B(3,3), t_sum(3,3,3,3), t_full(3,3,3,3)
+      real(wp) :: A(3, 3), B(3, 3), t_sum(3, 3, 3, 3), t_full(3, 3, 3, 3)
       integer :: i, j, k, l
 
       call build_symmetric_pair(A, B)
 
-      t_sum  = sym4_22(A, B) + sym4_22(B, A)
+      t_sum = sym4_22(A, B) + sym4_22(B, A)
       t_full = sym4_22_full_ref(A, B)
 
       call check(error, maxval(abs(t_sum - t_full)) < tensor_tol, &
-         "sym4_22(A,B) + sym4_22(B,A) must equal the full 6-term symmetric tensor")
+                 "sym4_22(A,B) + sym4_22(B,A) must equal the full 6-term symmetric tensor")
       if (allocated(error)) return
 
       ! The sum must be fully symmetric.
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         call check(error, abs(t_sum(i,j,k,l) - t_sum(j,i,k,l)) < tensor_tol, &
-            "sym4_22 + swapped: must be symmetric in i<->j")
-         if (allocated(error)) return
-      end do; end do; end do; end do
+            call check(error, abs(t_sum(i, j, k, l) - t_sum(j, i, k, l)) < tensor_tol, &
+                       "sym4_22 + swapped: must be symmetric in i<->j")
+            if (allocated(error)) return
+         end do; end do; end do; end do
    end subroutine test_sym4_22_full_symmetric
 
    !> Check the equivalent four-vector contraction.
    subroutine test_sym4_22_contraction(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: A(3,3), B(3,3), t(3,3,3,3)
+      real(wp) :: A(3, 3), B(3, 3), t(3, 3, 3, 3)
       real(wp) :: u(3), v(3), w(3), x(3)
       real(wp) :: contracted, expected
       integer :: i, j, k, l
 
       call build_symmetric_pair(A, B)
-      u = [1.0_wp,  0.5_wp, -0.3_wp]
-      v = [0.2_wp, -1.1_wp,  0.4_wp]
-      w = [-0.7_wp, 0.6_wp,  1.0_wp]
-      x = [0.9_wp,  0.0_wp, -0.5_wp]
+      u = [1.0_wp, 0.5_wp, -0.3_wp]
+      v = [0.2_wp, -1.1_wp, 0.4_wp]
+      w = [-0.7_wp, 0.6_wp, 1.0_wp]
+      x = [0.9_wp, 0.0_wp, -0.5_wp]
 
       t = sym4_22(A, B)
       contracted = 0.0_wp
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         contracted = contracted + t(i,j,k,l) * u(i) * v(j) * w(k) * x(l)
-      end do; end do; end do; end do
+            contracted = contracted + t(i, j, k, l)*u(i)*v(j)*w(k)*x(l)
+         end do; end do; end do; end do
 
-      expected = dot_product(u, matmul(A, v)) * dot_product(w, matmul(B, x)) &
-               + dot_product(u, matmul(A, w)) * dot_product(v, matmul(B, x)) &
-               + dot_product(u, matmul(A, x)) * dot_product(v, matmul(B, w))
+      expected = dot_product(u, matmul(A, v))*dot_product(w, matmul(B, x)) &
+                 + dot_product(u, matmul(A, w))*dot_product(v, matmul(B, x)) &
+                 + dot_product(u, matmul(A, x))*dot_product(v, matmul(B, w))
 
       call check(error, abs(contracted - expected) < tensor_tol, &
-         "sym4_22 contraction with four vectors must match bilinear-form sum")
+                 "sym4_22 contraction with four vectors must match bilinear-form sum")
    end subroutine test_sym4_22_contraction
 
    ! sym4_211(g, H): six-term symmetrisation.
@@ -728,95 +728,95 @@ contains
    !> Compare sym4_211 with its 6-term reference.
    subroutine test_sym4_211_brute_force(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), H(3,3), t(3,3,3,3), ref(3,3,3,3)
+      real(wp) :: g(3), H(3, 3), t(3, 3, 3, 3), ref(3, 3, 3, 3)
       integer :: i, j, k, l
 
       g = [0.6_wp, -1.4_wp, 0.9_wp]
-      H = reshape([ 2.0_wp,  0.3_wp, -0.5_wp, &
-                    0.3_wp,  1.1_wp,  0.8_wp, &
-                   -0.5_wp,  0.8_wp,  3.0_wp], [3, 3])
+      H = reshape([2.0_wp, 0.3_wp, -0.5_wp, &
+                   0.3_wp, 1.1_wp, 0.8_wp, &
+                   -0.5_wp, 0.8_wp, 3.0_wp], [3, 3])
 
       t = sym4_211(g, H)
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         ref(i,j,k,l) = g(i)*g(j)*H(k,l) + g(i)*g(k)*H(j,l) + g(i)*g(l)*H(j,k) &
-                      + g(j)*g(k)*H(i,l) + g(j)*g(l)*H(i,k) + g(k)*g(l)*H(i,j)
-      end do; end do; end do; end do
+            ref(i, j, k, l) = g(i)*g(j)*H(k, l) + g(i)*g(k)*H(j, l) + g(i)*g(l)*H(j, k) &
+                              + g(j)*g(k)*H(i, l) + g(j)*g(l)*H(i, k) + g(k)*g(l)*H(i, j)
+         end do; end do; end do; end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
-         "sym4_211: element-wise mismatch vs brute-force reference")
+                 "sym4_211: element-wise mismatch vs brute-force reference")
    end subroutine test_sym4_211_brute_force
 
    !> Check full sym4_211 symmetry.
    subroutine test_sym4_211_full_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), H(3,3), t(3,3,3,3)
+      real(wp) :: g(3), H(3, 3), t(3, 3, 3, 3)
       integer :: i, j, k, l
 
       g = [0.6_wp, -1.4_wp, 0.9_wp]
-      H = reshape([ 2.0_wp,  0.3_wp, -0.5_wp, &
-                    0.3_wp,  1.1_wp,  0.8_wp, &
-                   -0.5_wp,  0.8_wp,  3.0_wp], [3, 3])
+      H = reshape([2.0_wp, 0.3_wp, -0.5_wp, &
+                   0.3_wp, 1.1_wp, 0.8_wp, &
+                   -0.5_wp, 0.8_wp, 3.0_wp], [3, 3])
       t = sym4_211(g, H)
 
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         call check(error, abs(t(i,j,k,l) - t(j,i,k,l)) < tensor_tol, &
-            "sym4_211: must be symmetric in i<->j")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,k,j,l)) < tensor_tol, &
-            "sym4_211: must be symmetric in j<->k")
-         if (allocated(error)) return
-         call check(error, abs(t(i,j,k,l) - t(i,j,l,k)) < tensor_tol, &
-            "sym4_211: must be symmetric in k<->l")
-         if (allocated(error)) return
-      end do; end do; end do; end do
+            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
+                       "sym4_211: must be symmetric in i<->j")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                       "sym4_211: must be symmetric in j<->k")
+            if (allocated(error)) return
+            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                       "sym4_211: must be symmetric in k<->l")
+            if (allocated(error)) return
+         end do; end do; end do; end do
    end subroutine test_sym4_211_full_symmetry
 
    !> Check sym4_211 scaling in each argument.
    subroutine test_sym4_211_scaling(error)
       type(error_type), allocatable, intent(out) :: error
-      real(wp) :: g(3), H(3,3), t(3,3,3,3), t_g(3,3,3,3), t_H(3,3,3,3)
+      real(wp) :: g(3), H(3, 3), t(3, 3, 3, 3), t_g(3, 3, 3, 3), t_H(3, 3, 3, 3)
 
       g = [0.6_wp, -1.4_wp, 0.9_wp]
-      H = reshape([ 2.0_wp,  0.3_wp, -0.5_wp, &
-                    0.3_wp,  1.1_wp,  0.8_wp, &
-                   -0.5_wp,  0.8_wp,  3.0_wp], [3, 3])
+      H = reshape([2.0_wp, 0.3_wp, -0.5_wp, &
+                   0.3_wp, 1.1_wp, 0.8_wp, &
+                   -0.5_wp, 0.8_wp, 3.0_wp], [3, 3])
 
-      t   = sym4_211(g,            H)
-      t_g = sym4_211(2.0_wp * g,   H)
-      t_H = sym4_211(g,            -1.5_wp * H)
+      t = sym4_211(g, H)
+      t_g = sym4_211(2.0_wp*g, H)
+      t_H = sym4_211(g, -1.5_wp*H)
 
-      call check(error, maxval(abs(t_g - 4.0_wp * t)) < tensor_tol, &
-         "sym4_211 must scale as g^2 (quadratic in g)")
+      call check(error, maxval(abs(t_g - 4.0_wp*t)) < tensor_tol, &
+                 "sym4_211 must scale as g^2 (quadratic in g)")
       if (allocated(error)) return
-      call check(error, maxval(abs(t_H - (-1.5_wp) * t)) < tensor_tol, &
-         "sym4_211 must scale linearly in H")
+      call check(error, maxval(abs(t_H - (-1.5_wp)*t)) < tensor_tol, &
+                 "sym4_211 must scale linearly in H")
    end subroutine test_sym4_211_scaling
 
    ! Tensor-test helpers.
 
    !> Build distinct symmetric matrices.
    pure subroutine build_symmetric_pair(A, B)
-      real(wp), intent(out) :: A(3,3), B(3,3)
+      real(wp), intent(out) :: A(3, 3), B(3, 3)
 
-      A = reshape([ 1.0_wp,  0.5_wp, -0.2_wp, &
-                    0.5_wp,  2.0_wp,  0.7_wp, &
-                   -0.2_wp,  0.7_wp,  1.5_wp], [3, 3])
+      A = reshape([1.0_wp, 0.5_wp, -0.2_wp, &
+                   0.5_wp, 2.0_wp, 0.7_wp, &
+                   -0.2_wp, 0.7_wp, 1.5_wp], [3, 3])
 
-      B = reshape([ 3.0_wp, -0.4_wp,  0.6_wp, &
-                   -0.4_wp,  1.2_wp,  0.1_wp, &
-                    0.6_wp,  0.1_wp,  2.5_wp], [3, 3])
+      B = reshape([3.0_wp, -0.4_wp, 0.6_wp, &
+                   -0.4_wp, 1.2_wp, 0.1_wp, &
+                   0.6_wp, 0.1_wp, 2.5_wp], [3, 3])
    end subroutine build_symmetric_pair
 
    !> Full 6-term 2+2 symmetric reference.
    pure function sym4_22_full_ref(A, B) result(t)
-      real(wp), intent(in) :: A(3,3), B(3,3)
-      real(wp) :: t(3,3,3,3)
+      real(wp), intent(in) :: A(3, 3), B(3, 3)
+      real(wp) :: t(3, 3, 3, 3)
       integer :: i, j, k, l
 
       do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-         t(i,j,k,l) = A(i,j) * B(k,l) + A(i,k) * B(j,l) + A(i,l) * B(j,k) &
-                    + B(i,j) * A(k,l) + B(i,k) * A(j,l) + B(i,l) * A(j,k)
-      end do; end do; end do; end do
+            t(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k) &
+                            + B(i, j)*A(k, l) + B(i, k)*A(j, l) + B(i, l)*A(j, k)
+         end do; end do; end do; end do
    end function sym4_22_full_ref
 
    !===========================================================================

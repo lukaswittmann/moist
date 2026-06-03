@@ -3,7 +3,7 @@ module test_math_cell_grid
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_cell_grid, only: moist_cell_grid_type
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_math_cell_grid
@@ -16,16 +16,16 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("query_covers_bruteforce", test_query_covers_bruteforce), &
-         new_unittest("single_atom", test_single_atom), &
-         new_unittest("coincident_atoms", test_coincident_atoms), &
-         new_unittest("query_outside_bbox", test_query_outside_bbox), &
-         new_unittest("full_scan_below_threshold", test_full_scan_below_threshold), &
-         new_unittest("full_scan_threshold_not_triggered", test_full_scan_not_triggered), &
-         new_unittest("cell_fraction_superset", test_cell_fraction_superset), &
-         new_unittest("cell_fraction_finer_cells", test_cell_fraction_finer_cells), &
-         new_unittest("cell_fraction_default_identity", test_cell_fraction_default_identity) &
-      ]
+                  new_unittest("query_covers_bruteforce", test_query_covers_bruteforce), &
+                  new_unittest("single_atom", test_single_atom), &
+                  new_unittest("coincident_atoms", test_coincident_atoms), &
+                  new_unittest("query_outside_bbox", test_query_outside_bbox), &
+                  new_unittest("full_scan_below_threshold", test_full_scan_below_threshold), &
+                  new_unittest("full_scan_threshold_not_triggered", test_full_scan_not_triggered), &
+                  new_unittest("cell_fraction_superset", test_cell_fraction_superset), &
+                  new_unittest("cell_fraction_finer_cells", test_cell_fraction_finer_cells), &
+                  new_unittest("cell_fraction_default_identity", test_cell_fraction_default_identity) &
+                  ]
    end subroutine collect_math_cell_grid
 
    !> For a heterogeneous cluster of atoms and a lattice of query points
@@ -57,15 +57,15 @@ contains
       ! Sweep a lattice of query points across bbox +- max r_eff
       xmin = minval(xyz, dim=2) - maxval(r_eff)
       xmax = maxval(xyz, dim=2) + maxval(r_eff)
-      tol = 10.0_wp * epsilon(1.0_wp) * maxval(abs([xmin, xmax]))
+      tol = 10.0_wp*epsilon(1.0_wp)*maxval(abs([xmin, xmax]))
       nx_sweep = 7
 
       do ix = 0, nx_sweep - 1
       do iy = 0, nx_sweep - 1
       do iz = 0, nx_sweep - 1
-         point(1) = xmin(1) + (xmax(1) - xmin(1)) * real(ix, wp) / real(nx_sweep - 1, wp)
-         point(2) = xmin(2) + (xmax(2) - xmin(2)) * real(iy, wp) / real(nx_sweep - 1, wp)
-         point(3) = xmin(3) + (xmax(3) - xmin(3)) * real(iz, wp) / real(nx_sweep - 1, wp)
+         point(1) = xmin(1) + (xmax(1) - xmin(1))*real(ix, wp)/real(nx_sweep - 1, wp)
+         point(2) = xmin(2) + (xmax(2) - xmin(2))*real(iy, wp)/real(nx_sweep - 1, wp)
+         point(3) = xmin(3) + (xmax(3) - xmin(3))*real(iz, wp)/real(nx_sweep - 1, wp)
 
          call grid%query(point, start, n)
 
@@ -144,7 +144,7 @@ contains
       if (allocated(error)) return
 
       do j = 1, 4
-         count_j = count(grid%cell_nlat(start + 1 : start + n) == j)
+         count_j = count(grid%cell_nlat(start + 1:start + n) == j)
          call check(error, count_j == 1, "each atom must appear exactly once")
          if (allocated(error)) return
       end do
@@ -174,7 +174,7 @@ contains
       call check(error, start >= 0, "query must return a non-negative offset")
       if (allocated(error)) return
       call check(error, start + n <= size(grid%cell_nlat), &
-         "returned slice must be within cell_nlat")
+                 "returned slice must be within cell_nlat")
       if (allocated(error)) return
 
       call grid%destroy()
@@ -211,7 +211,7 @@ contains
       if (allocated(error)) return
 
       do j = 1, 6
-         count_j = count(grid%cell_nlat(start + 1 : start + n) == j)
+         count_j = count(grid%cell_nlat(start + 1:start + n) == j)
          call check(error, count_j == 1, "each atom must appear exactly once")
          if (allocated(error)) return
       end do
@@ -236,8 +236,8 @@ contains
       ! natoms (4) >= full_scan_below (3) - spatial path must run.
       call grid%build(xyz, r_eff, full_scan_below=3)
 
-      call check(error, .not. grid%full_scan, &
-         "full_scan flag must remain false at/above threshold")
+      call check(error,.not. grid%full_scan, &
+                 "full_scan flag must remain false at/above threshold")
       if (allocated(error)) return
 
       call grid%destroy()
@@ -266,7 +266,7 @@ contains
 
       xmin = minval(xyz, dim=2) - maxval(r_eff)
       xmax = maxval(xyz, dim=2) + maxval(r_eff)
-      tol = 10.0_wp * epsilon(1.0_wp) * maxval(abs([xmin, xmax]))
+      tol = 10.0_wp*epsilon(1.0_wp)*maxval(abs([xmin, xmax]))
       nx_sweep = 7
 
       do i = 1, size(fractions)
@@ -275,9 +275,9 @@ contains
          do ix = 0, nx_sweep - 1
          do iy = 0, nx_sweep - 1
          do iz = 0, nx_sweep - 1
-            point(1) = xmin(1) + (xmax(1) - xmin(1)) * real(ix, wp) / real(nx_sweep - 1, wp)
-            point(2) = xmin(2) + (xmax(2) - xmin(2)) * real(iy, wp) / real(nx_sweep - 1, wp)
-            point(3) = xmin(3) + (xmax(3) - xmin(3)) * real(iz, wp) / real(nx_sweep - 1, wp)
+            point(1) = xmin(1) + (xmax(1) - xmin(1))*real(ix, wp)/real(nx_sweep - 1, wp)
+            point(2) = xmin(2) + (xmax(2) - xmin(2))*real(iy, wp)/real(nx_sweep - 1, wp)
+            point(3) = xmin(3) + (xmax(3) - xmin(3))*real(iz, wp)/real(nx_sweep - 1, wp)
 
             if (.not. point_inside_bbox(point, minval(xyz, dim=2), maxval(xyz, dim=2))) cycle
 
@@ -329,7 +329,7 @@ contains
       call grid_fine%build(xyz, r_eff, cell_fraction=0.5_wp)
 
       call check(error, grid_fine%ncells > grid_default%ncells, &
-         "finer grid must have more cells")
+                 "finer grid must have more cells")
       if (allocated(error)) return
 
       ! Query near one atom: finer grid should return fewer candidates
@@ -337,7 +337,7 @@ contains
       call grid_fine%query(xyz(:, 1), start_f, n_f)
 
       call check(error, n_f <= n_d, &
-         "finer grid should return no more candidates than default")
+                 "finer grid should return no more candidates than default")
       if (allocated(error)) return
 
       call grid_default%destroy()
@@ -361,11 +361,11 @@ contains
       call grid_explicit%build(xyz, r_eff, cell_fraction=1.0_wp)
 
       call check(error, grid_implicit%ncells == grid_explicit%ncells, &
-         "cell count must match")
+                 "cell count must match")
       if (allocated(error)) return
 
       call check(error, abs(grid_implicit%cell_side - grid_explicit%cell_side) < &
-         epsilon(1.0_wp), "cell side must match")
+                 epsilon(1.0_wp), "cell side must match")
       if (allocated(error)) return
 
       call grid_implicit%query([0.5_wp, 0.5_wp, 0.0_wp], start_i, n_i)

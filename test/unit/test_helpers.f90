@@ -42,7 +42,7 @@ module test_helpers
    !> The 5 mstore collections that get_test_structures samples from.
    integer, parameter :: n_datasets = 3
    character(len=*), parameter :: datasets(n_datasets) = [character(len=10):: &
-      "MB16-43", "Amino20x4", "But14diol"] ! As the CFC is slow, we skip UPU23 for now
+                                                          "MB16-43", "Amino20x4", "But14diol"] ! As the CFC is slow, we skip UPU23 for now
 
 contains
 
@@ -147,7 +147,7 @@ contains
 
       real(wp), parameter :: pad = 2.0_wp
       real(wp), parameter :: min_dist = 2.0e-1_wp
-      integer,  parameter :: max_attempts = 10000
+      integer, parameter :: max_attempts = 10000
 
       integer :: total
       integer(int64) :: rng

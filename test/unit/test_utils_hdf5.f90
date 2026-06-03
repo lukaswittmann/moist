@@ -686,7 +686,7 @@ contains
       open (unit=99, file="test_adda_missing_path.h5", status="old")
       close (unit=99, status="delete")
 
-      call check(error, .not. adda_failed, &
+      call check(error,.not. adda_failed, &
          & more="adda should fail when the target path does not exist")
       if (allocated(error)) return
 
@@ -931,7 +931,7 @@ contains
 
       call cleanup_test_file(filename)
 
-      call check(error, .not. exists, &
+      call check(error,.not. exists, &
          & more="Deleting a non-empty group should remove the group")
       if (allocated(error)) return
    end subroutine test_delete_non_empty_group
@@ -1033,7 +1033,7 @@ contains
    subroutine test_rank_mismatch_read(error)
       type(error_type), allocatable, intent(out) :: error
       type(hdf5_file) :: h5f
-      integer, allocatable :: arr2d(:,:)
+      integer, allocatable :: arr2d(:, :)
       integer :: int_out
       integer :: i, j
       type(moist_error_type), allocatable :: h5err

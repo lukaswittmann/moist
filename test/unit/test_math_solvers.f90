@@ -29,8 +29,8 @@ module test_math_solvers
    use lbfgsb_module, only: setulb
    use moist_math_solver_fmin, only: fmin
    use nlesolver_module, only: nlesolver_type, &
-      NLESOLVER_SCALAR_BOUNDS, &
-      NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
+                               NLESOLVER_SCALAR_BOUNDS, &
+                               NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
    implicit none
    private
@@ -52,7 +52,7 @@ module test_math_solvers
    real(wp), parameter :: slsqp_kernel_thr = 1.0e-4_wp
    !> Reference solution of the constrained Rosenbrock problem (upstream slsqp).
    real(wp), parameter :: slsqp_rosen_x(2) = &
-      [0.78641515097183889_wp, 0.61769831659541152_wp]
+                          [0.78641515097183889_wp, 0.61769831659541152_wp]
    !> L-BFGS-B raw-kernel problem size and convergence controls.
    integer, parameter :: lbfgsb_n = 25, lbfgsb_m = 5
    real(wp), parameter :: lbfgsb_factr = 1.0e7_wp, lbfgsb_pgtol = 1.0e-5_wp
@@ -135,11 +135,11 @@ contains
 
       ! Initialize Newton solver with gradient = 0 formulation
       call new_newton_solver(solver, &
-         n=2, m=2, &
-         func=rosenbrock_gradient_residual, &
-         grad=rosenbrock_hessian, &
-         error=solver_error, &
-         tol=1.0e-12_wp)
+                             n=2, m=2, &
+                             func=rosenbrock_gradient_residual, &
+                             grad=rosenbrock_hessian, &
+                             error=solver_error, &
+                             tol=1.0e-12_wp)
 
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
@@ -289,7 +289,7 @@ contains
          xu=xu, &
          debug=.false., &
          error=solver_error &
-      )
+         )
 
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
@@ -307,7 +307,6 @@ contains
       call check(error, x(2), 1.0_wp, thr=slsqp_thr)
 
    end subroutine test_rosenbrock_slsqp_multistart
-
 
    !* ================================================================================= *!
    !*                   Test Problem 2: Constrained Circle Projection                   *!
@@ -339,8 +338,8 @@ contains
       integer :: istat
 
       ! Expected solution
-      x_expected = 2.0_wp / sqrt(13.0_wp)  ! ≈ 0.5547
-      y_expected = 3.0_wp / sqrt(13.0_wp)  ! ≈ 0.8321
+      x_expected = 2.0_wp/sqrt(13.0_wp)  ! ≈ 0.5547
+      y_expected = 3.0_wp/sqrt(13.0_wp)  ! ≈ 0.8321
 
       ! Initial guess: point on circle + Lagrange multiplier estimate
       ! Start from normalized direction toward target
@@ -348,11 +347,11 @@ contains
 
       ! Initialize Newton solver with Lagrangian formulation
       call new_newton_solver(solver, &
-         n=3, m=3, &
-         func=circle_lagrangian_residual, &
-         grad=circle_lagrangian_jacobian, &
-         error=solver_error, &
-         tol=1.0e-12_wp)
+                             n=3, m=3, &
+                             func=circle_lagrangian_residual, &
+                             grad=circle_lagrangian_jacobian, &
+                             error=solver_error, &
+                             tol=1.0e-12_wp)
 
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
@@ -365,7 +364,6 @@ contains
          call check(error, .false., message=solver_error%message)
          return
       end if
-
 
       ! Verify solution (only check x, y; lambda is auxiliary)
       call check(error, x(1), x_expected, thr=newton_thr)
@@ -389,8 +387,8 @@ contains
       integer :: istat
 
       ! Expected solution
-      x_expected = 2.0_wp / sqrt(13.0_wp)
-      y_expected = 3.0_wp / sqrt(13.0_wp)
+      x_expected = 2.0_wp/sqrt(13.0_wp)
+      y_expected = 3.0_wp/sqrt(13.0_wp)
 
       ! Set reasonable bounds for constrained optimization
       xl = [-2.0_wp, -2.0_wp]
@@ -444,8 +442,8 @@ contains
       real(wp) :: x_expected, y_expected
 
       ! Expected solution
-      x_expected = 2.0_wp / sqrt(13.0_wp)
-      y_expected = 3.0_wp / sqrt(13.0_wp)
+      x_expected = 2.0_wp/sqrt(13.0_wp)
+      y_expected = 3.0_wp/sqrt(13.0_wp)
 
       ! Set reasonable bounds
       xl = [-2.0_wp, -2.0_wp, -2.0_wp]
@@ -472,7 +470,7 @@ contains
          xu=xu, &
          debug=.false., &
          error=solver_error &
-      )
+         )
 
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
@@ -503,8 +501,8 @@ contains
       real(wp) :: x_expected, y_expected
 
       ! Expected solution
-      x_expected = 2.0_wp / sqrt(13.0_wp)
-      y_expected = 3.0_wp / sqrt(13.0_wp)
+      x_expected = 2.0_wp/sqrt(13.0_wp)
+      y_expected = 3.0_wp/sqrt(13.0_wp)
 
       ! Set reasonable bounds
       xl = [-2.0_wp, -2.0_wp]
@@ -557,25 +555,25 @@ contains
       real(wp), dimension(:), intent(out) :: f
 
       ! f_1 = df/ dx = -2(1-x) - 400x(y-x^2 )
-      f(1) = -2.0_wp * (1.0_wp - x(1)) - 400.0_wp * x(1) * (x(2) - x(1)**2)
+      f(1) = -2.0_wp*(1.0_wp - x(1)) - 400.0_wp*x(1)*(x(2) - x(1)**2)
 
       ! f_2 = df/ dy = 200(y-x^2 )
-      f(2) = 200.0_wp * (x(2) - x(1)**2)
+      f(2) = 200.0_wp*(x(2) - x(1)**2)
    end subroutine rosenbrock_gradient_residual
 
    !> Rosenbrock Hessian for Newton
    subroutine rosenbrock_hessian(x, jac)
       real(wp), dimension(:), intent(in) :: x
-      real(wp), dimension(:,:), intent(out) :: jac
+      real(wp), dimension(:, :), intent(out) :: jac
 
       !  d^2 f/ dx^2 = 2 - 400(y - 3x^2 )
-      jac(1, 1) = 2.0_wp - 400.0_wp * (x(2) - 3.0_wp * x(1)**2)
+      jac(1, 1) = 2.0_wp - 400.0_wp*(x(2) - 3.0_wp*x(1)**2)
 
       !  d^2 f/ dx dy = -400x
-      jac(1, 2) = -400.0_wp * x(1)
+      jac(1, 2) = -400.0_wp*x(1)
 
       !  d^2 f/ dy dx = -400x
-      jac(2, 1) = -400.0_wp * x(1)
+      jac(2, 1) = -400.0_wp*x(1)
 
       !  d^2 f/ dy^2 = 200
       jac(2, 2) = 200.0_wp
@@ -587,7 +585,7 @@ contains
       real(wp), intent(out) :: f
 
       ! f = (1-x)^2 + 100(y-x^2 )^2
-      f = (1.0_wp - x(1))**2 + 100.0_wp * (x(2) - x(1)**2)**2
+      f = (1.0_wp - x(1))**2 + 100.0_wp*(x(2) - x(1)**2)**2
    end subroutine rosenbrock_objective
 
    !> Rosenbrock objective with context for 3D variables (ignore z).
@@ -606,10 +604,10 @@ contains
       real(wp), dimension(:), intent(out) :: df
 
       !  df/ dx = -2(1-x) - 400x(y-x^2 )
-      df(1) = -2.0_wp * (1.0_wp - x(1)) - 400.0_wp * x(1) * (x(2) - x(1)**2)
+      df(1) = -2.0_wp*(1.0_wp - x(1)) - 400.0_wp*x(1)*(x(2) - x(1)**2)
 
       !  df/ dy = 200(y-x^2 )
-      df(2) = 200.0_wp * (x(2) - x(1)**2)
+      df(2) = 200.0_wp*(x(2) - x(1)**2)
    end subroutine rosenbrock_objective_gradient
 
    !> Rosenbrock objective gradient with context for 3D variables (ignore z).
@@ -637,7 +635,7 @@ contains
    !> Required by multistart's SLSQP interface even when m=0.
    subroutine empty_constraint_gradient_ctx3(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
-      real(wp), dimension(:,:), intent(out) :: dc
+      real(wp), dimension(:, :), intent(out) :: dc
       class(*), intent(in) :: context
 
       if (size(dc) > 0) dc = 0.0_wp
@@ -654,10 +652,10 @@ contains
       real(wp), dimension(:), intent(out) :: f
 
       ! f_1 = dL/ dx = 2(x-2) + 2 lambda x = 0
-      f(1) = 2.0_wp * (x(1) - 2.0_wp) + 2.0_wp * x(3) * x(1)
+      f(1) = 2.0_wp*(x(1) - 2.0_wp) + 2.0_wp*x(3)*x(1)
 
       ! f_2 = dL/ dy = 2(y-3) + 2 lambda y = 0
-      f(2) = 2.0_wp * (x(2) - 3.0_wp) + 2.0_wp * x(3) * x(2)
+      f(2) = 2.0_wp*(x(2) - 3.0_wp) + 2.0_wp*x(3)*x(2)
 
       ! f_3 = constraint = x^2 + y^2 - 1 = 0
       f(3) = x(1)**2 + x(2)**2 - 1.0_wp
@@ -666,21 +664,21 @@ contains
    !> Circle Lagrangian Jacobian for Newton
    subroutine circle_lagrangian_jacobian(x, jac)
       real(wp), dimension(:), intent(in) :: x  ! [x, y, λ]
-      real(wp), dimension(:,:), intent(out) :: jac
+      real(wp), dimension(:, :), intent(out) :: jac
 
       ! Row 1: derivatives of f_1
-      jac(1, 1) = 2.0_wp + 2.0_wp * x(3)  ! ∂f₁/∂x
+      jac(1, 1) = 2.0_wp + 2.0_wp*x(3)  ! ∂f₁/∂x
       jac(1, 2) = 0.0_wp                   ! ∂f₁/∂y
-      jac(1, 3) = 2.0_wp * x(1)            ! ∂f₁/∂λ
+      jac(1, 3) = 2.0_wp*x(1)            ! ∂f₁/∂λ
 
       ! Row 2: derivatives of f_2
       jac(2, 1) = 0.0_wp                   ! ∂f₂/∂x
-      jac(2, 2) = 2.0_wp + 2.0_wp * x(3)  ! ∂f₂/∂y
-      jac(2, 3) = 2.0_wp * x(2)            ! ∂f₂/∂λ
+      jac(2, 2) = 2.0_wp + 2.0_wp*x(3)  ! ∂f₂/∂y
+      jac(2, 3) = 2.0_wp*x(2)            ! ∂f₂/∂λ
 
       ! Row 3: derivatives of constraint
-      jac(3, 1) = 2.0_wp * x(1)            ! ∂f₃/∂x
-      jac(3, 2) = 2.0_wp * x(2)            ! ∂f₃/∂y
+      jac(3, 1) = 2.0_wp*x(1)            ! ∂f₃/∂x
+      jac(3, 2) = 2.0_wp*x(2)            ! ∂f₃/∂y
       jac(3, 3) = 0.0_wp                   ! ∂f₃/∂λ
    end subroutine circle_lagrangian_jacobian
 
@@ -708,10 +706,10 @@ contains
       real(wp), dimension(:), intent(out) :: df
 
       !  df/ dx = 2(x-2)
-      df(1) = 2.0_wp * (x(1) - 2.0_wp)
+      df(1) = 2.0_wp*(x(1) - 2.0_wp)
 
       !  df/ dy = 2(y-3)
-      df(2) = 2.0_wp * (x(2) - 3.0_wp)
+      df(2) = 2.0_wp*(x(2) - 3.0_wp)
    end subroutine circle_objective_gradient
 
    !> Circle objective gradient with context (for multi-start SLSQP)
@@ -744,19 +742,19 @@ contains
    !> Circle constraint gradient for SLSQP
    subroutine circle_constraint_gradient(x, dc)
       real(wp), dimension(:), intent(in) :: x   ! [x, y]
-      real(wp), dimension(:,:), intent(out) :: dc  ! [m, n]
+      real(wp), dimension(:, :), intent(out) :: dc  ! [m, n]
 
       !  dc/ dx = 2x
-      dc(1, 1) = 2.0_wp * x(1)
+      dc(1, 1) = 2.0_wp*x(1)
 
       !  dc/ dy = 2y
-      dc(1, 2) = 2.0_wp * x(2)
+      dc(1, 2) = 2.0_wp*x(2)
    end subroutine circle_constraint_gradient
 
    !> Circle constraint gradient with context (for multi-start SLSQP)
    subroutine circle_constraint_gradient_ctx(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
-      real(wp), dimension(:,:), intent(out) :: dc
+      real(wp), dimension(:, :), intent(out) :: dc
       class(*), intent(in) :: context
 
       call circle_constraint_gradient(x, dc)
@@ -793,7 +791,7 @@ contains
    !> Circle constraint gradient with context for 3D variables (ignore z).
    subroutine circle_constraint_gradient_ctx3(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
-      real(wp), dimension(:,:), intent(out) :: dc
+      real(wp), dimension(:, :), intent(out) :: dc
       class(*), intent(in) :: context
 
       dc = 0.0_wp
@@ -811,7 +809,7 @@ contains
       constraint = x(1)**2 + x(2)**2 - 1.0_wp
 
       ! f = (x-2)^2 + (y-3)^2 + penalty . c^2
-      f = (x(1) - 2.0_wp)**2 + (x(2) - 3.0_wp)**2 + penalty * constraint**2
+      f = (x(1) - 2.0_wp)**2 + (x(2) - 3.0_wp)**2 + penalty*constraint**2
    end subroutine circle_penalty_objective
 
    !> Circle penalty objective gradient for L-BFGS-B
@@ -825,10 +823,10 @@ contains
       constraint = x(1)**2 + x(2)**2 - 1.0_wp
 
       !  df/ dx = 2(x-2) + penalty . 2c . 2x
-      df(1) = 2.0_wp * (x(1) - 2.0_wp) + penalty * 2.0_wp * constraint * 2.0_wp * x(1)
+      df(1) = 2.0_wp*(x(1) - 2.0_wp) + penalty*2.0_wp*constraint*2.0_wp*x(1)
 
       !  df/ dy = 2(y-3) + penalty . 2c . 2y
-      df(2) = 2.0_wp * (x(2) - 3.0_wp) + penalty * 2.0_wp * constraint * 2.0_wp * x(2)
+      df(2) = 2.0_wp*(x(2) - 3.0_wp) + penalty*2.0_wp*constraint*2.0_wp*x(2)
    end subroutine circle_penalty_objective_gradient
 
    !* ================================================================================= *!
@@ -853,7 +851,7 @@ contains
       !> Nearest point on the right unit circle (center (+2,0)) to anchor (0,0.5):
       !> c_R + (a - c_R)/||a - c_R||, with ||a - c_R|| = sqrt(4.25).
       real(wp), parameter :: near_right(2) = &
-         [1.0298574998546681_wp, 0.24253562503633297_wp]
+                             [1.0298574998546681_wp, 0.24253562503633297_wp]
 
       xl = [-3.0_wp, -3.0_wp]
       xu = [3.0_wp, 3.0_wp]
@@ -1009,7 +1007,7 @@ contains
 
       associate (dummy => context)
       end associate
-      f = 0.5_wp * ((x(1) - 0.0_wp)**2 + (x(2) - 0.5_wp)**2)
+      f = 0.5_wp*((x(1) - 0.0_wp)**2 + (x(2) - 0.5_wp)**2)
    end subroutine two_circle_objective
 
    subroutine two_circle_objective_grad(x, df, context)
@@ -1035,7 +1033,7 @@ contains
       end associate
       u = (x(1) + 2.0_wp)**2 + x(2)**2 - 1.0_wp
       v = (x(1) - 2.0_wp)**2 + x(2)**2 - 1.0_wp
-      c(1) = u * v
+      c(1) = u*v
    end subroutine two_circle_constraint
 
    !> Constraint Jacobian: grad_h = v * grad_u + u * grad_v
@@ -1051,8 +1049,8 @@ contains
       u = (x(1) + 2.0_wp)**2 + x(2)**2 - 1.0_wp
       v = (x(1) - 2.0_wp)**2 + x(2)**2 - 1.0_wp
       ! grad_u = (2(x+2), 2y);  grad_v = (2(x-2), 2y)
-      dc(1, 1) = v * 2.0_wp * (x(1) + 2.0_wp) + u * 2.0_wp * (x(1) - 2.0_wp)
-      dc(1, 2) = v * 2.0_wp * x(2) + u * 2.0_wp * x(2)
+      dc(1, 1) = v*2.0_wp*(x(1) + 2.0_wp) + u*2.0_wp*(x(1) - 2.0_wp)
+      dc(1, 2) = v*2.0_wp*x(2) + u*2.0_wp*x(2)
    end subroutine two_circle_constraint_grad
 
    !> Test helper: is r on one of the two unit circles (within tol)?
@@ -1564,7 +1562,7 @@ contains
          do b = 0, 1
             use_broyden = (b == 1)
             call run_newton_dense(step_mode, use_broyden, &
-               "dense step_mode="//to_string(step_mode)//" broyden="//merge("T", "F", use_broyden), error)
+                                  "dense step_mode="//to_string(step_mode)//" broyden="//merge("T", "F", use_broyden), error)
             if (allocated(error)) return
          end do
       end do
@@ -1587,8 +1585,8 @@ contains
             do b = 0, 1
                use_broyden = (b == 1)
                call run_newton_sparse(modes(k), step_mode, use_broyden, &
-                  "sparse "//trim(names(k))//" step_mode="//to_string(step_mode)// &
-                  " broyden="//merge("T", "F", use_broyden), error)
+                                      "sparse "//trim(names(k))//" step_mode="//to_string(step_mode)// &
+                                      " broyden="//merge("T", "F", use_broyden), error)
                if (allocated(error)) return
             end do
          end do
@@ -1755,13 +1753,13 @@ contains
       x = [-1.2_wp, 1.0_wp]
 
       call new_newton_solver(solver, &
-         n=2, m=2, &
-         func=rosenbrock_gradient_residual, &
-         grad=rosenbrock_hessian, &
-         error=solver_error, &
-         max_iter=1, &
-         tol=1.0e-12_wp, &
-         tolx=1.0e-14_wp)
+                             n=2, m=2, &
+                             func=rosenbrock_gradient_residual, &
+                             grad=rosenbrock_hessian, &
+                             error=solver_error, &
+                             max_iter=1, &
+                             tol=1.0e-12_wp, &
+                             tolx=1.0e-14_wp)
 
       ! Construction is expected to succeed; the one-iteration solve from a far
       ! start must then report non-convergence (registered should_fail=.true.).
@@ -1885,7 +1883,7 @@ contains
       real(wp), parameter :: step = 1.0e-6_wp
       real(wp), parameter :: grad_tol = 1.0e-6_wp
       real(wp), parameter :: probes(2, 3) = reshape( &
-         [0.3_wp, -0.4_wp, 2.0_wp, 1.5_wp, -0.5_wp, -2.0_wp], [2, 3])
+                             [0.3_wp, -0.4_wp, 2.0_wp, 1.5_wp, -0.5_wp, -2.0_wp], [2, 3])
 
       call op%init(n_dim=2, max_roots=4, error=op_error)
       if (allocated(op_error)) then
@@ -1945,7 +1943,6 @@ contains
       end do
 
    end subroutine test_deflation_operator_gradient_fd
-
 
    !* ================================================================================= *!
    !*             L-BFGS-B raw-kernel: active-bound and error-state coverage            *!

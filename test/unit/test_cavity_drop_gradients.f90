@@ -9,7 +9,7 @@ module test_cavity_drop_gradients
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_projector, only: drop_projector_type
    use moist_cavity_drop_types, only: projection_workspace_type
-   use moist_radii, only : default_cpcm_radii
+   use moist_radii, only: default_cpcm_radii
    use moist_data_radii_legacy, only: get_radius_func
    use mctc_io_convert, only: aatoau
    use mstore, only: get_structure
@@ -57,7 +57,7 @@ contains
                   ! new_unittest("il16_008", test_il16_008), &
                   new_unittest("dimer_branching", test_dimer_branching), &
                   ! This test is expensive but we keep it for now
-                  new_unittest("branching_xyz_totals", test_branching_xyz_totals) & 
+                  new_unittest("branching_xyz_totals", test_branching_xyz_totals) &
                   ]
    end subroutine collect_cavity_drop_gradients
 
@@ -375,12 +375,12 @@ contains
       integer :: iat, idir
 
       call new(mol, [6, 6, 6, 6, 6], reshape([ &
-                                              0.00_wp,  4.21_wp,  0.00_wp, &
-                                              0.00_wp,  0.00_wp,  4.22_wp, &
-                                              0.00_wp, -4.18_wp,  0.00_wp, &
-                                              0.00_wp,  0.00_wp, -4.15_wp, &
-                                              0.02_wp,  0.10_wp, -0.20_wp], &
-                                              [3, 5]) * aatoau)
+                                             0.00_wp, 4.21_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, 4.22_wp, &
+                                             0.00_wp, -4.18_wp, 0.00_wp, &
+                                             0.00_wp, 0.00_wp, -4.15_wp, &
+                                             0.02_wp, 0.10_wp, -0.20_wp], &
+                                             [3, 5])*aatoau)
 
       allocate (radii(mol%nat))
       do iat = 1, mol%nat
@@ -392,11 +392,11 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=1.0_wp, blend_3b=1.0_wp)
          call new_cavity_drop(cavity, nleb=110, &
-                             do_fine=.true., &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7, &
-                             debug=.false., verbose=0, &
-                             radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              do_fine=.true., &
+                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7, &
+                              debug=.false., verbose=0, &
+                              radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
 
@@ -415,15 +415,15 @@ contains
          do idir = 1, ndim
             call build_and_totalize(cavity, mol, iat, idir, -2.0_wp*STEP_SIZE, A_nn, V_nn, error)
             if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir, -1.0_wp*STEP_SIZE, A_n,  V_n, error)
+            call build_and_totalize(cavity, mol, iat, idir, -1.0_wp*STEP_SIZE, A_n, V_n, error)
             if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir,  1.0_wp*STEP_SIZE, A_p,  V_p, error)
+            call build_and_totalize(cavity, mol, iat, idir, 1.0_wp*STEP_SIZE, A_p, V_p, error)
             if (allocated(error)) return
-            call build_and_totalize(cavity, mol, iat, idir,  2.0_wp*STEP_SIZE, A_pp, V_pp, error)
+            call build_and_totalize(cavity, mol, iat, idir, 2.0_wp*STEP_SIZE, A_pp, V_pp, error)
             if (allocated(error)) return
 
-            num_dA_drA(idir, iat) = (-A_pp + 8.0_wp*A_p - 8.0_wp*A_n + A_nn) / (12.0_wp*STEP_SIZE)
-            num_dV_drA(idir, iat) = (-V_pp + 8.0_wp*V_p - 8.0_wp*V_n + V_nn) / (12.0_wp*STEP_SIZE)
+            num_dA_drA(idir, iat) = (-A_pp + 8.0_wp*A_p - 8.0_wp*A_n + A_nn)/(12.0_wp*STEP_SIZE)
+            num_dV_drA(idir, iat) = (-V_pp + 8.0_wp*V_p - 8.0_wp*V_n + V_nn)/(12.0_wp*STEP_SIZE)
          end do
       end do
 
@@ -490,9 +490,9 @@ contains
          do j = i, 2, -1
             if (key_owner(j) < key_owner(j - 1)) then
                tmp_i = key_owner(j); key_owner(j) = key_owner(j - 1); key_owner(j - 1) = tmp_i
-               tmp_r = phi(j);        phi(j)       = phi(j - 1);        phi(j - 1)       = tmp_r
+               tmp_r = phi(j); phi(j) = phi(j - 1); phi(j - 1) = tmp_r
                tmp_v = work%points(:, j); work%points(:, j) = work%points(:, j - 1); work%points(:, j - 1) = tmp_v
-               tmp_r = work%rho(j);    work%rho(j)    = work%rho(j - 1);    work%rho(j - 1)    = tmp_r
+               tmp_r = work%rho(j); work%rho(j) = work%rho(j - 1); work%rho(j - 1) = tmp_r
                tmp_r = work%lambda(j); work%lambda(j) = work%lambda(j - 1); work%lambda(j - 1) = tmp_r
                tmp_v = work%normals(:, j); work%normals(:, j) = work%normals(:, j - 1); work%normals(:, j - 1) = tmp_v
                tmp_l = work%converged(j); work%converged(j) = work%converged(j - 1); work%converged(j - 1) = tmp_l
@@ -526,7 +526,7 @@ contains
    subroutine fatal_error_from_mctc(error, msg)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: msg
-      allocate(error)
+      allocate (error)
       error%message = msg
       error%stat = 1
    end subroutine fatal_error_from_mctc
@@ -550,7 +550,7 @@ contains
 
    !> Test gradient of gridpoints w.r.t. atomic positions
    subroutine do_test(error, mol, radii, blend_k_override, gamma_override, nleb_override, proj_level_override, &
-         branch_rho_cut_override, branch_weight_s_override)
+                      branch_rho_cut_override, branch_weight_s_override)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
@@ -569,7 +569,6 @@ contains
       real(wp), intent(in), optional :: branch_rho_cut_override
       !> Optional override for branch-weight softmax scale (larger = softer)
       real(wp), intent(in), optional :: branch_weight_s_override
-
 
       type(structure_type) :: mol_fd
       type(cavity_type_drop), allocatable :: cavity
@@ -664,12 +663,12 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=blend_k_local, blend_3b=gamma_local)
          call new_cavity_drop(cavity, nleb=nleb_local, &
-                             do_fine=.true., &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, &
-                             debug=.false., verbose=0, &
-                             wleb_prune_level=4, &
-                             radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              do_fine=.true., &
+                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, &
+                              debug=.false., verbose=0, &
+                              wleb_prune_level=4, &
+                              radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
       !> Raise wleb_cut above the tolerance-derived default (5e-16). With xi

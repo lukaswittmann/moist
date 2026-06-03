@@ -3,12 +3,12 @@ module test_math_trig
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check
    use moist_math_trigonometry, only: rotation_z_to_n
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_math_trig
 
-   real(wp), parameter :: thr = 100.0_wp * epsilon(1.0_wp)
+   real(wp), parameter :: thr = 100.0_wp*epsilon(1.0_wp)
 
 contains
 
@@ -18,14 +18,14 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("rot_z_to_z", test_rot_z_to_z), &
-         new_unittest("rot_z_to_neg_z", test_rot_z_to_neg_z), &
-         new_unittest("rot_z_to_x", test_rot_z_to_x), &
-         new_unittest("rot_z_to_y", test_rot_z_to_y), &
-         new_unittest("rot_z_to_arbitrary", test_rot_z_to_arbitrary), &
-         new_unittest("rot_orthogonality", test_rot_orthogonality), &
-         new_unittest("rot_determinant", test_rot_determinant) &
-      ]
+                  new_unittest("rot_z_to_z", test_rot_z_to_z), &
+                  new_unittest("rot_z_to_neg_z", test_rot_z_to_neg_z), &
+                  new_unittest("rot_z_to_x", test_rot_z_to_x), &
+                  new_unittest("rot_z_to_y", test_rot_z_to_y), &
+                  new_unittest("rot_z_to_arbitrary", test_rot_z_to_arbitrary), &
+                  new_unittest("rot_orthogonality", test_rot_orthogonality), &
+                  new_unittest("rot_determinant", test_rot_determinant) &
+                  ]
    end subroutine collect_math_trig
 
    !> Identity case: rotating z to z should give the identity matrix
@@ -40,9 +40,9 @@ contains
       do i = 1, 3
          do j = 1, 3
             if (i == j) then
-               call check(error, abs(R(i,j) - 1.0_wp) < thr, "Diagonal should be 1")
+               call check(error, abs(R(i, j) - 1.0_wp) < thr, "Diagonal should be 1")
             else
-               call check(error, abs(R(i,j)) < thr, "Off-diagonal should be 0")
+               call check(error, abs(R(i, j)) < thr, "Off-diagonal should be 0")
             end if
             if (allocated(error)) return
          end do
@@ -105,7 +105,7 @@ contains
 
       n = [1.0_wp, 2.0_wp, 3.0_wp]
       nrm = norm2(n)
-      n = n / nrm
+      n = n/nrm
 
       call rotation_z_to_n(n, R)
 
@@ -124,16 +124,16 @@ contains
       integer :: i, j
 
       n = [0.3_wp, -0.7_wp, 0.5_wp]
-      n = n / norm2(n)
+      n = n/norm2(n)
       call rotation_z_to_n(n, R)
 
       RtR = matmul(transpose(R), R)
       do i = 1, 3
          do j = 1, 3
             if (i == j) then
-               call check(error, abs(RtR(i,j) - 1.0_wp) < thr, "R^T R diagonal should be 1")
+               call check(error, abs(RtR(i, j) - 1.0_wp) < thr, "R^T R diagonal should be 1")
             else
-               call check(error, abs(RtR(i,j)) < thr, "R^T R off-diagonal should be 0")
+               call check(error, abs(RtR(i, j)) < thr, "R^T R off-diagonal should be 0")
             end if
             if (allocated(error)) return
          end do
@@ -146,12 +146,12 @@ contains
       real(wp) :: R(3, 3), n(3), det
 
       n = [-0.6_wp, 0.1_wp, -0.8_wp]
-      n = n / norm2(n)
+      n = n/norm2(n)
       call rotation_z_to_n(n, R)
 
-      det = R(1,1)*(R(2,2)*R(3,3) - R(2,3)*R(3,2)) &
-          - R(1,2)*(R(2,1)*R(3,3) - R(2,3)*R(3,1)) &
-          + R(1,3)*(R(2,1)*R(3,2) - R(2,2)*R(3,1))
+      det = R(1, 1)*(R(2, 2)*R(3, 3) - R(2, 3)*R(3, 2)) &
+            - R(1, 2)*(R(2, 1)*R(3, 3) - R(2, 3)*R(3, 1)) &
+            + R(1, 3)*(R(2, 1)*R(3, 2) - R(2, 2)*R(3, 1))
 
       call check(error, abs(det - 1.0_wp) < thr, "Determinant should be +1")
    end subroutine test_rot_determinant

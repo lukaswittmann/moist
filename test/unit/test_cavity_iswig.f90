@@ -66,7 +66,7 @@ contains
          return
       end if
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, nleb=1202, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
@@ -114,7 +114,7 @@ contains
          return
       end if
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
@@ -164,7 +164,7 @@ contains
          return
       end if
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
@@ -215,7 +215,7 @@ contains
 
       allocate (asph_full(nsph), asph_eff(nsph))
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, num_leb, 0.0_wp, 0.0_wp, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
@@ -230,7 +230,7 @@ contains
       asph_full = cav%asph
       deallocate (cav)
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, num_leb, 0.0_wp, 0.0_wp, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
@@ -275,8 +275,8 @@ contains
       do i = 1, mol%nat
          do j = 1, 3
             mol%xyz(j, i) = mol%xyz(j, i) + STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -289,8 +289,8 @@ contains
             end if
             fwd = cav%f(1)
             mol%xyz(j, i) = mol%xyz(j, i) - 2*STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -311,7 +311,7 @@ contains
       do i = 1, mol%nat
          do j = 1, 3
             call check(error, ana2d(j, i), num2d(j, i), thr_abs=ABS_THR, thr_rel=REL_THR, &
-               more="Analytical and numerical gradients do not match for switching function")
+                       more="Analytical and numerical gradients do not match for switching function")
          end do
       end do
 
@@ -353,8 +353,8 @@ contains
             do j = 1, 3
 
                mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*STEP_SIZE
-               if (allocated(cav)) deallocate(cav)
-               allocate(cav)
+               if (allocated(cav)) deallocate (cav)
+               allocate (cav)
                call new_cavity_iswig(cav, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
@@ -370,8 +370,8 @@ contains
                ffwd = cav%total_area
 
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
-               if (allocated(cav)) deallocate(cav)
-               allocate(cav)
+               if (allocated(cav)) deallocate (cav)
+               allocate (cav)
                call new_cavity_iswig(cav, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
@@ -387,8 +387,8 @@ contains
                fwd = cav%total_area
 
                mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*STEP_SIZE
-               if (allocated(cav)) deallocate(cav)
-               allocate(cav)
+               if (allocated(cav)) deallocate (cav)
+               allocate (cav)
                call new_cavity_iswig(cav, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
@@ -404,8 +404,8 @@ contains
                bwd = cav%total_area
 
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
-               if (allocated(cav)) deallocate(cav)
-               allocate(cav)
+               if (allocated(cav)) deallocate (cav)
+               allocate (cav)
                call new_cavity_iswig(cav, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
@@ -427,8 +427,8 @@ contains
 
          ana2d = 0.0_wp
          ! Use type-bound gradient on the cavity (3, nat)
-         if (allocated(cav)) deallocate(cav)
-         allocate(cav)
+         if (allocated(cav)) deallocate (cav)
+         allocate (cav)
          call new_cavity_iswig(cav, nleb=nlebs(nleb), &
             & cut_a=cut_a, cut_f=cut_f, &
             & radius_model=radius_model, error=cavity_error)
@@ -447,7 +447,7 @@ contains
          do i = 1, mol%nat
             do j = 1, 3
                call check(error, ana2d(j, i), num2d(j, i), thr_abs=ABS_THR, thr_rel=REL_THR, &
-                  more="Analytical and numerical gradients do not match for area")
+                          more="Analytical and numerical gradients do not match for area")
             end do
          end do
 
@@ -479,8 +479,8 @@ contains
       do i = 1, mol%nat
          do j = 1, 3
             mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*h
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
@@ -495,8 +495,8 @@ contains
             ffwd = cav%total_volume
 
             mol%xyz(j, i) = mol%xyz(j, i) - h
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
@@ -511,8 +511,8 @@ contains
             fwd = cav%total_volume
 
             mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*h
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
@@ -527,8 +527,8 @@ contains
             bwd = cav%total_volume
 
             mol%xyz(j, i) = mol%xyz(j, i) - h
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
@@ -544,13 +544,13 @@ contains
 
             mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*h
             num(3*(i - 1) + j) = (-ffwd + 8.0_wp*fwd &
-               & - 8.0_wp*bwd + bbwd) / (12.0_wp*h)
+               & - 8.0_wp*bwd + bbwd)/(12.0_wp*h)
          end do
       end do
 
       ! Compute analytical volume gradient
-      if (allocated(cav)) deallocate(cav)
-      allocate(cav)
+      if (allocated(cav)) deallocate (cav)
+      allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
@@ -603,7 +603,7 @@ contains
          return
       end if
 
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
@@ -617,7 +617,7 @@ contains
       end if
 
       n = cav%ngrid
-      allocate(amat(n, n))
+      allocate (amat(n, n))
       call cav%get_amat(amat, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -684,7 +684,7 @@ contains
       integer :: i, j, n, iat, iax
 
       call get_structure(mol, "MB16-43", "13")
-      allocate(radii(mol%nat))
+      allocate (radii(mol%nat))
       radii = 4.0_wp
 
       call new_radii_custom_atoms(radii, radius_model, cavity_error)
@@ -694,7 +694,7 @@ contains
       end if
 
       ! Build reference cavity to set up charge vectors
-      allocate(cav)
+      allocate (cav)
       call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
@@ -710,18 +710,18 @@ contains
       n = cav%ngrid
 
       ! Set up test charge vectors
-      allocate(q1(n), q2(n))
+      allocate (q1(n), q2(n))
       do i = 1, n
-         q1(i) = real(i, wp) / real(n + 1, wp)
+         q1(i) = real(i, wp)/real(n + 1, wp)
          if (mod(i, 2) == 0) then
-            q2(i) = real(i, wp) / real(n + 1, wp)
+            q2(i) = real(i, wp)/real(n + 1, wp)
          else
-            q2(i) = -real(i, wp) / real(n + 1, wp)
+            q2(i) = -real(i, wp)/real(n + 1, wp)
          end if
       end do
 
       ! Compute analytical gradient
-      allocate(ana_grad(3, mol%nat))
+      allocate (ana_grad(3, mol%nat))
       call cav%contract_amat1_q1q2_rA(q1, q2, ana_grad, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -729,16 +729,16 @@ contains
       end if
 
       ! Compute numerical gradient via 5-point stencil
-      allocate(num_grad(3, mol%nat))
+      allocate (num_grad(3, mol%nat))
       num_grad = 0.0_wp
 
       do iat = 1, mol%nat
          do iax = 1, 3
 
             ! +2h
-            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp * STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
                & error=cavity_error)
             if (allocated(cavity_error)) then
@@ -750,19 +750,19 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            allocate(amat(cav%ngrid, cav%ngrid))
+            allocate (amat(cav%ngrid, cav%ngrid))
             call cav%get_amat(amat, cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
             end if
             ffwd = dot_product(q1, matmul(amat, q2))
-            deallocate(amat)
+            deallocate (amat)
 
             ! +h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
                & error=cavity_error)
             if (allocated(cavity_error)) then
@@ -774,19 +774,19 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            allocate(amat(cav%ngrid, cav%ngrid))
+            allocate (amat(cav%ngrid, cav%ngrid))
             call cav%get_amat(amat, cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
             end if
             fwd = dot_product(q1, matmul(amat, q2))
-            deallocate(amat)
+            deallocate (amat)
 
             ! -h
-            mol%xyz(iax, iat) = mol%xyz(iax, iat) - 2.0_wp * STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - 2.0_wp*STEP_SIZE
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
                & error=cavity_error)
             if (allocated(cavity_error)) then
@@ -798,19 +798,19 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            allocate(amat(cav%ngrid, cav%ngrid))
+            allocate (amat(cav%ngrid, cav%ngrid))
             call cav%get_amat(amat, cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
             end if
             bwd = dot_product(q1, matmul(amat, q2))
-            deallocate(amat)
+            deallocate (amat)
 
             ! -2h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
-            if (allocated(cav)) deallocate(cav)
-            allocate(cav)
+            if (allocated(cav)) deallocate (cav)
+            allocate (cav)
             call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
                & error=cavity_error)
             if (allocated(cavity_error)) then
@@ -822,21 +822,21 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            allocate(amat(cav%ngrid, cav%ngrid))
+            allocate (amat(cav%ngrid, cav%ngrid))
             call cav%get_amat(amat, cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
             end if
             bbwd = dot_product(q1, matmul(amat, q2))
-            deallocate(amat)
+            deallocate (amat)
 
             ! Restore position
-            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp * STEP_SIZE
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
 
             ! 5-point stencil
             num_grad(iax, iat) = (-ffwd + 8.0_wp*fwd &
-               & - 8.0_wp*bwd + bbwd) / (12.0_wp * STEP_SIZE)
+               & - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
          end do
       end do
 
@@ -851,6 +851,5 @@ contains
       end do
 
    end subroutine test_amat_gradient
-
 
 end module test_cavity_iswig

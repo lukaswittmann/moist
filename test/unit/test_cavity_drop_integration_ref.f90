@@ -42,43 +42,43 @@ module test_cavity_drop_integration_ref
 
    ! Reference are generated from MC using test/dev/test_cavity_drop_deflation_comparison.f90
    type(integration_case_type), parameter :: cases(*) = [ &
-      integration_case_type( 1.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "Ar     ",    221.742887_wp,    310.437355_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "Ar     ",    221.742887_wp,    310.437355_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "Ar     ",    221.742887_wp,    310.437355_wp), &
-      integration_case_type(10.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "Ar     ",    221.742887_wp,    310.437355_wp), &
-      integration_case_type( 1.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "O2     ",    242.589143_wp,    353.723353_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "O2     ",    196.161273_wp,    255.138423_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "O2     ",    196.161273_wp,    255.138423_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "O2     ",    185.924268_wp,    233.928477_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "O2     ",    185.924268_wp,    233.928477_wp), &
-      integration_case_type(10.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "O2     ",    179.419066_wp,    218.353773_wp), &
-      integration_case_type( 1.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "CH4    ",    396.929665_wp,    742.412003_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "CH4    ",    255.697218_wp,    380.888334_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "CH4    ",    270.055161_wp,    414.747388_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "CH4    ",    229.987373_wp,    323.622720_wp), &
-      integration_case_type(10.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "CH4    ",    201.379772_wp,    261.188771_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "Amino20x4   ", "THR_xab",    871.709782_wp,   2046.069766_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  0.0_wp, "Amino20x4   ", "THR_xab",    802.552998_wp,   1673.692695_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  1.0_wp, "Amino20x4   ", "THR_xab",    816.233266_wp,   1801.648358_wp), &
-      integration_case_type( 5.0_wp,  1.0_wp,  1.0_wp, "Amino20x4   ", "THR_xab",    778.058686_wp,   1516.976987_wp), &
-      integration_case_type(10.0_wp,  1.0_wp,  0.0_wp, "Amino20x4   ", "THR_xab",    782.802167_wp,   1410.364379_wp), &
-      integration_case_type( 1.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "16     ",   1033.798426_wp,   3088.935546_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "MB16-43     ", "16     ",    739.232911_wp,   1734.806473_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "16     ",    775.484041_wp,   1921.288922_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "16     ",    703.771421_wp,   1567.182120_wp), &
-      integration_case_type( 5.0_wp,  1.0_wp,  1.0_wp, "MB16-43     ", "16     ",    690.487755_wp,   1425.662212_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  0.0_wp, "But14diol   ", "30     ",    577.749734_wp,   1207.837574_wp), &
-      integration_case_type( 2.0_wp,  1.0_wp,  1.0_wp, "But14diol   ", "30     ",    634.177253_wp,   1431.003011_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  0.0_wp, "But14diol   ", "30     ",    519.505143_wp,    980.963503_wp), &
-      integration_case_type( 3.0_wp,  1.0_wp,  1.0_wp, "But14diol   ", "30     ",    533.169514_wp,   1051.688680_wp), &
-      integration_case_type( 5.0_wp,  1.0_wp,  1.0_wp, "But14diol   ", "30     ",    496.399532_wp,    882.073907_wp), &
-      integration_case_type(10.0_wp,  1.0_wp,  0.0_wp, "But14diol   ", "30     ",    493.931152_wp,    816.379242_wp), &
-      integration_case_type( 2.0_wp,  0.0_wp,  1.0_wp, "MB16-43     ", "CH4    ",    243.767818_wp,    354.652628_wp), &
-      integration_case_type( 3.0_wp,  0.0_wp,  1.0_wp, "Amino20x4   ", "THR_xab",    789.581576_wp,   1694.721566_wp), &
-      integration_case_type( 3.0_wp,  0.0_wp,  1.0_wp, "But14diol   ", "30     ",    512.762446_wp,    981.787682_wp), &
-      integration_case_type( 3.0_wp,  0.0_wp,  1.0_wp, "MB16-43     ", "16     ",    690.329407_wp,   1491.585502_wp), &
-      integration_case_type( 2.0_wp,  0.0_wp,  1.0_wp, "MB16-43     ", "O2     ",    184.603535_wp,    231.274026_wp) &
-   ]
+                           integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "Ar     ", 221.742887_wp, 310.437355_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "Ar     ", 221.742887_wp, 310.437355_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "Ar     ", 221.742887_wp, 310.437355_wp), &
+                          integration_case_type(10.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "Ar     ", 221.742887_wp, 310.437355_wp), &
+                           integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "O2     ", 242.589143_wp, 353.723353_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "O2     ", 196.161273_wp, 255.138423_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "O2     ", 196.161273_wp, 255.138423_wp), &
+                           integration_case_type(3.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "O2     ", 185.924268_wp, 233.928477_wp), &
+                           integration_case_type(3.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "O2     ", 185.924268_wp, 233.928477_wp), &
+                          integration_case_type(10.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "O2     ", 179.419066_wp, 218.353773_wp), &
+                           integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "CH4    ", 396.929665_wp, 742.412003_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "CH4    ", 255.697218_wp, 380.888334_wp), &
+                           integration_case_type(2.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "CH4    ", 270.055161_wp, 414.747388_wp), &
+                           integration_case_type(3.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "CH4    ", 229.987373_wp, 323.622720_wp), &
+                          integration_case_type(10.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "CH4    ", 201.379772_wp, 261.188771_wp), &
+                          integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "Amino20x4   ", "THR_xab", 871.709782_wp, 2046.069766_wp), &
+                          integration_case_type(3.0_wp, 1.0_wp, 0.0_wp, "Amino20x4   ", "THR_xab", 802.552998_wp, 1673.692695_wp), &
+                          integration_case_type(3.0_wp, 1.0_wp, 1.0_wp, "Amino20x4   ", "THR_xab", 816.233266_wp, 1801.648358_wp), &
+                          integration_case_type(5.0_wp, 1.0_wp, 1.0_wp, "Amino20x4   ", "THR_xab", 778.058686_wp, 1516.976987_wp), &
+                         integration_case_type(10.0_wp, 1.0_wp, 0.0_wp, "Amino20x4   ", "THR_xab", 782.802167_wp, 1410.364379_wp), &
+                         integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 1033.798426_wp, 3088.935546_wp), &
+                          integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 739.232911_wp, 1734.806473_wp), &
+                          integration_case_type(2.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "16     ", 775.484041_wp, 1921.288922_wp), &
+                          integration_case_type(3.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "16     ", 703.771421_wp, 1567.182120_wp), &
+                          integration_case_type(5.0_wp, 1.0_wp, 1.0_wp, "MB16-43     ", "16     ", 690.487755_wp, 1425.662212_wp), &
+                          integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "But14diol   ", "30     ", 577.749734_wp, 1207.837574_wp), &
+                          integration_case_type(2.0_wp, 1.0_wp, 1.0_wp, "But14diol   ", "30     ", 634.177253_wp, 1431.003011_wp), &
+                           integration_case_type(3.0_wp, 1.0_wp, 0.0_wp, "But14diol   ", "30     ", 519.505143_wp, 980.963503_wp), &
+                          integration_case_type(3.0_wp, 1.0_wp, 1.0_wp, "But14diol   ", "30     ", 533.169514_wp, 1051.688680_wp), &
+                           integration_case_type(5.0_wp, 1.0_wp, 1.0_wp, "But14diol   ", "30     ", 496.399532_wp, 882.073907_wp), &
+                          integration_case_type(10.0_wp, 1.0_wp, 0.0_wp, "But14diol   ", "30     ", 493.931152_wp, 816.379242_wp), &
+                           integration_case_type(2.0_wp, 0.0_wp, 1.0_wp, "MB16-43     ", "CH4    ", 243.767818_wp, 354.652628_wp), &
+                          integration_case_type(3.0_wp, 0.0_wp, 1.0_wp, "Amino20x4   ", "THR_xab", 789.581576_wp, 1694.721566_wp), &
+                           integration_case_type(3.0_wp, 0.0_wp, 1.0_wp, "But14diol   ", "30     ", 512.762446_wp, 981.787682_wp), &
+                          integration_case_type(3.0_wp, 0.0_wp, 1.0_wp, "MB16-43     ", "16     ", 690.329407_wp, 1491.585502_wp), &
+                            integration_case_type(2.0_wp, 0.0_wp, 1.0_wp, "MB16-43     ", "O2     ", 184.603535_wp, 231.274026_wp) &
+                                             ]
 
 contains
 
@@ -87,43 +87,43 @@ contains
       !> Collection of unit tests.
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
-      allocate(testsuite(size(cases)))
-         testsuite(1) = new_unittest(case_to_string(cases(1)), test_case_001)
-         testsuite(2) = new_unittest(case_to_string(cases(2)), test_case_002)
-         testsuite(3) = new_unittest(case_to_string(cases(3)), test_case_003)
-         testsuite(4) = new_unittest(case_to_string(cases(4)), test_case_004)
-         testsuite(5) = new_unittest(case_to_string(cases(5)), test_case_005)
-         testsuite(6) = new_unittest(case_to_string(cases(6)), test_case_006)
-         testsuite(7) = new_unittest(case_to_string(cases(7)), test_case_007)
-         testsuite(8) = new_unittest(case_to_string(cases(8)), test_case_008)
-         testsuite(9) = new_unittest(case_to_string(cases(9)), test_case_009)
-         testsuite(10) = new_unittest(case_to_string(cases(10)), test_case_010)
-         testsuite(11) = new_unittest(case_to_string(cases(11)), test_case_011)
-         testsuite(12) = new_unittest(case_to_string(cases(12)), test_case_012)
-         testsuite(13) = new_unittest(case_to_string(cases(13)), test_case_013)
-         testsuite(14) = new_unittest(case_to_string(cases(14)), test_case_014)
-         testsuite(15) = new_unittest(case_to_string(cases(15)), test_case_015)
-         testsuite(16) = new_unittest(case_to_string(cases(16)), test_case_016)
-         testsuite(17) = new_unittest(case_to_string(cases(17)), test_case_017)
-         testsuite(18) = new_unittest(case_to_string(cases(18)), test_case_018)
-         testsuite(19) = new_unittest(case_to_string(cases(19)), test_case_019)
-         testsuite(20) = new_unittest(case_to_string(cases(20)), test_case_020)
-         testsuite(21) = new_unittest(case_to_string(cases(21)), test_case_021)
-         testsuite(22) = new_unittest(case_to_string(cases(22)), test_case_022)
-         testsuite(23) = new_unittest(case_to_string(cases(23)), test_case_023)
-         testsuite(24) = new_unittest(case_to_string(cases(24)), test_case_024)
-         testsuite(25) = new_unittest(case_to_string(cases(25)), test_case_025)
-         testsuite(26) = new_unittest(case_to_string(cases(26)), test_case_026)
-         testsuite(27) = new_unittest(case_to_string(cases(27)), test_case_027)
-         testsuite(28) = new_unittest(case_to_string(cases(28)), test_case_028)
-         testsuite(29) = new_unittest(case_to_string(cases(29)), test_case_029)
-         testsuite(30) = new_unittest(case_to_string(cases(30)), test_case_030)
-         testsuite(31) = new_unittest(case_to_string(cases(31)), test_case_031)
-         testsuite(32) = new_unittest(case_to_string(cases(32)), test_case_032)
-         testsuite(33) = new_unittest(case_to_string(cases(33)), test_case_033)
-         testsuite(34) = new_unittest(case_to_string(cases(34)), test_case_034)
-         testsuite(35) = new_unittest(case_to_string(cases(35)), test_case_035)
-         testsuite(36) = new_unittest(case_to_string(cases(36)), test_case_036)
+      allocate (testsuite(size(cases)))
+      testsuite(1) = new_unittest(case_to_string(cases(1)), test_case_001)
+      testsuite(2) = new_unittest(case_to_string(cases(2)), test_case_002)
+      testsuite(3) = new_unittest(case_to_string(cases(3)), test_case_003)
+      testsuite(4) = new_unittest(case_to_string(cases(4)), test_case_004)
+      testsuite(5) = new_unittest(case_to_string(cases(5)), test_case_005)
+      testsuite(6) = new_unittest(case_to_string(cases(6)), test_case_006)
+      testsuite(7) = new_unittest(case_to_string(cases(7)), test_case_007)
+      testsuite(8) = new_unittest(case_to_string(cases(8)), test_case_008)
+      testsuite(9) = new_unittest(case_to_string(cases(9)), test_case_009)
+      testsuite(10) = new_unittest(case_to_string(cases(10)), test_case_010)
+      testsuite(11) = new_unittest(case_to_string(cases(11)), test_case_011)
+      testsuite(12) = new_unittest(case_to_string(cases(12)), test_case_012)
+      testsuite(13) = new_unittest(case_to_string(cases(13)), test_case_013)
+      testsuite(14) = new_unittest(case_to_string(cases(14)), test_case_014)
+      testsuite(15) = new_unittest(case_to_string(cases(15)), test_case_015)
+      testsuite(16) = new_unittest(case_to_string(cases(16)), test_case_016)
+      testsuite(17) = new_unittest(case_to_string(cases(17)), test_case_017)
+      testsuite(18) = new_unittest(case_to_string(cases(18)), test_case_018)
+      testsuite(19) = new_unittest(case_to_string(cases(19)), test_case_019)
+      testsuite(20) = new_unittest(case_to_string(cases(20)), test_case_020)
+      testsuite(21) = new_unittest(case_to_string(cases(21)), test_case_021)
+      testsuite(22) = new_unittest(case_to_string(cases(22)), test_case_022)
+      testsuite(23) = new_unittest(case_to_string(cases(23)), test_case_023)
+      testsuite(24) = new_unittest(case_to_string(cases(24)), test_case_024)
+      testsuite(25) = new_unittest(case_to_string(cases(25)), test_case_025)
+      testsuite(26) = new_unittest(case_to_string(cases(26)), test_case_026)
+      testsuite(27) = new_unittest(case_to_string(cases(27)), test_case_027)
+      testsuite(28) = new_unittest(case_to_string(cases(28)), test_case_028)
+      testsuite(29) = new_unittest(case_to_string(cases(29)), test_case_029)
+      testsuite(30) = new_unittest(case_to_string(cases(30)), test_case_030)
+      testsuite(31) = new_unittest(case_to_string(cases(31)), test_case_031)
+      testsuite(32) = new_unittest(case_to_string(cases(32)), test_case_032)
+      testsuite(33) = new_unittest(case_to_string(cases(33)), test_case_033)
+      testsuite(34) = new_unittest(case_to_string(cases(34)), test_case_034)
+      testsuite(35) = new_unittest(case_to_string(cases(35)), test_case_035)
+      testsuite(36) = new_unittest(case_to_string(cases(36)), test_case_036)
    end subroutine collect_cavity_drop_integration_ref
 
    !> Validate one DROP cavity area/volume case against fixed MC references.
@@ -152,28 +152,28 @@ contains
 
       call load_structure(cases(case_idx)%dataset, cases(case_idx)%structure, mol)
 
-      allocate(cavity)
+      allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=cases(case_idx)%blend_k, &
                                 blend_2b=cases(case_idx)%blend_2b, &
                                 blend_3b=cases(case_idx)%blend_3b)
          call new_cavity_drop(cavity, nleb=NUM_LEB, tolerance=PROJ_TOL, &
-                             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             debug=.false., verbose=0, &
-                             radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+                              proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
+                              debug=.false., verbose=0, &
+                              radius_model=default_cpcm_radii(), &
+                              lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) then
-         call test_failed(error, "new_cavity_drop failed for " // trim(case_to_string(cases(case_idx))) // &
-                          ": " // trim(cavity_error%message))
+         call test_failed(error, "new_cavity_drop failed for "//trim(case_to_string(cases(case_idx)))// &
+                          ": "//trim(cavity_error%message))
          return
       end if
 
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
-         call test_failed(error, "cavity%update failed for " // trim(case_to_string(cases(case_idx))) // &
-                          ": " // trim(cavity_error%message))
+         call test_failed(error, "cavity%update failed for "//trim(case_to_string(cases(case_idx)))// &
+                          ": "//trim(cavity_error%message))
          return
       end if
 
@@ -192,11 +192,11 @@ contains
       !       " ratio:", volume_ratio
 
       call check(error, area_ratio, 1.0_wp, thr=AREA_REL_THR, &
-                 message="Area ratio mismatch for " // trim(case_to_string(cases(case_idx))))
+                 message="Area ratio mismatch for "//trim(case_to_string(cases(case_idx))))
       if (allocated(error)) return
 
       call check(error, volume_ratio, 1.0_wp, thr=VOLUME_REL_THR, &
-                 message="Volume ratio mismatch for " // trim(case_to_string(cases(case_idx))))
+                 message="Volume ratio mismatch for "//trim(case_to_string(cases(case_idx))))
       if (allocated(error)) return
 
    end subroutine run_single_case
@@ -425,11 +425,11 @@ contains
       !> Formatted gamma value.
       character(len=8) :: g_str
 
-      write(k_str, '(F4.1)') c%blend_k
-      write(b_str, '(F4.1)') c%blend_2b
-      write(g_str, '(F4.1)') c%blend_3b
-      str = trim(c%dataset) // " " // trim(c%structure) // " k=" // &
-            k_str(1:4) // " b=" // b_str(1:4) // " g=" // g_str(1:4)
+      write (k_str, '(F4.1)') c%blend_k
+      write (b_str, '(F4.1)') c%blend_2b
+      write (g_str, '(F4.1)') c%blend_3b
+      str = trim(c%dataset)//" "//trim(c%structure)//" k="// &
+            k_str(1:4)//" b="//b_str(1:4)//" g="//g_str(1:4)
    end function case_to_string
 
 end module test_cavity_drop_integration_ref
