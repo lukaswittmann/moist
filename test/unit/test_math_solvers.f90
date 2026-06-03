@@ -12,7 +12,7 @@
 module test_math_solvers
    use mctc_env, only: wp
    use mctc_io_utils, only: to_string
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_type, only: solver_base_type
    use moist_math_solver_newton
    use moist_math_solver_slsqp
@@ -22,6 +22,7 @@ module test_math_solvers
                                                 moist_math_solver_slsqp_deflation_type
    use moist_math_solver_newton_deflation, only: new_newton_deflation_solver, &
                                                  moist_math_solver_newton_deflation_type
+   use moist_math_solver_deflation, only: moist_deflation_operator_type
    use mctc_env_error, only: moist_error_type => error_type
    ! Raw vendored solver APIs (upstream test ports folded into this suite).
    use slsqp_module, only: slsqp_solver
@@ -43,9 +44,10 @@ module test_math_solvers
    !> Tolerance for L-BFGS-B solver
    real(wp), parameter :: lbfgsb_thr = 1.0e-6_wp
 
-   !===========================================================================
-   ! Raw-kernel test constants (vendored APIs ported from upstream test suites)
-   !===========================================================================
+   !* ================================================================================= *!
+   !*     Raw-kernel test constants (vendored APIs ported from upstream test suites)    *!
+   !* ================================================================================= *!
+
    !> SLSQP raw-kernel acceptance tolerance.
    real(wp), parameter :: slsqp_kernel_thr = 1.0e-4_wp
    !> Reference solution of the constrained Rosenbrock problem (upstream slsqp).
@@ -95,13 +97,19 @@ contains
          & new_unittest("fmin-kernel-sin", test_fmin_sin), &
          & new_unittest("fmin-kernel-parabola", test_fmin_parabola), &
          & new_unittest("newton-kernel-dense-sweep", test_newton_dense), &
-         & new_unittest("newton-kernel-sparse-sweep", test_newton_sparse) &
+         & new_unittest("newton-kernel-sparse-sweep", test_newton_sparse), &
+         & new_unittest("lbfgsb-invalid-memory", test_lbfgsb_invalid_memory, should_fail=.true.), &
+         & new_unittest("newton-maxiter-fail", test_newton_maxiter_fail, should_fail=.true.), &
+         & new_unittest("slsqp-maxiter-fail", test_slsqp_maxiter_fail, should_fail=.true.), &
+         & new_unittest("newton-deflation-max-roots", test_newton_deflation_max_roots), &
+         & new_unittest("deflation-operator-gradient-fd", test_deflation_operator_gradient_fd), &
+         & new_unittest("lbfgsb-kernel-bound-active", test_lbfgsb_bound_active) &
          & ]
    end subroutine collect_math_solvers
 
-   !==============================================================================
-   ! Test Problem 1: Rosenbrock Function (Unconstrained)
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                Test Problem 1: Rosenbrock Function (Unconstrained)                *!
+   !* ================================================================================= *!
    !> Physical problem: Minimize Rosenbrock function
    !>   f(x,y) = (1-x)^2 + 100(y-x^2 )^2
    !> Solution: x = 1, y = 1
@@ -150,8 +158,6 @@ contains
       if (allocated(error)) return
       call check(error, x(2), 1.0_wp, thr=newton_thr)
 
-      call solver%destroy()
-
    end subroutine test_rosenbrock_newton
 
    !> Test Rosenbrock with SLSQP solver
@@ -196,9 +202,6 @@ contains
       call check(error, x(1), 1.0_wp, thr=1.0e-5_wp)
       if (allocated(error)) return
       call check(error, x(2), 1.0_wp, thr=1.0e-5_wp)
-
-      call solver%destroy()
-      deallocate(solver)
 
    end subroutine test_rosenbrock_slsqp
 
@@ -245,14 +248,13 @@ contains
       if (allocated(error)) return
       call check(error, x(2), 1.0_wp, thr=lbfgsb_thr)
 
-      call solver%destroy()
-      deallocate(solver)
-
    end subroutine test_rosenbrock_lbfgsb
 
    !> Test Rosenbrock with SLSQP multi-start (unconstrained)
-   !> Note: multistart uses 3D Lebedev seeds, so we wrap the 2D Rosenbrock
-   !> objective/gradient into 3D by ignoring z.
+   !> As multistart uses 3D Lebedev seeds, so we wrap the 2D Rosenbrock
+   !> objective/gradient into 3D by ignoring z
+   !> This does not test the multistart functionality per se, but verifies that the multistart
+   !> directly, but it is more a smoke test
    subroutine test_rosenbrock_slsqp_multistart(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -304,14 +306,12 @@ contains
       if (allocated(error)) return
       call check(error, x(2), 1.0_wp, thr=slsqp_thr)
 
-      call solver%destroy()
-      deallocate(solver)
    end subroutine test_rosenbrock_slsqp_multistart
 
 
-   !==============================================================================
-   ! Test Problem 2: Constrained Circle Projection
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                   Test Problem 2: Constrained Circle Projection                   *!
+   !* ================================================================================= *!
    !> Physical problem: Find point on unit circle closest to target (2, 3)
    !>   minimize: (x-2)^2 + (y-3)^2
    !>   subject to: x^2 + y^2 = 1
@@ -376,8 +376,6 @@ contains
       ! Verify constraint satisfaction
       call check(error, x(1)**2 + x(2)**2, 1.0_wp, thr=newton_thr)
 
-      call solver%destroy()
-
    end subroutine test_circle_newton_lagrangian
 
    !> Test circle projection with SLSQP (explicit constraint)
@@ -433,9 +431,6 @@ contains
 
       ! Verify constraint satisfaction
       call check(error, x(1)**2 + x(2)**2, 1.0_wp, thr=slsqp_thr)
-
-      call solver%destroy()
-      deallocate(solver)
 
    end subroutine test_circle_slsqp_explicit
 
@@ -496,8 +491,6 @@ contains
       if (allocated(error)) return
       call check(error, x(1)**2 + x(2)**2, 1.0_wp, thr=slsqp_thr)
 
-      call solver%destroy()
-      deallocate(solver)
    end subroutine test_circle_slsqp_multistart
 
    !> Test circle projection with L-BFGS-B (penalty formulation)
@@ -552,14 +545,11 @@ contains
       ! Verify constraint satisfaction
       call check(error, x(1)**2 + x(2)**2, 1.0_wp, thr=lbfgsb_thr)
 
-      call solver%destroy()
-      deallocate(solver)
-
    end subroutine test_circle_lbfgsb_penalty
 
-   !==============================================================================
-   ! Rosenbrock Problem Functions
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                            Rosenbrock Problem Functions                           *!
+   !* ================================================================================= *!
 
    !> Rosenbrock gradient residual for Newton: df = 0
    subroutine rosenbrock_gradient_residual(x, f)
@@ -653,9 +643,9 @@ contains
       if (size(dc) > 0) dc = 0.0_wp
    end subroutine empty_constraint_gradient_ctx3
 
-   !==============================================================================
-   ! Circle Problem Functions
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                              Circle Problem Functions                             *!
+   !* ================================================================================= *!
 
    !> Circle Lagrangian residual for Newton: [ dL, constraint] = 0
    !> Variables: [x, y, lambda ]
@@ -841,18 +831,15 @@ contains
       df(2) = 2.0_wp * (x(2) - 3.0_wp) + penalty * 2.0_wp * constraint * 2.0_wp * x(2)
    end subroutine circle_penalty_objective_gradient
 
-   !==============================================================================
-   ! Test Problem: SLSQP-deflation two-circle union
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                   Test Problem: SLSQP-deflation two-circle union                   *!
+   !* ================================================================================= *!
    !> Projection of an anchor onto the union of two unit circles centered at
    !> (-2, 0) and (+2, 0), represented by the smooth product-form constraint
    !>   h(x, y) = (||r - c_L||^2 - 1) * (||r - c_R||^2 - 1) = 0.
    !> The set of KKT points for min 0.5||r - a||^2 s.t. h = 0 has FOUR members
-   !> (nearest + farthest point on each circle). With anchor a = (0, 0.5),
-   !> symmetry about the y-axis pairs them.
-   !>
-   !> Deflation is expected to enumerate all four KKT points from a single seed
-   !> at the anchor. Each point must lie on one of the two unit circles.
+   !> (nearest + farthest point on each circle)
+   !> with anchor a = (0, 0.5), symmetry about the y-axis pairs them.
    subroutine test_slsqp_deflation_two_circle_union(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -862,6 +849,11 @@ contains
       real(wp), allocatable :: roots(:, :)
       integer :: n_roots, i, n_on_left, n_on_right
       integer :: dummy_context
+      logical :: found_near_right
+      !> Nearest point on the right unit circle (center (+2,0)) to anchor (0,0.5):
+      !> c_R + (a - c_R)/||a - c_R||, with ||a - c_R|| = sqrt(4.25).
+      real(wp), parameter :: near_right(2) = &
+         [1.0298574998546681_wp, 0.24253562503633297_wp]
 
       xl = [-3.0_wp, -3.0_wp]
       xu = [3.0_wp, 3.0_wp]
@@ -896,8 +888,6 @@ contains
       call solver%solve(x, solver_error)
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
-         call solver%destroy()
-         deallocate (solver)
          return
       end if
 
@@ -906,57 +896,48 @@ contains
          call sd%get_raw_candidates(roots, n_roots)
       class default
          call check(error, .false., message="unexpected solver type")
-         call solver%destroy()
-         deallocate (solver)
          return
       end select
 
-      ! Deflation should find at least 2 distinct branches (nearest point on
-      ! each circle). Finding all 4 KKT points is also acceptable.
-      call check(error, n_roots >= 2, .true., &
-                 message="deflation must enumerate at least 2 distinct roots")
-      if (allocated(error)) then
-         call solver%destroy()
-         deallocate (solver)
-         return
-      end if
+      ! Deflation enumerates at least four distinct branches from this seed
+      call check(error, n_roots >= 4, .true., &
+                 message="deflation must enumerate at least 4 distinct roots")
+      if (allocated(error)) return
 
-      ! Every enumerated root must lie on one of the circles.
+      ! Every enumerated root must lie on one of the circles, and the nearest
+      ! KKT projection on the right circle must be recovered exactly
       n_on_left = 0
       n_on_right = 0
+      found_near_right = .false.
       do i = 1, n_roots
          call check(error, on_two_circle_union(roots(:, i)), .true., &
                     message="root not on circle union")
-         if (allocated(error)) then
-            call solver%destroy()
-            deallocate (solver)
-            return
-         end if
+         if (allocated(error)) return
          if (on_left_circle(roots(:, i))) n_on_left = n_on_left + 1
          if (on_right_circle(roots(:, i))) n_on_right = n_on_right + 1
+         if (norm2(roots(:, i) - near_right) < 1.0e-6_wp) found_near_right = .true.
       end do
 
-      ! Deflation must discover both branches (at least one point on each circle).
-      call check(error, n_on_left >= 1, .true., &
-                 message="deflation missed the left circle branch")
-      if (allocated(error)) then
-         call solver%destroy()
-         deallocate (solver)
-         return
-      end if
-      call check(error, n_on_right >= 1, .true., &
-                 message="deflation missed the right circle branch")
+      ! Deflation must discover both branches with at least two points each
+      call check(error, n_on_left >= 2, .true., &
+                 message="deflation must place >= 2 roots on the left circle")
+      if (allocated(error)) return
+      call check(error, n_on_right >= 2, .true., &
+                 message="deflation must place >= 2 roots on the right circle")
+      if (allocated(error)) return
 
-      call solver%destroy()
-      deallocate (solver)
+      ! The exact nearest-point KKT projection on the right circle is recovered.
+      call check(error, found_near_right, .true., &
+                 message="deflation must recover the near_R KKT projection exactly")
+
    end subroutine test_slsqp_deflation_two_circle_union
 
-   !==============================================================================
-   ! Test Problem: Newton-deflation on a scalar cubic
-   !==============================================================================
+   !* ================================================================================= *!
+   !*                  Test Problem: Newton-deflation on a scalar cubic                  *!
+   !* ================================================================================= *!
    !> Enumerate all three real roots of F(x) = (x-1)(x+1)(x-3) = x^3 - 3x^2 - x + 3
    !> from a single seed x0 = 0. Newton from x0=0 converges to one root;
-   !> iterated deflation must recover the other two.
+   !> iterated deflation must recover the other two
    subroutine test_newton_deflation_cubic(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -991,8 +972,6 @@ contains
       call solver%solve(x, solver_error)
       if (allocated(solver_error)) then
          call check(error, .false., message=solver_error%message)
-         call solver%destroy()
-         deallocate (solver)
          return
       end if
 
@@ -1001,16 +980,12 @@ contains
          call nd%get_raw_candidates(roots, n_roots)
       class default
          call check(error, .false., message="unexpected solver type")
-         call solver%destroy()
-         deallocate (solver)
          return
       end select
 
       ! Must enumerate all three distinct real roots.
       call check(error, n_roots, 3)
       if (allocated(error)) then
-         call solver%destroy()
-         deallocate (solver)
          return
       end if
 
@@ -1024,13 +999,7 @@ contains
       call check(error, found_m1 .and. found_p1 .and. found_p3, .true., &
                  message="Newton-deflation must enumerate all three roots (-1, +1, +3)")
 
-      call solver%destroy()
-      deallocate (solver)
    end subroutine test_newton_deflation_cubic
-
-   !------------------------------------------------------------------
-   ! SLSQP-deflation helpers (two-circle-union problem)
-   !------------------------------------------------------------------
 
    !> Objective: 0.5 * ||x - anchor||^2 with anchor = (0, 0.5).
    subroutine two_circle_objective(x, f, context)
@@ -1110,10 +1079,6 @@ contains
       hit = abs(sqrt((r(1) - 2.0_wp)**2 + r(2)**2) - 1.0_wp) < tol
    end function on_right_circle
 
-   !------------------------------------------------------------------
-   ! Newton-deflation helpers (scalar cubic problem)
-   !------------------------------------------------------------------
-
    !> Residual F(x) = (x-1)(x+1)(x-3) = x^3 - 3x^2 - x + 3
    subroutine cubic_residual_ctx(x, f, context)
       real(wp), dimension(:), intent(in) :: x
@@ -1136,9 +1101,9 @@ contains
       jac(1, 1) = 3.0_wp*x(1)**2 - 6.0_wp*x(1) - 1.0_wp
    end subroutine cubic_jacobian_ctx
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/slsqp (slsqp_module%slsqp_solver)
-   !===========================================================================
+   !* ================================================================================= *!
+   !*         Raw-kernel ports: jacobwilliams/slsqp (slsqp_module%slsqp_solver)         *!
+   !* ================================================================================= *!
    ! These exercise the raw SLSQP class directly; the wrapper layer above goes
    ! through new_slsqp_solver/solver%solve. Reference solutions are upstream.
 
@@ -1169,7 +1134,6 @@ contains
       if (allocated(error)) return
       call check(error, x(2), slsqp_rosen_x(2), thr=slsqp_kernel_thr)
 
-      call solver%destroy()
    end subroutine test_slsqp_rosenbrock
 
    !> slsqp_test_2.f90: minimize x1^2 + x2^2 + x3 subject to x1*x2 - x3 = 0
@@ -1204,7 +1168,6 @@ contains
       if (allocated(error)) return
       call check(error, x(3) >= 1.0_wp - slsqp_kernel_thr, "x3 >= 1 constraint violated")
 
-      call solver%destroy()
    end subroutine test_slsqp_quadratic
 
    !> slsqp_test_3.f90: Rosenbrock solved with finite-difference gradients in
@@ -1246,7 +1209,6 @@ contains
                     message="x(2) mismatch, gradient_mode="//to_string(gradient_mode))
          if (allocated(error)) return
 
-         call solver%destroy()
       end do
    end subroutine test_slsqp_fd_gradients
 
@@ -1291,7 +1253,6 @@ contains
                     message="objective mismatch, nnls_mode="//to_string(nnls_mode))
          if (allocated(error)) return
 
-         call solver%destroy()
       end do
    end subroutine test_slsqp_hs71
 
@@ -1327,7 +1288,6 @@ contains
       if (allocated(error)) return
       call check(error, x(2), slsqp_rosen_x(2), thr=slsqp_kernel_thr)
 
-      call solver%destroy()
    end subroutine test_slsqp_stopping
 
    !> Rosenbrock objective f = 100*(x2 - x1^2)^2 + (1 - x1)^2 with the
@@ -1422,9 +1382,9 @@ contains
       a(2, 4) = 2.0_wp*x(4)
    end subroutine slsqp_hs71_grad
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/lbfgsb (setulb reverse communication)
-   !===========================================================================
+   !* ================================================================================= *!
+   !*       Raw-kernel ports: jacobwilliams/lbfgsb (setulb reverse communication)       *!
+   !* ================================================================================= *!
    ! All three drivers minimize the same bound-constrained 25-variable extended
    ! Rosenbrock problem (optimum f = 0); they differ only in termination policy.
    ! File/console output is suppressed via iprint = -1.
@@ -1547,9 +1507,9 @@ contains
       g(lbfgsb_n) = 8.0_wp*t1
    end subroutine lbfgsb_rosenbrock_eval
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/fmin (1D derivative-free minimizer)
-   !===========================================================================
+   !* ================================================================================= *!
+   !*        Raw-kernel ports: jacobwilliams/fmin (1D derivative-free minimizer)        *!
+   !* ================================================================================= *!
 
    !> fmin test.f90: minimize sin(x) on [-4, 0]; the minimum is at x = -pi/2.
    subroutine test_fmin_sin(error)
@@ -1586,9 +1546,9 @@ contains
       f = (x - 2.0_wp)**2
    end function fmin_parabola_func
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/nlesolver-fortran (nlesolver_type)
-   !===========================================================================
+   !* ================================================================================= *!
+   !*         Raw-kernel ports: jacobwilliams/nlesolver-fortran (nlesolver_type)        *!
+   !* ================================================================================= *!
    ! Both solve f1 = x1^2 + x2 - 0.1 = 0, f2 = x2 + 0.2 = 0; root (sqrt(0.3),
    ! -0.2). Dense sweeps line-search/Broyden; sparse drives LSQR/LUSOL/LSMR.
 
@@ -1658,9 +1618,11 @@ contains
 
       x = [1.0_wp, 2.0_wp]
       call solver%solve(x)
+      call solver%status(istat, msg)
+      call check(error, istat == 1, label//": solve did not converge: "//msg)
+      if (allocated(error)) return
       call check_newton_root(x, label, error)
 
-      call solver%destroy()
    end subroutine run_newton_dense
 
    !> Run one sparse configuration and verify convergence to the root.
@@ -1688,9 +1650,11 @@ contains
 
       x = [1.0_wp, 2.0_wp]
       call solver%solve(x)
+      call solver%status(istat, msg)
+      call check(error, istat == 1, label//": solve did not converge: "//msg)
+      if (allocated(error)) return
       call check_newton_root(x, label, error)
 
-      call solver%destroy()
    end subroutine run_newton_sparse
 
    !> Assert that x is the expected root and the residual norm is small.
@@ -1746,5 +1710,293 @@ contains
       g(2) = g_dense(1, 2)
       g(3) = g_dense(2, 2)
    end subroutine newton_grad_sparse
+
+   !* ================================================================================= *!
+   !*       Failure-path tests for the solver wrappers (error-reporting coverage)       *!
+   !* ================================================================================= *!
+
+   !> L-BFGS-B construction must reject an out-of-range memory parameter m.
+   !> The valid range is [3, 20] (lbfgsb.f90 lines 225-229); m=1 is below the
+   !> minimum, so new_lbfgsb_solver must allocate solver_error and must NOT
+   !> allocate the solver. Pure construction-time validation: fully deterministic.
+   subroutine test_lbfgsb_invalid_memory(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      real(wp), dimension(2) :: xl, xu
+      integer, parameter :: bad_m = 1   ! below the documented minimum of 3
+
+      xl = -1.0e10_wp
+      xu = 1.0e10_wp
+
+      call new_lbfgsb_solver( &
+         solver=solver, &
+         n=2, &
+         error=solver_error, &
+         obj=rosenbrock_objective, &
+         obj_grad=rosenbrock_objective_gradient, &
+         l=xl, u=xu, &
+         m=bad_m)
+
+      ! Expected failure (registered should_fail=.true.): the out-of-range memory
+      ! parameter must be rejected at construction. Propagating solver_error makes
+      ! testdrive report EXPECTED FAIL; an UNEXPECTED PASS flags a regression.
+      if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
+   end subroutine test_lbfgsb_invalid_memory
+
+   !> Newton must surface non-convergence when iterations are exhausted
+   subroutine test_newton_maxiter_fail(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      real(wp), dimension(2) :: x
+
+      ! Far start so a single step cannot converge or stagnate.
+      x = [-1.2_wp, 1.0_wp]
+
+      call new_newton_solver(solver, &
+         n=2, m=2, &
+         func=rosenbrock_gradient_residual, &
+         grad=rosenbrock_hessian, &
+         error=solver_error, &
+         max_iter=1, &
+         tol=1.0e-12_wp, &
+         tolx=1.0e-14_wp)
+
+      ! Construction is expected to succeed; the one-iteration solve from a far
+      ! start must then report non-convergence (registered should_fail=.true.).
+      if (allocated(solver)) then
+         call solver%solve(x, solver_error)
+      end if
+      if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
+   end subroutine test_newton_maxiter_fail
+
+   !> SLSQP must surface non-convergence when the iteration budget is exhausted.
+   !> From the far start x=[-0.9, 0.9] on Rosenbrock (unconstrained) with
+   !> max_iter=1, the SLSQP core returns mode=9 ("More than max_iter iterations",
+   !> slsqp_module.F90 lines 664-665); slsqp_wrapper sets istat=mode (line 543),
+   !> and slsqp_solve allocates a fatal_error for any istat/=0 (slsqp.f90 lines
+   !> 322-325). We assert that error channel fires and that the message names the
+   !> non-zero status.
+   subroutine test_slsqp_maxiter_fail(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      real(wp), dimension(2) :: x
+      real(wp), dimension(2) :: xl, xu
+
+      ! Far start; bound the box so SLSQP cannot trivially jump to the optimum.
+      x = [-0.9_wp, 0.9_wp]
+      xl = [-2.0_wp, -2.0_wp]
+      xu = [2.0_wp, 2.0_wp]
+
+      call new_slsqp_solver( &
+         solver=solver, &
+         n=2, m=0, meq=0, &
+         error=solver_error, &
+         obj=rosenbrock_objective, &
+         obj_grad=rosenbrock_objective_gradient, &
+         xl=xl, xu=xu, &
+         max_iter=1, &
+         tol=1.0e-12_wp)
+
+      ! Construction is expected to succeed; the one-iteration solve from a far
+      ! start must then report non-convergence (registered should_fail=.true.).
+      if (allocated(solver)) then
+         call solver%solve(x, solver_error)
+      end if
+      if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
+   end subroutine test_slsqp_maxiter_fail
+
+   !* ================================================================================= *!
+   !*         Test Problem: Newton-deflation max_roots cap truncates enumeration        *!
+   !* ================================================================================= *!
+   !> Same cubic F(x) = (x-1)(x+1)(x-3) with three real roots at -1, +1, +3, but
+   !> with max_roots = 2
+   !> Tests the deflation cap; solver must stop after two roots
+   subroutine test_newton_deflation_max_roots(error)
+      type(error_type), allocatable, intent(out) :: error
+      class(solver_base_type), allocatable :: solver
+      type(moist_error_type), allocatable :: solver_error
+      real(wp), dimension(1) :: x
+      real(wp), allocatable :: roots(:, :)
+      integer :: n_roots
+      integer :: dummy_context
+
+      x(1) = 0.0_wp
+      dummy_context = 0
+
+      call new_newton_deflation_solver( &
+         solver=solver, &
+         n=1, m=1, &
+         func_ctx=cubic_residual_ctx, &
+         grad_ctx=cubic_jacobian_ctx, &
+         context=dummy_context, &
+         max_iter=200, &
+         tol=1.0e-12_wp, &
+         tolx=1.0e-12_wp, &
+         max_roots=2, &
+         dedup_tol=1.0e-4_wp, &
+         error=solver_error)
+
+      if (allocated(solver_error)) then
+         call check(error, .false., message=solver_error%message)
+         return
+      end if
+
+      call solver%solve(x, solver_error)
+      if (allocated(solver_error)) then
+         call check(error, .false., message=solver_error%message)
+         return
+      end if
+
+      select type (nd => solver)
+      type is (moist_math_solver_newton_deflation_type)
+         call nd%get_raw_candidates(roots, n_roots)
+      class default
+         call check(error, .false., message="unexpected solver type")
+         return
+      end select
+
+      ! The cap must truncate: exactly two roots, not the full set of three
+      call check(error, n_roots, 2)
+
+   end subroutine test_newton_deflation_max_roots
+
+   !* ================================================================================= *!
+   !*              Direct unit test of the core Farrell deflation operator               *!
+   !* ================================================================================= *!
+   !> Exercises moist_deflation_operator_type in isolation (no solver wrapper):
+   !>  - multiplier == 1 with no known roots (no deflation),
+   !>  - append_root accepts fresh points, rejects a within-dedup_tol duplicate
+   !>    and accepts a point just outside dedup_tol
+   !>  - analytic gradient(x) matches a central finite difference of
+   !>    multiplier(x) at probe points well away from the stored roots
+   subroutine test_deflation_operator_gradient_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_deflation_operator_type) :: op
+      type(moist_error_type), allocatable :: op_error
+      real(wp), dimension(2) :: root_a, root_b, p, pp, pm
+      real(wp), dimension(2) :: grad_analytic, grad_fd
+      real(wp) :: m_plus, m_minus
+      real(wp) :: rel_err
+      logical :: accepted
+      integer :: ip, k
+      real(wp), parameter :: step = 1.0e-6_wp
+      real(wp), parameter :: grad_tol = 1.0e-6_wp
+      real(wp), parameter :: probes(2, 3) = reshape( &
+         [0.3_wp, -0.4_wp, 2.0_wp, 1.5_wp, -0.5_wp, -2.0_wp], [2, 3])
+
+      call op%init(n_dim=2, max_roots=4, error=op_error)
+      if (allocated(op_error)) then
+         call check(error, .false., message=op_error%message)
+         return
+      end if
+
+      ! With no known roots the multiplier is the documented "no deflation" value 1.
+      call check(error, op%multiplier([1.0_wp, 2.0_wp]), 1.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+
+      ! append_root accepts two fresh, well-separated points.
+      root_a = [1.0_wp, 0.0_wp]
+      call op%append_root(root_a, accepted)
+      call check(error, accepted, .true., message="first root must be accepted")
+      if (allocated(error)) return
+
+      root_b = [-1.0_wp, 0.5_wp]
+      call op%append_root(root_b, accepted)
+      call check(error, accepted, .true., message="second root must be accepted")
+      if (allocated(error)) return
+
+      ! A point within dedup_tol (default 1e-6) of root_a is a duplicate: rejected.
+      call op%append_root([1.0_wp + 1.0e-9_wp, 0.0_wp], accepted)
+      call check(error, accepted, .false., &
+                 message="within-dedup_tol duplicate must be rejected")
+      if (allocated(error)) return
+
+      ! A point just outside dedup_tol is a distinct root: accepted.
+      call op%append_root([1.0_wp + 1.0e-3_wp, 0.0_wp], accepted)
+      call check(error, accepted, .true., &
+                 message="point outside dedup_tol must be accepted")
+      if (allocated(error)) return
+
+      ! Reset to the two clean, well-separated roots for the gradient FD check.
+      call op%reset()
+      call op%append_root(root_a, accepted)
+      call op%append_root(root_b, accepted)
+
+      ! Central-difference check of grad_M against analytic gradient.
+      do ip = 1, 3
+         p = probes(:, ip)
+         call op%gradient(p, grad_analytic)
+         do k = 1, 2
+            pp = p; pm = p
+            pp(k) = p(k) + step
+            pm(k) = p(k) - step
+            m_plus = op%multiplier(pp)
+            m_minus = op%multiplier(pm)
+            grad_fd(k) = (m_plus - m_minus)/(2.0_wp*step)
+         end do
+         rel_err = maxval(abs(grad_analytic - grad_fd)) &
+                   /max(1.0_wp, maxval(abs(grad_analytic)))
+         call check(error, rel_err < grad_tol, .true., &
+                    message="analytic grad_M must match central FD of multiplier")
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_deflation_operator_gradient_fd
+
+
+   !* ================================================================================= *!
+   !*             L-BFGS-B raw-kernel: active-bound and error-state coverage            *!
+   !* ================================================================================= *!
+
+   !> Bound-active coverage
+   !> Minimization of the convex quadratic sum_i (x_i - 3)^2 with an upper bound
+   !> u_i = 1 (nbd = 3, upper-only) -> the unconstrained optimum x_i = 3 lies OUTSIDE
+   !> the box, so the constrained optimum is clipped onto  the active upper bound x_i = 1
+   !> with f = n*(1-3)^2 = 12
+   subroutine test_lbfgsb_bound_active(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: n = 3, m = 5
+      integer, parameter :: nws = 2*m*n + 5*n + 11*m*m + 8*m
+      real(wp) :: x(n), l(n), u(n), g(n), f, wa(nws), dsave(29)
+      integer :: nbd(n), iwa(3*n), isave(44), i
+      character(len=60) :: task, csave
+      logical :: lsave(4)
+
+      ! Upper bound only: nbd(i) = 3, u(i) = 1; l(i) is unused for nbd = 3.
+      do i = 1, n
+         nbd(i) = 3
+         u(i) = 1.0_wp
+         l(i) = 0.0_wp
+      end do
+
+      x = -2.0_wp     ! feasible start, below the active bound
+      f = 0.0_wp
+      g = 0.0_wp
+
+      task = 'START'
+      do while (task(1:2) == 'FG' .or. task(1:5) == 'NEW_X' .or. task(1:5) == 'START')
+         call setulb(n, m, x, l, u, nbd, f, g, lbfgsb_factr, lbfgsb_pgtol, &
+                     wa, iwa, task, -1, csave, lsave, isave, dsave)
+         if (task(1:2) == 'FG') then
+            f = sum((x - 3.0_wp)**2)
+            g = 2.0_wp*(x - 3.0_wp)
+         end if
+      end do
+
+      call check(error, task(1:4) == "CONV", &
+                 "bound-active problem did not converge: "//trim(task))
+      if (allocated(error)) return
+      ! Every variable must pin to its active upper bound u = 1.
+      call check(error, maxval(abs(x - 1.0_wp)) < 1.0e-5_wp, &
+                 "bound-active solution not on the active upper bound")
+      if (allocated(error)) return
+      call check(error, abs(f - 12.0_wp) < 1.0e-8_wp, &
+                 "bound-active objective not n*(1-3)^2 = 12")
+      if (allocated(error)) return
+   end subroutine test_lbfgsb_bound_active
 
 end module test_math_solvers
