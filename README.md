@@ -116,14 +116,6 @@ Note that the fpm build does not support exporting the C-API, it only provides a
 
 #### Building with cmake
 
-The cmake build mirrors the meson configuration and links the same vendored Fortran dependencies (resolved in-tree from `subprojects/`, no network access).
-You need
-
-- a Fortran compiler supporting Fortran 2008
-- [cmake](https://cmake.org) version 3.18 or newer
-- a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
-- a LAPACK / BLAS provider, like MKL or OpenBLAS
-
 Configure and compile a default build with
 
 ```sh
