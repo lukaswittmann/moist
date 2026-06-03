@@ -15,14 +15,12 @@ module test_cavity_drop_primitives
 
    public :: collect_cavity_drop_primitives
 
-   public :: ndim, atol, rtol
-
    integer, parameter :: ndim = 3
    integer, parameter :: owner_dummy = 1
 
-   real(wp), parameter :: atol = 5.0e-9_wp
-   real(wp), parameter :: rtol = 5.0e-9_wp
-   real(wp), parameter :: fd_h = 1.0e-4_wp
+   real(wp), parameter :: ABS_THR = 5.0e-9_wp
+   real(wp), parameter :: REL_THR = 5.0e-9_wp
+   real(wp), parameter :: STEP_SIZE = 1.0e-4_wp
 
 contains
 
@@ -65,7 +63,7 @@ contains
       real(wp) :: work_point(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -98,7 +96,7 @@ contains
 
                do i = 1, ndim
                   call check(error, analytic(i), numeric(i), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -119,7 +117,7 @@ contains
       real(wp) :: work_point(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -155,7 +153,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=atol, thr_rel=rtol)
+                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -177,7 +175,7 @@ contains
       real(wp) :: work_point(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -217,7 +215,7 @@ contains
                   do j = 1, ndim
                      do k = 1, ndim
                         call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                                      thr_abs=atol, thr_rel=rtol)
+                                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -241,7 +239,7 @@ contains
       real(wp) :: work_point(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -284,7 +282,7 @@ contains
                      do k = 1, ndim
                         do m = 1, ndim
                            call check(error, analytic(i, j, k, m), numeric(i, j, k, m), &
-                              thr_abs=atol, thr_rel=rtol)
+                              thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -308,7 +306,7 @@ contains
       real(wp) :: work_center(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -344,7 +342,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=atol, thr_rel=rtol)
+                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -366,7 +364,7 @@ contains
       real(wp) :: work_center(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -399,7 +397,7 @@ contains
 
                do i = 1, ndim
                   call check(error, analytic(i), numeric(i), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -420,7 +418,7 @@ contains
       real(wp) :: work_center(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -456,7 +454,7 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic(i, j), numeric(i, j), &
-                                                   thr_abs=atol, thr_rel=rtol)
+                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -481,7 +479,7 @@ contains
       real(wp) :: work_point(ndim)
       real(wp) :: h
 
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -521,17 +519,17 @@ contains
                   end do
                end do
 
-               call check(error, analytic_val, numeric_val, thr_abs=atol, thr_rel=rtol)
+               call check(error, analytic_val, numeric_val, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
                do i = 1, ndim
                   call check(error, analytic_grad(i), numeric_grad(i), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic_hess(i, j), numeric_hess(i, j), &
-                                                   thr_abs=atol, thr_rel=rtol)
+                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -567,7 +565,7 @@ contains
                anchor = points(:, jpt)
                analytic = phi%f0(point, anchor, owner_dummy)
                reference = 0.5_wp*param%phi_alpha*sum((point - anchor)**2)
-               call check(error, analytic, reference, thr_abs=atol, thr_rel=rtol)
+               call check(error, analytic, reference, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
             end do
          end do
@@ -590,7 +588,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -622,7 +620,7 @@ contains
                end do
 
                do i = 1, ndim
-                  call check(error, analytic(i), numeric(i), thr_abs=atol, thr_rel=rtol)
+                  call check(error, analytic(i), numeric(i), thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -646,7 +644,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -681,7 +679,7 @@ contains
 
                do i = 1, ndim
                   do j = 1, ndim
-                     call check(error, analytic(i, j), numeric(i, j), thr_abs=atol, thr_rel=rtol)
+                     call check(error, analytic(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -709,7 +707,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
       point = points(:, 1)
       anchor = points(:, 2)
       analytic = phi%f3_rrr(point, anchor, owner_dummy)
@@ -739,7 +737,7 @@ contains
          do j = 1, ndim
             do k = 1, ndim
                call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                             thr_abs=atol, thr_rel=rtol)
+                                             thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
             end do
          end do
@@ -764,7 +762,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
       point = points(:, 1)
       anchor = points(:, 2)
       analytic = phi%f4_rrrr(point, anchor, owner_dummy)
@@ -797,7 +795,7 @@ contains
             do k = 1, ndim
                do m = 1, ndim
                   call check(error, analytic(i, j, k, m), numeric(i, j, k, m), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -822,7 +820,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -854,7 +852,7 @@ contains
 
             do i = 1, ndim
                do j = 1, mol%nat
-                  call check(error, analytic(i, j), numeric(i, j), thr_abs=atol, thr_rel=rtol)
+                  call check(error, analytic(i, j), numeric(i, j), thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -879,7 +877,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -917,7 +915,7 @@ contains
                   do atom_a = 1, mol%nat
                      do atom_b = 1, mol%nat
                         call check(error, analytic(i, j, atom_a, atom_b), numeric(i, j, atom_a, atom_b), &
-                                                      thr_abs=atol, thr_rel=rtol)
+                                                      thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -944,7 +942,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -978,7 +976,7 @@ contains
                do j = 1, ndim
                   do atom = 1, mol%nat
                      call check(error, analytic(i, j, atom), numeric(i, j, atom), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1007,7 +1005,7 @@ contains
 
       param%phi_alpha = 0.7_wp
       call phi%set_parameters(param)
-      h = fd_h
+      h = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1047,17 +1045,17 @@ contains
                   end do
                end do
 
-               call check(error, analytic_val, numeric_val, thr_abs=atol, thr_rel=rtol)
+               call check(error, analytic_val, numeric_val, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
                do i = 1, ndim
                   call check(error, analytic_grad(i), numeric_grad(i), &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
                do i = 1, ndim
                   do j = 1, ndim
                      call check(error, analytic_hess(i, j), numeric_hess(i, j), &
-                                                   thr_abs=atol, thr_rel=rtol)
+                                                   thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1088,7 +1086,7 @@ contains
       real(wp) :: lsf0_tmp
       real(wp) :: eps
 
-      eps = fd_h
+      eps = STEP_SIZE
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1163,7 +1161,7 @@ contains
 
                   call check(error, &
                                                 analytic(axis, atom), numeric, &
-                                                thr_abs=atol, thr_rel=rtol)
+                                                thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
