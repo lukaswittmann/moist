@@ -40,11 +40,13 @@ module test_cavity_drop_lsf
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
+   use test_helpers, only: get_test_structures, get_test_radii, get_test_points, &
+      center_at_origin, fd4_scalar
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_ssd, only: ssd0
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_model_gems_utils, only: BuildSuperStructure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none
    private
@@ -57,25 +59,14 @@ module test_cavity_drop_lsf
    character(len=*), parameter :: kind_svdw = "svdw"
    character(len=*), parameter :: kind_cfc  = "cfc"
 
-   real(wp), parameter :: fd_h = 5.0e-4_wp
-   real(wp), parameter :: atol = 2.0e-10_wp
-   real(wp), parameter :: rtol = 1.0e-9_wp
+   real(wp), parameter :: STEP_SIZE = 5.0e-4_wp
+   real(wp), parameter :: ABS_THR = 2.0e-10_wp
+   real(wp), parameter :: REL_THR = 1.0e-9_wp
 
    integer,  parameter :: n_svdw_blends = 5
    integer,  parameter :: n_svdw_gammas = 2
    real(wp), parameter :: svdw_blend_k_values(n_svdw_blends) = [0.1_wp, 0.5_wp, 1.0_wp, 2.0_wp, 3.0_wp]
    real(wp), parameter :: svdw_gamma_values(n_svdw_gammas) = [0.0_wp, 0.7_wp]
-
-   ! Screening-cutoff sweep
-   real(wp), parameter :: screening_thresholds(3) = [ &
-      1.0e-12_wp, 1.0e-13_wp, 1.0e-14_wp]
-   ! Number of 1-bohr outward steps marched from the molecule's bounding-box edge
-   integer,  parameter :: screening_n_steps = 15
-   real(wp), parameter :: screening_step_bohr = 1.0_wp
-   ! Stop the march once -log(PD0) exceeds this
-   real(wp), parameter :: screening_val_ref_max = 5.0_wp
-   ! Floating-point noise floor for the screening diff comparison
-   real(wp), parameter :: screening_noise_floor = 1.0e-12_wp
 
 contains
 
@@ -86,8 +77,8 @@ contains
          !> Common
          new_unittest("svdw_sign_convention", test_svdw_sign_convention), &
          new_unittest("cfc_sign_convention", test_cfc_sign_convention), &
-         new_unittest("svdw_neighbor_cutoff", test_svdw_neighbor_cutoff), &
-         new_unittest("cfc_neighbor_cutoff", test_cfc_neighbor_cutoff), &
+         new_unittest("svdw_screening_separation", test_svdw_screening_separation), &
+         new_unittest("cfc_screening_separation", test_cfc_screening_separation), &
          !> LSF
          new_unittest("svdw_f1_r_fd", test_svdw_f1_r_fd), &
          new_unittest("cfc_f1_r_fd", test_cfc_f1_r_fd), &
@@ -237,7 +228,7 @@ contains
       call get_test_radii(mol, radii)
       call init_lsf(lsf, mol, radii, 0, kind)
 
-      !* Inside: lies on atom 1, well inside the cavity.
+      ! Inside: lies on atom 1, well inside the cavity
       inside_pt = mol%xyz(:, 1) + [0.05_wp, 0.05_wp, 0.0_wp]
       call lsf%prepare(inside_pt)
       call lsf%f0_screened(val_inside)
@@ -246,7 +237,7 @@ contains
          return
       end if
 
-      !* Outside: well beyond the molecular bounding box along +x.
+      ! Outside: well beyond the molecular bounding box along +x
       outside_pt = [maxval(mol%xyz(1, :)) + 20.0_wp, 0.0_wp, 0.0_wp]
       call lsf%prepare(outside_pt)
       call lsf%f0_screened(val_outside)
@@ -256,109 +247,117 @@ contains
       end if
    end subroutine run_sign_convention
 
-   !> SvdW dispatch for the neighbour-cutoff check.
-   subroutine test_svdw_neighbor_cutoff(error)
+   !> SvdW dispatch for the molecule-pair separation check.
+   subroutine test_svdw_screening_separation(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_neighbor_cutoff(error, kind_svdw)
-   end subroutine test_svdw_neighbor_cutoff
+      call run_screening_separation(error, kind_svdw)
+   end subroutine test_svdw_screening_separation
 
-   !> CFC dispatch for the neighbour-cutoff check.
-   subroutine test_cfc_neighbor_cutoff(error)
+   !> CFC dispatch for the molecule-pair separation check.
+   subroutine test_cfc_screening_separation(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_neighbor_cutoff(error, kind_cfc)
-   end subroutine test_cfc_neighbor_cutoff
+      call run_screening_separation(error, kind_cfc)
+   end subroutine test_cfc_screening_separation
 
-   !> Verify the screening contract: a screened LSF with threshold X
-   !> differs from the unscreened (threshold=0) LSF by at most a bound
-   !> proportional to X, in the well-conditioned LSF regime.
+   !> Verify screening in the regime it is actually used: a stationary centre
+   !> molecule with a copy of itself pulled away from it, sampling the LSF only
+   !> at points near the centre molecule (never far out in vacuum).
    !>
-   !> The check sweeps three tight thresholds (1e-12, 1e-13, 1e-14) and
-   !> marches outward from the molecule's bounding-box edge in 1-bohr
-   !> steps, stopping per-threshold once either (a) every atom has
-   !> been screened (n_active == 0) or (b) the unscreened LSF value
-   !> exceeds `screening_val_ref_max`. Looser thresholds and points
-   !> with larger val_ref were excluded because they push the kernel
-   !> into the regime where the underlying Z is tiny and the kernel's
-   !> -log(Z)/blend_k amplification turns sub-threshold absolute drops
-   !> into LSF-value changes well above the threshold; that's a
-   !> kernel-conditioning issue rather than a screening bug, and the
-   !> cavity machinery never evaluates LSF in that regime.
+   !> Unlike `run_neighbor_cutoff`, which marches the evaluation point outward
+   !> until conditioning degrades, here the points stay near the stationary
+   !> centre molecule (well-conditioned, val ~ 0) and screening is driven by
+   !> the *separation* of the moving copy: when adjacent its atoms are within
+   !> the SSD cutoff and contribute (screened == unscreened); as it recedes
+   !> past the cutoff (~25-30 bohr for the production threshold) its atoms are
+   !> dropped, but by then their contribution is ~threshold, so the screened
+   !> LSF still tracks the unscreened reference within ~ntot^2 * X.
    !>
-   !> Bound rationale: an atom passes the SSD screening only if its
-   !> weight at the point is >= X. For SvdW this directly bounds its
-   !> kernel contribution by X. For CFC the atomic exponent (a1=-15)
-   !> is stricter than the SSD exponent (screen_k=3), so atomic terms
-   !> from dropped atoms decay much faster than X - but pair terms
-   !> between a dropped atom and a kept atom can persist. Counting both
-   !> atomic and pair channels gives a worst-case
-   !> P_dropped <= n_dropped*nat*X, so the LSF diff is bounded by
-   !> ~nat^2*X over the noise floor.
-   subroutine run_neighbor_cutoff(error, kind)
+   !> The centre and moving molecules are the same structure (a homo-dimer
+   !> separation), joined with [[BuildSuperStructure]] (centre first, moving
+   !> copy appended), so the moving atoms carry user ids > `nc`; that lets the
+   !> realism guard confirm the moving copy contributes when adjacent and is
+   !> fully screened away when far - the contribute->screen transition that
+   !> makes this a non-vacuous test of production-style screening.
+   subroutine run_screening_separation(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
 
       type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
+      type(structure_type) :: center_mol, moving_mol, super_mol
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_ref, lsf_scr
-      real(wp), allocatable :: radii(:)
-      real(wp) :: centroid(ndim), direction(ndim), point(ndim)
-      real(wp) :: max_extent, thr, val_ref, val_scr, diff, bound
-      integer :: icase, ithr, istep, n_active_scr
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp) :: thr, gap, shift, val_ref, val_scr, diff, bound, perc
+      integer :: icase, ithr, istep, ip, nc, ntot, min_nact, n_mov_pts
 
-      call get_test_structures(mols)
+      real(wp), parameter :: separation_thresholds(6) = [ &
+         1.0e-8_wp, 1.0E-9_wp, 1.0e-10_wp, 1.0e-11_wp, 1.0e-12_wp, 1.0e-13_wp]
+
+      integer,  parameter :: separation_n_steps = 100
+      real(wp), parameter :: separation_gap_step = 0.25_wp
+
+      call get_test_structures(mols, 12)
+
       do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
+         ! Centre and moving molecules; the centre stays fixed, the other is translated
+         center_mol = mols(icase)
+         call center_at_origin(center_mol)
+         nc = center_mol%nat
+         call get_test_points(center_mol, points, 12)
 
-         !* Reference LSF: no screening.
-         call init_lsf(lsf_ref, mol, radii, 0, kind)
+         do ithr = 1, size(separation_thresholds)
+            thr = separation_thresholds(ithr)
 
-         !* March outward from the molecule along +x. The starting offset
-         !* is the bounding-box max along +x so the first point sits near
-         !* the molecular surface where screening just begins to engage.
-         centroid = sum(mol%xyz, dim=2) / real(mol%nat, wp)
-         max_extent = maxval(mol%xyz(1, :)) - centroid(1)
-         direction = [1.0_wp, 0.0_wp, 0.0_wp]
+            do istep = 0, separation_n_steps
+               gap = real(istep, wp) * separation_gap_step
 
-         do ithr = 1, size(screening_thresholds)
-            thr = screening_thresholds(ithr)
-            call init_lsf(lsf_scr, mol, radii, 0, kind, screening_threshold=thr)
+               ! Create superstructure from two molecules
+               moving_mol = center_mol
+               shift = maxval(center_mol%xyz(1, :)) - minval(moving_mol%xyz(1, :)) + gap
+               moving_mol%xyz(1, :) = moving_mol%xyz(1, :) + shift
+               call BuildSuperStructure(center_mol, moving_mol, super_mol, &
+                  no_displacement=.true.)
+               ntot = super_mol%nat
 
-            do istep = 0, screening_n_steps
-               point = centroid + (max_extent &
-                  + real(istep, wp) * screening_step_bohr) * direction
+               call get_test_radii(super_mol, radii)
+               call init_lsf(lsf_ref, super_mol, radii, 0, kind, screening_threshold=0.0_wp)
+               call init_lsf(lsf_scr, super_mol, radii, 0, kind, screening_threshold=thr)
 
-               call lsf_ref%prepare(point)
-               call lsf_ref%f0_screened(val_ref)
-               call lsf_scr%prepare(point)
-               call lsf_scr%f0_screened(val_scr)
+               do ip = 1, size(points, 2)
+                  call lsf_ref%prepare(points(:, ip))
+                  call lsf_ref%f0_screened(val_ref)
+                  call lsf_scr%prepare(points(:, ip))
+                  call lsf_scr%f0_screened(val_scr)
 
-               !* Two march-termination guards:
-               !*   (1) all atoms screened: the kernel reports n_active=0
-               !*       and returns val=0; the comparison is undefined.
-               !*   (2) val_ref exceeds the well-conditioned LSF range:
-               !*       past this point the underlying Z is small enough
-               !*       that the kernel amplifies sub-threshold absolute
-               !*       drops into LSF-value changes above the threshold.
-               n_active_scr = lsf_scr%active_count()
-               if (n_active_scr == 0) exit
-               if (val_ref > screening_val_ref_max) exit
+                  ! The three body term introduces the largest errors prop. to thr * natoms^2
+                  ! This is because the three body term is inside ntot^2 terms; thus we use this as the thr
+                  call check(error, val_scr, val_ref, thr=real(ntot, wp) ** 2 * thr, &
+                     more = "screened lsf diverged from unscreened during separation (lower than natoms^2*thr)")
+                  if (allocated(error)) return
 
-               bound = real(mol%nat, wp)**2 * thr + screening_noise_floor
-               diff = abs(val_scr - val_ref)
-               if (diff > bound) then
-                  call test_failed(error, &
-                     "screened lsf diverged from unscreened beyond threshold bound")
-                  return
-               end if
+               end do
+               deallocate(lsf_ref, lsf_scr)
             end do
-
-            deallocate(lsf_scr)
          end do
-
-         deallocate(lsf_ref)
       end do
-   end subroutine run_neighbor_cutoff
+
+   end subroutine run_screening_separation
+
+   !> True if any currently-active atom belongs to the moving copy (user id
+   !> > `nc`, the centre molecule's atom count), i.e. the moving molecule
+   !> still contributes after screening. Reflects the most recent `prepare`.
+   logical function any_moving_active(lsf, nc) result(active)
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      integer, intent(in) :: nc
+      integer :: i
+
+      active = .false.
+      do i = 1, lsf%active_count()
+         if (lsf%active_atom(i) > nc) then
+            active = .true.
+            return
+         end if
+      end do
+   end function any_moving_active
 
    !* ================================================================================= *!
    !*                           Spatial-derivative FD tests                             *!
@@ -406,19 +405,19 @@ contains
                   call lsf%prepare(point)
                   call lsf%f012_r_screened(lsf1_r=analytic)
                   do axis = 1, ndim
-                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*fd_h
+                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f0_screened(f_pp)
-                     shifted = point; shifted(axis) = point(axis) + fd_h
+                     shifted = point; shifted(axis) = point(axis) + STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f0_screened(f_p)
-                     shifted = point; shifted(axis) = point(axis) - fd_h
+                     shifted = point; shifted(axis) = point(axis) - STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f0_screened(f_m)
-                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*fd_h
+                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f0_screened(f_mm)
-                     numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, fd_h)
+                     numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, STEP_SIZE)
                   end do
                   do i = 1, ndim
                      call check(error, analytic(i), numeric(i), &
-                        thr_abs=atol, thr_rel=rtol)
+                        thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -470,22 +469,22 @@ contains
                   call lsf%prepare(point)
                   call lsf%f012_r_screened(lsf2_rr=analytic)
                   do axis = 1, ndim
-                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*fd_h
+                     shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_pp)
-                     shifted = point; shifted(axis) = point(axis) + fd_h
+                     shifted = point; shifted(axis) = point(axis) + STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_p)
-                     shifted = point; shifted(axis) = point(axis) - fd_h
+                     shifted = point; shifted(axis) = point(axis) - STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_m)
-                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*fd_h
+                     shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_mm)
                      do i = 1, ndim
-                        numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), fd_h)
+                        numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), STEP_SIZE)
                      end do
                   end do
                   do j = 1, ndim
                      do i = 1, ndim
                         call check(error, analytic(i, j), numeric(i, j), &
-                           thr_abs=atol, thr_rel=rtol)
+                           thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -525,7 +524,7 @@ contains
       real(wp) :: hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
       real(wp) :: eps
 
-      eps = fd_h
+      eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
       call get_test_structures(mols)
@@ -566,7 +565,7 @@ contains
                      do j = 1, ndim
                         do i = 1, ndim
                            call check(error, analytic(i, j, k), numeric(i, j, k), &
-                              thr_abs=atol, thr_rel=rtol)
+                              thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -611,7 +610,7 @@ contains
       real(wp) :: numeric, f_pp, f_p, f_m, f_mm
       real(wp) :: eps
 
-      eps = fd_h
+      eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
       call get_test_structures(mols)
@@ -652,7 +651,7 @@ contains
                         call lsf%prepare(point); call lsf%f0_screened(f_mm)
                         numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
                         call check(error, analytic(axis, atom), numeric, &
-                           thr_abs=atol, thr_rel=rtol)
+                           thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -693,7 +692,7 @@ contains
       real(wp) :: numeric, g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
       real(wp) :: eps
 
-      eps = fd_h
+      eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
       call get_test_structures(mols)
@@ -735,7 +734,7 @@ contains
                         do i = 1, ndim
                            numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
                            call check(error, analytic(i, axis, atom), numeric, &
-                              thr_abs=atol, thr_rel=rtol)
+                              thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -777,7 +776,7 @@ contains
       real(wp) :: numeric, hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
       real(wp) :: eps
 
-      eps = fd_h
+      eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
       call get_test_structures(mols)
@@ -819,7 +818,7 @@ contains
                            do i = 1, ndim
                               numeric = fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
                               call check(error, analytic(i, j, axis, atom), numeric, &
-                                 thr_abs=atol, thr_rel=rtol)
+                                 thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
@@ -932,31 +931,31 @@ contains
                   do atomB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
-                        centers_local(axisB, atomB) = centers_local(axisB, atomB) + fd_h
+                        centers_local(axisB, atomB) = centers_local(axisB, atomB) + STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_fwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, atomB) = centers_local(axisB, atomB) + 2.0_wp*fd_h
+                        centers_local(axisB, atomB) = centers_local(axisB, atomB) + 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, atomB) = centers_local(axisB, atomB) - fd_h
+                        centers_local(axisB, atomB) = centers_local(axisB, atomB) - STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_bwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, atomB) = centers_local(axisB, atomB) - 2.0_wp*fd_h
+                        centers_local(axisB, atomB) = centers_local(axisB, atomB) - 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
                         do atomA = 1, mol%nat
                            do axisA = 1, ndim
                               numeric = fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), &
-                                 rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), fd_h)
+                                 rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), STEP_SIZE)
                               call check(error, analytic(axisA, atomA, axisB, atomB), numeric, &
-                                 thr_abs=atol, thr_rel=rtol)
+                                 thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
@@ -1021,22 +1020,22 @@ contains
                   do iB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) + fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_fwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) - fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_bwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
@@ -1045,9 +1044,9 @@ contains
                               do jdir = 1, ndim
                                  numeric = fd4_scalar(r_rA_fwd2(jdir, axisA, iA), &
                                     r_rA_fwd(jdir, axisA, iA), r_rA_bwd(jdir, axisA, iA), &
-                                    r_rA_bwd2(jdir, axisA, iA), fd_h)
+                                    r_rA_bwd2(jdir, axisA, iA), STEP_SIZE)
                                  call check(error, analytic(jdir, axisA, iA, axisB, iB), numeric, &
-                                    thr_abs=atol, thr_rel=rtol)
+                                    thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
                               end do
                            end do
@@ -1093,28 +1092,28 @@ contains
                   call prim%f4_rrrr_screened(analytic)
                   do axis = 1, ndim
                      work_point = point
-                     work_point(axis) = point(axis) + fd_h
+                     work_point(axis) = point(axis) + STEP_SIZE
                      call prim%prepare(work_point)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_fwd)
                      work_point = point
-                     work_point(axis) = point(axis) + 2.0_wp*fd_h
+                     work_point(axis) = point(axis) + 2.0_wp*STEP_SIZE
                      call prim%prepare(work_point)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_fwd2)
                      work_point = point
-                     work_point(axis) = point(axis) - fd_h
+                     work_point(axis) = point(axis) - STEP_SIZE
                      call prim%prepare(work_point)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_bwd)
                      work_point = point
-                     work_point(axis) = point(axis) - 2.0_wp*fd_h
+                     work_point(axis) = point(axis) - 2.0_wp*STEP_SIZE
                      call prim%prepare(work_point)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_bwd2)
                      do i = 1, ndim
                         do j = 1, ndim
                            do kk = 1, ndim
                               numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                 t3_bwd(i, j, kk), t3_bwd2(i, j, kk), fd_h)
+                                 t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
                               call check(error, analytic(i, j, kk, axis), numeric, &
-                                 thr_abs=atol, thr_rel=rtol)
+                                 thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
                            end do
                         end do
@@ -1172,28 +1171,28 @@ contains
                   do atom = 1, mol%nat
                      do axis = 1, ndim
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_fwd)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_fwd2)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_bwd)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
@@ -1203,9 +1202,9 @@ contains
                            do j = 1, ndim
                               do kk = 1, ndim
                                  numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                    t3_bwd(i, j, kk), t3_bwd2(i, j, kk), fd_h)
+                                    t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
                                  call check(error, analytic(i, j, kk, axis, atom), numeric, &
-                                    thr_abs=atol, thr_rel=rtol)
+                                    thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
                               end do
                            end do
@@ -1275,28 +1274,28 @@ contains
                   do iB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) + fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_fwd)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_fwd2)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) - fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_bwd)
                         centers_local = centers_base
-                        centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*fd_h
+                        centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
@@ -1308,9 +1307,9 @@ contains
                                  do kk = 1, ndim
                                     numeric = fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), &
                                        rr_rA_fwd(j, kk, axisA, iA), rr_rA_bwd(j, kk, axisA, iA), &
-                                       rr_rA_bwd2(j, kk, axisA, iA), fd_h)
+                                       rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE)
                                     call check(error, analytic(j, kk, axisA, iA, axisB, iB), &
-                                       numeric, thr_abs=atol, thr_rel=rtol)
+                                       numeric, thr_abs=ABS_THR, thr_rel=REL_THR)
                                     if (allocated(error)) return
                                  end do
                               end do
@@ -1358,25 +1357,25 @@ contains
                      call prim%pou_f012_r_screened(i, weight, dweight_r=dweight_r)
                      do axis = 1, ndim
                         work_point = point
-                        work_point(axis) = point(axis) + fd_h
+                        work_point(axis) = point(axis) + STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight_forward)
                         work_point = point
-                        work_point(axis) = point(axis) + 2.0_wp*fd_h
+                        work_point(axis) = point(axis) + 2.0_wp*STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight_forward2)
                         work_point = point
-                        work_point(axis) = point(axis) - fd_h
+                        work_point(axis) = point(axis) - STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight_backward)
                         work_point = point
-                        work_point(axis) = point(axis) - 2.0_wp*fd_h
+                        work_point(axis) = point(axis) - 2.0_wp*STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight_backward2)
                         numeric = fd4_scalar(weight_forward2, weight_forward, &
-                           weight_backward, weight_backward2, fd_h)
+                           weight_backward, weight_backward2, STEP_SIZE)
                         call check(error, dweight_r(axis), numeric, &
-                           thr_abs=atol, thr_rel=rtol)
+                           thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -1419,26 +1418,26 @@ contains
                      call prim%pou_f012_r_screened(i, weight, d2weight_rr=d2weight_rr)
                      do axisB = 1, ndim
                         work_point = point
-                        work_point(axisB) = point(axisB) + fd_h
+                        work_point(axisB) = point(axisB) + STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_forward)
                         work_point = point
-                        work_point(axisB) = point(axisB) + 2.0_wp*fd_h
+                        work_point(axisB) = point(axisB) + 2.0_wp*STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_forward2)
                         work_point = point
-                        work_point(axisB) = point(axisB) - fd_h
+                        work_point(axisB) = point(axisB) - STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_backward)
                         work_point = point
-                        work_point(axisB) = point(axisB) - 2.0_wp*fd_h
+                        work_point(axisB) = point(axisB) - 2.0_wp*STEP_SIZE
                         call prim%prepare(work_point)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_backward2)
                         do axisA = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axisA), grad_forward(axisA), &
-                              grad_backward(axisA), grad_backward2(axisA), fd_h)
+                              grad_backward(axisA), grad_backward2(axisA), STEP_SIZE)
                            call check(error, d2weight_rr(axisA, axisB), numeric, &
-                              thr_abs=atol, thr_rel=rtol)
+                              thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -1499,28 +1498,28 @@ contains
                   do atomA = 1, mol%nat
                      do axisA = 1, ndim
                         centers_local = centers_base
-                        centers_local(axisA, atomA) = centers_local(axisA, atomA) + fd_h
+                        centers_local(axisA, atomA) = centers_local(axisA, atomA) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_forward)
                         centers_local = centers_base
-                        centers_local(axisA, atomA) = centers_local(axisA, atomA) + 2.0_wp*fd_h
+                        centers_local(axisA, atomA) = centers_local(axisA, atomA) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_forward2)
                         centers_local = centers_base
-                        centers_local(axisA, atomA) = centers_local(axisA, atomA) - fd_h
+                        centers_local(axisA, atomA) = centers_local(axisA, atomA) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_backward)
                         centers_local = centers_base
-                        centers_local(axisA, atomA) = centers_local(axisA, atomA) - 2.0_wp*fd_h
+                        centers_local(axisA, atomA) = centers_local(axisA, atomA) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
@@ -1528,9 +1527,9 @@ contains
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_backward2)
                         do axis = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axis), grad_forward(axis), &
-                              grad_backward(axis), grad_backward2(axis), fd_h)
+                              grad_backward(axis), grad_backward2(axis), STEP_SIZE)
                            call check(error, d2weight_r_rA(axis, axisA, atomA), numeric, &
-                              thr_abs=atol, thr_rel=rtol)
+                              thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
                         end do
                      end do
@@ -1587,36 +1586,36 @@ contains
                   do atom = 1, mol%nat
                      do axis = 1, ndim
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%normalized_f01_rA_screened(f_forward)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%normalized_f01_rA_screened(f_forward2)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%normalized_f01_rA_screened(f_backward)
                         centers_local = centers_base
-                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*fd_h
+                        centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
                         call prim%prepare(point)
                         call prim%normalized_f01_rA_screened(f_backward2)
-                        numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, fd_h)
+                        numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE)
                         call check(error, deriv_rA(axis, atom), numeric, &
-                           thr_abs=atol, thr_rel=rtol)
+                           thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
                      end do
                   end do
@@ -1661,7 +1660,7 @@ contains
       d2(1) = ssd0(point2, centers2(:, 1), radii2(1))
       d2(2) = ssd0(point2, centers2(:, 2), radii2(2))
       expected = 0.5_wp*sum(d2)
-      call check(error, lsf0, expected, thr_abs=atol, thr_rel=rtol)
+      call check(error, lsf0, expected, thr_abs=ABS_THR, thr_rel=REL_THR)
       if (allocated(error)) return
 
       centers3 = reshape([ &
@@ -1683,7 +1682,7 @@ contains
       d3(2) = ssd0(point3, centers3(:, 2), radii3(2))
       d3(3) = ssd0(point3, centers3(:, 3), radii3(3))
       expected = sum(d3)/3.0_wp
-      call check(error, lsf0, expected, thr_abs=atol, thr_rel=rtol)
+      call check(error, lsf0, expected, thr_abs=ABS_THR, thr_rel=REL_THR)
    end subroutine test_svdw_body_order_scaling
 
 
