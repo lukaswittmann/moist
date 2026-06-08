@@ -1,11 +1,14 @@
-MOIST: Modular and Open-source Implicit Solvation Toolkit
-==============
+<div align="center">
+  
+  # MOIST - *The Modular and Open-source Implicit Solvation Toolkit*
 
-[![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER) 
-[![Version](https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases)](https://github.com/lukaswittmann/moist/releases/latest)
-[![Build](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main)](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml)
-[![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
-[![Coverage](https://codecov.io/gh/lukaswittmann/moist/branch/main/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
+  [![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER) 
+  [![Version](https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases)](https://github.com/lukaswittmann/moist/releases/latest)
+  [![Build](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main)](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml)
+  [![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
+  [![Coverage](https://codecov.io/gh/lukaswittmann/moist/branch/main/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
+</div>
+
 
 > [!Note]
 >  MOIST is currently in a pre-release state.
@@ -39,9 +42,9 @@ meson options passed to `meson setup`:
 
 | Option           | Default | Effect                                                           | Extra dependency                  |
 | ---------------- | ------- | ---------------------------------------------------------------- | --------------------------------- |
-| `-Drism=true`    | `false` | Build the RISM solvation model (defines `WITH_RISM`)              | FFTW3, HDF5 (added automatically) |
-| `-Dfftw=true`    | `false` | Link FFTW3 for FFT-based routines (defines `WITH_FFTW`)           | FFTW3                             |
-| `-Dhdf5=true`    | `false` | HDF5 I/O for RISM grids and large datasets (defines `WITH_HDF5`)  | HDF5 with Fortran bindings        |
+| `-Drism=true`    | `false` | Build the RISM solvation model (defines `WITH_RISM`)             | FFTW3, HDF5 (added automatically) |
+| `-Dfftw=true`    | `false` | Link FFTW3 for FFT-based routines (defines `WITH_FFTW`)          | FFTW3                             |
+| `-Dhdf5=true`    | `false` | HDF5 I/O for RISM grids and large datasets (defines `WITH_HDF5`) | HDF5 with Fortran bindings        |
 | `-Dilp64=true`   | `false` | Use 64-bit-integer (ILP64) BLAS/LAPACK                           | ILP64 BLAS/LAPACK                 |
 | `-Dopenmp=true`  | `true`  | OpenMP parallelisation (enables threaded FFT, `fftw3_threads`)   | OpenMP runtime                    |
 
