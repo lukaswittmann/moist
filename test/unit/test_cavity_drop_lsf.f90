@@ -92,6 +92,8 @@ contains
                   new_unittest("cfc_f2_r_rA_fd", test_cfc_f2_r_rA_fd), &
                   new_unittest("svdw_f3_rr_rA_fd", test_svdw_f3_rr_rA_fd), &
                   new_unittest("cfc_f3_rr_rA_fd", test_cfc_f3_rr_rA_fd), &
+                  new_unittest("svdw_f012_hessfree_value_grad", test_svdw_f012_hessfree), &
+                  new_unittest("cfc_f012_hessfree_value_grad", test_cfc_f012_hessfree), &
                   !> SvdW-only
                   new_unittest("svdw_f2_rArB", test_svdw_f2_rArB), &
                   new_unittest("svdw_f3_r_rArB", test_svdw_f3_r_rArB), &
@@ -831,6 +833,66 @@ contains
          deallocate (centers_base, centers_local)
       end do
    end subroutine run_f3_rr_rA_fd
+
+   !* ================================================================================= *!
+   !*                       Hessian-free value+gradient path                            *!
+   !* ================================================================================= *!
+
+   !> SvdW dispatch for the Hessian-free value+gradient consistency check.
+   subroutine test_svdw_f012_hessfree(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f012_hessfree(error, kind_svdw)
+   end subroutine test_svdw_f012_hessfree
+
+   !> CFC dispatch for the Hessian-free value+gradient consistency check.
+   subroutine test_cfc_f012_hessfree(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f012_hessfree(error, kind_cfc)
+   end subroutine test_cfc_f012_hessfree
+
+   !> `f012_r_screened` skips the Hessian pass when `lsf2_rr` is not requested
+   subroutine run_f012_hessfree(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      integer  :: icase, ipt, i, iblend, igamma, nblend, ngamma
+      real(wp) :: v0, v1, g0(ndim), g1(ndim), h(ndim, ndim)
+
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points)
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 2, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  call lsf%prepare(points(:, ipt))
+                  ! Hessian skipped (no lsf2_rr) vs Hessian computed.
+                  call lsf%f012_r_screened(lsf0=v0, lsf1_r=g0)
+                  call lsf%f012_r_screened(lsf0=v1, lsf1_r=g1, lsf2_rr=h)
+                  call check(error, v0 == v1, &
+                             "value changed when the Hessian is skipped")
+                  if (allocated(error)) return
+                  do i = 1, ndim
+                     call check(error, g0(i) == g1(i), &
+                                "gradient changed when the Hessian is skipped")
+                     if (allocated(error)) return
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+      end do
+   end subroutine run_f012_hessfree
 
    !* ================================================================================= *!
    !*                       SvdW-only sweep helpers                                     *!

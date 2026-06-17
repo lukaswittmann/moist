@@ -660,7 +660,7 @@ contains
       integer, intent(in) :: n_total
       integer, intent(out) :: n_active_local
       integer :: i, sorted_idx, user_idx
-      real(wp) :: x_i, w_i, diff(ndim), n_vec(ndim)
+      real(wp) :: x_i, w_i, diff(ndim), n_vec(ndim), bound
 
       n_active_local = 0
       do i = 1, n_total
@@ -668,6 +668,11 @@ contains
          sorted_idx = self%orig_to_sorted(user_idx)
 
          diff = point - self%sorted_centers(:, sorted_idx)
+         ! Conservative squared-distance pre-filter
+         bound = self%sorted_radii(sorted_idx) + self%screening_cutoff
+         if (bound > 0.0_wp) then
+            if (sum(diff*diff) > bound*bound*(1.0_wp + 1.0e-12_wp)) cycle
+         end if
          x_i = norm2(diff)
          if (x_i - self%sorted_radii(sorted_idx) > self%screening_cutoff) cycle
          w_i = exp(-(self%k/3.0_wp)*(x_i - self%sorted_radii(sorted_idx)))

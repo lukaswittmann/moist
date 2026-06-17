@@ -266,7 +266,11 @@ contains
       s_2 = self%param%blend_2b
       s_3 = self%param%blend_3b
 
-      call compute_lsf_z012_rr_screened(self%ssd_system, k, s_1, s_2, s_3, Z, gradZ, hessZ)
+      if (present(lsf2_rr)) then
+         call compute_lsf_z012_rr_screened(self%ssd_system, k, s_1, s_2, s_3, Z, gradZ, hessZ)
+      else
+         call compute_lsf_z012_rr_screened(self%ssd_system, k, s_1, s_2, s_3, Z, gradZ)
+      end if
 
       if (present(lsf0)) lsf0 = -1.0_wp/k*log(Z)
       invZ = 1.0_wp/max(Z, 1.0e-100_wp)
@@ -641,11 +645,12 @@ contains
       end if
    end subroutine compute_lsf_z0_screened
 
-!> Compute Z, gradZ, hessZ using O(N) power sums
+!> Compute Z, gradZ, and (optionally) hessZ using O(N) power sums
    subroutine compute_lsf_z012_rr_screened(ssd_system, k, s_1, s_2, s_3, Z, gradZ, hessZ)
       type(moist_cavity_drop_lsf_svdw_ssd_type), intent(in) :: ssd_system
       real(wp), intent(in) :: k, s_1, s_2, s_3
-      real(wp), intent(out) :: Z, gradZ(ndim), hessZ(ndim, ndim)
+      real(wp), intent(out) :: Z, gradZ(ndim)
+      real(wp), intent(out), optional :: hessZ(ndim, ndim)
 
       integer :: i, n_active
       real(wp) :: lambda1, lambda2, lambda3, lambda3_sq
@@ -667,8 +672,13 @@ contains
       real(wp) :: p1, p2, p3, p4
       !> Per-atom fused weights for outer-product and hessian contributions
       real(wp) :: w_nn, w_hd
+      !> Whether to run the Hessian pass (pass 2) and Hessian cross-terms
+      logical :: do_hess
 
-      Z = 0.0_wp; gradZ = 0.0_wp; hessZ = 0.0_wp
+      do_hess = present(hessZ)
+
+      Z = 0.0_wp; gradZ = 0.0_wp
+      if (do_hess) hessZ = 0.0_wp
       n_active = ssd_system%n_active
       if (n_active == 0) return
 
@@ -721,32 +731,34 @@ contains
       ! Fused-weight constants: q_k = a_k * lambda_k^2, p_k = a_k * lambda_k
       ! These pre-blend the 4 exponential kinds so the hessian loop accumulates
       ! into a single (ndim, ndim) array instead of four.
-      q1 = a1*lambda1_sq; p1 = a1*lambda1
-      q2 = a2*lambda2_sq; p2 = a2*lambda2
-      q3 = a3*lambda3*lambda3; p3 = a3*lambda3
-      q4 = a4*lambda3_sq_sq; p4 = a4*lambda3_sq
+      if (do_hess) then
+         q1 = a1*lambda1_sq; p1 = a1*lambda1
+         q2 = a2*lambda2_sq; p2 = a2*lambda2
+         q3 = a3*lambda3*lambda3; p3 = a3*lambda3
+         q4 = a4*lambda3_sq_sq; p4 = a4*lambda3_sq
 
-      ! === Pass 2: Fused hessian accumulation ===
-      ! 9 hessian accumulators (vs 36 in the unfused single-pass approach)
-      do i = 1, n_active
-         base = ssd_system%k3f0_arr(i)
-         base_sq = base*base
-         e1 = base_sq*base
-         e2 = base*ssd_system%sqrt_k3f0_arr(i)
+         ! === Pass 2: Fused hessian accumulation ===
+         ! 9 hessian accumulators (vs 36 in the unfused single-pass approach)
+         do i = 1, n_active
+            base = ssd_system%k3f0_arr(i)
+            base_sq = base*base
+            e1 = base_sq*base
+            e2 = base*ssd_system%sqrt_k3f0_arr(i)
 
-         ! Per-atom fused weights blend all 4 exponential kinds into one scalar
-         w_nn = q1*e1 + q2*e2 + q3*base + q4*base_sq
-         w_hd = p1*e1 + p2*e2 + p3*base + p4*base_sq
+            ! Per-atom fused weights blend all 4 exponential kinds into one scalar
+            w_nn = q1*e1 + q2*e2 + q3*base + q4*base_sq
+            w_hd = p1*e1 + p2*e2 + p3*base + p4*base_sq
 
-         grad_d = ssd_system%f1_r_arr(:, i)
-         hess_d = ssd_system%f2_rr_arr(:, :, i)
+            grad_d = ssd_system%f1_r_arr(:, i)
+            hess_d = ssd_system%f2_rr_arr(:, :, i)
 
-         nn(:, 1) = grad_d*grad_d(1)
-         nn(:, 2) = grad_d*grad_d(2)
-         nn(:, 3) = grad_d*grad_d(3)
+            nn(:, 1) = grad_d*grad_d(1)
+            nn(:, 2) = grad_d*grad_d(2)
+            nn(:, 3) = grad_d*grad_d(3)
 
-         hessZ = hessZ + w_nn*nn - w_hd*hess_d
-      end do
+            hessZ = hessZ + w_nn*nn - w_hd*hess_d
+         end do
+      end if
 
       ! === Assemble scalar Z from power sums ===
       Z = s_1*sum_e1
@@ -762,14 +774,16 @@ contains
       gradZ = a1*dsum_e1 + a2*dsum_e2 + a3*dsum_e3 + a4*dsum_e3_sq
 
       ! === Add hessian cross-terms (rank-1 updates from gradient sums) ===
-      if (n_active >= 2) then
-         hessZ = hessZ + s_2*outer_matrix(dsum_e2, dsum_e2)
-      end if
-      if (n_active >= 3) then
-         hessZ = hessZ + s_3*( &
-                 sum_e3*outer_matrix(dsum_e3, dsum_e3) &
-                 - 0.5_wp*(outer_matrix(dsum_e3, dsum_e3_sq) &
-                           + outer_matrix(dsum_e3_sq, dsum_e3)))
+      if (do_hess) then
+         if (n_active >= 2) then
+            hessZ = hessZ + s_2*outer_matrix(dsum_e2, dsum_e2)
+         end if
+         if (n_active >= 3) then
+            hessZ = hessZ + s_3*( &
+                    sum_e3*outer_matrix(dsum_e3, dsum_e3) &
+                    - 0.5_wp*(outer_matrix(dsum_e3, dsum_e3_sq) &
+                              + outer_matrix(dsum_e3_sq, dsum_e3)))
+         end if
       end if
    end subroutine compute_lsf_z012_rr_screened
 
