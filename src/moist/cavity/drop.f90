@@ -854,7 +854,7 @@ contains
 
       !> Filter out points below cutoff
       call self%timer%measure(9)
-      call self%filter_arrays('Branch filter', error)
+      call self%filter_arrays('Postfilter', error)
       if (allocated(error)) return
       call self%timer%measure(9)
 
