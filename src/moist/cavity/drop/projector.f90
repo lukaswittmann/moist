@@ -436,6 +436,10 @@ contains
 
       if (present(mol_cell_grid)) then
          self%mol_cell_grid = mol_cell_grid
+         ! Relabel candidate ids into the LSF's internal atom ordering
+         if (allocated(self%mol_cell_grid%cell_nlat)) then
+            call self%lsf%remap_candidate_grid(self%mol_cell_grid%cell_nlat)
+         end if
       end if
 
    end subroutine projector_init_primitives

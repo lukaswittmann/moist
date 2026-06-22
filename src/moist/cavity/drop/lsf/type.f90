@@ -39,6 +39,8 @@ module moist_cavity_drop_lsf_base
       !> base implementation first via
       !> `call self%moist_cavity_drop_lsf_type%update(mol, radii)`.
       procedure :: update => lsf_base_update
+      !> Optionally relabel the molecular cell-grid candidate lists into the actual LSF's internal atom ordering
+      procedure :: remap_candidate_grid => lsf_base_remap_candidate_grid
       !> Cache per-point screening / state. Called once per evaluation
       !> point before any derivative method. No-op-safe.
       procedure(lsf_prepare_iface), deferred :: prepare
@@ -85,7 +87,9 @@ module moist_cavity_drop_lsf_base
 
       !> @param[inout] self              LSF instance
       !> @param[in]    point             Evaluation point (3,)
-      !> @param[in]    candidate_indices Atom ids to consider (user-space)
+      !> @param[in]    candidate_indices Atom ids to consider, in the concrete
+      !>                                 LSF's own index space (user-space by
+      !>                                 default; see remap_candidate_grid)
       subroutine lsf_prepare_subset_iface(self, point, candidate_indices)
          import :: wp, moist_cavity_drop_lsf_type
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
@@ -203,5 +207,15 @@ contains
       if (allocated(self%radii)) deallocate (self%radii)
       self%radii = radii
    end subroutine lsf_base_update
+
+   !> Default candidate-grid remap
+   !>
+   !> @param[in]    self      LSF instance
+   !> @param[inout] cell_nlat Flat cell-grid candidate atom-id list
+   subroutine lsf_base_remap_candidate_grid(self, cell_nlat)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      integer, intent(inout) :: cell_nlat(:)
+      if (self%ncenters < 0 .or. size(cell_nlat) < 0) return
+   end subroutine lsf_base_remap_candidate_grid
 
 end module moist_cavity_drop_lsf_base

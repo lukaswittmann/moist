@@ -63,7 +63,11 @@ module moist_cavity_drop_lsf_svdw_ssd
       real(wp), allocatable :: sqrt_k3f0_arr(:)
       !> Gradient of f0 w.r.t. field point r [ndim, n_alloc]
       real(wp), allocatable :: f1_r_arr(:, :)
-      !> Hessian of f0 w.r.t. r [ndim, ndim, n_alloc]
+      !> Reciprocal distance 1/x per active atom [n_alloc] (if max_deriv >= 2)
+      !> The Hessian f2_rr = (I - n n^T)/x is reconstruted on the fly from f1_r (= n) and inv_x in z012/pou f012
+      real(wp), allocatable :: inv_x_arr(:)
+      !> Hessian of f0 w.r.t. r [ndim, ndim, n_alloc]; only saved if max_deriv >= 3
+      !> (where the higher-order / nuclear routines require it; see inv_x_arr)
       real(wp), allocatable :: f2_rr_arr(:, :, :)
       !> Third derivative w.r.t. r [ndim, ndim, ndim, n_alloc] (max_deriv >= 3)
       real(wp), allocatable :: f3_rrr_arr(:, :, :, :)
@@ -401,14 +405,17 @@ contains
 
       if (self%max_deriv >= 2 .and. x > 0.0_wp) then
          inv_x = 1.0_wp/x
-         do j = 1, ndim
-            do i = 1, ndim
-               self%f2_rr_arr(i, j, idx) = -n(i)*n(j)*inv_x
-            end do
-            self%f2_rr_arr(j, j, idx) = self%f2_rr_arr(j, j, idx) + inv_x
-         end do
+         self%inv_x_arr(idx) = inv_x
 
          if (self%max_deriv >= 3) then
+            ! Materialize the full Hessian
+            do j = 1, ndim
+               do i = 1, ndim
+                  self%f2_rr_arr(i, j, idx) = -n(i)*n(j)*inv_x
+               end do
+               self%f2_rr_arr(j, j, idx) = self%f2_rr_arr(j, j, idx) + inv_x
+            end do
+
             inv_x2 = inv_x*inv_x
             do k_ = 1, ndim
                do j = 1, ndim
@@ -447,7 +454,8 @@ contains
          end if
       else if (self%max_deriv >= 2) then
          ! x == 0: zero second-order field
-         self%f2_rr_arr(:, :, idx) = 0.0_wp
+         self%inv_x_arr(idx) = 0.0_wp
+         if (self%max_deriv >= 3) self%f2_rr_arr(:, :, idx) = 0.0_wp
       end if
    end subroutine ssd_soa_populate
 
@@ -480,6 +488,7 @@ contains
       if (allocated(self%k3f0_arr)) deallocate (self%k3f0_arr)
       if (allocated(self%sqrt_k3f0_arr)) deallocate (self%sqrt_k3f0_arr)
       if (allocated(self%f1_r_arr)) deallocate (self%f1_r_arr)
+      if (allocated(self%inv_x_arr)) deallocate (self%inv_x_arr)
       if (allocated(self%f2_rr_arr)) deallocate (self%f2_rr_arr)
       if (allocated(self%f3_rrr_arr)) deallocate (self%f3_rrr_arr)
       if (allocated(self%f4_rrrr_arr)) deallocate (self%f4_rrrr_arr)
@@ -604,17 +613,17 @@ contains
       if (allocated(self%k3f0_arr)) deallocate (self%k3f0_arr)
       if (allocated(self%sqrt_k3f0_arr)) deallocate (self%sqrt_k3f0_arr)
       if (allocated(self%f1_r_arr)) deallocate (self%f1_r_arr)
+      if (allocated(self%inv_x_arr)) deallocate (self%inv_x_arr)
       if (allocated(self%f2_rr_arr)) deallocate (self%f2_rr_arr)
       if (allocated(self%f3_rrr_arr)) deallocate (self%f3_rrr_arr)
       if (allocated(self%f4_rrrr_arr)) deallocate (self%f4_rrrr_arr)
       allocate (self%atom_indices(n))
       allocate (self%k3f0_arr(n))
       allocate (self%sqrt_k3f0_arr(n))
-      ! f1_r and f2_rr are always allocated (consumers like z012_rr access
-      ! them unconditionally). They are zeroed in ssd_soa_populate when
-      ! max_deriv is too low. Only the large f3/f4 tensors are conditional.
+      ! f1_r and inv_x are always allocated; z012_rr / pou f012 reconstruct the Hessian (I - n n^T)/x on the fly
       allocate (self%f1_r_arr(ndim, n))
-      allocate (self%f2_rr_arr(ndim, ndim, n))
+      allocate (self%inv_x_arr(n))
+      if (self%max_deriv >= 3) allocate (self%f2_rr_arr(ndim, ndim, n))
       if (self%max_deriv >= 3) allocate (self%f3_rrr_arr(ndim, ndim, ndim, n))
       if (self%max_deriv >= 4) allocate (self%f4_rrrr_arr(ndim, ndim, ndim, ndim, n))
    end subroutine ssd_system_update
@@ -624,12 +633,14 @@ contains
    !> Derivative orders:
    !>  - 0: Only f0, k3f0 (for value-only computations)
    !>  - 1: + f1_r (for gradients)
-   !>  - 2: + f2_rr (for Hessians) [DEFAULT]
-   !>  - 3: + f3_rrr (for 3rd derivatives, nuclear Hessians)
+   !>  - 2: + inv_x (for Hessians; the full f2_rr is reconstructed on the fly
+   !>       in the consumer from f1_r and inv_x) [DEFAULT]
+   !>  - 3: + f2_rr, f3_rrr (for 3rd derivatives, nuclear Hessians)
    !>  - 4: + f4_rrrr (for 4th derivatives, nuclear 3rd derivatives)
    !>
-   !> @param[inout] self  System to compute
-   !> @param[in]    point Evaluation point coordinates [ndim]
+   !> @param[inout] self              System to compute
+   !> @param[in]    point             Evaluation point coordinates [ndim]
+   !> @param[in]    candidate_indices Sorted-index atom ids to screen
    subroutine ssd_system_compute(self, point, candidate_indices)
       class(moist_cavity_drop_lsf_svdw_ssd_type), intent(inout) :: self
       real(wp), intent(in) :: point(ndim)
@@ -650,7 +661,9 @@ contains
    !>
    !> @param[inout] self              System
    !> @param[in]    point             Evaluation point [ndim]
-   !> @param[in]    candidate_indices User-space atom ids to screen
+   !> @param[in]    candidate_indices Spatially-sorted atom ids to screen
+   !>                                 (already in `sorted_*` index space; the
+   !>                                 caller remaps via `remap_candidate_grid`)
    !> @param[in]    n_total           Size of candidate_indices
    !> @param[out]   n_active_local    Number of atoms that passed screening
    pure subroutine ssd_screen_subset(self, point, candidate_indices, n_total, n_active_local)
@@ -664,8 +677,8 @@ contains
 
       n_active_local = 0
       do i = 1, n_total
-         user_idx = candidate_indices(i)
-         sorted_idx = self%orig_to_sorted(user_idx)
+         ! Candidates already carry sorted-index ids
+         sorted_idx = candidate_indices(i)
 
          diff = point - self%sorted_centers(:, sorted_idx)
          ! Conservative squared-distance pre-filter
@@ -684,6 +697,8 @@ contains
             else
                n_vec = 0.0_wp
             end if
+            ! Translate back to user space only for the (far fewer) kept atoms
+            user_idx = self%sorted_to_orig(sorted_idx)
             call ssd_soa_populate(self, n_active_local, &
                                   n_vec, x_i, self%radii(user_idx), user_idx, w_i)
          end if

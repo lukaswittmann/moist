@@ -41,6 +41,9 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: new => lsf_new
       !> Bind molecular geometry and refresh SSD geometry caches
       procedure, public :: update => lsf_update
+      !> Relabel cell-grid candidate ids into the SSD's spatially-sorted index
+      !> space (so the screen loop drops its per-candidate orig->sorted gather)
+      procedure, public :: remap_candidate_grid => lsf_svdw_remap_candidate_grid
       !> Point preparation: runs SSD screening at the evaluation point
       procedure, public :: prepare => lsf_prepare
       !> Point preparation variant using a caller-provided candidate atom list
@@ -140,12 +143,29 @@ contains
          max_deriv=prior_max_deriv)
       call self%ssd_system%update(mol%xyz, radii)
 
+      ! Full-scan candidate list, in the SSD's spatially-sorted index space so
+      ! the screen loop can index sorted_centers directly
       if (allocated(self%all_indices)) deallocate (self%all_indices)
       allocate (self%all_indices(mol%nat))
       do i = 1, mol%nat
-         self%all_indices(i) = i
+         self%all_indices(i) = self%ssd_system%orig_to_sorted(i)
       end do
    end subroutine lsf_update
+
+!> Relabel cell-grid candidate atom ids into the SSD's spatially-sorted index space
+!>
+!> @param[in]    self      SvdW LSF instance (must have been `update`d)
+!> @param[inout] cell_nlat Flat cell-grid candidate atom-id list
+   subroutine lsf_svdw_remap_candidate_grid(self, cell_nlat)
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      integer, intent(inout) :: cell_nlat(:)
+      integer :: i
+
+      if (.not. allocated(self%ssd_system%orig_to_sorted)) return
+      do i = 1, size(cell_nlat)
+         cell_nlat(i) = self%ssd_system%orig_to_sorted(cell_nlat(i))
+      end do
+   end subroutine lsf_svdw_remap_candidate_grid
 
 !> Run SSD screening at the evaluation point
 !>
@@ -164,7 +184,8 @@ contains
 !>
 !> @param[inout] self              LSF instance
 !> @param[in]    point             Evaluation point (3,)
-!> @param[in]    candidate_indices Atom ids to screen (user-space ordering)
+!> @param[in]    candidate_indices Atom ids to screen, in the SSD's sorted-index
+!>                                 space (see remap_candidate_grid)
    subroutine lsf_prepare_subset(self, point, candidate_indices)
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
@@ -191,10 +212,14 @@ contains
       if (.not. allocated(self%ssd_system%k3f0_arr)) return
       n_alloc = size(self%ssd_system%k3f0_arr)
 
+      ! f2_rr is saved only at max_deriv >= 3
       if (n >= 3) then
+         if (.not. allocated(self%ssd_system%f2_rr_arr)) &
+            allocate (self%ssd_system%f2_rr_arr(3, 3, n_alloc))
          if (.not. allocated(self%ssd_system%f3_rrr_arr)) &
             allocate (self%ssd_system%f3_rrr_arr(3, 3, 3, n_alloc))
       else
+         if (allocated(self%ssd_system%f2_rr_arr)) deallocate (self%ssd_system%f2_rr_arr)
          if (allocated(self%ssd_system%f3_rrr_arr)) deallocate (self%ssd_system%f3_rrr_arr)
       end if
 
@@ -652,13 +677,13 @@ contains
       real(wp), intent(out) :: Z, gradZ(ndim)
       real(wp), intent(out), optional :: hessZ(ndim, ndim)
 
-      integer :: i, n_active
+      integer :: i, j, ii, n_active
       real(wp) :: lambda1, lambda2, lambda3, lambda3_sq
       real(wp) :: lambda1_sq, lambda2_sq, lambda3_sq_sq
       real(wp) :: base, base_sq, e1, e2
       real(wp) :: sum_e1, sum_e2, sum_e3, sum_e3_sq
       real(wp) :: dsum_e1(ndim), dsum_e2(ndim), dsum_e3(ndim), dsum_e3_sq(ndim)
-      real(wp) :: grad_d(ndim), hess_d(ndim, ndim)
+      real(wp) :: grad_d(ndim), hess_d(ndim, ndim), inv_x
       !> Cached outer product of grad_d with itself
       real(wp) :: nn(ndim, ndim)
       !> Per-kind blending coefficients combining s_1, s_2, s_3 with scalar
@@ -750,7 +775,15 @@ contains
             w_hd = p1*e1 + p2*e2 + p3*base + p4*base_sq
 
             grad_d = ssd_system%f1_r_arr(:, i)
-            hess_d = ssd_system%f2_rr_arr(:, :, i)
+
+            ! Reconstruct hess_d = (I - n n^T)/x from f1_r (= n) and inv_x instead of reading a stored f2_rr_arr
+            inv_x = ssd_system%inv_x_arr(i)
+            do j = 1, ndim
+               do ii = 1, ndim
+                  hess_d(ii, j) = -grad_d(ii)*grad_d(j)*inv_x
+               end do
+               hess_d(j, j) = hess_d(j, j) + inv_x
+            end do
 
             nn(:, 1) = grad_d*grad_d(1)
             nn(:, 2) = grad_d*grad_d(2)
@@ -1761,12 +1794,12 @@ contains
       real(wp), intent(in) :: k, s_1, s_2, s_3, Z
       real(wp), allocatable, intent(out) :: result(:, :, :)
 
-      integer :: i, j, n_active
+      integer :: i, j, ii, n_active
       real(wp) :: lambda1, lambda2, lambda3
       real(wp) :: base, base_sq, e1, e2
       real(wp) :: sum_e2, sum_e3, sum_e3_sq
       real(wp) :: sum_e3_excl, sum_e3_sq_excl, pair_sum_excl
-      real(wp) :: invZ, M_i
+      real(wp) :: invZ, M_i, inv_x, hess_col(ndim)
       !> Global weighted gradient sums: F_ek(m) = sum_i e_k_i * f1_r(m, i)
       real(wp) :: F_e2(ndim), F_e3(ndim), F_e3sq(ndim)
       !> Per-atom partition weights and their spatial moment
@@ -1865,10 +1898,15 @@ contains
          ! S_p = sigma/Z - k * W_p * gradW
          S_p = sigma*invZ - k*W_vals(i)*gradW
 
-         ! result = outer(S_p, f1_r(:,p)) - W_p * f2_rr(:,:,p)
+         ! result = outer(S_p, f1_r(:,p)) - W_p * f2_rr(:,:,p), reconstructing
+         ! each f2_rr column = (I - n n^T)/x from f1_r (= grad_d) and inv_x
+         inv_x = ssd_system%inv_x_arr(i)
          do j = 1, ndim
-            result(:, j, i) = S_p*grad_d(j) &
-                              - W_vals(i)*ssd_system%f2_rr_arr(:, j, i)
+            do ii = 1, ndim
+               hess_col(ii) = -grad_d(ii)*grad_d(j)*inv_x
+            end do
+            hess_col(j) = hess_col(j) + inv_x
+            result(:, j, i) = S_p*grad_d(j) - W_vals(i)*hess_col
          end do
       end do
    end subroutine compute_lsf_f2_r_rA_screened
@@ -2274,9 +2312,9 @@ contains
       real(wp) :: dsum_e3_excl(ndim), dsum_e3_sq_excl(ndim)
       real(wp) :: d2sum_e3_excl(ndim, ndim), d2sum_e3_sq_excl(ndim, ndim)
       real(wp) :: dpair_sum_excl(ndim), d2pair_sum_excl(ndim, ndim)
-      real(wp) :: base, base_sq, sqrt_base
+      real(wp) :: base, base_sq, sqrt_base, inv_x
       logical :: need_grad, need_hess, compute_grad
-      integer :: i, atom, n_active
+      integer :: i, j, ii, atom, n_active
 
       need_grad = present(dweight_r)
       need_hess = present(d2weight_rr)
@@ -2339,7 +2377,14 @@ contains
             dsum_e3_sq = dsum_e3_sq - lambda3_sq*base_sq*grad_d
          end if
          if (need_hess) then
-            hess_d = self%ssd_system%f2_rr_arr(:, :, i)
+            ! Reconstruct hess_d = (I - n n^T)/x from f1_r (= grad_d) and inv_x
+            inv_x = self%ssd_system%inv_x_arr(i)
+            do j = 1, ndim
+               do ii = 1, ndim
+                  hess_d(ii, j) = -grad_d(ii)*grad_d(j)*inv_x
+               end do
+               hess_d(j, j) = hess_d(j, j) + inv_x
+            end do
             d2sum_e2 = d2sum_e2 + (base*sqrt_base)*(lambda2_sq*outer_matrix(grad_d, grad_d) - lambda2*hess_d)
             d2sum_e3 = d2sum_e3 + base*(lambda3*lambda3*outer_matrix(grad_d, grad_d) - lambda3*hess_d)
             d2sum_e3_sq = d2sum_e3_sq + base_sq*(lambda3_sq_sq*outer_matrix(grad_d, grad_d) - lambda3_sq*hess_d)
@@ -2450,8 +2495,8 @@ contains
       real(wp) :: lambda1, lambda2, lambda3
       real(wp) :: invZ, invZ2, invZ3
       real(wp) :: lambda1_sq, lambda2_sq, lambda3_sq, lambda3_sq_sq
-      real(wp) :: grad_d(ndim), hess_d(ndim, ndim), base, base_sq, sqrt_base
-      integer :: i, atom, atomA, n, n_active
+      real(wp) :: grad_d(ndim), hess_d(ndim, ndim), base, base_sq, sqrt_base, inv_x
+      integer :: i, j, ii, atom, atomA, n, n_active
 
       d2weight_r_rA = 0.0_wp
       n = self%ncenters
@@ -2487,7 +2532,15 @@ contains
          base_sq = base*base
          sqrt_base = self%ssd_system%sqrt_k3f0_arr(i)
          grad_d = self%ssd_system%f1_r_arr(:, i)
-         hess_d = self%ssd_system%f2_rr_arr(:, :, i)
+
+         ! Reconstruct hess_d = (I - n n^T)/x from f1_r (= grad_d) and inv_x
+         inv_x = self%ssd_system%inv_x_arr(i)
+         do j = 1, ndim
+            do ii = 1, ndim
+               hess_d(ii, j) = -grad_d(ii)*grad_d(j)*inv_x
+            end do
+            hess_d(j, j) = hess_d(j, j) + inv_x
+         end do
          e1_val(atom) = base_sq*base
          e2_val(atom) = base*sqrt_base
          e3_val(atom) = base
