@@ -26,7 +26,8 @@ jobs:
         with:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/lukaswittmann/moist/blob/main/CLA.md'
-          branch: 'main'
+          # dedicated, unprotected branch that only stores CLA signatures
+          branch: 'cla-signatures'
           allowlist: lukaswittmann,bot*
           custom-notsigned-prcomment: 'Thank you for your contribution to MOIST! Before it can be merged, please read our [Contributor License Agreement](https://github.com/lukaswittmann/moist/blob/main/CLA.md) and sign it by posting the comment below.'
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
