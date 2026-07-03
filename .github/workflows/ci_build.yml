@@ -133,11 +133,10 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
-          # Generous OpenMP worker-thread stack: test-drive runs a suite's tests
-          # on worker threads, and some hold large automatic arrays that overflow
-          # the small default stack. (meson legs set this via test_env.)
-          export OMP_STACKSIZE=128M
+          # Compile without -fopenmp: gfortran 14.4.0 on macOS miscompiles (?);
+          # likely corrupting some test-drive string and aborting at startup.
+          # To avoid this: tests run serially
           export DYLD_LIBRARY_PATH="$(dirname "$("$FC" -print-file-name=libgfortran.dylib)")"
           link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
-          fpm build --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
-          fpm test  --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
+          fpm build --compiler "$FC" --c-compiler "$CC" --link-flag "$link_flag"
+          fpm test  --compiler "$FC" --c-compiler "$CC" --link-flag "$link_flag"
