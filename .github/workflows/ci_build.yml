@@ -93,16 +93,28 @@ jobs:
         toolchain:
           - {build: meson, name: gnu13, compiler: gcc, version: '13'}
           - {build: meson, name: gnu14, compiler: gcc, version: '14'}
-          - {build: fpm,   name: gnu14, compiler: gcc, version: '14'}
+          - {build: fpm,   name: gnu14, compiler: conda-gcc, version: '14.3'}
     steps:
       - uses: actions/checkout@v5
 
       - name: Install compiler
+        if: matrix.toolchain.compiler == 'gcc'
         id: setup-fortran
         uses: fortran-lang/setup-fortran@v1
         with:
           compiler: ${{ matrix.toolchain.compiler }}
           version: ${{ matrix.toolchain.version }}
+
+      - name: Install compiler (conda-forge)
+        if: matrix.toolchain.compiler == 'conda-gcc'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fortran
+          create-args: gfortran=${{ matrix.toolchain.version }}
+          condarc: |
+            channels:
+              - conda-forge
+          init-shell: bash
 
       - name: Install dependencies (macOS)
         run: brew install meson ninja
@@ -118,10 +130,18 @@ jobs:
         run: brew install lapack
 
       - name: Set compiler environment
+        if: matrix.toolchain.compiler == 'gcc'
         run: |
           # Resolve `gcc`/`gfortran` on macOS
           echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
           echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+
+      - name: Set compiler environment (conda-forge)
+        if: matrix.toolchain.compiler == 'conda-gcc'
+        shell: bash -leo pipefail {0}
+        run: |
+          echo "FC=$(command -v gfortran)" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
 
       - name: Build and test (meson)
         if: matrix.toolchain.build == 'meson'
