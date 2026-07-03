@@ -148,7 +148,6 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
-          export DYLD_LIBRARY_PATH="$(dirname "$("$FC" -print-file-name=libgfortran.dylib)")"
           export OMP_STACKSIZE=128M
           flags="-O2 -fopenmp"
           link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
