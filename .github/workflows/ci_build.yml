@@ -149,6 +149,7 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
+          export SDKROOT="$(xcrun --show-sdk-path)"
           export OMP_STACKSIZE=128M
           flags="-O2 -fopenmp"
           link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
