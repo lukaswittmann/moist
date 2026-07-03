@@ -100,12 +100,12 @@ jobs:
           compiler: ${{ matrix.toolchain.compiler }}
           version: ${{ matrix.toolchain.version }}
 
-      - name: Install compiler (conda-forge)
+      - name: Install compiler and fpm (conda-forge)
         if: matrix.toolchain.compiler == 'conda-gcc'
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: fortran
-          create-args: gfortran=${{ matrix.toolchain.version }}
+          create-args: gfortran=${{ matrix.toolchain.version }} fpm=0.13.0
           condarc: |
             channels:
               - conda-forge
@@ -115,7 +115,7 @@ jobs:
         run: brew install meson ninja
 
       - name: Install fpm
-        if: matrix.toolchain.build == 'fpm'
+        if: matrix.toolchain.build == 'fpm' && matrix.toolchain.compiler != 'conda-gcc'
         uses: fortran-lang/setup-fpm@v10
         with:
           fpm-version: 'v0.13.0'
@@ -137,6 +137,7 @@ jobs:
         run: |
           echo "FC=$(command -v gfortran)" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"
+          dirname "$(command -v fpm)" >> "$GITHUB_PATH"
 
       - name: Build and test (meson)
         if: matrix.toolchain.build == 'meson'
