@@ -2,6 +2,7 @@ name: Build
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -72,12 +73,7 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
-          # test-drive runs a suite's tests on OpenMP worker threads; some hold
-          # large automatic arrays, which overflow the small default worker stack
-          # (fatal under ifx). The meson legs set this via test_env; fpm needs it
-          # in the environment here.
           export OMP_STACKSIZE=128M
-          # ifx defaults to a fast FP model; pin precise
           fflags="-fopenmp"
           if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
@@ -92,22 +88,34 @@ jobs:
         toolchain:
           - {build: meson, name: gnu13, compiler: gcc, version: '13'}
           - {build: meson, name: gnu14, compiler: gcc, version: '14'}
-          - {build: fpm,   name: gnu14, compiler: gcc, version: '14'}
+          - {build: fpm,   name: gnu14, compiler: conda-gcc, version: '14.3'}
     steps:
       - uses: actions/checkout@v5
 
       - name: Install compiler
+        if: matrix.toolchain.compiler == 'gcc'
         id: setup-fortran
         uses: fortran-lang/setup-fortran@v1
         with:
           compiler: ${{ matrix.toolchain.compiler }}
           version: ${{ matrix.toolchain.version }}
 
+      - name: Install compiler and fpm (conda-forge)
+        if: matrix.toolchain.compiler == 'conda-gcc'
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: fortran
+          create-args: gfortran=${{ matrix.toolchain.version }} fpm=0.13.0
+          condarc: |
+            channels:
+              - conda-forge
+          init-shell: bash
+
       - name: Install dependencies (macOS)
         run: brew install meson ninja
 
       - name: Install fpm
-        if: matrix.toolchain.build == 'fpm'
+        if: matrix.toolchain.build == 'fpm' && matrix.toolchain.compiler != 'conda-gcc'
         uses: fortran-lang/setup-fpm@v10
         with:
           fpm-version: 'v0.13.0'
@@ -117,10 +125,19 @@ jobs:
         run: brew install lapack
 
       - name: Set compiler environment
+        if: matrix.toolchain.compiler == 'gcc'
         run: |
           # Resolve `gcc`/`gfortran` on macOS
           echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
           echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+
+      - name: Set compiler environment (conda-forge)
+        if: matrix.toolchain.compiler == 'conda-gcc'
+        shell: bash -leo pipefail {0}
+        run: |
+          echo "FC=$(command -v gfortran)" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          dirname "$(command -v fpm)" >> "$GITHUB_PATH"
 
       - name: Build and test (meson)
         if: matrix.toolchain.build == 'meson'
@@ -132,11 +149,9 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
-          # Generous OpenMP worker-thread stack: test-drive runs a suite's tests
-          # on worker threads, and some hold large automatic arrays that overflow
-          # the small default stack. (meson legs set this via test_env.)
+          export SDKROOT="$(xcrun --show-sdk-path)"
           export OMP_STACKSIZE=128M
-          export DYLD_LIBRARY_PATH="$(dirname "$("$FC" -print-file-name=libgfortran.dylib)")"
+          flags="-O2 -fopenmp"
           link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
-          fpm build --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
-          fpm test  --compiler "$FC" --c-compiler "$CC" --flag -fopenmp --link-flag "$link_flag"
+          fpm build --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
+          fpm test  --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"

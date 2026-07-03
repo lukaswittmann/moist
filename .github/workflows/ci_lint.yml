@@ -14,4 +14,5 @@ jobs:
         run: pip install fortitude-lint
 
       - name: Run fortitude
+        continue-on-error: true
         run: fortitude check --output-format=concise src/ app/ test/

@@ -1,4 +1,4 @@
 [wrap-git]
 directory = jonquil
-url = https://github.com/lukaswittmann/jonquil
-revision = recursion
+url = https://github.com/toml-f/jonquil
+revision = v0.3.2
