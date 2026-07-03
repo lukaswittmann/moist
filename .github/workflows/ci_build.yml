@@ -73,12 +73,7 @@ jobs:
       - name: Build and test (fpm)
         if: matrix.toolchain.build == 'fpm'
         run: |
-          # test-drive runs a suite's tests on OpenMP worker threads; some hold
-          # large automatic arrays, which overflow the small default worker stack
-          # (fatal under ifx). The meson legs set this via test_env; fpm needs it
-          # in the environment here.
           export OMP_STACKSIZE=128M
-          # ifx defaults to a fast FP model; pin precise
           fflags="-fopenmp"
           if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
