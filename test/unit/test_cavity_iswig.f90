@@ -1241,15 +1241,13 @@ contains
       ref(:, 272) = [-1.286737287_wp, -3.778422911_wp, -1.924452277_wp, &
          & 1.83081357923673_wp, 0.00095424479095_wp, 0.065792319_wp, -0.000025192_wp]
 
-      ! Populate a bare iSwiG cavity with ORCA's reface; get_amat only
-      ! touches ngrid, xyz, xi and f.
+      ! Populate iSwiG cavity with ORCA equiv. inputs
       cav%ngrid = npts
       cav%xyz = ref(1:3, :)
       cav%xi = ref(4, :)
       cav%f = ref(5, :)
 
-      ! ORCA stores unscaled conductor charges; physical CPCM charges
-      ! carry the dielectric scaling f(eps) = (eps-1)/eps.
+      ! Scale ORCA's unscaled conductor charges
       feps = (eps_ref - 1.0_wp)/eps_ref
       phi = ref(6, :)
       q_ref = ref(7, :)*feps
@@ -1268,8 +1266,7 @@ contains
          return
       end if
 
-      ! Charges: observed max deviation 1.0e-9; the reference charges are
-      ! printed to 9 decimals, so 5e-9 is the data-precision limit.
+      ! Check charges; thr is number of reference decimals
       call check(error, maxval(abs(q - q_ref)), 0.0_wp, thr=5.0E-9_wp, &
          & more="iSwiG CPCM charges deviate from ORCA reference")
       if (allocated(error)) return

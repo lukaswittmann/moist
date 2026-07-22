@@ -164,9 +164,7 @@ contains
          errs(ileb) = abs(energy_array(1) - e_ref)
       end do
 
-      ! Both grids must reproduce the analytic Born energy to the accuracy of
-      ! the Lange-Herbert zeta optimization (observed ~3e-8 absolute, i.e.
-      ! ~2.5e-7 relative; both grids sit at this optimization noise floor).
+      ! Both grids must reproduce the analytic Born energy
       do ileb = 1, size(nlebs)
          call check(error, errs(ileb)/abs(e_ref), 0.0_wp, thr=1.0E-6_wp, &
             & message="Born ion energy deviates from analytic CPCM result")
@@ -943,8 +941,8 @@ contains
                              trim(solver_names(i))//" solver")
             return
          end if
-         ! Tighten CG tolerance so the iterative solver is comparable to the
-         ! direct solvers at the reference-check threshold
+
+         ! Set CG tolerance
          pcm_model%solver_tol = 1.0e-14_wp
          pcm_model%solver_maxiter = 10000
 
@@ -974,8 +972,7 @@ contains
             return
          end if
 
-         ! Compare to reference energy. All solvers, including CG at the
-         ! tightened tolerance, reproduce the reference to machine precision.
+         ! Compare to reference energy
          call check(error, energies(i), ref_energy, thr=thr*10.0_wp, &
                     message=trim(solver_names(i))//" solver energy deviates from reference ("// &
                     system_name//")")

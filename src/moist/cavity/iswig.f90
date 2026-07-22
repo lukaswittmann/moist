@@ -270,8 +270,6 @@ contains
    end subroutine compute_gradient_iswig
 
    !> Compute the contracted A-matrix derivative grad = q1^T (dA/dR) q2
-   !> for the iSwiG interaction matrix (see get_amat_iswig).
-   !> Returns grad(3, nsph) without forming the full derivative tensor
    !>
    !> @param[in]  q1    first charge vector (ngrid)
    !> @param[in]  q2    second charge vector (ngrid)
