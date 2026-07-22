@@ -238,9 +238,7 @@ contains
 
    end subroutine solve_pcm_inversion
 
-   !> Solve PCM system using Conjugate Gradient (CG) iterative method
-   !> Implements the standard CG algorithm for symmetric positive definite systems.
-   !> Ideal for ISWIG-assembled matrices which are diagonal-dominant.
+   !> Solve PCM system via preconditioned Conjugate Gradient
    subroutine solve_pcm_iterative(amat, rhs, q, tol, maxiter, error)
       !> System matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
@@ -255,13 +253,12 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: n, iter
+      integer :: n, iter, restart, i
       real(wp) :: alpha, beta, rho_old, rho_new, res_norm, pAp, rhs_norm
-      real(wp) :: tol_eff, stall_tol
+      real(wp) :: tol_eff
+      logical :: converged
       real(wp), allocatable :: r(:), p(:), Ap(:), z(:), diag_inv(:)
-      real(wp), parameter :: eps = epsilon(1.0_wp)
       real(wp), parameter :: diag_tol = 100.0_wp*epsilon(1.0_wp)
-      integer :: i
 
       n = size(amat, 1)
 
@@ -277,91 +274,82 @@ contains
          diag_inv(i) = 1.0_wp/amat(i, i)
       end do
 
-      ! Initialize: q = 0 (initial guess)
+      rhs_norm = sqrt(dot(rhs, rhs))
+      tol_eff = tol*max(1.0_wp, rhs_norm)
+
+      ! Initial guess q = 0
       q = 0.0_wp
 
-      ! Initial residual: r = b - A*q = b (since q=0)
-      r = rhs
+      do restart = 0, 1
 
-      ! Apply preconditioner: z = M^(-1) * r with M approx diag(A)
-      z = r*diag_inv
-
-      ! Initial search direction: p = z (preconditioned CG)
-      p = z
-
-      ! Initial residual norm squared: rho = (r, z)
-      rho_old = dot(r, z)
-      res_norm = sqrt(dot(r, r))
-      rhs_norm = sqrt(dot(rhs, rhs))
-      tol_eff = max(tol, tol*rhs_norm)
-      stall_tol = max(tol_eff*10.0_wp, 1.0e-6_wp*max(1.0_wp, rhs_norm))
-
-      ! Check if already converged
-      if (res_norm < tol_eff) then
-         return
-      end if
-
-      ! CG iterations
-      do iter = 1, maxiter
-
-         ! Compute A*p
-         call gemv(amat, p, Ap)
-
-         ! Debug: Check for NaN/Inf
-         if (any(isnan(Ap))) then
-            call fatal_error(error, "[CG] NaN detected in matrix-vector product")
-            return
+         ! True residual: r = b - A*q (first pass: r = b since q = 0)
+         if (restart == 0) then
+            r = rhs
+         else
+            call gemv(amat, q, Ap)
+            r = rhs - Ap
          end if
+         res_norm = sqrt(dot(r, r))
+         if (res_norm < tol_eff) return
 
-         ! Compute step size: alpha = (r, z) / (p, A*p)
-         pAp = dot(p, Ap)
-         alpha = rho_old/(pAp + eps)
+         ! Preconditioned direction: z = M^(-1) r, p = z, rho = (r, z)
+         z = r*diag_inv
+         p = z
+         rho_old = dot(r, z)
 
-         if (abs(pAp) < eps*100) then
-            if (res_norm <= stall_tol) then
+         converged = .false.
+         do iter = 1, maxiter
+
+            call gemv(amat, p, Ap)
+
+            ! Step size: alpha = (r, z) / (p, A*p).
+            ! For SPD A and p /= 0, pAp > 0; a non-positive value means the
+            ! matrix is not positive definite (or rounding destroyed it).
+            pAp = dot(p, Ap)
+            if (pAp <= 0.0_wp) then
+               call fatal_error(error, "[CG] Matrix is not positive definite")
                return
             end if
-            call fatal_error(error, "[CG] Matrix appears singular or not positive definite")
+            alpha = rho_old/pAp
+
+            q = q + alpha*p
+            r = r - alpha*Ap
+
+            z = r*diag_inv
+            rho_new = dot(r, z)
+            res_norm = sqrt(dot(r, r))
+
+            if (isnan(res_norm)) then
+               call fatal_error(error, "[CG] NaN detected in residual")
+               return
+            end if
+
+            if (res_norm < tol_eff) then
+               converged = .true.
+               exit
+            end if
+
+            beta = rho_new/rho_old
+            p = z + beta*p
+            rho_old = rho_new
+
+         end do
+
+         if (.not. converged) then
+            call fatal_error(error, "[CG] Failed to converge within maximum iterations")
             return
          end if
 
-         ! Update solution: q = q + alpha * p
-         q = q + alpha*p
-
-         ! Update residual: r = r - alpha * A*p
-         r = r - alpha*Ap
-
-         ! Apply preconditioner: z = M^(-1) * r
-         z = r*diag_inv
-
-         ! Compute new residual norm squared: rho_new = (r, z)
-         rho_new = dot(r, z)
+         ! Verify convergence against the residual b - A*q
+         call gemv(amat, q, Ap)
+         r = rhs - Ap
          res_norm = sqrt(dot(r, r))
-
-         ! Check convergence
-         if (res_norm < tol_eff) then
-            ! Converged successfully
-            return
-         end if
-
-         ! Check for NaN in solution
-         if (any(isnan(q)) .or. any(isnan(r))) then
-            call fatal_error(error, "[CG] NaN detected in solution or residual")
-            return
-         end if
-
-         ! Compute improvement factor: beta = (r_new, r_new) / (r_old, r_old)
-         beta = rho_new/(rho_old + eps)
-
-         ! Update search direction: p = z + beta * p
-         p = z + beta*p
-
-         ! Store old rho for next iteration
-         rho_old = rho_new
+         if (res_norm < tol_eff) return
 
       end do
 
-      call fatal_error(error, "[CG] Failed to converge within maximum iterations")
+      call fatal_error(error, &
+         & "[CG] Recurrence converged but true residual remains above tolerance")
       return
 
    end subroutine solve_pcm_iterative
