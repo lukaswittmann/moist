@@ -12,7 +12,6 @@ module moist_cavity_iswig
 
    implicit none
    private
-
    public :: cavity_type_iswig, new_cavity_iswig
 
    ! iSwiG implementation of cavity
@@ -57,7 +56,7 @@ module moist_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
       procedure :: contract_amat1_q1q2_rA => contract_amat1_q1q2_rA_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
-      !> ISWIG-specific matrix assembly (symmetric, diagonally dominant)
+      !> iSwiG-specific matrix assembly (symmetric, diagonally dominant)
       procedure :: get_amat => get_amat_iswig
    end type cavity_type_iswig
 
@@ -270,12 +269,7 @@ contains
 
    end subroutine compute_gradient_iswig
 
-   !> Compute the contracted A-matrix derivative: grad = q1^T (dA/dR) q2.
-   !> Returns grad(3, nsph) without forming the full derivative tensor.
-   !>
-   !> The A-matrix depends on positions through:
-   !>  (a) area elements a_p = R^2 * w * f_p (switching function)
-   !>  (b) grid point positions c_p (move with owner atom)
+   !> Compute the contracted A-matrix derivative grad = q1^T (dA/dR) q2
    !>
    !> @param[in]  q1    first charge vector (ngrid)
    !> @param[in]  q2    second charge vector (ngrid)
@@ -293,16 +287,11 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: nsph, ngrid, ip, jp, iat, jat
-      real(wp) :: px, py, pz, zeta, weight, r_own, switch
+      real(wp) :: px, py, pz, zeta, switch, diag_w
       real(wp) :: dx, dy, dz, dist
       real(wp) :: arg_plus, arg_minus, arg_plus_sq, arg_minus_sq, switch_pair
-      real(wp) :: pref, pref_zeta, pref_pair, dswitch
-      real(wp) :: r_vec(3), r_dist, r_dist3
-      real(wp) :: sqrt_ap, sqrt_aq, dA_dc, pair_weight
-      real(wp), parameter :: fourpi = 4.0_wp*pi
-      real(wp), parameter :: iswig_factor = 5.0_wp
-      real(wp), allocatable :: dform_da(:)
-      real(wp) :: dA_da
+      real(wp) :: pref, pref_pair, dswitch
+      real(wp) :: r_vec(3), r_dist, zeta_pq, zr, dS_dr, pair_weight
 
       nsph = size(self%radii)
       ngrid = self%ngrid
@@ -310,56 +299,22 @@ contains
       grad = 0.0_wp
       if (ngrid <= 0) return
 
-      ! Part 1: Precompute, for each point, d(q1^T A q2) / d(a_p)
-      allocate (dform_da(ngrid))
-      dform_da = 0.0_wp
-
+      ! Part 1: diagonal terms through the switching function F_p
+      ! dA_pp/dF_p = -xi_p sqrt(2/pi) / F_p^2, with
+      ! dF_p/ds = (F_p/f_pk) df_pk/dr * dr/ds for other spheres k
       do ip = 1, ngrid
-         sqrt_ap = sqrt(self%a(ip))
-         ! Off-diagonal contributions to dform_da(ip)
-         do jp = 1, ngrid
-            if (jp == ip) cycle
-            sqrt_aq = sqrt(self%a(jp))
-            r_vec = self%xyz(:, ip) - self%xyz(:, jp)
-            r_dist = sqrt(sum(r_vec**2))
-            ! A(p,q) = -sqrt_ap * sqrt_aq / (fourpi * r_dist)
-            ! dA(p,q)/da_p = A(p,q) / (2*a_p)
-            !              = -sqrt_aq / (2 * sqrt_ap * fourpi * r_dist)
-            dA_da = -sqrt_aq/(2.0_wp*sqrt_ap*fourpi*r_dist)
-            dform_da(ip) = dform_da(ip) + q1(ip)*dA_da*q2(jp) + q1(jp)*dA_da*q2(ip)
-         end do
-         ! Diagonal contribution to dform_da(ip)
-         do jp = 1, ngrid
-            if (jp == ip) cycle
-            sqrt_aq = sqrt(self%a(jp))
-            r_vec = self%xyz(:, ip) - self%xyz(:, jp)
-            r_dist = sqrt(sum(r_vec**2))
-            dA_da = -sqrt_aq/(2.0_wp*sqrt_ap*fourpi*r_dist)
-            ! d(iswig_factor * |A(p,q)|)/da_p contributes to A(p,p) diagonal
-            dform_da(ip) = dform_da(ip) + q1(ip)*(-iswig_factor*dA_da)*q2(ip)
-            ! A(q,q) also depends on a_p through iswig row-sum: |A(q,p)|
-            dform_da(ip) = dform_da(ip) + q1(jp)*(-iswig_factor*dA_da)*q2(jp)
-         end do
-         ! d(2*pi/a_p)/da_p = -2*pi/a_p^2
-         dform_da(ip) = dform_da(ip) &
-            & + q1(ip)*(-2.0_wp*pi/self%a(ip)**2)*q2(ip)
-      end do
+         diag_w = q1(ip)*q2(ip)
+         if (abs(diag_w) < epsilon(1.0_wp)) cycle
 
-      do ip = 1, ngrid
          iat = self%owner(ip)
-         r_own = self%radii(iat)
-         weight = self%wleb(ip)
          zeta = self%xi(ip)
          switch = self%f(ip)
          px = self%xyz(1, ip)
          py = self%xyz(2, ip)
          pz = self%xyz(3, ip)
 
-         if (abs(dform_da(ip)) < epsilon(1.0_wp)) cycle
-
-         ! pref = -R^2 * w * f / sqrt(pi), pref_zeta = pref * zeta
-         pref = -r_own*r_own*weight*switch/sqrt(pi)
-         pref_zeta = pref*zeta
+         ! pref = q1_p q2_p * dA_pp/dF_p * F_p * (-zeta/sqrt(pi))
+         pref = diag_w*zeta*sqrt(2.0_wp/pi)/switch*zeta/sqrt(pi)
 
          do jat = 1, nsph
             if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
@@ -371,41 +326,44 @@ contains
             arg_minus = zeta*(self%radii(jat) - dist)
             switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
 
-            pref_pair = pref_zeta/(switch_pair*dist)
+            ! df_pk/dr = -(zeta/sqrt(pi)) (exp(-arg_plus^2) - exp(-arg_minus^2))
+            ! combined: dswitch = q1q2 * (-zeta sqrt(2/pi)/F^2) * (F/f_pk)
+            !                     * df_pk/dr / r
+            pref_pair = pref/(switch_pair*dist)
             dswitch = pref_pair*(exp(-arg_plus_sq) - exp(-arg_minus_sq))
 
-            ! dswitch * direction = R^2 * w * (partial df_p / partial s)
-            ! Weight by dform_da(ip) to get contribution to grad
-            grad(1, iat) = grad(1, iat) + dswitch*dform_da(ip)*dx
-            grad(2, iat) = grad(2, iat) + dswitch*dform_da(ip)*dy
-            grad(3, iat) = grad(3, iat) + dswitch*dform_da(ip)*dz
+            grad(1, iat) = grad(1, iat) + dswitch*dx
+            grad(2, iat) = grad(2, iat) + dswitch*dy
+            grad(3, iat) = grad(3, iat) + dswitch*dz
 
-            grad(1, jat) = grad(1, jat) - dswitch*dform_da(ip)*dx
-            grad(2, jat) = grad(2, jat) - dswitch*dform_da(ip)*dy
-            grad(3, jat) = grad(3, jat) - dswitch*dform_da(ip)*dz
+            grad(1, jat) = grad(1, jat) - dswitch*dx
+            grad(2, jat) = grad(2, jat) - dswitch*dy
+            grad(3, jat) = grad(3, jat) - dswitch*dz
          end do
       end do
 
-      deallocate (dform_da)
-
-      ! Part 2: Derivative through grid point positions c_p
+      ! Part 2: off-diagonal terms through the interpoint distances
+      ! d/dr [erf(zr)/r] = (2z/sqrt(pi)) exp(-(zr)^2)/r - erf(zr)/r^2
       do ip = 1, ngrid
          iat = self%owner(ip)
-         sqrt_ap = sqrt(self%a(ip))
          do jp = ip + 1, ngrid
-            sqrt_aq = sqrt(self%a(jp))
+            if (self%owner(jp) == iat) cycle
+
+            pair_weight = q1(ip)*q2(jp) + q1(jp)*q2(ip)
+            if (abs(pair_weight) < epsilon(1.0_wp)) cycle
+
+            zeta_pq = self%xi(ip)*self%xi(jp) &
+               & /sqrt(self%xi(ip)**2 + self%xi(jp)**2)
 
             r_vec = self%xyz(:, ip) - self%xyz(:, jp)
             r_dist = sqrt(sum(r_vec**2))
-            r_dist3 = r_dist*r_dist*r_dist
+            zr = zeta_pq*r_dist
 
-            dA_dc = sqrt_ap*sqrt_aq/(fourpi*r_dist3)
+            dS_dr = (2.0_wp*zeta_pq/sqrt(pi))*exp(-zr*zr)/r_dist &
+               & - erf(zr)/r_dist**2
 
-            pair_weight = (q1(ip)*q2(jp) + q1(jp)*q2(ip)) &
-               & - iswig_factor*(q1(ip)*q2(ip) + q1(jp)*q2(jp))
-
-            grad(:, iat) = grad(:, iat) + pair_weight*dA_dc*r_vec
-            grad(:, self%owner(jp)) = grad(:, self%owner(jp)) - pair_weight*dA_dc*r_vec
+            grad(:, iat) = grad(:, iat) + pair_weight*dS_dr/r_dist*r_vec
+            grad(:, self%owner(jp)) = grad(:, self%owner(jp)) - pair_weight*dS_dr/r_dist*r_vec
          end do
       end do
 
@@ -701,7 +659,7 @@ contains
    end subroutine compute_switching_function
 
    !> Calculate prefactors needed for switching function derivatives
-   !> (for the ISWIG elementary switching function)
+   !> (for the iSwiG elementary switching function)
    pure subroutine factors_swi_derivs(point, center, zeta, radius, &
                                       dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
 
@@ -738,10 +696,7 @@ contains
 
    end subroutine factors_swi_derivs
 
-   !> Assemble PCM interaction matrix using ISWIG-style assembly.
-   !> Builds a symmetric, diagonally dominant matrix suitable for iterative solvers.
-   !> Off-diagonal: symmetric area weighting with geometric mean sqrt(a_i * a_j).
-   !> Diagonal: self-potential + row-sum enhancement for positive definiteness.
+   !> Assemble the iSwiG Amat
    !> @param[out] amat  Interaction matrix (ngrid, ngrid)
    !> @param[out] error Error handling
    subroutine get_amat_iswig(self, amat, error)
@@ -753,9 +708,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: ip, jp, ngrid
-      real(wp) :: r_vec(3), r_dist, row_sum
-      real(wp), parameter :: fourpi = 4.0_wp*pi
-      real(wp), parameter :: iswig_factor = 5.0_wp
+      real(wp) :: r_vec(3), r_dist, xi_i, zeta_ij
 
       ngrid = self%ngrid
 
@@ -766,18 +719,17 @@ contains
          return
       end if
 
-      ! Build ISWIG-style matrix (symmetric, diagonally dominant)
       do ip = 1, ngrid
-         row_sum = 0.0_wp
-         do jp = 1, ngrid
-            if (ip /= jp) then
-               r_vec(:) = self%xyz(:, ip) - self%xyz(:, jp)
-               r_dist = sqrt(sum(r_vec**2))
-               amat(ip, jp) = -sqrt(self%a(ip)*self%a(jp))/(fourpi*r_dist)
-               row_sum = row_sum + abs(amat(ip, jp))
-            end if
+         xi_i = self%xi(ip)
+         ! Gaussian self-interaction, switching function in the diagonal (iSwiG)
+         amat(ip, ip) = xi_i*sqrt(2.0_wp/pi)/self%f(ip)
+         do jp = ip + 1, ngrid
+            zeta_ij = xi_i*self%xi(jp)/sqrt(xi_i**2 + self%xi(jp)**2)
+            r_vec(:) = self%xyz(:, ip) - self%xyz(:, jp)
+            r_dist = sqrt(sum(r_vec**2))
+            amat(ip, jp) = erf(zeta_ij*r_dist)/r_dist
+            amat(jp, ip) = amat(ip, jp)
          end do
-         amat(ip, ip) = (2.0_wp*pi)/self%a(ip) + iswig_factor*row_sum
       end do
 
    end subroutine get_amat_iswig
