@@ -65,7 +65,7 @@ module moist_cavity_drop_lsf_cfc
       !> Cached `[1..ncenters]` for `prepare()` to feed to `ssd_system%compute`
       integer, allocatable :: all_indices(:)
 
-      ! ------- Per-evaluation-point caches (filled by prepare) ---------- *!
+      !* -------------------- Per-evaluation-point caches (prepare) ------------------- *!
 
       !> Pseudo-density value at the cached evaluation point
       real(wp) :: PD0 = 0.0_wp
@@ -76,7 +76,7 @@ module moist_cavity_drop_lsf_cfc
       !> Pseudo-density third spatial derivative [ndim, ndim, ndim]
       real(wp), allocatable :: PD3(:, :, :)
 
-      ! --- Per-atom accumulators for nuclear-derivative assembly ------- *!
+      !* ---------------- Per-atom accumulators for nuclear-derivatives --------------- *!
 
       !> Q1^A(alpha) = dPD/d(d_A,alpha) for atom A (collected from atom-A
       !> self-term and every pair involving A) [ndim, n_alloc]

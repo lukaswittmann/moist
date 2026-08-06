@@ -11,13 +11,13 @@ module moist_cavity_drop_lsf_svdw_param
    !> SvdW level-set function parameters
    type :: moist_cavity_drop_lsf_svdw_param_type
       !> Blending sharpness k in exp(-k * d).
-      real(wp) :: blend_k = 3.0_wp
+      real(wp) :: blend_k = 5.5_wp
       !> One-body blending weight.
       real(wp) :: blend_1b = 1.0_wp
       !> Two-body blending weight.
-      real(wp) :: blend_2b = 1.0_wp
+      real(wp) :: blend_2b = 0.0_wp
       !> Three-body blending weight.
-      real(wp) :: blend_3b = 1.0_wp
+      real(wp) :: blend_3b = 3.0_wp
    contains
       !> Override any subset of parameter fields.
       procedure, public :: new => new_lsf_svdw_param
@@ -54,11 +54,20 @@ contains
    !> Print the SvdW shape parameters in the verbose cavity diagnostics
    !>
    !> @param[in] self  SvdW parameter instance
-   subroutine print_lsf_svdw_param(self)
+   !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
+   !>                  context pass `ctx%unit` so this honours a log file
+   subroutine print_lsf_svdw_param(self, unit)
       class(moist_cavity_drop_lsf_svdw_param_type), intent(in) :: self
+      !> Output unit override
+      integer, intent(in), optional :: unit
       type(prettyprinter) :: pp
+      !> Effective output unit
+      integer :: iu
 
-      pp = new_prettyprinter(unit=output_unit)
+      iu = output_unit
+      if (present(unit)) iu = unit
+
+      pp = new_prettyprinter(unit=iu)
       call pp%push('Implicit surface (SvdW):')
       call pp%kv('Smoothing (k)', self%blend_k)
       call pp%kv('Smoothing (1b)', self%blend_1b)
