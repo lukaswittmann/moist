@@ -8,7 +8,7 @@ module moist_radii_static
    use moist_data_radii_legacy, only: get_radius, get_radius_func, rad_type
    use moist_radius_type, only: radius_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   implicit none
+   implicit none (type, external)
    private
 
    public :: static_radius_type
@@ -35,7 +35,8 @@ module moist_radii_static
 
 contains
 
-   !> Initialize a static radii object with a legacy model tag.
+   !> Initialize a static radii object with a legacy model tag
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  model_tag  legacy radii selector tag
    !> @param[in]  verbosity  optional print level for diagnostics
@@ -56,7 +57,8 @@ contains
       end if
    end subroutine new_static_radii
 
-   !> Constructor for CPCM static radii.
+   !> Constructor for CPCM static radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_cpcm_radii(self, verbosity)
@@ -68,7 +70,8 @@ contains
       call new_static_radii(self, rad_type%cpcm, verbosity)
    end subroutine new_cpcm_radii
 
-   !> Constructor for SMD static radii.
+   !> Constructor for SMD static radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_smd_radii(self, verbosity)
@@ -80,7 +83,8 @@ contains
       call new_static_radii(self, rad_type%smd, verbosity)
    end subroutine new_smd_radii
 
-   !> Constructor for D3 static radii.
+   !> Constructor for D3 static radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_d3_radii(self, verbosity)
@@ -92,7 +96,8 @@ contains
       call new_static_radii(self, rad_type%d3, verbosity)
    end subroutine new_d3_radii
 
-   !> Constructor for COSMO static radii.
+   !> Constructor for COSMO static radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_cosmo_radii(self, verbosity)
@@ -104,7 +109,8 @@ contains
       call new_static_radii(self, rad_type%cosmo, verbosity)
    end subroutine new_cosmo_radii
 
-   !> Constructor for Bondi static radii.
+   !> Constructor for Bondi static radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_bondi_radii(self, verbosity)
@@ -116,7 +122,8 @@ contains
       call new_static_radii(self, rad_type%bondi, verbosity)
    end subroutine new_bondi_radii
 
-   !> Constructor for Rahm (2016) atomic radii.
+   !> Constructor for Rahm (2016) atomic radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_rahm_radii(self, verbosity)
@@ -128,7 +135,8 @@ contains
       call new_static_radii(self, rad_type%rahm, verbosity)
    end subroutine new_rahm_radii
 
-   !> Constructor for Gaussian charge scheme (Bondi-based, scaled) radii.
+   !> Constructor for Gaussian charge scheme (Bondi-based, scaled) radii
+   !>
    !> @param[out] self       static radii model
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_gauss_radii(self, verbosity)
@@ -140,7 +148,8 @@ contains
       call new_static_radii(self, rad_type%gauss, verbosity)
    end subroutine new_gauss_radii
 
-   !> Print unique elemental radii present in the current molecule.
+   !> Print unique elemental radii present in the current molecule
+   !>
    !> @param[in] self  static radii model
    !> @param[in] unit  optional output unit
    subroutine print_static_radii(self, unit)
@@ -165,6 +174,8 @@ contains
       real(wp) :: r_ang
       !> Element symbol
       character(len=4) :: sym
+      !> Lookup error, used only to skip unparametrised elements
+      type(error_type), allocatable :: lookup_error
 
       zmax = maxval(self%atomic_numbers)
       allocate (has_element(zmax), source=.false.)
@@ -175,7 +186,8 @@ contains
       end do
 
       plp = new_prettylistprinter([6, 6, 10, 10], &
-                                  [character(len=9) :: "Num", "Sym", "R (A)", "R (bohr)"], unit=unit)
+                                  [character(len=9) :: "Num", "Sym", "R (A)", "R (bohr)"], &
+                                  unit=unit)
       call plp%header("RADII")
       call plp%blank()
       call plp%print_header()
@@ -184,21 +196,27 @@ contains
       do iz = 1, zmax
          if (.not. has_element(iz)) cycle
 
-         r_bohr = get_radius_func(iz, self%model_tag)
-         if (r_bohr <= 0.0_wp) cycle
-         r_ang = r_bohr*autoaa
-         sym = to_symbol(iz)
-
          call plp%begin_row()
          call plp%add(iz)
          call plp%add(trim(sym))
-         call plp%add(r_ang, fmt='f10.4')
-         call plp%add(r_bohr, fmt='f10.4')
+
+         r_bohr = get_radius_func(iz, self%model_tag, lookup_error)
+
+         if (allocated(lookup_error)) then
+            call plp%add("n/a")
+            call plp%add("n/a")
+         else
+            r_ang = r_bohr*autoaa
+            sym = to_symbol(iz)
+            call plp%add(r_ang, fmt="f10.4")
+            call plp%add(r_bohr, fmt="f10.4")
+         end if
          call plp%end_row()
       end do
    end subroutine print_static_radii
 
-   !> Update cached static radii and derivatives for a molecular structure.
+   !> Update cached static radii and derivatives for a molecular structure
+   !>
    !> @param[inout] self   static radii model
    !> @param[in]    mol    molecular structure
    !> @param[out]   error  error handle on invalid input/lookup
@@ -217,7 +235,7 @@ contains
 
       self%nat = mol%nat
       if (self%nat < 1) then
-         write (msg, '(a,i0)') "Invalid atom count in structure: ", self%nat
+         write (msg, "(a,i0)") "Invalid atom count in structure: ", self%nat
          call fatal_error(error, trim(msg))
          return
       end if
