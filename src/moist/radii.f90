@@ -6,7 +6,6 @@ module moist_radii
    use moist_radii_static, only: static_radius_type
    use moist_radii_static, only: new_cpcm_radii, new_smd_radii
    use moist_radii_static, only: new_d3_radii, new_cosmo_radii, new_bondi_radii
-   use moist_radii_draco, only: draco_radius_type, new_draco_radii
    use moist_radii_custom, only: custom_radius_type
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use mctc_io_utils, only: to_lower
@@ -22,7 +21,6 @@ module moist_radii
    public :: new_d3_radii
    public :: new_cosmo_radii
    public :: new_bondi_radii
-   public :: new_draco_radii
    public :: new_radii_custom_atoms
    public :: new_radii_custom_elements
    public :: new_radii

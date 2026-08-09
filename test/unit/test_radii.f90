@@ -6,11 +6,12 @@ module test_radii
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_data_radii_legacy, only: get_radius_func
-   use moist_radii, only: radius_type, static_radius_type, draco_radius_type
+   use moist_radii, only: radius_type, static_radius_type
    use moist_radii, only: new_cpcm_radii, new_smd_radii, new_d3_radii
    use moist_radii, only: new_cosmo_radii, new_bondi_radii, new_draco_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -30,7 +31,6 @@ contains
                   new_unittest("RadiiConstructorVerbosity", test_constructor_verbosity), &
                   new_unittest("StaticRadiiZeroGradient", test_static_zero_gradient), &
                   new_unittest("StaticRadiiNeedsUpdate", test_static_requires_update), &
-                  new_unittest("DracoRadiiDummy", test_draco_dummy), &
                   new_unittest("CustomRadiiAtomsWorks", test_custom_atoms_dropcess), &
                   new_unittest("CustomRadiiElementsWorks", test_custom_elements_dropcess), &
                   new_unittest("CustomRadiiCavityIntegration", test_custom_radii_cavity_integration), &
@@ -236,21 +236,6 @@ contains
       end if
    end subroutine test_static_requires_update
 
-   subroutine test_draco_dummy(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(structure_type) :: mol
-      type(draco_radius_type) :: model
-      type(moist_error_type), allocatable :: err
-
-      call make_test_molecule(mol)
-      call new_draco_radii(model)
-
-      call model%update(mol, err)
-      if (.not. allocated(err)) then
-         call test_failed(error, "DRACO dummy update should report not implemented")
-      end if
-   end subroutine test_draco_dummy
 
    subroutine test_custom_atoms_dropcess(error)
       type(error_type), allocatable, intent(out) :: error
@@ -440,6 +425,10 @@ contains
       class(radius_type), allocatable :: model
       type(moist_error_type), allocatable :: err
       real(wp), parameter :: radii(4) = [2.15_wp, 1.35_wp, 1.35_wp, 1.35_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       call make_test_molecule(mol)
 
@@ -452,8 +441,8 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=2.5_wp, blend_3b=1.0_wp)
-         call new_cavity_drop(cavity, nleb=110, &
-                              debug=.false., verbose=0, radius_model=model, &
+         call new_cavity_drop(cavity, ctx, nleb=110, &
+                              radius_model=model, &
                               lsf_model=svdw_template, error=err)
       end block
       if (allocated(err)) then
