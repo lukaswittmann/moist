@@ -86,13 +86,13 @@ contains
 
       integer :: unit, stat, ipt
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open CSV file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open CSV file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(a)') 'ngrid,numbering,x,y,z,owner,radius,area,w_leb,f'
+      write (unit, "(a)") "ngrid,numbering,x,y,z,owner,radius,area,w_leb,f"
 
       do ipt = 1, self%ngrid
          write (unit, '(i0,10('','',g0))') ipt, self%numbering(ipt), &
@@ -102,7 +102,7 @@ contains
       end do
       close (unit)
 
-      write (output_unit, '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (output_unit, "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
 
@@ -251,7 +251,7 @@ contains
             switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
 
             dfdR = -self%f(ip)*zeta/(sqrt(pi)*switch_pair*dist) &
-               & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))
+                  & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))
             self%f1_rA(:, iat, ip) = self%f1_rA(:, iat, ip) + dfdR*[dx, dy, dz]
             self%f1_rA(:, jat, ip) = self%f1_rA(:, jat, ip) - dfdR*[dx, dy, dz]
             dswitch = r_own*r_own*weight*dfdR
@@ -321,10 +321,10 @@ contains
          if (self%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
       end do
       if (iswig_order < 0) then
-         write (error_unit, '(a,i0)') "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
-         write (error_unit, '(a)') "Supported sizes:"
-         write (error_unit, '(8i10)') iswig_grid_sizes(1:8)
-         write (error_unit, '(8i10)') iswig_grid_sizes(9:)
+         write (error_unit, "(a,i0)") "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
+         write (error_unit, "(a)") "Supported sizes:"
+         write (error_unit, "(8i10)") iswig_grid_sizes(1:8)
+         write (error_unit, "(8i10)") iswig_grid_sizes(9:)
          call fatal_error(error, "Unsupported Lebedev size in iSwiG")
          return
       end if
