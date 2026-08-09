@@ -94,9 +94,9 @@ module moist_cli
 
       !> Enable all optional cavity properties (curvature, normals, etc.)
       logical :: cavity_fine = .true.
-      !> Enable marching-cubes reference area/volume computation
-      logical :: cavity_mc = .false.
-      !> Write cavity files (xyz, pqr, csv) to disk
+      !> Finest marching-cubes grid spacing in bohr (cavity mode "mc")
+      real(wp) :: cavity_mc_spacing = 0.2_wp
+      !> Write cavity files to disk (grid types: xyz/csv/pqr, marching cubes: obj/pqr)
       logical :: dump = .false.
 
    end type run_config
@@ -120,13 +120,15 @@ subroutine get_arguments(config, error)
    type(ArgumentParser), save :: model_parser
    type(ArgumentParser), save :: model_subparsers(4)
    type(ArgumentParser), save :: cavity_parser
-   type(ArgumentParser), save :: cavity_subparsers(4)
+   type(ArgumentParser), save :: cavity_subparsers(5)
    type(ArgumentParser), save :: drop_parser
    type(ArgumentParser), save :: drop_subparsers(2)
+   type(ArgumentParser), save :: mc_parser
+   type(ArgumentParser), save :: mc_subparsers(2)
    type(ArgumentParser), save :: solvent_parser
    type(Namespace) :: args
    type(subsubparser_spec) :: model_specs(4)
-   type(subsubparser_spec) :: cavity_specs(3)
+   type(subsubparser_spec) :: cavity_specs(4)
 
    character(len=:), allocatable :: version_string
    character(len=32) :: command
@@ -171,17 +173,19 @@ subroutine get_arguments(config, error)
       'Construct ISWIG cavities')
    call cavity_specs(3)%init('drop', 'DROP cavity', 'moist cavity drop', &
       'Construct DROP/DROP cavities')
+   call cavity_specs(4)%init('mc', 'Marching cubes cavity', 'moist cavity mc', &
+      'Integrate a level set isosurface with marching cubes')
 
    call setup_general_parent(general_parent)
    call setup_model_parser(model_parser, general_parent, model_specs, model_subparsers)
    call setup_cavity_parser(cavity_parser, general_parent, cavity_specs, cavity_subparsers, &
-      drop_parser, drop_subparsers)
+      drop_parser, drop_subparsers, mc_parser, mc_subparsers)
    call setup_solvent_parser(solvent_parser, general_parent)
 
    call parser%add_parser('model', model_parser, &
       help_text='Run a full solvation model (gems, alpb, rism1d, rism3d)')
    call parser%add_parser('cavity', cavity_parser, &
-      help_text='Construct a cavity (numsa, iswig, drop)')
+      help_text='Construct a cavity (numsa, iswig, drop, mc)')
    call parser%add_parser('solvent', solvent_parser, &
       help_text='Inspect solvent properties by name or alias')
 
@@ -277,14 +281,14 @@ subroutine get_arguments(config, error)
 
    case('cavity')
       if (.not. args%has_key('cavity_mode')) then
-         call fatal_error(error, 'Select one of: numsa, iswig, drop cavity types')
+         call fatal_error(error, 'Select one of: numsa, iswig, drop, or mc cavity types')
          return
       end if
 
       call args%get('cavity_mode', config%mode)
-      if (trim(config%mode) == 'drop') then
+      if (trim(config%mode) == 'drop' .or. trim(config%mode) == 'mc') then
          if (.not. args%has_key('drop_variant')) then
-            call fatal_error(error, 'Select one of: svdw, cfc DROP variants')
+            call fatal_error(error, 'Select one of: svdw, cfc level set functions')
             return
          end if
          call args%get('drop_variant', config%drop_variant)
@@ -355,8 +359,8 @@ subroutine get_arguments(config, error)
       if (args%has_key('nofine')) then
          call args%get('nofine', config%cavity_fine)
       end if
-      if (args%has_key('mc')) then
-         call args%get('mc', config%cavity_mc)
+      if (args%has_key('cavity_mc_spacing')) then
+         call args%get('cavity_mc_spacing', config%cavity_mc_spacing)
       end if
       if (args%has_key('dump')) then
          call args%get('dump', config%dump)
@@ -565,13 +569,18 @@ contains
    !> @param[inout] subparsers      Cavity subsubparser instances
    !> @param[inout] drop_parser     Nested DROP parser
    !> @param[inout] drop_subparsers Nested DROP variant parsers
-   subroutine setup_cavity_parser(p, parent, specs, subparsers, drop_parser, drop_subparsers)
+   !> @param[inout] mc_parser       Nested marching-cubes parser
+   !> @param[inout] mc_subparsers   Nested marching-cubes level-set parsers
+   subroutine setup_cavity_parser(p, parent, specs, subparsers, drop_parser, drop_subparsers, &
+                                  mc_parser, mc_subparsers)
       type(ArgumentParser), intent(inout) :: p
       type(ArgumentParser), intent(in) :: parent
       type(subsubparser_spec), intent(in) :: specs(:)
       type(ArgumentParser), intent(inout) :: subparsers(:)
       type(ArgumentParser), intent(inout) :: drop_parser
       type(ArgumentParser), intent(inout) :: drop_subparsers(:)
+      type(ArgumentParser), intent(inout) :: mc_parser
+      type(ArgumentParser), intent(inout) :: mc_subparsers(:)
       integer :: i, n
 
       call p%init_with_parents([parent], &
@@ -585,6 +594,9 @@ contains
          if (trim(specs(i)%name) == 'drop') then
             call setup_drop_parser(drop_parser, parent, drop_subparsers)
             call p%add_parser('drop', drop_parser, help_text=trim(specs(i)%help_text))
+         else if (trim(specs(i)%name) == 'mc') then
+            call setup_mc_parser(mc_parser, parent, mc_subparsers)
+            call p%add_parser('mc', mc_parser, help_text=trim(specs(i)%help_text))
          else
             call subparsers(i)%init_with_parents([parent], &
                prog=trim(specs(i)%prog), &
@@ -634,11 +646,56 @@ contains
    end subroutine setup_drop_parser
 
 
-   !> Add cavity arguments shared by all cavity type subcommands
-   !> @param[inout] p Cavity type parser receiving shared options
-   subroutine add_cavity_shared_arguments(p)
+   !> Configure the nested marching-cubes cavity parser
+   !>
+   !> Marching cubes integrates whichever level set function it is handed, so it
+   !> reuses the DROP level-set argument sets verbatim and shares their
+   !> `drop_variant` destination. `--nleb` is withheld: there is no angular grid.
+   !>
+   !> @param[inout] p          Marching-cubes parser receiving nested level sets
+   !> @param[in]    parent     Parent parser providing shared options
+   !> @param[inout] subparsers Level set parser instances
+   subroutine setup_mc_parser(p, parent, subparsers)
       type(ArgumentParser), intent(inout) :: p
+      type(ArgumentParser), intent(in) :: parent
+      type(ArgumentParser), intent(inout) :: subparsers(:)
+
+      call p%init_with_parents([parent], &
+         prog='moist cavity mc', &
+         description='Integrate a level set isosurface with marching cubes')
+
+      call p%add_subparsers(title='level set functions', dest='drop_variant')
+
+      call subparsers(1)%init_with_parents([parent], &
+         prog='moist cavity mc svdw', &
+         description='Integrate the SvdW level set isosurface')
+      call add_cavity_shared_arguments(subparsers(1), with_nleb=.false.)
+      call add_cavity_mc_arguments(subparsers(1))
+      call add_cavity_drop_svdw_arguments(subparsers(1))
+      call p%add_parser('svdw', subparsers(1), help_text='SvdW level set')
+
+      call subparsers(2)%init_with_parents([parent], &
+         prog='moist cavity mc cfc', &
+         description='Integrate the CFC level set isosurface')
+      call add_cavity_shared_arguments(subparsers(2), with_nleb=.false.)
+      call add_cavity_mc_arguments(subparsers(2))
+      call add_cavity_drop_cfc_arguments(subparsers(2))
+      call p%add_parser('cfc', subparsers(2), help_text='CFC level set')
+   end subroutine setup_mc_parser
+
+
+   !> Add cavity arguments shared by all cavity type subcommands
+   !> @param[inout] p         Cavity type parser receiving shared options
+   !> @param[in]    with_nleb Offer --nleb (default true); cavity types without an
+   !>                         angular grid, such as marching cubes, pass false
+   subroutine add_cavity_shared_arguments(p, with_nleb)
+      type(ArgumentParser), intent(inout) :: p
+      logical, intent(in), optional :: with_nleb
       integer :: grp_input, grp_technical
+      logical :: offer_nleb
+
+      offer_nleb = .true.
+      if (present(with_nleb)) offer_nleb = with_nleb
 
       grp_input = p%add_argument_group('Input/Output', &
          'Input cavity model and structure')
@@ -648,12 +705,14 @@ contains
       call p%add_argument('input', &
          help='Input coordinate file', metavar='COORD', &
          group_idx=grp_input)
-      call p%add_argument('--nleb', data_type='integer', &
-         action=not_less_than(1), &
-         default_val=194, &
-         metavar='INT', &
-         help='Lebedev grid points per atom', &
-         group_idx=grp_technical)
+      if (offer_nleb) then
+         call p%add_argument('--nleb', data_type='integer', &
+            action=not_less_than(1), &
+            default_val=194, &
+            metavar='INT', &
+            help='Lebedev grid points per atom', &
+            group_idx=grp_technical)
+      end if
       call p%add_argument('--radii', default_val='cpcm', &
          print_choices=.true., &
          choices=[character(len=5) :: 'cpcm', 'smd', 'd3', 'cosmo', 'bondi'], &
@@ -665,7 +724,7 @@ contains
          group_idx=grp_technical)
       call p%add_argument('--dump', action='store_true', &
          dest='dump', &
-         help='Write cavity files (xyz, pqr, csv) to disk', &
+         help='Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)', &
          group_idx=grp_input)
    end subroutine add_cavity_shared_arguments
 
@@ -709,11 +768,25 @@ contains
          dest='nofine', &
          help='Skip optional cavity properties (curvature, normals, etc.)', &
          group_idx=grp_technical)
-      call p%add_argument('--mc', action='store_true', &
-         dest='mc', &
-         help='Compute marching-cubes reference area and volume', &
-         group_idx=grp_technical)
    end subroutine add_cavity_drop_arguments
+
+
+   !> Add marching-cubes arguments to a level set parser
+   !> @param[inout] p Marching-cubes level set parser
+   subroutine add_cavity_mc_arguments(p)
+      type(ArgumentParser), intent(inout) :: p
+      integer :: grp_technical
+
+      grp_technical = p%add_argument_group('Marching cubes settings', &
+         'Isosurface integration control')
+
+      call p%add_argument('--spacing', data_type='real', &
+         default_val=0.2_wp, &
+         action=not_less_than(0.0_wp), &
+         dest='cavity_mc_spacing', metavar='REAL', &
+         help='Finest marching-cubes grid spacing in bohr', &
+         group_idx=grp_technical)
+   end subroutine add_cavity_mc_arguments
 
 
    !> Add SvdW DROP arguments to a DROP variant parser
@@ -723,13 +796,13 @@ contains
       integer :: grp_technical
 
       grp_technical = p%add_argument_group('SvdW settings', &
-         'SvdW level-set blending controls')
+         'SvdW level set smoothing controls')
 
       call p%add_argument('--blendk', data_type='real', &
          default_val=5.5_wp, &
          action=not_less_than(0.0_wp), &
          dest='drop_blendk', metavar='REAL', &
-         help='DROP blending sharpness k', &
+         help='DROP smoothing sharpness k', &
          group_idx=grp_technical)
       call p%add_argument('--blend1b', data_type='real', &
          default_val=1.0_wp, &
@@ -756,7 +829,7 @@ contains
       integer :: grp_technical
 
       grp_technical = p%add_argument_group('CFC settings', &
-         'CFC level-set controls')
+         'CFC level set controls')
 
       call p%add_argument('--a1', data_type='real', &
          default_val=-15.0_wp, &
