@@ -4,10 +4,10 @@
 !> https://ludwigboess.github.io/SPHKernels.jl/stable/kernels/
 module moist_math_smoothing_kernels
 
-   use mctc_env, only: wp
+   use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none (type, external)
    private
 
    public :: wendland_kernel_type
@@ -43,6 +43,7 @@ module moist_math_smoothing_kernels
       !> Function signature for dimension-specific kernel computation
       pure function wendland_compute_interface(q) result(val)
          import :: wp
+         implicit none (type, external)
          real(wp), intent(in) :: q
          real(wp) :: val
       end function wendland_compute_interface
@@ -50,17 +51,26 @@ module moist_math_smoothing_kernels
 
    abstract interface
       !> Initialize kernel interface
-      subroutine init_interface(self, order, dimension, h)
-         import :: smoothing_kernel_type, wp
+      !>
+      !> @param[inout] self      Kernel instance
+      !> @param[in]    order     Kernel order
+      !> @param[in]    dimension Spatial dimension
+      !> @param[in]    h         Smoothing length
+      !> @param[out]   error     Unsupported order/dimension, or invalid `h`
+      subroutine init_interface(self, order, dimension, h, error)
+         import :: smoothing_kernel_type, wp, error_type
+         implicit none (type, external)
          class(smoothing_kernel_type), intent(inout) :: self
          integer, intent(in) :: order
          integer, intent(in) :: dimension
          real(wp), intent(in) :: h
+         type(error_type), allocatable, intent(out) :: error
       end subroutine init_interface
 
       !> Kernel evaluation interface
       pure function f0_interface(self, r) result(kernel_val)
          import :: smoothing_kernel_type, wp
+         implicit none (type, external)
          class(smoothing_kernel_type), intent(in) :: self
          real(wp), intent(in) :: r
          real(wp) :: kernel_val
@@ -69,6 +79,7 @@ module moist_math_smoothing_kernels
       !> Kernel derivative interface (dW/dr)
       pure function f1_interface(self, r) result(derivative)
          import :: smoothing_kernel_type, wp
+         implicit none (type, external)
          class(smoothing_kernel_type), intent(in) :: self
          real(wp), intent(in) :: r
          real(wp) :: derivative
@@ -248,12 +259,31 @@ contains
    end function wendland_c6_23d_deriv
 
    !> Initialize Wendland kernel with order and dimension-specific normalization
-   subroutine wendland_init(self, order, dimension, h)
+   !>
+   !> @param[inout] self      Kernel instance
+   !> @param[in]    order     Kernel order (2, 4 or 6)
+   !> @param[in]    dimension Spatial dimension (1, 2 or 3)
+   !> @param[in]    h         Smoothing length, must be positive
+   !> @param[out]   error     Unsupported order/dimension, or non-positive `h`
+   subroutine wendland_init(self, order, dimension, h, error)
       class(wendland_kernel_type), intent(inout) :: self
       integer, intent(in) :: order
       integer, intent(in) :: dimension
       real(wp), intent(in) :: h
+      !> Unsupported order/dimension, or non-positive smoothing length
+      type(error_type), allocatable, intent(out) :: error
+      !> Reciprocal smoothing length shared by every normalization below
       real(wp) :: h_inv
+
+      self%compute => null()
+      self%compute_deriv => null()
+
+      !> Guard the reciprocal below; a zero or negative smoothing length has no
+      !> kernel and would otherwise divide by zero.
+      if (h <= 0.0_wp) then
+         call fatal_error(error, "wendland_init: smoothing length must be positive")
+         return
+      end if
 
       self%order = order
       self%dimension = dimension
@@ -280,8 +310,8 @@ contains
             self%compute => wendland_c2_23d
             self%compute_deriv => wendland_c2_23d_deriv
          case default
-            ! TODO: Proper error propagration
-            error stop "wendland_init: unsupported dimension for C2 (must be 1, 2, or 3)"
+            call unsupported_dimension(error, "C2", dimension)
+            return
          end select
       case (4)  ! Wendland C4
          select case (dimension)
@@ -301,8 +331,8 @@ contains
             self%compute => wendland_c4_23d
             self%compute_deriv => wendland_c4_23d_deriv
          case default
-            ! TODO: Proper error propagration
-            error stop "wendland_init: unsupported dimension for C4 (must be 1, 2, or 3)"
+            call unsupported_dimension(error, "C4", dimension)
+            return
          end select
       case (6)  ! Wendland C6
          select case (dimension)
@@ -322,14 +352,46 @@ contains
             self%compute => wendland_c6_23d
             self%compute_deriv => wendland_c6_23d_deriv
          case default
-            ! TODO: Proper error propagration
-            error stop "wendland_init: unsupported dimension for C6 (must be 1, 2, or 3)"
+            call unsupported_dimension(error, "C6", dimension)
+            return
          end select
       case default
-         ! TODO: Proper error propagration
-         error stop "wendland_init: unsupported order (must be 2, 4, or 6)"
+         call fatal_error(error, "wendland_init: unsupported order "// &
+                          trim(as_string(order))//" (must be 2, 4, or 6)")
+         return
       end select
    end subroutine wendland_init
+
+   !> Report a spatial dimension the requested Wendland order does not cover
+   !>
+   !> @param[out] error     Populated diagnostic
+   !> @param[in]  kernel    Kernel label used in the message, e.g. "C2"
+   !> @param[in]  dimension Offending spatial dimension
+   subroutine unsupported_dimension(error, kernel, dimension)
+      !> Populated diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> Kernel label used in the message
+      character(*), intent(in) :: kernel
+      !> Offending spatial dimension
+      integer, intent(in) :: dimension
+
+      call fatal_error(error, "wendland_init: unsupported dimension "// &
+                       trim(as_string(dimension))//" for "//kernel// &
+                       " (must be 1, 2, or 3)")
+   end subroutine unsupported_dimension
+
+   !> Render an integer for use in a diagnostic message
+   !>
+   !> @param[in] value Integer to render
+   !> @returns         Left-justified decimal representation
+   pure function as_string(value) result(text)
+      !> Integer to render
+      integer, intent(in) :: value
+      !> Left-justified decimal representation
+      character(len=16) :: text
+
+      write (text, "(i0)") value
+   end function as_string
 
    !> Evaluate Wendland kernel at distance r
    pure function wendland_f0(self, r) result(kernel_val)
