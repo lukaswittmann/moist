@@ -6,12 +6,14 @@
 !> corrected Nov. 17, 2010 for the 92nd edition.
 module moist_data_atomicrad
    use mctc_env, only: wp
+   use mctc_env, only: error_type, fatal_error
    use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: to_number
    implicit none
    private
 
-   public :: get_atomic_rad, atomic_rad, covalent_rad
+   public :: get_atomic_rad, get_covalent_rad, atomic_rad, covalent_rad
+   public :: max_elem
 
    !> Get atomic radius for a species
    interface get_atomic_rad
@@ -19,6 +21,13 @@ module moist_data_atomicrad
       module procedure :: get_atomic_rad_number
    end interface get_atomic_rad
 
+   !> Get covalent radius for a species
+   interface get_covalent_rad
+      module procedure :: get_covalent_rad_symbol
+      module procedure :: get_covalent_rad_number
+   end interface get_covalent_rad
+
+   !> Highest atomic number these tables cover
    integer, parameter :: max_elem = 118
 
    !> Atomic radii
@@ -59,34 +68,110 @@ module moist_data_atomicrad
 
 contains
 
-!> Get atomic radius for species with a given symbol
-   elemental function get_atomic_rad_symbol(symbol) result(radius)
+   !> Get atomic radius for species with a given symbol
+   subroutine get_atomic_rad_symbol(symbol, radius, error)
 
       !> Element symbol
       character(len=*), intent(in) :: symbol
 
-      !> atomic radius
-      real(wp) :: radius
+      !> Atomic radius in bohr
+      real(wp), intent(out) :: radius
 
-      radius = get_atomic_rad(to_number(symbol))
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-   end function get_atomic_rad_symbol
+      integer :: number
 
-!> Get atomic radius for species with a given atomic number
-   elemental function get_atomic_rad_number(number) result(radius)
+      radius = 0.0_wp
+
+      number = to_number(trim(symbol))
+      if (number < 1) then
+         call fatal_error(error, "Unknown element symbol: '"//trim(symbol)//"'")
+         return
+      end if
+
+      call get_atomic_rad_number(number, radius, error)
+
+   end subroutine get_atomic_rad_symbol
+
+   !> Get atomic radius for species with a given atomic number
+   subroutine get_atomic_rad_number(number, radius, error)
 
       !> Atomic number
       integer, intent(in) :: number
 
-      !> atomic radius
-      real(wp) :: radius
+      !> Atomic radius in bohr
+      real(wp), intent(out) :: radius
 
-      if (number > 0 .and. number <= size(atomic_rad, dim=1)) then
-         radius = atomic_rad(number)
-      else
-         radius = -1.0_wp
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=64) :: msg
+
+      radius = 0.0_wp
+
+      if (number < 1 .or. number > max_elem) then
+         write (msg, '(a,i0,a,i0,a)') &
+            "Atomic number ", number, " out of range [1, ", max_elem, "]"
+         call fatal_error(error, trim(msg))
+         return
       end if
 
-   end function get_atomic_rad_number
+      radius = atomic_rad(number)
+
+   end subroutine get_atomic_rad_number
+
+   !> Get covalent radius for species with a given symbol
+   subroutine get_covalent_rad_symbol(symbol, radius, error)
+
+      !> Element symbol
+      character(len=*), intent(in) :: symbol
+
+      !> Covalent radius in bohr
+      real(wp), intent(out) :: radius
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: number
+
+      radius = 0.0_wp
+
+      number = to_number(trim(symbol))
+      if (number < 1) then
+         call fatal_error(error, "Unknown element symbol: '"//trim(symbol)//"'")
+         return
+      end if
+
+      call get_covalent_rad_number(number, radius, error)
+
+   end subroutine get_covalent_rad_symbol
+
+   !> Get covalent radius for species with a given atomic number
+   subroutine get_covalent_rad_number(number, radius, error)
+
+      !> Atomic number
+      integer, intent(in) :: number
+
+      !> Covalent radius in bohr
+      real(wp), intent(out) :: radius
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=64) :: msg
+
+      radius = 0.0_wp
+
+      if (number < 1 .or. number > max_elem) then
+         write (msg, '(a,i0,a,i0,a)') &
+            "Atomic number ", number, " out of range [1, ", max_elem, "]"
+         call fatal_error(error, trim(msg))
+         return
+      end if
+
+      radius = covalent_rad(number)
+
+   end subroutine get_covalent_rad_number
 
 end module moist_data_atomicrad

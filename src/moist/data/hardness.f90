@@ -1,15 +1,19 @@
 module moist_data_hardness
    use mctc_env, only: wp
+   use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
    implicit none
    private
 
    public :: get_hardness
+   public :: max_elem
+
    interface get_hardness
       module procedure :: get_hardness_num
       module procedure :: get_hardness_sym
    end interface get_hardness
 
+   !> Highest atomic number this table covers
    integer, parameter :: max_elem = 118
 
    !> Element-specific chemical hardnesses for the charge scaling function used
@@ -43,33 +47,61 @@ module moist_data_hardness
 contains
 
    !> Get chemical hardness for a given element symbol
-   elemental function get_hardness_sym(sym) result(eta)
+   subroutine get_hardness_sym(sym, eta, error)
 
       !> Element symbol
       character(len=*), intent(in) :: sym
 
       !> Chemical hardness
-      real(wp) :: eta
+      real(wp), intent(out) :: eta
 
-      eta = get_hardness(to_number(sym))
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-   end function get_hardness_sym
+      integer :: num
+
+      eta = 0.0_wp
+
+      num = to_number(trim(sym))
+      if (num < 1) then
+         call fatal_error(error, "Unknown element symbol: '"//trim(sym)//"'")
+         return
+      end if
+
+      call get_hardness_num(num, eta, error)
+
+   end subroutine get_hardness_sym
 
    !> Get chemical hardness for a given atomic number
-   elemental function get_hardness_num(num) result(eta)
+   !>
+   !> Note that a hardness of exactly zero is a legitimate result for the
+   !> superheavy elements Rf-Og (Z = 104-118), which DFT-D4 does not
+   !> parametrise. Callers must therefore branch on `error`, never on the
+   !> returned value.
+   subroutine get_hardness_num(num, eta, error)
 
       !> Atomic number
       integer, intent(in) :: num
 
       !> Chemical hardness
-      real(wp) :: eta
+      real(wp), intent(out) :: eta
 
-      if (num > 0 .and. num <= size(chemical_hardness)) then
-         eta = chemical_hardness(num)
-      else
-         eta = 0.0_wp
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=64) :: msg
+
+      eta = 0.0_wp
+
+      if (num < 1 .or. num > max_elem) then
+         write (msg, '(a,i0,a,i0,a)') &
+            "Atomic number ", num, " out of range [1, ", max_elem, "]"
+         call fatal_error(error, trim(msg))
+         return
       end if
 
-   end function get_hardness_num
+      eta = chemical_hardness(num)
+
+   end subroutine get_hardness_num
 
 end module moist_data_hardness

@@ -1,16 +1,19 @@
 module moist_data_en
    use mctc_env, only: wp
+   use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
    implicit none
    private
 
    public :: get_electronegativity
+   public :: max_elem
 
    interface get_electronegativity
       module procedure :: get_electronegativity_num
       module procedure :: get_electronegativity_sym
    end interface get_electronegativity
 
+   !> Highest atomic number this table covers
    integer, parameter :: max_elem = 118
 
    !> Pauling electronegativities, used for the covalent coordination number.
@@ -43,33 +46,56 @@ module moist_data_en
 contains
 
    !> Get electronegativity for a given element symbol
-   elemental function get_electronegativity_sym(sym) result(en)
+   subroutine get_electronegativity_sym(sym, en, error)
 
       !> Element symbol
       character(len=*), intent(in) :: sym
 
       !> Electronegativity
-      real(wp) :: en
+      real(wp), intent(out) :: en
 
-      en = get_electronegativity(to_number(sym))
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-   end function get_electronegativity_sym
+      integer :: num
+
+      en = 0.0_wp
+
+      num = to_number(trim(sym))
+      if (num < 1) then
+         call fatal_error(error, "Unknown element symbol: '"//trim(sym)//"'")
+         return
+      end if
+
+      call get_electronegativity_num(num, en, error)
+
+   end subroutine get_electronegativity_sym
 
    !> Get electronegativity for a given atomic number
-   elemental function get_electronegativity_num(num) result(en)
+   subroutine get_electronegativity_num(num, en, error)
 
       !> Atomic number
       integer, intent(in) :: num
 
       !> Electronegativity
-      real(wp) :: en
+      real(wp), intent(out) :: en
 
-      if (num > 0 .and. num <= size(pauling_en)) then
-         en = pauling_en(num)
-      else
-         en = 0.0_wp
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=64) :: msg
+
+      en = 0.0_wp
+
+      if (num < 1 .or. num > max_elem) then
+         write (msg, '(a,i0,a,i0,a)') &
+            "Atomic number ", num, " out of range [1, ", max_elem, "]"
+         call fatal_error(error, trim(msg))
+         return
       end if
 
-   end function get_electronegativity_num
+      en = pauling_en(num)
+
+   end subroutine get_electronegativity_num
 
 end module moist_data_en

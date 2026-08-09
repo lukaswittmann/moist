@@ -19,8 +19,7 @@ module moist_data_radii_legacy
    integer, parameter :: max_elem_rahm = 96
    integer, parameter :: max_elem_gauss = 118
 
-   ! Model tags
-   ! TODO: best practice?
+   !> Model tags
    type, public :: radius_type
       integer :: cpcm = 1
       integer :: smd = 2
@@ -32,8 +31,6 @@ module moist_data_radii_legacy
    end type radius_type
 
    type(radius_type), parameter, public :: rad_type = radius_type()
-
-   ! TODO: general handling of different lengths of radii arrays?
 
    !> CPCM radii (already scaled)
    real(wp), parameter :: cpcm_vdw_rad(max_elem_cpcm) = aatoau*[ &
@@ -107,35 +104,32 @@ module moist_data_radii_legacy
       & 2.35215_wp, 2.21260_wp, 2.22970_wp, 2.19785_wp, &
       & 2.17695_wp, 2.21705_wp]
 
-   !> Default value for unoptimized van-der-Waals radii
-   real(wp), parameter :: cosmostub = 2.223_wp
-
    !> COSMO optimized van-der-Waals radii
    real(wp), parameter :: cosmo_vdw_rad(1:94) = aatoau*[ &
       & 1.3000_wp, 1.6380_wp, 1.5700_wp, 1.0530_wp, &   ! H-Be
       & 2.0480_wp, 2.0000_wp, 1.8300_wp, 1.7200_wp, &   ! B-O
       & 1.7200_wp, 1.8018_wp, 1.8000_wp, 1.6380_wp, &   ! F-Mg
       & 2.1530_wp, 2.2000_wp, 2.1060_wp, 2.1600_wp, &   ! Al-S
-      & 2.0500_wp, 2.2000_wp, 2.2230_wp, cosmostub, &   ! Cl-Ca
-      & cosmostub, 2.2930_wp, cosmostub, cosmostub, &   ! Sc-Cr
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Mn-Ni
-      & cosmostub, 1.6260_wp, cosmostub, 2.7000_wp, &   ! Cu-Ge
+      & 2.0500_wp, 2.2000_wp, 2.2230_wp, 2.2230_wp, &   ! Cl-Ca
+      & 2.2230_wp, 2.2930_wp, 2.2230_wp, 2.2230_wp, &   ! Sc-Cr
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Mn-Ni
+      & 2.2230_wp, 1.6260_wp, 2.2230_wp, 2.7000_wp, &   ! Cu-Ge
       & 2.3500_wp, 2.2000_wp, 2.1600_wp, 2.3630_wp, &   ! As-Kr
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Rb-Zr
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Nb-Ru
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Rh-Cd
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Rb-Zr
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Nb-Ru
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Rh-Cd
       & 2.2580_wp, 2.5500_wp, 2.4100_wp, 2.4100_wp, &   ! In-Te
-      & 2.3200_wp, 2.5270_wp, cosmostub, cosmostub, &   ! I-Ba
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! La-Nd
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Pm-Gd
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Tb-Er
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Tm-Hf
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Ta-Os
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Ir-Hg
-      & cosmostub, 2.3600_wp, 2.4220_wp, 2.3050_wp, &   ! Tl-Po
-      & 2.3630_wp, 2.5740_wp, cosmostub, cosmostub, &   ! At-Ra
-      & cosmostub, cosmostub, cosmostub, cosmostub, &   ! Ac-U
-      & cosmostub, cosmostub]                           ! Np-Pu
+      & 2.3200_wp, 2.5270_wp, 2.2230_wp, 2.2230_wp, &   ! I-Ba
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! La-Nd
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Pm-Gd
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Tb-Er
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Tm-Hf
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Ta-Os
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Ir-Hg
+      & 2.2230_wp, 2.3600_wp, 2.4220_wp, 2.3050_wp, &   ! Tl-Po
+      & 2.3630_wp, 2.5740_wp, 2.2230_wp, 2.2230_wp, &   ! At-Ra
+      & 2.2230_wp, 2.2230_wp, 2.2230_wp, 2.2230_wp, &   ! Ac-U
+      & 2.2230_wp, 2.2230_wp]                           ! Np-Pu
 
    !> Gaussian charge scheme radii (Bondi-based, uniformly scaled by 1.2)
    !> Ref: J. Phys. Chem. 2010, 133, 244111
@@ -202,6 +196,7 @@ module moist_data_radii_legacy
 
    public :: get_radius
    public :: get_radius_func
+   public :: get_upper_bound
 
    interface get_radius
       module procedure get_radius_default
@@ -219,12 +214,19 @@ module moist_data_radii_legacy
 
 contains
 
-   !> Look up the maximum valid atomic number for a given model tag.
+   !> Look up the maximum valid atomic number for a given model tag
+   !>
    !> @param[in]  model   radius type integer tag
-   !> @param[out] upper   upper bound on atomic number for that model
-   pure subroutine get_upper_bound(model, upper)
+   !> @param[out] upper   upper bound on atomic number, or -1 if unrecognised
+   !> @param[out] error   error on an unrecognised model tag
+   subroutine get_upper_bound(model, upper, error)
       integer, intent(in)  :: model
       integer, intent(out) :: upper
+      !> Error on an unrecognised model tag
+      type(error_type), allocatable, intent(out) :: error
+      character(len=64) :: msg
+
+      upper = -1
       select case (model)
       case (rad_type%cpcm); upper = max_elem_cpcm
       case (rad_type%smd); upper = max_elem_smd
@@ -233,19 +235,26 @@ contains
       case (rad_type%bondi); upper = max_elem_bondi
       case (rad_type%rahm); upper = max_elem_rahm
       case (rad_type%gauss); upper = max_elem_gauss
-      case default; upper = -1
+      case default
+         write (msg, '(a,i0)') "Unknown radius type: ", model
+         call fatal_error(error, trim(msg))
       end select
    end subroutine get_upper_bound
 
-   !> Resolve a model name string to its integer tag.
-   !> Returns -1 for unknown names.
-   !> @param[in]  name   to_lower model name
-   !> @param[out] tag    integer tag or -1
-   subroutine resolve_model_name(name, tag)
+   !> Resolve a model name string to its integer tag
+   !>
+   !> Matching is case-insensitive and ignores surrounding blanks.
+   !> @param[in]  name   model name
+   !> @param[out] tag    integer tag, or -1 if the name was not recognised
+   !> @param[out] error  error on an unrecognised model name
+   subroutine resolve_model_name(name, tag, error)
       character(len=*), intent(in) :: name
       integer, intent(out) :: tag
+      !> Error on an unrecognised model name
+      type(error_type), allocatable, intent(out) :: error
       character(len=:), allocatable :: mstr
 
+      tag = -1
       mstr = adjustl(to_lower(trim(name)))
       select case (mstr)
       case ("cpcm"); tag = rad_type%cpcm
@@ -255,33 +264,46 @@ contains
       case ("bondi"); tag = rad_type%bondi
       case ("rahm"); tag = rad_type%rahm
       case ("gauss"); tag = rad_type%gauss
-      case default; tag = -1
+      case default
+         call fatal_error(error, "Unknown radius type: '"//trim(name)//"'")
       end select
    end subroutine resolve_model_name
 
-   !> Retrieve a radius from the raw data arrays for a validated
-   !> (num, model) pair. No bounds checking is done here.
+   !> Retrieve a radius from the raw data arrays for a validated (num, model) pair
+   !>
+   !> `num` is assumed to have been range-checked against get_upper_bound for
+   !> this model already; no bounds checking is done here. The model tag is
+   !> checked, so an unrecognised one is an error rather than silently yielding
+   !> a CPCM radius.
    !> @param[in]  num    atomic number (must be in range)
-   !> @param[in]  model  radius type tag (must be valid)
+   !> @param[in]  model  radius type tag
    !> @param[out] rad    van-der-Waals radius
-   pure subroutine fetch_radius(num, model, rad)
+   !> @param[out] error  error on an unrecognised model tag
+   subroutine fetch_radius(num, model, rad, error)
       integer, intent(in)   :: num
       integer, intent(in)   :: model
       real(wp), intent(out) :: rad
+      !> Error on an unrecognised model tag
+      type(error_type), allocatable, intent(out) :: error
+      character(len=64) :: msg
 
+      rad = 0.0_wp
       select case (model)
+      case (rad_type%cpcm); rad = cpcm_vdw_rad(num)
       case (rad_type%smd); rad = smd_vdw_rad(num)
       case (rad_type%d3); rad = d3_vdw_rad(num)
       case (rad_type%cosmo); rad = cosmo_vdw_rad(num)
       case (rad_type%bondi); rad = bondi_vdw_rad(num)
       case (rad_type%rahm); rad = rahm_vdw_rad(num)
       case (rad_type%gauss); rad = gauss_vdw_rad(num)
-      case default; rad = cpcm_vdw_rad(num)
+      case default
+         write (msg, '(a,i0)') "Unknown radius type: ", model
+         call fatal_error(error, trim(msg))
       end select
    end subroutine fetch_radius
 
-   !--------------------------------------------------------------------
    !> Get van-der-Waals radius for an atomic number using the default
+   !>
    !> (CPCM) radii set.
    !> @param[in]  num    atomic number
    !> @param[out] rad    radius in atomic units
@@ -309,8 +331,8 @@ contains
       end if
    end subroutine get_radius_default
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius for an atomic number and integer model tag.
+   !> Get van-der-Waals radius for an atomic number and integer model tag
+   !>
    !> @param[in]  num    atomic number
    !> @param[in]  model  radius type tag (from rad_type)
    !> @param[out] rad    radius in atomic units
@@ -323,23 +345,20 @@ contains
       integer :: upper
       character(len=128) :: msg
 
-      call get_upper_bound(model, upper)
-      if (upper < 0) then
-         rad = 0.0_wp
-         write (msg, '(a,i0)') "Unknown radius type: ", model
-         call fatal_error(error, trim(msg))
-         return
-      end if
+      rad = 0.0_wp
+
+      call get_upper_bound(model, upper, error)
+      if (allocated(error)) return
 
       if (num < 1 .or. num > upper) then
-         rad = 0.0_wp
          write (msg, '(a,i0,a,i0,a)') &
             "Atomic number ", num, " out of range [1, ", upper, "]"
          call fatal_error(error, trim(msg))
          return
       end if
 
-      call fetch_radius(num, model, rad)
+      call fetch_radius(num, model, rad, error)
+      if (allocated(error)) return
 
       if (rad < 0.0_wp) then
          write (msg, '(a,i0)') &
@@ -348,8 +367,8 @@ contains
       end if
    end subroutine get_atnum_int
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius for an atomic number and model name string.
+   !> Get van-der-Waals radius for an atomic number and model name string
+   !>
    !> @param[in]  num        atomic number
    !> @param[in]  model_name radius set name (cpcm, smd, d3, cosmo, bondi)
    !> @param[out] rad        radius in atomic units
@@ -360,22 +379,17 @@ contains
       real(wp), intent(out) :: rad
       type(error_type), allocatable, intent(out) :: error
       integer :: tag
-      character(len=128) :: msg
 
-      call resolve_model_name(model_name, tag)
-      if (tag < 0) then
-         rad = 0.0_wp
-         write (msg, '(a,a,a)') &
-            "Unknown radius type: '", trim(model_name), "'"
-         call fatal_error(error, trim(msg))
-         return
-      end if
+      rad = 0.0_wp
+
+      call resolve_model_name(model_name, tag, error)
+      if (allocated(error)) return
 
       call get_atnum_int(num, tag, rad, error)
    end subroutine get_atnum_str
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius for an element symbol and integer model tag.
+   !> Get van-der-Waals radius for an element symbol and integer model tag
+   !>
    !> @param[in]  sym    element symbol (e.g. 'H', 'He')
    !> @param[in]  model  radius type tag (from rad_type)
    !> @param[out] rad    radius in atomic units
@@ -400,8 +414,8 @@ contains
       call get_atnum_int(num, model, rad, error)
    end subroutine get_atsym_int
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius for an element symbol and model name string.
+   !> Get van-der-Waals radius for an element symbol and model name string
+   !>
    !> @param[in]  sym        element symbol (e.g. 'H', 'He')
    !> @param[in]  model_name radius set name (cpcm, smd, d3, cosmo, bondi)
    !> @param[out] rad        radius in atomic units
@@ -414,18 +428,13 @@ contains
       integer :: num, tag
       character(len=128) :: msg
 
-      call resolve_model_name(model_name, tag)
-      if (tag < 0) then
-         rad = 0.0_wp
-         write (msg, '(a,a,a)') &
-            "Unknown radius type: '", trim(model_name), "'"
-         call fatal_error(error, trim(msg))
-         return
-      end if
+      rad = 0.0_wp
+
+      call resolve_model_name(model_name, tag, error)
+      if (allocated(error)) return
 
       call symbol_to_number(num, trim(sym))
       if (num < 1) then
-         rad = 0.0_wp
          write (msg, '(a,a,a)') &
             "Unknown element symbol: '", trim(sym), "'"
          call fatal_error(error, trim(msg))
@@ -435,67 +444,65 @@ contains
       call get_atnum_int(num, tag, rad, error)
    end subroutine get_atsym_str
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius as a function (for test/debug use).
-   !> Uses the default (CPCM) radii set. Stops on error.
+   !* ================================================================================= *!
+   !*             Expression-callable radius accessors (legacy convenience)             *!
+   !* ================================================================================= *!
+
+   !> Get van-der-Waals radius as an expression-callable function
+   !>
    !> @param[in]  num    atomic number
-   !> @return     radius in atomic units
-   function get_radius_func_default(num) result(rad)
+   !> @param[out] error  error on an invalid lookup
+   !> @return     radius in atomic units, or `missing` (-1) on failure
+   function get_radius_func_default(num, error) result(rad)
       !> Atomic number
       integer, intent(in) :: num
+      !> Error on an invalid lookup
+      type(error_type), allocatable, intent(out) :: error
       !> Radius in atomic units
       real(wp) :: rad
-      !> Error handler (local)
-      type(error_type), allocatable :: error
 
       call get_radius_default(num, rad, error)
-      if (allocated(error)) then
-         rad = missing
-      end if
+      if (allocated(error)) rad = missing
    end function get_radius_func_default
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius as a function with model tag (for test/debug use).
-   !> Stops on error.
+   !> Get van-der-Waals radius as an expression-callable function, by model tag
+   !>
    !> @param[in]  num    atomic number
    !> @param[in]  model  radius type tag (from rad_type)
-   !> @return     radius in atomic units
-   function get_radius_func_int(num, model) result(rad)
+   !> @param[out] error  error on an invalid lookup
+   !> @return     radius in atomic units, or `missing` (-1) on failure
+   function get_radius_func_int(num, model, error) result(rad)
       !> Atomic number
       integer, intent(in) :: num
       !> Radius model tag
       integer, intent(in) :: model
+      !> Error on an invalid lookup
+      type(error_type), allocatable, intent(out) :: error
       !> Radius in atomic units
       real(wp) :: rad
-      !> Error handler (local)
-      type(error_type), allocatable :: error
 
       call get_atnum_int(num, model, rad, error)
-      if (allocated(error)) then
-         rad = missing
-      end if
+      if (allocated(error)) rad = missing
    end function get_radius_func_int
 
-   !--------------------------------------------------------------------
-   !> Get van-der-Waals radius as a function with model name (for test/debug use).
-   !> Stops on error.
+   !> Get van-der-Waals radius as an expression-callable function, by model name
+   !>
    !> @param[in]  num         atomic number
-   !> @param[in]  model_name  radius set name (cpcm, smd, d3, cosmo, bondi)
-   !> @return     radius in atomic units
-   function get_radius_func_str(num, model_name) result(rad)
+   !> @param[in]  model_name  radius set name (cpcm, smd, d3, cosmo, bondi, rahm, gauss)
+   !> @param[out] error       error on an invalid lookup
+   !> @return     radius in atomic units, or `missing` (-1) on failure
+   function get_radius_func_str(num, model_name, error) result(rad)
       !> Atomic number
       integer, intent(in) :: num
       !> Radius model name
       character(len=*), intent(in) :: model_name
+      !> Error on an invalid lookup
+      type(error_type), allocatable, intent(out) :: error
       !> Radius in atomic units
       real(wp) :: rad
-      !> Error handler (local)
-      type(error_type), allocatable :: error
 
       call get_atnum_str(num, model_name, rad, error)
-      if (allocated(error)) then
-         rad = missing
-      end if
+      if (allocated(error)) rad = missing
    end function get_radius_func_str
 
 end module moist_data_radii_legacy
