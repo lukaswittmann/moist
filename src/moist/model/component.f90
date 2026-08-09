@@ -1,9 +1,12 @@
 module moist_model_components
 
-   ! use moist_model_component_cpcm, only: cpcm_component, new_cpcm_component
-   ! use moist_model_compoent_smdcds, only: smdcds_cds, calc_cds
+   use moist_model_component_pcm, only: cpcm, new_cpcm, solver_type, potential_source
+   use moist_model_component_pv, only: pv, new_pv
 
    implicit none
    private
+
+   public :: cpcm, new_cpcm, solver_type, potential_source
+   public :: pv, new_pv
 
 end module moist_model_components
