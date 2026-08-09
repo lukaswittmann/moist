@@ -5,7 +5,7 @@
 module moist_output_ascii
    use moist_build_info, only: git_commit
    use moist_version, only: get_moist_version
-   implicit none
+   implicit none (type, external)
    private
 
    !> Header style constants
@@ -16,7 +16,7 @@ module moist_output_ascii
    public :: moist_header
    public :: moist_build_header
    public :: moist_version_header
-   public :: gems_header, cavity_header
+   public :: cavity_header
 
 contains
 
@@ -40,7 +40,7 @@ contains
       show_tagline = (s == HEADER_FULL .or. s == HEADER_SHORT)
 
       if (show_logo) then
-         write (unit, '(a)') &
+         write (unit, "(a)") &
             "                            _   _     _             ", &
             "                _ __ ___   / \ (_)___| |_           ", &
             "     .---------| '_ ` _ \ /   \| / __| __|---------.", &
@@ -51,15 +51,15 @@ contains
 
       if (show_tagline) then
          if (.not. show_logo) then
-            write (unit, '(a)') &
+            write (unit, "(a)") &
                "     .---------------------------------------------."
          end if
-         write (unit, '(a)') &
+         write (unit, "(a)") &
             "     |       Modular and open-source               |", &
             "     |            implicit solvation toolkit       |"
       end if
 
-      write (unit, '(a)') &
+      write (unit, "(a)") &
          "     '---------------------------------------------'", ""
 
    end subroutine moist_header
@@ -84,9 +84,9 @@ contains
       pad_l = max(0, (inner - len(line))/2)
       pad_r = max(0, inner - len(line) - pad_l)
 
-      write (unit, '(a)') top
-      write (unit, '(a)') "     |"//repeat(' ', pad_l)//line//repeat(' ', pad_r)//"|"
-      write (unit, '(a)') bot, ""
+      write (unit, "(a)") top
+      write (unit, "(a)") "     |"//repeat(" ", pad_l)//line//repeat(" ", pad_r)//"|"
+      write (unit, "(a)") bot, ""
 
    end subroutine moist_build_header
 
@@ -97,25 +97,9 @@ contains
       character(len=:), allocatable :: version_string
 
       call get_moist_version(string=version_string)
-      write (unit, '(a, *(1x, a))') "moist", "version", version_string
+      write (unit, "(a, *(1x, a))") "moist", "version", version_string
 
    end subroutine moist_version_header
-
-   !> Print GEMS solvation model banner.
-   subroutine gems_header(unit)
-      !> Fortran I/O unit (6 = stdout)
-      integer, intent(in) :: unit
-
-      write (unit, '(a)') "", &
-         "             _________                              ", &
-         "            /__/___\__\    GEMS                     ", &
-         "     .------'. \   / .'----------------------------.", &
-         "     |        '.\ /.'    General and               |", &
-         "     |          '.'    Minimally-Empirical         |", &
-         "     |              Model for Solvation            |", &
-         "     '---------------------------------------------'", ""
-
-   end subroutine gems_header
 
    !> Print cavity construction banner.
    !> If scheme is present, includes the scheme name in the header.
@@ -126,14 +110,14 @@ contains
       character(len=*), intent(in), optional :: scheme
 
       if (present(scheme)) then
-         write (unit, '(a)') &
+         write (unit, "(a)") &
             "     .---------------------------------------------."
-         write (unit, '(a,a6,a)') &
+         write (unit, "(a,a6,a)") &
             "     |        Cavity Construction -- ", trim(scheme), "        |"
-         write (unit, '(a)') &
+         write (unit, "(a)") &
             "     '---------------------------------------------'", ""
       else
-         write (unit, '(a)') "", &
+         write (unit, "(a)") "", &
             "     .---------------------------------------------.", &
             "     |             Cavity Construction             |", &
             "     '---------------------------------------------'", ""
