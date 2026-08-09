@@ -8,7 +8,6 @@ module moist
    use moist_build_info
 
    use moist_model, only: solvation_model
-   ! use moist_model_gems, only : gems_model, new_gems_model
    implicit none
    public
 
