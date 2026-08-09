@@ -8,7 +8,7 @@ module test_radii
    use moist_data_radii_legacy, only: get_radius_func
    use moist_radii, only: radius_type, static_radius_type
    use moist_radii, only: new_cpcm_radii, new_smd_radii, new_d3_radii
-   use moist_radii, only: new_cosmo_radii, new_bondi_radii, new_draco_radii
+   use moist_radii, only: new_cosmo_radii, new_bondi_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
