@@ -35,7 +35,9 @@ jobs:
 
       - name: Build with coverage instrumentation
         run: |
-          meson setup build -Db_coverage=true
+          meson setup build -Db_coverage=true \
+            "-Dfortran_args=['-fprofile-update=atomic','-fprofile-abs-path']" \
+            "-Dc_args=['-fprofile-update=atomic','-fprofile-abs-path']"
           meson compile -C build
 
       - name: Run tests
@@ -44,8 +46,17 @@ jobs:
       - name: Generate Cobertura XML coverage report
         run: |
           mkdir -p build/meson-logs
+          # --include-internal-functions is mandatory for Fortran: gcovr drops
+          # every symbol starting with '__' as compiler-internal, and gfortran
+          # mangles all module procedures as __<module>_MOD_<procedure>. Without
+          # it roughly 93% of src/ is silently discarded from the report.
+          # solventgeometries.inc (included by src/moist/data/solvents.f90) is
+          # recorded by gcov as a bare name relative to the build directory,
+          # which gcovr cannot open; it holds only data statements anyway.
           gcovr -r . build \
             -e subprojects \
+            -e '.*solventgeometries\.inc' \
+            --include-internal-functions \
             --gcov-ignore-errors=no_working_dir_found \
             -x -o build/meson-logs/coverage.xml
 

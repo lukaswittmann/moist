@@ -21,3 +21,29 @@ ignore:
   - "python"
   - "config"
   - "build"
+
+  # Interface wrappers around the external BLAS/LAPACK
+  - "src/moist/math/blas"
+  - "src/moist/math/blas.f90"
+  - "src/moist/math/lapack"
+  - "src/moist/math/lapack.f90"
+
+  # Included external projects as subprojects; upstream owns the tests
+  # - "src/moist/math/linalg/lsmr"
+  # - "src/moist/math/linalg/lsqr"
+  # - "src/moist/math/linalg/lusol"
+  # - "src/moist/math/solver/fmin"
+  # - "src/moist/math/solver/lbfgsb"
+  # - "src/moist/math/solver/newton"
+  # - "src/moist/math/solver/slsqp"
+
+  # Hard-coded quadrature tables
+  - "src/moist/math/grid/lebedev.f90"
+
+  # Static parameter tables
+  - "src/moist/data"
+
+  # Presentation-only output
+  - "src/moist/output/citations.f90"
+  - "src/moist/output/format.f90"
+  - "src/moist/output/license.f90"
