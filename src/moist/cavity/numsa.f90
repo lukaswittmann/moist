@@ -34,12 +34,13 @@ module moist_cavity_numsa
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
    use moist_type, only: cavity_type
+   use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
    use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: cavity_type_numsa
@@ -50,8 +51,6 @@ module moist_cavity_numsa
    !> Extends the base cavity_type with NUMSA-specific state for computing
    !> solvent accessible surface area and its gradients.
    type, extends(cavity_type) :: cavity_type_numsa
-
-      !* Configuration parameters
 
       !> Number of Lebedev angular grid points
       integer :: num_leb = 110
@@ -64,10 +63,6 @@ module moist_cavity_numsa
       !> Tolerance for surface point exclusion
       real(wp) :: tolsesp = 1.e-6_wp
 
-      !* Internal integrator state
-
-      !> Number of atoms
-      integer :: nat
       !> Atomic numbers (nat)
       integer, allocatable :: at(:)
       !> Number of unique atom pairs
@@ -93,8 +88,6 @@ module moist_cavity_numsa
       !> Switching function coefficients: $a_0, a_1, a_3$
       real(wp) :: ah0, ah1, ah3
 
-      !* Cached gradients
-
       !> Total area gradient w.r.t. atom positions (3, nat)
       real(wp), allocatable :: area_grad(:, :)
       !> Atomic area gradients (unused, kept for compatibility)
@@ -109,60 +102,29 @@ module moist_cavity_numsa
 
 contains
 
-   ! !> Legacy numsa wrapper
-   ! subroutine calc_numsa(mol, total_area, total_volume, asph, error)
-
-   !    type(structure_type), intent(in) :: mol
-   !    real(wp), intent(out) :: total_area, total_volume
-   !    real(wp), allocatable, intent(out) :: asph(:)
-   !    type(error_type), allocatable, intent(out) :: error
-   !    integer :: ngrid, num_leb, nsph
-   !    real(wp) :: cut_a, cut_f
-   !    real(wp), allocatable :: c(:, :), a(:), xi(:), f(:), wleb(:)
-   !    integer, allocatable :: owner(:)
-   !    type(cavity_type_numsa), allocatable :: cavity
-   !    class(radius_type), allocatable :: radius_model
-
-   !    nsph = mol%nat
-   !    num_leb = 110
-   !    cut_a = 0.0_wp
-   !    cut_f = 1.0e-7_wp
-
-   !    allocate(asph(nsph))
-
-   !    allocate(cavity)
-   !    call new_radii("cpcm", radius_model, error)
-   !    if (allocated(error)) return
-
-   !    call new_cavity_iswig(cavity, num_leb, cut_a, cut_f, radius_model=radius_model, error=error)
-   !    if (allocated(error)) return
-
-   !    call cavity%update(mol, error=error)
-   !    if (allocated(error)) return
-
-   !    total_area = cavity%total_area
-   !    total_volume = cavity%total_volume
-   !    asph = cavity%asph
-
-   ! end subroutine calc_numsa
-
-!> Constructor for NUMSA cavity integrator
-!>
-!> Initializes a NUMSA cavity object with optional configuration parameters.
-!> The actual surface computation happens later during [[update_cavity_numsa]].
-!>
-!> @param[inout] self       The cavity object to initialize
-!> @param[in]    nleb       Number of Lebedev angular grid points (optional)
-!> @param[in]    probe_r    Probe radius in bohr (optional)
-!> @param[in]    offset_r   Cutoff offset in bohr (optional)
-!> @param[in]    smoothing_r Smoothing width $w$ in bohr (optional)
-   subroutine new_cavity_numsa(self, nleb, probe_r, offset_r, smoothing_r, &
+   !> Constructor for NUMSA cavity integrator
+   !>
+   !> Initializes a NUMSA cavity object with optional configuration parameters.
+   !> The actual surface computation happens later during [[update_cavity_numsa]].
+   !>
+   !> @param[inout] self       The cavity object to initialize
+   !> @param[in]    ctx        Shared run context (borrowed; must outlive the cavity)
+   !> @param[in]    nleb       Number of Lebedev angular grid points (optional)
+   !> @param[in]    probe_r    Probe radius in bohr (optional)
+   !> @param[in]    offset_r   Cutoff offset in bohr (optional)
+   !> @param[in]    smoothing_r Smoothing width $w$ in bohr (optional)
+   subroutine new_cavity_numsa(self, ctx, nleb, probe_r, offset_r, smoothing_r, &
                                radii, error)
       type(cavity_type_numsa), intent(inout) :: self
+      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      type(moist_context_type), intent(in), target :: ctx
       integer, intent(in), optional :: nleb
       real(wp), intent(in), optional :: probe_r, offset_r, smoothing_r
       class(radius_type), intent(in) :: radii
       type(error_type), allocatable, intent(out) :: error
+
+      !> Borrow the shared run context (owns verbosity/debug/timer)
+      self%ctx => ctx
 
       if (present(nleb)) self%num_leb = nleb
       if (present(probe_r)) self%probe = probe_r
@@ -173,23 +135,23 @@ contains
 
    end subroutine new_cavity_numsa
 
-!> Update cavity surface and gradients for current molecular geometry
-!>
-!> This is the main entry point for NUMSA surface computation. It:
-!>
-!> 1. Initializes internal state (angular grid, switching parameters)
-!> 2. Builds neighbor lists for efficient overlap detection
-!> 3. Computes atomic surface areas via Lebedev quadrature
-!> 4. Computes surface gradients $\partial A_i / \partial {\bf R}_j$
-!> 5. Caches total area gradient for later retrieval
-!>
-!> The surface area for each atom is stored in `self%asph`, and the
-!> full gradient tensor $\partial A_i / \partial {\bf R}_j$ is stored
-!> in `self%dsdr(3, j, i)`.
-!>
-!> @param[inout] self   The cavity object to update
-!> @param[in]    mol    Molecular structure with coordinates
-!> @param[in]    radii  Atomic radii (typically vdW radii) in bohr (nat)
+   !> Update cavity surface and gradients for current molecular geometry
+   !>
+   !> This is the main entry point for NUMSA surface computation. It:
+   !>
+   !> 1. Initializes internal state (angular grid, switching parameters)
+   !> 2. Builds neighbor lists for efficient overlap detection
+   !> 3. Computes atomic surface areas via Lebedev quadrature
+   !> 4. Computes surface gradients $\partial A_i / \partial {\bf R}_j$
+   !> 5. Caches total area gradient for later retrieval
+   !>
+   !> The surface area for each atom is stored in `self%asph`, and the
+   !> full gradient tensor $\partial A_i / \partial {\bf R}_j$ is stored
+   !> in `self%dsdr(3, j, i)`.
+   !>
+   !> @param[inout] self   The cavity object to update
+   !> @param[in]    mol    Molecular structure with coordinates
+   !> @param[in]    radii  Atomic radii (typically vdW radii) in bohr (nat)
    subroutine update_cavity_numsa(self, mol, error)
       class(cavity_type_numsa), intent(inout) :: self
       type(structure_type), intent(in) :: mol
@@ -201,6 +163,9 @@ contains
       integer :: iat, jatom, i
 
       nat = mol%nat
+      self%nsph = nat
+      if (allocated(self%sphxyz)) deallocate (self%sphxyz)
+      allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
 
       call self%radius_model%update(mol, error)
       if (allocated(self%radii)) deallocate (self%radii)
@@ -211,7 +176,8 @@ contains
       if (.not. allocated(self%asph)) allocate (self%asph(nat))
 
       ! initialize the internal numsa state and neighbour list
-      call init_numsa(self, mol%num(mol%id), self%radii, self%probe, self%num_leb, self%offset, self%smoothing, error)
+      call init_numsa(self, mol%num(mol%id), self%radii, self%probe, self%num_leb, &
+                      self%offset, self%smoothing, error)
       call update_nnlist(self, mol%xyz)
 
       allocate (surface(nat))
@@ -267,32 +233,32 @@ contains
       end if
    end subroutine compute_area_gradient_numsa
 
-!> Initialize internal NUMSA integrator state
-!>
-!> Prepares all geometry-independent quantities needed for surface integration:
-!>
-!> - **Switching function coefficients**: Computes $a_0, a_1, a_3$ for the cubic
-!>   polynomial $s(u) = a_0 + (a_1 + a_3 u^2) u$ that smoothly transitions from
-!>   0 to 1 over the interval $u \in [-w, w]$.
-!>
-!> - **Radial integral weights**: Precomputes the analytical integral
-!>   $$
-!>   w_r = \int_{R-w}^{R+w} \left(\frac{1}{4w} + 3a_3 f(r,R,w)\right) r^3 \, dr
-!>   $$
-!>   to eliminate the need for radial quadrature.
-!>
-!> - **Angular grid**: Sets up Lebedev quadrature points and weights on the unit sphere.
-!>
-!> - **Neighbor pair indices**: Prepares all unique (i,j) pairs for neighbor list construction.
-!>
-!> @param[inout] self      The cavity object to initialize
-!> @param[in]    num       Atomic numbers (nat)
-!> @param[in]    rad       Atomic radii in bohr (nat)
-!> @param[in]    probe     Probe radius in bohr
-!> @param[in]    nang      Number of Lebedev angular grid points
-!> @param[in]    offset    Optional cutoff radius offset (bohr)
-!> @param[in]    smoothing Optional smoothing width $w$ (bohr)
-!> @param[out]   error     Error handling
+   !> Initialize internal NUMSA integrator state
+   !>
+   !> Prepares all geometry-independent quantities needed for surface integration:
+   !>
+   !> - **Switching function coefficients**: Computes $a_0, a_1, a_3$ for the cubic
+   !>   polynomial $s(u) = a_0 + (a_1 + a_3 u^2) u$ that smoothly transitions from
+   !>   0 to 1 over the interval $u \in [-w, w]$.
+   !>
+   !> - **Radial integral weights**: Precomputes the analytical integral
+   !>   $$
+   !>   w_r = \int_{R-w}^{R+w} \left(\frac{1}{4w} + 3a_3 f(r,R,w)\right) r^3 \, dr
+   !>   $$
+   !>   to eliminate the need for radial quadrature.
+   !>
+   !> - **Angular grid**: Sets up Lebedev quadrature points and weights on the unit sphere.
+   !>
+   !> - **Neighbor pair indices**: Prepares all unique (i,j) pairs for neighbor list construction.
+   !>
+   !> @param[inout] self      The cavity object to initialize
+   !> @param[in]    num       Atomic numbers (nat)
+   !> @param[in]    rad       Atomic radii in bohr (nat)
+   !> @param[in]    probe     Probe radius in bohr
+   !> @param[in]    nang      Number of Lebedev angular grid points
+   !> @param[in]    offset    Optional cutoff radius offset (bohr)
+   !> @param[in]    smoothing Optional smoothing width $w$ (bohr)
+   !> @param[out]   error     Error handling
    subroutine init_numsa(self, num, rad, probe, nang, offset, smoothing, error)
 
       !> The cavity object to initialize
@@ -323,26 +289,26 @@ contains
       real(wp) :: ws, rr
 
       ! Set number of atoms
-      self%nat = size(num)
+      self%nsph = size(num)
       if (allocated(self%at)) deallocate (self%at)
-      allocate (self%at(self%nat))
+      allocate (self%at(self%nsph))
       self%at = num
 
       ! Set number of Lebedev points
       self%num_leb = nang
 
       ! Allocate pair indices for all unique (i,j) combinations
-      self%ntpair = self%nat*(self%nat - 1)/2
+      self%ntpair = self%nsph*(self%nsph - 1)/2
       if (allocated(self%ppind)) deallocate (self%ppind)
       allocate (self%ppind(2, self%ntpair))
       if (allocated(self%nnsas)) deallocate (self%nnsas)
-      allocate (self%nnsas(self%nat))
+      allocate (self%nnsas(self%nsph))
       if (allocated(self%nnlists)) deallocate (self%nnlists)
-      allocate (self%nnlists(self%nat, self%nat))
+      allocate (self%nnlists(self%nsph, self%nsph))
 
       ! Build list of unique atom pairs for neighbor detection
       ij = 0
-      do iat = 1, self%nat
+      do iat = 1, self%nsph
          do jat = 1, iat - 1
             ij = ij + 1
             self%ppind(1, ij) = iat
@@ -353,9 +319,9 @@ contains
       if (allocated(self%vdwsa)) deallocate (self%vdwsa)
       if (allocated(self%trj2)) deallocate (self%trj2)
       if (allocated(self%wrp)) deallocate (self%wrp)
-      allocate (self%vdwsa(self%nat))
-      allocate (self%trj2(2, self%nat))
-      allocate (self%wrp(self%nat))
+      allocate (self%vdwsa(self%nsph))
+      allocate (self%trj2(2, self%nsph))
+      allocate (self%wrp(self%nsph))
 
       ! Set smoothing width parameter
       if (present(smoothing)) then
@@ -372,7 +338,7 @@ contains
       self%ah3 = -1._wp/(4.0_wp*(ws*(ws*ws)))
 
       ! Compute atom-specific quantities
-      do iat = 1, self%nat
+      do iat = 1, self%nsph
          izp = num(iat)
          ! SASA sphere radius: vdW + probe
          self%vdwsa(iat) = rad(iat) + probe
@@ -416,17 +382,17 @@ contains
 
    end subroutine init_numsa
 
-!> Update neighbor list for current molecular geometry
-!>
-!> Builds an efficient neighbor list containing only atom pairs within
-!> the cutoff distance `self%srcut`. This avoids checking all atom pairs
-!> during surface integration.
-!>
-!> For each atom $i$, stores indices of neighbors $j$ such that
-!> $|{\bf R}_i - {\bf R}_j| < r_{\mathrm{cut}}$.
-!>
-!> @param[inout] self The cavity object with neighbor list storage
-!> @param[in]    xyz  Atomic coordinates (3, nat) in bohr
+   !> Update neighbor list for current molecular geometry
+   !>
+   !> Builds an efficient neighbor list containing only atom pairs within
+   !> the cutoff distance `self%srcut`. This avoids checking all atom pairs
+   !> during surface integration.
+   !>
+   !> For each atom $i$, stores indices of neighbors $j$ such that
+   !> $|{\bf R}_i - {\bf R}_j| < r_{\mathrm{cut}}$.
+   !>
+   !> @param[inout] self The cavity object with neighbor list storage
+   !> @param[in]    xyz  Atomic coordinates (3, nat) in bohr
    subroutine update_nnlist(self, xyz)
       class(cavity_type_numsa), intent(inout) :: self
       real(wp), intent(in) :: xyz(:, :)
@@ -447,8 +413,8 @@ contains
       integer, allocatable :: nnls(:, :)
 
       srcut2 = self%srcut*self%srcut
-      allocate (nnls(self%nat, self%nat))
-      allocate (nntmp(self%nat))
+      allocate (nnls(self%nsph, self%nsph))
+      allocate (nntmp(self%nsph))
       nntmp = 0
       nnls = 0
       self%nnsas = 0
@@ -471,7 +437,7 @@ contains
       end do
 
       ! Copy temporary neighbor lists to persistent storage
-      do i1 = 1, self%nat
+      do i1 = 1, self%nsph
          nntmp_i = nntmp(i1)
          if (nntmp_i > 0) then
             do i2 = 1, nntmp_i
@@ -485,25 +451,26 @@ contains
 
    end subroutine update_nnlist
 
-!> Compute NUMSA surface areas and gradients via Lebedev quadrature
-!>
-!> This is the core integration routine. For each atom $i$:
-!>
-!> 1. Places Lebedev grid points on a sphere of radius $R_i = r_{\mathrm{vdW},i} + r_{\mathrm{probe}}$
-!> 2. At each point ${\bf x}_p$, computes the accessibility weight
-!>    $s_p = \prod_j H_j({\bf x}_p)$ where $H_j$ is the switching function
-!>    describing exclusion by neighbor $j$
-!> 3. Integrates: $A_i = \sum_p w_p w_r s_p$ where $w_p$ is the Lebedev weight
-!>    and $w_r$ is the precomputed radial weight
-!> 4. Accumulates gradients $\partial A_i / \partial {\bf R}_j$ using the chain rule
-!>
-!> The switching function product ensures that buried points (inside neighbors)
-!> contribute zero, while exposed points contribute their full weight.
-!>
-!> @param[inout] self    The cavity object with grid and parameters
-!> @param[in]    xyz     Atomic coordinates (3, nat) in bohr
-!> @param[out]   surface Atomic surface areas (nat) in bohr^2
-!> @param[out]   dsdrt   Surface gradients (3, nat, nat) in bohr^2/bohr
+   !> Compute NUMSA surface areas and gradients via Lebedev quadrature
+   !>
+   !> This is the core integration routine. For each atom $i$:
+   !>
+   !> 1. Places Lebedev grid points on a sphere of radius
+   !>    $R_i = r_{\mathrm{vdW},i} + r_{\mathrm{probe}}$
+   !> 2. At each point ${\bf x}_p$, computes the accessibility weight
+   !>    $s_p = \prod_j H_j({\bf x}_p)$ where $H_j$ is the switching function
+   !>    describing exclusion by neighbor $j$
+   !> 3. Integrates: $A_i = \sum_p w_p w_r s_p$ where $w_p$ is the Lebedev weight
+   !>    and $w_r$ is the precomputed radial weight
+   !> 4. Accumulates gradients $\partial A_i / \partial {\bf R}_j$ using the chain rule
+   !>
+   !> The switching function product ensures that buried points (inside neighbors)
+   !> contribute zero, while exposed points contribute their full weight.
+   !>
+   !> @param[inout] self    The cavity object with grid and parameters
+   !> @param[in]    xyz     Atomic coordinates (3, nat) in bohr
+   !> @param[out]   surface Atomic surface areas (nat) in bohr^2
+   !> @param[out]   dsdrt   Surface gradients (3, nat, nat) in bohr^2/bohr
    subroutine compute_numsa(self, xyz, surface, dsdrt)
       class(cavity_type_numsa), intent(inout) :: self
       real(wp), intent(in) :: xyz(:, :)
@@ -546,13 +513,13 @@ contains
       surface(:) = 0.0_wp
       dsdrt(:, :, :) = 0.0_wp
 
-      allocate (grads(3, self%nat))
+      allocate (grads(3, self%nsph))
       grads = 0.0_wp
       allocate (grds(3, maxval(self%nnsas)))
       allocate (grdi(maxval(self%nnsas)))
 
       ! Loop over all atoms
-      do iat = 1, self%nat
+      do iat = 1, self%nsph
          rsas = self%vdwsa(iat)
          nno = self%nnsas(iat)
          grads = 0.0_wp
@@ -565,8 +532,9 @@ contains
             ! Place grid point on SASA sphere
             xyzp(:) = xyza(:) + rsas*self%ang_grid(:, ip)
             ! Compute accessibility weight and gradients at this point
-            call compute_w_sp(self, self%nat, self%nnlists(:nno, iat), self%trj2, self%vdwsa, xyz, nno, xyzp, &
-               & self%ah0, self%ah1, self%ah3, sasap, grds, nni, grdi)
+            call compute_w_sp(self, self%nsph, self%nnlists(:nno, iat), self%trj2, &
+                              self%vdwsa, xyz, nno, xyzp, self%ah0, self%ah1, self%ah3, sasap, &
+                              grds, nni, grdi)
 
             ! Accumulate surface contribution if point is accessible
             if (sasap > self%tolsesp) then
@@ -591,51 +559,51 @@ contains
 
    end subroutine compute_numsa
 
-!> Compute switching weight at a single surface point
-!>
-!> For a given point ${\bf x}_p$ on atom $i$'s SASA sphere, computes the
-!> accessibility weight as a product of switching functions from all neighbors:
-!>
-!> $$
-!> s_p = \prod_{j \in \text{neighbors}} H_j({\bf x}_p)
-!> $$
-!>
-!> where $H_j$ is the smooth switching polynomial that depends on the distance
-!> from ${\bf x}_p$ to neighbor $j$'s surface:
-!>
-!> $$
-!> u_j = |{\bf x}_p - {\bf R}_j| - R_j, \quad
-!> H_j(u_j) = \begin{cases}
-!> 0 & u_j < -w \\
-!> a_0 + (a_1 + a_3 u_j^2) u_j & -w \le u_j \le w \\
-!> 1 & u_j > w
-!> \end{cases}
-!> $$
-!>
-!> Simultaneously computes gradients using the chain rule:
-!>
-!> $$
-!> \frac{\partial s_p}{\partial {\bf R}_j} = s_p \frac{H_j'(u_j)}{H_j(u_j)}
-!> \frac{{\bf x}_p - {\bf R}_j}{|{\bf x}_p - {\bf R}_j|}
-!> $$
-!>
-!> This is the product rule applied to the logarithmic derivative.
-!>
-!> @param[in]  self     The cavity object with parameters
-!> @param[in]  nat      Total number of atoms
-!> @param[in]  nnlists  Neighbor indices for this atom (nno)
-!> @param[in]  trj2     Squared smoothing boundaries (2, nat)
-!> @param[in]  vdwsa    SASA sphere radii (nat)
-!> @param[in]  xyza     All atomic coordinates (3, nat)
-!> @param[in]  nno      Number of neighbors to check
-!> @param[in]  xyzp     Surface point coordinates (3)
-!> @param[in]  ah0      Switching polynomial coefficient $a_0$
-!> @param[in]  ah1      Switching polynomial coefficient $a_1$
-!> @param[in]  ah3      Switching polynomial coefficient $a_3$
-!> @param[out] sasap    Accessibility weight $s_p$
-!> @param[out] grds     Gradient contributions (3, nno)
-!> @param[out] nni      Number of neighbors affecting this point
-!> @param[out] grdi     Indices of affecting neighbors (nno)
+   !> Compute switching weight at a single surface point
+   !>
+   !> For a given point ${\bf x}_p$ on atom $i$'s SASA sphere, computes the
+   !> accessibility weight as a product of switching functions from all neighbors:
+   !>
+   !> $$
+   !> s_p = \prod_{j \in \text{neighbors}} H_j({\bf x}_p)
+   !> $$
+   !>
+   !> where $H_j$ is the smooth switching polynomial that depends on the distance
+   !> from ${\bf x}_p$ to neighbor $j$'s surface:
+   !>
+   !> $$
+   !> u_j = |{\bf x}_p - {\bf R}_j| - R_j, \quad
+   !> H_j(u_j) = \begin{cases}
+   !> 0 & u_j < -w \\
+   !> a_0 + (a_1 + a_3 u_j^2) u_j & -w \le u_j \le w \\
+   !> 1 & u_j > w
+   !> \end{cases}
+   !> $$
+   !>
+   !> Simultaneously computes gradients using the chain rule:
+   !>
+   !> $$
+   !> \frac{\partial s_p}{\partial {\bf R}_j} = s_p \frac{H_j'(u_j)}{H_j(u_j)}
+   !> \frac{{\bf x}_p - {\bf R}_j}{|{\bf x}_p - {\bf R}_j|}
+   !> $$
+   !>
+   !> This is the product rule applied to the logarithmic derivative.
+   !>
+   !> @param[in]  self     The cavity object with parameters
+   !> @param[in]  nat      Total number of atoms
+   !> @param[in]  nnlists  Neighbor indices for this atom (nno)
+   !> @param[in]  trj2     Squared smoothing boundaries (2, nat)
+   !> @param[in]  vdwsa    SASA sphere radii (nat)
+   !> @param[in]  xyza     All atomic coordinates (3, nat)
+   !> @param[in]  nno      Number of neighbors to check
+   !> @param[in]  xyzp     Surface point coordinates (3)
+   !> @param[in]  ah0      Switching polynomial coefficient $a_0$
+   !> @param[in]  ah1      Switching polynomial coefficient $a_1$
+   !> @param[in]  ah3      Switching polynomial coefficient $a_3$
+   !> @param[out] sasap    Accessibility weight $s_p$
+   !> @param[out] grds     Gradient contributions (3, nno)
+   !> @param[out] nni      Number of neighbors affecting this point
+   !> @param[out] grdi     Indices of affecting neighbors (nno)
    pure subroutine compute_w_sp(self, nat, nnlists, trj2, vdwsa, xyza, &
                                 nno, xyzp, ah0, ah1, ah3, sasap, grds, nni, grdi)
       class(cavity_type_numsa), intent(in) :: self
