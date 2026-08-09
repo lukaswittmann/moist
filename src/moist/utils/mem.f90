@@ -1,7 +1,7 @@
 !> Memory utilities for array reallocation
 module moist_utils_mem
-   use mctc_env, only: wp
-   implicit none
+   use mctc_env, only: wp, error_type, fatal_error
+   implicit none (type, external)
    private
 
    public :: grow_array
@@ -30,13 +30,16 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   subroutine grow_array_real_1d(array, new_size, fill_value)
+   !> @param[out]   error      Refused resize; terminates instead when absent
+   subroutine grow_array_real_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:)
       !> New array size
       integer, intent(in) :: new_size
       !> Fill value for new elements
       real(wp), intent(in), optional :: fill_value
+      !> Refused resize, left unallocated on success
+      type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: fill
       real(wp), allocatable :: tmp(:)
@@ -48,10 +51,10 @@ contains
       !> Early return if array already has the requested size
       if (old_size == new_size) return
 
-      !> Error if attempting to shrink array
+      !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         ! TODO: Proper error propagration
-         error stop "grow_array_real_1d: Cannot shrink array"
+         call fatal_error(error, "grow_array_real_1d: Cannot shrink array")
+         return
       end if
 
       fill = 0.0_wp
@@ -69,7 +72,8 @@ contains
    !> @param[in]    dim1       First dimension size (must match existing if allocated)
    !> @param[in]    dim2       Second dimension size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   subroutine grow_array_real_2d(array, dim1, dim2, fill_value)
+   !> @param[out]   error      Refused resize; terminates instead when absent
+   subroutine grow_array_real_2d(array, dim1, dim2, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:, :)
       !> First dimension size
@@ -78,6 +82,8 @@ contains
       integer, intent(in) :: dim2
       !> Fill value for new elements
       real(wp), intent(in), optional :: fill_value
+      !> Refused resize, left unallocated on success
+      type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: fill
       real(wp), allocatable :: tmp(:, :)
@@ -94,17 +100,17 @@ contains
 
       !> Enforce that first dimension remains constant
       if (old_dim1 > 0 .and. old_dim1 /= dim1) then
-         ! TODO: Proper error propagration
-         error stop "grow_array_real_2d: Cannot change first dimension"
+         call fatal_error(error, "grow_array_real_2d: Cannot change first dimension")
+         return
       end if
 
       !> Early return if array already has the requested size
       if (old_dim2 == dim2) return
 
-      !> Error if attempting to shrink array
+      !> Refuse to shrink; the array keeps its current contents and shape
       if (old_dim2 > dim2) then
-         ! TODO: Proper error propagration
-         error stop "grow_array_real_2d: Cannot shrink array"
+         call fatal_error(error, "grow_array_real_2d: Cannot shrink array")
+         return
       end if
 
       fill = 0.0_wp
@@ -121,13 +127,16 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0)
-   subroutine grow_array_int_1d(array, new_size, fill_value)
+   !> @param[out]   error      Refused resize; terminates instead when absent
+   subroutine grow_array_int_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       integer, allocatable, intent(inout) :: array(:)
       !> New array size
       integer, intent(in) :: new_size
       !> Fill value for new elements
       integer, intent(in), optional :: fill_value
+      !> Refused resize, left unallocated on success
+      type(error_type), allocatable, intent(out) :: error
 
       integer :: fill
       integer, allocatable :: tmp(:)
@@ -139,10 +148,10 @@ contains
       !> Early return if array already has the requested size
       if (old_size == new_size) return
 
-      !> Error if attempting to shrink array
+      !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         ! TODO: Proper error propagration
-         error stop "grow_array_int_1d: Cannot shrink array"
+         call fatal_error(error, "grow_array_int_1d: Cannot shrink array")
+         return
       end if
 
       fill = 0
@@ -159,13 +168,16 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default .false.)
-   subroutine grow_array_logical_1d(array, new_size, fill_value)
+   !> @param[out]   error      Refused resize; terminates instead when absent
+   subroutine grow_array_logical_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       logical, allocatable, intent(inout) :: array(:)
       !> New array size
       integer, intent(in) :: new_size
       !> Fill value for new elements
       logical, intent(in), optional :: fill_value
+      !> Refused resize, left unallocated on success
+      type(error_type), allocatable, intent(out) :: error
 
       logical :: fill
       logical, allocatable :: tmp(:)
@@ -177,10 +189,10 @@ contains
       !> Early return if array already has the requested size
       if (old_size == new_size) return
 
-      !> Error if attempting to shrink array
+      !> Refuse to shrink; the array keeps its current contents and size
       if (old_size > new_size) then
-         ! TODO: Proper error propagration
-         error stop "grow_array_logical_1d: Cannot shrink array"
+         call fatal_error(error, "grow_array_logical_1d: Cannot shrink array")
+         return
       end if
 
       fill = .false.
@@ -192,10 +204,10 @@ contains
       call move_alloc(tmp, array)
    end subroutine grow_array_logical_1d
 
-   !> Filter allocated 1D real array in-place.
+   !> Filter allocated 1D real array in-place
    !>
    !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays.
+   !> Safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D real array to filter
    !> @param[in]    n      Number of elements to consider
@@ -223,10 +235,10 @@ contains
       call move_alloc(tmp, arr)
    end subroutine filter_array_real_1d
 
-   !> Filter allocated 2D real array (dim1, n) in-place.
+   !> Filter allocated 2D real array (dim1, n) in-place
    !>
    !> Compacts arr(:, 1:n) to keep only columns where keep is .true.
-   !> Processes each row independently. Safely skips unallocated arrays.
+   !> Processes each row independently. Safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 2D real array to filter
    !> @param[in]    n      Number of columns to consider
@@ -255,10 +267,10 @@ contains
       call move_alloc(tmp, arr)
    end subroutine filter_array_real_2d
 
-   !> Filter allocated 1D integer array in-place.
+   !> Filter allocated 1D integer array in-place
    !>
    !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays.
+   !> Safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D integer array to filter
    !> @param[in]    n      Number of elements to consider
@@ -286,10 +298,10 @@ contains
       call move_alloc(tmp, arr)
    end subroutine filter_array_int_1d
 
-   !> Filter allocated 1D logical array in-place.
+   !> Filter allocated 1D logical array in-place
    !>
    !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays.
+   !> Safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D logical array to filter
    !> @param[in]    n      Number of elements to consider
