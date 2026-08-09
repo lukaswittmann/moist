@@ -13,7 +13,7 @@
 !>   4. Falls back to the atom-anchor direction when the gradient is near-zero
 !>
 !> Mathematical background:
-!>   For a level-set constraint S(x) = 0, the principal curvatures are
+!>   For a level set constraint S(x) = 0, the principal curvatures are
 !>   eigenvalues of the shape operator W = -P nabla^2 S P / ||nabla S||,
 !>   where P = I - n_hat n_hat^T is the tangent-plane projector and
 !>   n_hat = nabla S / ||nabla S||.  When |kappa_i| is small, the surface
