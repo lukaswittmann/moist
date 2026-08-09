@@ -1463,17 +1463,19 @@ contains
       f = 0.0_wp
       g = 0.0_wp
 
-      task = 'START'
-      do while (task(1:2) == 'FG' .or. task(1:5) == 'NEW_X' .or. task(1:5) == 'START')
+      task = "START"
+      do while (task(1:2) == "FG" .or. task(1:5) == "NEW_X" .or. task(1:5) == "START")
          call setulb(lbfgsb_n, lbfgsb_m, x, l, u, nbd, f, g, lbfgsb_factr, lbfgsb_pgtol, &
                      wa, iwa, task, -1, csave, lsave, isave, dsave)
-         if (task(1:2) == 'FG') then
+         if (task(1:2) == "FG") then
             call lbfgsb_rosenbrock_eval(x, f, g)
-         else if (task(1:5) == 'NEW_X' .and. max_nfg > 0) then
-            if (isave(34) >= max_nfg) &
-               task = 'STOP: total f and g evaluation limit reached'
-            if (dsave(13) <= 1.0e-10_wp*(1.0_wp + abs(f))) &
-               task = 'STOP: projected gradient sufficiently small'
+         else if (task(1:5) == "NEW_X" .and. max_nfg > 0) then
+            if (isave(34) >= max_nfg) then
+              task = "STOP: total f and g evaluation limit reached"
+            end if
+            if (dsave(13) <= 1.0e-10_wp*(1.0_wp + abs(f))) then
+              task = "STOP: projected gradient sufficiently small"
+            end if
          end if
       end do
 
@@ -1974,11 +1976,11 @@ contains
       f = 0.0_wp
       g = 0.0_wp
 
-      task = 'START'
-      do while (task(1:2) == 'FG' .or. task(1:5) == 'NEW_X' .or. task(1:5) == 'START')
+      task = "START"
+      do while (task(1:2) == "FG" .or. task(1:5) == "NEW_X" .or. task(1:5) == "START")
          call setulb(n, m, x, l, u, nbd, f, g, lbfgsb_factr, lbfgsb_pgtol, &
                      wa, iwa, task, -1, csave, lsave, isave, dsave)
-         if (task(1:2) == 'FG') then
+         if (task(1:2) == "FG") then
             f = sum((x - 3.0_wp)**2)
             g = 2.0_wp*(x - 3.0_wp)
          end if
