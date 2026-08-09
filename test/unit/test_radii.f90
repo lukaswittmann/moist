@@ -66,6 +66,7 @@ contains
       type(structure_type) :: mol
       type(static_radius_type) :: model
       type(moist_error_type), allocatable :: err
+      real(wp) :: ref
       integer :: iat
 
       call make_test_molecule(mol)
@@ -83,7 +84,12 @@ contains
       end if
 
       do iat = 1, mol%nat
-         call check(error, model%f0(iat), get_radius_func(mol%num(mol%id(iat)), "cpcm"), thr=thr, &
+         ref = get_radius_func(mol%num(mol%id(iat)), "cpcm", err)
+         if (allocated(err)) then
+            call test_failed(error, "CPCM reference lookup failed: "//trim(err%message))
+            return
+         end if
+         call check(error, model%f0(iat), ref, thr=thr, &
                     more="CPCM static radii mismatch")
          if (allocated(error)) return
       end do
@@ -95,6 +101,7 @@ contains
       type(structure_type) :: mol
       type(static_radius_type) :: model
       type(moist_error_type), allocatable :: err
+      real(wp) :: ref
 
       call make_test_molecule(mol)
 
@@ -108,8 +115,12 @@ contains
          call test_failed(error, "SMD static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "smd"), thr=thr, &
-                 more="SMD radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "smd", err)
+      if (allocated(err)) then
+         call test_failed(error, "smd reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="SMD radius mismatch")
       if (allocated(error)) return
 
       call new_d3_radii(model)
@@ -122,8 +133,12 @@ contains
          call test_failed(error, "D3 static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "d3"), thr=thr, &
-                 more="D3 radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "d3", err)
+      if (allocated(err)) then
+         call test_failed(error, "d3 reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="D3 radius mismatch")
       if (allocated(error)) return
 
       call new_cosmo_radii(model)
@@ -136,8 +151,12 @@ contains
          call test_failed(error, "COSMO static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "cosmo"), thr=thr, &
-                 more="COSMO radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "cosmo", err)
+      if (allocated(err)) then
+         call test_failed(error, "cosmo reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="COSMO radius mismatch")
       if (allocated(error)) return
 
       call new_bondi_radii(model)
@@ -150,8 +169,12 @@ contains
          call test_failed(error, "Bondi static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "bondi"), thr=thr, &
-                 more="Bondi radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "bondi", err)
+      if (allocated(err)) then
+         call test_failed(error, "bondi reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="Bondi radius mismatch")
    end subroutine test_static_constructors
 
    subroutine test_constructor_verbosity(error)
