@@ -11,6 +11,9 @@
 !>     with an LSF template exactly like [[cavity_type_drop]]
 !>   - [[integrate_surface_marching_cubes]], the bare integration kernel, for
 !>     callers (benchmarks, convergence sweeps) that hold an LSF but no cavity
+!>
+!> TODO: Add actual discretization, so this can be used for PCM and other surface-based models
+!>       Advantage: The grid point are is very homogeneous so good for (open)COSMO-RS
 module moist_cavity_marchingcubes
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
