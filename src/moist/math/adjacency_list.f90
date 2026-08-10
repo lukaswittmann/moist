@@ -1,4 +1,4 @@
-!> Sparse adjacency list (neighbour list) in compressed sparse row (CSR) format.
+!> Sparse adjacency list (neighbour list) in compressed sparse row (CSR) format
 !>
 !> Provides a reusable spatial neighbour list that can be built from any set of
 !> 3D coordinates and a global interaction cutoff. Internally uses a uniform
@@ -16,18 +16,18 @@
 module moist_math_adjacency_list
    use mctc_env, only: wp, error_type
    use moist_math_sorter_quicksort, only: qsort
-   implicit none
+   implicit none (type, external)
    private
 
    public :: adjacency_list_type
 
-   !> Adjacency list in compressed sparse row (CSR) format.
+   !> Adjacency list in compressed sparse row (CSR) format
    !>
    !> For point i the neighbours are stored at
    !>   nlat( inl(i)+1 : inl(i)+nnl(i) )
    !> with corresponding center-center distances in
    !>   dist( inl(i)+1 : inl(i)+nnl(i) )
-   !> When sorted=.true., both arrays are ordered by ascending distance.
+   !> When sorted=.true., both arrays are ordered by ascending distance
    type :: adjacency_list_type
       !> Global interaction cutoff distance
       real(wp) :: cutoff = 0.0_wp
@@ -58,7 +58,10 @@ module moist_math_adjacency_list
 
 contains
 
-   !> Set the interaction cutoff. Must be called before the first update.
+   !> Set the interaction cutoff. Must be called before the first update
+   !>
+   !> Every setting is reset, so init fully defines the configuration of the list:
+   !> omitting `sorted` means unsorted, regardless of how the instance was used before
    !>
    !> @param[inout] self    Adjacency list instance
    !> @param[in]    cutoff  Global interaction cutoff distance
@@ -72,15 +75,16 @@ contains
 
       call self%destroy()
       self%cutoff = cutoff
+      self%sorted = .false.
       if (present(sorted)) self%sorted = sorted
    end subroutine adjacency_list_init
 
-   !> (Re)build the neighbour list from a coordinate array using a cell grid.
+   !> (Re)build the neighbour list from a coordinate array using a cell grid
    !>
    !> The coordinates are partitioned into a uniform cubic grid with cell side
    !> length equal to the cutoff. For each point, only the 27 surrounding cells
    !> are inspected for potential neighbours, giving O(N*k) total cost where k
-   !> is the average neighbour count. Self-pairs (i==i) are excluded.
+   !> is the average neighbour count. Self-pairs (i==i) are excluded
    !>
    !> @param[inout] self  Adjacency list instance (cutoff must be set)
    !> @param[in]    xyz   Coordinate array (3, npoints)
@@ -121,7 +125,7 @@ contains
          return
       end if
 
-      ! --- Build uniform cell grid ---
+      ! Build uniform cell grid
 
       ! Compute bounding box
       xmin = xyz(1, 1); xmax = xyz(1, 1)
@@ -158,7 +162,7 @@ contains
          head(ic) = i
       end do
 
-      ! --- Count pass: determine nnl(i) for each point ---
+      ! Count pass: determine nnl(i) for each point
 
       do i = 1, npoints
          xi = xyz(1, i)
@@ -201,7 +205,7 @@ contains
          end do
       end do
 
-      ! --- Prefix sum: compute inl from nnl ---
+      ! Prefix sum: compute inl from nnl
 
       img = 0
       do i = 1, npoints
@@ -215,7 +219,7 @@ contains
       ! Reset nnl for the fill pass (reuse as running counter)
       self%nnl = 0
 
-      ! --- Fill pass: store neighbour indices and distances ---
+      ! Fill pass: store neighbour indices and distances
 
       do i = 1, npoints
          xi = xyz(1, i)
@@ -258,7 +262,7 @@ contains
          end do
       end do
 
-      ! --- Optionally sort each point's neighbours by ascending distance ---
+      ! Optionally sort each point's neighbours by ascending distance
       if (self%sorted) then
          block
             type(error_type), allocatable :: sort_error
@@ -268,6 +272,11 @@ contains
                      self%dist(self%inl(i) + 1:self%inl(i) + self%nnl(i)), &
                      self%nlat(self%inl(i) + 1:self%inl(i) + self%nnl(i)), &
                      sort_error)
+                  ! qsort only fails on a companion-array size mismatch,
+                  ! which cannot happen here, still TODO: add errorprop.
+                  if (allocated(sort_error)) then
+                     error stop "adjacency_list: dist/nlat slice bounds diverged"
+                  end if
                end if
             end do
          end block
@@ -277,7 +286,7 @@ contains
 
    end subroutine adjacency_list_update
 
-   !> Return the neighbour indices for point i as an integer array.
+   !> Return the neighbour indices for point i as an integer array
    !>
    !> @param[in] self  Adjacency list instance
    !> @param[in] i     Query point index
@@ -290,7 +299,7 @@ contains
       ids = self%nlat(self%inl(i) + 1:self%inl(i) + self%nnl(i))
    end function adjacency_list_get_neighbours
 
-   !> Deallocate all storage.
+   !> Deallocate all storage
    !>
    !> @param[inout] self  Adjacency list instance
    subroutine adjacency_list_destroy(self)
