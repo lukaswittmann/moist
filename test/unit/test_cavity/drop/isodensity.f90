@@ -24,7 +24,7 @@
 !> Geoms from mstore, the bases and converged density matrices from the reference
 !> files in `test/unit/data` (generated using PySCF)
 module test_cavity_drop_isodensity
-   use, intrinsic :: iso_c_binding, only: c_double, c_ptr, c_null_ptr, c_funloc, &
+   use, intrinsic :: iso_c_binding, only: c_double, c_int, c_ptr, c_null_ptr, c_funloc, &
                                           c_associated, c_f_pointer
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -974,9 +974,10 @@ contains
    !> @param[in]  point   Evaluation point in Bohr
    !> @param[out] value   Level set value
    !> @param[out] grad    Level set spatial gradient
-   !> @param[out] hess    Level set spatial Hessian (double[3][3] or NULL)
-   !> @param[out] third   Level set third spatial derivative (double[3][3][3] or NULL)
-   subroutine iso_reference_callback(context, point, value, grad, hess, third) bind(C)
+   !> @param[out] hess    Level set spatial Hessian (Fortran (3,3), or NULL)
+   !> @param[out] third   Level set third spatial derivative (Fortran (3,3,3), or NULL)
+   !> @returns            0 (this reference implementation never fails)
+   function iso_reference_callback(context, point, value, grad, hess, third) result(status) bind(C)
       !> Unused callback context (the test keeps its data in module state)
       type(c_ptr), value :: context
       !> Evaluation point in Bohr
@@ -985,15 +986,18 @@ contains
       real(c_double), intent(out) :: value
       !> Level set spatial gradient
       real(c_double), intent(out) :: grad(3)
-      !> Level set spatial Hessian (double[3][3] or NULL)
+      !> Level set spatial Hessian (Fortran (3,3), or NULL)
       type(c_ptr), value :: hess
-      !> Level set third spatial derivative (double[3][3][3] or NULL)
+      !> Level set third spatial derivative (Fortran (3,3,3), or NULL)
       type(c_ptr), value :: third
+      !> Zero on success
+      integer(c_int) :: status
 
       real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
       real(wp) :: rho, drho(3), d2rho(3, 3), d3rho(3, 3, 3)
       logical :: want_hess, want_third
 
+      status = 0_c_int
       if (c_associated(context)) return
       want_hess = c_associated(hess)
       want_third = c_associated(third)
@@ -1010,7 +1014,7 @@ contains
          call c_f_pointer(third, tptr, [3, 3, 3])
          tptr = real(-d3rho, c_double)
       end if
-   end subroutine iso_reference_callback
+   end function iso_reference_callback
 
    !> Build the internal isodensity LSF over the module reference density
    !>
@@ -1117,6 +1121,7 @@ contains
       real(wp) :: v_c, g_c(3), h_c(3, 3)
       real(wp), allocatable :: t_i(:, :, :), t_c(:, :, :)
       real(wp) :: dev_val, dev_grad, dev_hess, dev_third, scale_ref
+      type(mctc_error), allocatable :: lsf_err
       integer :: ip
 
       !> Roundoff-limited thresholds include headroom for the different summation
@@ -1142,12 +1147,20 @@ contains
       dev_third = 0.0_wp
       scale_ref = 0.0_wp
       do ip = 1, size(pts, 2)
-         call lsf_int%prepare(pts(:, ip))
+         call lsf_int%prepare(pts(:, ip), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
+            return
+         end if
          call lsf_int%f0_screened(v0_i)
          call lsf_int%f012_r_screened(v01_i, g01_i)
          call lsf_int%f012_r_screened(v012_i, g012_i, h012_i)
          call lsf_int%f3_rrr_screened(v_i, g_i, h_i, t_i)
-         call lsf_cb%prepare(pts(:, ip))
+         call lsf_cb%prepare(pts(:, ip), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
+            return
+         end if
          call lsf_cb%f0_screened(v0_c)
          call lsf_cb%f012_r_screened(v01_c, g01_c)
          call lsf_cb%f012_r_screened(v012_c, g012_c, h012_c)
@@ -1211,6 +1224,7 @@ contains
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v1, g1(3)
       real(wp) :: v2, g2(3), h2(3, 3)
+      type(mctc_error), allocatable :: lsf_err
       integer :: test, ip
       logical :: any_nonzero
 
@@ -1223,14 +1237,18 @@ contains
          do ip = 1, size(pts, 2)
             !> Value+gradient only: the Hessian is deliberately not requested.
             call lsf%set_max_deriv(1)
-            call lsf%prepare(pts(:, ip))
+            call lsf%prepare(pts(:, ip), lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
+               return
+            end if
             call check(error, lsf%prepared_deriv, 1, &
                        more="internal molecular test cached the wrong order at max_deriv=1")
             if (allocated(error)) return
             call lsf%f012_r_screened(v1, g1)
 
             call lsf%set_max_deriv(2)
-            call lsf%prepare(pts(:, ip))
+            call lsf%prepare(pts(:, ip), lsf_err)
             call check(error, lsf%prepared_deriv, 2, &
                        more="internal molecular test cached the wrong order at max_deriv=2")
             if (allocated(error)) return
@@ -1259,6 +1277,7 @@ contains
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v1, g1(3)
       real(wp) :: v2, g2(3), h2(3, 3)
+      type(mctc_error), allocatable :: lsf_err
       integer :: ip
       logical :: any_nonzero
 
@@ -1271,14 +1290,22 @@ contains
       do ip = 1, size(pts, 2)
          !> Value+gradient only: the Hessian is deliberately not requested.
          call lsf%set_max_deriv(1)
-         call lsf%prepare(pts(:, ip))
+         call lsf%prepare(pts(:, ip), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
+            return
+         end if
          call check(error, lsf%prepared_deriv, 1, &
                     more="callback isodensity LSF cached the wrong order at max_deriv=1")
          if (allocated(error)) return
          call lsf%f012_r_screened(v1, g1)
 
          call lsf%set_max_deriv(2)
-         call lsf%prepare(pts(:, ip))
+         call lsf%prepare(pts(:, ip), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
+            return
+         end if
          call check(error, lsf%prepared_deriv, 2, &
                     more="callback isodensity LSF cached the wrong order at max_deriv=2")
          if (allocated(error)) return
@@ -1351,6 +1378,7 @@ contains
       real(wp) :: v_s, g_s(3), h_s(3, 3)
       real(wp), allocatable :: t_e(:, :, :), t_s(:, :, :)
       real(wp) :: far_pts(3, 4), centroid(3), extent
+      type(mctc_error), allocatable :: lsf_err
       real(wp), parameter :: THR_SCREEN = 1.0e-12_wp
       real(wp), parameter :: SCREEN_TOL = 1.0e-14_wp
       !> Signed clearance of each far point beyond the molecular extent, in Bohr
@@ -1383,9 +1411,13 @@ contains
 
          call get_test_points(mol, pts, 12)
          do ip = 1, size(pts, 2)
-            call lsf_exact%prepare(pts(:, ip))
+            call lsf_exact%prepare(pts(:, ip), lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
+               return
+            end if
             call lsf_exact%f3_rrr_screened(v_e, g_e, h_e, t_e)
-            call lsf_screened%prepare(pts(:, ip))
+            call lsf_screened%prepare(pts(:, ip), lsf_err)
             call lsf_screened%f3_rrr_screened(v_s, g_s, h_s, t_s)
 
             call check(error, abs(v_e - v_s), 0.0_wp, thr=THR_SCREEN, &
@@ -1413,9 +1445,13 @@ contains
                              + sign(extent + abs(far_clearance(ip)), far_clearance(ip))
          end do
          do ip = 1, size(far_pts, 2)
-            call lsf_exact%prepare(far_pts(:, ip))
+            call lsf_exact%prepare(far_pts(:, ip), lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
+               return
+            end if
             call lsf_exact%f3_rrr_screened(v_e, g_e, h_e, t_e)
-            call lsf_screened%prepare(far_pts(:, ip))
+            call lsf_screened%prepare(far_pts(:, ip), lsf_err)
             call lsf_screened%f3_rrr_screened(v_s, g_s, h_s, t_s)
 
             call check(error, abs(v_e - v_s), 0.0_wp, thr=THR_SCREEN, &
