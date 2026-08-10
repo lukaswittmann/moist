@@ -6,8 +6,14 @@ program tester
    use testdrive, only : run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
    use test_utils, only : collect_utils
+   use test_utils_timer, only : collect_utils_timer
+   use test_utils_context, only : collect_utils_context
+   use test_utils_mem, only : collect_utils_mem
+   use test_utils_prettylistprint, only : collect_utils_prettylistprint
    use test_radii, only : collect_radii
+   use test_data, only : collect_data
    use test_math_linalg, only : collect_math_linalg
+   use test_math_smoothing_kernels, only : collect_math_smoothing_kernels
    use test_math_adjacency_list, only : collect_math_adjacency_list
    use test_math_cell_grid, only : collect_math_cell_grid
    use test_math_sorters, only : collect_math_sorters
@@ -15,23 +21,28 @@ program tester
    use test_math_grid, only : collect_math_grid
    use test_cavity_iswig, only : collect_cavity_iswig
    use test_cavity_drop_primitives, only : collect_cavity_drop_primitives
-   use test_cavity_drop_cfc_kernel, only : collect_cavity_drop_cfc_kernel
+   use test_cavity_drop_cfc, only : collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only : collect_cavity_drop_lsf
-   use test_cavity_drop_gradients, only : collect_cavity_drop_gradients
+   use test_cavity_drop_isodensity, only : collect_cavity_drop_isodensity
+   use test_cavity_drop_gradient, only : collect_cavity_drop_gradient
    use test_cavity_drop_cpcm, only : collect_cavity_drop_cpcm
    use test_cavity_numsa, only : collect_cavity_numsa
+   use test_cavity_marchingcubes, only : collect_cavity_marchingcubes
    use test_math_solvers, only : collect_math_solvers
-#ifdef WITH_RISM
-   ! use test_rism_1d, only : collect_rism_1d
-   ! use test_rism_thermo, only : collect_rism_thermo
-#endif
 #ifdef WITH_HDF5
    use test_utils_hdf5, only : collect_utils_hdf5
 #endif
-   use test_cavity_drop_integration_ref, only : collect_cavity_drop_integration_ref
-   use test_component_pcm_cpcm, only : collect_component_pcm_cpcm
+   use test_cavity_drop_integration, only : collect_cavity_drop_integration
+   use test_model_component_pcm_amat, only : collect_model_component_pcm_amat
+   use test_model_component_pcm_amat_kernel, only : collect_model_component_pcm_amat_kernel
+   use test_model_component_pcm_amat_assembly, only : collect_model_component_pcm_amat_assembly
+   use test_model_component_pcm_amat_adjoint, only : collect_model_component_pcm_amat_adjoint
+   use test_model_component_pcm_electrostatics, only : collect_model_component_pcm_electrostatics
+   use test_model_component_pcm_cpcm, only : collect_model_component_pcm_cpcm
+   use test_model_component_pv, only : collect_model_component_pv
+   use test_model_general, only : collect_model_general
 
-implicit none
+implicit none (type, external)
 
    integer :: stat, is
    character(len=:), allocatable :: suite_name, test_name
@@ -41,16 +52,15 @@ implicit none
    stat = 0
 
    testsuites = [ &
-#ifdef WITH_HDF5
-      & new_testsuite("utils_hdf5", collect_utils_hdf5), &
-#endif
-#ifdef WITH_RISM
-      ! & new_testsuite("rism_1d", collect_rism_1d), &
-      ! & new_testsuite("rism_thermo", collect_rism_thermo), &
-#endif
       & new_testsuite("utils", collect_utils), &
+      & new_testsuite("utils_timer", collect_utils_timer), &
+      & new_testsuite("utils_context", collect_utils_context), &
+      & new_testsuite("utils_mem", collect_utils_mem), &
+      & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
       & new_testsuite("radii", collect_radii), &
+      & new_testsuite("data", collect_data), &
       & new_testsuite("math_linalg", collect_math_linalg), &
+      & new_testsuite("math_smoothing_kernels", collect_math_smoothing_kernels), &
       & new_testsuite("math_adjacency_list", collect_math_adjacency_list), &
       & new_testsuite("math_cell_grid", collect_math_cell_grid), &
       & new_testsuite("math_solvers", collect_math_solvers), &
@@ -59,15 +69,31 @@ implicit none
       & new_testsuite("math_grid", collect_math_grid), &
 
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
-      & new_testsuite("cavity_drop_cfc_kernel", collect_cavity_drop_cfc_kernel), &
+      & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
-      & new_testsuite("cavity_drop_gradients", collect_cavity_drop_gradients), &
-      & new_testsuite("cavity_drop_integration_ref", collect_cavity_drop_integration_ref), &
+      & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
+      & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
+      & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
-      & new_testsuite("component_pcm_cpcm", collect_component_pcm_cpcm) &
+      & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &
+      & new_testsuite("model_component_pcm_amat", collect_model_component_pcm_amat), &
+      & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
+      & new_testsuite("model_component_pcm_amat_assembly", &
+         collect_model_component_pcm_amat_assembly), &
+      & new_testsuite("model_component_pcm_amat_adjoint", &
+         collect_model_component_pcm_amat_adjoint), &
+      & new_testsuite("model_component_pcm_electrostatics", &
+         collect_model_component_pcm_electrostatics), &
+      & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
+      & new_testsuite("model_component_pv", collect_model_component_pv), &
+      & new_testsuite("model_general", collect_model_general) &
       & ]
+
+#ifdef WITH_HDF5
+   testsuites = [testsuites, new_testsuite("utils_hdf5", collect_utils_hdf5)]
+#endif
 
    call get_argument(1, suite_name)
    call get_argument(2, test_name)
