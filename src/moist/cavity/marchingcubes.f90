@@ -484,8 +484,9 @@ contains
       allocate (self%total_volume)
 
       call self%ctx%timer%start("Marching cubes", category=cat_properties)
-      call integrate_marching_cubes_export(self)
+      call integrate_marching_cubes_export(self, error)
       call self%ctx%timer%stop("Marching cubes")
+      if (allocated(error)) return
 
    end subroutine update_cavity_marchingcubes
 
@@ -495,30 +496,32 @@ contains
    !> so the four combinations have to be dispatched explicitly.
    !>
    !> @param[inout] self  Cavity instance holding the LSF and the output slots
-   subroutine integrate_marching_cubes_export(self)
+   !> @param[out]   error LSF evaluation failure raised by the integrator
+   subroutine integrate_marching_cubes_export(self, error)
       class(cavity_type_marchingcubes), intent(inout) :: self
+      type(error_type), allocatable, intent(out) :: error
 
       if (allocated(self%obj_file) .and. allocated(self%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
-                                               self%total_area, self%total_volume, &
+                                               self%total_area, self%total_volume, error, &
                                                target_spacing=self%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
                                                obj_file=self%obj_file, pqr_file=self%pqr_file)
       else if (allocated(self%obj_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
-                                               self%total_area, self%total_volume, &
+                                               self%total_area, self%total_volume, error, &
                                                target_spacing=self%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
                                                obj_file=self%obj_file)
       else if (allocated(self%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
-                                               self%total_area, self%total_volume, &
+                                               self%total_area, self%total_volume, error, &
                                                target_spacing=self%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
                                                pqr_file=self%pqr_file)
       else
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
-                                               self%total_area, self%total_volume, &
+                                               self%total_area, self%total_volume, error, &
                                                target_spacing=self%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug)
       end if
@@ -603,11 +606,13 @@ contains
    !> @param[in]  verbosity       Verbosity level; >=2 enables progress output (optional)
    !> @param[in]  obj_file        Wavefront OBJ mesh output path (optional)
    !> @param[in]  pqr_file        PQR file output path with triangle centroids (optional)
-   subroutine integrate_surface_marching_cubes(lsf, xyz, area, volume, &
+   !> @param[out] error           LSF evaluation failure; area/volume are invalid
+   subroutine integrate_surface_marching_cubes(lsf, xyz, area, volume, error, &
                                                target_spacing, debug, verbosity, obj_file, pqr_file)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       real(wp), intent(in) :: xyz(:, :)
       real(wp), intent(out) :: area, volume
+      type(error_type), allocatable, intent(out) :: error
       real(wp), intent(in), optional :: target_spacing
       logical, intent(in), optional :: debug
       integer, intent(in), optional :: verbosity
@@ -670,6 +675,9 @@ contains
       type(mc_tri_buffer_type) :: loc_buf, all_tris
       !> Saved buffer position for save/restore during refinement comparison
       integer :: saved_pos
+      !> Per-thread LSF evaluation failure and the loop-wide abort it triggers
+      type(error_type), allocatable :: lsf_error
+      logical :: abort_requested
 
       spacing = 0.2_wp
       if (present(target_spacing)) spacing = target_spacing
@@ -706,24 +714,46 @@ contains
 
       ! Pre-compute LSF values on the (nx+1)*(ny+1)*(nz+1) vertex grid
       allocate (grid_vals(0:nx, 0:ny, 0:nz))
+      abort_requested = .false.
       !$omp parallel default(none) &
-      !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz) &
-      !$omp& private(lsf_priv, ptmp, ix, iy, iz)
+      !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz, &
+      !$omp&        abort_requested, error) &
+      !$omp& private(lsf_priv, ptmp, ix, iy, iz, lsf_error)
       allocate (lsf_priv, source=lsf)
       call lsf_priv%set_max_deriv(0)
       !$omp do collapse(3) schedule(dynamic)
       do iz = 0, nz
          do iy = 0, ny
             do ix = 0, nx
+               if (abort_requested) cycle
                ptmp = grid_min + coarse_spacing &
                       *real([ix, iy, iz], wp)
-               call lsf_priv%prepare(ptmp)
+               call lsf_priv%prepare(ptmp, lsf_error)
+               ! The failure cannot be returned from inside this worksharing
+               ! construct, so hand it to the shared `error` slot and let the
+               ! flag drain the loop.
+               if (allocated(lsf_error)) then
+                  !$omp critical (marchingcubes_abort)
+                  if (.not. abort_requested) then
+                     abort_requested = .true.
+                     call move_alloc(lsf_error, error)
+                  end if
+                  !$omp end critical (marchingcubes_abort)
+                  cycle
+               end if
                call lsf_priv%f0_screened(grid_vals(ix, iy, iz))
             end do
          end do
       end do
       !$omp end do
       !$omp end parallel
+
+      if (abort_requested) then
+         deallocate (grid_vals)
+         area = 0.0_wp
+         volume = 0.0_wp
+         return
+      end if
 
       ! Initialise counters
       area = 0.0_wp
@@ -770,8 +800,9 @@ contains
       !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, &
       !$omp&        max_level, min_spacing, local_stack_size, &
       !$omp&        n_coarse_total, n_coarse_done, progress_interval, &
-      !$omp&        dbg, wall_start, plp_mc, export_mesh, all_tris) &
-      !$omp& private(lsf_priv, loc_stack, loc_top, ix, iy, iz, cube, &
+      !$omp&        dbg, wall_start, plp_mc, export_mesh, all_tris, &
+      !$omp&        abort_requested, error) &
+      !$omp& private(lsf_priv, loc_stack, loc_top, ix, iy, iz, cube, lsf_error, &
       !$omp&         mid, sub_vals, sub_min, sub_max, sub_area, sub_vol, &
       !$omp&         coarse_area, coarse_vol, coarse_tri, sub_tri, do_refine, &
       !$omp&         all_pos, all_neg, center_val, spacing_here, child, &
@@ -792,6 +823,7 @@ contains
       do iz = 1, nz
          do iy = 1, ny
             do ix = 1, nx
+               if (abort_requested) cycle
                ! Build initial cube from cached vertex grid
                minp_cell = grid_min &
                            + coarse_spacing*real([ix - 1, iy - 1, iz - 1], wp)
@@ -820,7 +852,17 @@ contains
 
                   all_pos = all(cube%vals > 0.0_wp)
                   all_neg = all(cube%vals < 0.0_wp)
-                  call lsf_priv%prepare(mid)
+                  call lsf_priv%prepare(mid, lsf_error)
+                  if (allocated(lsf_error)) then
+                     !$omp critical (marchingcubes_abort)
+                     if (.not. abort_requested) then
+                        abort_requested = .true.
+                        call move_alloc(lsf_error, error)
+                     end if
+                     !$omp end critical (marchingcubes_abort)
+                     loc_top = 0
+                     cycle
+                  end if
                   call lsf_priv%f0_screened(center_val)
                   if (all_pos .and. center_val < 0.0_wp) then
                      all_pos = .false.
@@ -860,7 +902,17 @@ contains
 
                      call subdivide_cube(cube%minp, cube%maxp, mid, &
                                          cube%vals, sub_min, sub_max, sub_vals, &
-                                         lsf_priv)
+                                         lsf_priv, lsf_error)
+                     if (allocated(lsf_error)) then
+                        !$omp critical (marchingcubes_abort)
+                        if (.not. abort_requested) then
+                           abort_requested = .true.
+                           call move_alloc(lsf_error, error)
+                        end if
+                        !$omp end critical (marchingcubes_abort)
+                        loc_top = 0
+                        cycle
+                     end if
 
                      sub_area = 0.0_wp
                      sub_vol = 0.0_wp
@@ -1076,13 +1128,15 @@ contains
    !> @param[out] sub_vals     LSF values at corners of the 8 child cubes
    !> @param[in]  lsf          LSF level set function primitive
    subroutine subdivide_cube(minp, maxp, mid, parent_vals, sub_min, sub_max, &
-                             sub_vals, lsf)
+                             sub_vals, lsf, error)
       real(wp), intent(in) :: minp(3), maxp(3), mid(3)
       !> LSF values at the 8 parent corners (standard MC ordering)
       real(wp), intent(in) :: parent_vals(8)
       real(wp), intent(out) :: sub_min(3, 8), sub_max(3, 8)
       real(wp), intent(out) :: sub_vals(8, 8)
       class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> LSF evaluation failure at one of the 19 new points
+      type(error_type), allocatable, intent(out) :: error
 
       !> Bit patterns for the 8 corners of a cube in standard MC order
       integer, parameter :: cbits(3, 8) = reshape([ &
@@ -1113,7 +1167,8 @@ contains
                if (mod(i, 2) == 0 .and. mod(j, 2) == 0 &
                    .and. mod(k, 2) == 0) cycle
                p = [coords(1, i), coords(2, j), coords(3, k)]
-               call lsf%prepare(p)
+               call lsf%prepare(p, error)
+               if (allocated(error)) return
                call lsf%f0_screened(cache(i, j, k))
             end do
          end do
