@@ -14,7 +14,6 @@ module moist_radii
 
    public :: radius_type
    public :: static_radius_type
-   public :: draco_radius_type
    public :: custom_radius_type
    public :: new_cpcm_radii
    public :: new_smd_radii
