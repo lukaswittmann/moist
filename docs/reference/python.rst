@@ -12,7 +12,7 @@ Python API
    pyscf
 
 
-Library interface
+Library Interface
 -----------------
 
 .. automodule:: moist.interface

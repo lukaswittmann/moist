@@ -13,7 +13,7 @@ The MOIST library seamlessly integrates with other Fortran projects via module i
    Full Reference <https://moist.github.io/moist>
 
 
-Handling of geometries and structure
+Handling of Geometries and Structure
 ------------------------------------
 
 The basic infrastructure to handle molecular and periodic structures is provided by the `modular computation tool chain library <https://github.com/grimme-lab/mctc-lib>`_.
@@ -84,7 +84,7 @@ To change those specific structure parameters the structure type and all depende
 Other properties, like the geometry (``xyz``), molecular charge (``charge``), number of unpaired electrons (``uhf``) and lattice parameters (``lattice``) can be changed without requiring to reconstruct dependent objects like calculators or restart data.
 
 
-Error handling
+Error Handling
 --------------
 
 The basic error handler is an allocatable derived type, available from ``mctc_env`` as ``error_type``, which signals an error by its allocation status.

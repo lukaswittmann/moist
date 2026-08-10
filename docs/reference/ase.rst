@@ -1,4 +1,4 @@
-ASE integration
+ASE Integration
 ===============
 
 .. note::

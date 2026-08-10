@@ -1,4 +1,4 @@
-PySCF integration
+PySCF Integration
 =================
 
 .. note::
