@@ -1,4 +1,4 @@
-!> COSMO Fine Cavity (CFC) level-set function
+!> COSMO Fine Cavity (CFC) level set function
 !>
 !> Concrete LSF implementing the Diedenhofen & Klamt 2018 pseudo-density
 !>   PD(r) = sum_a   exp{ a1 (s_a - 1) }                                     (atomic)
