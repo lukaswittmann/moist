@@ -272,7 +272,12 @@ contains
                   work=works(thread_slot) &
                   )
 
-               if (allocated(proj_error)) then
+               ! An LSF evaluation failure invalidates the whole build
+               if (allocated(projectors(thread_slot)%lsf_error)) then
+                  call move_alloc(projectors(thread_slot)%lsf_error, &
+                                  thread_error(thread_slot)%e)
+                  append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
+               else if (allocated(proj_error)) then
                   !$omp critical (projection_warning_print)
                   print "(a,i0)", "Warning: Projection failed for gridpoint ", i
                   print "(a)", proj_error%message
@@ -557,6 +562,8 @@ contains
       real(wp) :: y1(3), y2(3), cross_prod(3), J_i
 
       logical :: abort_requested
+      !> Per-thread LSF evaluation failure, promoted into `error` under a critical
+      type(error_type), allocatable :: lsf_error
 
       ! Tangent-restricted KKT diagnostics (debug only)
       logical :: do_diag
@@ -596,7 +603,8 @@ contains
       !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, igrid, proj_point, &
       !$omp& anchor_point, lambda_val, lsf0, A, g_vec, g_norm_sq, g_norm, n_surf, q1, q2, &
       !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
-      !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i)
+      !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
+      !$omp& lsf_error)
       thread_slot = omp_get_thread_num() + 1
 
       !$omp do schedule(dynamic)
@@ -615,7 +623,21 @@ contains
          lambda_val = self%lambda0(igrid)
 
          ! Compute SSD on-the-fly for this point
-         call lsf_threads(thread_slot)%lsf%prepare(proj_point)
+         call lsf_threads(thread_slot)%lsf%prepare(proj_point, lsf_error)
+
+         ! The failure cannot be returned from inside this worksharing construct,
+         ! so hand it to the shared `error` slot and let the flag drain the loop.
+         ! The LSF's cached derivatives are substitutes; stop before reading them.
+         if (allocated(lsf_error)) then
+            !$omp critical (compute_cpjac_abort)
+            if (.not. abort_requested) then
+               abort_requested = .true.
+               call move_alloc(lsf_error, error)
+            end if
+            !$omp end critical (compute_cpjac_abort)
+            !$omp cancel do
+            cycle
+         end if
 
          ! Compute lsf derivatives
          call lsf_threads(thread_slot)%lsf%f012_r_screened(lsf0, &

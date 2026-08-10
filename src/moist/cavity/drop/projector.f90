@@ -154,6 +154,9 @@ module moist_cavity_drop_projector
       real(wp) :: cached_ssd_point(3) = [huge(0.0_wp), huge(0.0_wp), huge(0.0_wp)]
       logical :: ssd_cache_valid = .false.
 
+      !> LSF evaluation failure seen during the current `project_point`
+      type(error_type), allocatable :: lsf_error
+
       !> Cache for SLSQP callbacks (reuse phi computation across objective/gradient/constraint)
       real(wp) :: cached_phi0 = 0.0_wp
       real(wp) :: cached_phi1_r(3)
@@ -466,9 +469,13 @@ contains
              point(3) == self%cached_ssd_point(3)) return
       end if
 
+      ! The LSF already reported it cannot evaluate at some point of this solve
+      if (allocated(self%lsf_error)) return
+
       call self%mol_cell_grid%query(point, start, n)
       call self%lsf%prepare_subset(point, &
-                                   self%mol_cell_grid%cell_nlat(start + 1:start + n))
+                                   self%mol_cell_grid%cell_nlat(start + 1:start + n), &
+                                   self%lsf_error)
 
       self%cached_ssd_point(:) = point(:)
       self%ssd_cache_valid = .true.
@@ -570,6 +577,14 @@ contains
       class default
          return
       end select
+
+      ! The LSF failed and now serves substitute values
+      if (associated(ctx%projector)) then
+         if (allocated(ctx%projector%lsf_error)) then
+            stop_solver = .true.
+            return
+         end if
+      end if
 
       ! Only check if threshold is set (> 0)
       if (ctx%threshold <= 0.0_wp) return
@@ -1394,6 +1409,7 @@ contains
       n_points = 0
       call work%clear()
       self%ssd_cache_valid = .false.
+      if (allocated(self%lsf_error)) deallocate (self%lsf_error)
 
       level = self%proj_level
       if (present(proj_level)) level = proj_level

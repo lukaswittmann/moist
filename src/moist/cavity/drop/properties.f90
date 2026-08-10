@@ -261,6 +261,9 @@ contains
       real(wp) :: g_norm, g_norm_sq, inv_g_norm
       real(wp) :: n_vec(3), t1(3), t2(3), Ht1(3), Ht2(3)
       real(wp) :: S11, S12, S22, half_trace, half_diff, disc
+      !> Loop-wide abort request and the LSF evaluation failure that caused it
+      logical :: abort_requested
+      type(error_type), allocatable :: lsf_error, abort_lsf_error
 
       ! Initialize curvature arrays
       if (allocated(self%k1)) deallocate (self%k1)
@@ -283,17 +286,30 @@ contains
          call lsf_threads(thread_slot)%lsf%set_max_deriv(2)
       end do
 
+      abort_requested = .false.
+
       !$omp parallel do default(shared) &
       !$omp& private(igrid, thread_slot, lsf0_loc, lsf1_r_loc, lsf2_rr_loc, &
       !$omp&   g_vec, H_mat, g_norm, g_norm_sq, inv_g_norm, &
       !$omp&   n_vec, t1, t2, Ht1, Ht2, &
-      !$omp&   S11, S12, S22, half_trace, half_diff, disc) &
+      !$omp&   S11, S12, S22, half_trace, half_diff, disc, lsf_error) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
+         if (abort_requested) cycle
          thread_slot = omp_get_thread_num() + 1
 
          ! Compute SSD on-the-fly and evaluate LSF gradient (g) and Hessian (H)
-         call lsf_threads(thread_slot)%lsf%prepare(self%xyz(:, igrid))
+         call lsf_threads(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)
+         if (allocated(lsf_error)) then
+            !$omp critical (compute_curvature_abort)
+            if (.not. abort_requested) then
+               call move_alloc(lsf_error, abort_lsf_error)
+               abort_requested = .true.
+            end if
+            !$omp end critical (compute_curvature_abort)
+            cycle
+         end if
+
          call lsf_threads(thread_slot)%lsf%f012_r_screened( &
             lsf0_loc, lsf1_r_loc, lsf2_rr_loc)
 
@@ -359,6 +375,11 @@ contains
       end do
       !$omp end parallel do
 
+      if (abort_requested) then
+         call move_alloc(abort_lsf_error, error)
+         return
+      end if
+
    end subroutine compute_curvature
 
    !* ================================================================================= *!
@@ -418,7 +439,10 @@ contains
       allocate (lsf, source=self%lsf_model)
 
       do i = 1, ngrid
-         call lsf%prepare(self%xyz(:, i))
+         ! Serial loop, so an evaluation failure can be returned immediately
+         ! (see the parallel loops for the general contract).
+         call lsf%prepare(self%xyz(:, i), error)
+         if (allocated(error)) return
          call lsf%f012_r_screened(lsf0=S_val, lsf1_r=grad_S)
          s_vals(i) = abs(S_val)
          grad_s_norms(i) = sqrt(dot_product(grad_S, grad_S))
