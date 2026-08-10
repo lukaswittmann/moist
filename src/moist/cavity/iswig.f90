@@ -188,8 +188,10 @@ contains
    !> The area and volume gradients differ only in the weight applied:
    !>   area:   dA/ds  = sum_p  R^2 * w * (df/ds)
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
-   subroutine compute_gradient_iswig(self)
+   subroutine compute_gradient_iswig(self, error)
       class(cavity_type_iswig), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
       integer :: nsph, ip, iat, jat, iaxis
       real(wp) :: weight, zeta, r_own

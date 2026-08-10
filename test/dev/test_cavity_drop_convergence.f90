@@ -369,7 +369,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cavity%get_gradient()
+      call cavity%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       do iat = 1, mol%nat
          do idir = 1, ndim
@@ -418,7 +422,11 @@ contains
             call test_failed(error, cavity_error%message)
             return
          end if
-         call cavity%get_gradient()
+         call cavity%get_gradient(cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
 
          do iat = 1, mol%nat
             do idir = 1, ndim

@@ -223,10 +223,12 @@ contains
 !>
 !> where $A_{\mathrm{tot}} = \sum_i A_i$ is the total surface area.
 !>
-!> @param[inout] self The cavity object with cached gradients
-   subroutine compute_area_gradient_numsa(self)
+!> @param[inout] self  The cavity object with cached gradients
+!> @param[out]   error Error handling
+   subroutine compute_area_gradient_numsa(self, error)
       class(cavity_type_numsa), intent(inout) :: self
-      type(error_type), allocatable :: error
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
       ! area_grad already prepared during update; ensure allocated
       if (.not. allocated(self%area_grad)) then
          call fatal_error(error, "Area gradient requested before cavity update in numsa cavity.")

@@ -416,9 +416,9 @@ contains
          return
       end if
 
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
 
-      call check(error, allocated(cav%error), &
+      call check(error, allocated(cavity_error), &
          & more="Marching cubes must report that it has no analytic gradients")
       if (allocated(error)) return
 

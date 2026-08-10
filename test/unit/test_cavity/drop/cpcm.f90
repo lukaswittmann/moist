@@ -111,9 +111,9 @@ contains
          return
       end if
 
-      call cavity%get_gradient()
-      if (allocated(cavity%error)) then
-         call test_failed(error, cavity%error%message)
+      call cavity%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
          return
       end if
 
@@ -229,9 +229,9 @@ contains
       allocate (numbering_ref(ngrid))
       numbering_ref = cavity%numbering(1:ngrid)
 
-      call cavity%get_gradient()
-      if (allocated(cavity%error)) then
-         call test_failed(error, cavity%error%message)
+      call cavity%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
          return
       end if
 
@@ -617,7 +617,11 @@ contains
       end do
 
       !> Get analytic geometry derivatives.
-      call cavity%get_gradient()
+      call cavity%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       !> Assemble A matrix and its gradient
       allocate (Amat0(ngrid, ngrid), Amat1_rA(ndim, mol%nat, ngrid, ngrid))

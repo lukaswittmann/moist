@@ -287,7 +287,11 @@ contains
          call test_failed(error, "surface construction failed: "//err%message)
          return
       end if
-      call cavity%get_gradient()
+      call cavity%get_gradient(err)
+      if (allocated(err)) then
+         call test_failed(error, "forward gradient failed: "//err%message)
+         return
+      end if
 
       ngrid = cavity%ngrid
       nsph = cavity%nsph

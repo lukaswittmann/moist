@@ -80,9 +80,6 @@ module moist_type
       !> Nuclear derivatives of surface point volumes (3, nsph, ngrid).
       !> Contracting over the grid gives the total-volume nuclear gradient.
       real(wp), allocatable :: v1_rA(:, :, :)
-
-      !> Error handling
-      type(error_type), allocatable :: error
    contains
       procedure(update_cavity), deferred :: update
       procedure(get_cavity_gradient), deferred :: get_gradient
@@ -112,9 +109,10 @@ module moist_type
          type(error_type), allocatable, intent(out) :: error
       end subroutine update_cavity
 
-      subroutine get_cavity_gradient(self)
-         import :: cavity_type
+      subroutine get_cavity_gradient(self, error)
+         import :: cavity_type, error_type
          class(cavity_type), intent(inout) :: self
+         type(error_type), allocatable, intent(out) :: error
       end subroutine get_cavity_gradient
 
    end interface

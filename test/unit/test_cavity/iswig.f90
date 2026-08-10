@@ -476,7 +476,11 @@ contains
             call test_failed(error, cavity_error%message)
             return
          end if
-         call cav%get_gradient()
+         call cav%get_gradient(cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
          if (allocated(cav%area_grad)) ana2d = cav%area_grad
 
          do i = 1, mol%nat
@@ -601,7 +605,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (ana(3*mol%nat))
       do i = 1, mol%nat
@@ -1382,9 +1390,9 @@ contains
       end do
 
       ! Compute analytical gradient through the generic PCM A-matrix adjoints
-      call cav%get_gradient()
-      if (allocated(cav%error)) then
-         call test_failed(error, cav%error%message)
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
          return
       end if
 

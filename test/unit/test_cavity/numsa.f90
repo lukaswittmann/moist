@@ -223,7 +223,8 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) return
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
@@ -271,7 +272,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
@@ -319,7 +324,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad

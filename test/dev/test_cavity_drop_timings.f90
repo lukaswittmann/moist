@@ -115,7 +115,8 @@ contains
                time_update = time_update + real(t1 - t0, wp)
 
                call cpu_time(t0)
-               call cavity_drop%get_gradient()
+               call cavity_drop%get_gradient(cavity_error)
+               if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
                call cpu_time(t1)
                time_gradient = time_gradient + real(t1 - t0, wp)
             end do
@@ -493,7 +494,11 @@ contains
                return
             end if
 
-            call cavity%get_gradient()
+            call cavity%get_gradient(cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
 
             !> On the first build, enumerate the timer tree (labels + structure)
             !> and write the now-known CSV header.
@@ -847,7 +852,11 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            call cavity%get_gradient()
+            call cavity%get_gradient(cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, cavity_error%message)
+               return
+            end if
             call cpu_time(t1)
             total_times(istruct) = total_times(istruct) + real(t1 - t0, wp)
          end do

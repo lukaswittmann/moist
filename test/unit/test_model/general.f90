@@ -313,6 +313,12 @@ contains
          call test_failed(error, "CPCM+PV(0) gradient failed: "//err%message)
          return
       end if
+      ! The reverse-mode gradient contracts the surface adjoints directly
+      call model_pv%cavity%get_gradient(err)
+      if (allocated(err)) then
+         call test_failed(error, "Cavity forward gradient failed: "//err%message)
+         return
+      end if
       if (.not. allocated(model_pv%cavity%v1_rA)) then
          call test_failed(error, "Cavity produced no per-point volume derivatives")
          return

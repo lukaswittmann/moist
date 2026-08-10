@@ -536,12 +536,14 @@ contains
    !> discontinuously with the geometry, so there is no analytic nuclear
    !> derivative to hand back. Fail loudly rather than return zeros.
    !>
-   !> @param[inout] self  Cavity instance receiving the error
-   subroutine get_gradient_marchingcubes(self)
+   !> @param[inout] self  Cavity instance
+   !> @param[out]   error Error handling
+   subroutine get_gradient_marchingcubes(self, error)
       class(cavity_type_marchingcubes), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-      if (allocated(self%error)) deallocate (self%error)
-      call fatal_error(self%error, &
+      call fatal_error(error, &
                        "Marching cubes provides no analytic nuclear gradients")
 
    end subroutine get_gradient_marchingcubes
