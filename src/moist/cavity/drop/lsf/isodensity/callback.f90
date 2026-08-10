@@ -33,8 +33,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       !> @param[out] hess     Spatial Hessian d2S/drdr   (double[3][3] or NULL)
       !> @param[out] third    Spatial third deriv         (double[3][3][3] or NULL)
       subroutine isodensity_lsf_callback(context, point, value, grad, hess, third) bind(C)
-         implicit none (type, external)
          import :: c_double, c_ptr
+         implicit none (type, external)
          type(c_ptr), value :: context
          real(c_double), intent(in) :: point(3)
          real(c_double), intent(out) :: value
