@@ -7,11 +7,12 @@ module test_cavity_drop_convergence
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_drop_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_data_radii_legacy, only: get_radius_func
    use mstore, only: get_structure
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -63,6 +64,10 @@ contains
          'MB16-43     ', 'Amino20x4   ', 'UPU23       ']
       character(len=7), parameter :: mol_ids(n_mols) = [ &
          'CH4    ', 'THR_xab', '4b     ']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       write (*, '(a)') ''
       write (*, '(a)') '========================================================================'
@@ -78,9 +83,9 @@ contains
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, nleb=nleb_values(igrid), &
+               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
                   tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-                  debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+                  radius_model=default_cpcm_radii(), &
                   lsf_model=svdw_template, error=cavity_error)
             end block
             if (allocated(cavity_error)) then
@@ -140,7 +145,7 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp) :: areas(7), volumes(7)
       real(wp) :: ref_area, ref_volume
-      integer :: igrid, imol, iat
+      integer :: igrid, imol
 
       integer, parameter :: n_spacings = 8
       real(wp), parameter :: spacings(n_spacings) = [ &
@@ -161,10 +166,8 @@ contains
          call get_structure(mol, trim(dataset_names(imol)), trim(mol_ids(imol)))
 
          if (allocated(radii)) deallocate(radii)
-         allocate(radii(mol%nat))
-         do iat = 1, mol%nat
-            radii(iat) = get_radius_func(mol%num(mol%id(iat)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
          !> Without a cavity to set this, the direct user owns the
@@ -220,7 +223,7 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp) :: areas(11), volumes(11)
       real(wp) :: ref_area, ref_volume
-      integer :: igrid, imol, iat
+      integer :: igrid, imol
 
       integer, parameter :: n_grids = 11
       integer, parameter :: nleb_values(n_grids) = [ &
@@ -231,6 +234,10 @@ contains
          'MB16-43     ', 'Amino20x4   ', 'UPU23       ']
       character(len=7), parameter :: mol_ids(n_mols) = [ &
          'CH4    ', 'THR_xab', '4b     ']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       write (*, '(a)') ''
       write (*, '(a)') '========================================================================'
@@ -241,10 +248,8 @@ contains
          call get_structure(mol, trim(dataset_names(imol)), trim(mol_ids(imol)))
 
          if (allocated(radii)) deallocate(radii)
-         allocate(radii(mol%nat))
-         do iat = 1, mol%nat
-            radii(iat) = get_radius_func(mol%num(mol%id(iat)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          call new_radii_custom_atoms(radii, radius_model, cavity_error)
          if (allocated(cavity_error)) then
@@ -255,7 +260,7 @@ contains
          do igrid = 1, n_grids
             if (allocated(cav)) deallocate(cav)
             allocate(cav)
-            call new_cavity_iswig(cav, nleb=nleb_values(igrid), &
+            call new_cavity_iswig(cav, ctx, nleb=nleb_values(igrid), &
                radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -327,6 +332,10 @@ contains
          170, 194, 302, 350, 434, 590, 770, 974, &
          1202, 1454, 1730, 2030, 2354, 2702, 3074, 3470, &
          3890, 4334, 4802, 5294, 5810]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       call get_structure(mol, "MB16-43", "CH4")
       n_comp = ndim * mol%nat
@@ -339,10 +348,10 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-         call new_cavity_drop(cavity, nleb=nleb_values(n_grids), &
+         call new_cavity_drop(cavity, ctx, nleb=nleb_values(n_grids), &
             tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
             do_fine=.true., &
-            debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            radius_model=default_cpcm_radii(), &
             lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) then
@@ -388,10 +397,10 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-            call new_cavity_drop(cavity, nleb=nleb_values(igrid), &
+            call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
                tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
                do_fine=.true., &
-               debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+               radius_model=default_cpcm_radii(), &
                lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) then
@@ -467,6 +476,10 @@ contains
       real(wp), parameter :: blendk_values(n_blendk) = [ &
          1.0_wp, 1.25_wp, 1.5_wp, 1.75_wp, 2.0_wp, 2.5_wp, 3.0_wp, 3.5_wp, &
          4.0_wp, 4.5_wp, 5.0_wp, 6.0_wp, 7.0_wp, 8.0_wp, 9.0_wp, 10.0_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       call get_structure(mol, "UPU23", "4b")
 
@@ -481,9 +494,9 @@ contains
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(blend_k=blendk_values(ik), blend_2b=blend_2b, &
                   blend_3b=blend_3b)
-               call new_cavity_drop(cavity, nleb=nleb_values(igrid), &
+               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
                   tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-                  debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+                  radius_model=default_cpcm_radii(), &
                   lsf_model=svdw_template, error=cavity_error)
             end block
             if (allocated(cavity_error)) then
@@ -536,6 +549,10 @@ contains
          1.0e-13_wp, 7.5e-14_wp, 5.0e-14_wp, 2.5e-14_wp, &
          1.0e-14_wp, 7.5e-15_wp, 5.0e-15_wp, 2.5e-15_wp, &
          1.0e-15_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       call get_structure(mol, "UPU23", "4b")
 
@@ -549,10 +566,10 @@ contains
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, nleb=nleb_values(igrid), &
+               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
                   tolerance=tol_values(itol), proj_maxiter=proj_maxiter, &
                   proj_level=proj_level, &
-                  debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+                  radius_model=default_cpcm_radii(), &
                   lsf_model=svdw_template, error=cavity_error)
             end block
             if (allocated(cavity_error)) then
@@ -575,5 +592,27 @@ contains
       if (allocated(cavity)) deallocate(cavity)
 
    end subroutine test_convergence_drop_nleb_projtol
+
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   subroutine fill_cpcm_radii(mol, radii, error)
+      !> Structure whose per-atom radii are filled
+      type(structure_type), intent(in) :: mol
+      !> Allocated on exit to mol%nat
+      real(wp), allocatable, intent(out) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: err
+      integer :: iat
+
+      allocate (radii(mol%nat))
+      do iat = 1, mol%nat
+         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
+         if (allocated(err)) then
+            call test_failed(error, "radius lookup failed: "//trim(err%message))
+            return
+         end if
+      end do
+   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_convergence

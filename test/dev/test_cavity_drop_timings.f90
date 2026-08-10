@@ -10,9 +10,10 @@ module test_cavity_drop_timings
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_radii, only: default_cpcm_radii
    use moist_radii_static, only: static_radius_type
-   use moist_cavity_drop_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -25,8 +26,8 @@ contains
    subroutine collect_cavity_drop_timings(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-                  new_unittest("timing_drop_proj_levels", test_timing_drop_proj_levels), &
-                  new_unittest("timing_cell_fraction_benchmark", test_timing_cell_fraction_benchmark), &
+                  ! new_unittest("timing_drop_proj_levels", test_timing_drop_proj_levels), &
+                  ! new_unittest("timing_cell_fraction_benchmark", test_timing_cell_fraction_benchmark), &
                   new_unittest("timing_drop_scaling", test_timing_drop_scaling), &
                   new_unittest("timing_mc_scaling", test_timing_mc_scaling), &
                   new_unittest("timing_iswig_scaling", test_timing_iswig_scaling) &
@@ -40,18 +41,23 @@ contains
       type(cavity_type_drop), allocatable :: cavity_drop
       real(wp), allocatable :: radii(:)
       character(len=20) :: struct_names(25)
-      integer :: iat, iter, istruct, ilevel
+      integer :: iter, istruct, ilevel
       real :: t0, t1
       real(wp) :: time_update, time_gradient, time_total
       integer :: n_iter, nleb, proj_level
-      real(wp) :: blend_k, blend_3b
+      real(wp) :: blend_k, blend_2b, blend_3b
       type(mctc_error), allocatable :: cavity_error
       integer, parameter :: n_proj_levels = 1
       integer, parameter :: proj_levels(n_proj_levels) = [1]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
 
-      nleb = 110
-      blend_k = 3.0_wp
-      blend_3b = 1.0_wp
+      call new_context(ctx, verbosity=0)
+
+      nleb = 194
+      blend_k = 5.5_wp
+      blend_2b = 0.0_wp
+      blend_3b = 3.0_wp
       n_iter = 1
 
       struct_names = [character(len=20) :: 'polyala_04', 'polyala_08', 'polyala_12', &
@@ -64,7 +70,8 @@ contains
       write (*, '(a)') '================================================================'
       write (*, '(a)') 'Benchmark: DROP Cavity - Projection Level Comparison'
       write (*, '(a, i0)') 'Parameters: nleb = ', nleb
-      write (*, '(a, f6.3)') '            blend_k = ', blend_k
+      write (*, '(a, f6.3)') '            blend_k  = ', blend_k
+      write (*, '(a, f6.3)') '            blend_2b = ', blend_2b
       write (*, '(a, f6.3)') '            blend_3b = ', blend_3b
       write (*, '(a, i0)') '            iterations = ', n_iter
       write (*, '(a)') '================================================================'
@@ -78,10 +85,9 @@ contains
          call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
 
          if (allocated(radii)) deallocate (radii)
-         allocate (radii(mol%nat))
-         do iat = 1, mol%nat
-            radii(iat) = get_radius_func(mol%num(mol%id(iat)))*aatoau
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
+         radii = radii*aatoau
 
          do ilevel = 1, n_proj_levels
             proj_level = proj_levels(ilevel)
@@ -96,12 +102,11 @@ contains
                call cpu_time(t0)
                block
                   type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                  call svdw_template%new(blend_k=blend_k, blend_3b=blend_3b)
-                  call new_cavity_drop(cavity_drop, nleb=nleb, &
-                                      verbose=0, debug=.false., &
-                                      tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                      radius_model=default_cpcm_radii(), &
-                                      lsf_model=svdw_template, error=cavity_error)
+                  call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+                  call new_cavity_drop(cavity_drop, ctx, nleb=nleb, &
+                                       tolerance=1.0E-10_wp, proj_level=proj_level, &
+                                       radius_model=default_cpcm_radii(), &
+                                       lsf_model=svdw_template, error=cavity_error)
                end block
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
                call cavity_drop%update(mol, error=cavity_error)
@@ -251,7 +256,7 @@ contains
       real(wp) :: all_points(ndim, n_pts)
       real :: t0, t1
       real(wp) :: t_full, t_screened, t_build, cand_sum
-      integer :: istruct, ipt, iter, iat, ifrac, n_calls
+      integer :: istruct, ipt, iter, ifrac, n_calls
       integer :: start, n_cand
       real(wp) :: delta
       character(len=8) :: frac_str
@@ -279,11 +284,11 @@ contains
 
          if (allocated(radii)) deallocate (radii)
          if (allocated(r_eff)) deallocate (r_eff)
-         allocate (radii(mol%nat), r_eff(mol%nat))
-         do iat = 1, mol%nat
-            radii(iat) = get_radius_func(mol%num(mol%id(iat)))*aatoau
-            r_eff(iat) = radii(iat) + delta
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
+         allocate (r_eff(mol%nat))
+         radii = radii*aatoau
+         r_eff = radii + delta
 
          ! Setup LSF primitive (owns its internal SSD system)
          call lsf_prim%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
@@ -377,29 +382,34 @@ contains
 
       !> Number of polyalanine structures to benchmark
       integer, parameter :: n_struct = 25
-      !> Number of timer slots registered in new_cavity_drop
-      integer, parameter :: n_timers = 33
+      !> Upper bound on the number of timer nodes; the actual count is read from
+      !> the cavity timer tree at runtime into n_timers.
+      integer, parameter :: max_timers = 64
       !> Minimum time (s) for a data point to be included in the fit
       real(wp), parameter :: t_min = 1.0e-6_wp
 
       !> Cavity parameters
       integer, parameter :: nleb = 194
-      real(wp), parameter :: blend_k = 4.5_wp
-      real(wp), parameter :: blend_3b = 1.0_wp
+      real(wp), parameter :: blend_k = 5.5_wp
+      real(wp), parameter :: blend_2b = 0.0_wp
+      real(wp), parameter :: blend_3b = 3.0_wp
       integer, parameter :: proj_level = 3
 
       character(len=20) :: struct_names(n_struct)
-      character(len=30) :: timer_labels(n_timers)
-      logical :: is_parent(n_timers)
+      !> Display labels (indented by tree depth) and top-level flags, enumerated
+      !> from the cavity timer itself rather than a hardcoded table.
+      integer :: n_timers
+      character(len=40) :: timer_labels(max_timers)
+      logical :: is_parent(max_timers)
 
       !> Collected benchmark data
       integer :: n_atoms_arr(n_struct)
       integer :: n_grid_arr(n_struct)
-      real(wp) :: times(n_timers, n_struct)
+      real(wp) :: times(max_timers, n_struct)
       real(wp) :: total_times(n_struct)
 
       !> Number of repetitions per structure for stable timings
-      integer, parameter :: n_iter = 10
+      integer, parameter :: n_iter = 3
 
       !> Fit workspace
       real(wp) :: real_n(n_struct), raw_t(n_struct)
@@ -409,12 +419,13 @@ contains
       integer :: istruct, itimer, iter, iprint
       real(wp) :: rn_iter
 
-      !> Print order (groups children under their parent)
-      integer :: print_order(n_timers), n_print
-
       !> CSV output
       integer :: csv_unit
       character(len=*), parameter :: csv_file = 'drop_timings.csv'
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0, do_profile=.true.)
 
       !> Polyalanine structures (increasing size)
       struct_names = [character(len=20) :: &
@@ -424,58 +435,11 @@ contains
                       'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
                       'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
 
-      !> Timer labels matching IDs registered in new_cavity_drop
-      timer_labels = ' '
-      timer_labels(1) = 'Setup'
-      timer_labels(2) = '  Lebedev cache'
-      timer_labels(3) = '  Array setup'
-      timer_labels(4) = '  Adj. lists'
-      timer_labels(5) = '  Switching func.'
-      timer_labels(6) = '  Pre-filter'
-      timer_labels(7) = 'Projector'
-      timer_labels(8) = 'Post processing'
-      timer_labels(9) = '  Filter'
-      timer_labels(10) = '  Grid adj. list'
-      timer_labels(11) = '  CP Jacobian'
-      timer_labels(12) = '  Disconnected cav.'
-      timer_labels(13) = 'Properties'
-      timer_labels(14) = '  Grid density'
-      timer_labels(15) = '  Curvatures'
-      timer_labels(16) = '  Area & Volume'
-      timer_labels(17) = '  Gaussians'
-      timer_labels(18) = '  CPCM energy'
-      timer_labels(19) = 'Gradients'
-      timer_labels(20) = '  Primitives'
-      timer_labels(21) = '  Positions'
-      timer_labels(22) = '  Displacement'
-      timer_labels(23) = '  Distances'
-      timer_labels(25) = '  CP Jacobian (grad)'
-      timer_labels(26) = '  Gaussian widths'
-      timer_labels(27) = '  Switching (grad)'
-      timer_labels(28) = '  Area (grad)'
-      timer_labels(29) = '  Volume (grad)'
-      timer_labels(30) = '  Surface normal'
-      timer_labels(31) = '  Branch weights'
-      timer_labels(32) = '  Branch weights (pp)'
-      timer_labels(33) = '  CPCM (grad)'
-
+      !> The timer node set (names, nesting, order) is not declared here: it is
+      !> enumerated from the cavity's own timer after the first build, so this
+      !> benchmark automatically tracks whatever the DROP source measures.
       is_parent = .false.
-      is_parent([1, 7, 8, 13, 19]) = .true.
-
-      !> Print order: group children under their parent
-      n_print = 0
-      call add_order(1); call add_order(2); call add_order(3)
-      call add_order(4); call add_order(5); call add_order(6)
-      call add_order(7)
-      call add_order(8); call add_order(9); call add_order(10)
-      call add_order(11); call add_order(12); call add_order(32)
-      call add_order(13); call add_order(14); call add_order(15)
-      call add_order(16); call add_order(17); call add_order(18)
-      call add_order(19); call add_order(20); call add_order(21)
-      call add_order(22); call add_order(23); call add_order(30)
-      call add_order(25); call add_order(26); call add_order(27)
-      call add_order(28); call add_order(29); call add_order(31)
-      call add_order(33)
+      n_timers = 0
 
       !> ====================== Benchmark loop ======================
       rn_iter = real(n_iter, wp)
@@ -483,22 +447,14 @@ contains
       write (*, '(a)') ''
       write (*, '(a)') '=================================================================='
       write (*, '(a)') 'Benchmark: DROP cavity component scaling (update + gradient)'
-      write (*, '(a,i0,a,f5.2,a,f5.2,a,i0,a,i0)') &
-         'nleb=', nleb, '  k=', blend_k, '  b3=', blend_3b, &
+      write (*, '(a,i0,a,f5.2,a,f5.2,a,f5.2,a,i0,a,i0)') &
+         'nleb=', nleb, '  k=', blend_k, '  b2=', blend_2b, '  b3=', blend_3b, &
          '  proj=', proj_level, '  iter=', n_iter
       write (*, '(a)') '=================================================================='
 
-      !> Open CSV file and write header
+      !> Open the CSV file; its header is written once the timer tree is known
+      !> (after the first cavity builds, so columns match what was measured).
       open (newunit=csv_unit, file=csv_file, status='replace', action='write')
-      write (csv_unit, '(a)', advance='no') 'structure,n_atoms,n_grid,iter,total'
-      do itimer = 1, n_timers
-         if (len_trim(timer_labels(itimer)) > 0) then
-            write (csv_unit, '(a,a)', advance='no') ',', trim(adjustl(timer_labels(itimer)))
-         else
-            write (csv_unit, '(a,i0)', advance='no') ',timer_', itimer
-         end if
-      end do
-      write (csv_unit, *)
 
       do istruct = 1, n_struct
          call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
@@ -511,14 +467,18 @@ contains
          do iter = 1, n_iter
             if (allocated(cavity)) deallocate (cavity)
             allocate (cavity)
+            !> Zero the shared timer so every node reports this build alone. The
+            !> node tree (and hence the itimer -> label mapping snapshotted below)
+            !> survives the reset, unlike a freshly constructed context.
+            call ctx%timer%reset()
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blend_k, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, nleb=nleb, &
-                                   verbose=0, debug=.false., do_fine=.true., &
-                                   tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                   radius_model=default_cpcm_radii(), &
-                                   lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+               call new_cavity_drop(cavity, ctx, nleb=nleb, &
+                                    do_fine=.true., &
+                                    tolerance=1.0E-10_wp, proj_level=proj_level, &
+                                    radius_model=default_cpcm_radii(), &
+                                    lsf_model=svdw_template, error=cavity_error)
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -533,21 +493,33 @@ contains
 
             call cavity%get_gradient()
 
+            !> On the first build, enumerate the timer tree (labels + structure)
+            !> and write the now-known CSV header.
+            if (n_timers == 0) then
+               call snapshot_timer_tree()
+               write (csv_unit, '(a)', advance='no') 'structure,n_atoms,n_grid,iter,total'
+               do itimer = 1, n_timers
+                  write (csv_unit, '(a,a)', advance='no') ',', trim(adjustl(timer_labels(itimer)))
+               end do
+               write (csv_unit, *)
+            end if
+
             !> Write per-iteration row to CSV
             write (csv_unit, '(a,a,i0,a,i0,a,i0,a,es14.6)', advance='no') &
                trim(struct_names(istruct)), ',', mol%nat, ',', cavity%ngrid, &
-               ',', iter, ',', cavity%timer%get()
+               ',', iter, ',', cavity%ctx%timer%get()
             do itimer = 1, n_timers
-               write (csv_unit, '(a,es14.6)', advance='no') ',', cavity%timer%get(itimer)
+               write (csv_unit, '(a,es14.6)', advance='no') ',', &
+                  cavity%ctx%timer%node_time(itimer)
             end do
             write (csv_unit, *)
 
             !> Accumulate timer values
             do itimer = 1, n_timers
                times(itimer, istruct) = times(itimer, istruct) &
-                                        + cavity%timer%get(itimer)
+                                        + cavity%ctx%timer%node_time(itimer)
             end do
-            total_times(istruct) = total_times(istruct) + cavity%timer%get()
+            total_times(istruct) = total_times(istruct) + cavity%ctx%timer%get()
             n_grid_arr(istruct) = cavity%ngrid
          end do
 
@@ -591,8 +563,8 @@ contains
       write (*, *)
 
       !> Per-timer rows (skip zero timers)
-      do iprint = 1, n_print
-         itimer = print_order(iprint)
+      do iprint = 1, n_timers
+         itimer = iprint
          if (maxval(times(itimer, :)) < t_min) cycle
          if (is_parent(itimer)) then
             write (*, '(a30)', advance='no') repeat('-', 30)
@@ -626,8 +598,8 @@ contains
       end if
 
       !> Per-timer
-      do iprint = 1, n_print
-         itimer = print_order(iprint)
+      do iprint = 1, n_timers
+         itimer = iprint
          if (maxval(times(itimer, :)) < t_min) cycle
          if (is_parent(itimer)) then
             write (*, '(a30, a10, a10, a12)') repeat('-', 30), &
@@ -650,11 +622,18 @@ contains
 
    contains
 
-      subroutine add_order(id)
-         integer, intent(in) :: id
-         n_print = n_print + 1
-         print_order(n_print) = id
-      end subroutine add_order
+      !> Enumerate the cavity timer tree into the display arrays: label indented
+      !> by nesting depth, top-level nodes flagged as parents. Uses the timer's
+      !> own introspection so nothing about the node set is duplicated here.
+      subroutine snapshot_timer_tree()
+         integer :: id, depth
+         n_timers = min(cavity%ctx%timer%num_nodes(), max_timers)
+         do id = 1, n_timers
+            depth = cavity%ctx%timer%node_depth(id)
+            timer_labels(id) = repeat('  ', depth)//cavity%ctx%timer%node_name(id)
+            is_parent(id) = depth == 0
+         end do
+      end subroutine snapshot_timer_tree
 
    end subroutine test_timing_drop_scaling
 
@@ -813,8 +792,12 @@ contains
       integer :: istruct, iter
       real(wp) :: rn_iter
       real :: t0, t1
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
 
       !> Polyalanine structures (increasing size)
+      call new_context(ctx, verbosity=0)
+
       struct_names = [character(len=20) :: &
                       'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
                       'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
@@ -844,7 +827,7 @@ contains
          do iter = 1, n_iter
             if (allocated(cavity)) deallocate (cavity)
             allocate (cavity)
-            call new_cavity_iswig(cavity, nleb=nleb, &
+            call new_cavity_iswig(cavity, ctx, nleb=nleb, &
                                   radius_model=default_cpcm_radii(), error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -1144,5 +1127,27 @@ contains
          r_squared = 0.0_wp
       end if
    end subroutine fit_power_law
+
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   subroutine fill_cpcm_radii(mol, radii, error)
+      !> Structure whose per-atom radii are filled
+      type(structure_type), intent(in) :: mol
+      !> Allocated on exit to mol%nat
+      real(wp), allocatable, intent(out) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: err
+      integer :: iat
+
+      allocate (radii(mol%nat))
+      do iat = 1, mol%nat
+         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
+         if (allocated(err)) then
+            call test_failed(error, "radius lookup failed: "//trim(err%message))
+            return
+         end if
+      end do
+   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_timings

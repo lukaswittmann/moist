@@ -13,6 +13,7 @@ module test_cavity_drop_robustness
    use moist_radii, only : default_cpcm_radii
    use moist_utils_env, only: resolve_dir, ensure_dir
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -43,7 +44,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all UPU23 IDs to iterate over
@@ -51,6 +52,10 @@ contains
                                      '0a', '0b', '1a', '1b', '1c', '1e', '1f', '1g', &
                                      '1m', '1p', '2a', '2h', '2p', '3a', '3b', '3d', &
                                      '4b', '5z', '6p', '7a', '7p', '8d', '9a', 'aa']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in UPU23
       do iid = 1, size(upu23_ids)
@@ -60,17 +65,15 @@ contains
          call get_structure(mol, "UPU23", upu23_ids(iid))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -88,7 +91,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all heavy28 IDs to iterate over
@@ -103,6 +106,10 @@ contains
                                       'sbh3_hi    ', 'sbh3_nh3   ', 'teh2       ', 'teh2_2     ', &
                                       'teh2_h2o   ', 'teh2_h2s   ', 'teh2_hbr   ', 'teh2_hcl   ', &
                                       'teh2_hi    ', 'teh2_nh3   ']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in heavy28
       do iid = 1, size(heavy28_ids)
@@ -112,17 +119,15 @@ contains
          call get_structure(mol, "Heavy28", trim(heavy28_ids(iid)))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -140,7 +145,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all amino20x4 IDs to iterate over
@@ -165,6 +170,10 @@ contains
                                      'TRP_xac', 'TRP_xaf', 'TRP_xag', 'TRP_xah', 'TRP_xao', &
                                      'TYR_xab', 'TYR_xag', 'TYR_xah', 'TYR_xan', 'TYR_xar', &
                                      'VAL_xad', 'VAL_xaf', 'VAL_xah', 'VAL_xaj', 'VAL_xak']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in amino20x4
       do iid = 1, size(amino20x4_ids)
@@ -174,17 +183,15 @@ contains
          call get_structure(mol, "Amino20x4", amino20x4_ids(iid))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -202,7 +209,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all mb16-43 IDs to iterate over
@@ -215,6 +222,10 @@ contains
                                      '41  ', '42  ', '43  ', 'AlH3', 'BH3 ', 'BeH2', 'CH4 ', 'Cl2 ', &
                                      'F2  ', 'H2  ', 'LiH ', 'MgH2', 'N2  ', 'NaH ', 'O2  ', 'P2  ', &
                                      'S2  ', 'PCl ', 'SiH4']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in mb16-43
       do iid = 1, size(mb16_43_ids)
@@ -224,17 +235,15 @@ contains
          call get_structure(mol, "MB16-43", trim(mb16_43_ids(iid)))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -252,7 +261,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all But14diol IDs to iterate over
@@ -264,6 +273,10 @@ contains
                                      '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', &
                                      '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', &
                                      '61', '62', '63', '64', '65']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in But14diol
       do iid = 1, size(but14diol_ids)
@@ -273,17 +286,15 @@ contains
          call get_structure(mol, "But14diol", trim(but14diol_ids(iid)))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -301,7 +312,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
-      integer :: i, iid
+      integer :: iid
       type(mctc_error), allocatable :: cavity_error
 
       ! Array of all IL16 IDs to iterate over
@@ -312,6 +323,10 @@ contains
                                      '212 ', '212A', '212B', '213 ', '213A', '213B', '214 ', '214A', &
                                      '214B', '227 ', '227A', '227B', '228 ', '228A', '228B', '229 ', &
                                      '229A', '229B', '230 ', '230A', '230B', '231 ', '231A', '231B']
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Iterate over all IDs in IL16
       do iid = 1, size(il16_ids)
@@ -321,17 +336,15 @@ contains
          call get_structure(mol, "IL16", trim(il16_ids(iid)))
 
          ! Get radii
-         allocate (radii(mol%nat))
-         do i = 1, mol%nat
-            radii(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii, error)
+         if (allocated(error)) return
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -381,6 +394,10 @@ contains
 
       !> Seed value for rng
       integer, parameter :: SEED_VALUE = 42
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Initialize random seed for reproducibility
       seed_array = SEED_VALUE
@@ -411,7 +428,11 @@ contains
             num(iat) = MIN_ATNUM + int(rand_val*(MAX_ATNUM - MIN_ATNUM + 1))
 
             ! Get VdW radius for this atom
-            vdw_radius = get_radius_func(num(iat))
+            vdw_radius = get_radius_func(num(iat), cavity_error)
+            if (allocated(cavity_error)) then
+               call test_failed(error, "radius lookup failed: "//trim(cavity_error%message))
+               return
+            end if
             radii(iat) = vdw_radius
 
             ! Generate position: 90% near existing atoms, 10% far away
@@ -511,8 +532,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
-                                debug=.false., verbose=0, radius_model=default_cpcm_radii(), &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
+                                radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
@@ -589,5 +610,27 @@ contains
       end subroutine write_convergence_failure_xyz
 
    end subroutine test_robustness_fuzz
+
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   subroutine fill_cpcm_radii(mol, radii, error)
+      !> Structure whose per-atom radii are filled
+      type(structure_type), intent(in) :: mol
+      !> Allocated on exit to mol%nat
+      real(wp), allocatable, intent(out) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: err
+      integer :: iat
+
+      allocate (radii(mol%nat))
+      do iat = 1, mol%nat
+         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
+         if (allocated(err)) then
+            call test_failed(error, "radius lookup failed: "//trim(err%message))
+            return
+         end if
+      end do
+   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_robustness

@@ -11,9 +11,10 @@ module test_cavity_drop_integration
    use, intrinsic :: iso_fortran_env, only: error_unit
 
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_marchingcubes, only: integrate_surface_marching_cubes
+   use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_utils_env, only: resolve_dir, ensure_dir
+   use moist_context, only: moist_context_type, new_context
 
    implicit none
    private
@@ -577,18 +578,19 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(moist_cavity_drop_parameters_type) :: param
       real(wp), allocatable :: radii_local(:)
-      integer :: i
       type(mctc_error), allocatable :: cavity_error
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Get radii (either from argument or compute from atomic numbers)
       if (present(radii)) then
          allocate (radii_local(size(radii)))
          radii_local = radii
       else
-         allocate (radii_local(mol%nat))
-         do i = 1, mol%nat
-            radii_local(i) = get_radius_func(mol%num(mol%id(i)))
-         end do
+         call fill_cpcm_radii(mol, radii_local, error)
+         if (allocated(error)) return
       end if
 
       ! Initialize cavity with Lebedev grid
@@ -596,9 +598,8 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
-         call new_cavity_drop(cavity, nleb=NUM_LEB, &
+         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             debug=.false., verbose=0, &
                              radius_model=default_cpcm_radii(), &
                              lsf_model=svdw_template, error=cavity_error)
       end block
@@ -657,6 +658,10 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       real(wp), allocatable :: radii_local(:)
       type(mctc_error), allocatable :: cavity_error
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       ! Sanitize names (replace spaces and special chars with underscores)
       sanitized_benchmark = trim(benchmark_name)
@@ -736,10 +741,8 @@ contains
             allocate (radii_local(size(radii)))
             radii_local = radii
          else
-            allocate (radii_local(mol%nat))
-            do i = 1, mol%nat
-               radii_local(i) = get_radius_func(mol%num(mol%id(i)))
-            end do
+            call fill_cpcm_radii(mol, radii_local, error)
+            if (allocated(error)) return
          end if
 
          ! Initialize and compute cavity
@@ -747,10 +750,9 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
-            call new_cavity_drop(cavity, nleb=NUM_LEB, &
+            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
                                 proj_level=PROJ_LEVEL, &
-                                debug=.false., verbose=0, &
                                 radius_model=default_cpcm_radii(), &
                                 lsf_model=svdw_template, error=cavity_error)
          end block
@@ -771,5 +773,27 @@ contains
       end if
 
    end subroutine compare_mc_cavity_cached
+
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   subroutine fill_cpcm_radii(mol, radii, error)
+      !> Structure whose per-atom radii are filled
+      type(structure_type), intent(in) :: mol
+      !> Allocated on exit to mol%nat
+      real(wp), allocatable, intent(out) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: err
+      integer :: iat
+
+      allocate (radii(mol%nat))
+      do iat = 1, mol%nat
+         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
+         if (allocated(err)) then
+            call test_failed(error, "radius lookup failed: "//trim(err%message))
+            return
+         end if
+      end do
+   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_integration

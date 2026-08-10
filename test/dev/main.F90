@@ -11,9 +11,7 @@ program dev_tester
    use test_cavity_drop_integration, only : collect_cavity_drop_integration
    use test_cavity_drop_convergence, only : collect_cavity_drop_convergence
    use test_cavity_drop_deflation_comparison, only : collect_cavity_drop_deflation_comparison
-#ifdef WITH_RISM
-   ! use test_rism_1d_vv, only : collect_rism_1d_vv
-#endif
+   use test_pcm_amat_timings, only : collect_pcm_amat_timings
 
 implicit none
 
@@ -30,10 +28,8 @@ implicit none
       & new_testsuite("cavity_drop_robustness", collect_cavity_drop_robustness), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_deflation_comparison", collect_cavity_drop_deflation_comparison), &
-      & new_testsuite("cavity_drop_convergence", collect_cavity_drop_convergence) &
-#ifdef WITH_RISM
-      ! , new_testsuite("rism_1d_vv", collect_rism_1d_vv) &
-#endif
+      & new_testsuite("cavity_drop_convergence", collect_cavity_drop_convergence), &
+      & new_testsuite("pcm_amat_timings", collect_pcm_amat_timings) &
       & ]
 
    call get_argument(1, suite_name)
