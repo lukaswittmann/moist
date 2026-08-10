@@ -3,8 +3,9 @@
 !> This experimental LSF delegates value, spatial gradient, spatial Hessian,
 !> and third spatial derivative evaluation to a C callback
 module moist_cavity_drop_lsf_isodensity_callback
-   use, intrinsic :: iso_c_binding, only: c_double, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
+   use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
+   use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -32,8 +33,9 @@ module moist_cavity_drop_lsf_isodensity_callback
       !> @param[out] grad     Spatial gradient dS/dr
       !> @param[out] hess     Spatial Hessian d2S/drdr   (double[3][3] or NULL)
       !> @param[out] third    Spatial third deriv         (double[3][3][3] or NULL)
-      subroutine isodensity_lsf_callback(context, point, value, grad, hess, third) bind(C)
-         import :: c_double, c_ptr
+      !> @returns             0 on success, nonzero host status on failure
+      function isodensity_lsf_callback(context, point, value, grad, hess, third) result(status) bind(C)
+         import :: c_double, c_int, c_ptr
          implicit none (type, external)
          type(c_ptr), value :: context
          real(c_double), intent(in) :: point(3)
@@ -41,7 +43,8 @@ module moist_cavity_drop_lsf_isodensity_callback
          real(c_double), intent(out) :: grad(3)
          type(c_ptr), value :: hess
          type(c_ptr), value :: third
-      end subroutine isodensity_lsf_callback
+         integer(c_int) :: status
+      end function isodensity_lsf_callback
    end interface
 
    !> Isodensity LSF implemented by a foreign callback.
@@ -118,15 +121,20 @@ contains
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
-   subroutine lsf_prepare(self, point)
+   !> @param[out]   error Host callback failure at this point
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
+      type(error_type), allocatable, intent(out) :: error
 
       procedure(isodensity_lsf_callback), pointer :: callback
       real(c_double) :: c_point(3), c_value, c_grad(3)
       real(c_double), target :: c_hess(3, 3), c_third(3, 3, 3)
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
+      integer(c_int) :: status
+      character(len=16) :: status_buf
+      character(len=48) :: point_buf
 
       ! Only request the (expensive) density Hessian/third derivative for the
       ! orders the cavity actually needs.  The projection's value+gradient phase
@@ -148,7 +156,24 @@ contains
       if (want_hess) self%prepared_deriv = 2
       if (want_third) self%prepared_deriv = 3
       c_point = real(point, c_double)
-      call callback(self%context, c_point, c_value, c_grad, p_hess, p_third)
+      status = callback(self%context, c_point, c_value, c_grad, p_hess, p_third)
+      if (status /= 0_c_int) then
+         ! Substitute state; numbers are not a result; the caller aborts on `error`
+         self%value = 1.0_wp
+         self%grad = 0.0_wp
+         self%grad(1) = 1.0_wp
+         self%hess = 0.0_wp
+         self%third = 0.0_wp
+         ! The substitute state is not a derivative jet of anything
+         self%prepared_deriv = -1
+         ! Carry the point in the diagnostic
+         write (status_buf, "(i0)") int(status)
+         write (point_buf, "(3(1x,es13.6))") point
+         call fatal_error(error, "External LSF evaluation failed with status "// &
+                          trim(status_buf)//" at point ("//trim(adjustl(point_buf))// &
+                          " ) Bohr. The cavity build was aborted; no cavity data are valid.")
+         return
+      end if
       self%value = self%scale*real(c_value, wp)
       self%grad = self%scale*real(c_grad, wp)
       if (want_hess) then
@@ -168,13 +193,15 @@ contains
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point in Bohr
    !> @param[in]    candidate_indices Ignored atom candidates
-   subroutine lsf_prepare_subset(self, point, candidate_indices)
+   !> @param[out]   error             Host callback failure at this point
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
+      type(error_type), allocatable, intent(out) :: error
 
       if (size(candidate_indices) < 0) return
-      call self%prepare(point)
+      call self%prepare(point, error)
    end subroutine lsf_prepare_subset
 
    !> Record requested derivative order

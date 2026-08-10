@@ -11,9 +11,10 @@
 !> The cavity holds a `class(moist_cavity_drop_lsf_type), allocatable` model from which thread-local clones are made.
 !> The [[lsf_thread_slot]] wrapper enables arrays of polymorphic LSF clones, since Fortran has no class(...), allocatable :: arr(:)
 module moist_cavity_drop_lsf_base
+   use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
-   implicit none
+   implicit none ()
    private
 
    public :: moist_cavity_drop_lsf_type
@@ -46,8 +47,7 @@ module moist_cavity_drop_lsf_base
       procedure :: require_deriv => lsf_base_require_deriv
       !> Optionally relabel the molecular cell-grid candidate lists into the actual LSF's internal atom ordering
       procedure :: remap_candidate_grid => lsf_base_remap_candidate_grid
-      !> Cache per-point screening / state. Called once per evaluation
-      !> point before any derivative method. No-op-safe.
+      !> Cache per-point screening / state
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list.
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
@@ -84,10 +84,13 @@ module moist_cavity_drop_lsf_base
 
       !> @param[inout] self   LSF instance
       !> @param[in]    point  Evaluation point (3,)
-      subroutine lsf_prepare_iface(self, point)
-         import :: wp, moist_cavity_drop_lsf_type
+      !> @param[out]   error  Evaluation failure at this point
+      subroutine lsf_prepare_iface(self, point, error)
+         import :: wp, error_type, moist_cavity_drop_lsf_type
+         implicit none ()
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
+         type(error_type), allocatable, intent(out) :: error
       end subroutine lsf_prepare_iface
 
       !> @param[inout] self              LSF instance
@@ -95,11 +98,13 @@ module moist_cavity_drop_lsf_base
       !> @param[in]    candidate_indices Atom ids to consider, in the concrete
       !>                                 LSF's own index space (user-space by
       !>                                 default; see remap_candidate_grid)
-      subroutine lsf_prepare_subset_iface(self, point, candidate_indices)
-         import :: wp, moist_cavity_drop_lsf_type
+      !> @param[out]   error             Evaluation failure at this point
+      subroutine lsf_prepare_subset_iface(self, point, candidate_indices, error)
+         import :: wp, error_type, moist_cavity_drop_lsf_type
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
          integer, intent(in) :: candidate_indices(:)
+         type(error_type), allocatable, intent(out) :: error
       end subroutine lsf_prepare_subset_iface
 
       !> @param[inout] self LSF instance

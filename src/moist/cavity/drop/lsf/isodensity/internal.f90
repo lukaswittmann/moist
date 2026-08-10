@@ -23,7 +23,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type
-   implicit none
+   implicit none (type, external)
    private
 
    integer, parameter :: ndim = 3
@@ -148,10 +148,10 @@ contains
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
-   subroutine lsf_prepare(self, point)
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
-
+      type(error_type), allocatable, intent(out) :: error
       call lsf_prepare_impl(self, point)
    end subroutine lsf_prepare
 
@@ -218,11 +218,11 @@ contains
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point in Bohr
    !> @param[in]    candidate_indices Ignored atom candidates
-   subroutine lsf_prepare_subset(self, point, candidate_indices)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
-
+      type(error_type), allocatable, intent(out) :: error
       !> The candidate atoms come from the cavity's molecular cell grid, whose
       !> per-atom reach is sized by lsf_neighbor_cutoff to the shell reach, so no
       !> contributing shell is missed.  Forward them straight to the evaluator.

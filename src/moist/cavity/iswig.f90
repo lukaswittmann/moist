@@ -8,6 +8,7 @@ module moist_cavity_iswig
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
    use moist_type, only: cavity_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
 
@@ -44,6 +45,8 @@ module moist_cavity_iswig
    contains
       procedure :: update => update_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
+      !> Contract surface-observable adjoints into the nuclear gradient
+      procedure :: get_surface_gradient => get_surface_gradient_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
    end type cavity_type_iswig
 
@@ -191,8 +194,7 @@ contains
       integer :: nsph, ip, iat, jat, iaxis
       real(wp) :: weight, zeta, r_own
       real(wp) :: px, py, pz, rx, ry, rz, r_dot_p
-      real(wp) :: dx, dy, dz, dist, arg_plus, arg_minus, arg_plus_sq, arg_minus_sq
-      real(wp) :: switch_pair
+      real(wp) :: dx, dy, dz, dvec(3)
       real(wp) :: dfdR, dswitch
       real(wp) :: area_weight, vol_weight
 
@@ -243,17 +245,14 @@ contains
          do jat = 1, nsph
             if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
 
-            call factors_swi_derivs([px, py, pz], self%sphxyz(:, jat), zeta, self%radii(jat), &
-                                    dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
+            call swi_pair_dfdr([px, py, pz], self%sphxyz(:, jat), zeta, self%radii(jat), &
+                               self%f(ip), dvec, dfdR)
+            dx = dvec(1)
+            dy = dvec(2)
+            dz = dvec(3)
 
-            arg_plus = zeta*(self%radii(jat) + dist)
-            arg_minus = zeta*(self%radii(jat) - dist)
-            switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
-
-            dfdR = -self%f(ip)*zeta/(sqrt(pi)*switch_pair*dist) &
-                  & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))
-            self%f1_rA(:, iat, ip) = self%f1_rA(:, iat, ip) + dfdR*[dx, dy, dz]
-            self%f1_rA(:, jat, ip) = self%f1_rA(:, jat, ip) - dfdR*[dx, dy, dz]
+            self%f1_rA(:, iat, ip) = self%f1_rA(:, iat, ip) + dfdR*dvec
+            self%f1_rA(:, jat, ip) = self%f1_rA(:, jat, ip) - dfdR*dvec
             dswitch = r_own*r_own*weight*dfdR
 
             ! Area gradient
@@ -275,9 +274,9 @@ contains
             self%volume_grad(3, jat) = self%volume_grad(3, jat) - dswitch*vol_weight*dz
 
             self%v1_rA(:, iat, ip) = self%v1_rA(:, iat, ip) &
-               & + dswitch*vol_weight*[dx, dy, dz]
+               & + dswitch*vol_weight*dvec
             self%v1_rA(:, jat, ip) = self%v1_rA(:, jat, ip) &
-               & - dswitch*vol_weight*[dx, dy, dz]
+               & - dswitch*vol_weight*dvec
          end do
 
          ! Volume geometric term (owner atom only)
@@ -293,6 +292,99 @@ contains
       end do
 
    end subroutine compute_gradient_iswig
+
+   !> Contract a surface adjoint into the nuclear gradient (reverse mode)
+   !>
+   !> Accumulates `dE/dR_A` for the energy whose surface adjoints `acc` holds,
+   !> without ever forming the `(3, nsph, ngrid)` forward Jacobians
+   !>
+   !> The result is *added* to `gradient`, so several passes can share one 
+   !> accumulator
+   !>
+   !> @param[in]    self     iSwiG cavity instance (must hold an updated grid)
+   !> @param[in]    acc      Accumulated surface-observable adjoints
+   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[out]   error    Error object, allocated on failure
+   subroutine get_surface_gradient_iswig(self, acc, gradient, error)
+      !> iSwiG cavity instance
+      class(cavity_type_iswig), intent(in) :: self
+      !> Accumulated surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Grid, owner and neighbour sphere indices
+      integer :: igrid, iat, jat
+      !> Effective switching adjoint, area channel folded in
+      real(wp) :: w_f_eff
+      !> Point-to-center separation and the radial switching derivative
+      real(wp) :: dvec(3), dfdr
+      !> Gradient contribution of one (point, sphere) pair
+      real(wp) :: contribution(3)
+
+      if (.not. acc%is_initialized()) then
+         call fatal_error(error, "get_surface_gradient_iswig: accumulator is not initialized")
+         return
+      end if
+      if (size(acc%w_xi) /= self%ngrid) then
+         call fatal_error(error, "get_surface_gradient_iswig: accumulator grid size mismatch")
+         return
+      end if
+      if (any(shape(gradient) /= [3, self%nsph])) then
+         call fatal_error(error, "get_surface_gradient_iswig: gradient shape mismatch")
+         return
+      end if
+      if (.not. allocated(self%xyz) .or. .not. allocated(self%owner) .or. &
+          .not. allocated(self%sphxyz) .or. .not. allocated(self%radii) .or. &
+          .not. allocated(self%wleb) .or. .not. allocated(self%xi0) .or. &
+          .not. allocated(self%f)) then
+         call fatal_error(error, "get_surface_gradient_iswig: cavity surface data are incomplete")
+         return
+      end if
+
+      ! Geometry-dependent radii would move the width, weight, normal and
+      ! curvature channels this routine drops, and the forward path in
+      ! [[compute_gradient_iswig]] ignores them just as completely.
+      if (allocated(self%radius_model)) then
+         if (allocated(self%radius_model%f1_rA)) then
+            if (any(self%radius_model%f1_rA /= 0.0_wp)) then
+               call fatal_error(error, "get_surface_gradient_iswig: radii models with a "// &
+                                "nuclear dependence are not supported")
+               return
+            end if
+         end if
+      end if
+
+      if (self%ngrid <= 0) return
+
+      do igrid = 1, self%ngrid
+         iat = self%owner(igrid)
+
+         !* --------------------------- Position channel --------------------------- *!
+         gradient(:, iat) = gradient(:, iat) + acc%w_xyz(:, igrid)
+
+         !* -------------------------- Switching channel -------------------------- *!
+         ! a_i = R_I^2 wleb_i f_i, and neither radius nor Lebedev weight moves,
+         ! so the area adjoint enters purely through df_i/dR_A.
+         w_f_eff = acc%w_f(igrid) &
+                   + acc%w_a(igrid)*self%radii(iat)**2*self%wleb(igrid)
+         if (w_f_eff == 0.0_wp) cycle
+
+         do jat = 1, self%nsph
+            if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
+
+            call swi_pair_dfdr(self%xyz(:, igrid), self%sphxyz(:, jat), self%xi0(igrid), &
+                               self%radii(jat), self%f(igrid), dvec, dfdr)
+
+            contribution = w_f_eff*dfdr*dvec
+            gradient(:, iat) = gradient(:, iat) + contribution
+            gradient(:, jat) = gradient(:, jat) - contribution
+         end do
+      end do
+
+   end subroutine get_surface_gradient_iswig
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
    subroutine ensure_lebedev_cache(self, error)
@@ -636,5 +728,61 @@ contains
       arg_minus_sq = arg_minus*arg_minus
 
    end subroutine factors_swi_derivs
+
+   !> Derivative of a switching factor with respect to one sphere center
+   !>
+   !> `f_i` is the product of the elementary switching factors over all spheres
+   !> other than the owner, so its derivative with respect to the separation
+   !> from sphere `j` factorizes into `f_i` times the logarithmic derivative of
+   !> that one factor. The result is returned as the radial coefficient `dfdr`
+   !> and the separation vector `dvec`, with
+   !>
+   !>   d f_i / d r  =  dfdr * dvec  =  -d f_i / d c_j
+   !>
+   !> Shared by the forward Jacobian in [[compute_gradient_iswig]] and the
+   !> reverse contraction in [[get_surface_gradient_iswig]] so that both paths
+   !> evaluate the identical expression.
+   !>
+   !> @param[in]  point  Grid point position
+   !> @param[in]  center Sphere center position
+   !> @param[in]  zeta   Gaussian width of the grid point
+   !> @param[in]  radius Radius of the sphere
+   !> @param[in]  f_val  Switching factor of the grid point
+   !> @param[out] dvec   Separation of point and sphere center
+   !> @param[out] dfdr   Radial derivative coefficient
+   pure subroutine swi_pair_dfdr(point, center, zeta, radius, f_val, dvec, dfdr)
+      !> Grid point position
+      real(wp), intent(in) :: point(3)
+      !> Sphere center position
+      real(wp), intent(in) :: center(3)
+      !> Gaussian width of the grid point
+      real(wp), intent(in) :: zeta
+      !> Radius of the sphere
+      real(wp), intent(in) :: radius
+      !> Switching factor of the grid point
+      real(wp), intent(in) :: f_val
+
+      !> Separation of point and sphere center
+      real(wp), intent(out) :: dvec(3)
+      !> Radial derivative coefficient
+      real(wp), intent(out) :: dfdr
+
+      !> Separation components and distance
+      real(wp) :: dx, dy, dz, dist
+      !> Error-function arguments and the elementary switching factor
+      real(wp) :: arg_plus, arg_minus, arg_plus_sq, arg_minus_sq, switch_pair
+
+      call factors_swi_derivs(point, center, zeta, radius, &
+                              dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
+
+      arg_plus = zeta*(radius + dist)
+      arg_minus = zeta*(radius - dist)
+      switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
+
+      dfdr = -f_val*zeta/(sqrt(pi)*switch_pair*dist) &
+            & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))
+      dvec = [dx, dy, dz]
+
+   end subroutine swi_pair_dfdr
 
 end module moist_cavity_iswig
