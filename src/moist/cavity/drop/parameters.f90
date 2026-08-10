@@ -104,9 +104,9 @@ module moist_cavity_drop_parameters
 
       !> ========== Switching Functions ==========
 
-      !> Start of critical level-set weight switching transition
+      !> Start of critical level set weight switching transition
       real(wp) :: w_0ls_from = 0.25_wp
-      !> End of critical level-set weight switching transition
+      !> End of critical level set weight switching transition
       real(wp) :: w_0ls_to = 0.6_wp
 
       !> Start of focal/branching weight switching transition
@@ -330,35 +330,35 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
 
       ! Grid
-      call self%register_int_scalar('grid.num_leb', self%num_leb)
+      call self%register_int_scalar("grid.num_leb", self%num_leb)
       ! Tolerance (master; wleb_cut, proj_tol, branch_sep are derived;
       ! LSF screening lives on the LSF concrete and is not registered here)
-      call self%register_real_scalar('tolerance', self%tolerance)
+      call self%register_real_scalar("tolerance", self%tolerance)
       ! Objective
-      call self%register_real_scalar('objective.alpha', self%phi_alpha)
+      call self%register_real_scalar("objective.alpha", self%phi_alpha)
       ! Projection
-      call self%register_int_scalar('projection.maxiter', self%proj_maxiter)
-      call self%register_int_scalar('projection.level', self%proj_level)
+      call self%register_int_scalar("projection.maxiter", self%proj_maxiter)
+      call self%register_int_scalar("projection.level", self%proj_level)
       ! Screening
-      call self%register_int_scalar('screening.cell_grid_full_scan_below', &
+      call self%register_int_scalar("screening.cell_grid_full_scan_below", &
                                     self%cell_grid_full_scan_below)
-      call self%register_real_scalar('screening.cell_grid_fraction', &
+      call self%register_real_scalar("screening.cell_grid_fraction", &
                                      self%cell_grid_fraction)
       ! Switching
-      call self%register_real_scalar('switching.w_0ls_from', self%w_0ls_from)
-      call self%register_real_scalar('switching.w_0ls_to', self%w_0ls_to)
-      call self%register_real_scalar('switching.w_0ls_p', self%w_0ls_p)
-      call self%register_real_scalar('switching.w_0ls_a', self%w_0ls_a)
-      call self%register_real_scalar('switching.w_0tra_from', self%w_0tra_from)
-      call self%register_real_scalar('switching.w_0tra_to', self%w_0tra_to)
+      call self%register_real_scalar("switching.w_0ls_from", self%w_0ls_from)
+      call self%register_real_scalar("switching.w_0ls_to", self%w_0ls_to)
+      call self%register_real_scalar("switching.w_0ls_p", self%w_0ls_p)
+      call self%register_real_scalar("switching.w_0ls_a", self%w_0ls_a)
+      call self%register_real_scalar("switching.w_0tra_from", self%w_0tra_from)
+      call self%register_real_scalar("switching.w_0tra_to", self%w_0tra_to)
       ! Weight switching (from/to are derived)
-      call self%register_int_scalar('switching.wleb_prune_level', self%wleb_prune_level)
+      call self%register_int_scalar("switching.wleb_prune_level", self%wleb_prune_level)
       ! Density
-      call self%register_real_scalar('density.rho_grid_h', self%rho_grid_h)
+      call self%register_real_scalar("density.rho_grid_h", self%rho_grid_h)
       ! Branching
-      call self%register_real_scalar('branching.softmax_scale', self%branch_weight_s)
+      call self%register_real_scalar("branching.softmax_scale", self%branch_weight_s)
       ! Disconnected points
-      call self%register_real_scalar('disconnection.threshold', self%disconnection_thrs)
+      call self%register_real_scalar("disconnection.threshold", self%disconnection_thrs)
 
    end subroutine register_cavity_drop_entries
 
@@ -409,86 +409,95 @@ contains
 
       select case (self%proj_level)
       case (1)
-         label = 'SLSQP'
+         label = "SLSQP"
       case (2)
-         label = 'SLSQP + Newton'
+         label = "SLSQP + Newton"
       case (3)
-         label = 'Conditional multi-tangent'
+         label = "Conditional multi-tangent"
       case (4)
-         label = 'Conditional SLSQP-deflation'
+         label = "Conditional SLSQP-deflation"
       case (5)
-         label = 'SLSQP-deflation'
+         label = "SLSQP-deflation"
       case (6)
-         label = 'Newton-deflation (4D KKT)'
+         label = "Newton-deflation (4D KKT)"
       case (7)
-         label = 'Regular SLSQP multistart'
+         label = "Regular SLSQP multistart"
       case (8)
-         label = 'Fine SLSQP multistart reference'
+         label = "Fine SLSQP multistart reference"
       case default
-         label = 'unknown'
+         label = "unknown"
       end select
    end function get_proj_level_label
 
-   !> Print current parameter values to standard output
+   !> Print current parameter values
    !> @param[in] self Parameter container to display
-   subroutine print_parameters(self)
+   !> @param[in] unit Output unit (default `output_unit`); callers holding a run
+   !>                 context pass `ctx%unit` so this honours a log file
+   subroutine print_parameters(self, unit)
       class(moist_cavity_drop_parameters_type), intent(in) :: self
+      !> Output unit override
+      integer, intent(in), optional :: unit
       type(prettyprinter) :: pp
+      !> Effective output unit
+      integer :: iu
 
-      pp = new_prettyprinter(unit=output_unit)
+      iu = output_unit
+      if (present(unit)) iu = unit
+
+      pp = new_prettyprinter(unit=iu)
 
       call pp%blank()
-      call pp%push('Cavity Parameters:')
+      call pp%push("Cavity Parameters:")
 
-      call pp%push('Discretization:')
-      call pp%kv('Number of Leb. points', self%num_leb)
+      call pp%push("Discretization:")
+      call pp%kv("Number of Leb. points", self%num_leb)
       call pp%pop()
 
-      call pp%push('Tolerance:')
-      call pp%kv('Main tolerance', self%tolerance)
-      call pp%kv('Projection tol.', self%proj_tol)
-      call pp%kv('Screening threshold', self%screening_threshold)
-      call pp%kv('Weight cutoff', self%wleb_cut)
-      call pp%kv('Branch sep. cutoff', self%branch_sep_cut)
+      call pp%push("Tolerance:")
+      call pp%kv("Main tolerance", self%tolerance)
+      call pp%kv("Projection tol.", self%proj_tol)
+      call pp%kv("Screening threshold", self%screening_threshold)
+      call pp%kv("Weight cutoff", self%wleb_cut)
+      call pp%kv("Branch sep. cutoff", self%branch_sep_cut)
       call pp%pop()
 
-      call pp%push('Switching:')
-      call pp%kv('f_crit start', self%w_0ls_from)
-      call pp%kv('f_crit end', self%w_0ls_to)
-      call pp%kv('f_foc start', self%w_0tra_from)
-      call pp%kv('f_foc end', self%w_0tra_to)
-      call pp%kv('Wleb switch level', self%wleb_prune_level)
+      call pp%push("Switching:")
+      call pp%kv("f_crit start", self%w_0ls_from)
+      call pp%kv("f_crit end", self%w_0ls_to)
+      call pp%kv("f_foc start", self%w_0tra_from)
+      call pp%kv("f_foc end", self%w_0tra_to)
+      call pp%kv("Wleb switch level", self%wleb_prune_level)
       if (self%wleb_prune_level > 0) then
-         call pp%kv('Wleb switch from', self%wleb_prune_from)
-         call pp%kv('Wleb switch to', self%wleb_prune_to)
+         call pp%kv("Wleb switch from", self%wleb_prune_from)
+         call pp%kv("Wleb switch to", self%wleb_prune_to)
       end if
       call pp%pop()
 
-      call pp%push('Gaussians:')
-      call pp%kv('xi_born', self%iswig_xi_born)
+      call pp%push("Gaussians:")
+      call pp%kv("xi_born", self%iswig_xi_born)
       call pp%pop()
 
-      call pp%push('Objective function:')
-      call pp%kv('Alpha', self%phi_alpha)
+      call pp%push("Objective function:")
+      call pp%kv("Alpha", self%phi_alpha)
       call pp%pop()
 
-      call pp%push('Projection settings:')
-      call pp%kv('Projection level', self%proj_level, self%proj_level_label())
-      call pp%kv('Maximum iterations', self%proj_maxiter)
+      call pp%push("Projection settings:")
+      call pp%kv("Projection level", self%proj_level, self%proj_level_label())
+      call pp%kv("Maximum iterations", self%proj_maxiter)
       call pp%pop()
 
-      call pp%push('Branching:')
-      call pp%kv('Softmax scale', self%branch_weight_s)
-      call pp%kv('Rho cutoff', self%branch_rho_cut, 'Bohr')
+      call pp%push("Branching:")
+      call pp%kv("Softmax scale", self%branch_weight_s)
+      call pp%kv("Rho cutoff", self%branch_rho_cut, "Bohr")
       call pp%pop()
 
-      call pp%push('Screening:')
-      call pp%kv('Cell grid full-scan below', self%cell_grid_full_scan_below, 'atoms')
-      call pp%kv('Cell grid fraction', self%cell_grid_fraction)
+      call pp%push("Screening:")
+      call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
+      call pp%kv("Cell grid fraction", self%cell_grid_fraction)
       call pp%pop()
 
-      call pp%push('Disconnected points:')
-      call pp%kv('Distance threshold', self%disconnection_thrs)
+      call pp%push("Disconnected points:")
+      call pp%kv("Distance threshold", self%disconnection_thrs)
       call pp%pop()
 
    end subroutine print_parameters

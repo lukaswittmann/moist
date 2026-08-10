@@ -1,5 +1,6 @@
 module moist_cavity_drop_types
    use mctc_env_accuracy, only: wp
+   use mctc_env, only: error_type, fatal_error
    use moist_utils_mem, only: grow_array
 
    implicit none
@@ -123,13 +124,20 @@ contains
    !>
    !> @param[inout] self Projection workspace instance
    !> @param[in]    initial_capacity Optional initial branch capacity
-   subroutine projection_workspace_init(self, initial_capacity)
+   subroutine projection_workspace_init(self, initial_capacity, error)
       class(projection_workspace_type), intent(inout) :: self
       integer, intent(in), optional :: initial_capacity
+      type(error_type), allocatable, intent(out) :: error
 
       call self%destroy()
       if (present(initial_capacity)) then
-         if (initial_capacity > 0) call self%reserve(initial_capacity)
+         if (initial_capacity > 0) then
+            call self%reserve(initial_capacity, error)
+            if (allocated(error)) then
+               call fatal_error(error, "Projection workspace allocation failure")
+               return
+            end if
+         end if
       end if
    end subroutine projection_workspace_init
 
@@ -145,22 +153,30 @@ contains
    !>
    !> @param[inout] self Projection workspace instance
    !> @param[in]    required_capacity Minimum required capacity
-   subroutine projection_workspace_reserve(self, required_capacity)
+   subroutine projection_workspace_reserve(self, required_capacity, error)
       class(projection_workspace_type), intent(inout) :: self
       integer, intent(in) :: required_capacity
+      type(error_type), allocatable, intent(out) :: error
       integer :: new_capacity
 
       if (required_capacity <= self%capacity) return
 
       new_capacity = projection_buffer_grow_capacity(self%capacity, required_capacity)
 
-      call grow_array(self%points, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%normals, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%rho, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%lambda, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%phi, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%branch_weights, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%converged, new_capacity, fill_value=.false.)
+      call grow_array(self%points, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%normals, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%rho, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%lambda, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%phi, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%branch_weights, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%converged, new_capacity, fill_value=.false., error=error)
+      if (allocated(error)) return
 
       self%capacity = new_capacity
    end subroutine projection_workspace_reserve
@@ -170,12 +186,14 @@ contains
    !> @param[inout] self Projection workspace instance
    !> @param[in]    point Branch point coordinates
    !> @param[in]    converged_flag Convergence flag for the branch
-   subroutine projection_workspace_set_single(self, point, converged_flag)
+   subroutine projection_workspace_set_single(self, point, converged_flag, error)
       class(projection_workspace_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       logical, intent(in) :: converged_flag
+      type(error_type), allocatable, intent(out) :: error
 
-      call self%reserve(1)
+      call self%reserve(1, error)
+      if (allocated(error)) return
       self%n_points = 1
       self%points(:, 1) = point
       self%normals(:, 1) = 0.0_wp
@@ -225,13 +243,20 @@ contains
    !>
    !> @param[inout] self Projection buffer instance
    !> @param[in]    initial_capacity Optional initial capacity
-   subroutine projection_buffer_init(self, initial_capacity)
+   subroutine projection_buffer_init(self, initial_capacity, error)
       class(projection_buffer_type), intent(inout) :: self
       integer, intent(in), optional :: initial_capacity
+      type(error_type), intent(out), allocatable :: error
 
       call self%destroy()
       if (present(initial_capacity)) then
-         if (initial_capacity > 0) call self%reserve(initial_capacity)
+         if (initial_capacity > 0) then
+            call self%reserve(initial_capacity, error)
+            if (allocated(error)) then
+               call fatal_error(error, "Projection buffer allocation failure")
+               return
+            end if
+         end if
       end if
    end subroutine projection_buffer_init
 
@@ -247,9 +272,10 @@ contains
    !>
    !> @param[inout] self Projection buffer instance
    !> @param[in]    required_capacity Minimum capacity to guarantee
-   subroutine projection_buffer_reserve(self, required_capacity)
+   subroutine projection_buffer_reserve(self, required_capacity, error)
       class(projection_buffer_type), intent(inout) :: self
       integer, intent(in) :: required_capacity
+      type(error_type), allocatable, intent(out) :: error
 
       integer :: new_capacity
 
@@ -257,26 +283,43 @@ contains
 
       new_capacity = projection_buffer_grow_capacity(self%capacity, required_capacity)
 
-      call grow_array(self%xyz, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%anchorxyz, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%normal0, 3, new_capacity, fill_value=0.0_wp)
+      call grow_array(self%xyz, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchorxyz, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%normal0, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
 
-      call grow_array(self%wleb, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%anchor_wleb0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%lambda0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%iswig_f0, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%f, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%anchor_xi0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%rho, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%wbranch, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%phi0, new_capacity, fill_value=0.0_wp)
+      call grow_array(self%wleb, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_wleb0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%lambda0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%iswig_f0, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%f, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_xi0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%rho, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%wbranch, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%phi0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
 
-      call grow_array(self%owner, new_capacity, fill_value=0)
-      call grow_array(self%branch, new_capacity, fill_value=1)
-      call grow_array(self%anchor_id, new_capacity, fill_value=0)
-      call grow_array(self%branch_count, new_capacity, fill_value=1)
+      call grow_array(self%owner, new_capacity, fill_value=0, error=error)
+      if (allocated(error)) return
+      call grow_array(self%branch, new_capacity, fill_value=1, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_id, new_capacity, fill_value=0, error=error)
+      if (allocated(error)) return
+      call grow_array(self%branch_count, new_capacity, fill_value=1, error=error)
+      if (allocated(error)) return
 
-      call grow_array(self%converged, new_capacity, fill_value=.false.)
+      call grow_array(self%converged, new_capacity, fill_value=.false., error=error)
+      if (allocated(error)) return
 
       self%capacity = new_capacity
    end subroutine projection_buffer_reserve
@@ -298,10 +341,9 @@ contains
    !> @param[in]    proj_normals Projected branch normal vectors
    !> @param[in]    proj_converged Branch convergence flags
    !> @param[in]    branch_weights Branch weights
-   !> @param[out]   ok Append success flag (optional)
    subroutine projection_buffer_append_branches(self, anchor_xyz, owner, wleb, anchor_wleb0, &
                                                 iswig_f0, f, anchor_xi0, anchor_id, proj_points, proj_rho, proj_lambda, &
-                                                proj_normals, proj_converged, branch_weights, proj_phi, ok)
+                                                proj_normals, proj_converged, branch_weights, proj_phi, error)
       class(projection_buffer_type), intent(inout) :: self
       real(wp), intent(in) :: anchor_xyz(3)
       integer, intent(in) :: owner
@@ -318,7 +360,7 @@ contains
       logical, intent(in) :: proj_converged(:)
       real(wp), intent(in) :: branch_weights(:)
       real(wp), intent(in) :: proj_phi(:)
-      logical, intent(out), optional :: ok
+      type(error_type), intent(out), allocatable :: error
 
       integer :: ib, idx, n_branch, first_idx, last_idx
       logical :: valid
@@ -333,14 +375,14 @@ contains
       valid = valid .and. size(proj_converged) == n_branch
       valid = valid .and. size(branch_weights) == n_branch
       valid = valid .and. size(proj_phi) == n_branch
-      if (.not. valid) then
-         if (present(ok)) ok = .false.
-         return
-      end if
 
       first_idx = self%n_used + 1
       last_idx = self%n_used + n_branch
-      call self%reserve(last_idx)
+      call self%reserve(last_idx, error)
+      if (allocated(error)) then
+         call fatal_error(error, "Projection buffer allocation failure")
+         return
+      end if
 
       do ib = 1, n_branch
          idx = first_idx + ib - 1
@@ -364,7 +406,6 @@ contains
       end do
 
       self%n_used = last_idx
-      if (present(ok)) ok = .true.
    end subroutine projection_buffer_append_branches
 
    !> Append branches from a projection workspace
@@ -381,7 +422,7 @@ contains
    !> @param[in]    anchor_id Anchor group id
    !> @param[out]   ok Append success flag (optional)
    subroutine projection_buffer_add_workspace(self, work, anchor_xyz, owner, wleb, anchor_wleb0, &
-                                              iswig_f0, f, anchor_xi0, anchor_id, ok)
+                                              iswig_f0, f, anchor_xi0, anchor_id, error)
       class(projection_buffer_type), intent(inout) :: self
       type(projection_workspace_type), intent(in) :: work
       real(wp), intent(in) :: anchor_xyz(3)
@@ -392,12 +433,12 @@ contains
       real(wp), intent(in) :: f
       real(wp), intent(in) :: anchor_xi0
       integer, intent(in) :: anchor_id
-      logical, intent(out), optional :: ok
+      type(error_type), intent(out), allocatable :: error
       integer :: n_branch
 
       n_branch = work%size()
       if (n_branch <= 0) then
-         if (present(ok)) ok = .false.
+         call fatal_error(error, "projection_buffer_add_workspace: no branches to append")
          return
       end if
 
@@ -417,7 +458,7 @@ contains
          proj_converged=work%converged(1:n_branch), &
          branch_weights=work%branch_weights(1:n_branch), &
          proj_phi=work%phi(1:n_branch), &
-         ok=ok)
+         error=error)
    end subroutine projection_buffer_add_workspace
 
    !> Return current number of stored projection entries

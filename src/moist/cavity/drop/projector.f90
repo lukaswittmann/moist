@@ -1,5 +1,5 @@
 
-!> Project anchor points onto an implicit level-set-function (LSF) surface.
+!> Project anchor points onto an implicit level set function (LSF) surface.
 !>
 !> Given an anchor point, this module finds the nearest point(s) on the
 !> surface LSF(x) = 0 by minimizing the quadratic anchor objective
@@ -292,7 +292,7 @@ contains
 
    !> Build a warm-started seed z = (x_init, lambda_init) for the
    !> Newton-deflation 4-D KKT system by taking one tangent-plane Newton
-   !> step toward the level-set surface from the anchor.
+   !> step toward the level set surface from the anchor.
    !>
    !> At z = (anchor, 0) the residual reduces to F = (0, 0, 0, -L(anchor)),
    !> so the inner solver's first Newton step has magnitude
@@ -539,15 +539,15 @@ contains
 
       ! Print header once
       if (iter == 1) then
-         write (output_unit, '(a6,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14)') &
-            'Iter', 'LSF', '||dLSF||', 'dPhi', 'rho', 'lambda', '||dL||', '|G|'
-         write (output_unit, '(A6,1X,7(A14,1X))') "-----", "--------------", &
+         write (output_unit, "(a6,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14)") &
+            "Iter", "LSF", "||dLSF||", "dPhi", "rho", "lambda", "||dL||", "|G|"
+         write (output_unit, "(A6,1X,7(A14,1X))") "-----", "--------------", &
             "--------------", "--------------", "--------------", "--------------", &
             "--------------", "--------------"
       end if
 
       ! Print iteration data with physically meaningful quantities
-      write (output_unit, '(i6,1x,7(e14.6,1x),3f12.4)') &
+      write (output_unit, "(i6,1x,7(e14.6,1x),3f12.4)") &
          iter, S_val, norm_grad_S, delta_phi, rho, lambda_val, norm_grad_L, constraint_viol
 
    end subroutine newton_debug_callback
@@ -585,8 +585,8 @@ contains
          stop_solver = .true.
          if (associated(ctx%projector)) then
             if (ctx%projector%debug) then
-               write (output_unit, '(a,f12.6,a,f12.6,a)') &
-                  '[displacement_check] Stopping: rho = ', rho, ' Bohr > threshold = ', ctx%threshold, ' Bohr'
+               write (output_unit, "(a,f12.6,a,f12.6,a)") &
+                  "[displacement_check] Stopping: rho = ", rho, " Bohr > threshold = ", ctx%threshold, " Bohr"
             end if
          end if
       end if
@@ -633,15 +633,15 @@ contains
 
       ! Print header on first iteration
       if (iter == 0) then
-         write (output_unit, '(a6,1x,a14,1x,a15,1x,a16,1x,a16,1x,a16,1x,a14)') &
-            'Iter', 'LSF', '||∇LSF||', 'ΔΦ (obj)', 'ρ', '||∇Φ||', '|G| (con)'
-         write (output_unit, '(A6,1X,6(A14,1X))') "-----", "--------------", &
+         write (output_unit, "(a6,1x,a14,1x,a15,1x,a16,1x,a16,1x,a16,1x,a14)") &
+            "Iter", "LSF", "||∇LSF||", "ΔΦ (obj)", "ρ", "||∇Φ||", "|G| (con)"
+         write (output_unit, "(A6,1X,6(A14,1X))") "-----", "--------------", &
             "--------------", "--------------", "--------------", "--------------", &
             "--------------"
       end if
 
       ! Print iteration data
-      write (output_unit, '(i6,1x,6(e14.6,1x))') &
+      write (output_unit, "(i6,1x,6(e14.6,1x))") &
          iter, S_val, norm_grad_S, delta_phi, rho, sqrt(sum(grad_phi**2)), abs(c(1))
 
    end subroutine slsqp_debug_callback
@@ -1062,8 +1062,8 @@ contains
 
       if (allocated(error)) then
          if (self%verbosity >= 3) then
-            write (output_unit, '(x,i12,x,a,a)') index, &
-               '[multi-SLSQP] Failed: ', trim(error%message)
+            write (output_unit, "(x,i12,x,a,a)") index, &
+               "[multi-SLSQP] Failed: ", trim(error%message)
          end if
          call solver%destroy()
          deallocate (solver)
@@ -1165,10 +1165,10 @@ contains
 
       if (allocated(error)) then
          if (self%verbosity >= 3) then
-            write (output_unit, '(x,i12,x,a,a)') index, &
-               '[single-SLSQP] Failed: ', trim(error%message)
-            write (output_unit, '(x,i12,x,a)') index, &
-               '[single-SLSQP] Resorting to Newton ...'
+            write (output_unit, "(x,i12,x,a,a)") index, &
+               "[single-SLSQP] Failed: ", trim(error%message)
+            write (output_unit, "(x,i12,x,a)") index, &
+               "[single-SLSQP] Resorting to Newton ..."
          end if
          deallocate (error)
       end if
@@ -1223,7 +1223,11 @@ contains
       !> workspace may still be unallocated on its first use, so skip the
       !> allocation sanity check.
       if (n_seeds > 0) then
-         call work%reserve(n_seeds)
+         call work%reserve(n_seeds, error)
+         if (allocated(error)) then
+            call fatal_error(error, "Projection workspace allocation failure")
+            return
+         end if
          if (.not. allocated(work%points) .or. .not. allocated(work%normals) .or. &
              .not. allocated(work%rho) .or. .not. allocated(work%lambda) .or. &
              .not. allocated(work%phi) .or. .not. allocated(work%converged) .or. &
@@ -1242,7 +1246,13 @@ contains
          ! Still populate diagnostics (rho, phi, normal, lambda estimate)
          do i_seed = 1, n_seeds
             n_points = n_points + 1
-            if (n_points > work%capacity) call work%reserve(n_points)
+            if (n_points > work%capacity) then
+               call work%reserve(n_points, error)
+               if (allocated(error)) then
+                  call fatal_error(error, "Projection workspace allocation failure")
+                  return
+               end if
+            end if
             work%points(:, n_points) = x_seeds(:, i_seed)
             work%rho(n_points) = sqrt(dot_product( &
                                       x_seeds(:, i_seed) - anchor, x_seeds(:, i_seed) - anchor))
@@ -1292,9 +1302,9 @@ contains
                failed_indices(n_failed) = i_seed
                seed_error_msgs(n_failed) = error%message
                if (self%verbosity >= 3) then
-                  write (output_unit, '(x,i12,x,a,i0,a,a)') index, &
-                     '[refinement] Dropping branch ', i_seed, &
-                     ': ', trim(error%message)
+                  write (output_unit, "(x,i12,x,a,i0,a,a)") index, &
+                     "[refinement] Dropping branch ", i_seed, &
+                     ": ", trim(error%message)
                end if
                deallocate (error)
                cycle
@@ -1309,7 +1319,13 @@ contains
             end if
 
             n_points = n_points + 1
-            if (n_points > work%capacity) call work%reserve(n_points)
+            if (n_points > work%capacity) then
+               call work%reserve(n_points, error)
+               if (allocated(error)) then
+                  call fatal_error(error, "Projection workspace allocation failure")
+                  return
+               end if
+            end if
             work%points(:, n_points) = x_refined(:)
             work%lambda(n_points) = lambda_refined
             work%rho(n_points) = rho_refined
@@ -1322,12 +1338,12 @@ contains
          ! here - let the caller handle fallback via n_points == 0)
          if (n_points == 0 .and. n_failed > 0) then
             if (self%verbosity >= 3) then
-               write (output_unit, '(x,i12,x,a,i0,a,i0,a)') &
-                  index, '[refinement] All ', n_failed, ' of ', n_seeds, &
-                  ' seed(s) failed:'
+               write (output_unit, "(x,i12,x,a,i0,a,i0,a)") &
+                  index, "[refinement] All ", n_failed, " of ", n_seeds, &
+                  " seed(s) failed:"
                do i_seed = 1, n_failed
-                  write (output_unit, '(x,i12,x,a,i0,a,a)') &
-                     index, '[refinement]   seed ', failed_indices(i_seed), ': ', &
+                  write (output_unit, "(x,i12,x,a,i0,a,a)") &
+                     index, "[refinement]   seed ", failed_indices(i_seed), ": ", &
                      trim(seed_error_msgs(i_seed))
                end do
             end if
@@ -1439,8 +1455,8 @@ contains
       if (allocated(error)) then
          if (level >= 7) return
          if (self%verbosity >= 3) then
-            write (output_unit, '(x,i12,x,a,a)') index, &
-               '[solver-fail] Falling back to multistart: ', trim(error%message)
+            write (output_unit, "(x,i12,x,a,a)") index, &
+               "[solver-fail] Falling back to multistart: ", trim(error%message)
          end if
          deallocate (error)
          n_seeds = 0
@@ -1458,8 +1474,8 @@ contains
 
       if (n_points == 0 .and. level < 7) then
          if (self%verbosity >= 3) then
-            write (output_unit, '(x,i12,x,a)') &
-               index, '[fallback] Previous run produced 0 points, retrying with multistart'
+            write (output_unit, "(x,i12,x,a)") &
+               index, "[fallback] Previous run produced 0 points, retrying with multistart"
          end if
 
          if (allocated(x_seeds)) deallocate (x_seeds)
@@ -1479,7 +1495,7 @@ contains
                                 rho_max, x_seeds, n_seeds, work, n_points, error)
          if (allocated(error)) return
          if (self%verbosity >= 3) then
-            write (output_unit, '(1x,i12,x,a,i0,a)') &
+            write (output_unit, "(1x,i12,x,a,i0,a)") &
                index, "[fallback] Multistart produced ", n_points, " candidate points"
          end if
       end if
@@ -1639,47 +1655,47 @@ contains
 
       if (self%debug) then
          if (n_selected > 1) then
-            write (output_unit, '(x,a,i0)') 'Number of unique minima found: ', n_selected
-            write (output_unit, '(x,a)')
-            write (output_unit, '(x,a,3f22.14)') 'Anchor point:', anchor(1), anchor(2), anchor(3)
-            write (output_unit, '(x,a)')
+            write (output_unit, "(x,a,i0)") "Number of unique minima found: ", n_selected
+            write (output_unit, "(x,a)")
+            write (output_unit, "(x,a,3f22.14)") "Anchor point:", anchor(1), anchor(2), anchor(3)
+            write (output_unit, "(x,a)")
 
             minima_tbl = new_prettylistprinter( &
                          widths=[10, 22, 22, 22, 22], &
-                         headers=[character(len=22) :: 'Minimum', 'Rho', 'x', 'y', 'z'], &
+                         headers=[character(len=22) :: "Minimum", "Rho", "x", "y", "z"], &
                          unit=output_unit, offset=1, fmt_len=22, column_gap=0)
             call minima_tbl%print_header()
             call minima_tbl%separator()
             do j = 1, n_selected
                dist2_i = norm2(unique(:, j) - anchor)
-               write (idx_label, '(I0)') j
+               write (idx_label, "(I0)") j
                call minima_tbl%begin_row()
                call minima_tbl%add(trim(idx_label))
-               call minima_tbl%add(dist2_i, 'F22.14')
-               call minima_tbl%add(unique(1, j), 'F22.14')
-               call minima_tbl%add(unique(2, j), 'F22.14')
-               call minima_tbl%add(unique(3, j), 'F22.14')
+               call minima_tbl%add(dist2_i, "F22.14")
+               call minima_tbl%add(unique(1, j), "F22.14")
+               call minima_tbl%add(unique(2, j), "F22.14")
+               call minima_tbl%add(unique(3, j), "F22.14")
                call minima_tbl%end_row()
             end do
 
-            write (output_unit, '(x,a)')
-            write (output_unit, '(x,a)') 'Distance matrix between unique minima:'
-            write (output_unit, '(x,a)')
+            write (output_unit, "(x,a)")
+            write (output_unit, "(x,a)") "Distance matrix between unique minima:"
+            write (output_unit, "(x,a)")
 
             allocate (dist_widths(n_selected + 1), source=10)
             allocate (character(len=10) :: dist_headers(n_selected + 1))
-            dist_headers(1) = 'i\j'
+            dist_headers(1) = "i\j"
             do j = 1, n_selected
-               write (idx_label, '(I0)') j
+               write (idx_label, "(I0)") j
                dist_headers(j + 1) = trim(idx_label)
             end do
 
             dist_tbl = new_prettylistprinter( &
                        widths=dist_widths, headers=dist_headers, unit=output_unit, offset=1, &
-                       fmt_len=10, fmt_real='F10.2', fmt_exp='ES10.2', column_gap=0)
+                       fmt_len=10, fmt_real="F10.2", fmt_exp="ES10.2", column_gap=0)
             call dist_tbl%print_header()
             do i = 1, n_selected
-               write (idx_label, '(I0)') i
+               write (idx_label, "(I0)") i
                call dist_tbl%begin_row()
                call dist_tbl%add(trim(idx_label))
                do j = 1, n_selected
@@ -1687,7 +1703,7 @@ contains
                      call dist_tbl%skip()
                   else
                      dist2_i = sqrt(sum((unique(:, i) - unique(:, j))**2))
-                     call dist_tbl%add(dist2_i, 'ES10.2')
+                     call dist_tbl%add(dist2_i, "ES10.2")
                   end if
                end do
                call dist_tbl%end_row()
@@ -1695,9 +1711,9 @@ contains
             if (allocated(dist_widths)) deallocate (dist_widths)
             if (allocated(dist_headers)) deallocate (dist_headers)
          else
-            write (output_unit, '(x,a)') 'Only one unique minimum found.'
+            write (output_unit, "(x,a)") "Only one unique minimum found."
          end if
-         write (output_unit, '(x,a)')
+         write (output_unit, "(x,a)")
       end if
 
       deallocate (unique)
@@ -1827,7 +1843,7 @@ contains
       call solver%solve(z_solution, error)
       if (allocated(error)) then
          if (self%verbosity >= 3) then
-            write (output_unit, '(x,i12,x,a,a)') index, '[Newton] ', trim(error%message)
+            write (output_unit, "(x,i12,x,a,a)") index, "[Newton] ", trim(error%message)
          end if
          return
       end if
@@ -1848,7 +1864,7 @@ contains
 
          if (allocated(error)) then
             if (self%verbosity >= 3) then
-               write (output_unit, '(x,i12,x,a,a)') index, '[optimality] ', trim(error%message)
+               write (output_unit, "(x,i12,x,a,a)") index, "[optimality] ", trim(error%message)
             end if
             deallocate (error)
          end if
@@ -1865,7 +1881,7 @@ contains
 
          if (is_saddle) then
             if (self%verbosity >= 3) then
-               write (output_unit, '(1x,i12,x,a)') &
+               write (output_unit, "(1x,i12,x,a)") &
                   index, "[optimality] Saddle point detected, attempting escape ..."
             end if
 
@@ -1920,18 +1936,18 @@ contains
 
             if (self%verbosity >= 3) then
                if (is_saddle .and. is_kkt) then
-                  write (output_unit, '(1x,i12,x,a)') &
-                     index, '[optimality] Failed to escape saddle point!'
+                  write (output_unit, "(1x,i12,x,a)") &
+                     index, "[optimality] Failed to escape saddle point!"
                else
-                  write (output_unit, '(1x,i12,x,a)') &
-                     index, '[optimality] Escape successful!'
+                  write (output_unit, "(1x,i12,x,a)") &
+                     index, "[optimality] Escape successful!"
                end if
             end if
 
             if (allocated(error)) then
                if (self%verbosity >= 3) then
-                  write (output_unit, '(x,i12,x,a,a)') index, &
-                     '[optimality] Newton after escape failed: ', trim(error%message)
+                  write (output_unit, "(x,i12,x,a,a)") index, &
+                     "[optimality] Newton after escape failed: ", trim(error%message)
                end if
                return
             end if
@@ -1958,12 +1974,12 @@ contains
       rho_actual = sqrt(dot_product(gridpoint - anchor, gridpoint - anchor))
 
       if (self%debug) then
-         write (output_unit, '(a)') '[projector] Converged! Projection results:'
-         write (output_unit, '(a,i12)') '  anchor ID   = ', index
-         write (output_unit, '(a,3f12.6)') '  anchor      = ', anchor
-         write (output_unit, '(a,3f12.6)') '  gridpoint   = ', gridpoint
-         write (output_unit, '(a,es12.4)') '  lambda      = ', lambda_curr
-         write (output_unit, '(a,f12.6,a)') '  rho         = ', rho_actual, ' Bohr'
+         write (output_unit, "(a)") "[projector] Converged! Projection results:"
+         write (output_unit, "(a,i12)") "  anchor ID   = ", index
+         write (output_unit, "(a,3f12.6)") "  anchor      = ", anchor
+         write (output_unit, "(a,3f12.6)") "  gridpoint   = ", gridpoint
+         write (output_unit, "(a,es12.4)") "  lambda      = ", lambda_curr
+         write (output_unit, "(a,f12.6,a)") "  rho         = ", rho_actual, " Bohr"
       end if
 
       if (present(normal_out)) then
@@ -2039,10 +2055,10 @@ contains
       if (present(is_converged)) is_converged = .false.
 
       if (self%debug) then
-         write (output_unit, '(x,a,2x,a,2x,a)') &
-            '===================================', &
-            'Stability analysis', &
-            '==================================='
+         write (output_unit, "(x,a,2x,a,2x,a)") &
+            "===================================", &
+            "Stability analysis", &
+            "==================================="
       end if
 
       ! Step 0: Verify KKT conditions
@@ -2058,10 +2074,10 @@ contains
       norm_grad_S = sqrt(dot_product(grad_S, grad_S))
       if (norm_grad_S < tol_grad) then
          if (self%verbosity >= 2) then
-            write (output_unit, '(x,i12,x,a,es12.4)') index, &
-               '[KKT check] Degenerate LSF gradient ||grad_S|| = ', norm_grad_S
-            write (output_unit, '(x,i12,x,a)') index, &
-               '[KKT check] Constraint qualification violated - classification unreliable'
+            write (output_unit, "(x,i12,x,a,es12.4)") index, &
+               "[KKT check] Degenerate LSF gradient ||grad_S|| = ", norm_grad_S
+            write (output_unit, "(x,i12,x,a)") index, &
+               "[KKT check] Constraint qualification violated - classification unreliable"
          end if
          return ! Cannot reliably classify
       end if
@@ -2072,23 +2088,23 @@ contains
       res_stat = sqrt(dot_product(grad_L, grad_L))
 
       if (self%debug) then
-         write (output_unit, '(x,a)') 'KKT verification:'
-         write (output_unit, '(3x,a,es12.4,a,es12.4,a)') &
-            'Feasibility   |S(r*)| = ', res_feas, '  (tol: ', tol_feas, ')'
-         write (output_unit, '(3x,a,es12.4,a,es12.4,a)') &
-            'Stationarity  ||dL||  = ', res_stat, '  (tol: ', tol_stat, ')'
-         write (output_unit, '(3x,a,es12.4)') &
-            'Gradient norm ||dS||  = ', norm_grad_S
+         write (output_unit, "(x,a)") "KKT verification:"
+         write (output_unit, "(3x,a,es12.4,a,es12.4,a)") &
+            "Feasibility   |S(r*)| = ", res_feas, "  (tol: ", tol_feas, ")"
+         write (output_unit, "(3x,a,es12.4,a,es12.4,a)") &
+            "Stationarity  ||dL||  = ", res_stat, "  (tol: ", tol_stat, ")"
+         write (output_unit, "(3x,a,es12.4)") &
+            "Gradient norm ||dS||  = ", norm_grad_S
       end if
 
       if (res_feas > tol_feas .or. res_stat > tol_stat) then
          if (self%verbosity >= 3 .or. self%debug) then
-            write (output_unit, '(x,i12,x,a)') index, &
-               '[KKT check] Not at KKT point - skipping classification'
-            write (output_unit, '(x,i12,x,a,es12.4,a,es12.4,a)') index, &
-               '[KKT check]   Feasibility |S(r*)| = ', res_feas, ' (tol: ', tol_feas, ')'
-            write (output_unit, '(x,i12,x,a,es12.4,a,es12.4,a)') index, &
-               '[KKT check]   Stationarity ||dL|| = ', res_stat, ' (tol: ', tol_stat, ')'
+            write (output_unit, "(x,i12,x,a)") index, &
+               "[KKT check] Not at KKT point - skipping classification"
+            write (output_unit, "(x,i12,x,a,es12.4,a,es12.4,a)") index, &
+               "[KKT check]   Feasibility |S(r*)| = ", res_feas, " (tol: ", tol_feas, ")"
+            write (output_unit, "(x,i12,x,a,es12.4,a,es12.4,a)") index, &
+               "[KKT check]   Stationarity ||dL|| = ", res_stat, " (tol: ", tol_stat, ")"
          end if
          if (present(is_kkt)) is_kkt = .false.
          return ! Not converged to KKT point
@@ -2125,16 +2141,16 @@ contains
       eig_tol = max(tol_eig_base, 1.0e-8_wp*HL_norm)
 
       if (self%debug) then
-         write (output_unit, '(x,a)') 'Constrained optimality classification:'
-         write (output_unit, '(3x,a,3es14.6)') 'Reduced Hessian eigenvalues: ', mu_min, mu_max
+         write (output_unit, "(x,a)") "Constrained optimality classification:"
+         write (output_unit, "(3x,a,3es14.6)") "Reduced Hessian eigenvalues: ", mu_min, mu_max
       end if
 
       ! Classify based on smallest eigenvalue
       if (mu_min < -eig_tol) then
          ! SADDLE or MAXIMUM on the surface
          if (self%debug) then
-            write (output_unit, '(3x,a)') '=> Negative curvature in tangent direction'
-            write (output_unit, '(5x,a)') '*** YIKES! SADDLE/MAXIMUM detected ***'
+            write (output_unit, "(3x,a)") "=> Negative curvature in tangent direction"
+            write (output_unit, "(5x,a)") "*** YIKES! SADDLE/MAXIMUM detected ***"
          end if
 
          ! Set saddle flag for caller to handle
@@ -2142,15 +2158,15 @@ contains
 
          ! Only error if strict mode and caller doesn't handle saddle
          if (self%strict_minimum_required .and. .not. present(is_saddle)) then
-            call fatal_error(error, 'Saddle point detected but strict minimum required')
+            call fatal_error(error, "Saddle point detected but strict minimum required")
             return
          end if
 
       else if (mu_min > eig_tol) then
          ! LOCAL MINIMUM on the surface
          if (self%debug) then
-            write (output_unit, '(3x,a)') '=> Positive curvature in all tangent directions'
-            write (output_unit, '(5x,a)') '*** HURRAY! CONSTRAINED LOCAL MINIMUM ***'
+            write (output_unit, "(3x,a)") "=> Positive curvature in all tangent directions"
+            write (output_unit, "(5x,a)") "*** HURRAY! CONSTRAINED LOCAL MINIMUM ***"
          end if
          if (present(is_converged)) is_converged = .true.
 
@@ -2188,39 +2204,39 @@ contains
          deallocate (lsf3_S)
 
          if (self%debug) then
-            write (output_unit, '(3x,a)') '=> Second-order test degenerate; checking third-order condition'
-            write (output_unit, '(3x,a,3es16.8)') 'Degenerate point r* = ', r_star
-            write (output_unit, '(3x,a,3es16.8)') 'Anchor         r0 = ', anchor
-            write (output_unit, '(3x,a,es16.8)') 'Lambda            = ', lambda
-            write (output_unit, '(3x,a,2es16.8)') 'Reduced eigs      = ', mu_min, mu_max
-            write (output_unit, '(3x,a,es16.8)') 'Eig tolerance     = ', eig_tol
-            write (output_unit, '(3x,a,3es16.8)') 'Degen direction d = ', d_degen
-            write (output_unit, '(3x,a,es16.8)') 'D3 L[d,d,d]       = ', D3_ddd
+            write (output_unit, "(3x,a)") "=> Second-order test degenerate; checking third-order condition"
+            write (output_unit, "(3x,a,3es16.8)") "Degenerate point r* = ", r_star
+            write (output_unit, "(3x,a,3es16.8)") "Anchor         r0 = ", anchor
+            write (output_unit, "(3x,a,es16.8)") "Lambda            = ", lambda
+            write (output_unit, "(3x,a,2es16.8)") "Reduced eigs      = ", mu_min, mu_max
+            write (output_unit, "(3x,a,es16.8)") "Eig tolerance     = ", eig_tol
+            write (output_unit, "(3x,a,3es16.8)") "Degen direction d = ", d_degen
+            write (output_unit, "(3x,a,es16.8)") "D3 L[d,d,d]       = ", D3_ddd
          end if
 
          if (abs(D3_ddd) > tol_D3) then
             ! Nonzero third derivative => inflection point on the surface
             ! This is NOT a local minimum; treat as saddle (escapable)
             if (self%debug) then
-               write (output_unit, '(5x,a)') '*** INFLECTION: nonzero D3 => treating as saddle ***'
+               write (output_unit, "(5x,a)") "*** INFLECTION: nonzero D3 => treating as saddle ***"
             end if
             if (present(is_saddle)) is_saddle = .true.
 
             if (self%strict_minimum_required .and. .not. present(is_saddle)) then
-               call fatal_error(error, 'Inflection point detected but strict minimum required')
+               call fatal_error(error, "Inflection point detected but strict minimum required")
                return
             end if
          else
             if (self%debug) then
-               write (output_unit, '(5x,a)') '*** YIKES! DEGENERATE to third order (flat D2 and D3) ***'
+               write (output_unit, "(5x,a)") "*** YIKES! DEGENERATE to third order (flat D2 and D3) ***"
             end if
-            call fatal_error(error, 'Degenerate to third order; classification unreliable')
+            call fatal_error(error, "Degenerate to third order; classification unreliable")
             return
          end if
       end if
 
       if (self%debug) then
-         write (output_unit, '(a)') ''
+         write (output_unit, "(a)") ""
       end if
 
    end subroutine check_constrained_optimality
@@ -2296,13 +2312,13 @@ contains
       rho_curr = sqrt(dot_product(r_curr - anchor, r_curr - anchor))
 
       if (self%debug) then
-         write (output_unit, '(a)') ''
-         write (output_unit, '(a)') ' ====================== Rienmannian Newton Escape ======================'
-         write (output_unit, '(a)') ''
+         write (output_unit, "(a)") ""
+         write (output_unit, "(a)") " ====================== Rienmannian Newton Escape ======================"
+         write (output_unit, "(a)") ""
          ! TODO: re-enable per-iteration r_init/anchor/rho/Phi debug dump when needed
-         write (output_unit, '(a4,1x,a12,1x,a12,1x,a12,1x,a10,1x,a12,1x,a12)') &
-            'Iter', 'Phi', 'rho', '||g_tan||', 'alpha', 'mu_min', 'Status'
-         write (output_unit, '(a)') repeat('-', 85)
+         write (output_unit, "(a4,1x,a12,1x,a12,1x,a12,1x,a10,1x,a12,1x,a12)") &
+            "Iter", "Phi", "rho", "||g_tan||", "alpha", "mu_min", "Status"
+         write (output_unit, "(a)") repeat("-", 85)
       end if
 
       ! Main Riemannian optimization loop
@@ -2317,7 +2333,7 @@ contains
          ! Build normal and tangent basis
          norm_grad_S = sqrt(dot_product(grad_S, grad_S))
          if (norm_grad_S < 1.0e-10_wp) then
-            call fatal_error(error, 'Riemannian escape: degenerate LSF gradient')
+            call fatal_error(error, "Riemannian escape: degenerate LSF gradient")
             return
          end if
          normal_vec = grad_S/norm_grad_S
@@ -2351,8 +2367,8 @@ contains
          if (norm_g_tan < tol_grad_tan .and. .not. at_saddle) then
             converged = .true.
             if (self%debug) then
-               write (output_unit, '(a)') ''
-               write (output_unit, '(a)') '[riemannian] Converged to local minimum'
+               write (output_unit, "(a)") ""
+               write (output_unit, "(a)") "[riemannian] Converged to local minimum"
             end if
             exit
          end if
@@ -2435,8 +2451,8 @@ contains
 
          if (.not. ls_dropcess) then
             if (self%debug) then
-               write (output_unit, '(a)') ''
-               write (output_unit, '(a)') '[riemannian] Line search failed'
+               write (output_unit, "(a)") ""
+               write (output_unit, "(a)") "[riemannian] Line search failed"
             end if
             exit
          end if
@@ -2450,11 +2466,11 @@ contains
          ! Print iteration info
          if (self%debug) then
             if (at_saddle) then
-               write (output_unit, '(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,a12)') &
-                  iter, phi_curr, rho_curr, norm_g_tan, alpha, mu_min, 'SADDLE'
+               write (output_unit, "(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,a12)") &
+                  iter, phi_curr, rho_curr, norm_g_tan, alpha, mu_min, "SADDLE"
             else
-               write (output_unit, '(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,a12)') &
-                  iter, phi_curr, rho_curr, norm_g_tan, alpha, mu_min, 'MIN-TYPE'
+               write (output_unit, "(i4,1x,es12.4,1x,f12.6,1x,es12.4,1x,es10.2,1x,es12.4,1x,a12)") &
+                  iter, phi_curr, rho_curr, norm_g_tan, alpha, mu_min, "MIN-TYPE"
             end if
          end if
       end do
@@ -2464,17 +2480,17 @@ contains
       lambda_out = lambda_curr
 
       if (self%debug) then
-         write (output_unit, '(a)') ''
-         write (output_unit, '(a)') '─────────────────────────────────────────────────────────────────'
-         write (output_unit, '(a,i0)') '  Iterations:    ', iter
-         write (output_unit, '(a,es14.6)') '  Final Phi:     ', phi_curr
-         write (output_unit, '(a,f12.6,a)') '  Final rho:     ', rho_curr, ' Bohr'
-         write (output_unit, '(a,l1)') '  Converged:     ', converged
-         write (output_unit, '(a)') ''
+         write (output_unit, "(a)") ""
+         write (output_unit, "(a)") "-----------------------------------------------------------------"
+         write (output_unit, "(a,i0)") "  Iterations:    ", iter
+         write (output_unit, "(a,es14.6)") "  Final Phi:     ", phi_curr
+         write (output_unit, "(a,f12.6,a)") "  Final rho:     ", rho_curr, " Bohr"
+         write (output_unit, "(a,l1)") "  Converged:     ", converged
+         write (output_unit, "(a)") ""
       end if
 
       if (.not. converged .and. iter >= self%riemann_max_iter) then
-         call fatal_error(error, 'Riemannian Newton did not converge within max iterations')
+         call fatal_error(error, "Riemannian Newton did not converge within max iterations")
       end if
 
    end subroutine riemannian_newton_escape
@@ -2529,7 +2545,7 @@ contains
             ! Use least-squares projection to handle small numerical inconsistency.
             norm_grad_S = dot_product(grad_S, grad_S)
             if (norm_grad_S < 1.0e-14_wp) then
-               call fatal_error(error, 'Retraction failed: degenerate LSF gradient at converged point')
+               call fatal_error(error, "Retraction failed: degenerate LSF gradient at converged point")
                return
             end if
             grad_phi = self%phi%f1_r(r_curr, anchor, owner)
@@ -2543,7 +2559,7 @@ contains
          ! Newton step along normal: r_new = r - S / ||grad_S||^2 * grad_S
          norm_grad_S = dot_product(grad_S, grad_S)
          if (norm_grad_S < 1.0e-14_wp) then
-            call fatal_error(error, 'Retraction failed: degenerate LSF gradient')
+            call fatal_error(error, "Retraction failed: degenerate LSF gradient")
             return
          end if
 
@@ -2552,7 +2568,7 @@ contains
       end do
 
       ! Failed to converge
-      call fatal_error(error, 'Retraction to surface did not converge')
+      call fatal_error(error, "Retraction to surface did not converge")
 
    end subroutine retract_to_surface
 
