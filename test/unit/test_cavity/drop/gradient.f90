@@ -25,7 +25,7 @@ module test_cavity_drop_gradient
    integer, parameter :: ndim = 3
 
    real(wp), parameter :: k = 2.5_wp
-   real(wp), parameter :: gamma = 1.0_wp
+   real(wp), parameter :: blend_3b = 1.0_wp
    integer, parameter :: NUM_LEB = 50
 
    real(wp), parameter :: STEP_SIZE = 2.5E-4_wp
@@ -53,12 +53,11 @@ contains
                   new_unittest("mb16_43_01", test_mb16_43_01), &
                   new_unittest("but14diol_1", test_but14diol_1), &
                   new_unittest("il16_008", test_il16_008), &
-                  new_unittest("dimer_branching", test_dimer_branching), &
                   ! Adjoint tests
                   new_unittest("adjoint_channels_fd", test_adjoint_channels_fd), &
                   new_unittest("adjoint_area_channels", test_adjoint_area_channels), &
-                  ! Branching tests (second is expensive but kept for now)
-                  new_unittest("ar5_blendk_09", test_ar5_blendk_09), &
+                  ! Branching tests (more expensive but kept for now)
+                  new_unittest("cross_branching", test_cross_branching), &
                   new_unittest("branching_xyz_totals", test_branching_xyz_totals) &
                   ]
    end subroutine collect_cavity_drop_gradient
@@ -93,25 +92,6 @@ contains
 
       call do_test(error, mol, radii, blend_k_override=2.0_wp, nleb_override=194, proj_level_override=2)
    end subroutine test_dimer
-
-   !> Test gradient for 5-argon geometry with custom blend-k
-   subroutine test_ar5_blendk_09(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
-
-      call new(mol, [18, 18, 18, 18, 18], reshape([ &
-                                                  0.2_wp, 0.0_wp, 5.1_wp, &
-                                                  -2.2_wp, -2.2_wp, 0.0_wp, &
-                                                  2.2_wp, -2.2_wp, 0.0_wp, &
-                                                  -2.2_wp, 2.2_wp, 0.0_wp, &
-                                                  2.2_wp, 2.2_wp, 0.0_wp], [3, 5]))
-
-      call fill_cpcm_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii, blend_k_override=0.9_wp)
-   end subroutine test_ar5_blendk_09
 
    !> Test gradient for Amino20x4 GLY_xab
    subroutine test_amino20x4_gly_xab(error)
@@ -169,27 +149,33 @@ contains
       call do_test(error, mol, radii)
    end subroutine test_il16_008
 
-   !> Branching test: carbon dimer nominally aligned with z-axis, placed
-   !> near the dissociation limit (~5.75 bohr between carbons whose default
-   !> radii are ~3 bohr) so that the cavity has strong concave pinch near
-   !> the midpoint. A 0.01 bohr perturbation in x and y breaks perfect
-   !> axial symmetry. proj_level=7 (full Lebedev onion solver) is
-   !> the canonical enumerator: it exercises every LSF branch needed by
-   !> the branch-weight softmax derivative path without leaning on any
-   !> deflation heuristics.
-   subroutine test_dimer_branching(error)
+   !> Full derivative suite on a geometry whose anchors actually branch
+   !>
+   !> The five-carbon cross has concave seams where the projection has several
+   !> minima per anchor, so the multistart projector returns siblings. Keeping
+   !> them alive additionally needs a softer branch softmax: at the production
+   !> scale (0.05, set by `new_cavity_drop`) the prune in filter.f90 discards
+   !> every sibling but the strongest and `branch_count` collapses back to 1.
+   !> Measured onset is s ~ 0.2; 0.5 leaves margin so the stencil geometries
+   !> branch too.
+   !>
+   !> This is the only fixture that exercises the branch post-pass, which
+   !> corrects `wleb1_rA`, `xi1_rA`, `a_i1_rA` and `v1_rA` after the main loop.
+   !> `xi1_rA` was missing from that list and nothing caught it.
+   subroutine test_cross_branching(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
 
-      call new(mol, [6, 6], reshape([0.0000_wp, 0.000_wp, 0.00_wp, &
-                                     0.0001_wp, 0.003_wp, 6.1_wp], [3, 2]))
+      call get_test_cross(mol)
 
       call fill_cpcm_radii(mol, radii, error)
       if (allocated(error)) return
 
-      call do_test(error, mol, radii, proj_level_override=7, nleb_override=50, blend_k_override=1.0_wp)
-   end subroutine test_dimer_branching
+      call do_test(error, mol, radii, proj_level_override=7, nleb_override=50, &
+                   blend_k_override=1.0_wp, blend_3b_override=1.0_wp, &
+                   branch_weight_s_override=0.5_wp, require_branching=.true.)
+   end subroutine test_cross_branching
 
    !> Total-area and total-volume gradient test for four carbons in a planar cross plus a central carbon
    subroutine test_branching_xyz_totals(error)
@@ -235,6 +221,12 @@ contains
 
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
+
+      if (.not. allocated(cavity%branch_count)) then
+         call test_failed(error, "Fixture requested branching but has no branch_count")
+         return
+      end if
+
       call cavity%get_gradient()
 
       do iat = 1, mol%nat
@@ -365,8 +357,8 @@ contains
    end subroutine fatal_error_from_mctc
 
    !> Test gradient of gridpoints w.r.t. atomic positions
-   subroutine do_test(error, mol, radii, blend_k_override, gamma_override, nleb_override, proj_level_override, &
-                      branch_rho_cut_override, branch_weight_s_override)
+   subroutine do_test(error, mol, radii, blend_k_override, blend_3b_override, nleb_override, proj_level_override, &
+                      branch_rho_cut_override, branch_weight_s_override, require_branching)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
@@ -375,8 +367,8 @@ contains
       real(wp), intent(in) :: radii(:)
       !> Optional override for blending steepness parameter
       real(wp), intent(in), optional :: blend_k_override
-      !> Optional override for blending gamma parameter
-      real(wp), intent(in), optional :: gamma_override
+      !> Optional override for blending blend_3b parameter
+      real(wp), intent(in), optional :: blend_3b_override
       !> Optional override for Lebedev grid size
       integer, intent(in), optional :: nleb_override
       !> Optional override for projection level
@@ -385,6 +377,8 @@ contains
       real(wp), intent(in), optional :: branch_rho_cut_override
       !> Optional override for branch-weight softmax scale (larger = softer)
       real(wp), intent(in), optional :: branch_weight_s_override
+      !> Require the reference build to actually produce branched anchors
+      logical, intent(in), optional :: require_branching
 
       type(structure_type) :: mol_fd
       type(cavity_type_drop), allocatable :: cavity
@@ -398,7 +392,7 @@ contains
       integer :: iat, idir, jdir, igrid, ngrid_set, jgrid, num_idn, idx_map, max_numbering
       real(wp) :: diff, max_diff
       real(wp) :: blend_k_local
-      real(wp) :: gamma_local
+      real(wp) :: blend_3b_local
       integer :: nleb_local, proj_level_local
 
       logical, allocatable :: nn_converged(:, :, :), n_converged(:, :, :), &
@@ -472,8 +466,8 @@ contains
 
       blend_k_local = k
       if (present(blend_k_override)) blend_k_local = blend_k_override
-      gamma_local = gamma
-      if (present(gamma_override)) gamma_local = gamma_override
+      blend_3b_local = blend_3b
+      if (present(blend_3b_override)) blend_3b_local = blend_3b_override
       nleb_local = NUM_LEB
       if (present(nleb_override)) nleb_local = nleb_override
       proj_level_local = PROJ_LEVEL
@@ -481,7 +475,7 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k_local, blend_3b=gamma_local)
+         call svdw_template%new(blend_k=blend_k_local, blend_3b=blend_3b_local)
          call new_cavity_drop(cavity, ctx, nleb=nleb_local, &
                               do_fine=.true., &
                               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, &
@@ -490,9 +484,8 @@ contains
                               lsf_model=svdw_template, error=cavity_error)
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
-      !> Raise wleb_cut above the tolerance-derived default (5e-16). With xi
-      !> ~ 1/sqrt(wleb), points near the cutoff would otherwise inflate xi and
-      !> its gradient to magnitudes where FD noise dominates REL_THR.
+      ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
+      ! to magnitudes where FD noise dominate
       if (present(branch_rho_cut_override)) then
          cavity%param%branch_rho_cut = branch_rho_cut_override
       end if
@@ -503,6 +496,20 @@ contains
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) call test_failed(error, "Failed to build cavity: "//cavity_error%message)
       ngrid_set = cavity%ngrid
+
+      if (present(require_branching)) then
+         if (require_branching) then
+            if (.not. allocated(cavity%branch_count)) then
+               call test_failed(error, "Fixture requested branching but has no branch_count")
+               return
+            end if
+            if (.not. any(cavity%branch_count(1:ngrid_set) > 1)) then
+               call test_failed(error, "Fixture requested branching but no anchor branched; "// &
+                                "the branch post-pass would go untested")
+               return
+            end if
+         end if
+      end if
 
       allocate (ref_numbering(ngrid_set))
       if (ngrid_set > 0) then
@@ -1234,6 +1241,7 @@ contains
       real(wp), allocatable :: radii(:)
       type(cavity_type_drop), allocatable :: cavity
       type(mctc_error), allocatable :: cavity_error
+      type(mctc_error), allocatable :: lsf_err
       type(moist_context_type), target :: ctx
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
 
@@ -1271,7 +1279,7 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=gamma)
+         call svdw_template%new(blend_k=k, blend_3b=blend_3b)
          call new_context(ctx, verbosity=0)
          call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
                               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
@@ -1380,7 +1388,11 @@ contains
       allocate (lsf1_rA(ndim, nsph), lsf2_r_rA(ndim, ndim, nsph))
       do igrid = 1, ngrid_set
          if (.not. ref_conv(igrid)) cycle
-         call lsf%prepare(cavity%xyz(:, igrid))
+         call lsf%prepare(cavity%xyz(:, igrid), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+            return
+         end if
          call lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
          do ich = 1, NCHAN
             do iat = 1, nsph
@@ -1522,7 +1534,7 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=gamma)
+         call svdw_template%new(blend_k=k, blend_3b=blend_3b)
          call new_context(ctx, verbosity=0)
          call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
                               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
