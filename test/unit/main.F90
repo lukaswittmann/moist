@@ -1,48 +1,47 @@
 
-
 !> Driver for unit testing
 program tester
-   use, intrinsic :: iso_fortran_env, only : error_unit
-   use testdrive, only : run_testsuite, new_testsuite, testsuite_type, &
+   use, intrinsic :: iso_fortran_env, only: error_unit
+   use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
-   use test_utils, only : collect_utils
-   use test_utils_timer, only : collect_utils_timer
-   use test_utils_context, only : collect_utils_context
-   use test_utils_mem, only : collect_utils_mem
-   use test_utils_prettylistprint, only : collect_utils_prettylistprint
-   use test_radii, only : collect_radii
-   use test_data, only : collect_data
-   use test_math_linalg, only : collect_math_linalg
-   use test_math_smoothing_kernels, only : collect_math_smoothing_kernels
-   use test_math_adjacency_list, only : collect_math_adjacency_list
-   use test_math_cell_grid, only : collect_math_cell_grid
-   use test_math_sorters, only : collect_math_sorters
-   use test_math_trig, only : collect_math_trig
-   use test_math_grid, only : collect_math_grid
-   use test_cavity_iswig, only : collect_cavity_iswig
-   use test_cavity_drop_primitives, only : collect_cavity_drop_primitives
-   use test_cavity_drop_cfc, only : collect_cavity_drop_cfc
-   use test_cavity_drop_lsf, only : collect_cavity_drop_lsf
-   use test_cavity_drop_isodensity, only : collect_cavity_drop_isodensity
-   use test_cavity_drop_gradient, only : collect_cavity_drop_gradient
-   use test_cavity_drop_cpcm, only : collect_cavity_drop_cpcm
-   use test_cavity_numsa, only : collect_cavity_numsa
-   use test_cavity_marchingcubes, only : collect_cavity_marchingcubes
-   use test_math_solvers, only : collect_math_solvers
+   use test_utils, only: collect_utils
+   use test_utils_timer, only: collect_utils_timer
+   use test_utils_context, only: collect_utils_context
+   use test_utils_mem, only: collect_utils_mem
+   use test_utils_prettylistprint, only: collect_utils_prettylistprint
+   use test_radii, only: collect_radii
+   use test_data, only: collect_data
+   use test_math_linalg, only: collect_math_linalg
+   use test_math_smoothing_kernels, only: collect_math_smoothing_kernels
+   use test_math_adjacency_list, only: collect_math_adjacency_list
+   use test_math_cell_grid, only: collect_math_cell_grid
+   use test_math_sorters, only: collect_math_sorters
+   use test_math_trig, only: collect_math_trig
+   use test_math_grid, only: collect_math_grid
+   use test_cavity_iswig, only: collect_cavity_iswig
+   use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
+   use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
+   use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
+   use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
+   use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
+   use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
+   use test_cavity_numsa, only: collect_cavity_numsa
+   use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
+   use test_math_solvers, only: collect_math_solvers
 #ifdef WITH_HDF5
-   use test_utils_hdf5, only : collect_utils_hdf5
+   use test_utils_hdf5, only: collect_utils_hdf5
 #endif
-   use test_cavity_drop_integration, only : collect_cavity_drop_integration
-   use test_model_component_pcm_amat, only : collect_model_component_pcm_amat
-   use test_model_component_pcm_amat_kernel, only : collect_model_component_pcm_amat_kernel
-   use test_model_component_pcm_amat_assembly, only : collect_model_component_pcm_amat_assembly
-   use test_model_component_pcm_amat_adjoint, only : collect_model_component_pcm_amat_adjoint
-   use test_model_component_pcm_electrostatics, only : collect_model_component_pcm_electrostatics
-   use test_model_component_pcm_cpcm, only : collect_model_component_pcm_cpcm
-   use test_model_component_pv, only : collect_model_component_pv
-   use test_model_general, only : collect_model_general
+   use test_cavity_drop_integration, only: collect_cavity_drop_integration
+   use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
+   use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
+   use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
+   use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
+   use test_model_component_pcm_electrostatics, only: collect_model_component_pcm_electrostatics
+   use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
+   use test_model_component_pv, only: collect_model_component_pv
+   use test_model_general, only: collect_model_general
 
-implicit none (type, external)
+   implicit none(type, external)
 
    integer :: stat, is
    character(len=:), allocatable :: suite_name, test_name
@@ -57,8 +56,8 @@ implicit none (type, external)
       & new_testsuite("utils_context", collect_utils_context), &
       & new_testsuite("utils_mem", collect_utils_mem), &
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
-      & new_testsuite("radii", collect_radii), &
       & new_testsuite("data", collect_data), &
+      & new_testsuite("radii", collect_radii), &
       & new_testsuite("math_linalg", collect_math_linalg), &
       & new_testsuite("math_smoothing_kernels", collect_math_smoothing_kernels), &
       & new_testsuite("math_adjacency_list", collect_math_adjacency_list), &
@@ -67,7 +66,6 @@ implicit none (type, external)
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
       & new_testsuite("math_grid", collect_math_grid), &
-
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
@@ -102,33 +100,32 @@ implicit none (type, external)
       is = select_suite(testsuites, suite_name)
       if (is > 0 .and. is <= size(testsuites)) then
          if (allocated(test_name)) then
-            write(error_unit, fmt) "Suite:", trim(testsuites(is)%name)
+            write (error_unit, fmt) "Suite:", trim(testsuites(is)%name)
             call run_selected(testsuites(is)%collect, test_name, error_unit, stat)
             if (stat < 0) then
                error stop 1
             end if
          else
-            write(error_unit, fmt) "Testing:", trim(testsuites(is)%name)
+            write (error_unit, fmt) "Testing:", trim(testsuites(is)%name)
             call run_testsuite(testsuites(is)%collect, error_unit, stat)
          end if
       else
-         write(error_unit, fmt) "Available testsuites"
+         write (error_unit, fmt) "Available testsuites"
          do is = 1, size(testsuites)
-            write(error_unit, fmt) "-", trim(testsuites(is)%name)
+            write (error_unit, fmt) "-", trim(testsuites(is)%name)
          end do
          error stop 1
       end if
    else
       do is = 1, size(testsuites)
-         write(error_unit, fmt) "Testing:", trim(testsuites(is)%name)
+         write (error_unit, fmt) "Testing:", trim(testsuites(is)%name)
          call run_testsuite(testsuites(is)%collect, error_unit, stat)
       end do
    end if
 
    if (stat > 0) then
-      write(error_unit, '(i0, 1x, a)') stat, "test(s) failed!"
+      write (error_unit, "(i0, 1x, a)") stat, "test(s) failed!"
       error stop 1
    end if
-
 
 end program tester
