@@ -1,4 +1,4 @@
-srcs + = files(
-'ssd.f90',
-'param.f90',
+srcs += files(
+  'ssd.f90',
+  'param.f90',
 )
