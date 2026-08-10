@@ -16,7 +16,7 @@ module moist_cavity_drop_lsf_svdw
 
    !> Smooth van der Waals LSF
    !>
-   !> Concrete level-set function: takes its blending parameters directly
+   !> Concrete level set function: takes its blending parameters directly
    !> through [[new]], owns the screening SSD system, refreshes geometry caches
    !> via [[update]], and primes per-point screening via [[prepare]]. Inherits
    !> common atom-LSF state (ncenters, mol, radii) from
@@ -214,18 +214,21 @@ contains
 
       ! f2_rr is saved only at max_deriv >= 3
       if (n >= 3) then
-         if (.not. allocated(self%ssd_system%f2_rr_arr)) &
-            allocate (self%ssd_system%f2_rr_arr(3, 3, n_alloc))
-         if (.not. allocated(self%ssd_system%f3_rrr_arr)) &
-            allocate (self%ssd_system%f3_rrr_arr(3, 3, 3, n_alloc))
+         if (.not. allocated(self%ssd_system%f2_rr_arr)) then
+           allocate (self%ssd_system%f2_rr_arr(3, 3, n_alloc))
+         end if
+         if (.not. allocated(self%ssd_system%f3_rrr_arr)) then
+           allocate (self%ssd_system%f3_rrr_arr(3, 3, 3, n_alloc))
+         end if
       else
          if (allocated(self%ssd_system%f2_rr_arr)) deallocate (self%ssd_system%f2_rr_arr)
          if (allocated(self%ssd_system%f3_rrr_arr)) deallocate (self%ssd_system%f3_rrr_arr)
       end if
 
       if (n >= 4) then
-         if (.not. allocated(self%ssd_system%f4_rrrr_arr)) &
-            allocate (self%ssd_system%f4_rrrr_arr(3, 3, 3, 3, n_alloc))
+         if (.not. allocated(self%ssd_system%f4_rrrr_arr)) then
+           allocate (self%ssd_system%f4_rrrr_arr(3, 3, 3, 3, n_alloc))
+         end if
       else
          if (allocated(self%ssd_system%f4_rrrr_arr)) deallocate (self%ssd_system%f4_rrrr_arr)
       end if
