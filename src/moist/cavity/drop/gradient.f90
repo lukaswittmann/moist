@@ -60,6 +60,8 @@ contains
       integer :: nthreads, thread_slot
       integer :: timer_ref_thread
       logical :: abort_requested
+      !> Per-thread LSF evaluation failure, promoted into `error` under a critical
+      type(error_type), allocatable :: lsf_error
 
       !> Pre-resolved timer handles for the per-grid-point hot loop
       integer :: h_grad, h_prim, h_pos, h_disp, h_dist, h_norm, h_cpj, h_gw, &
@@ -163,6 +165,7 @@ contains
       integer :: owner_m, k_param
       real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
       real(wp) :: area_fac_m, rn_m, dwleb_branch, da_branch, dv_branch
+      real(wp) :: xi_fac_m
       real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
       real(wp), allocatable :: branch_weights(:), branch_dweights(:, :)
 
@@ -294,7 +297,7 @@ contains
       !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
       !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
       !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
-      !$omp& A_tot_local, V_tot_local)
+      !$omp& A_tot_local, V_tot_local, lsf_error)
       thread_slot = omp_get_thread_num() + 1
 
       allocate (lsf3_rr_rA(3, 3, 3, self%nsph))
@@ -332,7 +335,17 @@ contains
          phi2_r_rA = phi_threads(thread_slot)%f2_r_rA(point, anchor, owner_idx)
 
          ! Compute SSD on-the-fly for this point
-         call lsf_threads(thread_slot)%lsf%prepare(point)
+         call lsf_threads(thread_slot)%lsf%prepare(point, lsf_error)
+         if (allocated(lsf_error)) then
+            !$omp critical (compute_gradient_abort)
+            if (.not. abort_requested) then
+               abort_requested = .true.
+               call move_alloc(lsf_error, error)
+            end if
+            !$omp end critical (compute_gradient_abort)
+            !$omp cancel do
+            cycle
+         end if
 
          ! Get nuclear and mixed derivatives
          call lsf_threads(thread_slot)%lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
@@ -1023,12 +1036,23 @@ contains
                factor_m = self%wleb(im_grid)/self%wbranch(im_grid)
                area_fac_m = self%radii(owner_m)**2*self%f(im_grid)
                rn_m = dot_product(self%xyz(:, im_grid), self%normal0(:, im_grid))
+               ! xi = swx/(R*sqrt(wleb)) -> branch weight of dxi/dwleb = -xi/(2*wleb)
+               if (self%wleb(im_grid) > tiny(1.0_wp)) then
+                  xi_fac_m = -0.5_wp*self%xi0(im_grid)/self%wleb(im_grid)
+               else
+                  xi_fac_m = 0.0_wp
+               end if
                do iatom = 1, self%nsph
                   do iaxis = 1, 3
                      k_param = (iatom - 1)*3 + iaxis
                      dwleb_branch = factor_m*branch_dweights(k_param, m_branch)
                      self%wleb1_rA(iaxis, iatom, im_grid) = &
                         self%wleb1_rA(iaxis, iatom, im_grid) + dwleb_branch
+
+                     if (allocated(self%xi1_rA)) then
+                        self%xi1_rA(iaxis, iatom, im_grid) = &
+                           self%xi1_rA(iaxis, iatom, im_grid) + xi_fac_m*dwleb_branch
+                     end if
 
                      da_branch = area_fac_m*dwleb_branch
                      dv_branch = (1.0_wp/3.0_wp)*da_branch*rn_m
