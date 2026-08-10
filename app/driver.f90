@@ -18,10 +18,6 @@ module moist_driver
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
    use moist_type, only: coupling_type, cavity_type, solvation_model
-#ifdef WITH_RISM
-   ! use moist_model_rism1d, only: rism1d_model, new_rism1d_model
-   ! use moist_model_rism3d, only: rism3d_model, new_rism3d_model
-#endif
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
 ! #ifdef WITH_MKL
