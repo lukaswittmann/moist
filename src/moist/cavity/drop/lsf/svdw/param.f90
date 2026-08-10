@@ -8,7 +8,7 @@ module moist_cavity_drop_lsf_svdw_param
 
    public :: moist_cavity_drop_lsf_svdw_param_type
 
-   !> SvdW level-set function parameters
+   !> SvdW level set function parameters
    type :: moist_cavity_drop_lsf_svdw_param_type
       !> Blending sharpness k in exp(-k * d).
       real(wp) :: blend_k = 5.5_wp
@@ -68,11 +68,11 @@ contains
       if (present(unit)) iu = unit
 
       pp = new_prettyprinter(unit=iu)
-      call pp%push('Implicit surface (SvdW):')
-      call pp%kv('Smoothing (k)', self%blend_k)
-      call pp%kv('Smoothing (1b)', self%blend_1b)
-      call pp%kv('Smoothing (2b)', self%blend_2b)
-      call pp%kv('Smoothing (3b)', self%blend_3b)
+      call pp%push("Implicit surface (SvdW):")
+      call pp%kv("Smoothing (k)", self%blend_k)
+      call pp%kv("Smoothing (1b)", self%blend_1b)
+      call pp%kv("Smoothing (2b)", self%blend_2b)
+      call pp%kv("Smoothing (3b)", self%blend_3b)
       call pp%pop()
    end subroutine print_lsf_svdw_param
 
