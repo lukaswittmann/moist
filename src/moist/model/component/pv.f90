@@ -12,7 +12,7 @@ module moist_model_component_pv
 
    !> Pressure-volume energy contribution `pressure * cavity_volume`
    type, extends(solvation_model_component) :: pv
-      !> Pressure multiplying the cavity volume
+      !> Pressure multiplying the cavity volume in atomic units
       real(wp) :: pressure = 0.0_wp
    contains
       procedure :: update => pv_update
