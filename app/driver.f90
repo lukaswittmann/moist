@@ -279,11 +279,8 @@ contains
 
             ! Gradient if asked for
             if (config%grad) then
-               call cavity%get_gradient()
-               if (allocated(cavity%error)) then
-                  allocate (error, source=cavity%error)
-                  return
-               end if
+               call cavity%get_gradient(error)
+               if (allocated(error)) return
             end if
 
             ! Print results; with no unit the cavity follows its own context
