@@ -17,6 +17,9 @@ The electrostatic potential can be computed from atomic charges or supplied by a
 Matrix inversion, LU, Cholesky, and iterative solvers are available; an externally assembled matrix can also be supplied.
 The common implementation provides the reaction potential, model surface weights, and nuclear gradient.
 
+The PCM surface weights are available and can be combined with the :doc:`ρ-DROP isodensity cavity </cavities/isodensity>` for a fully variational, self-consistent isodensity PCM energy.
+Analytic nuclear gradients are available with both static and isodensity cavities.
+
 .. toctree::
    :maxdepth: 1
 
