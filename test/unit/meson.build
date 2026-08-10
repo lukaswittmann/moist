@@ -23,7 +23,7 @@ subdir('test_utils')
 # force every leaf to be 'utils_<leaf>', leaving a plain 'utils' suite unreachable), and
 # smoke tests for optional vendored dependencies, which exercise upstream modules
 # directly and so mirror nothing under src/moist/.
-root_tests = ['utils', 'radii', 'data']
+root_tests = ['api', 'utils', 'radii', 'data']
 if use_hdf5
   root_tests += 'utils_hdf5'
 endif

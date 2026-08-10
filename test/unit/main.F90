@@ -4,6 +4,7 @@ program tester
    use, intrinsic :: iso_fortran_env, only: error_unit
    use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
+   use test_api, only: collect_api
    use test_utils, only: collect_utils
    use test_utils_timer, only: collect_utils_timer
    use test_utils_context, only: collect_utils_context
@@ -24,6 +25,7 @@ program tester
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
+   use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
    use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
    use test_cavity_numsa, only: collect_cavity_numsa
    use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
@@ -51,6 +53,7 @@ program tester
    stat = 0
 
    testsuites = [ &
+      & new_testsuite("api", collect_api), &
       & new_testsuite("utils", collect_utils), &
       & new_testsuite("utils_timer", collect_utils_timer), &
       & new_testsuite("utils_context", collect_utils_context), &
@@ -71,6 +74,7 @@ program tester
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
+      & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
