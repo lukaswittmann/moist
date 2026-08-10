@@ -1,5 +1,6 @@
 module test_cavity_drop_primitives
    use mctc_env_accuracy, only: wp
+   use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
    use moist_cavity_drop_lsf_svdw_ssd, only: ssd0, ssd1_r, ssd2_rr, ssd3_rrr, ssd4_rrrr, &
@@ -9,7 +10,7 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_switching, only: moist_cavity_drop_smooth_step_swif, &
                                           new_smooth_step_swif
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none (type, external)
    private
 
@@ -1085,6 +1086,7 @@ contains
       real(wp) :: f_pp, f_p, f_m, f_mm, numeric
       real(wp) :: lsf0_tmp
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
 
@@ -1109,7 +1111,11 @@ contains
             point = points(:, ipt)
             call prim%update(mol_base, radii)
             call prim%ssd_system%update(centers_base, radii)
-            call prim%prepare(point)
+            call prim%prepare(point, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
             call prim%f0_screened(lsf0)
             call prim%f3_rr_rA_screened(lsf1_rA=lsf1, &
                                         lsf3_rr_rA=dummy_rr_rA)
@@ -1123,7 +1129,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_pp = sw%f0(lsf0_tmp)
 
@@ -1133,7 +1139,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_p = sw%f0(lsf0_tmp)
 
@@ -1143,7 +1149,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_m = sw%f0(lsf0_tmp)
 
@@ -1153,7 +1159,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_mm = sw%f0(lsf0_tmp)
 

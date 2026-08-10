@@ -8,6 +8,7 @@ module test_cavity_iswig
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    implicit none (type, external)
@@ -39,7 +40,8 @@ contains
          & new_unittest("gradient_volume", test_gradient_volume), &
          & new_unittest("amat_properties", test_amat_properties), &
          & new_unittest("amat_gradient", test_amat_gradient), &
-         & new_unittest("amat_orca_reference", test_amat_orca_reference) &
+         & new_unittest("amat_orca_reference", test_amat_orca_reference), &
+         & new_unittest("surface_gradient", test_surface_gradient) &
          & ]
 
    end subroutine collect_cavity_iswig
@@ -1485,5 +1487,236 @@ contains
       end subroutine amat_energy
 
    end subroutine test_amat_gradient
+
+   !> Reverse-mode surface gradient against finite differences
+   !>
+   !> [[get_surface_gradient_iswig]] contracts an accumulated surface adjoint
+   !> straight into `dE/dR_A`. The reference is the numerical derivative of the
+   !> very quantity that adjoint defines,
+   !>
+   !>   E = sum_i [ w_xi_i xi_i + w_f_i f_i + w_a_i a_i + w_w_i wleb_i
+   !>             + w_xyz_i . r_i + w_n_i . n_i + (w_k1_i + w_k2_i)/R_owner(i) ]
+   !>
+   !> re-evaluated on a cavity rebuilt at each displaced geometry. Every channel
+   !> is driven at once, including the four the contraction drops as
+   !> geometry-independent: if any of them did move with the nuclei, the
+   !> numerical derivative would see it and the analytic one would not.
+   !>
+   !> Weights are pinned to the *raw* Lebedev index rather than the filtered
+   !> grid index, so a rebuilt grid keeps assigning the same weight to the same
+   !> point; the energy helper additionally refuses to run if the surviving set
+   !> changes at all, which would put a step into the finite difference.
+   subroutine test_surface_gradient(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_iswig), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+      type(cavity_surface_adjoint_type) :: acc
+      real(wp), allocatable :: radii(:)
+      !> Adjoint weights, indexed by raw (pre-filter) grid point
+      real(wp), allocatable :: rw_xi(:), rw_f(:), rw_a(:), rw_w(:)
+      real(wp), allocatable :: rw_xyz(:, :), rw_n(:, :), rw_k1(:), rw_k2(:)
+      !> Channel weights on the filtered grid
+      real(wp), allocatable :: w_xi(:), w_f(:), w_a(:), w_w(:)
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
+      !> Reverse-mode and numerical gradients
+      real(wp), allocatable :: ana_grad(:, :), num_grad(:, :)
+      !> Reference grid extent and point identities
+      integer, allocatable :: numbering_ref(:)
+      integer :: nraw, n
+      real(wp) :: ffwd, fwd, bwd, bbwd
+      integer :: i, iraw, iat, iax
+      !> Number of Lebedev points per sphere of the fixture
+      integer, parameter :: NLEB = 50
+      !> Switching cutoff, low enough that the dropped points carry no weight
+      real(wp), parameter :: CUT_F = 1.0E-7_wp
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+
+      call get_structure(mol, "MB16-43", "01")
+      allocate (radii(mol%nat))
+      radii = 2.0_wp
+
+      call new_radii_custom_atoms(radii, radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
+         & radius_model=radius_model, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      n = cav%ngrid
+      nraw = mol%nat*NLEB
+      numbering_ref = cav%numbering
+
+      ! Deterministic weights of comparable size in every channel, scaled so the
+      ! grid sum stays of order one
+      allocate (rw_xi(nraw), rw_f(nraw), rw_a(nraw), rw_w(nraw))
+      allocate (rw_k1(nraw), rw_k2(nraw))
+      allocate (rw_xyz(3, nraw), rw_n(3, nraw))
+      do iraw = 1, nraw
+         rw_xi(iraw) = channel_weight(iraw, 1)
+         rw_f(iraw) = channel_weight(iraw, 2)
+         rw_a(iraw) = channel_weight(iraw, 3)
+         rw_w(iraw) = channel_weight(iraw, 4)
+         rw_k1(iraw) = channel_weight(iraw, 5)
+         rw_k2(iraw) = channel_weight(iraw, 6)
+         do iax = 1, 3
+            rw_xyz(iax, iraw) = channel_weight(iraw, 6 + iax)
+            rw_n(iax, iraw) = channel_weight(iraw, 9 + iax)
+         end do
+      end do
+
+      ! Analytical gradient through the reverse-mode contraction
+      allocate (w_xi(n), w_f(n), w_a(n), w_w(n), w_k1(n), w_k2(n))
+      allocate (w_xyz(3, n), w_n(3, n))
+      do i = 1, n
+         iraw = cav%numbering(i)
+         w_xi(i) = rw_xi(iraw)
+         w_f(i) = rw_f(iraw)
+         w_a(i) = rw_a(iraw)
+         w_w(i) = rw_w(iraw)
+         w_k1(i) = rw_k1(iraw)
+         w_k2(i) = rw_k2(iraw)
+         w_xyz(:, i) = rw_xyz(:, iraw)
+         w_n(:, i) = rw_n(:, iraw)
+      end do
+
+      call acc%init(n)
+      call acc%add_surface_weights(cavity_error, w_xi=w_xi, w_f=w_f, w_a=w_a, &
+         & w_w=w_w, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, w_k2=w_k2)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      allocate (ana_grad(3, mol%nat), source=0.0_wp)
+      call cav%get_surface_gradient(acc, ana_grad, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      ! Numerical gradient via 5-point stencil
+      allocate (num_grad(3, mol%nat), source=0.0_wp)
+      do iat = 1, mol%nat
+         do iax = 1, 3
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
+            call adjoint_energy(ffwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
+            call adjoint_energy(fwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - 2.0_wp*STEP_SIZE
+            call adjoint_energy(bwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
+            call adjoint_energy(bbwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
+
+            num_grad(iax, iat) = (-ffwd + 8.0_wp*fwd &
+               & - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
+         end do
+      end do
+
+      ! A vanishing reference would let any implementation pass
+      if (maxval(abs(num_grad)) <= 1.0E-6_wp) then
+         call test_failed(error, "Surface-gradient reference is vacuous")
+         return
+      end if
+
+      do iat = 1, mol%nat
+         do iax = 1, 3
+            call check(error, ana_grad(iax, iat), num_grad(iax, iat), &
+               & thr_abs=ABS_THR, thr_rel=REL_THR, &
+               & more="Reverse-mode surface gradient mismatch")
+            if (allocated(error)) return
+         end do
+      end do
+
+   contains
+
+      !> Deterministic pseudo-random weight for one raw point and channel
+      pure function channel_weight(ipoint, ichannel) result(weight)
+         !> Raw grid-point index
+         integer, intent(in) :: ipoint
+         !> Channel identifier
+         integer, intent(in) :: ichannel
+         !> Weight of this point in this channel
+         real(wp) :: weight
+
+         weight = sin(0.37_wp*real(ipoint, wp) + 1.7_wp*real(ichannel, wp)) &
+            & /real(nraw, wp)
+
+      end function channel_weight
+
+      !> Rebuild the cavity at the current geometry and return the adjoint energy
+      subroutine adjoint_energy(value)
+         !> Surface energy whose adjoints `acc` holds
+         real(wp), intent(out) :: value
+
+         integer :: igrid, jraw, jat
+
+         value = 0.0_wp
+         if (allocated(cav)) deallocate (cav)
+         allocate (cav)
+         call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
+            & radius_model=radius_model, error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         call cav%update(mol, error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         if (cav%ngrid /= n) then
+            call test_failed(error, "Surface-gradient FD: grid size changed")
+            return
+         end if
+         if (any(cav%numbering /= numbering_ref)) then
+            call test_failed(error, "Surface-gradient FD: surviving point set changed")
+            return
+         end if
+
+         do igrid = 1, cav%ngrid
+            jraw = cav%numbering(igrid)
+            jat = cav%owner(igrid)
+            value = value &
+               & + rw_xi(jraw)*cav%xi0(igrid) &
+               & + rw_f(jraw)*cav%f(igrid) &
+               & + rw_a(jraw)*cav%a(igrid) &
+               & + rw_w(jraw)*cav%wleb(igrid) &
+               & + dot_product(rw_xyz(:, jraw), cav%xyz(:, igrid)) &
+               & + dot_product(rw_n(:, jraw), cav%normal0(:, igrid)) &
+               & + (rw_k1(jraw) + rw_k2(jraw))/cav%radii(jat)
+         end do
+
+      end subroutine adjoint_energy
+
+   end subroutine test_surface_gradient
 
 end module test_cavity_iswig
