@@ -1,4 +1,4 @@
-Marching cubes cavity
+Marching Cubes Cavity
 =====================
 
 Marching cubes integrates the zero level set of a given level set function.
@@ -33,7 +33,7 @@ The LSF model and the radii model are required constructor arguments.
 ``obj_file`` / ``pqr_file`` (optional paths)
    When given, the triangle mesh produced during ``update`` is written as an ``obj_file`` (Wavefront OBJ mesh) or an ``pqr_file`` (one ``HETATM`` per triangle center).
 
-Command line
+Command Line
 ------------
 
 .. code-block:: none

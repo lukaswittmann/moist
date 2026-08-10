@@ -1,4 +1,4 @@
-iSwiG cavity
+iSwiG Cavity
 ============
 
 iSwiG is the switching Gaussian surface-discretization approach :cite:p:`lange2010swig` for van der Waals type cavitites.

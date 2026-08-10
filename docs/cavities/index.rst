@@ -3,7 +3,7 @@ Cavities
 
 This section describes the cavity constructions available in MOIST and the settings that control their shape and surface discretization.
 
-Common interface
+Common Interface
 ----------------
 
 All cavity implementations are based on the the abstract ``cavity_type`` defined in ``src/moist/type.f90``.
@@ -27,7 +27,7 @@ Concrete cavity types must implement two deferred procedures:
 The base type also provides optional response hooks. 
 ``get_surface_potential`` maps model surface weights to host-potential contributions.
 
-Typical use
+Typical Use
 -----------
 
 1. Construct a concrete cavity and configure its radii and discretization.
@@ -41,7 +41,7 @@ Typical use
 
 The shared ``print``, ``write_xyz_debug``, ``write_csv_debug``, and ``write_pqr_debug`` procedures provide diagnostics and grid export; ``find_disconnected_cavities`` checks the grid for disconnected cavities.
 
-Available cavities
+Available Cavities
 ------------------
 
 .. toctree::

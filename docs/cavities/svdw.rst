@@ -1,4 +1,4 @@
-SvdW-DROP cavity
+SvdW-DROP Cavity
 ================
 
 The smooth van der Waals surface :cite:p:`wittmann2026drop` is the default DROP level set.
@@ -20,4 +20,3 @@ Optional settings:
 
 ``blend_3b`` (real, default ``3.0``)
    three-body smoothing.
-

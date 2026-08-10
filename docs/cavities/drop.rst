@@ -75,7 +75,7 @@ Settings can be supplied two ways:
   ``wleb_prune_level``.
 
 
-Level set functions (LSF)
+Level Set Functions (LSF)
 -------------------------
 
 The LSF defines the implicit surface that the reference (van der Waals) grid is
@@ -93,7 +93,7 @@ MOIST provides SvdW, CFC, and isodensity LSFs:
    svdw
    cfc
 
-Grid discretization
+Grid Discretization
 -------------------
 
 ``grid.num_leb`` (integer, default ``194``)
@@ -101,7 +101,7 @@ Grid discretization
    **Must be one of the supported Lebedev orders**: 6, 14, 26, 38, 50, 86, 110, 146, 170, 194, 302, 350, 434, 590, 770, 974, 1202, 1454, 1730, 2030, 2354, 2702, 3074, 3470, 3890, 4334, 4802, 5294, 5810.
 
 
-Numerical tolerance
+Numerical Tolerance
 -------------------
 
 ``tolerance`` (real, default ``1.0e-10``)
@@ -113,7 +113,7 @@ Numerical tolerance
    See :cite:t:`wittmann2026drop`, Supporting Information Sec. C.2.c for convergence behavior with respect to these thresholds.
 
 
-Surface projection
+Surface Projection
 ------------------
 
 ``projection.level`` (integer, default ``3``)
@@ -158,7 +158,7 @@ Surface projection
   Weight of the anchor term in the projection objective; larger values keep projected points closer to their initial (anchor) position. Adjusting this should have no effect on the final surface.
 
 
-Switching functions
+Switching Functions
 -------------------
 
 Smooth step functions that fade surface contributions in and out so the cavity stays differentiable also in rare edge cases.
@@ -187,7 +187,7 @@ Two independent switches act on the integration weights, each keyed on a differe
   When that tangential curvature becomes too small, the focal switch ``f_foc`` smoothly damps the contribution of the affected point so the discretized surface remains stable.
 
 
-Weight pruning
+Weight Pruning
 --------------
 
 If desired, near-zero weights can be smoothly attenuated to speed up the computation of electrostatic potential integrals (for QM coupling) in cases with large numbers of points with negligible contributions (e.g. large cavities with high Lebedev order).
@@ -224,7 +224,7 @@ Branching
   The branch ``rho`` cutoff is derived from this and the weight cutoff, and the resulting branch fraction is  multiplied into the integration weight for each projected point.
 
 
-Spatial screening
+Spatial Screening
 -----------------
 
 Acceleration settings that do not change results, only cost.
@@ -237,7 +237,7 @@ Acceleration settings that do not change results, only cost.
    Below this atom count the cell grid collapses to a single full-scan cell.
 
 
-Disconnected points
+Disconnected Points
 -------------------
 
 ``disconnection.threshold`` (real, default ``4.0``)

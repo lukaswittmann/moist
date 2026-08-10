@@ -1,4 +1,4 @@
-CFC-DROP cavity
+CFC-DROP Cavity
 ===============
 
 The COSMO Fine Cavity (CFC) is a radii-based pseudo-density surface following :cite:t:`klamt2018cfc`, originally discretized via a marching tetrahedron algorithm.
