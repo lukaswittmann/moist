@@ -27,11 +27,11 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("supported-combinations", test_supported_combinations), &
-                  new_unittest("unsupported-dimension", test_unsupported_dimension), &
-                  new_unittest("unsupported-order", test_unsupported_order), &
-                  new_unittest("nonpositive-h", test_nonpositive_h), &
-                  new_unittest("failed-init-detaches", test_failed_init_detaches) &
+                  new_unittest("supported_combinations", test_supported_combinations), &
+                  new_unittest("unsupported_dimension", test_unsupported_dimension), &
+                  new_unittest("unsupported_order", test_unsupported_order), &
+                  new_unittest("nonpositive_h", test_nonpositive_h), &
+                  new_unittest("failed_init_detaches", test_failed_init_detaches) &
                   ]
 
    end subroutine collect_math_smoothing_kernels

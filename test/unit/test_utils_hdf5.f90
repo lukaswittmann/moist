@@ -13,35 +13,35 @@ contains
    subroutine collect_utils_hdf5(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("CreateFile", test_create_file), &
-         & new_unittest("WriteReadScalar", test_write_read_scalar), &
-         & new_unittest("WriteReadArray1D", test_write_read_array1d), &
-         & new_unittest("WriteReadArray2D", test_write_read_array2d), &
-         & new_unittest("WriteReadArray3D", test_write_read_array3d), &
-         & new_unittest("WriteReadString", test_write_read_string), &
-         & new_unittest("GroupOperations", test_group_operations), &
-         & new_unittest("IntegerArrays", test_integer_arrays), &
-         & new_unittest("Attributes", test_attributes), &
-         & new_unittest("Delete", test_delete), &
-         & new_unittest("OpenUnopenedHandle", test_open_unopened_handle, &
+         & new_unittest("create_file", test_create_file), &
+         & new_unittest("write_read_scalar", test_write_read_scalar), &
+         & new_unittest("write_read_array1d", test_write_read_array1d), &
+         & new_unittest("write_read_array2d", test_write_read_array2d), &
+         & new_unittest("write_read_array3d", test_write_read_array3d), &
+         & new_unittest("write_read_string", test_write_read_string), &
+         & new_unittest("group_operations", test_group_operations), &
+         & new_unittest("integer_arrays", test_integer_arrays), &
+         & new_unittest("attributes", test_attributes), &
+         & new_unittest("delete", test_delete), &
+         & new_unittest("open_unopened_handle", test_open_unopened_handle, &
          &    should_fail=.true.), &
-         & new_unittest("NestedOpenGroupWithoutClose", &
+         & new_unittest("nested_open_group_without_close", &
          &    test_nested_open_group_without_close, should_fail=.true.), &
-         & new_unittest("DeleteMissingPath", test_delete_missing_path, &
+         & new_unittest("delete_missing_path", test_delete_missing_path, &
          &    should_fail=.true.), &
-         & new_unittest("DeleteNonEmptyGroup", &
+         & new_unittest("delete_non_empty_group", &
          &    test_delete_non_empty_group), &
-         & new_unittest("DatasetOverwriteSamePath", &
+         & new_unittest("dataset_overwrite_same_path", &
          &    test_dataset_overwrite_same_path, should_fail=.true.), &
-         & new_unittest("TypeMismatchRead", test_type_mismatch_read, &
+         & new_unittest("type_mismatch_read", test_type_mismatch_read, &
          &    should_fail=.true.), &
-         & new_unittest("RankMismatchRead", test_rank_mismatch_read, &
+         & new_unittest("rank_mismatch_read", test_rank_mismatch_read, &
          &    should_fail=.true.), &
-         & new_unittest("ReadOnlyBlocksMutation", &
+         & new_unittest("read_only_blocks_mutation", &
          &    test_read_only_blocks_mutation, should_fail=.true.), &
-         & new_unittest("AddaMissingPath", test_adda_missing_path, should_fail=.true.), &
-         & new_unittest("GroupOpenClose", test_group_open_close), &
-         & new_unittest("CloseOpenGroup", test_close_with_open_group) &
+         & new_unittest("adda_missing_path", test_adda_missing_path, should_fail=.true.), &
+         & new_unittest("group_open_close", test_group_open_close), &
+         & new_unittest("close_open_group", test_close_with_open_group) &
          & ]
    end subroutine collect_utils_hdf5
 

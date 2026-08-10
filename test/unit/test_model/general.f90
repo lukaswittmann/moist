@@ -39,8 +39,8 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("General Model CPCM", test_general_model_smoke), &
-         & new_unittest("General Model CPCM+PV", test_general_model_pv_smoke) &
+         & new_unittest("general_model_cpcm", test_general_model_smoke), &
+         & new_unittest("general_model_cpcm_pv", test_general_model_pv_smoke) &
          & ]
 
    end subroutine collect_model_general

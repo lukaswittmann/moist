@@ -46,11 +46,11 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("PV Sphere Volume", test_pv_sphere_volume), &
-         & new_unittest("PV Nuclear Gradient", test_pv_nuclear_gradient), &
-         & new_unittest("PV Surface Weights", test_pv_surface_weights), &
-         & new_unittest("PV Zero Pressure Short Circuit", test_pv_short_circuit), &
-         & new_unittest("PV Lifecycle Guards", test_pv_guards) &
+         & new_unittest("pv_sphere_volume", test_pv_sphere_volume), &
+         & new_unittest("pv_nuclear_gradient", test_pv_nuclear_gradient), &
+         & new_unittest("pv_surface_weights", test_pv_surface_weights), &
+         & new_unittest("pv_zero_pressure_short_circuit", test_pv_short_circuit), &
+         & new_unittest("pv_lifecycle_guards", test_pv_guards) &
          & ]
 
    end subroutine collect_model_component_pv

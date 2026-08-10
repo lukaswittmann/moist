@@ -33,20 +33,20 @@ contains
                   new_unittest("ssd_f2_rr", test_ssd_f2_rr), &
                   new_unittest("ssd_f3_rrr", test_ssd_f3_rrr), &
                   new_unittest("ssd_f4_rrrr", test_ssd_f4_rrrr), &
-                  new_unittest("ssd_f1_rA", test_ssd_f1_rA), &
-                  new_unittest("ssd_f2_rArB", test_ssd_f2_rArB), &
-                  new_unittest("ssd_f2_r_rA", test_ssd_f2_r_rA), &
+                  new_unittest("ssd_f1_ra", test_ssd_f1_rA), &
+                  new_unittest("ssd_f2_rarb", test_ssd_f2_rArB), &
+                  new_unittest("ssd_f2_r_ra", test_ssd_f2_r_rA), &
                   new_unittest("ssd_f012_r", test_ssd_f012_r), &
                   new_unittest("phi_f0", test_phi_f0), &
                   new_unittest("phi_f1_r", test_phi_f1_r), &
                   new_unittest("phi_f2_rr", test_phi_f2_rr), &
                   new_unittest("phi_f3_rrr", test_phi_f3_rrr), &
                   new_unittest("phi_f4_rrrr", test_phi_f4_rrrr), &
-                  new_unittest("phi_f1_rA", test_phi_f1_rA), &
-                  new_unittest("phi_f2_rArB", test_phi_f2_rArB), &
-                  new_unittest("phi_f2_r_rA", test_phi_f2_r_rA), &
+                  new_unittest("phi_f1_ra", test_phi_f1_rA), &
+                  new_unittest("phi_f2_rarb", test_phi_f2_rArB), &
+                  new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
                   new_unittest("phi_f012_r", test_phi_f012_r), &
-                  new_unittest("switching_f1_rA", test_switching_f1_rA) &
+                  new_unittest("switching_f1_ra", test_switching_f1_rA) &
                   ]
    end subroutine collect_cavity_drop_primitives
 

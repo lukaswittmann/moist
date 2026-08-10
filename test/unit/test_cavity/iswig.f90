@@ -30,16 +30,16 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("Spherical cavity", test_spherical_cavity), &
-         & new_unittest("Molecular cavity", test_molecular_cavity), &
-         & new_unittest("AreaSum", test_area_summation), &
-         & new_unittest("AreaVariants", test_area_variants), &
-         & new_unittest("GradientSwitch", test_gradient_switch), &
-         & new_unittest("GradientArea", test_gradient_area), &
-         & new_unittest("GradientVolume", test_gradient_volume), &
-         & new_unittest("AmatProperties", test_amat_properties), &
-         & new_unittest("AmatGradient", test_amat_gradient), &
-         & new_unittest("AmatOrcaReference", test_amat_orca_reference) &
+         & new_unittest("spherical_cavity", test_spherical_cavity), &
+         & new_unittest("molecular_cavity", test_molecular_cavity), &
+         & new_unittest("area_sum", test_area_summation), &
+         & new_unittest("area_variants", test_area_variants), &
+         & new_unittest("gradient_switch", test_gradient_switch), &
+         & new_unittest("gradient_area", test_gradient_area), &
+         & new_unittest("gradient_volume", test_gradient_volume), &
+         & new_unittest("amat_properties", test_amat_properties), &
+         & new_unittest("amat_gradient", test_amat_gradient), &
+         & new_unittest("amat_orca_reference", test_amat_orca_reference) &
          & ]
 
    end subroutine collect_cavity_iswig

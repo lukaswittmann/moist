@@ -17,8 +17,8 @@ contains
 subroutine collect_utils(testsuite)
    type(unittest_type), allocatable, intent(out) :: testsuite(:)
    testsuite = [ &
-      & new_unittest("SumSolventProperties", test_sum_solvent_properties), &
-      & new_unittest("SolventIDFinder", test_solvent_id_finder) &
+      & new_unittest("sum_solvent_properties", test_sum_solvent_properties), &
+      & new_unittest("solvent_id_finder", test_solvent_id_finder) &
 
       & ]
 end subroutine collect_utils

@@ -65,25 +65,25 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("atom_pd1_r_fd       ", test_atom_pd1_r_fd), &
-                  new_unittest("atom_pd2_rr_fd      ", test_atom_pd2_rr_fd), &
-                  new_unittest("atom_pd3_rrr_fd     ", test_atom_pd3_rrr_fd), &
-                  new_unittest("atom_pd2_symmetry   ", test_atom_pd2_symmetry), &
-                  new_unittest("atom_pd3_symmetry   ", test_atom_pd3_symmetry), &
-                  new_unittest("pair_pd1_a_fd       ", test_pair_pd1_a_fd), &
-                  new_unittest("pair_pd1_b_fd       ", test_pair_pd1_b_fd), &
-                  new_unittest("pair_pd2_aa_fd      ", test_pair_pd2_aa_fd), &
-                  new_unittest("pair_pd2_bb_fd      ", test_pair_pd2_bb_fd), &
-                  new_unittest("pair_pd2_ab_fd      ", test_pair_pd2_ab_fd), &
-                  new_unittest("pair_pd3_aaa_fd     ", test_pair_pd3_aaa_fd), &
-                  new_unittest("pair_pd3_bbb_fd     ", test_pair_pd3_bbb_fd), &
-                  new_unittest("pair_pd3_aab_fd     ", test_pair_pd3_aab_fd), &
-                  new_unittest("pair_pd3_abb_fd     ", test_pair_pd3_abb_fd), &
-                  new_unittest("pair_tensor_symm    ", test_pair_tensor_symmetries), &
-                  new_unittest("pair_swap_a_b       ", test_pair_swap_invariance), &
-                  new_unittest("log_lift_grad_fd    ", test_log_lift_grad_fd), &
-                  new_unittest("log_lift_hess_fd    ", test_log_lift_hess_fd), &
-                  new_unittest("log_lift_third_fd   ", test_log_lift_third_fd) &
+                  new_unittest("atom_pd1_r_fd", test_atom_pd1_r_fd), &
+                  new_unittest("atom_pd2_rr_fd", test_atom_pd2_rr_fd), &
+                  new_unittest("atom_pd3_rrr_fd", test_atom_pd3_rrr_fd), &
+                  new_unittest("atom_pd2_symmetry", test_atom_pd2_symmetry), &
+                  new_unittest("atom_pd3_symmetry", test_atom_pd3_symmetry), &
+                  new_unittest("pair_pd1_a_fd", test_pair_pd1_a_fd), &
+                  new_unittest("pair_pd1_b_fd", test_pair_pd1_b_fd), &
+                  new_unittest("pair_pd2_aa_fd", test_pair_pd2_aa_fd), &
+                  new_unittest("pair_pd2_bb_fd", test_pair_pd2_bb_fd), &
+                  new_unittest("pair_pd2_ab_fd", test_pair_pd2_ab_fd), &
+                  new_unittest("pair_pd3_aaa_fd", test_pair_pd3_aaa_fd), &
+                  new_unittest("pair_pd3_bbb_fd", test_pair_pd3_bbb_fd), &
+                  new_unittest("pair_pd3_aab_fd", test_pair_pd3_aab_fd), &
+                  new_unittest("pair_pd3_abb_fd", test_pair_pd3_abb_fd), &
+                  new_unittest("pair_tensor_symm", test_pair_tensor_symmetries), &
+                  new_unittest("pair_swap_a_b", test_pair_swap_invariance), &
+                  new_unittest("log_lift_grad_fd", test_log_lift_grad_fd), &
+                  new_unittest("log_lift_hess_fd", test_log_lift_hess_fd), &
+                  new_unittest("log_lift_third_fd", test_log_lift_third_fd) &
                   ]
    end subroutine collect_cavity_drop_cfc
 

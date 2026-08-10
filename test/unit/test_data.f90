@@ -53,35 +53,35 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("ElementTablesComplete", test_element_tables_complete), &
-                  new_unittest("ElementTablesPhysical", test_element_tables_physical), &
-                  new_unittest("HardnessSuperheavyAreZero", test_hardness_superheavy), &
-                  new_unittest("AnchorElectronegativity", test_anchor_en), &
-                  new_unittest("AnchorHardness", test_anchor_hardness), &
-                  new_unittest("AnchorMass", test_anchor_mass), &
-                  new_unittest("AnchorAtomicRad", test_anchor_atomic_rad), &
-                  new_unittest("AnchorCovalentRad", test_anchor_covalent_rad), &
-                  new_unittest("AccessorRejectsOutOfRange", test_accessor_out_of_range), &
-                  new_unittest("AccessorAcceptsBoundaries", test_accessor_boundaries), &
-                  new_unittest("AccessorRejectsBadSymbol", test_accessor_bad_symbol), &
-                  new_unittest("AccessorSymbolCaseInsensitive", test_accessor_symbol_case), &
-                  new_unittest("AccessorSymbolMatchesNumber", test_accessor_symbol_consistency), &
-                  new_unittest("RadiusAllModelsComplete", test_radius_models_complete), &
-                  new_unittest("RadiusModelUpperBounds", test_radius_upper_bounds), &
-                  new_unittest("RadiusKeywordNormalisation", test_radius_keyword_normalisation), &
-                  new_unittest("RadiusRejectsBadKeyword", test_radius_bad_keyword), &
-                  new_unittest("RadiusModelsAreDistinct", test_radius_models_distinct), &
-                  new_unittest("RadiusBondiMissingRejected", test_radius_bondi_missing), &
-                  new_unittest("RadiusModelErrorWinsOverSymbol", test_radius_error_precedence), &
-                  new_unittest("RadiusFuncSentinel", test_radius_func_sentinel), &
-                  new_unittest("RadiusFuncReportsError", test_radius_func_reports_error), &
-                  new_unittest("SolventIdsAreContiguous", test_solvent_ids_contiguous), &
-                  new_unittest("SolventNameRoundTrip", test_solvent_name_round_trip), &
-                  new_unittest("SolventAliasCaseAndBlanks", test_solvent_alias_normalisation), &
-                  new_unittest("SolventRejectsBlankAlias", test_solvent_blank_alias), &
-                  new_unittest("SolventRejectsBadId", test_solvent_bad_id), &
-                  new_unittest("SolventSystemConstructs", test_solvent_system_constructs), &
-                  new_unittest("SolventSystemValidatesInput", test_solvent_system_validation) &
+                  new_unittest("element_tables_complete", test_element_tables_complete), &
+                  new_unittest("element_tables_physical", test_element_tables_physical), &
+                  new_unittest("hardness_superheavy_are_zero", test_hardness_superheavy), &
+                  new_unittest("anchor_electronegativity", test_anchor_en), &
+                  new_unittest("anchor_hardness", test_anchor_hardness), &
+                  new_unittest("anchor_mass", test_anchor_mass), &
+                  new_unittest("anchor_atomic_rad", test_anchor_atomic_rad), &
+                  new_unittest("anchor_covalent_rad", test_anchor_covalent_rad), &
+                  new_unittest("accessor_rejects_out_of_range", test_accessor_out_of_range), &
+                  new_unittest("accessor_accepts_boundaries", test_accessor_boundaries), &
+                  new_unittest("accessor_rejects_bad_symbol", test_accessor_bad_symbol), &
+                  new_unittest("accessor_symbol_case_insensitive", test_accessor_symbol_case), &
+                  new_unittest("accessor_symbol_matches_number", test_accessor_symbol_consistency), &
+                  new_unittest("radius_all_models_complete", test_radius_models_complete), &
+                  new_unittest("radius_model_upper_bounds", test_radius_upper_bounds), &
+                  new_unittest("radius_keyword_normalisation", test_radius_keyword_normalisation), &
+                  new_unittest("radius_rejects_bad_keyword", test_radius_bad_keyword), &
+                  new_unittest("radius_models_are_distinct", test_radius_models_distinct), &
+                  new_unittest("radius_bondi_missing_rejected", test_radius_bondi_missing), &
+                  new_unittest("radius_model_error_wins_over_symbol", test_radius_error_precedence), &
+                  new_unittest("radius_func_sentinel", test_radius_func_sentinel), &
+                  new_unittest("radius_func_reports_error", test_radius_func_reports_error), &
+                  new_unittest("solvent_ids_are_contiguous", test_solvent_ids_contiguous), &
+                  new_unittest("solvent_name_round_trip", test_solvent_name_round_trip), &
+                  new_unittest("solvent_alias_case_and_blanks", test_solvent_alias_normalisation), &
+                  new_unittest("solvent_rejects_blank_alias", test_solvent_blank_alias), &
+                  new_unittest("solvent_rejects_bad_id", test_solvent_bad_id), &
+                  new_unittest("solvent_system_constructs", test_solvent_system_constructs), &
+                  new_unittest("solvent_system_validates_input", test_solvent_system_validation) &
                   ]
    end subroutine collect_data
 

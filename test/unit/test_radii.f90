@@ -26,25 +26,25 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("StaticRadiiCPCM", test_static_radii_cpcm), &
-                  new_unittest("StaticRadiiConstructors", test_static_constructors), &
-                  new_unittest("RadiiConstructorVerbosity", test_constructor_verbosity), &
-                  new_unittest("StaticRadiiZeroGradient", test_static_zero_gradient), &
-                  new_unittest("StaticRadiiNeedsUpdate", test_static_requires_update), &
-                  new_unittest("CustomRadiiAtomsWorks", test_custom_atoms_dropcess), &
-                  new_unittest("CustomRadiiElementsWorks", test_custom_elements_dropcess), &
-                  new_unittest("CustomRadiiCavityIntegration", test_custom_radii_cavity_integration), &
-                  new_unittest("CustomRadiiAtomsBadEmpty", test_custom_atoms_empty_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiAtomsBadValue", test_custom_atoms_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiAtomsBadNat", test_custom_atoms_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadEmpty", test_custom_elements_empty_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadSize", test_custom_elements_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadZ", test_custom_elements_invalid_z_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadValue", test_custom_elements_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadDuplicate", test_custom_elements_duplicate_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsMissing", test_custom_elements_missing_for_molecule_fails, &
+                  new_unittest("static_radii_cpcm", test_static_radii_cpcm), &
+                  new_unittest("static_radii_constructors", test_static_constructors), &
+                  new_unittest("radii_constructor_verbosity", test_constructor_verbosity), &
+                  new_unittest("static_radii_zero_gradient", test_static_zero_gradient), &
+                  new_unittest("static_radii_needs_update", test_static_requires_update), &
+                  new_unittest("custom_radii_atoms_works", test_custom_atoms_dropcess), &
+                  new_unittest("custom_radii_elements_works", test_custom_elements_dropcess), &
+                  new_unittest("custom_radii_cavity_integration", test_custom_radii_cavity_integration), &
+                  new_unittest("custom_radii_atoms_bad_empty", test_custom_atoms_empty_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_value", test_custom_atoms_nonpositive_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_nat", test_custom_atoms_size_mismatch_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_empty", test_custom_elements_empty_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_size", test_custom_elements_size_mismatch_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_z", test_custom_elements_invalid_z_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_value", test_custom_elements_nonpositive_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_duplicate", test_custom_elements_duplicate_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_missing", test_custom_elements_missing_for_molecule_fails, &
                                should_fail=.true.), &
-                  new_unittest("CustomRadiiStringGuidance", test_custom_string_guidance, should_fail=.true.) &
+                  new_unittest("custom_radii_string_guidance", test_custom_string_guidance, should_fail=.true.) &
                   ]
    end subroutine collect_radii
 

@@ -83,13 +83,13 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("Spherical isosurface", test_spherical_isosurface), &
-         & new_unittest("SphereRadii", test_sphere_radii), &
-         & new_unittest("DisjointSpheres", test_disjoint_spheres), &
-         & new_unittest("NestedSpheres", test_nested_spheres), &
-         & new_unittest("NoGridPoints", test_no_grid_points), &
-         & new_unittest("NoGradient", test_gradient_unavailable), &
-         & new_unittest("RejectsBadSpacing", test_rejects_bad_spacing), &
+         & new_unittest("spherical_isosurface", test_spherical_isosurface), &
+         & new_unittest("sphere_radii", test_sphere_radii), &
+         & new_unittest("disjoint_spheres", test_disjoint_spheres), &
+         & new_unittest("nested_spheres", test_nested_spheres), &
+         & new_unittest("no_grid_points", test_no_grid_points), &
+         & new_unittest("no_gradient", test_gradient_unavailable), &
+         & new_unittest("rejects_bad_spacing", test_rejects_bad_spacing), &
          & new_unittest(case_to_string(cases(1)), test_case_001), &
          & new_unittest(case_to_string(cases(2)), test_case_002), &
          & new_unittest(case_to_string(cases(3)), test_case_003), &

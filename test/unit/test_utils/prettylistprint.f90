@@ -21,10 +21,10 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("healthy-printer-emits", test_healthy_printer_emits), &
-                  new_unittest("row-layout", test_row_layout), &
+                  new_unittest("healthy_printer_emits", test_healthy_printer_emits), &
+                  new_unittest("row_layout", test_row_layout), &
                   new_unittest("decorations", test_decorations), &
-                  new_unittest("real-overflow-marker", test_real_overflow_marker) &
+                  new_unittest("real_overflow_marker", test_real_overflow_marker) &
                   ]
 
    end subroutine collect_utils_prettylistprint

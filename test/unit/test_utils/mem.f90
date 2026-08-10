@@ -17,14 +17,14 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("grow-preserves-and-fills", test_grow_preserves_and_fills), &
-                  new_unittest("grow-from-unallocated", test_grow_from_unallocated), &
-                  new_unittest("same-size-is-noop", test_same_size_is_noop), &
-                  new_unittest("shrink-real-1d-reports", test_shrink_real_1d_reports), &
-                  new_unittest("shrink-int-1d-reports", test_shrink_int_1d_reports), &
-                  new_unittest("shrink-logical-1d-reports", test_shrink_logical_1d_reports), &
-                  new_unittest("shrink-real-2d-reports", test_shrink_real_2d_reports), &
-                  new_unittest("dim1-change-reports", test_dim1_change_reports) &
+                  new_unittest("grow_preserves_and_fills", test_grow_preserves_and_fills), &
+                  new_unittest("grow_from_unallocated", test_grow_from_unallocated), &
+                  new_unittest("same_size_is_noop", test_same_size_is_noop), &
+                  new_unittest("shrink_real_1d_reports", test_shrink_real_1d_reports), &
+                  new_unittest("shrink_int_1d_reports", test_shrink_int_1d_reports), &
+                  new_unittest("shrink_logical_1d_reports", test_shrink_logical_1d_reports), &
+                  new_unittest("shrink_real_2d_reports", test_shrink_real_2d_reports), &
+                  new_unittest("dim1_change_reports", test_dim1_change_reports) &
                   ]
 
    end subroutine collect_utils_mem

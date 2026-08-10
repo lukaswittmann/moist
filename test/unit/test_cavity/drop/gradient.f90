@@ -49,8 +49,8 @@ contains
                   ! Cavity derivative tests
                   new_unittest("single_atom", test_single_atom), &
                   new_unittest("dimer", test_dimer), &
-                  new_unittest("amino20x4_GLY_xab", test_amino20x4_gly_xab), &
-                  new_unittest("mb16-43_01", test_mb16_43_01), &
+                  new_unittest("amino20x4_gly_xab", test_amino20x4_gly_xab), &
+                  new_unittest("mb16_43_01", test_mb16_43_01), &
                   new_unittest("but14diol_1", test_but14diol_1), &
                   new_unittest("il16_008", test_il16_008), &
                   new_unittest("dimer_branching", test_dimer_branching), &

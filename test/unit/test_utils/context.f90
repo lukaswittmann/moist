@@ -16,19 +16,19 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("defaults-and-settings", test_defaults_and_settings), &
-                  new_unittest("shared-timer-tree", test_shared_timer_tree), &
-                  new_unittest("writes-guard", test_writes_guard), &
-                  new_unittest("profile-flag", test_profile_flag), &
-                  new_unittest("report-depth", test_report_depth), &
-                  new_unittest("threads-default", test_threads_default), &
-                  new_unittest("threads-explicit", test_threads_explicit), &
-                  new_unittest("set-num-threads", test_set_num_threads), &
-                  new_unittest("delete-releases-pin", test_delete_releases_pin), &
-                  new_unittest("owned-logfile", test_owned_logfile), &
-                  new_unittest("print-settings-runs", test_print_settings_runs), &
-                  new_unittest("debug-message-gated", test_debug_message_gated), &
-                  new_unittest("delete-is-safe", test_delete_is_safe) &
+                  new_unittest("defaults_and_settings", test_defaults_and_settings), &
+                  new_unittest("shared_timer_tree", test_shared_timer_tree), &
+                  new_unittest("writes_guard", test_writes_guard), &
+                  new_unittest("profile_flag", test_profile_flag), &
+                  new_unittest("report_depth", test_report_depth), &
+                  new_unittest("threads_default", test_threads_default), &
+                  new_unittest("threads_explicit", test_threads_explicit), &
+                  new_unittest("set_num_threads", test_set_num_threads), &
+                  new_unittest("delete_releases_pin", test_delete_releases_pin), &
+                  new_unittest("owned_logfile", test_owned_logfile), &
+                  new_unittest("print_settings_runs", test_print_settings_runs), &
+                  new_unittest("debug_message_gated", test_debug_message_gated), &
+                  new_unittest("delete_is_safe", test_delete_is_safe) &
                   ]
 
    end subroutine collect_utils_context

@@ -17,17 +17,17 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         new_unittest("loop-accumulation", test_loop_accumulation), &
-         new_unittest("nesting-and-paths", test_nesting_and_paths), &
-         new_unittest("unbalanced-poisons-nan", test_unbalanced_poisons_nan), &
-         new_unittest("mismatch-unwind", test_mismatch_unwind), &
-         new_unittest("handle-fast-path", test_handle_fast_path), &
-         new_unittest("current-open-node", test_current_open_node), &
+         new_unittest("loop_accumulation", test_loop_accumulation), &
+         new_unittest("nesting_and_paths", test_nesting_and_paths), &
+         new_unittest("unbalanced_poisons_nan", test_unbalanced_poisons_nan), &
+         new_unittest("mismatch_unwind", test_mismatch_unwind), &
+         new_unittest("handle_fast_path", test_handle_fast_path), &
+         new_unittest("current_open_node", test_current_open_node), &
          new_unittest("introspection", test_introspection), &
-         new_unittest("double-start-poisons", test_double_start_poisons), &
-         new_unittest("stale-handle-safe", test_stale_handle_safe), &
-         new_unittest("unwind-to-depth", test_unwind_to_depth), &
-         new_unittest("reset-and-inactive", test_reset_and_inactive) &
+         new_unittest("double_start_poisons", test_double_start_poisons), &
+         new_unittest("stale_handle_safe", test_stale_handle_safe), &
+         new_unittest("unwind_to_depth", test_unwind_to_depth), &
+         new_unittest("reset_and_inactive", test_reset_and_inactive) &
          ]
 
    end subroutine collect_utils_timer

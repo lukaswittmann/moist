@@ -47,31 +47,31 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("CPCM Born Ion", test_cpcm_born), &
-         & new_unittest("CPCM LU Energy", test_cpcm_energy_lu), &
-         & new_unittest("CPCM Charged System", test_cpcm_charged), &
-         & new_unittest("CPCM Solver Comparison", test_cpcm_solver_comparison), &
-         & new_unittest("CPCM Vacuum Limit", test_cpcm_vacuum_limit), &
-         & new_unittest("CPCM External Potential", test_cpcm_external_potential), &
-         & new_unittest("CPCM External Potential Requires Input", test_cpcm_external_potential_requires_input, &
+         & new_unittest("cpcm_born_ion", test_cpcm_born), &
+         & new_unittest("cpcm_lu_energy", test_cpcm_energy_lu), &
+         & new_unittest("cpcm_charged_system", test_cpcm_charged), &
+         & new_unittest("cpcm_solver_comparison", test_cpcm_solver_comparison), &
+         & new_unittest("cpcm_vacuum_limit", test_cpcm_vacuum_limit), &
+         & new_unittest("cpcm_external_potential", test_cpcm_external_potential), &
+         & new_unittest("cpcm_external_potential_requires_input", test_cpcm_external_potential_requires_input, &
             should_fail=.true.), &
-         & new_unittest("CPCM External Matrix", test_cpcm_external_matrix), &
-         & new_unittest("CPCM Spin-Resolved Charges", test_cpcm_spin_resolved_charges), &
-         & new_unittest("CPCM Requires Update", test_cpcm_requires_update, should_fail=.true.), &
-         & new_unittest("CPCM Invalid Solver", test_cpcm_invalid_solver, should_fail=.true.), &
-         & new_unittest("PCM Rejects Dielectric Below One", test_pcm_invalid_epsilon), &
-         & new_unittest("CPCM Iterative Rejects Non-SPD Matrix", test_cpcm_iterative_not_spd, should_fail=.true.), &
-         & new_unittest("CPCM Reallocates On Grid Change", test_cpcm_reallocate_on_ngrid_change), &
-         & new_unittest("CPCM Records Shared Timer Tree", test_cpcm_timer_tree), &
-         & new_unittest("CPCM Stale Charge Regression", test_cpcm_stale_charge_regression), &
-         & new_unittest("CPCM Surface Weights", test_cpcm_surface_weights), &
-         & new_unittest("CPCM Molecular Surface Weights", test_cpcm_molecular_surface_weights), &
-         & new_unittest("CPCM Nuclear Gradient", test_cpcm_nuclear_gradient), &
-         & new_unittest("CPCM External Nuclear Gradient", test_cpcm_external_nuclear_gradient), &
-         & new_unittest("CPCM Translation Invariance", test_cpcm_translation_invariance), &
-         & new_unittest("CPCM Dielectric Scaling", test_cpcm_dielectric_scaling), &
-         & new_unittest("CPCM Coincident Points", test_cpcm_coincident_points) &
-         ! & new_unittest("CPCM Solver Timing", test_cpcm_timing) &
+         & new_unittest("cpcm_external_matrix", test_cpcm_external_matrix), &
+         & new_unittest("cpcm_spin_resolved_charges", test_cpcm_spin_resolved_charges), &
+         & new_unittest("cpcm_requires_update", test_cpcm_requires_update, should_fail=.true.), &
+         & new_unittest("cpcm_invalid_solver", test_cpcm_invalid_solver, should_fail=.true.), &
+         & new_unittest("pcm_rejects_dielectric_below_one", test_pcm_invalid_epsilon), &
+         & new_unittest("cpcm_iterative_rejects_non_spd_matrix", test_cpcm_iterative_not_spd, should_fail=.true.), &
+         & new_unittest("cpcm_reallocates_on_grid_change", test_cpcm_reallocate_on_ngrid_change), &
+         & new_unittest("cpcm_records_shared_timer_tree", test_cpcm_timer_tree), &
+         & new_unittest("cpcm_stale_charge_regression", test_cpcm_stale_charge_regression), &
+         & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
+         & new_unittest("cpcm_molecular_surface_weights", test_cpcm_molecular_surface_weights), &
+         & new_unittest("cpcm_nuclear_gradient", test_cpcm_nuclear_gradient), &
+         & new_unittest("cpcm_external_nuclear_gradient", test_cpcm_external_nuclear_gradient), &
+         & new_unittest("cpcm_translation_invariance", test_cpcm_translation_invariance), &
+         & new_unittest("cpcm_dielectric_scaling", test_cpcm_dielectric_scaling), &
+         & new_unittest("cpcm_coincident_points", test_cpcm_coincident_points) &
+         ! & new_unittest("cpcm_solver_timing", test_cpcm_timing) &
          & ]
 
    end subroutine collect_model_component_pcm_cpcm

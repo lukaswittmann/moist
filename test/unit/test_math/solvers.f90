@@ -76,34 +76,34 @@ contains
    subroutine collect_math_solvers(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("rosenbrock-newton", test_rosenbrock_newton), &
-         & new_unittest("circle-newton-lagrangian", test_circle_newton_lagrangian), &
-         & new_unittest("rosenbrock-slsqp", test_rosenbrock_slsqp), &
-         & new_unittest("circle-slsqp-explicit", test_circle_slsqp_explicit), &
-         & new_unittest("rosenbrock-slsqp-multistart", test_rosenbrock_slsqp_multistart), &
-         & new_unittest("circle-slsqp-multistart", test_circle_slsqp_multistart), &
-         & new_unittest("rosenbrock-lbfgsb", test_rosenbrock_lbfgsb), &
-         & new_unittest("circle-lbfgsb-penalty", test_circle_lbfgsb_penalty), &
-         & new_unittest("slsqp-deflation-two-circle-union", test_slsqp_deflation_two_circle_union), &
-         & new_unittest("newton-deflation-cubic", test_newton_deflation_cubic), &
-         & new_unittest("slsqp-kernel-rosenbrock-inequality", test_slsqp_rosenbrock), &
-         & new_unittest("slsqp-kernel-quadratic-eq-ineq", test_slsqp_quadratic), &
-         & new_unittest("slsqp-kernel-fd-gradients", test_slsqp_fd_gradients), &
-         & new_unittest("slsqp-kernel-hock-schittkowski-71", test_slsqp_hs71), &
-         & new_unittest("slsqp-kernel-stopping-nan-bounds", test_slsqp_stopping), &
-         & new_unittest("lbfgsb-kernel-driver1-default", test_lbfgsb_driver1), &
-         & new_unittest("lbfgsb-kernel-driver2-eval-limit", test_lbfgsb_driver2), &
-         & new_unittest("lbfgsb-kernel-driver3-large-budget", test_lbfgsb_driver3), &
-         & new_unittest("fmin-kernel-sin", test_fmin_sin), &
-         & new_unittest("fmin-kernel-parabola", test_fmin_parabola), &
-         & new_unittest("newton-kernel-dense-sweep", test_newton_dense), &
-         & new_unittest("newton-kernel-sparse-sweep", test_newton_sparse), &
-         & new_unittest("lbfgsb-invalid-memory", test_lbfgsb_invalid_memory, should_fail=.true.), &
-         & new_unittest("newton-maxiter-fail", test_newton_maxiter_fail, should_fail=.true.), &
-         & new_unittest("slsqp-maxiter-fail", test_slsqp_maxiter_fail, should_fail=.true.), &
-         & new_unittest("newton-deflation-max-roots", test_newton_deflation_max_roots), &
-         & new_unittest("deflation-operator-gradient-fd", test_deflation_operator_gradient_fd), &
-         & new_unittest("lbfgsb-kernel-bound-active", test_lbfgsb_bound_active) &
+         & new_unittest("rosenbrock_newton", test_rosenbrock_newton), &
+         & new_unittest("circle_newton_lagrangian", test_circle_newton_lagrangian), &
+         & new_unittest("rosenbrock_slsqp", test_rosenbrock_slsqp), &
+         & new_unittest("circle_slsqp_explicit", test_circle_slsqp_explicit), &
+         & new_unittest("rosenbrock_slsqp_multistart", test_rosenbrock_slsqp_multistart), &
+         & new_unittest("circle_slsqp_multistart", test_circle_slsqp_multistart), &
+         & new_unittest("rosenbrock_lbfgsb", test_rosenbrock_lbfgsb), &
+         & new_unittest("circle_lbfgsb_penalty", test_circle_lbfgsb_penalty), &
+         & new_unittest("slsqp_deflation_two_circle_union", test_slsqp_deflation_two_circle_union), &
+         & new_unittest("newton_deflation_cubic", test_newton_deflation_cubic), &
+         & new_unittest("slsqp_kernel_rosenbrock_inequality", test_slsqp_rosenbrock), &
+         & new_unittest("slsqp_kernel_quadratic_eq_ineq", test_slsqp_quadratic), &
+         & new_unittest("slsqp_kernel_fd_gradients", test_slsqp_fd_gradients), &
+         & new_unittest("slsqp_kernel_hock_schittkowski_71", test_slsqp_hs71), &
+         & new_unittest("slsqp_kernel_stopping_nan_bounds", test_slsqp_stopping), &
+         & new_unittest("lbfgsb_kernel_driver1_default", test_lbfgsb_driver1), &
+         & new_unittest("lbfgsb_kernel_driver2_eval_limit", test_lbfgsb_driver2), &
+         & new_unittest("lbfgsb_kernel_driver3_large_budget", test_lbfgsb_driver3), &
+         & new_unittest("fmin_kernel_sin", test_fmin_sin), &
+         & new_unittest("fmin_kernel_parabola", test_fmin_parabola), &
+         & new_unittest("newton_kernel_dense_sweep", test_newton_dense), &
+         & new_unittest("newton_kernel_sparse_sweep", test_newton_sparse), &
+         & new_unittest("lbfgsb_invalid_memory", test_lbfgsb_invalid_memory, should_fail=.true.), &
+         & new_unittest("newton_maxiter_fail", test_newton_maxiter_fail, should_fail=.true.), &
+         & new_unittest("slsqp_maxiter_fail", test_slsqp_maxiter_fail, should_fail=.true.), &
+         & new_unittest("newton_deflation_max_roots", test_newton_deflation_max_roots), &
+         & new_unittest("deflation_operator_gradient_fd", test_deflation_operator_gradient_fd), &
+         & new_unittest("lbfgsb_kernel_bound_active", test_lbfgsb_bound_active) &
          & ]
    end subroutine collect_math_solvers
 

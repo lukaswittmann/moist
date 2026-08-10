@@ -91,24 +91,24 @@ contains
                   new_unittest("cfc_f2_rr_fd", test_cfc_f2_rr_fd), &
                   new_unittest("svdw_f3_rrr_fd", test_svdw_f3_rrr_fd), &
                   new_unittest("cfc_f3_rrr_fd", test_cfc_f3_rrr_fd), &
-                  new_unittest("svdw_f1_rA_fd", test_svdw_f1_rA_fd), &
-                  new_unittest("cfc_f1_rA_fd", test_cfc_f1_rA_fd), &
-                  new_unittest("svdw_f2_r_rA_fd", test_svdw_f2_r_rA_fd), &
-                  new_unittest("cfc_f2_r_rA_fd", test_cfc_f2_r_rA_fd), &
-                  new_unittest("svdw_f3_rr_rA_fd", test_svdw_f3_rr_rA_fd), &
-                  new_unittest("cfc_f3_rr_rA_fd", test_cfc_f3_rr_rA_fd), &
+                  new_unittest("svdw_f1_ra_fd", test_svdw_f1_rA_fd), &
+                  new_unittest("cfc_f1_ra_fd", test_cfc_f1_rA_fd), &
+                  new_unittest("svdw_f2_r_ra_fd", test_svdw_f2_r_rA_fd), &
+                  new_unittest("cfc_f2_r_ra_fd", test_cfc_f2_r_rA_fd), &
+                  new_unittest("svdw_f3_rr_ra_fd", test_svdw_f3_rr_rA_fd), &
+                  new_unittest("cfc_f3_rr_ra_fd", test_cfc_f3_rr_rA_fd), &
                   new_unittest("svdw_f012_hessfree_value_grad", test_svdw_f012_hessfree), &
                   new_unittest("cfc_f012_hessfree_value_grad", test_cfc_f012_hessfree), &
                   !> SvdW-only
-                  new_unittest("svdw_f2_rArB", test_svdw_f2_rArB), &
-                  new_unittest("svdw_f3_r_rArB", test_svdw_f3_r_rArB), &
+                  new_unittest("svdw_f2_rarb", test_svdw_f2_rArB), &
+                  new_unittest("svdw_f3_r_rarb", test_svdw_f3_r_rArB), &
                   new_unittest("svdw_f4_rrrr", test_svdw_f4_rrrr), &
-                  new_unittest("svdw_f4_rrr_rA", test_svdw_f4_rrr_rA), &
-                  new_unittest("svdw_f4_rr_rArB", test_svdw_f4_rr_rArB), &
+                  new_unittest("svdw_f4_rrr_ra", test_svdw_f4_rrr_rA), &
+                  new_unittest("svdw_f4_rr_rarb", test_svdw_f4_rr_rArB), &
                   new_unittest("svdw_pou_f1_r", test_svdw_pou_f1_r), &
                   new_unittest("svdw_pou_f2_rr", test_svdw_pou_f2_rr), &
-                  new_unittest("svdw_pou_f2_r_rA", test_svdw_pou_f2_r_rA), &
-                  new_unittest("svdw_normalized_f1_rA", test_svdw_normalized_f1_rA), &
+                  new_unittest("svdw_pou_f2_r_ra", test_svdw_pou_f2_r_rA), &
+                  new_unittest("svdw_normalized_f1_ra", test_svdw_normalized_f1_rA), &
                   new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling) &
                   ]
    end subroutine collect_cavity_drop_lsf
