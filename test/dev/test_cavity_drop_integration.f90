@@ -573,6 +573,7 @@ contains
       real(wp), intent(in), optional :: target_spacing  ! Target grid spacing (default: 0.3 Bohr)
       !> Error handle: set (and caller should return) if the cavity build fails
       type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: mc_error
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -621,8 +622,12 @@ contains
 
       ! Integrate using marching cubes
       call integrate_surface_marching_cubes(lsf, mol%xyz, &
-                                            mc_area, mc_volume, debug=.false., &
+                                            mc_area, mc_volume, mc_error, debug=.false., &
                                             target_spacing=target_spacing)
+      if (allocated(mc_error)) then
+         call test_failed(error, mc_error%message)
+         return
+      end if
 
       ! Get cavity results
       cavity_area = cavity%total_area

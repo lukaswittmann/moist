@@ -233,6 +233,7 @@ contains
       real(wp), allocatable :: radii(:), r_eff(:)
       real(wp) :: point(ndim)
       real(wp) :: lsf_val, lsf_grad(ndim), lsf_hess(ndim, ndim)
+      type(mctc_error), allocatable :: lsf_err
 
       integer, parameter :: n_structs = 6
       character(len=20), parameter :: struct_sets(n_structs) = &
@@ -307,7 +308,7 @@ contains
             do ipt = 1, n_pts
                point = all_points(:, ipt)
                call cpu_time(t0)
-               call lsf_prim%prepare(point)
+               call lsf_prim%prepare(point, lsf_err)
                call lsf_prim%f012_r_screened(lsf_val, lsf_grad, lsf_hess)
                call cpu_time(t1)
                t_full = t_full + real(t1 - t0, wp)
@@ -338,7 +339,8 @@ contains
                   call cpu_time(t0)
                   call cell_grid%query(point, start, n_cand)
                   call lsf_prim%prepare_subset(point, &
-                                               cell_grid%cell_nlat(start + 1:start + n_cand))
+                                               cell_grid%cell_nlat(start + 1:start + n_cand), &
+                                               lsf_err)
                   call lsf_prim%f012_r_screened(lsf_val, lsf_grad, lsf_hess)
                   call cpu_time(t1)
                   t_screened = t_screened + real(t1 - t0, wp)
@@ -641,6 +643,7 @@ contains
    !> Uses the same polyalanine series as test_timing_drop_scaling.
    subroutine test_timing_mc_scaling(error)
       type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: mc_error
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(static_radius_type) :: radius_model
@@ -721,8 +724,12 @@ contains
          mc_times(istruct) = 0.0_wp
          do iter = 1, n_iter
             call cpu_time(t0)
-            call integrate_surface_marching_cubes(lsf, mol%xyz, area, volume, &
+            call integrate_surface_marching_cubes(lsf, mol%xyz, area, volume, mc_error, &
                                                   target_spacing=mc_spacing)
+            if (allocated(mc_error)) then
+               call test_failed(error, mc_error%message)
+               return
+            end if
             call cpu_time(t1)
             mc_times(istruct) = mc_times(istruct) + real(t1 - t0, wp)
          end do

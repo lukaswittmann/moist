@@ -138,6 +138,7 @@ contains
    !> Test convergence of marching cubes area and volume w.r.t. grid spacing.
    subroutine test_convergence_marching_cubes(error)
       type(error_type), allocatable, intent(out) :: error
+      type(mctc_error), allocatable :: mc_error
 
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -177,7 +178,11 @@ contains
 
          do igrid = 1, n_spacings
             call integrate_surface_marching_cubes(lsf, mol%xyz, areas(igrid), volumes(igrid), &
-               target_spacing=spacings(igrid))
+               mc_error, target_spacing=spacings(igrid))
+            if (allocated(mc_error)) then
+               call test_failed(error, mc_error%message)
+               return
+            end if
          end do
 
          ref_area = areas(n_spacings)
