@@ -18,7 +18,7 @@ module test_model_component_pcm_cpcm
    use moist_radii, only: static_radius_type, new_cosmo_radii, &
       & new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
-   use test_model_component_surface_harness, only: surface_fixture, &
+   use test_model_component_helper, only: surface_fixture, &
       & new_surface_fixture, check_surface_weights, &
       & ngrid_sw => fixture_ngrid_param, sw_areas => fixture_areas_param, &
       & sw_xis => fixture_xis_param, sw_fs => fixture_fs_param, &
