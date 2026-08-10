@@ -106,7 +106,7 @@ contains
    !> Returns `.true.` when `slot` carries an error, so the caller can leave the
    !> iteration. The flag is what actually stops the loop: `!$omp cancel` is a
    !> no-op unless cancellation is enabled in the runtime, so every iteration
-   !> re-reads `abort_requested` and skips its body.
+   !> re-reads `abort_requested` and skips its body
    !>
    !> @param[inout] slot            Calling thread's error slot
    !> @param[in]    ianchor         Anchor index that failed (0 for setup failures)
