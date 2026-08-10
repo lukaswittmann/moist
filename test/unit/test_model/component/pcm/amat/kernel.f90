@@ -9,7 +9,7 @@ module test_model_component_pcm_amat_kernel
       pcm_amat_diag_value, pcm_amat_diag_grad, pcm_amat_diag_hess
    use test_helpers, only: fd4_scalar, fd4_offsets
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none
+   implicit none (type, external)
    private
 
    public :: collect_model_component_pcm_amat_kernel

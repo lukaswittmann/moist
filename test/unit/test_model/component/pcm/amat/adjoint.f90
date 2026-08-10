@@ -310,7 +310,8 @@ contains
 
       do j = 1, ngrid
          do i = 1, ngrid
-            call check(error, amat_dense(i, j), amat(i, j), thr_abs=1.0e-15_wp, thr_rel=1.0e-15_wp, &
+            call check(error, amat_dense(i, j), amat(i, j), &
+                       thr_abs=1.0e-15_wp, thr_rel=1.0e-15_wp, &
                        more="dense-path matrix differs from the plain assembly")
             if (allocated(error)) return
          end do

@@ -9,7 +9,7 @@ module test_model_component_pcm_amat_assembly
                            get_test_cavity_iswig, rel_deviation
    use test_model_component_pcm_amat, only: count_branches, nmol, nleb_survey
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none
+   implicit none (type, external)
    private
 
    public :: collect_model_component_pcm_amat_assembly
