@@ -1,4 +1,4 @@
-!> Abstract level-set function (LSF) base type for the DROP scheme
+!> Abstract level set function (LSF) base type for the DROP scheme
 !>
 !> The DROP cavity discretization is independent of *which* LSF defines the cavity surface.
 !> This module provides the abstract base any concrete LSF must extend.
@@ -21,24 +21,29 @@ module moist_cavity_drop_lsf_base
 
    !> Abstract LSF base
    type, abstract :: moist_cavity_drop_lsf_type
-      !> Number of atomic centers.
+      !> Number of atomic centers
       integer :: ncenters = 0
-      !> Molecular structure data.
+      !> Molecular structure data
       type(structure_type) :: mol
-      !> Atomic radii (per-atom).
+      !> Atomic radii (per-atom)
       real(wp), allocatable :: radii(:)
       !> Screening threshold below which the LSF contribution is treated
       !> as zero. Owned by the cavity (couples to the projection tolerance);
       !> the LSF concrete reads this value to size its internal screening
       !> caches whenever `update` runs. Direct users (tests calling the
-      !> concrete without a cavity) may set it before calling `update`.
+      !> concrete without a cavity) may set it before calling `update`
       real(wp) :: screening_threshold = 0.0_wp
+      !> Highest spatial derivative order actually present in the per-point cache after
+      !> the latest `prepare`/`prepare_subset`
+      integer :: prepared_deriv = -1
    contains
       !> Bind molecular geometry. Concrete LSFs may override to refresh
       !> additional caches (e.g. SSD); the override should call this
       !> base implementation first via
-      !> `call self%moist_cavity_drop_lsf_type%update(mol, radii)`.
+      !> `call self%moist_cavity_drop_lsf_type%update(mol, radii)`
       procedure :: update => lsf_base_update
+      !> Abort when an accessor is asked for an order `prepare` did not compute
+      procedure :: require_deriv => lsf_base_require_deriv
       !> Optionally relabel the molecular cell-grid candidate lists into the actual LSF's internal atom ordering
       procedure :: remap_candidate_grid => lsf_base_remap_candidate_grid
       !> Cache per-point screening / state. Called once per evaluation
@@ -48,17 +53,17 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
       !> Configure the highest spatial derivative order required.
       procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
-      !> Number of atoms currently active after `prepare`/`prepare_subset`.
+      !> Number of atoms currently active after `prepare`/`prepare_subset`
       procedure(lsf_active_count_iface), deferred :: active_count
-      !> User-space atom id of the i-th currently active atom.
+      !> User-space atom id of the i-th currently active atom
       procedure(lsf_active_atom_iface), deferred :: active_atom
-      !> LSF value only (lowest-cost path; used by marching cubes).
+      !> LSF value only (lowest-cost path; used by marching cubes)
       procedure(lsf_f0_iface), deferred :: f0_screened
-      !> Combined value/gradient/Hessian (any subset via optional args).
+      !> Combined value/gradient/Hessian (any subset via optional args)
       procedure(lsf_f012_r_iface), deferred :: f012_r_screened
-      !> Third spatial derivative (plus optionally lower-order outputs).
+      !> Third spatial derivative (plus optionally lower-order outputs)
       procedure(lsf_f3_rrr_iface), deferred :: f3_rrr_screened
-      !> Mixed third derivative: spatial Hessian w.r.t. nuclear positions.
+      !> Mixed third derivative: spatial Hessian w.r.t. nuclear positions
       procedure(lsf_f3_rr_rA_iface), deferred :: f3_rr_rA_screened
       !> Per-atom radial offset beyond which this LSF's contribution
       !> falls below its internal screening threshold. Used by the cavity
@@ -207,6 +212,29 @@ contains
       if (allocated(self%radii)) deallocate (self%radii)
       self%radii = radii
    end subroutine lsf_base_update
+
+   !> Abort when an accessor is asked for a derivative order the latest
+   !> `prepare` did not compute
+   !>
+   !> @param[in] self   LSF instance
+   !> @param[in] order  Derivative order the caller is about to read
+   !> @param[in] caller Accessor name, for the diagnostic
+   subroutine lsf_base_require_deriv(self, order, caller)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      integer, intent(in) :: order
+      character(len=*), intent(in) :: caller
+
+      character(len=16) :: got, want
+
+      if (self%prepared_deriv < 0) return
+      if (order <= self%prepared_deriv) return
+
+      write (want, "(i0)") order
+      write (got, "(i0)") self%prepared_deriv
+      error stop "moist DROP LSF: "//caller//" needs derivative order "// &
+         trim(want)//" but prepare ran at "//trim(got)// &
+         " -- raise set_max_deriv before prepare"
+   end subroutine lsf_base_require_deriv
 
    !> Default candidate-grid remap
    !>
