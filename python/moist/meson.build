@@ -68,10 +68,6 @@ if install
   )
 endif
 
-# The extension module is built here while the sources live in the source tree,
-# and `moist` is a regular package, so PYTHONPATH cannot merge the two halves.
-# Stage the sources next to the extension to get one importable package in the
-# build tree, which is what `meson test` runs against.
 foreach name : [
   '__init__.py',
   'conftest.py',
@@ -114,8 +110,7 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
     timeout: 300,
   )
 
-  # The host-side chain rule against a real QM code, split by what a failure
-  # points at.  Each entry selects a pytest marker; see python/pyproject.toml.
+  # The host-side chain rule against a real QM code
   #
   #   host          the adapter's own derivative orders, moist not involved
   #   vdw           electrostatic conventions on a density-independent cavity
@@ -141,9 +136,7 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
     )
   endforeach
 
-  # The GOSTSHYP pressure wall on the isodensity cavity.  Same split rationale
-  # as the moist_pyscf targets above: one marker per layer, so a failure names
-  # what broke rather than just that something did.
+  # The GOSTSHYP pressure model on the isodensity cavity
   #
   #   gostshyp_integrals   libcint fakemol constants and cartesian orders
   #   gostshyp_params      surface-parameter derivatives at a frozen cavity

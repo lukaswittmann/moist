@@ -1,4 +1,4 @@
-"""End-to-end tests of the moist/host chain rule against PySCF.
+"""End-to-end tests of the moist/host chain rule against PySCF
 
 moist hands out adjoint weights and expects the host to finish the chain rule
 with its own density derivatives, so the correctness of an isodensity cavity is
@@ -50,51 +50,33 @@ try:
 except ImportError as exc:  # pragma: no cover - optional dependency
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from .interface import CPCM, PV, DROPCavity, GeneralSolvationModel  # noqa: E402
-from .pyscf import PySCFIsodensityHost, solvated_rhf  # noqa: E402
+from .interface import CPCM, PV, DROPCavity, GeneralSolvationModel
+from .pyscf import PySCFIsodensityHost, solvated_rhf
 
-#: Dielectric constant of water.
+#: Dielectric constant of water
 EPSILON = 80.0
 #: 10 GPa (atomic units)
 PRESSURE = 1.0e10 / 2.9421015697e13
 #: Lebedev order
-NLEB = 26
+NLEB = 50
 #: Cavity projection tolerance
-PROJ_TOL = 1e-12
-#: FD step on the density matrix, in units of a unit-Frobenius-norm direction.
+PROJ_TOL = 1e-13
+
+#: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
-#: FD step on nuclear coordinates in bohr; matches test_helpers.f90's tuned value.
+#: FD step on nuclear coordinates in bohr; matches test_helpers.f90's tuned value
 STEP_R = 2.5e-4
-#: Tolerances, combined as test-drive's ``check(..., thr_abs=, thr_rel=)`` does:
-#: a value passes when ``|diff| <= max(ABS_THR, REL_THR * |reference|)``.  The
-#: absolute floor is what actually governs here -- the quantities are ~1e-3, so
-#: the relative bound only takes over above |reference| ~ 0.1.
-#:
-#: Measured across the full matrix at PROJ_TOL=1e-13: worst absolute deviation
-#: 3.9e-11, worst true-relative 1.1e-08 (both glycine or water at def2-svp), so
-#: ABS_THR keeps ~13x of headroom.  That margin is the point: the numbers come
-#: from one BLAS on one platform, and an absolute floor at 1e-11 -- which is
-#: what REL_THR/10 would give if REL_THR were pushed to 1e-10 -- sits *below*
-#: the noise and fails intermittently.
-#:
-#: The floor is cavity-projection noise, not FD truncation: round-off is ~5e-15,
-#: and tightening PROJ_TOL from 1e-13 to 1e-14 moves it only 4.1e-11 -> 3.9e-11
-#: while making the extended tier markedly slower.
+
+#: Tolerances
 REL_THR = 1e-9
 ABS_THR = REL_THR / 10.0
-#: Same combination for the converged-SCF gradient.  Deliberately looser than
-#: ABS_THR: L2 differences a *converged* SCF energy, so it carries the cavity
-#: noise twice over (once in the analytic side, once in each displaced SCF).
-#: Measured worst deviation 2.2e-10 for water/sto-3g, so an absolute floor of
-#: 1e-10 sits below the noise and fails outright; 1e-9 leaves ~4.6x.
-#: Tightening solvated_rhf's conv_tol does not help -- the energy is already
-#: stable to ~3e-14 across conv_tol 1e-12..1e-14 -- the limiter is the cavity.
-SCF_REL_THR = 1e-8
+#: Converged-SCF gradient tolerances
+SCF_REL_THR = 1e-9
 SCF_ABS_THR = SCF_REL_THR / 10.0
+
 #: A negative control must miss by at least this many tolerances
 VACUITY_FACTOR = 100.0
-#: An analytic quantity must be at least this large before agreeing with a
-#: finite difference says anything at all.
+#: An analytic quantity must be at least this large
 MIN_SIGNAL = 1e-12
 
 
@@ -106,11 +88,7 @@ class System:
     charge: int = 0
 
 
-#: Test solutes.  These are *fixtures*, not reference structures: bond lengths
-#: are idealised and the geometries are not optimised.  That is deliberate --
-#: zwitterionic glycine is not a gas-phase minimum at all, and an optimisation
-#: would proton-transfer it back to the neutral form.  What the tests need is a
-#: fixed, well-conditioned geometry with a converging SCF.
+#: Test solutes
 SYSTEMS = {
     # Slightly asymmetric water
     "water": System(
@@ -144,21 +122,14 @@ SYSTEMS = {
     ),
 }
 
-#: Active (system, basis) cases.  Comment a row out to drop it; the figure is
-#: the approximate cost of the FD sweeps that row drives.
-#:
-#: Basis choice is not arbitrary.  Mutation testing shows STO-3G and def2-SVP
-#: detect every injected error in the analytic derivatives *identically* -- same
-#: tests fail, same counts -- with one exception: STO-3G has no d functions on
-#: C/N/O/F, so cartesian and spherical AOs coincide and a sph/cart mix-up in
-#: `_ao` is invisible to it.  Keep at least one def2-SVP row to cover l >= 2.
+#: Active (system, basis) cases
 CASES = [
-    ("water", "sto-3g"),                   # ~6 s   the workhorse
-    ("water", "def2-svp"),                 # ~6 s   covers l >= 2, see above
-    # ("fluoroacetate", "sto-3g"),         # ~21 s  anion, atom count != 3
-    # ("fluoroacetate", "def2-svp"),       # ~24 s
-    # ("glycine_zwitterion", "sto-3g"),    # ~21 s  neutral, charge-separated
-    # ("glycine_zwitterion", "def2-svp"),  # ~35 s
+    ("water", "sto-3g"),                  # ~6 s   the workhorse
+    ("water", "def2-svp"),                # ~6 s   covers l >= 2
+    # ("fluoroacetate", "sto-3g"),         # ~21 s  anion
+    ("fluoroacetate", "def2-svp"),         # ~24 s
+    # ("glycine_zwitterion", "sto-3g"),   # ~21 s  neutral, charge-separated
+    # ("glycine_zwitterion", "def2-svp"), # ~35 s
 ]
 #: The case used by tests that pin a convention once rather than sweeping.
 PRIMARY_CASE = CASES[0]

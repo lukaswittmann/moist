@@ -222,6 +222,31 @@ class PV(SolvationComponent):
         self._component = library.new_pv_component(self.pressure)
 
 
+class Gostshyp(SolvationComponent):
+    """GOSTSHYP hydrostatic-pressure component.
+
+    An unnormalized Gaussian on every cavity grid point, with its amplitude
+    fixed so the force on the electron density matches ``pressure`` times the
+    local area (Pausch, Zeller, Neudecker, *JCTC* 2025, 21, 747).
+
+    Unlike the other components this one cannot be driven by geometry alone:
+    its density traces are AO-basis three-center integrals that only the host
+    can form.  Call
+    :meth:`~moist.interface.GeneralSolvationModel.supply_gostshyp` after every
+    cavity update, and read the amplitudes back from
+    :meth:`~moist.interface.GeneralSolvationModel.get_potential_extended`.
+
+    Parameters
+    ----------
+    pressure
+        Applied hydrostatic pressure in Hartree/bohr^3.
+    """
+
+    def __init__(self, pressure: float) -> None:
+        self.pressure = float(pressure)
+        self._component = library.new_gostshyp_component(self.pressure)
+
+
 @dataclass
 class GeneralPotential:
     """Adjoint channels returned by a general solvation model."""
@@ -231,6 +256,11 @@ class GeneralPotential:
     w_lsf0: np.ndarray
     w_lsf1: np.ndarray
     w_lsf2: np.ndarray
+    #: Amplitudes conjugate to a host's own Gaussian integral blocks; only
+    #: filled by :meth:`GeneralSolvationModel.get_potential_extended`, so they
+    #: stay ``None`` on the plain read rather than silently reporting zeros.
+    w_gauss_g: Optional[np.ndarray] = None
+    w_gauss_f: Optional[np.ndarray] = None
 
 
 class GeneralSolvationModel(SolvationModel):
@@ -300,6 +330,30 @@ class GeneralSolvationModel(SolvationModel):
             self._model, phi, w_xi, w_f, w_xyz, w_n, qefield
         )
 
+    def supply_gostshyp(
+        self,
+        gt: np.ndarray,
+        pt: np.ndarray,
+        mt: np.ndarray,
+        rt: np.ndarray,
+    ) -> None:
+        """Supply the Gaussian density moments the GOSTSHYP component consumes.
+
+        Moments of the solute density against the unnormalized Gaussian
+        ``exp(-w_i |r - r_i|^2)`` on each grid point, in native cavity order:
+        ``gt = <G>`` ``(ngrid,)``, ``pt = <(r-r_i) G>`` ``(3, ngrid)``,
+        ``mt = <(r-r_i)(r-r_i) G>`` ``(3, 3, ngrid)`` and
+        ``rt = <(r-r_i) |r-r_i|^2 G>`` ``(3, ngrid)``.
+
+        The width ``w_i`` is the model's own, so read the grid-point areas back
+        from the live cavity first.  Rebuild after every cavity update; moments
+        sized for a different grid are refused rather than resized.
+        """
+
+        if not self._updated:
+            raise RuntimeError("Model has to be updated before supplying GOSTSHYP moments")
+        library.general_model_supply_gostshyp(self._model, gt, pt, mt, rt)
+
     def solve(self, phi: np.ndarray) -> tuple[float, np.ndarray]:
         """Solve all electrostatic components and return energy and charges."""
 
@@ -320,6 +374,19 @@ class GeneralSolvationModel(SolvationModel):
         if not self._updated:
             raise RuntimeError("Model has to be updated before requesting a potential")
         result = library.general_model_get_potential(self._model, self.ngrid)
+        return GeneralPotential(**result)
+
+    def get_potential_extended(self) -> GeneralPotential:
+        """Return every adjoint channel, including the Gaussian amplitudes.
+
+        Prefer this over :meth:`get_potential` plus a separate amplitude read:
+        assembling a potential contracts the cavity surface adjoints once, and
+        splitting the read would pay that cost twice.
+        """
+
+        if not self._updated:
+            raise RuntimeError("Model has to be updated before requesting a potential")
+        result = library.general_model_get_potential_extended(self._model, self.ngrid)
         return GeneralPotential(**result)
 
     def get_gradient(self, natoms: int) -> np.ndarray:

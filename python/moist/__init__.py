@@ -9,11 +9,11 @@ from .interface import (
     DROPCavity,
     GeneralPotential,
     GeneralSolvationModel,
+    Gostshyp,
     IsodensityDROPCavity,
     PV,
     SolvationComponent,
     SolvationModel,
-    # SolvationModelGEMS,
     Structure,
 )
 
@@ -24,11 +24,11 @@ __all__ = [
     "DROPCavity",
     "GeneralPotential",
     "GeneralSolvationModel",
+    "Gostshyp",
     "IsodensityDROPCavity",
     "PV",
     "SolvationComponent",
     "SolvationModel",
-    # "SolvationModelGEMS",
     "Structure",
 ]
 __version__ = "0.6.0"

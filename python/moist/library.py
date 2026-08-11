@@ -382,6 +382,19 @@ def new_pv_component(pressure: float) -> ComponentHandle:
     )
 
 
+def new_gostshyp_component(pressure: float) -> ComponentHandle:
+    """Create a GOSTSHYP hydrostatic-pressure component.
+
+    ``pressure`` is in Hartree/bohr^3.  The component needs Gaussian density
+    moments supplied through :func:`general_model_supply_gostshyp` after every
+    cavity update; it cannot form them itself.
+    """
+
+    return ComponentHandle.with_gc(
+        error_check(lib.moist_new_gostshyp_component)(float(pressure))
+    )
+
+
 def new_general_model(
     cavity: CavityHandle,
     components: list[ComponentHandle],
@@ -451,6 +464,46 @@ def general_model_supply_electrostatics(
     )
 
 
+def general_model_supply_gostshyp(
+    model: ModelHandle,
+    gt: np.ndarray,
+    pt: np.ndarray,
+    mt: np.ndarray,
+    rt: np.ndarray,
+) -> None:
+    """Supply the Gaussian density moments the GOSTSHYP component consumes.
+
+    Moments of the solute density against the unnormalized Gaussian
+    ``exp(-w_i |r - r_i|^2)`` on each grid point, in native cavity order:
+    ``gt = <G>``, ``pt = <(r-r_i) G>``, ``mt = <(r-r_i)(r-r_i) G>`` and
+    ``rt = <(r-r_i) |r-r_i|^2 G>``.  All four are required.
+    """
+
+    _gt = np.ascontiguousarray(gt, dtype=np.float64).reshape(-1)
+    ngrid = int(_gt.size)
+
+    def vector(name, value):
+        array = np.asarray(value, dtype=np.float64, order="F")
+        if array.shape != (3, ngrid):
+            raise ValueError(f"{name} must have shape (3, ngrid)")
+        return array
+
+    _pt = vector("pt", pt)
+    _rt = vector("rt", rt)
+    _mt = np.asarray(mt, dtype=np.float64, order="F")
+    if _mt.shape != (3, 3, ngrid):
+        raise ValueError("mt must have shape (3, 3, ngrid)")
+
+    error_check(lib.moist_general_model_supply_gostshyp)(
+        model.handle,
+        ngrid,
+        _cast("double*", _gt),
+        _cast("double*", _pt),
+        _cast("double*", _mt),
+        _cast("double*", _rt),
+    )
+
+
 def general_model_get_trace_potential(
     model: ModelHandle, ngrid: int
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -490,6 +543,48 @@ def general_model_get_potential(model: ModelHandle, ngrid: int) -> dict:
         "w_lsf0": w_lsf0,
         "w_lsf1": w_lsf1,
         "w_lsf2": w_lsf2,
+    }
+
+
+def general_model_get_potential_extended(model: ModelHandle, ngrid: int) -> dict:
+    """Return every potential channel, including the GOSTSHYP host amplitudes.
+
+    ``w_gauss_g``/``w_gauss_f`` are the amplitudes conjugate to the host's own
+    Gaussian integral blocks; the host completes its Fock contribution as
+    ``F += sum_i [w_gauss_g[i] g[..., i] + w_gauss_f[i] f[..., i]]``.  They come
+    back zero when no component supplies them.
+
+    Prefer this over calling :func:`general_model_get_potential` and a separate
+    amplitude read: assembling a potential contracts the cavity surface
+    adjoints once, and splitting the read would pay that cost twice.
+    """
+
+    w_umol = np.zeros(ngrid, dtype=np.float64)
+    w_qmol = np.zeros(ngrid, dtype=np.float64)
+    w_lsf0 = np.zeros(ngrid, dtype=np.float64)
+    w_lsf1 = np.zeros((3, ngrid), dtype=np.float64, order="F")
+    w_lsf2 = np.zeros((3, 3, ngrid), dtype=np.float64, order="F")
+    w_gauss_g = np.zeros(ngrid, dtype=np.float64)
+    w_gauss_f = np.zeros(ngrid, dtype=np.float64)
+    error_check(lib.moist_general_model_get_potential_extended)(
+        model.handle,
+        int(ngrid),
+        _cast("double*", w_umol),
+        _cast("double*", w_qmol),
+        _cast("double*", w_lsf0),
+        _cast("double*", w_lsf1),
+        _cast("double*", w_lsf2),
+        _cast("double*", w_gauss_g),
+        _cast("double*", w_gauss_f),
+    )
+    return {
+        "w_umol": w_umol,
+        "w_qmol": w_qmol,
+        "w_lsf0": w_lsf0,
+        "w_lsf1": w_lsf1,
+        "w_lsf2": w_lsf2,
+        "w_gauss_g": w_gauss_g,
+        "w_gauss_f": w_gauss_f,
     }
 
 
