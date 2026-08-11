@@ -1,7 +1,7 @@
 !> DROP projection and mapped Jacobian quadrature weight computation
 submodule(moist_cavity_drop) moist_cavity_drop_projection
    use omp_lib, only: omp_get_thread_num, omp_get_wtime
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none
@@ -532,13 +532,13 @@ contains
    module subroutine compute_cp_jacobian_scaling(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      integer :: igrid, nthreads, thread_slot
+      integer :: igrid, thread_slot
       real(wp) :: proj_point(3), anchor_point(3), lambda_val
       real(wp) :: lsf0
       real(wp), allocatable :: lsf1_r_threads(:, :), lsf2_rr_threads(:, :, :)
       real(wp) :: A(3, 3), g_vec(3), g_norm_sq, g_norm
       real(wp) :: alpha_coeff
-      type(lsf_thread_slot), allocatable :: lsf_threads(:)
+      type(drop_worker_slots_type) :: slots
       ! Surface tangent frame Q = [q1, q2] from n = g/|g|
       real(wp) :: n_surf(3), q1(3), q2(3)
 
@@ -561,8 +561,8 @@ contains
       ! Jacobian computation
       real(wp) :: y1(3), y2(3), cross_prod(3), J_i
 
-      logical :: abort_requested
-      !> Per-thread LSF evaluation failure, promoted into `error` under a critical
+      type(drop_abort_latch_type) :: abort
+      !> Per-thread LSF evaluation failure, handed to the latch
       type(error_type), allocatable :: lsf_error
 
       ! Tangent-restricted KKT diagnostics (debug only)
@@ -573,20 +573,14 @@ contains
       logical, allocatable :: diag_mask(:)
       integer :: c_critical, c_warning, c_safe
 
-      abort_requested = .false.
+      call abort%reset()
 
-      ! Initialize SSD systems and thread-local SSD evaluators
-      ! Thread budget comes from the shared context (the single source of truth).
-      nthreads = self%ctx%get_num_threads()
-      allocate (lsf_threads(nthreads))
-      allocate (lsf1_r_threads(3, nthreads), source=0.0_wp)
-      allocate (lsf2_rr_threads(3, 3, nthreads), source=0.0_wp)
-      do thread_slot = 1, nthreads
-         allocate (lsf_threads(thread_slot)%lsf, source=self%lsf_model)
-         ! This loop reads the LSF Hessian (lsf2_rr) below, so the cached
-         ! callback LSF must be told to compute up to second order.
-         call lsf_threads(thread_slot)%lsf%set_max_deriv(2)
-      end do
+      ! Initialize SSD systems and thread-local SSD evaluators.
+      ! This loop reads the LSF Hessian (lsf2_rr) below, so the cached callback
+      ! LSF must be told to compute up to second order.
+      call slots%init(self%ctx, self%lsf_model, 2)
+      allocate (lsf1_r_threads(3, slots%nthreads), source=0.0_wp)
+      allocate (lsf2_rr_threads(3, 3, slots%nthreads), source=0.0_wp)
 
       ! Initialize Jacobian scaling array
       if (allocated(self%cpjac_scal0)) deallocate (self%cpjac_scal0)
@@ -600,7 +594,7 @@ contains
       alpha_coeff = self%param%phi_alpha
 
       ! Loop over all grid points to compute Jacobian scaling
-      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, igrid, proj_point, &
+      !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, proj_point, &
       !$omp& anchor_point, lambda_val, lsf0, A, g_vec, g_norm_sq, g_norm, n_surf, q1, q2, &
       !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
       !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
@@ -610,7 +604,7 @@ contains
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
          !$omp cancellation point do
-         if (abort_requested) cycle
+         if (abort%requested) cycle
 
          ! Skip if below switching cutoff.
          if (self%f(igrid) < self%param%wleb_cut) then
@@ -623,24 +617,19 @@ contains
          lambda_val = self%lambda0(igrid)
 
          ! Compute SSD on-the-fly for this point
-         call lsf_threads(thread_slot)%lsf%prepare(proj_point, lsf_error)
+         call slots%lsf(thread_slot)%lsf%prepare(proj_point, lsf_error)
 
          ! The failure cannot be returned from inside this worksharing construct,
          ! so hand it to the shared `error` slot and let the flag drain the loop.
          ! The LSF's cached derivatives are substitutes; stop before reading them.
          if (allocated(lsf_error)) then
-            !$omp critical (compute_cpjac_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call move_alloc(lsf_error, error)
-            end if
-            !$omp end critical (compute_cpjac_abort)
+            call abort%latch_error(lsf_error, igrid)
             !$omp cancel do
             cycle
          end if
 
          ! Compute lsf derivatives
-         call lsf_threads(thread_slot)%lsf%f012_r_screened(lsf0, &
+         call slots%lsf(thread_slot)%lsf%f012_r_screened(lsf0, &
                                                            lsf1_r_threads(:, thread_slot), lsf2_rr_threads(:, :, thread_slot))
 
          g_vec = lsf1_r_threads(:, thread_slot)
@@ -688,12 +677,8 @@ contains
          if (self%w_f0(igrid) < self%param%wleb_cut) cycle
 
          if (abs(det_B) <= det_B_guard) then
-            !$omp critical (compute_cpjac_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call fatal_error(error, "[Error] Tangent Jacobian matrix B is singular after switching")
-            end if
-            !$omp end critical (compute_cpjac_abort)
+            call abort%latch_message( &
+               "[Error] Tangent Jacobian matrix B is singular after switching", igrid)
             !$omp cancel do
             cycle
          end if
@@ -737,9 +722,13 @@ contains
       !$omp end do
       !$omp end parallel
 
-      if (allocated(error)) return
-      if (abort_requested) then
-         call fatal_error(error, "Jacobian scaling computation aborted. (unreachable in normal execution)")
+      if (abort%requested) then
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Jacobian scaling computation aborted. (unreachable in normal execution)")
+         end if
          return
       end if
 

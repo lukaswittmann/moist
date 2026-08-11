@@ -1,30 +1,24 @@
 !> Per-grid-point sensitivity kernel shared by the DROP adjoint paths
 !>
-!> Both DROP reverse-mode paths -- the electronic one in `adjoint.f90` and the
-!> nuclear one in `nuclear_gradient.f90` -- differentiate the *same* per-point
-!> map: from a perturbation of the projected point `r`, the multiplier
+!> Both DROP reverse-mode paths (electronic and nuclear) differentiate the same
+!> per-point map: from a perturbation of the projected point `r`, the multiplier
 !> `lambda` and the level-set jet `(S, grad S, grad^2 S)`, through the tangent
-!> frame, the closest-point Jacobian `J`, the switching functions, the Lebedev
-!> weight and the Gaussian width, to the surface observables.
+!> frame, the closest-point Jacobian `J`, the switching function(s), the Lebedev
+!> weight and the Gaussian width, to the surface observables
 !>
-!> That map is *linear* in the perturbation, so a caller obtains the derivative
-!> along any parameter by seeding it once per basis direction and summing. The
-!> two stages here are
+!> That map is linear in the perturbation, so a caller obtains the derivative
+!> along any parameter by seeding it once per basis direction and summing
+!> The two stages are:
 !>
-!>   1. [[build_seed_state]] -- everything that depends only on the grid point,
-!>      evaluated once, and
-!>   2. [[apply_seed]] -- the linear response to one seed, evaluated once per
-!>      basis direction.
+!>   1. [[build_seed_state]]: everything that depends only on the grid point
+!>      evaluated once
+!>   2. [[apply_seed]]: the linear response to one seed, evaluated once per
+!>      basis direction
 !>
-!> The module deliberately depends on nothing above the DROP switching
-!> functions, so that it can be used from submodules of `moist_cavity_drop`
-!> without a circular dependency. Grid-level quantities the cavity owns
-!> (`anchor_wleb0`, `cpjac_scal0`, `w_f0`, `wbranch`, `wleb`, `xi0`, ...) are
-!> copied into [[drop_seed_state_type]] by the caller.
+!> Degeneracy is reported: [[build_seed_state]] returns a status code and
+!> leaves the fatal-versus-skip decision to the caller
 !>
-!> Degeneracy is *reported*, not acted on: [[build_seed_state]] returns a
-!> status code and leaves the fatal-versus-skip decision to the caller.
-module moist_cavity_drop_adjoint_kernel
+module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif
@@ -32,7 +26,7 @@ module moist_cavity_drop_adjoint_kernel
    implicit none (type, external)
    private
 
-   public :: drop_seed_state_type, drop_seed_result_type
+   public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type
    public :: build_seed_state, apply_seed, compute_branch_phi_adj
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
@@ -133,6 +127,37 @@ module moist_cavity_drop_adjoint_kernel
       !> Sensitivity of the principal curvatures (zero unless `want_curvature`)
       real(wp) :: dk1 = 0.0_wp, dk2 = 0.0_wp
    end type drop_seed_result_type
+
+   !> Surface adjoints reduced to the channels the seed loop actually reads
+   !>
+   !> The area and integration-weight channels of a
+   !> `cavity_surface_adjoint_type` are *derived*: with
+   !> `a_i = R_I^2 f_i wleb_i`, `w_i = wleb_i` and
+   !> `xi_i = swx/(R_I sqrt(wleb_i))` we have `a = c f/xi^2` and `w = c/xi^2`,
+   !> so both fold into the width channel through `d/dxi`. The area channel
+   !> folds into the switching channel as well, through
+   !> `da/df = R_I^2 wleb_i` -- but only for a parameter that moves `f`.
+   !>
+   !> This type holds the result of that folding, so the seed loops read one
+   !> flat set of weights and never have to know which channel they came from.
+   type :: drop_surface_weights_type
+      !> Gaussian-width adjoint, with the area and weight channels folded in
+      real(wp), allocatable :: w_xi(:)
+      !> Switching adjoint; carries the area fold only when it was requested
+      real(wp), allocatable :: w_f(:)
+      !> Projected-position adjoint
+      real(wp), allocatable :: w_xyz(:, :)
+      !> Outward-normal adjoint
+      real(wp), allocatable :: w_n(:, :)
+      !> Principal-curvature adjoints
+      real(wp), allocatable :: w_k1(:), w_k2(:)
+      !> Branch-objective adjoint from the softmax reverse pass
+      real(wp), allocatable :: branch_phi_adj(:)
+      !> Whether the normal channel carries anything
+      logical :: have_wn = .false.
+      !> Whether either curvature channel carries anything
+      logical :: have_wk = .false.
+   end type drop_surface_weights_type
 
 contains
 
@@ -566,4 +591,4 @@ contains
 
    end function seed_status_message
 
-end module moist_cavity_drop_adjoint_kernel
+end module moist_cavity_drop_derivatives_kernel

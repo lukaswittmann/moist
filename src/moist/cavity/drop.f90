@@ -26,6 +26,7 @@ module moist_cavity_drop
    use moist_utils_mem, only: grow_array, filter_array
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
    use moist_math_smoothing_kernels, only: wendland_kernel_type
 
    use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
@@ -385,7 +386,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_gaussians
 
-      !> [gradient.f90] Compute first nuclear derivatives for DROP quantities
+      !> [deriv/forward.f90] Compute first nuclear derivatives for DROP quantities
       module subroutine compute_gradient_drop(self, error, anchor_only)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -396,13 +397,56 @@ module moist_cavity_drop
          logical, intent(in), optional :: anchor_only
       end subroutine compute_gradient_drop
 
-      !> [gradient.f90] Compute anchor-only nuclear derivatives (owner motion,
+      !> [deriv/forward.f90] Compute anchor-only nuclear derivatives (owner motion,
       !> frozen field).  Thin wrapper over compute_gradient_drop(anchor_only=.true.).
       module subroutine compute_anchor_gradient(self, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_anchor_gradient
+
+      !> [deriv/weights.f90] Reject a surface adjoint the cavity cannot contract
+      !>
+      !> @param[in]  self    DROP cavity instance
+      !> @param[in]  acc     Accumulated surface-observable adjoints
+      !> @param[in]  context Calling routine, used to prefix the diagnostics
+      !> @param[out] error   Error object
+      module subroutine check_surface_adjoint(self, acc, context, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         character(len=*), intent(in) :: context
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine check_surface_adjoint
+
+      !> [deriv/weights.f90] Fold the derived weight channels and run the branch
+      !> reverse pass
+      !>
+      !> @param[in]  self           DROP cavity instance
+      !> @param[in]  acc            Accumulated surface-observable adjoints
+      !> @param[in]  fold_switching Whether to fold the area channel into `w_f`
+      !> @param[out] eff            Folded weights and the branch adjoint
+      module subroutine prepare_surface_weights(self, acc, fold_switching, eff)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         logical, intent(in) :: fold_switching
+         type(drop_surface_weights_type), intent(out) :: eff
+      end subroutine prepare_surface_weights
+
+      !> [deriv/weights.f90] Copy the cavity's grid-level scalars into a seed state
+      !>
+      !> @param[in]    self           DROP cavity instance
+      !> @param[in]    igrid          Grid point to describe
+      !> @param[in]    want_curvature Whether the curvature invariants are needed
+      !> @param[inout] state          Seed state
+      module subroutine fill_seed_state(self, igrid, want_curvature, state)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         integer, intent(in) :: igrid
+         logical, intent(in) :: want_curvature
+         type(drop_seed_state_type), intent(inout) :: state
+      end subroutine fill_seed_state
 
       !> Contract surface weights to per-grid LSF adjoint weights
       !>
@@ -422,7 +466,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine contract_surface_lsf_weights
 
-      !> [adjoint.f90] Map accumulated surface adjoints into the generic potential
+      !> [deriv/potential.f90] Map accumulated surface adjoints into the generic potential
       module subroutine get_surface_potential_drop(self, acc, potential, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -431,7 +475,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_potential_drop
 
-      !> [nuclear_gradient.f90] Contract accumulated surface adjoints into dE/dR_A
+      !> [deriv/nuclear.f90] Contract accumulated surface adjoints into dE/dR_A
       !>
       !> @param[in]    self     DROP cavity instance
       !> @param[in]    acc      Accumulated surface-observable adjoints

@@ -2,7 +2,7 @@
 submodule(moist_cavity_drop) moist_cavity_drop_properties
    use omp_lib, only: omp_get_thread_num
    use mctc_io_constants, only: pi
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter_quicksort, only: qsort
@@ -254,16 +254,16 @@ contains
    module subroutine compute_curvature(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      type(lsf_thread_slot), allocatable :: lsf_threads(:)
-      integer :: igrid, nthreads, thread_slot
+      type(drop_worker_slots_type) :: slots
+      integer :: igrid, thread_slot
       real(wp) :: lsf0_loc, lsf1_r_loc(3), lsf2_rr_loc(3, 3)
       real(wp) :: g_vec(3), H_mat(3, 3)
       real(wp) :: g_norm, g_norm_sq, inv_g_norm
       real(wp) :: n_vec(3), t1(3), t2(3), Ht1(3), Ht2(3)
       real(wp) :: S11, S12, S22, half_trace, half_diff, disc
-      !> Loop-wide abort request and the LSF evaluation failure that caused it
-      logical :: abort_requested
-      type(error_type), allocatable :: lsf_error, abort_lsf_error
+      !> Loop-wide abort latch and the LSF evaluation failure handed to it
+      type(drop_abort_latch_type) :: abort
+      type(error_type), allocatable :: lsf_error
 
       ! Initialize curvature arrays
       if (allocated(self%k1)) deallocate (self%k1)
@@ -275,42 +275,33 @@ contains
       if (allocated(self%KG)) deallocate (self%KG)
       allocate (self%KG(self%ngrid), source=0.0_wp)
 
-      ! Set up thread-local LSF evaluators and SSD systems
-      ! Thread budget comes from the shared context (the single source of truth).
-      nthreads = self%ctx%get_num_threads()
-      allocate (lsf_threads(nthreads))
-      do thread_slot = 1, nthreads
-         allocate (lsf_threads(thread_slot)%lsf, source=self%lsf_model)
-         ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the
-         ! cached callback LSF must be told to compute up to second order.
-         call lsf_threads(thread_slot)%lsf%set_max_deriv(2)
-      end do
+      ! Set up thread-local LSF evaluators and SSD systems.
+      ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the cached
+      ! callback LSF must be told to compute up to second order.
+      call slots%init(self%ctx, self%lsf_model, 2)
 
-      abort_requested = .false.
+      call abort%reset()
 
-      !$omp parallel do default(shared) &
+      ! num_threads pins the team to the size the slots were built for; without
+      ! it a larger live team indexes slots%lsf out of bounds.
+      !$omp parallel do num_threads(slots%nthreads) default(shared) &
       !$omp& private(igrid, thread_slot, lsf0_loc, lsf1_r_loc, lsf2_rr_loc, &
       !$omp&   g_vec, H_mat, g_norm, g_norm_sq, inv_g_norm, &
       !$omp&   n_vec, t1, t2, Ht1, Ht2, &
       !$omp&   S11, S12, S22, half_trace, half_diff, disc, lsf_error) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
-         if (abort_requested) cycle
+         if (abort%requested) cycle
          thread_slot = omp_get_thread_num() + 1
 
          ! Compute SSD on-the-fly and evaluate LSF gradient (g) and Hessian (H)
-         call lsf_threads(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)
+         call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)
          if (allocated(lsf_error)) then
-            !$omp critical (compute_curvature_abort)
-            if (.not. abort_requested) then
-               call move_alloc(lsf_error, abort_lsf_error)
-               abort_requested = .true.
-            end if
-            !$omp end critical (compute_curvature_abort)
+            call abort%latch_error(lsf_error, igrid)
             cycle
          end if
 
-         call lsf_threads(thread_slot)%lsf%f012_r_screened( &
+         call slots%lsf(thread_slot)%lsf%f012_r_screened( &
             lsf0_loc, lsf1_r_loc, lsf2_rr_loc)
 
          g_vec = lsf1_r_loc
@@ -375,8 +366,8 @@ contains
       end do
       !$omp end parallel do
 
-      if (abort_requested) then
-         call move_alloc(abort_lsf_error, error)
+      if (abort%requested) then
+         call move_alloc(abort%error, error)
          return
       end if
 

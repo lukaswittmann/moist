@@ -1,9 +1,19 @@
-submodule(moist_cavity_drop) moist_cavity_drop_gradient
+!> Lgecacy forward-mode nuclear Jacobian of every DROP surface quantity
+!>
+!> This is a legacy duplicate of the new implementation as
+!> [[moist_cavity_drop_derivatives_kernel:build_seed_state]] +
+!> [[moist_cavity_drop_derivatives_kernel:apply_seed]], seeded with
+!> `dlsf1_r = lsf2_r_rA(:,beta,A)` and `dlsf2_rr = lsf3_rr_rA(:,:,beta,A)`.
+!>
+!> This is left in the code base to allow for comparisons and reference
+!> until possible bugs or inconsistencies in the reverse implementation
+!> are resolved
+submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
    use omp_lib, only: omp_get_thread_num
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_math_lapack_gesv, only: lapack_gesv
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_linalg, only: eig_2x2_symmetric
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
    implicit none (type, external)
 
 contains
@@ -46,21 +56,25 @@ contains
       !> Local copy of the anchor-only flag
       logical :: anchor_only_loc
 
-      !> LSF thread slots
-      type(lsf_thread_slot), allocatable :: lsf_threads(:)
-
-      !> Phi thread slots
-      type(moist_cavity_drop_objective_phi_type), allocatable :: phi_threads(:)
+      !> Per-thread LSF evaluators and projection objectives
+      type(drop_worker_slots_type) :: slots
 
       !> Loop indices
       integer :: igrid, iatom, iaxis, jaxis, i, n_active
       integer, allocatable :: active_idx(:)
 
       !> OpenMP thread management
-      integer :: nthreads, thread_slot
+      integer :: thread_slot
+      !> Thread whose timings stand in for the whole team, and the resulting
+      !> per-thread gate. The timer is not thread-safe (see utils/timer.f90),
+      !> so exactly one thread may touch it -- and only when the user asked for
+      !> a detailed profile, since ~20 timer calls per grid point in the hot
+      !> loop are not free.
       integer :: timer_ref_thread
-      logical :: abort_requested
-      !> Per-thread LSF evaluation failure, promoted into `error` under a critical
+      logical :: do_timing
+      !> First failure seen anywhere in the parallel region
+      type(drop_abort_latch_type) :: abort
+      !> Per-thread LSF evaluation failure, handed to the latch
       type(error_type), allocatable :: lsf_error
 
       !> Pre-resolved timer handles for the per-grid-point hot loop
@@ -82,9 +96,9 @@ contains
       !> KKT system
       real(wp) :: lambda_val
       real(wp) :: G_lagrangian(3), H_lagrangian(3, 3)
-      real(wp) :: kkt_mat_base(4, 4), kkt_mat(4, 4), kkt_rhs(4, 1)
+      real(wp) :: kkt_rhs(4, 1)
       real(wp) :: rhs_vec(4)
-      integer(lapack_ik) :: kkt_ipiv(4), kkt_info
+      integer(lapack_ik) :: kkt_info
       real(wp), allocatable :: kkt_rhs_batch(:, :)
 
       !> swi: Rho derivatives
@@ -181,18 +195,10 @@ contains
       if (present(anchor_only)) anchor_only_loc = anchor_only
 
       ! Initialize thread-local primitives
-      nthreads = self%ctx%get_num_threads()
+      ! Gradient uses third spatial derivatives (f3_rrr_screened, f3_rr_rA_screened);
+      ! upgrade SSD storage so f3_rrr_arr is allocated before any %prepare call
       timer_ref_thread = 1
-      allocate (lsf_threads(nthreads))
-      allocate (phi_threads(nthreads))
-      do thread_slot = 1, nthreads
-         allocate (lsf_threads(thread_slot)%lsf, source=self%lsf_model)
-         ! Gradient uses third spatial derivatives (f3_rrr_screened, f3_rr_rA_screened);
-         ! upgrade SSD storage so f3_rrr_arr is allocated before any %prepare call
-         call lsf_threads(thread_slot)%lsf%set_max_deriv(3)
-         call phi_threads(thread_slot)%set_parameters(self%param)
-         call phi_threads(thread_slot)%set_input(self%mol, self%radii)
-      end do
+      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
 
       ! Allocate gradient arrays
       if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
@@ -233,8 +239,6 @@ contains
       allocate (self%w_f1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
       if (allocated(self%wleb1_rA)) deallocate (self%wleb1_rA)
       allocate (self%wleb1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
-
-      ! TODO: These are currently optional (just for testing)
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
       allocate (self%xi1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
 
@@ -248,7 +252,7 @@ contains
          allocate (self%k2_rA(3, self%nsph, self%ngrid), source=0.0_wp)
       end if
 
-      abort_requested = .false.
+      call abort%reset()
 
       ! Pre-resolve the per-grid-point timer handles under the "Gradients" node
       ! once, before the parallel region. Inside the loop the single timing
@@ -272,11 +276,11 @@ contains
       h_bw = self%ctx%timer%resolve("Branch weights", h_grad)
 
       ! Loop over all grid points (parallelized).
-      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, igrid, &
+      !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
       !$omp& iatom, iaxis, jaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
       !$omp& lsf1_rA, lsf2_r_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
-      !$omp& G_lagrangian, H_lagrangian, kkt_mat_base, kkt_mat, kkt_rhs, rhs_vec, &
-      !$omp& kkt_ipiv, kkt_info, rho_unit, &
+      !$omp& G_lagrangian, H_lagrangian, kkt_rhs, rhs_vec, &
+      !$omp& kkt_info, rho_unit, &
       !$omp& delta_matrix, r_iI_vec, r_iI_norm, r_hat_dot_r, &
       !$omp& grad_r_hat_dot_r, alpha_coeff, g_vec, g_norm_sq, g_norm, A_mat, &
       !$omp& t1_vec, t2_vec, y1, y2, cross_vec, &
@@ -297,10 +301,13 @@ contains
       !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
       !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
       !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
-      !$omp& A_tot_local, V_tot_local, lsf_error)
+      !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
       thread_slot = omp_get_thread_num() + 1
+      do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
-      allocate (lsf3_rr_rA(3, 3, 3, self%nsph))
+      ! lsf3_rr_rA is deliberately not allocated here: f3_rr_rA_screened takes
+      ! it as `allocatable, intent(out)` and allocates it itself, so a
+      ! pre-allocation would be discarded on the first call.
       allocate (lsf3_rrr(3, 3, 3))
       allocate (active_idx(self%nsph))
       allocate (dn_dR_buf(3, self%nsph, 3))
@@ -318,10 +325,10 @@ contains
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
          !$omp cancellation point do
-         if (abort_requested) cycle
+         if (abort%requested) cycle
 
          !* -------------------------- Primitive derivatives -------------------------- *!
-         call self%ctx%timer%start(h_prim)
+         if (do_timing) call self%ctx%timer%start(h_prim)
 
          point = self%xyz(:, igrid)
          anchor = self%anchorxyz(:, igrid)
@@ -329,27 +336,22 @@ contains
          lambda_val = self%lambda0(igrid)
 
          ! Get phi derivatives
-         call phi_threads(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
+         call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
 
          ! Get cached phi derivatives
-         phi2_r_rA = phi_threads(thread_slot)%f2_r_rA(point, anchor, owner_idx)
+         phi2_r_rA = slots%phi(thread_slot)%f2_r_rA(point, anchor, owner_idx)
 
          ! Compute SSD on-the-fly for this point
-         call lsf_threads(thread_slot)%lsf%prepare(point, lsf_error)
+         call slots%lsf(thread_slot)%lsf%prepare(point, lsf_error)
          if (allocated(lsf_error)) then
-            !$omp critical (compute_gradient_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call move_alloc(lsf_error, error)
-            end if
-            !$omp end critical (compute_gradient_abort)
+            call abort%latch_error(lsf_error, igrid)
             !$omp cancel do
             cycle
          end if
 
          ! Get nuclear and mixed derivatives
-         call lsf_threads(thread_slot)%lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-         call lsf_threads(thread_slot)%lsf%f3_rrr_screened(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+         call slots%lsf(thread_slot)%lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         call slots%lsf(thread_slot)%lsf%f3_rrr_screened(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
 
          ! Get LSF gradient magnitude
          g_norm_sq = dot_product(lsf1_r, lsf1_r)
@@ -362,20 +364,10 @@ contains
          ! Compute r_i . n_i
          r_hat_dot_r = dot_product(point, self%normal0(:, igrid))
 
-         call self%ctx%timer%stop(h_prim)
+         if (do_timing) call self%ctx%timer%stop(h_prim)
 
          !* ---------------------- r_i derivative ---------------------- *!
-         call self%ctx%timer%start(h_pos)
-
-         ! Bordered KKT sensitivity solve:
-         !   [H  -g] [dr/dR  ]   [b1]
-         !   [g'  0] [dlambda] = [b4]
-         ! where H = H_lagrangian and g = lsf1_r. Solve the full bordered
-         ! system to avoid requiring H itself to be invertible.
-         kkt_mat_base = 0.0_wp
-         kkt_mat_base(1:3, 1:3) = H_lagrangian
-         kkt_mat_base(1:3, 4) = -lsf1_r
-         kkt_mat_base(4, 1:3) = lsf1_r
+         if (do_timing) call self%ctx%timer%start(h_pos)
 
          ! Solve for each active atom and axis
          ! Screening: only active nodes have nonzero lsf1_rA / lsf2_r_rA;
@@ -386,9 +378,9 @@ contains
                active_idx(i) = i
             end do
          else
-            n_active = lsf_threads(thread_slot)%lsf%active_count()
+            n_active = slots%lsf(thread_slot)%lsf%active_count()
             do i = 1, n_active
-               active_idx(i) = lsf_threads(thread_slot)%lsf%active_atom(i)
+               active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
             end do
          end if
 
@@ -403,16 +395,9 @@ contains
          end do
 
          ! Single factorization + solve for all RHS
-         kkt_mat = kkt_mat_base
-         call lapack_gesv(4_lapack_ik, int(3*n_active, lapack_ik), kkt_mat, 4_lapack_ik, &
-                          kkt_ipiv, kkt_rhs_batch, 4_lapack_ik, kkt_info)
+         call drop_kkt_solve(H_lagrangian, lsf1_r, kkt_rhs_batch(:, 1:3*n_active), kkt_info)
          if (kkt_info /= 0_lapack_ik) then
-            !$omp critical (compute_gradient_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call fatal_error(error, "[Error] Bordered KKT sensitivity solve failed")
-            end if
-            !$omp end critical (compute_gradient_abort)
+            call abort%latch_message("[Error] Bordered KKT sensitivity solve failed", igrid)
             !$omp cancel do
             cycle
          end if
@@ -426,11 +411,11 @@ contains
             end do
          end do
 
-         call self%ctx%timer%stop(h_pos)
+         if (do_timing) call self%ctx%timer%stop(h_pos)
 
          !* ---------------------- rho_i derivative (optional) ---------------------- *!
          if (allocated(self%rho1_rA)) then
-            call self%ctx%timer%start(h_disp)
+            if (do_timing) call self%ctx%timer%start(h_disp)
             rho_vec = point - anchor
             rho_norm = sqrt(dot_product(rho_vec, rho_vec))
 
@@ -459,12 +444,12 @@ contains
                end do ! iaxis
             end do ! i (active atoms)
 
-            call self%ctx%timer%stop(h_disp)
+            if (do_timing) call self%ctx%timer%stop(h_disp)
          end if
 
          !* -------------------- r_iI derivative (optional) -------------------- *!
          if (allocated(self%r_iI1_rA)) then
-            call self%ctx%timer%start(h_dist)
+            if (do_timing) call self%ctx%timer%start(h_dist)
             ! r_iI1_rA \equiv R_i when i \in I
             ! \frac{\mathbf r_{Ii}}{r_{iI}}^\top\cdot\left(\nabla_A \mathbf r_I
             ! - \nabla_A \mathbf r_i\right)
@@ -491,7 +476,7 @@ contains
                end do ! iaxis
             end do ! i (active atoms)
 
-            call self%ctx%timer%stop(h_dist)
+            if (do_timing) call self%ctx%timer%stop(h_dist)
          end if
 
          !* -------------------- surface normal derivative -------------------- *!
@@ -500,7 +485,7 @@ contains
          ! where d(grad(S))/dr_A = explicit + Hessian * dr/dr_A
          ! Always computed into thread-local buffer (needed by volume gradient).
          ! Stored to self%normal1_rA only when requested.
-         call self%ctx%timer%start(h_norm)
+         if (do_timing) call self%ctx%timer%start(h_norm)
 
          dn_dR_buf = 0.0_wp
 
@@ -528,7 +513,7 @@ contains
             end do ! iaxis
          end do ! i (active atoms)
 
-         call self%ctx%timer%stop(h_norm)
+         if (do_timing) call self%ctx%timer%stop(h_norm)
 
          !* -------------------- cpjac_scal derivative -------------------- *!
          ! 2x2 tangent-restricted approach matching projection.f90:
@@ -537,7 +522,7 @@ contains
          !   tau_k = Q^T t_k, w_k = Binv*tau_k, y_k = alpha*Q*w_k
          !   J = |y1 x y2|
          ! Derivatives: dJ/dr_A via chain rule through all intermediates
-         call self%ctx%timer%start(h_cpj)
+         if (do_timing) call self%ctx%timer%start(h_cpj)
 
          ! Coefficient alpha = 0.5 * w_a
          alpha_coeff = self%param%phi_alpha
@@ -589,12 +574,8 @@ contains
          call self%f_foc%eval(lambda_switch, f_foc_f0, f_foc_dS)
 
          if (abs(det_B) <= det_B_guard) then
-            !$omp critical (compute_gradient_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call fatal_error(error, "[Error] Tangent Jacobian matrix B is singular after switching")
-            end if
-            !$omp end critical (compute_gradient_abort)
+            call abort%latch_message( &
+               "[Error] Tangent Jacobian matrix B is singular after switching", igrid)
             !$omp cancel do
             cycle
          end if
@@ -863,11 +844,11 @@ contains
             end do ! iaxis
          end do ! i (active atoms)
 
-         call self%ctx%timer%stop(h_cpj)
+         if (do_timing) call self%ctx%timer%stop(h_cpj)
 
          !* ---------------------- xi_i derivative ---------------------- *!
          ! Compute derivative of Gaussian widths w.r.t. nuclear coordinates
-         call self%ctx%timer%start(h_gw)
+         if (do_timing) call self%ctx%timer%start(h_gw)
 
          !> xi depends on cp_jac_scal (and derivative) *and* on anchor_xi (and derivative)
          if (allocated(self%xi1_rA)) then
@@ -876,10 +857,10 @@ contains
                                        active=active_idx(1:n_active))
          end if
 
-         call self%ctx%timer%stop(h_gw)
+         if (do_timing) call self%ctx%timer%stop(h_gw)
 
          !* ---------------------- f_i derivative ---------------------- *!
-         call self%ctx%timer%start(h_sw)
+         if (do_timing) call self%ctx%timer%start(h_sw)
 
          !> iswig switching derivatives: evaluated at anchor position
          !> Uses built-in sorted neighbor list for inner loops (early exit).
@@ -887,10 +868,10 @@ contains
                                    anchor, owner_idx, self%anchor_xi0(igrid), anchor_xi_local, &
                                    active=active_idx(1:n_active))
 
-         call self%ctx%timer%stop(h_sw)
+         if (do_timing) call self%ctx%timer%stop(h_sw)
 
          !* ---------------------- a_i derivative ---------------------- *!
-         call self%ctx%timer%start(h_area)
+         if (do_timing) call self%ctx%timer%start(h_area)
          ! Screening: f1_rA and wleb1_rA are zero for inactive atoms
          do i = 1, n_active
             iatom = active_idx(i)
@@ -901,10 +882,10 @@ contains
 
          end do ! i (active atoms)
 
-         call self%ctx%timer%stop(h_area)
+         if (do_timing) call self%ctx%timer%stop(h_area)
 
          !* ---------------------- v_i derivative ---------------------- *!
-         call self%ctx%timer%start(h_vol)
+         if (do_timing) call self%ctx%timer%start(h_vol)
 
          ! New volume formula: v_i = (1/3) * a_i * (r_i . n_i)
          ! where n_i = dS / | dS| is the surface normal
@@ -928,7 +909,7 @@ contains
             end do ! iaxis
          end do ! i (active atoms)
 
-         call self%ctx%timer%stop(h_vol)
+         if (do_timing) call self%ctx%timer%stop(h_vol)
 
          !* -------- Per-atom accumulation -------- *!
          do i = 1, n_active
@@ -953,14 +934,19 @@ contains
       self%V_tot1_rA = self%V_tot1_rA + V_tot_local
       !$omp end critical (gradient_reduction)
 
-      deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, dn_dR_buf)
+      deallocate (lsf3_rrr, active_idx, dn_dR_buf)
+      if (allocated(lsf3_rr_rA)) deallocate (lsf3_rr_rA)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA, anchor_xi_local)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local)
       !$omp end parallel
 
-      if (allocated(error)) return
-      if (abort_requested) then
-         call fatal_error(error, "Error: Gradient computation aborted. (unreachable in normal execution)")
+      if (abort%requested) then
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Error: Gradient computation aborted. (unreachable in normal execution)")
+         end if
          return
       end if
 
@@ -1102,4 +1088,4 @@ contains
       call self%compute_gradient_drop(error, anchor_only=.true.)
    end subroutine compute_anchor_gradient
 
-end submodule moist_cavity_drop_gradient
+end submodule moist_cavity_drop_derivatives_forward

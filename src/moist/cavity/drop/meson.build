@@ -11,10 +11,8 @@ srcs += files(
   'filter.f90',
   'setup.f90',
   'properties.f90',
-  'gradient.f90',
-  'adjoint_kernel.f90',
-  'adjoint.f90',
-  'nuclear_gradient.f90',
+  'threads.f90',
 )
 
 subdir('lsf')
+subdir('derivatives')
