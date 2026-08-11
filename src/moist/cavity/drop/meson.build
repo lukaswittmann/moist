@@ -12,7 +12,9 @@ srcs += files(
   'setup.f90',
   'properties.f90',
   'gradient.f90',
+  'adjoint_kernel.f90',
   'adjoint.f90',
+  'nuclear_gradient.f90',
 )
 
 subdir('lsf')

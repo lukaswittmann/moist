@@ -222,6 +222,8 @@ module moist_cavity_drop
       procedure :: contract_surface_lsf_weights
       !> Map surface-coordinate weights into generic potential channels
       procedure :: get_surface_potential => get_surface_potential_drop
+      !> Contract surface-coordinate weights into the nuclear gradient
+      procedure :: get_surface_gradient => get_surface_gradient_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop
@@ -428,6 +430,20 @@ module moist_cavity_drop
          type(potential_type), intent(inout) :: potential
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_potential_drop
+
+      !> [nuclear_gradient.f90] Contract accumulated surface adjoints into dE/dR_A
+      !>
+      !> @param[in]    self     DROP cavity instance
+      !> @param[in]    acc      Accumulated surface-observable adjoints
+      !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+      !> @param[out]   error    Error object
+      module subroutine get_surface_gradient_drop(self, acc, gradient, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(inout) :: gradient(:, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_gradient_drop
 
    end interface
 
@@ -811,22 +827,21 @@ contains
    !* ================================================================================= *!
 
    !> Compute and store all requested DROP nuclear derivatives.
-   !> @param[inout] self Cavity instance receiving derivatives or an error
-   subroutine get_gradient_drop(self)
+   !> @param[inout] self  Cavity instance receiving the derivatives
+   !> @param[out]   error Error handling
+   subroutine get_gradient_drop(self, error)
       class(cavity_type_drop), intent(inout) :: self
-      !> Local derivative error, moved onto self on failure
-      type(error_type), allocatable :: gradient_error
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
       !> Timer stack depth at entry; error paths unwind back to it (below).
       integer :: d0
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)
-      if (allocated(self%error)) deallocate (self%error)
 
       if (self%ctx%verbosity > 1) write (self%ctx%unit, '(a)') "[Info] Computing gradients ..."
-      call self%compute_gradient_drop(gradient_error)
-      if (allocated(gradient_error)) then
-         call move_alloc(gradient_error, self%error)
+      call self%compute_gradient_drop(error)
+      if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
          return
       end if
