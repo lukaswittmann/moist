@@ -26,6 +26,8 @@ module moist_model_general
       type(solvation_component_slot), allocatable :: components(:)
       !> Whether the latest model update completed successfully
       logical :: updated = .false.
+      !> Force the legacy forward nuclear-gradient path
+      logical :: force_forward_gradient = .false.
    contains
       procedure :: add_component
       procedure :: update => general_update
@@ -254,10 +256,32 @@ contains
          return
       end if
       allocate (local(3, self%cavity%nsph), source=0.0_wp)
-      do i = 1, size(self%components)
-         call self%components(i)%item%get_gradient(coupling, self%cavity, local, error)
-         if (allocated(error)) return
-      end do
+
+      if ( .not. self%force_forward_gradient) then
+         ! Reverse mode: every component states its surface adjoint, the cavity
+         ! contracts the lot once. Nothing builds a nuclear Jacobian.
+         block
+            type(cavity_surface_adjoint_type) :: acc
+
+            call acc%init(self%cavity%ngrid)
+            do i = 1, size(self%components)
+               call self%components(i)%item%get_direct_gradient(coupling, self%cavity, &
+                                                                local, error)
+               if (allocated(error)) return
+               call self%components(i)%item%get_gradient_surface_weights(coupling, &
+                                                                         self%cavity, acc, error)
+               if (allocated(error)) return
+            end do
+            call self%cavity%get_surface_gradient(acc, local, error)
+            if (allocated(error)) return
+         end block
+      else
+         do i = 1, size(self%components)
+            call self%components(i)%item%get_gradient(coupling, self%cavity, local, error)
+            if (allocated(error)) return
+         end do
+      end if
+
       gradient = gradient + local
 
    end subroutine general_get_gradient

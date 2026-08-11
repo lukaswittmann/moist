@@ -112,7 +112,7 @@ contains
 
    !> Add pressure-scaled total-volume surface adjoints
    !>
-   !> The enclosed volume is the divergence-theorem sum over the tesserae,
+   !> The enclosed volume is the divergence-theorem sum over the grid-points,
    !> `V = sum_i a_i (r_i . n_i)/3`, so its surface adjoints follow directly from
    !> the per-point geometry. The area channel carries `dV/da_i = (r_i . n_i)/3`;
    !> the cavity folds it into whichever primitive channels it is built from.
@@ -134,9 +134,9 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Pressure-scaled adjoints of the tessera areas, positions, and normals
+      !> Pressure-scaled adjoints of the grid-point areas, positions, and normals
       real(wp), allocatable :: w_a(:), w_xyz(:, :), w_n(:, :)
-      !> Tessera index
+      !> Grid-point index
       integer :: igrid
 
       if (self%pressure == 0.0_wp) return
@@ -161,7 +161,7 @@ contains
 
    !> Add the pressure-scaled cavity-volume nuclear gradient
    !>
-   !> The total volume is the grid sum of the per-tessera volume elements, so
+   !> The total volume is the grid sum of the per-grid-point volume elements, so
    !> its nuclear derivative is the contraction of `v1_rA` over the grid.
    !>
    !> @param[inout] self     Component instance
@@ -187,12 +187,11 @@ contains
          return
       end if
 
-      !> The per-tessera volume derivatives belong to the current geometry only
+      !> The per-grid-point volume derivatives belong to the current geometry only
       !> once a gradient run has produced them.
-      if (.not. allocated(cavity%v1_rA)) call cavity%get_gradient()
-      if (allocated(cavity%error)) then
-         allocate (error, source=cavity%error)
-         return
+      if (.not. allocated(cavity%v1_rA)) then
+         call cavity%get_gradient(error)
+         if (allocated(error)) return
       end if
       if (.not. allocated(cavity%v1_rA)) then
          call fatal_error(error, "Cavity does not provide volume nuclear derivatives")

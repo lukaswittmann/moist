@@ -11,7 +11,7 @@ module moist_model_component_pcm_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
    use moist_model_component_pcm_electrostatics, only: &
-      & pcm_electrostatic_nuclear_gradient
+      & pcm_electrostatic_nuclear_gradient, pcm_electrostatic_surface_weights
    use moist_utils_timer, only: cat_setup, cat_energy, cat_solve
    implicit none (type, external)
    private
@@ -105,6 +105,15 @@ module moist_model_component_pcm_type
 
       !> Accumulate the PCM cavity surface adjoint weights
       procedure :: get_surface_weights => pcm_base_get_surface_weights
+
+      !> Accumulate the surface adjoints the reverse-mode gradient consumes
+      procedure :: get_gradient_surface_weights => pcm_base_get_gradient_surface_weights
+
+      !> Nuclear gradient contributions that bypass the cavity surface
+      procedure :: get_direct_gradient => pcm_base_get_direct_gradient
+
+      !> Resolve the electronic field and moving point charges
+      procedure :: electrostatic_sources => pcm_base_electrostatic_sources
 
       !> Contract the current PCM charges to Gaussian-surface weights
       procedure :: amat_surface_weights => pcm_base_amat_surface_weights
@@ -471,19 +480,73 @@ contains
       if (.not. allocated(cavity%xi1_rA) .or. &
           .not. allocated(cavity%f1_rA) .or. &
           .not. allocated(cavity%xyz1_rA)) then
-         call cavity%get_gradient()
-      end if
-      if (allocated(cavity%error)) then
-         allocate (error, source=cavity%error)
-         return
+         call cavity%get_gradient(error)
+         if (allocated(error)) return
       end if
 
       allocate (grad_amat(3, nat), grad_electrostatic(3, nat))
       call self%amat_nuclear_gradient(cavity, grad_amat, error)
       if (allocated(error)) return
 
+      call self%electrostatic_sources(coupling, ngrid, qefield, source_charge, error)
+      if (allocated(error)) return
+
+      call pcm_electrostatic_nuclear_gradient(cavity%xyz, &
+         & self%mol_solu%xyz, cavity%xyz1_rA, self%q, qefield, &
+         & source_charge, grad_electrostatic, error)
+      if (allocated(error)) return
+
+      allocate (grad_width(3, nat), source=0.0_wp)
+      if (allocated(coupling%elstat_w_xi)) then
+         if (size(coupling%elstat_w_xi) /= ngrid) then
+            call fatal_error(error, &
+               & "[pcm_base_get_gradient] host Gaussian-width weights have wrong size")
+            return
+         end if
+         do igrid = 1, ngrid
+            grad_width = grad_width + &
+               & coupling%elstat_w_xi(igrid)*cavity%xi1_rA(:, :, igrid)
+         end do
+      end if
+
+      gradient = gradient + 0.5_wp*grad_amat/self%feps + &
+         & grad_electrostatic + grad_width
+
+   end subroutine pcm_base_get_gradient
+
+   !> Resolve the moving point charges and the electronic field at the surface
+   !>
+   !> Shared by the forward gradient and the reverse-mode hooks so both see the
+   !> same potential-source convention. Pure control flow: no arithmetic is
+   !> reordered relative to the original inline version.
+   !>
+   !> @param[inout] self          PCM component instance
+   !> @param[in]    coupling      QM coupling data
+   !> @param[in]    ngrid         Cavity grid size
+   !> @param[out]   qefield       Charge-weighted electronic field (3, ngrid)
+   !> @param[out]   source_charge Moving point charges (nat)
+   !> @param[out]   error         Error handling
+   subroutine pcm_base_electrostatic_sources(self, coupling, ngrid, qefield, source_charge, error)
+      !> PCM component instance
+      class(pcm_base), intent(inout) :: self
+      !> QM coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity grid size
+      integer, intent(in) :: ngrid
+      !> Charge-weighted electronic field
+      real(wp), allocatable, intent(out) :: qefield(:, :)
+      !> Moving point charges entering the molecular potential
+      real(wp), allocatable, intent(out) :: source_charge(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Number of solute atoms and atom index
+      integer :: nat, iatom
+
+      nat = self%mol_solu%nat
       allocate (qefield(3, ngrid), source=0.0_wp)
       allocate (source_charge(nat))
+
       select case (self%phi_source)
       case (potential_source%charges)
          if (.not. allocated(coupling%qat)) then
@@ -520,28 +583,136 @@ contains
          return
       end select
 
-      call pcm_electrostatic_nuclear_gradient(cavity%xyz, &
-         & self%mol_solu%xyz, cavity%xyz1_rA, self%q, qefield, &
-         & source_charge, grad_electrostatic, error)
+   end subroutine pcm_base_electrostatic_sources
+
+   !> Surface adjoints the PCM *nuclear gradient* consumes
+   !>
+   !> Deliberately not the same accumulator the potential builds. The forward
+   !> gradient in [[pcm_base_get_gradient]] draws its surface-position term
+   !> from `coupling%elstat_qefield` plus the internally computed nuclear
+   !> field, and its width term from `coupling%elstat_w_xi`; it never reads
+   !> `elstat_w_xyz`, `elstat_w_f` or `elstat_w_n`, which the potential path
+   !> does read. Mirroring exactly that set keeps the reverse-mode gradient
+   !> numerically equal to the legacy one for every host.
+   !>
+   !> (That the two paths disagree about which host channels are authoritative
+   !> is a pre-existing inconsistency, tracked separately; this routine
+   !> reproduces the gradient side rather than silently changing it.)
+   !>
+   !> @param[inout] self     PCM component instance
+   !> @param[in]    coupling QM coupling data
+   !> @param[in]    cavity   Cavity the PCM matrix was assembled on
+   !> @param[inout] acc      Accumulated cavity surface adjoints
+   !> @param[out]   error    Error handling
+   subroutine pcm_base_get_gradient_surface_weights(self, coupling, cavity, acc, error)
+      !> PCM component instance
+      class(pcm_base), intent(inout) :: self
+      !> QM coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity the PCM matrix was assembled on
+      class(cavity_type), intent(in) :: cavity
+      !> Accumulated cavity surface adjoints
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> A-matrix surface adjoints and the electrostatic position adjoint
+      real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
+      real(wp), allocatable :: w_xyz_elstat(:, :), grad_direct(:, :)
+      !> Electronic field and moving point charges
+      real(wp), allocatable :: qefield(:, :), source_charge(:)
+      !> Grid size and the 1/(2 f(eps)) response prefactor
+      integer :: ngrid
+      real(wp) :: prefactor
+
+      ngrid = cavity%ngrid
+      if (self%feps == 0.0_wp) return
+
+      ! A-matrix channel, identical to the potential path
+      allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
+      call self%amat_surface_weights(cavity, w_xi, w_f, w_xyz, error)
+      if (allocated(error)) return
+      prefactor = 0.5_wp/self%feps
+      call acc%add_surface_weights(error, w_xi=prefactor*w_xi, &
+         & w_f=prefactor*w_f, w_xyz=prefactor*w_xyz)
       if (allocated(error)) return
 
-      allocate (grad_width(3, nat), source=0.0_wp)
+      ! Electrostatic channel: the surface-position adjoint only; the direct
+      ! nuclear term is delivered by [[pcm_base_get_direct_gradient]]
+      call self%electrostatic_sources(coupling, ngrid, qefield, source_charge, error)
+      if (allocated(error)) return
+      allocate (w_xyz_elstat(3, ngrid), grad_direct(3, self%mol_solu%nat))
+      call pcm_electrostatic_surface_weights(cavity%xyz, self%mol_solu%xyz, &
+         & self%q, qefield, source_charge, w_xyz_elstat, grad_direct, error)
+      if (allocated(error)) return
+      call acc%add_surface_weights(error, w_xyz=w_xyz_elstat)
+      if (allocated(error)) return
+
+      ! Host width channel, the one host adjoint the forward gradient uses
       if (allocated(coupling%elstat_w_xi)) then
          if (size(coupling%elstat_w_xi) /= ngrid) then
             call fatal_error(error, &
-               & "[pcm_base_get_gradient] host Gaussian-width weights have wrong size")
+               & "[pcm_base_get_gradient_surface_weights] host Gaussian-width "// &
+               & "weights have wrong size")
             return
          end if
-         do igrid = 1, ngrid
-            grad_width = grad_width + &
-               & coupling%elstat_w_xi(igrid)*cavity%xi1_rA(:, :, igrid)
-         end do
+         call acc%add_surface_weights(error, w_xi=coupling%elstat_w_xi)
       end if
 
-      gradient = gradient + 0.5_wp*grad_amat/self%feps + &
-         & grad_electrostatic + grad_width
+   end subroutine pcm_base_get_gradient_surface_weights
 
-   end subroutine pcm_base_get_gradient
+   !> Nuclear gradient of the PCM electrostatics at fixed surface
+   !>
+   !> The solute nuclei move under the fixed surface charges; this term does
+   !> not reach the energy through any cavity surface quantity, so it stays
+   !> with the component instead of going through the cavity contraction.
+   !>
+   !> @param[inout] self     PCM component instance
+   !> @param[in]    coupling QM coupling data
+   !> @param[inout] cavity   Live cavity
+   !> @param[inout] gradient Nuclear-gradient accumulator
+   !> @param[out]   error    Error handling
+   subroutine pcm_base_get_direct_gradient(self, coupling, cavity, gradient, error)
+      !> PCM component instance
+      class(pcm_base), intent(inout) :: self
+      !> QM coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Live cavity
+      class(cavity_type), intent(inout) :: cavity
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Surface-position adjoint (discarded here) and the direct term
+      real(wp), allocatable :: w_xyz_elstat(:, :), grad_direct(:, :)
+      !> Electronic field and moving point charges
+      real(wp), allocatable :: qefield(:, :), source_charge(:)
+      !> Solute atom count and grid size
+      integer :: nat, ngrid
+
+      nat = self%mol_solu%nat
+      ngrid = cavity%ngrid
+      if (size(gradient, 1) /= 3 .or. size(gradient, 2) /= nat) then
+         call fatal_error(error, "[pcm_base_get_direct_gradient] gradient shape mismatch")
+         return
+      end if
+
+      call self%ensure_charges(coupling, cavity, error)
+      if (allocated(error)) return
+      if (self%feps == 0.0_wp) return
+
+      call self%electrostatic_sources(coupling, ngrid, qefield, source_charge, error)
+      if (allocated(error)) return
+
+      allocate (w_xyz_elstat(3, ngrid), grad_direct(3, nat))
+      call pcm_electrostatic_surface_weights(cavity%xyz, self%mol_solu%xyz, &
+         & self%q, qefield, source_charge, w_xyz_elstat, grad_direct, error)
+      if (allocated(error)) return
+
+      gradient = gradient + grad_direct
+
+   end subroutine pcm_base_get_direct_gradient
 
    !> Contract the current PCM charges to Gaussian-surface A-matrix weights
    !>
@@ -553,7 +724,7 @@ contains
    !> @param[in]  cavity  Live cavity carrying the Gaussian PCM surface
    !> @param[out] w_xi    Gaussian-width weights
    !> @param[out] w_f     Switching-factor weights
-   !> @param[out] w_xyz   Tessera-position weights
+   !> @param[out] w_xyz   Grid-point-position weights
    !> @param[out] error   Error handling
    subroutine pcm_base_amat_surface_weights(self, cavity, w_xi, w_f, w_xyz, error)
       !> PCM component with current surface charges
@@ -564,7 +735,7 @@ contains
       real(wp), intent(out) :: w_xi(:)
       !> Switching-factor weights
       real(wp), intent(out) :: w_f(:)
-      !> Tessera-position weights
+      !> Grid-point-position weights
       real(wp), intent(out) :: w_xyz(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -610,7 +781,7 @@ contains
       real(wp), allocatable :: w_xi(:)
       !> Switching-factor weights
       real(wp), allocatable :: w_f(:)
-      !> Tessera-position weights
+      !> Grid-point-position weights
       real(wp), allocatable :: w_xyz(:, :)
 
       if (.not. allocated(cavity%xi1_rA) .or. .not. allocated(cavity%f1_rA) .or. &
@@ -657,7 +828,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Per-tessera adjoints of q^T A q w.r.t. xi_i, f_i and r_i
+      !> Per-grid-point adjoints of q^T A q w.r.t. xi_i, f_i and r_i
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
       !> Number of cavity grid points
       integer :: ngrid

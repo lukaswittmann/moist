@@ -234,11 +234,11 @@ contains
 
    !> Gaussian pair width p = xi_i*xi_j/sqrt(xi_i**2 + xi_j**2)
    !>
-   !> @param[in]  xi_i  Gaussian width of tessera i
-   !> @param[in]  xi_j  Gaussian width of tessera j
+   !> @param[in]  xi_i  Gaussian width of grid-point i
+   !> @param[in]  xi_j  Gaussian width of grid-point j
    !> @param[out] p     Pair width
    pure subroutine pcm_amat_width0(xi_i, xi_j, p)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -249,13 +249,13 @@ contains
 
    !> Gaussian pair width and its first derivatives
    !>
-   !> @param[in]  xi_i  Gaussian width of tessera i
-   !> @param[in]  xi_j  Gaussian width of tessera j
+   !> @param[in]  xi_i  Gaussian width of grid-point i
+   !> @param[in]  xi_j  Gaussian width of grid-point j
    !> @param[out] p     Pair width
    !> @param[out] p_i   dp/dxi_i
    !> @param[out] p_j   dp/dxi_j
    pure subroutine pcm_amat_width1(xi_i, xi_j, p, p_i, p_j)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -277,8 +277,8 @@ contains
 
    !> Gaussian pair width and its first and second derivatives
    !>
-   !> @param[in]  xi_i  Gaussian width of tessera i
-   !> @param[in]  xi_j  Gaussian width of tessera j
+   !> @param[in]  xi_i  Gaussian width of grid-point i
+   !> @param[in]  xi_j  Gaussian width of grid-point j
    !> @param[out] p     Pair width
    !> @param[out] p_i   dp/dxi_i
    !> @param[out] p_j   dp/dxi_j
@@ -286,7 +286,7 @@ contains
    !> @param[out] p_ij  d2p/dxi_i dxi_j
    !> @param[out] p_jj  d2p/dxi_j**2
    pure subroutine pcm_amat_width2(xi_i, xi_j, p, p_i, p_j, p_ii, p_ij, p_jj)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -429,12 +429,12 @@ contains
 
    !> Full Gaussian pair kernel value A = erf(p*r)/r
    !>
-   !> @param[in]  xi_i  Gaussian width of tessera i
-   !> @param[in]  xi_j  Gaussian width of tessera j
+   !> @param[in]  xi_i  Gaussian width of grid-point i
+   !> @param[in]  xi_j  Gaussian width of grid-point j
    !> @param[in]  r2    Squared separation
    !> @param[out] a     Kernel value
    pure subroutine pcm_amat_near_value(xi_i, xi_j, r2, a)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -457,15 +457,15 @@ contains
    !> The xi channels are exp(-x)-weighted, so they are exponentially
    !> small (and eventually exactly zero) once the pair separates.
    !>
-   !> @param[in]  xi_i    Gaussian width of tessera i
-   !> @param[in]  xi_j    Gaussian width of tessera j
+   !> @param[in]  xi_i    Gaussian width of grid-point i
+   !> @param[in]  xi_j    Gaussian width of grid-point j
    !> @param[in]  r2      Squared separation
    !> @param[out] a       Kernel value
    !> @param[out] a_xi_i  dA/dxi_i
    !> @param[out] a_xi_j  dA/dxi_j
    !> @param[out] a_r2    dA/dr2
    pure subroutine pcm_amat_near_grad(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -497,8 +497,8 @@ contains
 
    !> Full Gaussian pair kernel value and first and second derivatives
    !>
-   !> @param[in]  xi_i         Gaussian width of tessera i
-   !> @param[in]  xi_j         Gaussian width of tessera j
+   !> @param[in]  xi_i         Gaussian width of grid-point i
+   !> @param[in]  xi_j         Gaussian width of grid-point j
    !> @param[in]  r2           Squared separation
    !> @param[out] a            Kernel value
    !> @param[out] a_xi_i       dA/dxi_i
@@ -513,7 +513,7 @@ contains
    pure subroutine pcm_amat_near_hess(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2, &
                                       a_xi_i_xi_i, a_xi_i_xi_j, a_xi_j_xi_j, &
                                       a_xi_i_r2, a_xi_j_r2, a_r2_r2)
-      !> Gaussian widths of the two tesserae
+      !> Gaussian widths of the two grid-pointe
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -561,13 +561,13 @@ contains
 
    !> Diagonal Gaussian self-interaction A_ii = sqrt(2/pi)*xi/f
    !>
-   !> @param[in]  xi  Gaussian width of the tessera
-   !> @param[in]  f   Switching factor of the tessera
+   !> @param[in]  xi  Gaussian width of the grid-point
+   !> @param[in]  f   Switching factor of the grid-point
    !> @param[out] a   Diagonal kernel value
    pure subroutine pcm_amat_diag_value(xi, f, a)
-      !> Gaussian width of the tessera
+      !> Gaussian width of the grid-point
       real(wp), intent(in) :: xi
-      !> Switching factor of the tessera
+      !> Switching factor of the grid-point
       real(wp), intent(in) :: f
       !> Diagonal kernel value
       real(wp), intent(out) :: a
@@ -578,15 +578,15 @@ contains
 
    !> Diagonal self-interaction and its first derivatives
    !>
-   !> @param[in]  xi    Gaussian width of the tessera
-   !> @param[in]  f     Switching factor of the tessera
+   !> @param[in]  xi    Gaussian width of the grid-point
+   !> @param[in]  f     Switching factor of the grid-point
    !> @param[out] a     Diagonal kernel value
    !> @param[out] a_xi  dA_ii/dxi
    !> @param[out] a_f   dA_ii/df
    pure subroutine pcm_amat_diag_grad(xi, f, a, a_xi, a_f)
-      !> Gaussian width of the tessera
+      !> Gaussian width of the grid-point
       real(wp), intent(in) :: xi
-      !> Switching factor of the tessera
+      !> Switching factor of the grid-point
       real(wp), intent(in) :: f
       !> Diagonal kernel value
       real(wp), intent(out) :: a
@@ -605,8 +605,8 @@ contains
 
    !> Diagonal self-interaction and its first and second derivatives
    !>
-   !> @param[in]  xi       Gaussian width of the tessera
-   !> @param[in]  f        Switching factor of the tessera
+   !> @param[in]  xi       Gaussian width of the grid-point
+   !> @param[in]  f        Switching factor of the grid-point
    !> @param[out] a        Diagonal kernel value
    !> @param[out] a_xi     dA_ii/dxi
    !> @param[out] a_f      dA_ii/df
@@ -614,9 +614,9 @@ contains
    !> @param[out] a_xi_f   d2A_ii/dxi df
    !> @param[out] a_f_f    d2A_ii/df**2
    pure subroutine pcm_amat_diag_hess(xi, f, a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f)
-      !> Gaussian width of the tessera
+      !> Gaussian width of the grid-point
       real(wp), intent(in) :: xi
-      !> Switching factor of the tessera
+      !> Switching factor of the grid-point
       real(wp), intent(in) :: f
       !> Diagonal kernel value
       real(wp), intent(out) :: a
