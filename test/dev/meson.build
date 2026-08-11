@@ -5,7 +5,6 @@ dev_tests = [
   'cavity_drop_integration',
   'cavity_drop_convergence',
   'cavity_drop_deflation_comparison',
-  'pcm_amat_timings',
 ]
 
 if use_rism

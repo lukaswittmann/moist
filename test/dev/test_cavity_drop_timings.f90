@@ -18,6 +18,8 @@ module test_cavity_drop_timings
    private
 
    public :: collect_cavity_drop_timings
+   !> Shared with the other scaling benchmarks in test/dev
+   public :: collect_valid_points, fit_power_law
 
    integer, parameter :: ndim = 3
 
@@ -895,123 +897,6 @@ contains
 
    end subroutine test_timing_iswig_scaling
 
-   ! !> Benchmark GEPOL SES cavity scaling with system size.
-   ! !> Uses the same polyalanine series as test_timing_drop_scaling.
-   ! subroutine test_timing_gepol_scaling(error)
-   !    type(error_type), allocatable, intent(out) :: error
-   !    type(structure_type) :: mol
-   !    type(cavity_type_gepol), allocatable :: cavity
-   !    type(mctc_error), allocatable :: cavity_error
-
-   !    !> Number of polyalanine structures to benchmark
-   !    integer, parameter :: n_struct = 25
-   !    !> Minimum time (s) for a data point to be included in the fit
-   !    real(wp), parameter :: t_min = 1.0e-6_wp
-
-   !    !> GEPOL parameters
-   !    integer, parameter :: ndiv = 3
-
-   !    character(len=20) :: struct_names(n_struct)
-
-   !    !> Collected benchmark data
-   !    integer :: n_atoms_arr(n_struct)
-   !    integer :: n_grid_arr(n_struct)
-   !    real(wp) :: total_times(n_struct)
-   !    real(wp) :: areas(n_struct), volumes(n_struct)
-
-   !    !> Number of repetitions per structure for stable timings
-   !    integer, parameter :: n_iter = 10
-
-   !    !> Fit workspace
-   !    real(wp) :: real_n(n_struct), raw_t(n_struct)
-   !    real(wp) :: exponent, r_sq, coeff_a
-   !    integer :: n_valid
-
-   !    integer :: istruct, iter
-   !    real(wp) :: rn_iter
-   !    real :: t0, t1
-
-   !    !> Polyalanine structures (increasing size)
-   !    struct_names = [character(len=20) :: &
-   !                    'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
-   !                    'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
-   !                    'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-   !                    'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
-   !                    'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
-
-   !    rn_iter = real(n_iter, wp)
-
-   !    write (*, '(a)') ''
-   !    write (*, '(a)') '=================================================================='
-   !    write (*, '(a)') 'Benchmark: GEPOL SES cavity scaling (update + gradient)'
-   !    write (*, '(a,i0,a,i0)') 'ndiv=', ndiv, '  iter=', n_iter
-   !    write (*, '(a)') '=================================================================='
-   !    write (*, '(a)') ''
-   !    write (*, '(a14, a8, a8, a12, a16, a16)') &
-   !       'Structure', 'N_at', 'N_grid', 'Time (s)', 'Area', 'Volume'
-   !    write (*, '(a14, a8, a8, a12, a16, a16)') &
-   !       '-------------', '-------', '-------', '-----------', &
-   !       '---------------', '---------------'
-
-   !    do istruct = 1, n_struct
-   !       call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
-   !       n_atoms_arr(istruct) = mol%nat
-
-   !       total_times(istruct) = 0.0_wp
-   !       do iter = 1, n_iter
-   !          if (allocated(cavity)) deallocate (cavity)
-   !          allocate (cavity)
-   !          call new_cavity_gepol(cavity, ndiv=ndiv, verbosity=0, &
-   !                                radius_model=default_cpcm_radii(), error=cavity_error)
-   !          if (allocated(cavity_error)) then
-   !             call test_failed(error, cavity_error%message)
-   !             return
-   !          end if
-
-   !          call cpu_time(t0)
-   !          call cavity%update(mol, error=cavity_error)
-   !          if (allocated(cavity_error)) then
-   !             call test_failed(error, cavity_error%message)
-   !             return
-   !          end if
-   !          call cavity%get_gradient()
-   !          call cpu_time(t1)
-   !          total_times(istruct) = total_times(istruct) + real(t1 - t0, wp)
-   !       end do
-   !       total_times(istruct) = total_times(istruct)/rn_iter
-   !       n_grid_arr(istruct) = cavity%ngrid
-   !       areas(istruct) = cavity%total_area
-   !       volumes(istruct) = cavity%total_volume
-
-   !       write (*, '(2x,a14, i6, i8, f12.4, f16.4, f16.4)') &
-   !          trim(struct_names(istruct)), n_atoms_arr(istruct), &
-   !          n_grid_arr(istruct), total_times(istruct), &
-   !          areas(istruct), volumes(istruct)
-   !    end do
-
-   !    if (allocated(cavity)) deallocate (cavity)
-
-   !    !> Scaling fit
-   !    write (*, '(a)') ''
-   !    write (*, '(a)') '--- Scaling fit: t(N) = A * N^X ---'
-   !    write (*, '(a14, a10, a10, a12)') 'Component', 'X', 'R^2', 'A'
-   !    write (*, '(a14, a10, a10, a12)') repeat('-', 14), &
-   !       repeat('-', 10), repeat('-', 10), repeat('-', 12)
-
-   !    call collect_valid_points(n_struct, n_atoms_arr, total_times, t_min, &
-   !                              real_n, raw_t, n_valid)
-   !    if (n_valid >= 4) then
-   !       call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, &
-   !                          coeff_a)
-   !       write (*, '(a14, f10.3, f10.4, es12.3)') &
-   !          'GEPOL total', exponent, r_sq, coeff_a
-   !    else
-   !       write (*, '(a14, a22)') 'GEPOL total', '  (insufficient data)'
-   !    end if
-
-   !    write (*, '(a)') ''
-
-   ! end subroutine test_timing_gepol_scaling
 
    !> Collect valid data points for power-law fitting.
    !> Only includes points where the measured time exceeds t_min.
