@@ -243,7 +243,7 @@ contains
 
       !> Library error handling
       type(moist_error_type), allocatable :: err
-      !> Synthetic two-nucleus, three-tessera problem
+      !> Synthetic two-nucleus, three-grid-point problem
       real(wp) :: xyz(3, 3), sphxyz(3, 2), xyz1_rA(3, 3, 2, 3)
       real(wp) :: surface_q(3), qefield(3, 3), za(2)
       real(wp) :: grad(3, 2), grad_small(3, 1)
@@ -282,7 +282,7 @@ contains
    end subroutine test_rejects_invalid_shapes
 
    !> Evaluate the nuclear plus external-field reference energy.
-   !> @param[in] xyz Reference tessera positions
+   !> @param[in] xyz Reference grid-point positions
    !> @param[in] sphxyz0 Reference nuclear positions
    !> @param[in] sphxyz Displaced nuclear positions
    !> @param[in] xyz1_rA Surface-position response

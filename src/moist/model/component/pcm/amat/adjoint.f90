@@ -132,6 +132,9 @@ contains
 
    !> Contract surface-variable weights with nuclear derivative arrays
    !>
+   !> Should not be used; is the legacy forward path implementation
+   !> of [[pcm_amat_nuclear_gradient]]
+   !>
    !> @param[in]  xi1_rA      Width derivatives
    !> @param[in]  f1_rA       Switching-factor derivatives
    !> @param[in]  xyz1_rA     Surface-position derivatives
@@ -167,8 +170,6 @@ contains
          call fatal_error(error, "pcm_amat_nuclear_gradient: array shape mismatch")
          return
       end if
-
-      ! TODO: Reverse-mode (z-vector) migration
 
       !$omp parallel do default(none) reduction(+:grad_rA) &
       !$omp shared(xi1_rA, f1_rA, xyz1_rA, w_xi, w_f, w_xyz, ngrid, nsph) &

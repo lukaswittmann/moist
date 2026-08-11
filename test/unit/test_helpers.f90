@@ -17,6 +17,9 @@
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h)` - 4-point central FD formula
 !>   * `fd4_offsets` - the matching stencil offsets, in units of h
 !>   * `rel_deviation(a, b)` - |a - b| / (1 + |b|)
+!>   * `fill_legacy_radii(mol, radii, error)` - legacy per-element radius table
+!>   * `build_numbering_map(numbering, map)` - persistent grid numbering ->
+!>                                             current array index
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution.
@@ -38,6 +41,7 @@ module test_helpers
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
                           static_radius_type, new_cosmo_radii
    use moist_type, only: coupling_type
+   use moist_data_radii_legacy, only: get_radius_func
    use testdrive, only: error_type, test_failed
    implicit none
    private
@@ -54,6 +58,8 @@ module test_helpers
    public :: fd4_offsets
    public :: rel_deviation
    public :: check_moist_error
+   public :: fill_legacy_radii
+   public :: build_numbering_map
 
    !> Default n for get_test_structures (must be a multiple of 5).
    integer, parameter :: default_n_structures = 5
@@ -229,7 +235,7 @@ contains
       integer, intent(in), optional :: nleb
       !> Optional radius model; CPCM-table per-atom radii if absent.
       class(radius_type), intent(in), optional :: radius_model
-      !> Optional switching-factor cutoff; tesserae with `f <= cut_f` are
+      !> Optional switching-factor cutoff; grid-pointe with `f <= cut_f` are
       !> dropped at construction. Raise it to keep only the exposed surface.
       real(wp), intent(in), optional :: cut_f
 
@@ -477,5 +483,67 @@ contains
       !* Top 31 bits as a nonneg integer; divide by 2^31 to land in [0, 1).
       u = real(ishft(state, -33), wp)/real(2_int64**31, wp)
    end function lcg_uniform
+
+   !> Fill per-atom radii from the legacy per-element table
+   !>
+   !> The CPCM-flavoured cavity tests want the same radii the legacy code used,
+   !> which is not what `get_test_radii` returns.
+   !>
+   !> @param[in]  mol   Structure whose per-atom radii are filled
+   !> @param[out] radii Allocated on exit to `mol%nat`
+   !> @param[out] error Test failure, allocated if a lookup fails
+   subroutine fill_legacy_radii(mol, radii, error)
+      !> Structure whose per-atom radii are filled
+      type(structure_type), intent(in) :: mol
+      !> Allocated on exit to mol%nat
+      real(wp), allocatable, intent(out) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Lookup failure from the radius table
+      type(moist_error_type), allocatable :: err
+      !> Atom index
+      integer :: iat
+
+      allocate (radii(mol%nat))
+      do iat = 1, mol%nat
+         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
+         if (allocated(err)) then
+            call test_failed(error, "radius lookup failed: "//trim(err%message))
+            return
+         end if
+      end do
+   end subroutine fill_legacy_radii
+
+   !> Invert a cavity's persistent grid numbering into an index lookup
+   !>
+   !> DROP filters and reorders its grid on every rebuild, so a finite-difference
+   !> comparison between two builds cannot be keyed on the array index. It has to
+   !> go through `cavity%numbering`, which survives the rebuild. `map(n)` is the
+   !> current array index of the point numbered `n`, or 0 if that point is absent
+   !> from this build.
+   !>
+   !> @param[in]  numbering Persistent point numbers, one per current grid point
+   !> @param[out] map       Numbering -> index, sized to the largest number seen
+   subroutine build_numbering_map(numbering, map)
+      !> Persistent point numbers
+      integer, intent(in) :: numbering(:)
+      !> Numbering -> current index
+      integer, allocatable, intent(out) :: map(:)
+
+      !> Grid index and the number it carries
+      integer :: igrid, inum
+      !> Largest number present
+      integer :: max_num
+
+      max_num = 0
+      if (size(numbering) > 0) max_num = maxval(numbering)
+
+      allocate (map(max(1, max_num)), source=0)
+      do igrid = 1, size(numbering)
+         inum = numbering(igrid)
+         if (inum > 0 .and. inum <= max_num) map(inum) = igrid
+      end do
+   end subroutine build_numbering_map
 
 end module test_helpers

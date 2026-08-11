@@ -6,7 +6,7 @@
 !>
 !> Comparisons:
 !>  * the surface-variable weights against 4-point central differences of the
-!>    contracted energy `q1^T A q2` on a molecular surface, where a tessera has
+!>    contracted energy `q1^T A q2` on a molecular surface, where a grid-point has
 !>    hundreds of partners spread across both kernel branches
 !>  * the nuclear gradient against a contraction of the dense derivative tensor
 !>    [[assemble_pcm_amat_with_gradient]] builds entry by entry, which is a
@@ -44,7 +44,7 @@ module test_model_component_pcm_amat_adjoint
    !> Smallest exposed surface the finite-difference tests accept
    integer, parameter :: fd_min_points = 50
 
-   !> Number of tesserae finite-differenced per structure
+   !> Number of grid-pointe finite-differenced per structure
    integer, parameter :: n_fd_points = 50
 
 contains
@@ -69,16 +69,16 @@ contains
    !> symmetrized charge product q1_i q2_j + q1_j q2_i is not simply q1_i q1_j;
    !> an accidental symmetrization in the weights would otherwise pass
    !>
-   !> @param[in]  ngrid  Number of tesserae
+   !> @param[in]  ngrid  Number of grid-pointe
    !> @param[out] q1     Left contraction vector
    !> @param[out] q2     Right contraction vector
    subroutine make_charges(ngrid, q1, q2)
-      !> Number of tesserae
+      !> Number of grid-pointe
       integer, intent(in) :: ngrid
       !> Left and right contraction vectors
       real(wp), allocatable, intent(out) :: q1(:), q2(:)
 
-      !> Tessera index
+      !> Grid-point index
       integer :: i
 
       allocate (q1(ngrid), q2(ngrid))
@@ -142,7 +142,7 @@ contains
       real(wp), allocatable :: q1(:), q2(:)
       !> Analytic adjoints
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
-      !> Tessera, axis, stencil and stride indices; grid size
+      !> Grid-point, axis, stencil and stride indices; grid size
       integer :: ip, ig, iax, k, stride, ngrid
       !> Per-branch pair counts of the differenced surface
       integer :: nfar, nnear
@@ -153,7 +153,7 @@ contains
 
       call get_test_structures(mols, nmol)
       call center_at_origin(mols(1))
-      ! `cut_f` drops the buried tesserae at construction: their near-zero
+      ! `cut_f` drops the buried grid-pointe at construction: their near-zero
       ! switching factor makes both the contracted energy and the relative FD
       ! step degenerate. The working copies below are what the stencils poke.
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb_survey, &
@@ -203,7 +203,7 @@ contains
          end do
          xi(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/dxi at tessera ", ig
+         write (context, "(a,i0)") "dE/dxi at grid-point ", ig
          call check(error, w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
          if (allocated(error)) return
@@ -222,7 +222,7 @@ contains
          end do
          f(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/df at tessera ", ig
+         write (context, "(a,i0)") "dE/df at grid-point ", ig
          call check(error, w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
          if (allocated(error)) return
@@ -241,7 +241,7 @@ contains
             end do
             xyz(iax, ig) = saved
             fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at tessera ", ig
+            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid-point ", ig
             call check(error, w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                        more=trim(context))
             if (allocated(error)) return

@@ -6,10 +6,87 @@ module moist_model_component_pcm_electrostatics
    private
 
    public :: pcm_electrostatic_nuclear_gradient
+   public :: pcm_electrostatic_surface_weights
 
 contains
 
+   !> Split the electrostatic surface coupling into adjoint and direct parts
+   !>
+   !> The reverse-mode counterpart of [[pcm_electrostatic_nuclear_gradient]].
+   !> That routine contracts the surface-position adjoint `qefield - q_i*E_nuc`
+   !> with `xyz1_rA` on the spot; here the same vector is handed back as a
+   !> surface weight for the cavity to contract, and only the term that does
+   !> *not* flow through the surface -- the nuclei moving under the fixed
+   !> surface charges -- is returned as a gradient.
+   !>
+   !> Deliberately kept as a separate routine rather than shared with the
+   !> forward version: folding them together would reorder the floating-point
+   !> accumulation and perturb the legacy path.
+   !>
+   !> @param[in]  xyz        Surface positions (3, ngrid)
+   !> @param[in]  sphxyz     Atomic sphere centers (3, nsph)
+   !> @param[in]  surface_q  Surface charges (ngrid)
+   !> @param[in]  qefield    Charge-weighted electronic field (3, ngrid)
+   !> @param[in]  za         Nuclear charges (nsph)
+   !> @param[out] w_xyz      Surface-position adjoint (3, ngrid)
+   !> @param[out] grad_rA    Direct nuclear gradient at fixed surface (3, nsph)
+   !> @param[out] error      Error handling
+   subroutine pcm_electrostatic_surface_weights(xyz, sphxyz, surface_q, qefield, za, &
+                                                w_xyz, grad_rA, error)
+      !> Surface positions and sphere centers
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :)
+      !> Surface charges, electronic field weights, and nuclear charges
+      real(wp), intent(in) :: surface_q(:), qefield(:, :), za(:)
+      !> Surface-position adjoint
+      real(wp), intent(out) :: w_xyz(:, :)
+      !> Direct nuclear gradient
+      real(wp), intent(out) :: grad_rA(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Surface, source-atom, and extent indices
+      integer :: i, katom, ngrid, nsph
+      !> Surface charge, displacement data, and nuclear field
+      real(wp) :: qi, rvec(3), r2, inv_r3, enuc(3)
+      !> Squared-distance threshold for coincident sources
+      real(wp), parameter :: r2tol = 1.0e-30_wp
+
+      grad_rA = 0.0_wp
+      w_xyz = 0.0_wp
+      ngrid = size(surface_q)
+      nsph = size(za)
+      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid .or. &
+          size(sphxyz, 1) /= 3 .or. size(sphxyz, 2) /= nsph .or. &
+          size(qefield, 1) /= 3 .or. size(qefield, 2) /= ngrid .or. &
+          size(w_xyz, 1) /= 3 .or. size(w_xyz, 2) /= ngrid .or. &
+          size(grad_rA, 1) /= 3 .or. size(grad_rA, 2) /= nsph) then
+         call fatal_error(error, "pcm_electrostatic_surface_weights: array shape mismatch")
+         return
+      end if
+
+      ! Serial: the work is O(ngrid*nsph) with a handful of flops per pair and
+      ! the reduction target is tiny, so an OpenMP array reduction here would
+      ! cost more than it saves
+      do i = 1, ngrid
+         qi = surface_q(i)
+         enuc = 0.0_wp
+         do katom = 1, nsph
+            rvec = xyz(:, i) - sphxyz(:, katom)
+            r2 = sum(rvec*rvec)
+            if (r2 <= r2tol) cycle
+            inv_r3 = 1.0_wp/(sqrt(r2)*r2)
+            enuc = enuc + za(katom)*inv_r3*rvec
+            grad_rA(:, katom) = grad_rA(:, katom) + qi*za(katom)*inv_r3*rvec
+         end do
+         w_xyz(:, i) = qefield(:, i) - qi*enuc
+      end do
+
+   end subroutine pcm_electrostatic_surface_weights
+
    !> Contract direct nuclear and electronic surface-field contributions
+   !>
+   !> Should not be used; is the legacy forward path implementation
+   !> of [[pcm_electrostatic_nuclear_gradient]]
    !>
    !> @param[in]  xyz         Surface positions
    !> @param[in]  sphxyz      Atomic sphere centers
@@ -49,17 +126,6 @@ contains
          call fatal_error(error, "pcm_electrostatic_nuclear_gradient: array shape mismatch")
          return
       end if
-
-      ! TODO: Reverse-mode (z-vector) migration
-      !
-      ! Using xyz1_rA(3, 3, nsph, ngrid) scales quadratically and thus this does not parallelize
-      ! well >4 threads
-      !
-      ! The chain vector below is the surface adjoint w_xyz, and the direct nuclear term is
-      ! independent of that; we can thus use w_xyz = qefield - q_i*E_nuc via
-      ! cavity_surface_adjoint_type (as pcm_base_get_surface_weights already does) and let the
-      ! cavity contract it via contract_surface_lsf_weights which solves the same per-point
-      !bordered KKT system with 4 RHS instead of 3*n_active (i.e. not forming xyz1_rA explicitly)
 
       !$omp parallel do default(none) reduction(+:grad_rA) &
       !$omp shared(xyz, sphxyz, xyz1_rA, surface_q, qefield, za, ngrid, nsph) &

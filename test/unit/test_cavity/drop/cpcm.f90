@@ -7,8 +7,8 @@ module test_cavity_drop_cpcm
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
-   use moist_data_radii_legacy, only: get_radius_func
    use mstore, only: get_structure
+   use test_helpers, only: fill_legacy_radii
    use moist_math_lapack, only: getrf, getri
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
@@ -88,7 +88,7 @@ contains
 
       call get_structure(mol, "MB16-43", "04")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       allocate (cavity)
@@ -201,7 +201,7 @@ contains
 
       call get_structure(mol, "MB16-43", "15")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       allocate (cavity)
@@ -350,7 +350,7 @@ contains
       ! Create single oxygen atom
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -366,7 +366,7 @@ contains
       call new(mol, [8, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
                                      3.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -385,7 +385,7 @@ contains
                                                   -2.2_wp, 2.2_wp, 0.0_wp, &
                                                   2.2_wp, 2.2_wp, 0.0_wp], [3, 5]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii, blend_k_override=0.8_wp)
@@ -399,7 +399,7 @@ contains
 
       call get_structure(mol, "MB16-43", "H2")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -413,7 +413,7 @@ contains
 
       call get_structure(mol, "Heavy28", "bih3_h2o")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -427,7 +427,7 @@ contains
 
       call get_structure(mol, "Heavy28", "h2o")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -441,7 +441,7 @@ contains
 
       call get_structure(mol, "Heavy28", "pbh4")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -455,7 +455,7 @@ contains
 
       call get_structure(mol, "MB16-43", "01")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -469,7 +469,7 @@ contains
 
       call get_structure(mol, "MB16-43", "19")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -483,7 +483,7 @@ contains
 
       call get_structure(mol, "But14diol", "1")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -497,7 +497,7 @@ contains
 
       call get_structure(mol, "But14diol", "32")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -511,7 +511,7 @@ contains
 
       call get_structure(mol, "IL16", "008")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -1067,25 +1067,5 @@ contains
    end subroutine do_test
 
    !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
-   subroutine fill_cpcm_radii(mol, radii, error)
-      !> Structure whose per-atom radii are filled
-      type(structure_type), intent(in) :: mol
-      !> Allocated on exit to mol%nat
-      real(wp), allocatable, intent(out) :: radii(:)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      type(mctc_error), allocatable :: err
-      integer :: iat
-
-      allocate (radii(mol%nat))
-      do iat = 1, mol%nat
-         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
-         if (allocated(err)) then
-            call test_failed(error, "radius lookup failed: "//trim(err%message))
-            return
-         end if
-      end do
-   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_cpcm

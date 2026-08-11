@@ -35,7 +35,7 @@ module test_cavity_drop_nuclear_adjoint
    use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_components, only: pv, new_pv
-   use test_helpers, only: make_charge_coupling
+   use test_helpers, only: make_charge_coupling, fill_legacy_radii
    implicit none(type, external)
    private
 
@@ -760,14 +760,8 @@ contains
          prune_loc = 0
       end if
 
-      allocate (radii(mol%nat))
-      do iat = 1, mol%nat
-         radii(iat) = get_radius_func(mol%num(mol%id(iat)), cav_error)
-         if (allocated(cav_error)) then
-            call test_failed(error, "radius lookup failed: "//trim(cav_error%message))
-            return
-         end if
-      end do
+      call fill_legacy_radii(mol, radii, error)
+      if (allocated(error)) return
 
       allocate (cavity)
       block

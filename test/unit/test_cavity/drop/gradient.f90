@@ -2,7 +2,7 @@ module test_cavity_drop_gradient
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
-   use test_helpers, only: get_test_cross
+   use test_helpers, only: get_test_cross, fill_legacy_radii, build_numbering_map
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -71,7 +71,7 @@ contains
       ! Create single oxygen atom
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -87,7 +87,7 @@ contains
       call new(mol, [6, 6], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
                                      6.0_wp, 1.1_wp, 0.0_wp], [3, 2]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii, blend_k_override=2.0_wp, nleb_override=194, proj_level_override=2)
@@ -101,7 +101,7 @@ contains
 
       call get_structure(mol, "Amino20x4", "GLY_xab")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -115,7 +115,7 @@ contains
 
       call get_structure(mol, "MB16-43", "01")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -129,7 +129,7 @@ contains
 
       call get_structure(mol, "But14diol", "1")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -143,7 +143,7 @@ contains
 
       call get_structure(mol, "IL16", "008")
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii)
@@ -169,7 +169,7 @@ contains
 
       call get_test_cross(mol)
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       call do_test(error, mol, radii, proj_level_override=7, nleb_override=50, &
@@ -196,7 +196,7 @@ contains
 
       call get_test_cross(mol)
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       allocate (cavity)
@@ -393,7 +393,7 @@ contains
       integer, allocatable :: ref_numbering(:), numbering_to_idx(:)
       logical, allocatable :: valid_gridpoint_ref(:)
       logical, allocatable :: valid_gridpoint(:, :, :)  ! Validity per (idir, iat, igrid)
-      integer :: iat, idir, jdir, igrid, ngrid_set, jgrid, num_idn, idx_map, max_numbering
+      integer :: iat, idir, jdir, igrid, ngrid_set, jgrid, num_idn, idx_map
       real(wp) :: diff, max_diff
       real(wp) :: blend_k_local
       real(wp) :: blend_3b_local
@@ -516,19 +516,8 @@ contains
       end if
 
       allocate (ref_numbering(ngrid_set))
-      if (ngrid_set > 0) then
-         ref_numbering = cavity%numbering(1:ngrid_set)
-         max_numbering = maxval(ref_numbering)
-      else
-         max_numbering = 0
-      end if
-      allocate (numbering_to_idx(max(1, max_numbering)), source=0)
-      do igrid = 1, ngrid_set
-         num_idn = ref_numbering(igrid)
-         if (num_idn > 0 .and. num_idn <= size(numbering_to_idx)) then
-            numbering_to_idx(num_idn) = igrid
-         end if
-      end do
+      if (ngrid_set > 0) ref_numbering = cavity%numbering(1:ngrid_set)
+      call build_numbering_map(ref_numbering, numbering_to_idx)
 
       ! Store reference convergence status before finite differences
       allocate (valid_gridpoint_ref(ngrid_set), source=.false.)
@@ -1267,7 +1256,7 @@ contains
       real(wp) :: fd_coeff(4), fd_delta(4)
       real(wp) :: d_normal(ndim), d_k1, d_k2, rhs
       integer :: iat, idir, igrid, jgrid, ich, istep, ax, a, b
-      integer :: ngrid_set, nsph, num_idn, idx_map, max_numbering
+      integer :: ngrid_set, nsph, num_idn, idx_map
       integer :: ncompared(NCHAN)
 
       fd_coeff = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/(12.0_wp*STEP_SIZE)
@@ -1281,7 +1270,7 @@ contains
                                        0.00_wp, 0.00_wp, 4.60_wp, &
                                        2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       allocate (cavity)
@@ -1317,15 +1306,12 @@ contains
       end if
 
       !> Reference bookkeeping: persistent numbering -> reference grid index.
-      max_numbering = maxval(cavity%numbering(1:ngrid_set))
-      allocate (numbering_to_idx(max(1, max_numbering)), source=0)
+      call build_numbering_map(cavity%numbering(1:ngrid_set), numbering_to_idx)
       allocate (ref_conv(ngrid_set), source=.false.)
       allocate (ref_owner(ngrid_set), source=0)
       allocate (ref_k1(ngrid_set), source=0.0_wp)
       allocate (ref_k2(ngrid_set), source=0.0_wp)
       do igrid = 1, ngrid_set
-         num_idn = cavity%numbering(igrid)
-         if (num_idn > 0 .and. num_idn <= max_numbering) numbering_to_idx(num_idn) = igrid
          ref_conv(igrid) = cavity%converged(igrid)
          ref_owner(igrid) = cavity%owner(igrid)
          ref_k1(igrid) = cavity%k1(igrid)
@@ -1441,7 +1427,7 @@ contains
                end if
                do jgrid = 1, cavity%ngrid
                   num_idn = cavity%numbering(jgrid)
-                  if (num_idn <= 0 .or. num_idn > max_numbering) cycle
+                  if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
                   idx_map = numbering_to_idx(num_idn)
                   if (idx_map <= 0) cycle
                   st_normal(:, idx_map, istep) = cavity%normal0(:, jgrid)
@@ -1503,7 +1489,7 @@ contains
    !> The area and integration-weight adjoint channels must be equivalent to the
    !> `w_xi` weights they fold into.
    !>
-   !> A DROP tessera area is `a = wleb * f / xi**2`, so a weight on `a` and a
+   !> A DROP point area is `a = wleb * f / xi**2`, so a weight on `a` and a
    !> weight on `wleb` both reach the level set only through
    !> `w_xi <- -2*(a*w_a + wleb*w_w)/xi0`. Feeding `w_a`/`w_w` to the accumulator
    !> and feeding the pre-folded `w_xi` directly must therefore produce the same
@@ -1536,7 +1522,7 @@ contains
                                        0.00_wp, 0.00_wp, 4.60_wp, &
                                        2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
 
-      call fill_cpcm_radii(mol, radii, error)
+      call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
       allocate (cavity)
@@ -1618,25 +1604,5 @@ contains
    end subroutine test_adjoint_area_channels
 
    !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
-   subroutine fill_cpcm_radii(mol, radii, error)
-      !> Structure whose per-atom radii are filled
-      type(structure_type), intent(in) :: mol
-      !> Allocated on exit to mol%nat
-      real(wp), allocatable, intent(out) :: radii(:)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      type(mctc_error), allocatable :: err
-      integer :: iat
-
-      allocate (radii(mol%nat))
-      do iat = 1, mol%nat
-         radii(iat) = get_radius_func(mol%num(mol%id(iat)), err)
-         if (allocated(err)) then
-            call test_failed(error, "radius lookup failed: "//trim(err%message))
-            return
-         end if
-      end do
-   end subroutine fill_cpcm_radii
 
 end module test_cavity_drop_gradient

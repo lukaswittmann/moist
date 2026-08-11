@@ -31,7 +31,7 @@ contains
                   new_unittest("assembly_vs_reference", test_assembly_vs_reference), &
                   new_unittest("assembly_branch_coverage", test_assembly_branch_coverage), &
                   new_unittest("assembly_dense_grid", test_assembly_dense_grid), &
-                  new_unittest("coincident_tesserae", test_coincident_tesserae) &
+                  new_unittest("coincident_grid_points", test_coincident_grid_points) &
                   ]
 
    end subroutine collect_model_component_pcm_amat_assembly
@@ -247,8 +247,8 @@ contains
 
    end subroutine test_assembly_dense_grid
 
-   !> Coincident tesserae stay finite and hit the Gaussian overlap limit
-   subroutine test_coincident_tesserae(error)
+   !> Coincident grid-pointe stay finite and hit the Gaussian overlap limit
+   subroutine test_coincident_grid_points(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
@@ -276,10 +276,10 @@ contains
       do j = 1, 4
          do i = 1, 4
             call check(error, amat(i, j) == amat(i, j), &
-                       more="coincident tesserae produced a NaN")
+                       more="coincident grid-pointe produced a NaN")
             if (allocated(error)) return
             call check(error, abs(amat(i, j)) < huge(1.0_wp), &
-                       more="coincident tesserae produced an infinity")
+                       more="coincident grid-pointe produced an infinity")
             if (allocated(error)) return
          end do
       end do
@@ -289,6 +289,6 @@ contains
       call check(error, amat(1, 2), limit, thr=ref_thr*limit, &
                  more="coincident pair does not reach the Gaussian overlap limit")
 
-   end subroutine test_coincident_tesserae
+   end subroutine test_coincident_grid_points
 
 end module test_model_component_pcm_amat_assembly
