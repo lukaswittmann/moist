@@ -119,52 +119,49 @@ module moist_type
 
    !> Type for potential data (idential to tblite)
    type :: potential_type
-      !> Atom-resolved charge-dependent potential
-      real(wp), allocatable :: vat(:, :)
-      !> Shell-resolved charge-dependent potential
-      real(wp), allocatable :: vsh(:, :)
-      !> Orbital-resolved charge-dependent potential
-      real(wp), allocatable :: vao(:, :)
-      !> Atom-resolved dipolar potential
-      real(wp), allocatable :: vdp(:, :, :)
-      !> Atom-resolved quadrupolar potential
-      real(wp), allocatable :: vqp(:, :, :)
+
+      !* -------------------- Adjoint weights for cavity level set -------------------- *!
+
       !> Adjoint weights for cavity level set values (ngrid)
       real(wp), allocatable :: w_lsf0(:)
       !> Adjoint weights for cavity level set gradients (3, ngrid)
       real(wp), allocatable :: w_lsf1(:, :)
       !> Adjoint weights for cavity level set Hessians (3, 3, ngrid)
       real(wp), allocatable :: w_lsf2(:, :, :)
-      !> Adjoint weights for the solute density at cavity points (ngrid);
-      !> dE/drho_i; the host contracts this with its density evaluator to build
-      !> the Fock contribution F_uv += sum_i w_rho(i) phi_u(r_i) phi_v(r_i)
-      real(wp), allocatable :: w_rho(:)
-      !> Nonlocal electrostatic adjoint dE/dumol on the electrostatic grid
+
+      !* ------------------------------- Electrostatics ------------------------------- *!
+
+      !> Electrostatics adjoint dE/dumol on the electrostatic grid
       real(wp), allocatable :: w_elstat_umol(:)
-      !> Nonlocal electrostatic adjoint dE/dqmol on the electrostatic grid
+      !> Electrostatics adjoint dE/dqmol on the electrostatic grid
       real(wp), allocatable :: w_elstat_qmol(:)
-      !> Inner ("elstat") cavity level set adjoint weights for electrostatics.
-      !> Same meaning as w_lsf0/1/2 but on the inner cavity grid (ngrid_elstat),
-      !> which differs from the outer grid.
-      !> The two grids cannot be summed inside moist: the host contracts each
-      !> set against the level set basis on its own cavity grid, then sums the
-      !> resulting dE/de_c contributions. Only allocated when the model owns an
-      !> inner cavity (internal level set path with LevelSet.g_iso_elstat > 0).
-      real(wp), allocatable :: w_lsf0_elstat(:)
-      real(wp), allocatable :: w_lsf1_elstat(:, :)
-      real(wp), allocatable :: w_lsf2_elstat(:, :, :)
+
+      !* ---------------------------------- GOSTSHYP ---------------------------------- *!
+
+      !> Amplitudes conjugate to the host's Gaussian integral blocks (ngrid)
+      !> (counterpart of the `gauss_*` coupling moments)
+      !> Host builds Fock contribution as plain sum over grid points,
+      !>
+      !>    F_uv += sum_i [ w_gauss_g(i) g_uv,i + w_gauss_f(i) f_uv,i ]
+      !>
+      !> with `g_uv,i = <u|G_i|v>` and `f_uv,i = n_i . grad_r g_uv,i`
+      !>
+      !> Both signs are folded in here so the host never has to know the convention
+      !>
+      !> Grid points the model has switched off carry exactly zero, so the mask
+      !> propagates without the host repeating it
+      real(wp), allocatable :: w_gauss_g(:)
+      !> See `w_gauss_g` (ngrid)
+      real(wp), allocatable :: w_gauss_f(:)
    end type potential_type
 
    !> QM/solute data supplied to solvation models for one coupling step.
    type :: coupling_type
       !> Number of electrons for each atom (nat, spin)
       real(wp), allocatable :: qat(:, :)
-      !> Number of electrons for each shell (nsh, spin)
-      real(wp), allocatable :: qsh(:, :)
-      !> Atomic dipole moments for each atom (3, nat, spin)
-      real(wp), allocatable :: dpat(:, :, :)
-      !> Atomic quadrupole moments for each atom (5, nat, spin)
-      real(wp), allocatable :: qpat(:, :, :)
+
+      !* ------------------------------- Electrostatics ------------------------------- *!
+
       !> Molecular potential trace on the electrostatic cavity (ngrid)
       real(wp), allocatable :: elstat_umol(:)
       !> Molecular outward normal-derivative trace on the cavity (ngrid)
@@ -180,10 +177,26 @@ module moist_type
       !> Charge-weighted electronic field on the electrostatic cavity (3, ngrid)
       !  (distinct from `elstat_w_xyz`, which is an adjoint with respect to surface positions)
       real(wp), allocatable :: elstat_qefield(:, :)
-      !> Solute electron density at cavity points, native cavity order (ngrid)
-      real(wp), allocatable :: rho_solute(:)
-      !> Spatial gradient of the solute density at cavity points (3, ngrid)
-      real(wp), allocatable :: rho_solute_gradient(:, :)
+
+      !* ---------------------------------- GOSTSHYP ---------------------------------- *!
+
+      !> Moments of the solute density against an unnormalized Gaussian
+      !> `G_i = exp(-w_i |r - r_i|^2)` centereda cavity grid point
+      !>
+      !> The width `w_i` is the model's own, so the host must read it back
+      !> from the cavity before forming these
+      !>
+      !> AO-basis three-center integrals contracted with the density, needs
+      !> QM density and integrals
+      !>
+      !> `<G_i>` (ngrid)
+      real(wp), allocatable :: gauss_gt(:)
+      !> `<(r - r_i) G_i>` (3, ngrid)
+      real(wp), allocatable :: gauss_pt(:, :)
+      !> `<(r - r_i)(r - r_i) G_i>` (3, 3, ngrid) (symmetric in the first two)
+      real(wp), allocatable :: gauss_mt(:, :, :)
+      !> `<(r - r_i) |r - r_i|^2 G_i>` (3, ngrid)
+      real(wp), allocatable :: gauss_rt(:, :)
    contains
       !> Clear all supplied coupling arrays.
       procedure :: clear => clear_coupling
@@ -453,9 +466,6 @@ contains
       class(coupling_type), intent(inout) :: self
 
       if (allocated(self%qat)) deallocate (self%qat)
-      if (allocated(self%qsh)) deallocate (self%qsh)
-      if (allocated(self%dpat)) deallocate (self%dpat)
-      if (allocated(self%qpat)) deallocate (self%qpat)
       if (allocated(self%elstat_umol)) deallocate (self%elstat_umol)
       if (allocated(self%elstat_qmol)) deallocate (self%elstat_qmol)
       if (allocated(self%elstat_w_xi)) deallocate (self%elstat_w_xi)
@@ -463,8 +473,10 @@ contains
       if (allocated(self%elstat_w_xyz)) deallocate (self%elstat_w_xyz)
       if (allocated(self%elstat_w_n)) deallocate (self%elstat_w_n)
       if (allocated(self%elstat_qefield)) deallocate (self%elstat_qefield)
-      if (allocated(self%rho_solute)) deallocate (self%rho_solute)
-      if (allocated(self%rho_solute_gradient)) deallocate (self%rho_solute_gradient)
+      if (allocated(self%gauss_gt)) deallocate (self%gauss_gt)
+      if (allocated(self%gauss_pt)) deallocate (self%gauss_pt)
+      if (allocated(self%gauss_mt)) deallocate (self%gauss_mt)
+      if (allocated(self%gauss_rt)) deallocate (self%gauss_rt)
    end subroutine clear_coupling
 
    !> Default no-op direct trace-potential hook

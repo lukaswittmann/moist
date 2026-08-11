@@ -645,8 +645,7 @@ contains
          call test_failed(error, "PV potential failed: "//err%message)
          return
       end if
-      call check(error, .not. allocated(potential%vat) &
-         & .and. .not. allocated(potential%w_lsf0) &
+      call check(error, .not. allocated(potential%w_lsf0) &
          & .and. .not. allocated(potential%w_elstat_umol), &
          & more="PV wrote to the host potential")
       if (allocated(error)) return
