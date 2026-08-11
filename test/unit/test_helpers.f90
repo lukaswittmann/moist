@@ -235,7 +235,7 @@ contains
       integer, intent(in), optional :: nleb
       !> Optional radius model; CPCM-table per-atom radii if absent.
       class(radius_type), intent(in), optional :: radius_model
-      !> Optional switching-factor cutoff; grid-pointe with `f <= cut_f` are
+      !> Optional switching-factor cutoff;  grid points with `f <= cut_f` are
       !> dropped at construction. Raise it to keep only the exposed surface.
       real(wp), intent(in), optional :: cut_f
 

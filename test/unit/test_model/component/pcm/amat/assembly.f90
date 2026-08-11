@@ -247,7 +247,7 @@ contains
 
    end subroutine test_assembly_dense_grid
 
-   !> Coincident grid-pointe stay finite and hit the Gaussian overlap limit
+   !> Coincident grid points stay finite and hit the Gaussian overlap limit
    subroutine test_coincident_grid_points(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -276,10 +276,10 @@ contains
       do j = 1, 4
          do i = 1, 4
             call check(error, amat(i, j) == amat(i, j), &
-                       more="coincident grid-pointe produced a NaN")
+                       more="coincident grid points produced a NaN")
             if (allocated(error)) return
             call check(error, abs(amat(i, j)) < huge(1.0_wp), &
-                       more="coincident grid-pointe produced an infinity")
+                       more="coincident grid points produced an infinity")
             if (allocated(error)) return
          end do
       end do

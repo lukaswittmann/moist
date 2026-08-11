@@ -89,7 +89,7 @@ contains
    !> @param[in]  r2    Squared separation
    !> @return     a     Reference kernel value erf(p*r)/r
    pure function reference_value(xi_i, xi_j, r2) result(a)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two  grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -112,7 +112,7 @@ contains
    !> @param[in]  r2    Squared separation
    !> @return     x     Boys argument
    pure function boys_argument(xi_i, xi_j, r2) result(x)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two  grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -370,7 +370,7 @@ contains
 
    end subroutine test_near_hess_fd
 
-   !> Swapping the two grid-pointe mirrors the width channels and leaves the rest
+   !> Swapping the two  grid points mirrors the width channels and leaves the rest
    subroutine test_near_exchange_symmetry(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

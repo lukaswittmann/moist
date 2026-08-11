@@ -1714,7 +1714,7 @@ contains
       integer, parameter :: n_fd_points = 4
       !> Smallest switching factor a differenced grid-point may have.
       !>
-      !> An iSwiG surface keeps nearly buried grid-pointe with f down to ~1e-10, whose
+      !> An iSwiG surface keeps nearly buried  grid points with f down to ~1e-10, whose
       !> diagonal entry sqrt(2/pi)*xi/f then reaches ~1e10. Their analytic weights
       !> are as valid as any other -- the component treats every grid-point alike --
       !> but a relative step on such an f is ~1e-13 wide, so the difference
@@ -1869,7 +1869,7 @@ contains
 !>    dE/dR_A = q^T dphi/dR_A
 !>              + 1/(2 f(eps)) q^T (dA/dR_A) q
 !>
-!> are active because rebuilding the iSwiG cavity moves its grid-pointe and changes
+!> are active because rebuilding the iSwiG cavity moves its  grid points and changes
 !> its switching factors while the source charges move with the nuclei.
 !>
 !> @param[out] error Test failure
@@ -2382,7 +2382,7 @@ contains
 
    end subroutine test_cpcm_dielectric_scaling
 
-!> Bit-coincident grid-pointe must not poison the CPCM matrix.
+!> Bit-coincident  grid points must not poison the CPCM matrix.
 !>
 !> In symmetric molecules two Lebedev points owned by different spheres can land
 !> at bit-identical coordinates (the Td axis of NH4+/PH4+, a linear anion at
@@ -2399,7 +2399,7 @@ contains
 
       type(cavity_type_drop) :: cavity
 
-      !> Three grid-pointe, the first two bit-identical with distinct widths
+      !> Three  grid points, the first two bit-identical with distinct widths
       integer, parameter :: ngrid_c = 3
       real(wp), parameter :: xis(ngrid_c) = [0.65_wp, 0.83_wp, 0.71_wp]
       real(wp), parameter :: fs(ngrid_c) = [0.91_wp, 0.88_wp, 0.79_wp]
@@ -2424,7 +2424,7 @@ contains
       end if
 
       call check(error, all(ieee_is_finite_matrix(amat)), &
-         & "coincident grid-pointe must not produce non-finite CPCM matrix entries")
+         & "coincident  grid points must not produce non-finite CPCM matrix entries")
       if (allocated(error)) return
 
       ! The coincident pair must carry the analytic zero-separation limit.
@@ -2435,7 +2435,7 @@ contains
       if (allocated(error)) return
 
       call check(error, amat(2, 1), expected, thr=thr, &
-         & message="the CPCM matrix must stay symmetric at coincident grid-pointe")
+         & message="the CPCM matrix must stay symmetric at coincident  grid points")
 
    contains
 

@@ -44,7 +44,7 @@ module test_model_component_pcm_amat_adjoint
    !> Smallest exposed surface the finite-difference tests accept
    integer, parameter :: fd_min_points = 50
 
-   !> Number of grid-pointe finite-differenced per structure
+   !> Number of  grid points finite-differenced per structure
    integer, parameter :: n_fd_points = 50
 
 contains
@@ -69,11 +69,11 @@ contains
    !> symmetrized charge product q1_i q2_j + q1_j q2_i is not simply q1_i q1_j;
    !> an accidental symmetrization in the weights would otherwise pass
    !>
-   !> @param[in]  ngrid  Number of grid-pointe
+   !> @param[in]  ngrid  Number of  grid points
    !> @param[out] q1     Left contraction vector
    !> @param[out] q2     Right contraction vector
    subroutine make_charges(ngrid, q1, q2)
-      !> Number of grid-pointe
+      !> Number of  grid points
       integer, intent(in) :: ngrid
       !> Left and right contraction vectors
       real(wp), allocatable, intent(out) :: q1(:), q2(:)
@@ -153,7 +153,7 @@ contains
 
       call get_test_structures(mols, nmol)
       call center_at_origin(mols(1))
-      ! `cut_f` drops the buried grid-pointe at construction: their near-zero
+      ! `cut_f` drops the buried  grid points at construction: their near-zero
       ! switching factor makes both the contracted energy and the relative FD
       ! step degenerate. The working copies below are what the stencils poke.
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb_survey, &
