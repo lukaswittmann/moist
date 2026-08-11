@@ -316,7 +316,9 @@ contains
       if (allocated(error)) return
       call add_vector(target%w_elstat_qmol, source%w_elstat_qmol, "w_elstat_qmol", error)
       if (allocated(error)) return
-      call add_vector(target%w_rho, source%w_rho, "w_rho", error)
+      call add_vector(target%w_gauss_g, source%w_gauss_g, "w_gauss_g", error)
+      if (allocated(error)) return
+      call add_vector(target%w_gauss_f, source%w_gauss_f, "w_gauss_f", error)
       if (allocated(error)) return
       call add_vector(target%w_lsf0, source%w_lsf0, "w_lsf0", error)
       if (allocated(error)) return

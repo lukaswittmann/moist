@@ -315,7 +315,7 @@ def new_drop_cavity_isodensity_callback(
                 np.frombuffer(ffi.buffer(third_ptr, 216), dtype=np.float64)[:] = third.ravel(
                     order="F"
                 )
-        except BaseException as exc:  # noqa: BLE001 - see comment
+        except BaseException as exc:
             # CFFI cannot propagate an exception through the C frame, but the
             # callback ABI has a failure channel: returning nonzero aborts the
             # build with a moist error. Keep the exception so the caller can
@@ -733,6 +733,7 @@ def get_cavity_gaussian(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
     switch = np.zeros(ngrid, dtype=np.float64)
     error_check(lib.moist_get_cavity_gaussian)(
         cavity.handle,
+        ngrid,
         _cast("double*", xi),
         _cast("double*", switch),
     )

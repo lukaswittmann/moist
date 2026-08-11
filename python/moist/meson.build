@@ -83,8 +83,7 @@ foreach name : [
   configure_file(input: files(name), output: name, copy: true)
 endforeach
 
-# pytest is an optional development dependency: skip the targets rather than
-# failing configuration when it is absent.
+# pytest is an optional development dependency
 if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   pytest_args = [
     '-m', 'pytest',
@@ -98,19 +97,17 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   ]
   coupling_src = meson.current_build_dir() / 'test_pyscf.py'
 
-  # The CFFI bindings and the Python object model: handles, lifetimes, argument
-  # marshalling, error propagation.  No physics -- a failure here means the
-  # plumbing is broken rather than the derivatives.
+  # The CFFI bindings and the Python object model
   test(
     'python_api',
     python,
     args: pytest_args + bindings_srcs,
     depends: moist_pyext,
     env: pytest_env,
-    timeout: 300,
+    timeout: 60,
   )
 
-  # The host-side chain rule against a real QM code
+  # Test MOIST--QM coupling (using PySCF) (mainly isodensity cavity + models)
   #
   #   host          the adapter's own derivative orders, moist not involved
   #   vdw           electrostatic conventions on a density-independent cavity
@@ -118,13 +115,13 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   #   conventions   channel semantics and the negative controls
   #   scf           the self-consistent layer (slowest, ~21 s)
   foreach entry : [
-    ['pyscf_host', 'host', 300],
-    ['pyscf_vdw', 'vdw', 600],
-    ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 900],
-    ['pyscf_isodensity_pv', 'isodensity and pv', 900],
-    ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 900],
-    ['pyscf_conventions', 'conventions', 600],
-    ['pyscf_scf', 'scf', 3600],
+    ['pyscf_host', 'host', 60],
+    ['pyscf_vdw', 'vdw', 60],
+    ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 60],
+    ['pyscf_isodensity_pv', 'isodensity and pv', 60],
+    ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 60],
+    ['pyscf_conventions', 'conventions', 60],
+    ['pyscf_scf', 'scf', 60],
   ]
     test(
       entry[0],
@@ -145,11 +142,11 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   #   gostshyp_conventions channel semantics and the negative controls
   gostshyp_src = meson.current_build_dir() / 'test_gostshyp.py'
   foreach entry : [
-    ['gostshyp_integrals', 'gostshyp_integrals and not slow', 300],
-    ['gostshyp_params', 'gostshyp_params and not slow', 300],
-    ['gostshyp_fock', 'gostshyp_fock and not slow', 600],
-    ['gostshyp_gradient', 'gostshyp_gradient and not slow', 900],
-    ['gostshyp_conventions', 'gostshyp_conventions and not slow', 600],
+    ['gostshyp_integrals', 'gostshyp_integrals', 60],
+    ['gostshyp_params', 'gostshyp_params', 60],
+    ['gostshyp_fock', 'gostshyp_fock', 60],
+    ['gostshyp_gradient', 'gostshyp_gradient', 60],
+    ['gostshyp_conventions', 'gostshyp_conventions', 60],
   ]
     test(
       entry[0],
@@ -161,16 +158,6 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
     )
   endforeach
 
-  # The larger solute rows, kept out of the default sweep.
-  test(
-    'gostshyp_extended',
-    python,
-    args: pytest_args + ['-m', 'slow', gostshyp_src],
-    depends: moist_pyext,
-    env: pytest_env,
-    suite: 'extended',
-    timeout: 3600,
-  )
 else
   message('pytest not found: skipping the python test targets')
 endif

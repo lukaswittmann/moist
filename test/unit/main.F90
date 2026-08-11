@@ -40,6 +40,7 @@ program tester
    use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
    use test_model_component_pcm_electrostatics, only: collect_model_component_pcm_electrostatics
    use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
+   use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_general, only: collect_model_general
 
@@ -89,6 +90,7 @@ program tester
       & new_testsuite("model_component_pcm_electrostatics", &
          collect_model_component_pcm_electrostatics), &
       & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
+      & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_general", collect_model_general) &
       & ]

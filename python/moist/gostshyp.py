@@ -228,13 +228,18 @@ class GostshypWall:
         # Keep the two traces this build already implies.  They are the only
         # part of the moments any later read needs, and rebuilding them would
         # mean four fresh s/p/d/f integral blocks -- the dominant cost here.
-        self._traces = (
+        traces = (
             gt,
             -2.0 * self.omega * np.einsum("ja,ja->j", self.normals, pt, optimize=True),
         )
 
-        self.energy = self.model.get_energy()
-        self._potential = self.model.get_potential_extended()
+        # Everything is staged locally and pushed at once
+        energy = self.model.get_energy()
+        potential = self.model.get_potential_extended()
+
+        self._traces = traces
+        self.energy = energy
+        self._potential = potential
         return self.energy
 
     # ------------------------------------------------------------------
@@ -409,6 +414,27 @@ class GostshypWall:
         """The per-grid-point amplitudes ``p_j`` of the last :meth:`update`."""
 
         return None if self._potential is None else self._potential.w_gauss_g
+
+    @property
+    def inactive_count(self) -> int:
+        """Grid points the component switched off, out of :attr:`ngrid`.
+
+        The component drops points whose density overlap is a relative
+        round-off away from zero, and says nothing about it.  A sizeable count
+        is normal -- 7 of 71 for water at 50 GPa, 24 of 159 for fluoroacetate --
+        so this is a number to watch across a trajectory rather than a pass/fail
+        one: a systematically wrong moment supply shrinks every ``ftilde`` and
+        shows up here as points quietly leaving the surface.
+
+        Derived from ``ftilde`` rather than from the amplitudes, for the reason
+        :meth:`effective_volume` gives: the amplitudes carry the pressure, so at
+        ``p_inp = 0`` they report every point as dropped.
+        """
+
+        self._require_potential()
+        _, ftilde = self.live_traces
+        floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
+        return int(np.count_nonzero(np.abs(ftilde) <= floor))
 
     @property
     def live_traces(self) -> tuple[np.ndarray, np.ndarray]:
