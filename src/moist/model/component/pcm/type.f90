@@ -455,7 +455,7 @@ contains
       real(wp), allocatable :: source_charge(:)
       !> Number of solute atoms and cavity grid points
       integer :: nat, ngrid
-      !> Atom and grid-point indices
+      !> Atom and grid point indices
       integer :: iatom, igrid
 
       nat = self%mol_solu%nat
@@ -724,7 +724,7 @@ contains
    !> @param[in]  cavity  Live cavity carrying the Gaussian PCM surface
    !> @param[out] w_xi    Gaussian-width weights
    !> @param[out] w_f     Switching-factor weights
-   !> @param[out] w_xyz   Grid-point-position weights
+   !> @param[out] w_xyz   Grid point-position weights
    !> @param[out] error   Error handling
    subroutine pcm_base_amat_surface_weights(self, cavity, w_xi, w_f, w_xyz, error)
       !> PCM component with current surface charges
@@ -735,7 +735,7 @@ contains
       real(wp), intent(out) :: w_xi(:)
       !> Switching-factor weights
       real(wp), intent(out) :: w_f(:)
-      !> Grid-point-position weights
+      !> Grid point-position weights
       real(wp), intent(out) :: w_xyz(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -781,7 +781,7 @@ contains
       real(wp), allocatable :: w_xi(:)
       !> Switching-factor weights
       real(wp), allocatable :: w_f(:)
-      !> Grid-point-position weights
+      !> Grid point-position weights
       real(wp), allocatable :: w_xyz(:, :)
 
       if (.not. allocated(cavity%xi1_rA) .or. .not. allocated(cavity%f1_rA) .or. &
@@ -828,7 +828,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Per-grid-point adjoints of q^T A q w.r.t. xi_i, f_i and r_i
+      !> Per-grid point adjoints of q^T A q w.r.t. xi_i, f_i and r_i
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
       !> Number of cavity grid points
       integer :: ngrid
@@ -1045,7 +1045,7 @@ contains
       !> Potential at each grid point (ngrid)
       real(wp), intent(out) :: phi(:)
 
-      !> Grid-point and atom indices with their extents
+      !> Grid point and atom indices with their extents
       integer :: i, j, nat, ngrid
       !> Separation vector, its length, and the atomic partial charge
       real(wp) :: r_vec(3), r_dist, q_atom
