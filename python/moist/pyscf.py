@@ -25,8 +25,9 @@ Two chain rules have to be completed by the host.  For the Fock matrix,
 and for the nuclear gradient the same weights are contracted with
 ``dS/dR_A`` instead, alongside the AO-derivative part of ``dphi/dR_A``.  The
 remaining routes -- the nuclear field, the surface motion, the A-matrix and the
-anchor/switching geometry -- belong to moist and come back from
-:meth:`~moist.interface.GeneralSolvationModel.get_gradient`.
+anchor/switching geometry -- belong to moist.  A
+:class:`~moist.interface.Evaluation` composes both halves into its ``fock`` and
+``gradient`` results.
 
 Conventions this module depends on, each verified against finite differences by
 ``test_pyscf.py``:
@@ -46,17 +47,25 @@ Conventions this module depends on, each verified against finite differences by
 from __future__ import annotations
 
 from typing import Optional
+import warnings
 
 import numpy as np
 
 from .interface import (
     CPCM,
-    GeneralSolvationModel,
+    CavitySnapshot,
+    CouplingChannel,
+    CouplingTransaction,
+    Electrostatics,
+    GeneralPotential,
     IsodensityDROPCavity,
+    SolvationCoupling,
+    SolvationModel,
     Structure,
+    TracePotential,
 )
 
-__all__ = ["PySCFIsodensityHost", "solvated_rhf"]
+__all__ = ["PySCFCoupling", "PySCFHost", "PySCFIsodensityHost", "solvated_rhf"]
 
 #: Default isodensity contour in electrons/bohr^3.
 DEFAULT_RHO_ISO = 4.0e-4
@@ -83,8 +92,8 @@ def _component_index(axes: tuple[int, ...]) -> int:
     raise ValueError(f"invalid derivative axes: {axes}")
 
 
-class PySCFIsodensityHost:
-    """Drive a moist cavity and solvation model from a PySCF molecule.
+class PySCFHost:
+    """Adapt a PySCF molecule to MOIST host and isodensity operations.
 
     The density matrix is mutable state (:attr:`dm`) because the isodensity
     surface follows the density: it must be current *before* every cavity
@@ -186,11 +195,17 @@ class PySCFIsodensityHost:
         return value, grad, hess, third
 
     def make_cavity(self, **kwargs) -> IsodensityDROPCavity:
-        """Isodensity DROP cavity bound to this host's level set."""
-        kwargs.setdefault("scale", self.scale)
-        if kwargs["scale"] != self.scale:
-            raise ValueError("cavity scale must match the host scale")
-        return IsodensityDROPCavity(self.lsf, **kwargs)
+        """Deprecated compatibility factory for ``IsodensityDROPCavity(self)``."""
+        warnings.warn(
+            "host.make_cavity() is deprecated; use IsodensityDROPCavity(host, ...)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return IsodensityDROPCavity(self, **kwargs)
+
+    def coupling(self, density_matrix: np.ndarray) -> "PySCFCoupling":
+        """Bind one density matrix to this host for a coherent evaluation."""
+        return PySCFCoupling(self, density_matrix)
 
     # ------------------------------------------------------------------
     # electrostatics
@@ -287,7 +302,7 @@ class PySCFIsodensityHost:
         """Solvation contribution to the Fock matrix, ``(nao, nao)``.
 
         :param potential: the :class:`~moist.interface.GeneralPotential` from
-            :meth:`GeneralSolvationModel.get_potential`.
+            :meth:`SolvationModel.get_potential`.
         :param include_lsf: contract the level-set adjoints.  Must be ``False``
             for a density-independent cavity, whose ``w_lsf`` weights describe a
             level set that has nothing to do with the electron density.
@@ -345,7 +360,7 @@ class PySCFIsodensityHost:
         -- for an isodensity cavity, whose level set reports zero nuclear
         partials by construction -- the basis-center derivative of the level
         set.  Add the result to
-        :meth:`GeneralSolvationModel.get_gradient`.
+        :meth:`SolvationModel.get_gradient`.
         """
         coords = np.asarray(coords)
         gradient = self._gradient_phi(coords, np.asarray(potential.w_umol))
@@ -416,6 +431,122 @@ class PySCFIsodensityHost:
         return np.asfortranarray(gradient)
 
 
+class PySCFIsodensityHost(PySCFHost):
+    """Deprecated compatibility name for :class:`PySCFHost`."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "PySCFIsodensityHost is deprecated; use PySCFHost",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)
+
+
+class PySCFCoupling(SolvationCoupling):
+    """Adapter for one moist evaluation at a fixed PySCF density matrix.
+
+    The adapter hides the two-pass electrostatic exchange: it first supplies the
+    molecular potential, obtains the surface charges, then supplies the
+    charge-dependent surface-position and nuclear-gradient response channels.
+    It also completes moist's adjoints into host Fock and nuclear-gradient
+    contributions.
+
+    Parameters
+    ----------
+    host
+        A :class:`PySCFHost` providing the PySCF host operations and, for an
+        isodensity cavity, its level-set source.
+        construct the model cavity.
+    density_matrix
+        Density matrix held fixed for this evaluation.
+    """
+
+    channels = frozenset({CouplingChannel.ELECTROSTATICS})
+
+    def __init__(
+        self,
+        host: PySCFHost,
+        density_matrix: np.ndarray,
+    ) -> None:
+        self.host = host
+        density = np.array(density_matrix, copy=True, order="C")
+        expected = (host.mol.nao_nr(), host.mol.nao_nr())
+        if density.shape != expected:
+            raise ValueError(f"density_matrix must have shape {expected}")
+        self._density_matrix = np.frombuffer(
+            density.tobytes(order="C"), dtype=density.dtype
+        ).reshape(expected)
+        self._include_lsf = True
+
+    @property
+    def density_matrix(self) -> np.ndarray:
+        """The fixed, immutable density associated with this evaluation."""
+        return self._density_matrix
+
+    @property
+    def structure(self) -> Structure:
+        return self.host.structure()
+
+    def activate(self) -> None:
+        # The isodensity callback runs during model.update(), before prepare().
+        self.host.dm = self.density_matrix
+
+    def prepare(self, transaction: CouplingTransaction) -> None:
+        self._include_lsf = transaction.density_dependent
+        if not transaction.requires(CouplingChannel.ELECTROSTATICS):
+            return
+        cavity = transaction.cavity
+        coords = cavity.xyz.T
+        phi = self.host.surface_potential(coords)
+
+        def electrostatics(
+            _cavity: CavitySnapshot,
+            trace: Optional[TracePotential],
+        ) -> Electrostatics:
+            if trace is None:
+                return Electrostatics(phi)
+            return Electrostatics(
+                phi,
+                w_xyz=self.host.surface_position_weights(coords, trace.molecular),
+                qefield=self.host.qefield(coords, trace.molecular),
+            )
+
+        transaction.exchange_electrostatics(electrostatics)
+
+    def fock(
+        self,
+        cavity: CavitySnapshot,
+        potential: GeneralPotential,
+    ) -> np.ndarray:
+        self.activate()
+        return self.host.fock(
+            cavity.xyz.T,
+            potential,
+            include_lsf=self._density_dependent(cavity),
+        )
+
+    def gradient(
+        self,
+        cavity: CavitySnapshot,
+        potential: GeneralPotential,
+        model_gradient,
+    ) -> np.ndarray:
+        self.activate()
+        return model_gradient() + self.host.gradient(
+            cavity.xyz.T,
+            potential,
+            include_lsf=self._density_dependent(cavity),
+        )
+
+    def _density_dependent(self, _cavity: CavitySnapshot) -> bool:
+        # The snapshot deliberately contains values only; cavity construction
+        # semantics stay on the live object owned by the current model.
+        # ``prepare`` runs before result assembly, so the bound host can retain
+        # this one boolean without exposing the native model to result consumers.
+        return getattr(self, "_include_lsf", True)
+
+
 def solvated_rhf(
     mol,
     epsilon: float,
@@ -429,7 +560,7 @@ def solvated_rhf(
     """Restricted Hartree-Fock in a CPCM isodensity cavity, solved to self-consistency.
 
     The surface follows the density, so the cavity is rebuilt from scratch on
-    every SCF iteration.  Because :meth:`PySCFIsodensityHost.fock` is the exact
+    every SCF iteration.  Because :meth:`PySCFHost.fock` is the exact
     derivative of the solvation energy, the SCF remains a stationary-point
     search for ``E_HF + E_solv`` and the converged density is variational.
 
@@ -437,20 +568,17 @@ def solvated_rhf(
     """
     from pyscf import lib, scf
 
-    host = PySCFIsodensityHost(mol, rho_iso=rho_iso, scale=scale)
+    host = PySCFHost(mol, rho_iso=rho_iso, scale=scale)
 
     class _SolvatedRHF(scf.hf.RHF):
         """RHF carrying the solvation response as a tagged extra potential."""
 
         def _solvent(self, dm):
-            host.dm = dm
-            model = GeneralSolvationModel(
-                host.make_cavity(**cavity_kwargs), [CPCM(epsilon)]
+            model = SolvationModel(
+                IsodensityDROPCavity(host, **cavity_kwargs), [CPCM(epsilon)]
             )
-            model.update(host.structure())
-            coords = model.cavity.xyz.T
-            energy, potential = host.solve(model, coords)
-            return energy, host.fock(coords, potential, include_lsf=True)
+            result = model.evaluate(coupling=host.coupling(dm))
+            return result.energy, result.fock
 
         def get_veff(self, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             veff = super().get_veff(mol, dm, dm_last, vhf_last, hermi)

@@ -68,11 +68,12 @@ from .gostshyp import (
     _S_OVER_F_NORM,
     _S_OVER_P_NORM,
     GPA_TO_AU,
+    GostshypModel,
     GostshypWall,
     _int3c1e,
 )
-from .interface import Structure
-from .pyscf import PySCFIsodensityHost
+from .interface import IsodensityDROPCavity, Structure
+from .pyscf import PySCFHost
 
 #: Every test in this module is a GOSTSHYP test; the second marker selects the
 #: layer, and meson turns each into its own target.
@@ -308,9 +309,9 @@ def make_wall(mol, positions=None, *, dm, pressure=PRESSURE):
     """Host plus an updated GOSTSHYP wall at ``dm``, optionally displaced."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    host = PySCFIsodensityHost(mol)
+    host = PySCFHost(mol)
     host.dm = dm
-    wall = GostshypWall(host, pressure, nleb=NLEB, tolerance=PROJ_TOL)
+    wall = GostshypModel(host, pressure, nleb=NLEB, tolerance=PROJ_TOL)
     wall.update(dm)
     return host, wall
 
@@ -669,7 +670,7 @@ def test_params_update_drops_the_previous_surfaces_moments():
     "forgot to re-supply" into the same error as "never supplied" instead of a
     plausible energy for a surface that has moved.
 
-    :meth:`GostshypWall.update` always re-supplies in the same breath, so this
+    :meth:`GostshypModel.update` always re-supplies in the same breath, so this
     only bites a host driving the model by hand.
     """
     system, basis = PRIMARY_CASE
@@ -734,6 +735,36 @@ def test_params_second_moment_matches_a_second_difference():
 # ----------------------------------------------------------------------
 # fock -- the level-set chain rule
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.gostshyp_fock
+def test_evaluation_owns_complete_gostshyp_results():
+    """The generic result includes the wall's reverse-mode host response."""
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    host = PySCFHost(mol)
+    wall = GostshypModel(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
+
+    result = wall.evaluate(dm)
+    expected_gradient = wall.nuclear_gradient(dm)
+    host.dm = np.zeros_like(dm)
+
+    assert result.energy == wall.energy
+    np.testing.assert_allclose(result.fock, wall.fock(dm))
+    np.testing.assert_allclose(result.gradient, expected_gradient)
+    assert not result.fock.flags.writeable
+    assert not result.gradient.flags.writeable
+
+
+@pytest.mark.gostshyp_fock
+def test_gostshyp_wall_name_remains_compatible():
+    mol = molecule(*PRIMARY_CASE)
+    host = PySCFHost(mol)
+
+    with pytest.deprecated_call(match="GostshypModel"):
+        wall = GostshypWall(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
+
+    assert isinstance(wall, GostshypModel)
 
 
 @pytest.mark.gostshyp_fock
@@ -870,12 +901,12 @@ def test_gradient_surface_channel_matches_fd(system, basis):
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
-        cavity = host.make_cavity(nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
         cavity.update(Structure(numbers, displaced))
         result = cavity.cavity
         centers = np.ascontiguousarray(result.xyz.T)
         areas = np.ascontiguousarray(result.a)
-        normals = np.ascontiguousarray(result.normal0.T)
+        normals = np.array(result.normal0.T, order="C", copy=True)
         normals /= np.linalg.norm(normals, axis=1)[:, None]
         with np.errstate(divide="ignore", invalid="ignore"):
             omega = np.pi * math.log(2.0) / areas
@@ -1071,9 +1102,9 @@ def test_conventions_anchor_area_derivatives_sum_to_the_total():
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = PySCFIsodensityHost(mol)
+    host = PySCFHost(mol)
     host.dm = dm
-    cavity = host.make_cavity(nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
     cavity.update(host.structure())
 
     cavity.compute_anchor_gradient()
@@ -1137,7 +1168,7 @@ def test_conventions_failed_update_publishes_nothing_partial(monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError("potential assembly failed")
 
-    monkeypatch.setattr(wall.model, "get_potential_extended", boom)
+    monkeypatch.setattr(wall.model, "potential", boom)
     with pytest.raises(RuntimeError, match="potential assembly failed"):
         wall.update(dm)
 

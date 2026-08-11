@@ -50,8 +50,8 @@ try:
 except ImportError as exc:  # pragma: no cover - optional dependency
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from .interface import CPCM, PV, DROPCavity, GeneralSolvationModel
-from .pyscf import PySCFIsodensityHost, solvated_rhf
+from .interface import CPCM, PV, DROPCavity, GeneralSolvationModel, IsodensityDROPCavity
+from .pyscf import PySCFHost, PySCFIsodensityHost, solvated_rhf
 
 #: Dielectric constant of water
 EPSILON = 80.0
@@ -205,22 +205,66 @@ def make_host(mol, positions=None, *, dm):
     """Host bound to ``mol`` displaced to ``positions`` (bohr), at fixed ``dm``."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    host = PySCFIsodensityHost(mol)
+    host = PySCFHost(mol)
     host.dm = dm
     return host
 
 
+@pytest.mark.host
+def test_pyscf_host_is_an_isodensity_cavity_source():
+    mol = molecule(*PRIMARY_CASE)
+    host = PySCFHost(mol)
+
+    cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+
+    assert isinstance(cavity, IsodensityDROPCavity)
+    with pytest.deprecated_call(match="PySCFHost"):
+        legacy = PySCFIsodensityHost(mol)
+    with pytest.deprecated_call(match="IsodensityDROPCavity"):
+        compatibility_cavity = host.make_cavity(nleb=NLEB)
+    assert isinstance(legacy, PySCFHost)
+    assert isinstance(compatibility_cavity, IsodensityDROPCavity)
+
+
 def solve(host, *, isodensity, components="cpcm"):
-    """Build a cavity plus components and drive one electrostatic cycle."""
+    """Build a cavity plus components and evaluate one coherent coupling."""
     if isodensity:
-        cavity = host.make_cavity(nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
     else:
         cavity = DROPCavity(nleb=NLEB)
     model = GeneralSolvationModel(cavity, COMPONENTS[components]())
-    model.update(host.structure())
-    coords = model.cavity.xyz.T
-    energy, potential = host.solve(model, coords)
-    return energy, potential, coords, model
+    result = model.evaluate(coupling=host.coupling(host.dm))
+    return result.energy, result.potential, result.cavity.xyz.T, model
+
+
+@pytest.mark.host
+def test_evaluation_exposes_complete_pyscf_results():
+    """The evaluation owns the host Fock and complete nuclear gradient."""
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = make_host(mol, dm=dm)
+    model = GeneralSolvationModel(
+        IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL),
+        COMPONENTS["cpcm"](),
+    )
+
+    density = np.array(dm, copy=True)
+    coupling = host.coupling(density)
+    result = model.evaluate(coupling=coupling)
+    coords = result.cavity.xyz.T
+
+    np.testing.assert_allclose(
+        result.fock,
+        host.fock(coords, result.potential, include_lsf=True),
+    )
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        coupling.density_matrix.setflags(write=True)
+    with pytest.raises(AttributeError):
+        coupling.density_matrix = np.zeros_like(density)
+    density.fill(0.0)
+    np.testing.assert_allclose(
+        result.gradient,
+        model.gradient() + host.gradient(coords, result.potential, include_lsf=True),
+    )
 
 
 def fd_density(mol, dm, direction, *, isodensity, components="cpcm"):
@@ -533,7 +577,7 @@ def test_gradient_path_ignores_host_surface_weights():
 
     ``w_xyz`` is read when the potential is assembled but dropped when the
     gradient is, so scaling it by a thousand moves the gradient by exactly zero.
-    That is what makes it safe for :meth:`PySCFIsodensityHost.solve` to supply
+    That is what makes it safe for :meth:`PySCFHost.solve` to supply
     ``w_xyz`` and ``qefield`` together: were the gradient path to start reading
     ``w_xyz``, the surface-motion term would be counted twice and
     ``test_l1_gradient_matches_fd`` would begin to fail.

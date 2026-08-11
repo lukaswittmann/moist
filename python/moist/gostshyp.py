@@ -43,7 +43,7 @@ The nuclear gradient has three routes:
 * integral: the AO centers move at a frozen surface.  Host-side, from
   ``int3c1e_ip1``.
 * field: the density, and hence the level set, moves with the nuclei.
-  Host-side, through ``PySCFIsodensityHost._gradient_lsf`` contracted with the
+  Host-side, through ``PySCFHost._gradient_lsf`` contracted with the
   level-set adjoints moist returns.
 * surface: the grid points are dragged by their anchor atoms and the
   surface itself responds.  Entirely moist's, through the reverse-mode path;
@@ -56,14 +56,27 @@ from __future__ import annotations
 
 import math
 from typing import Optional
+import warnings
 
 import numpy as np
 from pyscf import gto
 
-from .interface import GeneralPotential, GeneralSolvationModel, Gostshyp
-from .pyscf import PySCFIsodensityHost
+from .interface import (
+    CavitySnapshot,
+    CouplingChannel,
+    CouplingTransaction,
+    Evaluation,
+    GeneralPotential,
+    Gostshyp,
+    GostshypMoments,
+    IsodensityDROPCavity,
+    SolvationCoupling,
+    SolvationModel,
+    Structure,
+)
+from .pyscf import PySCFHost
 
-__all__ = ["GostshypWall", "GPA_TO_AU"]
+__all__ = ["GostshypModel", "GostshypWall", "GPA_TO_AU"]
 
 #: 1 GPa in Hartree / bohr^3.
 GPA_TO_AU = 1.0e9 * 5.29177210903e-11**3 / 4.3597447222071e-18
@@ -89,7 +102,7 @@ _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 #: The floor that decides which grid points still carry a usable density overlap
 #: belongs beside the amplitudes it masks, and that is where it acts: nothing on
 #: the energy, Fock or gradient path reads this copy.  It exists only for
-#: :meth:`GostshypWall.effective_volume`, which has to report a
+#: :meth:`GostshypModel.effective_volume`, which has to report a
 #: pressure-*independent* quantity and so cannot recover the mask from
 #: amplitudes that vanish with the pressure.  The linearity test pins the two
 #: copies against each other wherever the pressure is nonzero.
@@ -133,25 +146,94 @@ def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
     return (mol + fakemol).intor(intor, shls_slice=shls_slice)
 
 
-class GostshypWall:
+class _GostshypCoupling(SolvationCoupling):
+    """Fixed-density host adapter for one :class:`GostshypModel` evaluation."""
+
+    channels = frozenset({CouplingChannel.GOSTSHYP})
+
+    def __init__(self, wall: GostshypModel, density_matrix: np.ndarray) -> None:
+        self.wall = wall
+        density = np.array(density_matrix, copy=True, order="C")
+        expected = (wall.mol.nao_nr(), wall.mol.nao_nr())
+        if density.shape != expected:
+            raise ValueError(f"density_matrix must have shape {expected}")
+        self._density_matrix = np.frombuffer(
+            density.tobytes(order="C"), dtype=density.dtype
+        ).reshape(expected)
+        self.traces: Optional[tuple[np.ndarray, np.ndarray]] = None
+
+    @property
+    def density_matrix(self) -> np.ndarray:
+        return self._density_matrix
+
+    @property
+    def structure(self) -> Structure:
+        return self.wall.host.structure()
+
+    def activate(self) -> None:
+        self.wall.host.dm = self.density_matrix
+
+    def prepare(self, transaction: CouplingTransaction) -> None:
+        self.wall._set_grid_points(transaction.cavity)
+        self.wall._build_integrals()
+        gt, pt, mt, rt = self.wall._surface_moments(
+            self.wall._density_matrix_cart(self.density_matrix)
+        )
+        transaction.supply_gostshyp(
+            GostshypMoments(
+                gt,
+                np.asfortranarray(pt.T),
+                np.asfortranarray(mt.transpose(1, 2, 0)),
+                np.asfortranarray(rt.T),
+            )
+        )
+        self.traces = (
+            gt,
+            -2.0
+            * self.wall.omega
+            * np.einsum("ja,ja->j", self.wall.normals, pt, optimize=True),
+        )
+
+    def fock(
+        self,
+        _cavity: CavitySnapshot,
+        potential: GeneralPotential,
+    ) -> np.ndarray:
+        return self.wall._fock_from(potential, include_cavity_response=True)
+
+    def gradient(
+        self,
+        _cavity: CavitySnapshot,
+        potential: GeneralPotential,
+        model_gradient,
+    ) -> np.ndarray:
+        self.activate()
+        return self.wall._nuclear_gradient_from(
+            self.density_matrix,
+            potential,
+            model_gradient,
+        )
+
+
+class GostshypModel:
     """GOSTSHYP pressure model on a moist isodensity DROP cavity.
 
     :param host: PySCF host supplying the level set, geometry and density.
     :param pressure: ``p_inp`` in Hartree/bohr^3 (multiply GPa by
         :data:`GPA_TO_AU`).
     :param cavity_kwargs: forwarded to
-        :meth:`~moist.pyscf.PySCFIsodensityHost.make_cavity` (``nleb``,
+        :class:`~moist.interface.IsodensityDROPCavity` (``nleb``,
         ``tolerance``, ...).
 
-    Owns a :class:`~moist.interface.GeneralSolvationModel` carrying a single
+    Owns a :class:`~moist.interface.SolvationModel` carrying a single
     :class:`~moist.interface.Gostshyp` component.  The cavity follows the
-    density, so :meth:`update` must run before any energy, Fock or gradient is
-    read.
+    density, so :meth:`evaluate` rebuilds every host and model contribution as
+    one transaction.
     """
 
     def __init__(
         self,
-        host: PySCFIsodensityHost,
+        host: PySCFHost,
         pressure: float,
         **cavity_kwargs,
     ) -> None:
@@ -159,13 +241,14 @@ class GostshypWall:
         self.mol = host.mol
         self.pressure = float(pressure)
         self.component = Gostshyp(self.pressure)
-        self.model = GeneralSolvationModel(
-            host.make_cavity(**cavity_kwargs), [self.component]
+        self.model = SolvationModel(
+            IsodensityDROPCavity(host, **cavity_kwargs), [self.component]
         )
 
         self.energy = 0.0
         self.ngrid = 0
         self._potential: Optional[GeneralPotential] = None
+        self._evaluation: Optional[Evaluation] = None
         self._traces: Optional[tuple[np.ndarray, np.ndarray]] = None
         self._c2s: Optional[np.ndarray] = None
         self._G: Optional[np.ndarray] = None
@@ -175,16 +258,15 @@ class GostshypWall:
     # cavity and grid point geometry
     # ------------------------------------------------------------------
 
-    def _set_grid_points(self) -> None:
+    def _set_grid_points(self, result: CavitySnapshot) -> None:
         """Snapshot the live cavity into the arrays the integrals need."""
 
-        result = self.model.cavity
         self.centers = np.ascontiguousarray(result.xyz.T, dtype=np.float64)
         self.areas = np.ascontiguousarray(result.a, dtype=np.float64)
         self.ngrid = int(self.centers.shape[0])
         self.nsph = int(result.nsph)
 
-        normals = np.ascontiguousarray(result.normal0.T, dtype=np.float64)
+        normals = np.array(result.normal0.T, dtype=np.float64, order="C", copy=True)
         norm = np.linalg.norm(normals, axis=1)
         good = norm > 0.0
         normals[good] /= norm[good, None]
@@ -197,8 +279,8 @@ class GostshypWall:
         omega[~np.isfinite(omega)] = 0.0
         self.omega = omega
 
-    def update(self, dm: np.ndarray) -> float:
-        """Rebuild the cavity and integrals at ``dm`` and return the energy.
+    def evaluate(self, dm: np.ndarray) -> Evaluation:
+        """Return one coherent energy, Fock, gradient, and cavity evaluation.
 
         The cached results are dropped *before* the rebuild.  The host density
         and the cavity are already mutated by the time anything downstream can
@@ -208,39 +290,22 @@ class GostshypWall:
 
         self._potential = None
         self._traces = None
+        self._evaluation = None
         self.energy = 0.0
 
-        self.host.dm = dm
-        self.model.update(self.host.structure())
-        self._set_grid_points()
-        self._build_integrals()
+        coupling = _GostshypCoupling(self, dm)
+        result = self.model.evaluate(coupling=coupling)
+        assert coupling.traces is not None
 
-        # The moments are only valid for the cavity they were built on, so they
-        # are handed over in the same breath as the update that produced it.
-        gt, pt, mt, rt = self._surface_moments(self._density_matrix_cart(dm))
-        self.model.supply_gostshyp(
-            gt,
-            np.asfortranarray(pt.T),
-            np.asfortranarray(mt.transpose(1, 2, 0)),
-            np.asfortranarray(rt.T),
-        )
+        self._traces = coupling.traces
+        self.energy = result.energy
+        self._potential = result.potential
+        self._evaluation = result
+        return result
 
-        # Keep the two traces this build already implies.  They are the only
-        # part of the moments any later read needs, and rebuilding them would
-        # mean four fresh s/p/d/f integral blocks -- the dominant cost here.
-        traces = (
-            gt,
-            -2.0 * self.omega * np.einsum("ja,ja->j", self.normals, pt, optimize=True),
-        )
-
-        # Everything is staged locally and pushed at once
-        energy = self.model.get_energy()
-        potential = self.model.get_potential_extended()
-
-        self._traces = traces
-        self.energy = energy
-        self._potential = potential
-        return self.energy
+    def update(self, dm: np.ndarray) -> float:
+        """Compatibility method returning only :meth:`evaluate`'s energy."""
+        return self.evaluate(dm).energy
 
     # ------------------------------------------------------------------
     # integrals (dense)
@@ -329,7 +394,7 @@ class GostshypWall:
         BLAS leaves dirty floating-point status flags behind for these shapes --
         the SIMD tail reads padding lanes -- so numpy reports divide-by-zero and
         overflow from a product that performs neither.  Suppressed here for the
-        same reason :meth:`~moist.pyscf.PySCFIsodensityHost.lsf` suppresses them.
+        same reason :meth:`~moist.pyscf.PySCFHost.lsf` suppresses them.
         """
 
         c2s = self._cart2sph
@@ -404,7 +469,7 @@ class GostshypWall:
 
         Carries both the amplitudes the host contracts into its Fock matrix and
         the level-set adjoints ``w_lsf0/1/2`` that
-        :meth:`~moist.pyscf.PySCFIsodensityHost._fock_lsf` consumes.
+        :meth:`~moist.pyscf.PySCFHost._fock_lsf` consumes.
         """
 
         return self._require_potential()
@@ -483,7 +548,18 @@ class GostshypWall:
             the surface moves with the density.
         """
 
-        potential = self._require_potential()
+        return self._fock_from(
+            self._require_potential(),
+            include_cavity_response=include_cavity_response,
+        )
+
+    def _fock_from(
+        self,
+        potential: GeneralPotential,
+        *,
+        include_cavity_response: bool,
+    ) -> np.ndarray:
+        """Contract a captured potential with the current integral blocks."""
         fock = np.einsum("j,uvj->uv", potential.w_gauss_g, self._G, optimize=True)
         fock += np.einsum("j,uvj->uv", potential.w_gauss_f, self._F, optimize=True)
         fock = 0.5 * (fock + fock.T)
@@ -495,10 +571,15 @@ class GostshypWall:
     # nuclear gradient
     # ------------------------------------------------------------------
 
-    def _integral_nuclear_gradient(self, dm: np.ndarray) -> np.ndarray:
+    def _integral_nuclear_gradient(
+        self,
+        dm: np.ndarray,
+        potential: Optional[GeneralPotential] = None,
+    ) -> np.ndarray:
         """AO centers move, surface frozen.  Fortran ``(3, natm)``."""
 
-        potential = self._require_potential()
+        if potential is None:
+            potential = self._require_potential()
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
 
@@ -526,6 +607,7 @@ class GostshypWall:
     def _field_nuclear_gradient(self, dm: np.ndarray) -> np.ndarray:
         """The level set's own dependence on the nuclei, through the AO basis."""
 
+        self.host.dm = dm
         return self.host._gradient_lsf(self.centers, self._require_potential())
 
     def _surface_nuclear_gradient(self) -> np.ndarray:
@@ -539,7 +621,21 @@ class GostshypWall:
         """
 
         self._require_potential()
-        return self.model.get_gradient(self.mol.natm)
+        return self.model.gradient()
+
+    def _nuclear_gradient_from(
+        self,
+        dm: np.ndarray,
+        potential: GeneralPotential,
+        model_gradient,
+    ) -> np.ndarray:
+        """Assemble every gradient route for one captured evaluation."""
+        self.host.dm = dm
+        return (
+            self._integral_nuclear_gradient(dm, potential)
+            + self.host._gradient_lsf(self.centers, potential)
+            + model_gradient()
+        )
 
     def nuclear_gradient(self, dm: np.ndarray) -> np.ndarray:
         """Total ``dE^GOST/dR`` at fixed ``dm``, Fortran ``(3, natm)``.
@@ -551,8 +647,20 @@ class GostshypWall:
         response.
         """
 
-        return (
-            self._integral_nuclear_gradient(dm)
-            + self._field_nuclear_gradient(dm)
-            + self._surface_nuclear_gradient()
+        return self._nuclear_gradient_from(
+            dm,
+            self._require_potential(),
+            self.model.gradient,
         )
+
+
+class GostshypWall(GostshypModel):
+    """Deprecated compatibility name for :class:`GostshypModel`."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "GostshypWall is deprecated; use GostshypModel",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

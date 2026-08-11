@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from pytest import raises
 
-from moist.interface import IsodensityDROPCavity, Structure
+from moist.interface import GeneralSolvationModel, IsodensityDROPCavity, PV, Structure
 from moist.library import _callback_takes_order, get_api_version
 
 
@@ -98,6 +98,15 @@ class _GaussianLSF:
         return self._derivatives(point, 3)
 
 
+class _GaussianSource(_GaussianLSF):
+    """Level-set provider matching the public isodensity source interface."""
+
+    scale = 750.0
+
+    def lsf(self, point, order):
+        return self._derivatives(point, order)
+
+
 @pytest.fixture
 def water() -> tuple[np.ndarray, np.ndarray]:
     numbers = np.array([8, 1, 1])
@@ -117,6 +126,30 @@ def _build(callback, water, **kwargs):
     cavity = IsodensityDROPCavity(callback, nleb=26, **kwargs)
     cavity.update(structure)
     return cavity.cavity
+
+
+def test_isodensity_cavity_accepts_a_level_set_source(water) -> None:
+    """The cavity constructor owns source adaptation and scale matching."""
+    numbers, positions = water
+    source = _GaussianSource(positions)
+    cavity = IsodensityDROPCavity(source, nleb=26)
+
+    cavity.update(Structure(numbers, positions))
+
+    assert cavity.snapshot().ngrid > 0
+    assert source.calls > 0
+    with raises(ValueError, match="scale must match"):
+        IsodensityDROPCavity(source, nleb=26, scale=1000.0)
+
+
+def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None:
+    _, positions = water
+    source = _GaussianLSF(positions)
+
+    with pytest.deprecated_call(match="source"):
+        cavity = IsodensityDROPCavity(callback=source.with_order, nleb=26)
+
+    assert isinstance(cavity, IsodensityDROPCavity)
 
 
 def test_callback_both_forms_agree(water) -> None:
@@ -258,3 +291,52 @@ def test_callback_failure_is_not_sticky(water) -> None:
     fail[0] = False
     cavity.update(structure)
     assert cavity.cavity.ngrid > 0
+
+
+def test_failed_rebuild_invalidates_previous_cavity_results(water) -> None:
+    """A failed second build must not leave the first surface readable as current."""
+    numbers, positions = water
+    lsf = _GaussianLSF(positions)
+    fail = [False]
+
+    def flaky(point, order):
+        if fail[0] and lsf.calls >= 50:
+            raise RuntimeError("no density here")
+        return lsf._derivatives(point, order)
+
+    cavity = IsodensityDROPCavity(flaky, nleb=26)
+    cavity.update(Structure(numbers, positions))
+    assert cavity.snapshot().ngrid > 0
+
+    fail[0] = True
+    lsf.calls = 0
+    with raises(RuntimeError, match="no density here"):
+        cavity.update(Structure(numbers, positions))
+
+    with raises(RuntimeError, match="successfully updated"):
+        cavity.snapshot()
+
+
+def test_failed_model_rebuild_invalidates_its_cavity_view(water) -> None:
+    """Model updates propagate callback failures and invalidate their live view."""
+    numbers, positions = water
+    lsf = _GaussianLSF(positions)
+    fail = [False]
+
+    def flaky(point, order):
+        if fail[0] and lsf.calls >= 50:
+            raise RuntimeError("no density here")
+        return lsf._derivatives(point, order)
+
+    structure = Structure(numbers, positions)
+    model = GeneralSolvationModel(IsodensityDROPCavity(flaky, nleb=26), [PV(1.0e-4)])
+    model.update(structure)
+    assert model.cavity.snapshot().ngrid > 0
+
+    fail[0] = True
+    lsf.calls = 0
+    with raises(RuntimeError, match="no density here"):
+        model.update(structure)
+
+    with raises(RuntimeError, match="successfully updated"):
+        model.cavity.snapshot()

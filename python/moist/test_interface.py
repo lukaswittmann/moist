@@ -4,10 +4,17 @@ from pytest import approx, raises
 
 from moist import library
 from moist.interface import (
+    ArrayCoupling,
     CPCM,
+    Cavity,
+    CouplingTransaction,
+    DROPCavitySnapshot,
     DROPCavity,
+    Electrostatics,
+    Evaluation,
     GeneralSolvationModel,
     PV,
+    SolvationCoupling,
     SolvationModel,
     Structure,
 )
@@ -56,19 +63,25 @@ def test_default_drop_surface_matches_the_svdw_defaults(
 
 
 def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
-    with raises(ValueError, match="Dimension missmatch"):
+    with raises(ValueError, match="positions must have shape"):
         Structure(np.array([1, 1]), positions)
 
-    with raises(ValueError, match="Expected tripels"):
+    with raises(ValueError, match="positions must have shape"):
         Structure(numbers, np.random.default_rng().random(7))
 
     structure = Structure(numbers, positions)
 
-    with raises(ValueError, match="Dimension missmatch for positions"):
+    with raises(ValueError, match="positions must have shape"):
         structure.update(np.random.default_rng().random(7))
 
-    with raises(ValueError, match="Invalid lattice provided"):
+    with raises(ValueError, match="lattice must have shape"):
         structure.update(positions, np.random.default_rng().random(7))
+
+    with raises(ValueError, match="positions must have shape"):
+        Structure(np.array([1, 1]), np.zeros((3, 2)))
+
+    with raises(ValueError, match="numbers must have shape"):
+        Structure(numbers.reshape(1, -1), positions)
 
 
 def test_general_model_iterates_cpcm_and_pv_components() -> None:
@@ -94,6 +107,139 @@ def test_general_model_iterates_cpcm_and_pv_components() -> None:
     assert potential.w_lsf0.shape == (model.ngrid,)
     assert potential.w_lsf1.shape == (3, model.ngrid)
     assert potential.w_lsf2.shape == (3, 3, model.ngrid)
+
+
+def test_general_model_evaluates_a_complete_array_coupling() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    pressure = 2.5e-4
+    model = GeneralSolvationModel(
+        DROPCavity(nleb=26),
+        [CPCM(32.0), PV(pressure)],
+    )
+    coupling = ArrayCoupling(
+        structure,
+        electrostatics=lambda cavity, _trace: Electrostatics(
+            np.zeros(cavity.ngrid)
+        ),
+    )
+
+    result = model.evaluate(coupling=coupling)
+
+    assert isinstance(result, Evaluation)
+    assert isinstance(result.cavity, DROPCavitySnapshot)
+    assert isinstance(model.cavity, Cavity)
+    assert result.energy == approx(pressure * result.cavity.volume, abs=2.0e-13)
+    np.testing.assert_array_equal(result.charges, np.zeros(result.cavity.ngrid))
+    assert result.fock is None
+    assert result.gradient.shape == (3, len(structure))
+    assert result.cavity.grid_points is result.cavity.xyz
+    assert result.cavity.grid_areas is result.cavity.a
+    assert result.potential.level_set_value_weights is result.potential.w_lsf0
+    assert not result.cavity.xyz.flags.writeable
+    assert not result.potential.w_lsf0.flags.writeable
+    assert not result.gradient.flags.writeable
+
+
+def test_solvation_model_is_the_canonical_constructor() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    coupling = ArrayCoupling(structure)
+    model = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+
+    result = model.evaluate(structure, coupling=coupling)
+
+    assert GeneralSolvationModel is SolvationModel
+    assert result.energy == approx(2.5e-4 * result.cavity.volume, abs=2.0e-13)
+
+
+def test_evaluation_rejects_a_structure_from_another_coupling() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    other = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.8], [0.0, 0.0, 0.8]]),
+    )
+    model = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+
+    with raises(ValueError, match="does not match"):
+        model.evaluate(structure, coupling=ArrayCoupling(other))
+
+
+def test_evaluation_results_use_irreversibly_read_only_buffers() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    result = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)]).evaluate(structure)
+
+    with raises(ValueError, match="WRITEABLE"):
+        result.cavity.xyz.setflags(write=True)
+    with raises(ValueError, match="WRITEABLE"):
+        result.potential.w_lsf0.setflags(write=True)
+
+
+def test_failed_coupling_preparation_invalidates_the_model() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+
+    class FailingCoupling(SolvationCoupling):
+        channels = frozenset({"electrostatics"})
+
+        @property
+        def structure(self) -> Structure:
+            return structure
+
+        def prepare(self, transaction: CouplingTransaction) -> None:
+            def fail_after_first_supply(cavity, trace):
+                if trace is not None:
+                    raise RuntimeError("host response failed")
+                return Electrostatics(np.zeros(cavity.ngrid))
+
+            transaction.exchange_electrostatics(fail_after_first_supply)
+
+    model = SolvationModel(DROPCavity(nleb=26), [CPCM(32.0)])
+
+    with raises(RuntimeError, match="host response failed"):
+        model.evaluate(coupling=FailingCoupling())
+    with raises(RuntimeError, match="successfully updated"):
+        _ = model.energy
+    with raises(RuntimeError, match="successfully updated"):
+        model.potential()
+    with raises(RuntimeError, match="successfully updated"):
+        model.cavity.snapshot()
+
+
+def test_general_model_rejects_missing_coupling_channels() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    model = GeneralSolvationModel(DROPCavity(nleb=26), [CPCM(32.0)])
+
+    with raises(ValueError, match="electrostatics"):
+        model.evaluate(structure)
+
+
+def test_evaluation_gradient_rejects_a_superseded_model_state() -> None:
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    model = GeneralSolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+    first = model.evaluate(structure)
+    model.evaluate(structure)
+
+    with raises(RuntimeError, match="superseded"):
+        _ = first.gradient
 
 
 def test_general_model_update_invalidates_supplied_electrostatics() -> None:
@@ -130,11 +276,17 @@ def test_borrowed_model_cavity_rejects_standalone_updates() -> None:
     model.update(structure)
     original_area = model.cavity.area
 
+    with raises(RuntimeError, match="model-owned cavity"):
+        model.cavity.update(structure)
+    with pytest.deprecated_call():
+        cavity_handle = model.cavity_handle
     with raises(RuntimeError, match="borrowed cavity"):
-        library.update_cavity(model.cavity_handle, structure._mol)
+        library.update_cavity(cavity_handle, structure._mol)
+    with pytest.deprecated_call():
+        cavity_handle = model.cavity_handle
     with raises(RuntimeError, match="borrowed cavity"):
         library.error_check(library.lib.moist_update_drop_cavity)(
-            model.cavity_handle.handle,
+            cavity_handle.handle,
             structure._mol.handle,
             library.ffi.NULL,
         )

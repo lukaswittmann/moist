@@ -1,17 +1,54 @@
-"""High-level Python interface for moist solvation models."""
+"""Object-oriented Python interface for moist solvation models.
+
+The native C interface is intentionally procedural.  This module puts the
+Python seam around a complete model evaluation instead: live cavity objects own
+their behaviour, snapshots are explicit values, coupling adapters hide host
+exchange ordering, and :class:`Evaluation` represents one coherent model state.
+"""
+
+from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, fields
+from enum import Enum, IntEnum
+from typing import Callable, Optional, Protocol
+import warnings
 
 import numpy as np
 
 from . import library
 
 
-@dataclass
-class Cavity:
-    """Snapshot of cavity data after a model update."""
+# -----------------------------------------------------------------------------
+# Result values
+# -----------------------------------------------------------------------------
+
+
+def _immutable_array(array: np.ndarray) -> np.ndarray:
+    """Copy an array onto a buffer whose write protection cannot be reversed."""
+    order = "F" if array.flags.f_contiguous and not array.flags.c_contiguous else "C"
+    buffer = array.tobytes(order=order)
+    return np.frombuffer(buffer, dtype=array.dtype).reshape(array.shape, order=order)
+
+
+def _freeze_result_arrays(value) -> None:
+    """Replace ndarray fields with immutable-buffer copies."""
+    for field in fields(value):
+        array = getattr(value, field.name)
+        if isinstance(array, np.ndarray):
+            object.__setattr__(value, field.name, _immutable_array(array))
+
+
+class _ImmutableArrayValue:
+    """Dataclass mixin that gives ndarray fields immutable backing buffers."""
+
+    def __post_init__(self) -> None:
+        _freeze_result_arrays(self)
+
+
+@dataclass(frozen=True)
+class CavitySnapshot(_ImmutableArrayValue):
+    """Generic cavity data copied from one successful update."""
 
     area: float
     volume: float
@@ -23,6 +60,31 @@ class Cavity:
     converged: np.ndarray
     radii: np.ndarray
     asph: np.ndarray
+
+    @property
+    def grid_points(self) -> np.ndarray:
+        return self.xyz
+
+    @property
+    def grid_areas(self) -> np.ndarray:
+        return self.a
+
+    @property
+    def sphere_owner(self) -> np.ndarray:
+        return self.owner
+
+    @property
+    def sphere_radii(self) -> np.ndarray:
+        return self.radii
+
+    @property
+    def sphere_areas(self) -> np.ndarray:
+        return self.asph
+
+@dataclass(frozen=True)
+class DROPCavitySnapshot(CavitySnapshot):
+    """DROP-specific cavity data copied from one successful update."""
+
     nmax: int
     normal0: np.ndarray
     wleb: np.ndarray
@@ -30,9 +92,29 @@ class Cavity:
     f: np.ndarray
     rho: np.ndarray
 
+    @property
+    def initial_normals(self) -> np.ndarray:
+        return self.normal0
 
-@dataclass
-class AnchorGradient:
+    @property
+    def lebedev_weights(self) -> np.ndarray:
+        return self.wleb
+
+    @property
+    def anchor_displacements(self) -> np.ndarray:
+        return self.r_iI0
+
+    @property
+    def switching_values(self) -> np.ndarray:
+        return self.f
+
+    @property
+    def density_values(self) -> np.ndarray:
+        return self.rho
+
+
+@dataclass(frozen=True)
+class AnchorGradient(_ImmutableArrayValue):
     """Anchor-channel nuclear derivatives of a DROP cavity, native grid order.
 
     Every array is Fortran-ordered, matching moist's own layout:
@@ -53,11 +135,98 @@ class AnchorGradient:
     A_tot1_rA: np.ndarray
     V_tot1_rA: np.ndarray
 
+@dataclass(frozen=True)
+class TracePotential(_ImmutableArrayValue):
+    """Direct host-trace adjoints used while preparing a coupling."""
+
+    molecular: np.ndarray
+    normal: np.ndarray
+
+    def __iter__(self):
+        """Preserve tuple unpacking used by the pre-evaluation interface."""
+        yield self.molecular
+        yield self.normal
+
+
+@dataclass(frozen=True)
+class GeneralPotential(_ImmutableArrayValue):
+    """Every adjoint channel returned by a general solvation model."""
+
+    w_umol: np.ndarray
+    w_qmol: np.ndarray
+    w_lsf0: np.ndarray
+    w_lsf1: np.ndarray
+    w_lsf2: np.ndarray
+    w_gauss_g: Optional[np.ndarray] = None
+    w_gauss_f: Optional[np.ndarray] = None
+
+    @property
+    def molecular_potential_weights(self) -> np.ndarray:
+        return self.w_umol
+
+    @property
+    def molecular_charge_weights(self) -> np.ndarray:
+        return self.w_qmol
+
+    @property
+    def level_set_value_weights(self) -> np.ndarray:
+        return self.w_lsf0
+
+    @property
+    def level_set_gradient_weights(self) -> np.ndarray:
+        return self.w_lsf1
+
+    @property
+    def level_set_hessian_weights(self) -> np.ndarray:
+        return self.w_lsf2
+
+    @property
+    def gaussian_value_weights(self) -> Optional[np.ndarray]:
+        return self.w_gauss_g
+
+    @property
+    def gaussian_normal_weights(self) -> Optional[np.ndarray]:
+        return self.w_gauss_f
+
+@dataclass(frozen=True)
+class Electrostatics:
+    """Host electrostatic traces supplied for one cavity surface.
+
+    ``phi`` is the only universally required field.  The response arrays are
+    optional at this low-level value-object seam; coupling adapters decide which
+    ones are required for a complete evaluation and supply them atomically.
+    """
+
+    phi: np.ndarray
+    w_xi: Optional[np.ndarray] = None
+    w_f: Optional[np.ndarray] = None
+    w_xyz: Optional[np.ndarray] = None
+    w_n: Optional[np.ndarray] = None
+    qefield: Optional[np.ndarray] = None
+
+
+@dataclass(frozen=True)
+class GostshypMoments:
+    """Gaussian density moments consumed by a GOSTSHYP model component."""
+
+    gt: np.ndarray
+    pt: np.ndarray
+    mt: np.ndarray
+    rt: np.ndarray
+
+
+# -----------------------------------------------------------------------------
+# Molecular structure
+# -----------------------------------------------------------------------------
+
 
 class Structure:
-    """Wrapped molecular structure object."""
+    """Validated molecular structure owning a native moist handle.
 
-    _mol = library.StructureHandle.null()
+    Coordinates and lattice vectors are in Bohr.  Positions use the natural
+    NumPy shape ``(natoms, 3)``; the wrapper converts that row-major memory to
+    the native Fortran ``(3, natoms)`` view without an intermediate transpose.
+    """
 
     def __init__(
         self,
@@ -65,252 +234,851 @@ class Structure:
         positions: np.ndarray,
         lattice: Optional[np.ndarray] = None,
         periodic: Optional[np.ndarray] = None,
-    ):
-        if positions.size % 3 != 0:
-            raise ValueError("Expected tripels of cartesian coordinates")
-        if 3 * numbers.size != positions.size:
-            raise ValueError("Dimension missmatch between numbers and positions")
+    ) -> None:
+        _numbers = np.asarray(numbers)
+        if _numbers.ndim != 1:
+            raise ValueError("numbers must have shape (natoms,)")
+        natoms = int(_numbers.size)
 
-        self._natoms = len(numbers)
-        _numbers = np.ascontiguousarray(numbers, dtype=np.int32)
-        _positions = np.ascontiguousarray(positions, dtype=np.float64)
+        _positions = self._positions_array(positions, natoms)
+        _lattice = self._lattice_array(lattice)
 
-        if lattice is not None:
-            if lattice.size != 9:
-                raise ValueError("Invalid lattice provided")
-            _lattice = np.ascontiguousarray(lattice, dtype=np.float64)
-        else:
-            _lattice = None
-
-        if periodic is not None:
-            if periodic.size != 3:
-                raise ValueError("Invalid periodicity provided")
-            _periodic = np.ascontiguousarray(periodic, dtype=np.bool_)
-        else:
+        if periodic is None:
             _periodic = None
+        else:
+            _periodic = np.asarray(periodic)
+            if _periodic.shape != (3,):
+                raise ValueError("periodic must have shape (3,)")
 
-        self._mol = library.new_structure(
+        self._natoms = natoms
+        self._numbers = np.ascontiguousarray(_numbers, dtype=np.int32)
+        self._positions = _positions
+        self._lattice = _lattice
+        self._periodic = (
+            None if _periodic is None else np.ascontiguousarray(_periodic, dtype=np.bool_)
+        )
+        self._handle = library.new_structure(
             self._natoms,
-            _numbers,
-            _positions,
-            _lattice,
-            _periodic,
+            self._numbers,
+            self._positions,
+            self._lattice,
+            self._periodic,
         )
 
-    def __len__(self):
-        return self._natoms
-
-    def update(self, positions: np.ndarray, lattice: Optional[np.ndarray] = None) -> None:
-        if 3 * len(self) != positions.size:
-            raise ValueError("Dimension missmatch for positions")
-
-        _positions = np.ascontiguousarray(positions, dtype=np.float64)
-
-        if lattice is not None:
-            if lattice.size != 9:
-                raise ValueError("Invalid lattice provided")
-            _lattice = np.ascontiguousarray(lattice, dtype=np.float64)
-        else:
-            _lattice = None
-
-        library.update_structure(self._mol, _positions, _lattice)
-
-
-class SolvationModel(ABC):
-    """Shared high-level interface for moist solvation models."""
-
-    _model = library.ModelHandle.null()
-
-    def __init__(self):
-        self._updated = False
-
-    @classmethod
-    @abstractmethod
-    def _from_constructor(cls, *args, **kwargs):
-        """Create a model instance from a model-specific constructor."""
-
-    def update(self, structure: Structure) -> None:
-        library.update_model(self._model, structure._mol)
-        self._updated = True
-
-    def get_energy(self) -> float:
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting the energy")
-        return library.get_model_energy(self._model)
+    @staticmethod
+    def _positions_array(positions: np.ndarray, natoms: int) -> np.ndarray:
+        array = np.asarray(positions)
+        if array.shape != (natoms, 3):
+            raise ValueError(f"positions must have shape ({natoms}, 3)")
+        return np.ascontiguousarray(array, dtype=np.float64)
 
     @staticmethod
-    def _cavity_from_handle(cavity_handle) -> Cavity:
-        """Snapshot a (borrowed) cavity handle into a :class:`Cavity`."""
+    def _lattice_array(lattice: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if lattice is None:
+            return None
+        array = np.asarray(lattice)
+        if array.shape != (3, 3):
+            raise ValueError("lattice must have shape (3, 3)")
+        return np.ascontiguousarray(array, dtype=np.float64)
 
-        generic = library.get_cavity_results(cavity_handle)
-        drop = library.get_drop_specific(cavity_handle, ngrid=generic["ngrid"])
+    def _same_geometry(self, other: Structure) -> bool:
+        """Whether two structures describe exactly the same native update."""
+        return (
+            np.array_equal(self._numbers, other._numbers)
+            and np.array_equal(self._positions, other._positions)
+            and self._optional_array_equal(self._lattice, other._lattice)
+            and self._optional_array_equal(self._periodic, other._periodic)
+        )
 
-        return Cavity(
-            area=generic["area"],
-            volume=generic["volume"],
-            ngrid=generic["ngrid"],
-            nsph=generic["nsph"],
-            xyz=generic["xyz"],
-            a=generic["a"],
-            owner=generic["owner"],
-            converged=generic["converged"],
-            radii=generic["radii"],
-            asph=generic["asph"],
-            nmax=drop["nmax"],
-            normal0=drop["normal0"],
-            wleb=drop["wleb"],
-            r_iI0=drop["r_iI0"],
-            f=drop["f"],
-            rho=drop["rho"],
+    @staticmethod
+    def _optional_array_equal(
+        left: Optional[np.ndarray], right: Optional[np.ndarray]
+    ) -> bool:
+        return (left is None and right is None) or (
+            left is not None and right is not None and np.array_equal(left, right)
+        )
+
+    def __len__(self) -> int:
+        return self._natoms
+
+    @property
+    def natoms(self) -> int:
+        return self._natoms
+
+    @property
+    def numbers(self) -> np.ndarray:
+        return self._numbers.copy()
+
+    @property
+    def positions(self) -> np.ndarray:
+        return self._positions.copy()
+
+    @property
+    def lattice(self) -> Optional[np.ndarray]:
+        return None if self._lattice is None else self._lattice.copy()
+
+    @property
+    def periodic(self) -> Optional[np.ndarray]:
+        return None if self._periodic is None else self._periodic.copy()
+
+    @property
+    def _mol(self) -> library.StructureHandle:
+        """Compatibility name for package-internal pre-refactor callers."""
+        return self._handle
+
+    def _as_handle(self) -> library.StructureHandle:
+        return self._handle
+
+    def update(self, positions: np.ndarray, lattice: Optional[np.ndarray] = None) -> None:
+        _positions = self._positions_array(positions, self._natoms)
+        _lattice = self._lattice_array(lattice)
+
+        library.update_structure(self._handle, _positions, _lattice)
+        self._positions = _positions
+        if _lattice is not None:
+            self._lattice = _lattice
+
+
+# -----------------------------------------------------------------------------
+# Live cavities
+# -----------------------------------------------------------------------------
+
+
+class Cavity(ABC):
+    """Live cavity object.
+
+    A cavity owns behaviour and native state.  :meth:`snapshot` returns an
+    explicit copied value for a particular successful update.  Model-owned
+    cavity views expose the same read/derivative behaviour but cannot be rebuilt
+    independently of their model.
+    """
+
+    density_dependent = False
+
+    def __init__(self, handle: library.CavityHandle, *, owned: bool = True) -> None:
+        self._handle = handle
+        self._owned = owned
+        self._updated = False
+        self._snapshot_cache: Optional[CavitySnapshot] = None
+
+    def _as_handle(self) -> library.CavityHandle:
+        return self._handle
+
+    def _invalidate(self) -> None:
+        self._updated = False
+        self._snapshot_cache = None
+
+    def _mark_updated(self) -> None:
+        self._updated = True
+        self._snapshot_cache = None
+
+    def _before_native_update(self) -> None:
+        """Hook for callback-backed cavities."""
+
+    def _raise_callback_failure(self) -> None:
+        """Hook for callback-backed cavities."""
+
+    def update(self, structure: Structure) -> None:
+        if not self._owned:
+            raise RuntimeError("A model-owned cavity must be updated through its model")
+        self._invalidate()
+        self._before_native_update()
+        try:
+            library.update_cavity(self._handle, structure._as_handle())
+        except Exception:
+            self._raise_callback_failure()
+            raise
+        self._raise_callback_failure()
+        self._mark_updated()
+
+    def _require_updated(self) -> None:
+        if not self._updated:
+            raise RuntimeError("Cavity has not been successfully updated")
+
+    def snapshot(self) -> CavitySnapshot:
+        """Copy the current native cavity results into an immutable value object."""
+        self._require_updated()
+        if self._snapshot_cache is None:
+            self._snapshot_cache = self._read_snapshot()
+        return self._snapshot_cache
+
+    @abstractmethod
+    def _read_snapshot(self) -> CavitySnapshot:
+        """Read a concrete snapshot from the native handle."""
+
+    @abstractmethod
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        """Wrap the model-owned native copy without taking update ownership."""
+
+    @property
+    def cavity(self) -> CavitySnapshot:
+        """Compatibility alias for :meth:`snapshot`."""
+        return self.snapshot()
+
+    @property
+    def area(self) -> float:
+        return self.snapshot().area
+
+    @property
+    def volume(self) -> float:
+        return self.snapshot().volume
+
+    @property
+    def ngrid(self) -> int:
+        return self.snapshot().ngrid
+
+    @property
+    def nsph(self) -> int:
+        return self.snapshot().nsph
+
+    @property
+    def xyz(self) -> np.ndarray:
+        return self.snapshot().xyz
+
+    @property
+    def a(self) -> np.ndarray:
+        return self.snapshot().a
+
+    @property
+    def owner(self) -> np.ndarray:
+        return self.snapshot().owner
+
+    @property
+    def converged(self) -> np.ndarray:
+        return self.snapshot().converged
+
+    @property
+    def radii(self) -> np.ndarray:
+        return self.snapshot().radii
+
+    @property
+    def asph(self) -> np.ndarray:
+        return self.snapshot().asph
+
+
+class _DROPCavityBase(Cavity):
+    """Shared behaviour for standalone and model-owned DROP cavities."""
+
+    def _read_snapshot(self) -> DROPCavitySnapshot:
+        generic = library.get_cavity_results(self._handle)
+        drop = library.get_drop_specific(self._handle, ngrid=generic["ngrid"])
+        return DROPCavitySnapshot(**generic, **drop)
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _BorrowedDROPCavity(handle, self)
+
+    def assemble_amat(self) -> tuple[np.ndarray, np.ndarray]:
+        self._require_updated()
+        return library.assemble_drop_amat(self._handle)
+
+    def get_gaussian(self) -> tuple[np.ndarray, np.ndarray]:
+        """Return Gaussian widths and switching factors without assembling A."""
+        self._require_updated()
+        return library.get_cavity_gaussian(self._handle)
+
+    def compute_anchor_gradient(self) -> None:
+        """Compute the anchor-only nuclear derivatives."""
+        self._require_updated()
+        library.compute_anchor_gradient(self._handle)
+
+    def get_anchor_gradient(self) -> AnchorGradient:
+        """Return the anchor-channel nuclear derivatives in native grid order."""
+        self._require_updated()
+        return AnchorGradient(**library.get_anchor_gradient(self._handle))
+
+    def contract_amat_surface_weights(
+        self,
+        q1: np.ndarray,
+        q2: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self._require_updated()
+        return library.contract_amat1_q1q2_surface_weights(self._handle, q1, q2)
+
+    def contract_surface_lsf_weights(
+        self,
+        w_xi: np.ndarray,
+        w_f: np.ndarray,
+        w_xyz: np.ndarray,
+        w_n: Optional[np.ndarray] = None,
+        w_k1: Optional[np.ndarray] = None,
+        w_k2: Optional[np.ndarray] = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        self._require_updated()
+        return library.contract_surface_lsf_weights(
+            self._handle, w_xi, w_f, w_xyz, w_n, w_k1, w_k2
         )
 
     @property
-    def cavity(self) -> Cavity:
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting the cavity")
+    def nmax(self) -> int:
+        return self.snapshot().nmax
 
-        return self._cavity_from_handle(library.get_model_cavity(self._model))
+    @property
+    def normal0(self) -> np.ndarray:
+        return self.snapshot().normal0
+
+    @property
+    def wleb(self) -> np.ndarray:
+        return self.snapshot().wleb
+
+    @property
+    def r_iI0(self) -> np.ndarray:
+        return self.snapshot().r_iI0
+
+    @property
+    def f(self) -> np.ndarray:
+        return self.snapshot().f
+
+    @property
+    def rho(self) -> np.ndarray:
+        return self.snapshot().rho
 
 
-class SolvationComponent(ABC):
-    """Base class for components accepted by :class:`GeneralSolvationModel`."""
+class _BorrowedDROPCavity(_DROPCavityBase):
+    """High-level view of the authoritative cavity owned by a model."""
 
-    _component = library.ComponentHandle.null()
+    def __init__(self, handle: library.CavityHandle, source: Cavity) -> None:
+        super().__init__(handle, owned=False)
+        self._source = source  # also keeps callback-backed source objects alive
+
+    @property
+    def density_dependent(self) -> bool:
+        return self._source.density_dependent
+
+
+class DROPCavity(_DROPCavityBase):
+    """Standard solute-vdW DROP cavity with a density-independent surface."""
+
+    def __init__(
+        self,
+        nleb: Optional[int] = None,
+        debug: bool = False,
+        verbosity: int = 0,
+        do_fine: bool = False,
+        tolerance: Optional[float] = None,
+    ) -> None:
+        super().__init__(
+            library.new_drop_cavity(
+                nleb=nleb,
+                debug=debug,
+                verbosity=verbosity,
+                do_fine=do_fine,
+                tolerance=tolerance,
+            )
+        )
+
+
+class IsodensitySource(Protocol):
+    """Provider of an unscaled isodensity level set and its MOIST scale."""
+
+    scale: float
+
+    def lsf(self, point: np.ndarray, order: int):
+        """Return the level-set value and spatial derivatives through ``order``."""
+        ...
+
+
+class IsodensityDROPCavity(_DROPCavityBase):
+    """DROP cavity driven by an isodensity source or a raw Python callback.
+
+    A source exposes ``lsf(point, order)`` and ``scale``.  Passing a source is
+    the canonical interface because it keeps the callback and its scaling
+    invariant together.  Raw callbacks remain supported for non-host callers.
+    """
+
+    density_dependent = True
+
+    def __init__(
+        self,
+        source=None,
+        nleb: Optional[int] = None,
+        scale: Optional[float] = None,
+        debug: bool = False,
+        verbosity: int = 0,
+        do_fine: bool = False,
+        wleb_prune_level: Optional[int] = None,
+        tolerance: Optional[float] = None,
+        pass_order: Optional[bool] = None,
+        callback=None,
+    ) -> None:
+        if callback is not None:
+            if source is not None:
+                raise TypeError("Pass source or callback, not both")
+            warnings.warn(
+                "callback= is deprecated; pass the callback as source instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            source = callback
+        if source is None:
+            raise TypeError("IsodensityDROPCavity requires a level-set source")
+
+        provider_callback = getattr(source, "lsf", None)
+        if callable(provider_callback):
+            if not hasattr(source, "scale"):
+                raise TypeError("An isodensity source must expose a scale")
+            source_scale = float(source.scale)
+            if scale is not None and float(scale) != source_scale:
+                raise ValueError("cavity scale must match the isodensity source scale")
+            resolved_callback = provider_callback
+            resolved_scale = source_scale
+        elif callable(source):
+            resolved_callback = source
+            resolved_scale = 1000.0 if scale is None else float(scale)
+        else:
+            raise TypeError(
+                "source must be callable or expose callable lsf(point, order)"
+            )
+
+        handle, callback_ref = library.new_drop_cavity_isodensity_callback(
+            callback=resolved_callback,
+            nleb=nleb,
+            scale=resolved_scale,
+            debug=debug,
+            verbosity=verbosity,
+            do_fine=do_fine,
+            wleb_prune_level=wleb_prune_level,
+            tolerance=tolerance,
+            pass_order=pass_order,
+        )
+        super().__init__(handle)
+        self._source = source
+        self._callback_ref = callback_ref
+
+    def _before_native_update(self) -> None:
+        self._handle.callback_state.reset()
+
+    def _raise_callback_failure(self) -> None:
+        self._handle.callback_state.raise_if_failed()
+
+
+# -----------------------------------------------------------------------------
+# Solvation component configurations
+# -----------------------------------------------------------------------------
+
+
+class CouplingChannel(str, Enum):
+    """Host-data capability required by a solvation component."""
+
+    ELECTROSTATICS = "electrostatics"
+    GOSTSHYP = "gostshyp"
+
+
+class SolvationComponent:
+    """Immutable model-component configuration backed by a native constructor."""
+
+    coupling_channels: frozenset[CouplingChannel] = frozenset()
+
+    def __init__(self, handle: library.ComponentHandle) -> None:
+        self._handle = handle
+
+    def _as_handle(self) -> library.ComponentHandle:
+        return self._handle
+
+
+class CPCMSolver(IntEnum):
+    INVERSION = 1
+    LU = 2
+    CHOLESKY = 3
+    ITERATIVE = 4
 
 
 class CPCM(SolvationComponent):
-    """Conductor-like polarizable continuum component.
+    """Conductor-like polarizable continuum component."""
 
-    Parameters
-    ----------
-    epsilon
-        Relative dielectric constant of the solvent.
-    solver
-        One of ``"inversion"``, ``"lu"``, ``"cholesky"``, or
-        ``"iterative"`` (or the corresponding integer enumeration 1--4,
-        exported to C as ``moist_pcm_solver``).
-    """
+    coupling_channels = frozenset({CouplingChannel.ELECTROSTATICS})
+    _SOLVERS = {solver.name.lower(): solver for solver in CPCMSolver}
 
-    _SOLVERS = {
-        "inversion": 1,
-        "lu": 2,
-        "cholesky": 3,
-        "iterative": 4,
-    }
-
-    def __init__(self, epsilon: float, solver: str | int = "cholesky") -> None:
+    def __init__(
+        self,
+        epsilon: float,
+        solver: str | int | CPCMSolver = CPCMSolver.CHOLESKY,
+    ) -> None:
         if isinstance(solver, str):
             try:
-                solver_id = self._SOLVERS[solver.lower()]
+                solver_value = self._SOLVERS[solver.lower()]
             except KeyError as exc:
                 choices = ", ".join(self._SOLVERS)
                 raise ValueError(f"Unknown CPCM solver {solver!r}; choose {choices}") from exc
         else:
-            solver_id = int(solver)
-            if solver_id not in self._SOLVERS.values():
-                raise ValueError("CPCM solver enumeration must be between 1 and 4")
-        self.epsilon = float(epsilon)
-        self.solver = solver_id
-        self._component = library.new_cpcm_component(self.epsilon, self.solver)
+            try:
+                solver_value = CPCMSolver(int(solver))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("CPCM solver enumeration must be between 1 and 4") from exc
+        self._epsilon = float(epsilon)
+        self._solver = solver_value
+        super().__init__(library.new_cpcm_component(self._epsilon, int(self._solver)))
+
+    @property
+    def epsilon(self) -> float:
+        return self._epsilon
+
+    @property
+    def solver(self) -> CPCMSolver:
+        return self._solver
 
 
 class PV(SolvationComponent):
     """Pressure-volume energy component ``pressure * cavity volume``."""
 
     def __init__(self, pressure: float) -> None:
-        self.pressure = float(pressure)
-        self._component = library.new_pv_component(self.pressure)
+        self._pressure = float(pressure)
+        super().__init__(library.new_pv_component(self._pressure))
+
+    @property
+    def pressure(self) -> float:
+        return self._pressure
 
 
 class Gostshyp(SolvationComponent):
-    """GOSTSHYP hydrostatic-pressure component.
+    """GOSTSHYP hydrostatic-pressure component."""
 
-    An unnormalized Gaussian on every cavity grid point, with its amplitude
-    fixed so the force on the electron density matches ``pressure`` times the
-    local area (Pausch, Zeller, Neudecker, *JCTC* 2025, 21, 747).
-
-    Unlike the other components this one cannot be driven by geometry alone:
-    its density traces are AO-basis three-center integrals that only the host
-    can form.  Call
-    :meth:`~moist.interface.GeneralSolvationModel.supply_gostshyp` after every
-    cavity update, and read the amplitudes back from
-    :meth:`~moist.interface.GeneralSolvationModel.get_potential_extended`.
-
-    Parameters
-    ----------
-    pressure
-        Applied hydrostatic pressure in Hartree/bohr^3.
-    """
+    coupling_channels = frozenset({CouplingChannel.GOSTSHYP})
 
     def __init__(self, pressure: float) -> None:
-        self.pressure = float(pressure)
-        self._component = library.new_gostshyp_component(self.pressure)
+        self._pressure = float(pressure)
+        super().__init__(library.new_gostshyp_component(self._pressure))
+
+    @property
+    def pressure(self) -> float:
+        return self._pressure
 
 
-@dataclass
-class GeneralPotential:
-    """Adjoint channels returned by a general solvation model."""
-
-    w_umol: np.ndarray
-    w_qmol: np.ndarray
-    w_lsf0: np.ndarray
-    w_lsf1: np.ndarray
-    w_lsf2: np.ndarray
-    #: Amplitudes conjugate to a host's own Gaussian integral blocks; only
-    #: filled by :meth:`GeneralSolvationModel.get_potential_extended`, so they
-    #: stay ``None`` on the plain read rather than silently reporting zeros.
-    w_gauss_g: Optional[np.ndarray] = None
-    w_gauss_f: Optional[np.ndarray] = None
+# -----------------------------------------------------------------------------
+# Coupling adapters and evaluations
+# -----------------------------------------------------------------------------
 
 
-class GeneralSolvationModel(SolvationModel):
-    """Compose one live cavity with an ordered list of solvation components."""
+class SolvationCoupling(ABC):
+    """Adapter between a host representation and one moist evaluation."""
+
+    channels: frozenset[CouplingChannel] = frozenset()
+
+    @property
+    @abstractmethod
+    def structure(self) -> Structure:
+        """Structure associated with this coupling."""
+
+    def activate(self) -> None:
+        """Publish adapter state needed by callback-backed cavity construction."""
+
+    @abstractmethod
+    def prepare(self, transaction: CouplingTransaction) -> None:
+        """Supply host data through one model-owned coupling transaction."""
+
+    def fock(
+        self,
+        cavity: CavitySnapshot,
+        potential: GeneralPotential,
+    ) -> Optional[np.ndarray]:
+        """Return a host Fock contribution, or ``None`` when unavailable."""
+        return None
+
+    def gradient(
+        self,
+        cavity: CavitySnapshot,
+        potential: GeneralPotential,
+        model_gradient: Callable[[], np.ndarray],
+    ) -> np.ndarray:
+        """Return the complete nuclear gradient for this coupling."""
+        return model_gradient()
+
+
+ElectrostaticsProvider = Callable[
+    [CavitySnapshot, Optional[TracePotential]], Electrostatics
+]
+
+
+class CouplingTransaction:
+    """Restricted interface for supplying host data during one evaluation.
+
+    Custom coupling adapters receive this object instead of the model itself.
+    It owns multi-pass native ordering and exposes only the operations valid
+    between a successful cavity update and result assembly.
+    """
+
+    __slots__ = ("_model", "_cavity")
+
+    def __init__(self, model: SolvationModel) -> None:
+        self._model = model
+        self._cavity = model.cavity.snapshot()
+
+    @property
+    def cavity(self) -> CavitySnapshot:
+        return self._cavity
+
+    @property
+    def density_dependent(self) -> bool:
+        return self._model.cavity.density_dependent
+
+    def requires(self, channel: CouplingChannel) -> bool:
+        return channel in self._model.required_coupling_channels
+
+    def exchange_electrostatics(self, provider: ElectrostaticsProvider) -> None:
+        """Complete moist's two-pass electrostatic host exchange."""
+        self._model._supply_electrostatics(provider(self._cavity, None))
+        trace = self._model.trace_potential()
+        self._model._supply_electrostatics(provider(self._cavity, trace))
+
+    def supply_gostshyp(self, moments: GostshypMoments) -> None:
+        """Supply Gaussian moments for the transaction's current surface."""
+        self._model._supply_gostshyp(moments)
+
+
+class ArrayCoupling(SolvationCoupling):
+    """Low-level adapter for hosts that already own the required arrays.
+
+    ``electrostatics`` may be a fixed :class:`Electrostatics` value or a
+    callable.  A callable is invoked first with ``trace=None`` and then with the
+    model's direct trace potential, allowing charge-dependent response arrays to
+    be constructed without exposing the two-pass ordering to the caller.
+    """
 
     def __init__(
         self,
-        cavity,
+        structure: Structure,
+        *,
+        electrostatics: Optional[Electrostatics | ElectrostaticsProvider] = None,
+        gostshyp: Optional[GostshypMoments] = None,
+    ) -> None:
+        self._structure = structure
+        self._electrostatics = electrostatics
+        self._gostshyp = gostshyp
+        channels = set()
+        if electrostatics is not None:
+            channels.add(CouplingChannel.ELECTROSTATICS)
+        if gostshyp is not None:
+            channels.add(CouplingChannel.GOSTSHYP)
+        self.channels = frozenset(channels)
+
+    @property
+    def structure(self) -> Structure:
+        return self._structure
+
+    def _electrostatic_data(
+        self,
+        cavity: CavitySnapshot,
+        trace: Optional[TracePotential],
+    ) -> Electrostatics:
+        provider = self._electrostatics
+        if provider is None:
+            raise RuntimeError("No electrostatics were configured")
+        return provider(cavity, trace) if callable(provider) else provider
+
+    def prepare(self, transaction: CouplingTransaction) -> None:
+        if self._electrostatics is not None:
+            transaction.exchange_electrostatics(self._electrostatic_data)
+        if self._gostshyp is not None:
+            transaction.supply_gostshyp(self._gostshyp)
+
+
+class Evaluation:
+    """Results from one coherent model/coupling evaluation.
+
+    Energy, potential, cavity and Fock data are captured before the evaluation
+    is returned.  The usually more expensive gradient is lazy and may only be
+    requested while this remains the model's current evaluation; this prevents
+    a later model update from being mixed with an older potential or cavity.
+    """
+
+    __slots__ = (
+        "_model",
+        "_epoch",
+        "_coupling",
+        "_gradient",
+        "_cavity_result",
+        "_energy",
+        "_potential_result",
+        "_fock_result",
+    )
+
+    def __init__(
+        self,
+        *,
+        model: SolvationModel,
+        epoch: int,
+        coupling: SolvationCoupling,
+        cavity: CavitySnapshot,
+        energy: float,
+        potential: GeneralPotential,
+        fock: Optional[np.ndarray],
+    ) -> None:
+        self._model = model
+        self._epoch = epoch
+        self._coupling = coupling
+        self._gradient: Optional[np.ndarray] = None
+        self._cavity_result = cavity
+        self._energy = float(energy)
+        self._potential_result = potential
+        self._fock_result = None if fock is None else _immutable_array(fock)
+
+    @property
+    def cavity(self) -> CavitySnapshot:
+        return self._cavity_result
+
+    @property
+    def energy(self) -> float:
+        return self._energy
+
+    @property
+    def potential(self) -> GeneralPotential:
+        return self._potential_result
+
+    @property
+    def fock(self) -> Optional[np.ndarray]:
+        return self._fock_result
+
+    @property
+    def charges(self) -> np.ndarray:
+        """Direct molecular-potential adjoints (surface charges for CPCM)."""
+        return self.potential.w_umol
+
+    @property
+    def gradient(self) -> np.ndarray:
+        if self._gradient is None:
+            if self._model.epoch != self._epoch:
+                raise RuntimeError(
+                    "This evaluation was superseded; request its gradient before "
+                    "evaluating the model again"
+                )
+            self._gradient = _immutable_array(
+                self._coupling.gradient(
+                    self.cavity,
+                    self.potential,
+                    self._model.gradient,
+                )
+            )
+        return self._gradient
+
+
+# -----------------------------------------------------------------------------
+# Solvation models
+# -----------------------------------------------------------------------------
+
+
+class SolvationModel:
+    """Compose one live cavity with an ordered set of solvation components."""
+
+    def __init__(
+        self,
+        cavity: Cavity,
         components: list[SolvationComponent] | tuple[SolvationComponent, ...],
         debug: bool = False,
         verbosity: int = 0,
     ) -> None:
-        super().__init__()
-        if not hasattr(cavity, "_cavity"):
-            raise TypeError("cavity must be a moist standalone cavity object")
-        items = list(components)
+        if not isinstance(cavity, Cavity):
+            raise TypeError("cavity must be a moist Cavity object")
+        items = tuple(components)
         if not items:
-            raise ValueError("A general solvation model requires at least one component")
+            raise ValueError("A solvation model requires at least one component")
         if any(not isinstance(item, SolvationComponent) for item in items):
             raise TypeError("components must contain only SolvationComponent objects")
 
+        self._updated = False
+        self._natoms: Optional[int] = None
+        self._epoch = 0
         self._source_cavity = cavity
-        self.components = tuple(items)
+        self._components = items
+        self._required_coupling_channels = frozenset().union(
+            *(item.coupling_channels for item in items)
+        )
         self._model = library.new_general_model(
-            cavity._cavity,
-            [item._component for item in items],
+            cavity._as_handle(),
+            [item._as_handle() for item in items],
             debug=debug,
             verbosity=verbosity,
         )
-        # General models own a cavity copy. Keep its borrowed handle so hosts
-        # can install mutable isodensity data before the first geometry update.
-        self._cavity_handle = library.get_model_cavity(self._model)
+        borrowed = library.get_model_cavity(self._model)
+        self._cavity = cavity._model_view(borrowed)
 
-    @classmethod
-    def _from_constructor(cls, *args, **kwargs):
-        return cls(*args, **kwargs)
+    @property
+    def epoch(self) -> int:
+        return self._epoch
+
+    @property
+    def components(self) -> tuple[SolvationComponent, ...]:
+        return self._components
+
+    @property
+    def required_coupling_channels(self) -> frozenset[CouplingChannel]:
+        return self._required_coupling_channels
+
+    def _invalidate(self) -> None:
+        self._epoch += 1
+        self._updated = False
+        self._natoms = None
+        self._cavity._invalidate()
+
+    def update(self, structure: Structure) -> None:
+        self._invalidate()
+        self._source_cavity._before_native_update()
+        try:
+            library.update_model(self._model, structure._as_handle())
+        except Exception:
+            self._source_cavity._raise_callback_failure()
+            raise
+        self._source_cavity._raise_callback_failure()
+        self._natoms = len(structure)
+        self._updated = True
+        self._cavity._mark_updated()
+
+    def _require_updated(self) -> None:
+        if not self._updated:
+            raise RuntimeError("Model has not been successfully updated")
+
+    @property
+    def energy(self) -> float:
+        self._require_updated()
+        return library.get_model_energy(self._model)
+
+    def get_energy(self) -> float:
+        """Compatibility method for :attr:`energy`."""
+        return self.energy
+
+    def gradient(self) -> np.ndarray:
+        """Return the native model gradient for the last updated structure."""
+        self._require_updated()
+        assert self._natoms is not None
+        return library.general_model_get_gradient(self._model, self._natoms)
+
+    def get_gradient(self, natoms: Optional[int] = None) -> np.ndarray:
+        """Compatibility method; ``natoms`` is now inferred from ``update``."""
+        if natoms is not None and self._natoms is not None and int(natoms) != self._natoms:
+            raise ValueError(
+                f"natoms={natoms} does not match the updated structure ({self._natoms})"
+            )
+        return self.gradient()
+
+    @property
+    def cavity(self) -> Cavity:
+        """The authoritative model-owned live cavity."""
+        return self._cavity
 
     @property
     def cavity_handle(self) -> library.CavityHandle:
-        """Borrowed handle to the model-owned live cavity."""
-
-        return self._cavity_handle
+        """Deprecated low-level escape hatch; use :attr:`cavity` instead."""
+        warnings.warn(
+            "cavity_handle is deprecated; model.cavity exposes the live cavity object",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self._cavity._as_handle()
 
     @property
     def ngrid(self) -> int:
-        """Number of points on the current live cavity."""
+        return self._cavity.ngrid
 
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting its grid size")
-        return library.get_cavity_sizes(self._cavity_handle)[0]
+    def _supply_electrostatics(self, data: Electrostatics) -> None:
+        self._require_updated()
+        self._epoch += 1
+        library.general_model_supply_electrostatics(
+            self._model,
+            data.phi,
+            data.w_xi,
+            data.w_f,
+            data.w_xyz,
+            data.w_n,
+            data.qefield,
+        )
 
     def supply_electrostatics(
         self,
@@ -322,12 +1090,20 @@ class GeneralSolvationModel(SolvationModel):
         w_n: Optional[np.ndarray] = None,
         qefield: Optional[np.ndarray] = None,
     ) -> None:
-        """Supply the molecular potential and optional direct response arrays."""
+        """Compatibility shim for manually staged electrostatic coupling."""
+        self._supply_electrostatics(
+            Electrostatics(phi, w_xi, w_f, w_xyz, w_n, qefield)
+        )
 
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before supplying electrostatics")
-        library.general_model_supply_electrostatics(
-            self._model, phi, w_xi, w_f, w_xyz, w_n, qefield
+    def _supply_gostshyp(self, moments: GostshypMoments) -> None:
+        self._require_updated()
+        self._epoch += 1
+        library.general_model_supply_gostshyp(
+            self._model,
+            moments.gt,
+            moments.pt,
+            moments.mt,
+            moments.rt,
         )
 
     def supply_gostshyp(
@@ -337,249 +1113,92 @@ class GeneralSolvationModel(SolvationModel):
         mt: np.ndarray,
         rt: np.ndarray,
     ) -> None:
-        """Supply the Gaussian density moments the GOSTSHYP component consumes.
+        """Compatibility shim for manually staged GOSTSHYP moments."""
+        self._supply_gostshyp(GostshypMoments(gt, pt, mt, rt))
 
-        Moments of the solute density against the unnormalized Gaussian
-        ``exp(-w_i |r - r_i|^2)`` on each grid point, in native cavity order:
-        ``gt = <G>`` ``(ngrid,)``, ``pt = <(r-r_i) G>`` ``(3, ngrid)``,
-        ``mt = <(r-r_i)(r-r_i) G>`` ``(3, 3, ngrid)`` and
-        ``rt = <(r-r_i) |r-r_i|^2 G>`` ``(3, ngrid)``.
-
-        The width ``w_i`` is the model's own, so read the grid-point areas back
-        from the live cavity first.  Rebuild after every cavity update; moments
-        sized for a different grid are refused rather than resized.
-        """
-
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before supplying GOSTSHYP moments")
-        library.general_model_supply_gostshyp(self._model, gt, pt, mt, rt)
-
-    def solve(self, phi: np.ndarray) -> tuple[float, np.ndarray]:
-        """Solve all electrostatic components and return energy and charges."""
-
-        self.supply_electrostatics(phi)
-        charges, _ = library.general_model_get_trace_potential(self._model, self.ngrid)
-        return self.get_energy(), charges
+    def trace_potential(self) -> TracePotential:
+        self._require_updated()
+        molecular, normal = library.general_model_get_trace_potential(
+            self._model, self.ngrid
+        )
+        return TracePotential(molecular, normal)
 
     def get_trace_potential(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return direct molecular-potential and normal-trace adjoints."""
-
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting a potential")
-        return library.general_model_get_trace_potential(self._model, self.ngrid)
+        """Compatibility tuple form of :meth:`trace_potential`."""
+        trace = self.trace_potential()
+        return trace.molecular, trace.normal
 
     def get_potential(self) -> GeneralPotential:
-        """Return accumulated direct and cavity-response adjoint channels."""
+        """Compatibility read without optional Gaussian response channels."""
+        self._require_updated()
+        return GeneralPotential(
+            **library.general_model_get_potential(self._model, self.ngrid)
+        )
 
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting a potential")
-        result = library.general_model_get_potential(self._model, self.ngrid)
-        return GeneralPotential(**result)
+    def potential(self) -> GeneralPotential:
+        """Return every response channel in one composed value."""
+        self._require_updated()
+        return GeneralPotential(
+            **library.general_model_get_potential_extended(self._model, self.ngrid)
+        )
 
     def get_potential_extended(self) -> GeneralPotential:
-        """Return every adjoint channel, including the Gaussian amplitudes.
+        """Compatibility alias for :meth:`potential`."""
+        return self.potential()
 
-        Prefer this over :meth:`get_potential` plus a separate amplitude read:
-        assembling a potential contracts the cavity surface adjoints once, and
-        splitting the read would pay that cost twice.
-        """
+    def solve(self, phi: np.ndarray) -> tuple[float, np.ndarray]:
+        """Compatibility helper for energy/charge-only electrostatic solves."""
+        self.supply_electrostatics(phi)
+        return self.energy, self.trace_potential().molecular
 
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting a potential")
-        result = library.general_model_get_potential_extended(self._model, self.ngrid)
-        return GeneralPotential(**result)
-
-    def get_gradient(self, natoms: int) -> np.ndarray:
-        """Return the accumulated nuclear gradient with shape ``(3, natoms)``."""
-
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting a gradient")
-        return library.general_model_get_gradient(self._model, int(natoms))
-
-    @property
-    def cavity(self) -> Cavity:
-        """Snapshot the current model-owned cavity."""
-
-        if not self._updated:
-            raise RuntimeError("Model has to be updated before requesting the cavity")
-        return self._cavity_from_handle(self._cavity_handle)
-
-
-class _DROPCavityBase:
-    """Shared standalone DROP cavity result handling."""
-
-    def update(self, structure: Structure) -> None:
-        library.update_cavity(self._cavity, structure._mol)
-        self._updated = True
-
-    @property
-    def cavity(self) -> Cavity:
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before requesting results")
-        generic = library.get_cavity_results(self._cavity)
-        drop = library.get_drop_specific(self._cavity, ngrid=generic["ngrid"])
-
-        return Cavity(
-            area=generic["area"],
-            volume=generic["volume"],
-            ngrid=generic["ngrid"],
-            nsph=generic["nsph"],
-            xyz=generic["xyz"],
-            a=generic["a"],
-            owner=generic["owner"],
-            converged=generic["converged"],
-            radii=generic["radii"],
-            asph=generic["asph"],
-            nmax=drop["nmax"],
-            normal0=drop["normal0"],
-            wleb=drop["wleb"],
-            r_iI0=drop["r_iI0"],
-            f=drop["f"],
-            rho=drop["rho"],
-        )
-
-    def assemble_amat(self) -> tuple[np.ndarray, np.ndarray]:
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before assembling the A-matrix")
-        return library.assemble_drop_amat(self._cavity)
-
-    def get_gaussian(self) -> tuple[np.ndarray, np.ndarray]:
-        """Return Gaussian widths and switching factors without assembling A."""
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before reading Gaussian data")
-        return library.get_cavity_gaussian(self._cavity)
-
-    def compute_anchor_gradient(self) -> None:
-        """Compute the anchor-only nuclear derivatives (DROP cavities only).
-
-        Must precede :meth:`get_anchor_gradient`.  For a callback level set the
-        field's nuclear partials are zero, so the anchor pass is the whole
-        nuclear route moist can see on its own.
-        """
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before computing the anchor gradient")
-        library.compute_anchor_gradient(self._cavity)
-
-    def get_anchor_gradient(self) -> AnchorGradient:
-        """Return the anchor-channel nuclear derivatives in native grid order.
-
-        Requires a preceding :meth:`compute_anchor_gradient`.  The grid point area
-        carries a switching-function dependence (``a_i ~ f_i / xi_i**2``), so
-        ``a_i1_rA`` is the area route a geometric surface functional needs and
-        is not recoverable from ``xi1_rA``.
-        """
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before reading the anchor gradient")
-        return AnchorGradient(**library.get_anchor_gradient(self._cavity))
-
-    def contract_amat_surface_weights(
+    def evaluate(
         self,
-        q1: np.ndarray,
-        q2: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before contracting A-matrix weights")
-        return library.contract_amat1_q1q2_surface_weights(self._cavity, q1, q2)
+        structure: Optional[Structure] = None,
+        *,
+        coupling: Optional[SolvationCoupling] = None,
+    ) -> Evaluation:
+        """Evaluate the model and host coupling as one coherent transaction."""
+        if coupling is None:
+            if structure is None:
+                raise TypeError("evaluate requires a structure or coupling")
+            coupling = ArrayCoupling(structure)
+        elif not isinstance(coupling, SolvationCoupling):
+            raise TypeError("coupling must implement SolvationCoupling")
 
-    def contract_surface_lsf_weights(
-        self,
-        w_xi: np.ndarray,
-        w_f: np.ndarray,
-        w_xyz: np.ndarray,
-        w_n: Optional[np.ndarray] = None,
-        w_k1: Optional[np.ndarray] = None,
-        w_k2: Optional[np.ndarray] = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Return LSF adjoint weights for a contracted drop surface response.
+        channels = frozenset(CouplingChannel(channel) for channel in coupling.channels)
+        missing = self.required_coupling_channels - channels
+        if missing:
+            names = ", ".join(sorted(channel.value for channel in missing))
+            raise ValueError(f"Coupling does not provide required channels: {names}")
 
-        The outward-normal (``w_n``) and principal-curvature (``w_k1``,
-        ``w_k2``) channels are optional and skipped when omitted.
-        """
-        if not self._updated:
-            raise RuntimeError("Cavity has to be updated before contracting LSF weights")
-        return library.contract_surface_lsf_weights(
-            self._cavity, w_xi, w_f, w_xyz, w_n, w_k1, w_k2)
+        coupling_structure = coupling.structure
+        if structure is None:
+            structure = coupling_structure
+        elif not structure._same_geometry(coupling_structure):
+            raise ValueError("structure does not match the coupling structure")
 
-
-class DROPCavity(_DROPCavityBase):
-    """Standard solute-vdW (SvdW) DROP cavity with a density-independent surface.
-
-    The surface is built from atomic van-der-Waals spheres (default CPCM radii)
-    and depends only on the molecular structure, so the cavity geometry is fixed
-    across an SCF.  Shares the same result/A-matrix accessors as the isodensity
-    cavity through :class:`_DROPCavityBase`.
-    """
-
-    def __init__(
-        self,
-        nleb: Optional[int] = None,
-        debug: bool = False,
-        verbosity: int = 0,
-        do_fine: bool = False,
-    ):
-        self._updated = False
-        self._cavity = library.new_drop_cavity(
-            nleb=nleb,
-            debug=debug,
-            verbosity=verbosity,
-            do_fine=do_fine,
-        )
-
-
-class IsodensityDROPCavity(_DROPCavityBase):
-    """DROP cavity whose level set is provided by a Python callback.
-
-    The callback is invoked either as ``callback(point, order)`` -- where
-    ``order`` is the highest derivative moist currently needs, so the callback
-    can skip computing the rest -- or as ``callback(point)``. The form is
-    detected from the signature; set ``pass_order`` to force it. See
-    :func:`moist.library.new_drop_cavity_isodensity_callback` for the full
-    contract.
-
-    A callback that raises aborts the build: :meth:`update` fails with the
-    original exception instead of returning a cavity built on substitute values.
-    """
-
-    def __init__(
-        self,
-        callback,
-        nleb: Optional[int] = None,
-        scale: float = 1000.0,
-        debug: bool = False,
-        verbosity: int = 0,
-        do_fine: bool = False,
-        wleb_prune_level: Optional[int] = None,
-        tolerance: Optional[float] = None,
-        pass_order: Optional[bool] = None,
-    ):
-        self._updated = False
-        self._cavity, self._callback_ref = library.new_drop_cavity_isodensity_callback(
-            callback=callback,
-            nleb=nleb,
-            scale=scale,
-            debug=debug,
-            verbosity=verbosity,
-            do_fine=do_fine,
-            wleb_prune_level=wleb_prune_level,
-            tolerance=tolerance,
-            pass_order=pass_order,
-        )
-
-    def update(self, structure: Structure) -> None:
-        """Build the cavity, surfacing any failure inside the Python callback.
-
-        An exception in the callback aborts the build: the binding reports it
-        through the callback's return code and moist fails this call with an
-        "external LSF evaluation failed" error. That error is accurate but says
-        nothing about *why* the callback failed, so the exception itself -- which
-        cannot travel back through the C frame -- is carried out of band and
-        re-raised here, with its original traceback, in place of moist's.
-        """
-        state = self._cavity.callback_state
-        state.reset()
         try:
-            super().update(structure)
+            coupling.activate()
+            self.update(structure)
+            coupling.prepare(CouplingTransaction(self))
+
+            energy = self.energy
+            potential = self.potential()
+            cavity = self._cavity.snapshot()
+            fock = coupling.fock(cavity, potential)
+            return Evaluation(
+                model=self,
+                epoch=self.epoch,
+                coupling=coupling,
+                cavity=cavity,
+                energy=energy,
+                potential=potential,
+                fock=fock,
+            )
         except Exception:
-            state.raise_if_failed()
+            self._invalidate()
             raise
-        state.raise_if_failed()
+
+
+# Compatibility name retained for callers of the pre-refactor general model.
+GeneralSolvationModel = SolvationModel
