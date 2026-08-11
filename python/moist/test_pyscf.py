@@ -404,9 +404,9 @@ def test_lsf_callback_is_finite(system, basis):
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
-    centre = mol.atom_coords()[0]
+    center = mol.atom_coords()[0]
     for offset in ([0.9, 0.4, 1.3], [40.0, 0.0, 0.0], [0.0, -60.0, 25.0]):
-        point = centre + np.array(offset)
+        point = center + np.array(offset)
         value, grad_, hess, third = host.lsf(point, 3)
         assert np.isfinite(value)
         for tensor in (grad_, hess, third):
@@ -444,7 +444,7 @@ def test_l1_fock_matches_fd(system, basis, components):
 @pytest.mark.parametrize("components", COMPONENT_PARAMS)
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l1_gradient_matches_fd(system, basis, components):
-    """dE/dR at fixed P, including the level set's own basis-centre derivative."""
+    """dE/dR at fixed P, including the level set's own basis-center derivative."""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     host = make_host(mol, dm=dm)

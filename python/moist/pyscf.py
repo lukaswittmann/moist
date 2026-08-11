@@ -212,8 +212,8 @@ class PySCFIsodensityHost:
         """``grad_r phi_elec(r)`` at each grid point, ``(3, ngrid)``.
 
         The derivative with respect to the grid origin follows from
-        translational invariance: shifting the operator centre by ``d`` is the
-        same as shifting both AO centres by ``-d``, giving
+        translational invariance: shifting the operator center by ``d`` is the
+        same as shifting both AO centers by ``-d``, giving
         ``d/dC (r_i|uv) = T_uv + T_vu`` with ``T`` the bra-derivative integral.
         """
         dm = self._density_matrix()
@@ -341,9 +341,9 @@ class PySCFIsodensityHost:
         """Host-side nuclear gradient terms, Fortran ``(3, natm)``.
 
         These are exactly the routes that run through the AO basis and which
-        moist therefore cannot see: the basis-centre derivative of ``phi``, and
+        moist therefore cannot see: the basis-center derivative of ``phi``, and
         -- for an isodensity cavity, whose level set reports zero nuclear
-        partials by construction -- the basis-centre derivative of the level
+        partials by construction -- the basis-center derivative of the level
         set.  Add the result to
         :meth:`GeneralSolvationModel.get_gradient`.
         """
