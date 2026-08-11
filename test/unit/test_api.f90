@@ -184,7 +184,7 @@ module test_api
    !*                    Isodensity callback state (failure-channel tests)              *!
    !* ================================================================================= *!
 
-   !> Water geometry the test callback's model density is centred on (Bohr)
+   !> Water geometry the test callback's model density is centered on (Bohr)
    real(c_double), parameter :: cb_centers(3, 3) = reshape( &
       [0.0_c_double, 0.0_c_double, 0.1173_c_double, &
        0.0_c_double, 1.4309_c_double, -0.9370_c_double, &

@@ -670,7 +670,7 @@ contains
 
    !> Build the shared DROP fixture with every optional property enabled
    !>
-   !> The two heavy centres give an elongated cavity with well-separated
+   !> The two heavy centers give an elongated cavity with well-separated
    !> principal curvatures and the off-axis hydrogen removes the residual
    !> rotational symmetry, so no channel is accidentally degenerate.
    !>

@@ -1547,7 +1547,7 @@ contains
 
       call new_context(ctx)
 
-      ! A single dummy centre: the external potential source means the molecular
+      ! A single dummy center: the external potential source means the molecular
       ! geometry never enters the energy, but update() stores it.
       xyz_mol(:, 1) = 0.0_wp
       call new(mol, [1], xyz_mol)
@@ -2190,7 +2190,7 @@ contains
 
 !> The CPCM energy is invariant under rigid translation of the solute.
 !>
-!> Every iSwiG grid point is placed relative to an atomic centre, so shifting the
+!> Every iSwiG grid point is placed relative to an atomic center, so shifting the
 !> whole structure shifts the surface with it and leaves every distance in both
 !> the matrix and the potential trace unchanged. Unlike rotation -- which
 !> reorients the molecule against a lab-fixed Lebedev grid and therefore only

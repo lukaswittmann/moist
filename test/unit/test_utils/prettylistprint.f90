@@ -94,7 +94,7 @@ contains
       call plp%blank()
 
       call read_line(iu, path, 1, line)
-      call check(error, line, "==_h_i_===", "the title is spread and centred in '=' fill")
+      call check(error, line, "==_h_i_===", "the title is spread and centered in '=' fill")
       if (allocated(error)) return
 
       call read_line(iu, path, 2, line)

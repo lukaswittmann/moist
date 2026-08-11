@@ -67,7 +67,7 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: lambda_val = 0.0_wp
       !> Objective coefficient `phi_alpha`
       real(wp) :: alpha_coeff = 0.0_wp
-      !> Anchor position and its owner sphere centre
+      !> Anchor position and its owner sphere center
       real(wp) :: anchor(3) = 0.0_wp, owner_xyz(3) = 0.0_wp
       !> Grid-level weights entering the `wleb` / `xi` chain
       real(wp) :: anchor_wleb0 = 0.0_wp, cpjac_scal0 = 0.0_wp, w_f0 = 0.0_wp
