@@ -237,7 +237,7 @@ contains
          rz = pz - self%sphxyz(3, iat)
          r_dot_p = rx*px + ry*py + rz*pz
 
-         ! Per-grid-point weights for each gradient type:
+         ! Per-grid point weights for each gradient type:
          !   area:   R^2 w df/dR
          !   volume: R w (n dot c)/3 df/dR
          area_weight = 1.0_wp

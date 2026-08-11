@@ -1766,7 +1766,7 @@ contains
    !> @param[in]     xu          Upper bounds for xyz
    !> @param[in]     displacement_threshold  Maximum allowed displacement
    !> @param[in]     owner       Owner atom index
-   !> @param[in]     index       Grid-point index (for diagnostics)
+   !> @param[in]     index       Grid point index (for diagnostics)
    !> @param[out]    error       Error if refinement fails
    !> @param[out]    gridpoint   Refined projected point
    !> @param[out]    lambda_out  Optional lagrange multiplier

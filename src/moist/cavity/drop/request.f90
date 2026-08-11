@@ -21,7 +21,7 @@ module moist_cavity_drop_request
    !> to `.false.` for minimal overhead.
    type :: drop_property_request
 
-      !> Compute local grid-point density (diagnostic)
+      !> Compute local grid point density (diagnostic)
       logical :: grid_point_density = .false.
 
       !> Compute principal, mean, and Gaussian curvatures (diagnostic)
@@ -30,7 +30,7 @@ module moist_cavity_drop_request
       !> Store surface normal vectors at grid points
       logical :: normal = .false.
 
-      !> Store sphere-center to grid-point distances
+      !> Store sphere-center to grid point distances
       logical :: r_iI = .false.
 
       !> Store anchor-to-projected-point displacement distances

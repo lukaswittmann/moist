@@ -70,7 +70,7 @@ contains
       !> Per-thread LSF evaluation failure
       type(error_type), allocatable :: lsf_error
 
-      !> Shared per-grid-point sensitivity kernel state and its response
+      !> Shared per-grid point sensitivity kernel state and its response
       type(drop_seed_state_type) :: state
       !> Degeneracy status
       integer :: status

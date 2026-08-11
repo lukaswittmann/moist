@@ -372,7 +372,7 @@ contains
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
       real(wp) :: xyz_mol(3, 1)
-      !> Grid-point index
+      !> Grid point index
       integer :: igrid
 
       !> Pressure of the component under test
@@ -474,7 +474,7 @@ contains
 
          !> Quadrature areas reconstructed from the perturbed fixture
          real(wp), allocatable :: areas(:)
-         !> Grid-point index
+         !> Grid point index
          integer :: i
 
          areas = trial%areas()

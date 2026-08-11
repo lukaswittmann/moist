@@ -1,8 +1,8 @@
 """GOSTSHYP hydrostatic pressure on a moist isodensity cavity.
 
 GOSTSHYP simulates hydrostatic pressure by placing an unnormalized Gaussian
-potential on every cavity grid-point and fixing its amplitude so the force the
-wall exerts on the electron density matches ``p_inp`` times the grid-point area:
+potential on every cavity grid point and fixing its amplitude so the force the
+wall exerts on the electron density matches ``p_inp`` times the grid point area:
 
 .. math::
 
@@ -22,13 +22,13 @@ matrix at a *frozen* surface is
 
 Almost all of that is QM-side integral work.  What moist owns is the other
 half: the derivatives of :math:`E^\\mathrm{GOST}` with respect to the *cavity
-parameters* — the grid-point area, position and outward normal — and the chain
+parameters* — the grid point area, position and outward normal — and the chain
 that turns them into a level-set response and a nuclear gradient.  This module
 computes the surface weights and hands them to moist; moist returns the
 level-set adjoints, which :mod:`moist.pyscf` contracts with ``dS/dP`` and
 ``dS/dR``.
 
-Every per-grid-point Gaussian carries a normalization constant ``N_j`` that
+Every per-grid point Gaussian carries a normalization constant ``N_j`` that
 cancels exactly between energy and Fock, so it is never formed.  Only the
 *relative* s/p/d/f angular constants are restored, which is what makes
 ``f = n . grad g`` hold exactly rather than up to a factor.
@@ -90,7 +90,7 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 #: xxx/xyy/xzz, y picks xxy/yyy/yzz and z picks xxz/yyz/zzz.
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
-#: Relative floor on ``|ftilde_j|`` below which a grid-point is inactive.
+#: Relative floor on ``|ftilde_j|`` below which a grid point is inactive.
 #:
 #: ====== ============== =========== ===============
 #: floor   E error (rel)  Fock (rel)  gradient (rel)
@@ -107,7 +107,7 @@ _OVERLAP_FLOOR = 1.0e-9
 
 
 def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int) -> gto.Mole:
-    """One coefficient-1 GTO shell of angular momentum ``angl`` per grid-point."""
+    """One coefficient-1 GTO shell of angular momentum ``angl`` per grid point."""
 
     coords = np.asarray(coords, dtype=np.float64)
     exponents = np.asarray(exponents, dtype=np.float64)
@@ -135,7 +135,7 @@ def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int) -> 
 
 
 def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
-    """Three-centre one-electron integrals over a Gaussian-per-grid-point fakemol."""
+    """Three-centre one-electron integrals over a Gaussian-per-grid point fakemol."""
 
     fakemol = _fakemol_gaussians(centers, omega, angl)
     nbas = mol.nbas
@@ -159,13 +159,13 @@ class _GostshypState:
     gtilde: np.ndarray
     #: Density-contracted normal-projected Gaussian gradient.
     ftilde: np.ndarray
-    #: Grid-point carrying a usable density overlap.
+    #: Grid point carrying a usable density overlap.
     active: np.ndarray
 
 
 @dataclass(frozen=True)
 class _SurfaceAdjoints:
-    """Energy sensitivities to the DROP surface, per grid-point, native order."""
+    """Energy sensitivities to the DROP surface, per grid point, native order."""
 
     #: ``(ngrid,)`` area route mapped onto the Gaussian width.
     w_xi: np.ndarray
@@ -230,7 +230,7 @@ class GostshypWall:
         self._Fvec: Optional[np.ndarray] = None
 
     # ------------------------------------------------------------------
-    # cavity and grid-point geometry
+    # cavity and grid point geometry
     # ------------------------------------------------------------------
 
     def _set_grid_points(self) -> None:
@@ -248,7 +248,7 @@ class GostshypWall:
         normals[good] /= norm[good, None]
         self.normals = normals
 
-        # omega_j = pi ln2 / a_j; a degenerate zero-area grid-point is inert.
+        # omega_j = pi ln2 / a_j; a degenerate zero-area grid point is inert.
         with np.errstate(divide="ignore", invalid="ignore"):
             omega = np.pi * math.log(2.0) / self.areas
         omega[~np.isfinite(omega)] = 0.0
@@ -331,7 +331,7 @@ class GostshypWall:
             return c2s @ np.asarray(dm) @ c2s.T
 
     def _gf_tilde(self, dm_cart, centers, omega, normals):
-        """``(gtilde, ftilde)`` for *arbitrary* grid-point parameters.
+        """``(gtilde, ftilde)`` for *arbitrary* grid point parameters.
 
         The finite-difference reference for :meth:`_param_derivatives`; it must
         not read any cached surface state.
@@ -361,7 +361,7 @@ class GostshypWall:
         gtilde = np.einsum("uvj,uv->j", self._G, dm, optimize=True)
         ftilde = np.einsum("uvj,uv->j", self._F, dm, optimize=True)
 
-        # p_j = p_inp a_j / ftilde_j.  A grid-point that has left the density
+        # p_j = p_inp a_j / ftilde_j.  A grid point that has left the density
         # carries no reliable ratio gtilde_j/ftilde_j at all, so it is dropped
         # here once and stays dropped in every derivative; see _OVERLAP_FLOOR.
         floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
@@ -397,7 +397,7 @@ class GostshypWall:
 
     @property
     def amplitudes(self) -> Optional[np.ndarray]:
-        """The per-grid-point amplitudes ``p_j`` of the last :meth:`update`."""
+        """The per-grid point amplitudes ``p_j`` of the last :meth:`update`."""
 
         return None if self._state is None else self._state.alpha
 
@@ -534,7 +534,7 @@ class GostshypWall:
     # ------------------------------------------------------------------
 
     def surface_adjoints(self, dm: np.ndarray) -> _SurfaceAdjoints:
-        """``dE/d(a_j, r_j, n_j)`` per grid-point, in moist native grid order.
+        """``dE/d(a_j, r_j, n_j)`` per grid point, in moist native grid order.
 
         This is what a Fortran ``gostshyp`` component would hand to
         ``cavity_surface_adjoint_type``'s ``w_a``/``w_xyz``/``w_n`` channels.
@@ -665,7 +665,7 @@ class GostshypWall:
     ) -> np.ndarray:
         """Rigid owner-atom motion of the  grid points at a frozen level-set field.
 
-        The area route uses the *true* per-point ``da_i/dR_A``: the grid-point area
+        The area route uses the *true* per-point ``da_i/dR_A``: the grid point area
         carries a switching-function dependence (``a_i ~ f_i/xi_i^2``) that the
         Gaussian-width proxy misses for nuclear motion.
         """

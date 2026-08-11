@@ -209,7 +209,7 @@ class PySCFIsodensityHost:
         return phi_nuc - np.einsum("iuv,uv->i", vgrids, dm)
 
     def _grad_phi_elec(self, coords: np.ndarray) -> np.ndarray:
-        """``grad_r phi_elec(r)`` at each grid-point, ``(3, ngrid)``.
+        """``grad_r phi_elec(r)`` at each grid point, ``(3, ngrid)``.
 
         The derivative with respect to the grid origin follows from
         translational invariance: shifting the operator centre by ``d`` is the
@@ -221,7 +221,7 @@ class PySCFIsodensityHost:
         return -2.0 * np.einsum("kiuv,uv->ki", tint, dm)
 
     def _grad_phi_nuc(self, coords: np.ndarray) -> np.ndarray:
-        """``grad_r phi_nuc(r)`` at each grid-point, ``(3, ngrid)``."""
+        """``grad_r phi_nuc(r)`` at each grid point, ``(3, ngrid)``."""
         centers = self.mol.atom_coords()
         charges = self.mol.atom_charges().astype(float)
         delta = coords[:, None, :] - centers[None, :, :]

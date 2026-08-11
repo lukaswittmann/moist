@@ -1537,7 +1537,7 @@ contains
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
       !> Type-bound and independently contracted A-matrix nuclear gradients
       real(wp) :: grad_rA(3, 1), grad_ref(3, 1)
-      !> Grid-point, nuclear-displacement and Cartesian-component indices
+      !> Grid point, nuclear-displacement and Cartesian-component indices
       integer :: igrid, iaxis, icoord
       !> Largest deviation between the two nuclear-gradient contractions
       real(wp) :: gradient_deviation
@@ -1682,7 +1682,7 @@ contains
 !>
 !> `test_cpcm_surface_weights` above drives the same code path on a seven-point
 !> synthetic surface; this one runs it on an iSwiG cavity built from an mstore
-!> structure, where a grid-point has hundreds of partners spread across both
+!> structure, where a grid point has hundreds of partners spread across both
 !> branches of the pair kernel and the switching factors span several orders of
 !> magnitude. The potential is supplied externally and held fixed, so the
 !> energy depends on the surface only through the CPCM matrix and the weights
@@ -1710,13 +1710,13 @@ contains
       real(wp), parameter :: epsilon = 78.4_wp
       !> Lebedev grid size. Every stencil point costs one O(ngrid**3) solve.
       integer, parameter :: nleb = 26
-      !> Grid-pointe differenced, strided across the exposed surface
+      !> Grid pointe differenced, strided across the exposed surface
       integer, parameter :: n_fd_points = 4
-      !> Smallest switching factor a differenced grid-point may have.
+      !> Smallest switching factor a differenced grid point may have.
       !>
       !> An iSwiG surface keeps nearly buried  grid points with f down to ~1e-10, whose
       !> diagonal entry sqrt(2/pi)*xi/f then reaches ~1e10. Their analytic weights
-      !> are as valid as any other -- the component treats every grid-point alike --
+      !> are as valid as any other -- the component treats every grid point alike --
       !> but a relative step on such an f is ~1e-13 wide, so the difference
       !> quotient is pure rounding noise. The sample is therefore drawn from the
       !> exposed part of the surface; the buried diagonal is covered analytically
@@ -1798,7 +1798,7 @@ contains
          end do
          cavity%xi0(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/dxi at grid-point ", ig
+         write (context, "(a,i0)") "dE/dxi at grid point ", ig
          call check(error, weights%w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
          if (allocated(error)) return
@@ -1812,7 +1812,7 @@ contains
          end do
          cavity%f(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/df at grid-point ", ig
+         write (context, "(a,i0)") "dE/df at grid point ", ig
          call check(error, weights%w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
          if (allocated(error)) return
@@ -1826,7 +1826,7 @@ contains
             end do
             cavity%xyz(iax, ig) = saved
             fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), xyz_step)
-            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid-point ", ig
+            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid point ", ig
             call check(error, weights%w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                & more=trim(context))
             if (allocated(error)) return
@@ -2190,7 +2190,7 @@ contains
 
 !> The CPCM energy is invariant under rigid translation of the solute.
 !>
-!> Every iSwiG grid-point is placed relative to an atomic centre, so shifting the
+!> Every iSwiG grid point is placed relative to an atomic centre, so shifting the
 !> whole structure shifts the surface with it and leaves every distance in both
 !> the matrix and the potential trace unchanged. Unlike rotation -- which
 !> reorients the molecule against a lab-fixed Lebedev grid and therefore only

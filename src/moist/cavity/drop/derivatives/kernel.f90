@@ -1,4 +1,4 @@
-!> Per-grid-point sensitivity kernel shared by the DROP adjoint paths
+!> Per-grid point sensitivity kernel shared by the DROP adjoint paths
 !>
 !> Both DROP reverse-mode paths (electronic and nuclear) differentiate the same
 !> per-point map: from a perturbation of the projected point `r`, the multiplier
@@ -51,7 +51,7 @@ module moist_cavity_drop_derivatives_kernel
    !> while the mean and Gaussian curvatures stay smooth
    real(wp), parameter :: seed_curv_disc_guard = 1.0e-10_wp
 
-   !> Per-grid-point forward state consumed by [[apply_seed]]
+   !> Per-grid point forward state consumed by [[apply_seed]]
    !>
    !> Fields are filled in two stages. The `Inputs` block is written by the
    !> caller before [[build_seed_state]] runs; everything below it is derived.
@@ -161,7 +161,7 @@ module moist_cavity_drop_derivatives_kernel
 
 contains
 
-   !> Evaluate every per-grid-point quantity the seed loop reuses
+   !> Evaluate every per-grid point quantity the seed loop reuses
    !>
    !> The caller fills the `Inputs` block of `state` first. On a degenerate
    !> point `status` is set and the derived fields are left incomplete.
@@ -313,7 +313,7 @@ contains
 
    end subroutine build_seed_state
 
-   !> Propagate one seed through the per-grid-point map
+   !> Propagate one seed through the per-grid point map
    !>
    !> The seed is the perturbation of the level-set jet at the *fixed* point
    !> (`dlsf1_r`, `dlsf2_rr`) together with the induced motion of the projected
@@ -321,14 +321,14 @@ contains
    !> the bordered KKT system. A perturbation of the level-set *value* enters
    !> only through that system, so it has no argument here.
    !>
-   !> @param[in]  state    Per-grid-point forward state from [[build_seed_state]]
+   !> @param[in]  state    Per-grid point forward state from [[build_seed_state]]
    !> @param[in]  dlsf1_r  Seed perturbation of `grad S` at fixed `r`
    !> @param[in]  dlsf2_rr Seed perturbation of `grad^2 S` at fixed `r`
    !> @param[in]  dr       Induced motion of the projected point
    !> @param[in]  dlambda  Induced change of the Lagrange multiplier
    !> @param[out] res      Linear response of the per-point map
    pure subroutine apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res)
-      !> Per-grid-point forward state
+      !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Seed perturbation of the level-set gradient and Hessian
       real(wp), intent(in) :: dlsf1_r(3), dlsf2_rr(3, 3)

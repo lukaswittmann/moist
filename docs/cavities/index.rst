@@ -10,7 +10,7 @@ All cavity implementations are based on the the abstract ``cavity_type`` defined
 It exposes shared allocatable quantities that concrete cavities populate where applicable:
 
 - atomic sphere centers, radii, and per-sphere areas;
-- grid-point positions, owners, areas, Gaussian widths, and switching function;
+- grid point positions, owners, areas, Gaussian widths, and switching function;
 - total cavity area and volume;
 - optional nuclear derivatives of positions, widths, and switching function.
 

@@ -396,7 +396,7 @@ class _DROPCavityBase:
     def get_anchor_gradient(self) -> AnchorGradient:
         """Return the anchor-channel nuclear derivatives in native grid order.
 
-        Requires a preceding :meth:`compute_anchor_gradient`.  The grid-point area
+        Requires a preceding :meth:`compute_anchor_gradient`.  The grid point area
         carries a switching-function dependence (``a_i ~ f_i / xi_i**2``), so
         ``a_i1_rA`` is the area route a geometric surface functional needs and
         is not recoverable from ``xi1_rA``.

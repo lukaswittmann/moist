@@ -77,7 +77,7 @@ PROJ_TOL = 1e-12
 STEP_DM = 1e-4
 #: FD step on nuclear coordinates in bohr; matches test_pyscf.py's tuned value.
 STEP_R = 2.5e-4
-#: FD step on a grid-point centre, in bohr.
+#: FD step on a grid point centre, in bohr.
 STEP_C = 1e-4
 #: *Relative* FD step on the Gaussian exponent.  omega = pi ln2 / a spans orders
 #: of magnitude across the  grid points, so one absolute step cannot serve them all.
@@ -160,7 +160,7 @@ SYSTEMS = {
 #: tensors and, for the response moments, a ``(ncart, ncart, ngrid, 10)``
 #: f-fakemol block, so cost grows as nao^2.
 #:
-#: Basis choice is not arbitrary: the *grid-point* leg carries d and f fakemols for
+#: Basis choice is not arbitrary: the *grid point* leg carries d and f fakemols for
 #: every basis, but the AO leg's cartesian-to-spherical transform is the
 #: identity without l >= 2 AOs.  STO-3G has no d functions on O/F, so a
 #: cart/sph mix-up in ``_to_spherical`` is invisible to it -- keep a def2-SVP row.
@@ -271,7 +271,7 @@ def fd_density(mol, dm, direction, *, pressure=PRESSURE):
         _host, wall = make_wall(mol, dm=dm + offset * STEP_DM * direction, pressure=pressure)
         samples.append(wall.energy)
         grids.append(wall.ngrid)
-    assert len(set(grids)) == 1, f"grid-point count drifted across the stencil: {grids}"
+    assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_DM)
 
 
@@ -284,7 +284,7 @@ def fd_position(mol, positions, dm, index, *, pressure=PRESSURE):
         _host, wall = make_wall(mol, displaced, dm=dm, pressure=pressure)
         samples.append(wall.energy)
         grids.append(wall.ngrid)
-    assert len(set(grids)) == 1, f"grid-point count drifted across the stencil: {grids}"
+    assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_R)
 
 
@@ -414,7 +414,7 @@ def test_integrals_fakemol_normalization_constants():
 @pytest.mark.gostshyp_integrals
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_integrals_f_is_the_field_point_normal_gradient_of_g(system, basis):
-    """``ftilde == n . grad_r gtilde``, i.e. minus the grid-point-centre gradient.
+    """``ftilde == n . grad_r gtilde``, i.e. minus the grid point-centre gradient.
 
     Displacing the field point is the opposite of displacing the Gaussian
     centre, which is the whole content of the sign in ``_build_integrals``.  Get
@@ -479,7 +479,7 @@ def test_params_derivatives_match_fd(system, basis):
 
 @pytest.mark.gostshyp_params
 def test_params_second_moment_matches_a_second_difference():
-    """``Mt_ab`` against a second difference of ``gtilde`` in the grid-point centre.
+    """``Mt_ab`` against a second difference of ``gtilde`` in the grid point centre.
 
     With ``G = exp(-omega rho^2)``, ``d^2 gtilde/dC_a dC_b = 4 omega^2 Mt_ab -
     2 omega delta_ab gtilde``.  This isolates the d-fakemol constant and the
@@ -669,7 +669,7 @@ def test_gradient_anchor_channel_matches_fd(system, basis):
             energy, ngrid = anchored_energy(displaced)
             samples.append(energy)
             grids.append(ngrid)
-        assert len(set(grids)) == 1, f"grid-point count drifted: {grids}"
+        assert len(set(grids)) == 1, f"grid point count drifted: {grids}"
         numerical = fd4(samples, STEP_R)
         assert deviation(analytic[index], numerical) <= 1.0
 
@@ -826,7 +826,7 @@ def test_conventions_gradient_requires_every_channel(dropped):
 def test_conventions_anchor_area_route_needs_the_true_area_derivative():
     """``a_i1_rA`` is not recoverable from the Gaussian-width proxy.
 
-    The grid-point area is ``a_i ~ f_i / xi_i**2``, and under *nuclear* motion the
+    The grid point area is ``a_i ~ f_i / xi_i**2``, and under *nuclear* motion the
     switching factor moves too -- a route ``xi1_rA`` cannot see.  Reusing the
     Fock-side ``dE_da -> w_xi`` fold here is the natural mistake, so it is
     pinned as a control rather than left to a comment.
@@ -894,7 +894,7 @@ def test_conventions_overlap_floor_keeps_the_model_differentiable():
         gostshyp_module._OVERLAP_FLOOR = original
 
     # Tightening the floor readmits energy monotonically: a looser cut can only
-    # discard  grid points, and every grid-point's contribution p_j gtilde_j is
+    # discard  grid points, and every grid point's contribution p_j gtilde_j is
     # positive for a compressive wall.
     assert energies[0] < energies[1] < energies[2]
     # ...and the default discards under a part in 10^6 (measured 1.7e-7), while

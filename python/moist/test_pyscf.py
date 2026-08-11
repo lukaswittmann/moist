@@ -260,7 +260,7 @@ def fd_density(mol, dm, direction, *, isodensity, components="cpcm"):
         energy, _, _, model = solve(host, isodensity=isodensity, components=components)
         samples.append(energy)
         grids.append(model.ngrid)
-    assert len(set(grids)) == 1, f"grid-point count drifted across the stencil: {grids}"
+    assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_DM)
 
 
@@ -274,7 +274,7 @@ def fd_position(mol, positions, dm, index, *, isodensity, components="cpcm"):
         energy, _, _, model = solve(host, isodensity=isodensity, components=components)
         samples.append(energy)
         grids.append(model.ngrid)
-    assert len(set(grids)) == 1, f"grid-point count drifted across the stencil: {grids}"
+    assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_R)
 
 

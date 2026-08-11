@@ -84,8 +84,8 @@ contains
 
    !> Reference kernel value evaluated straight from its closed form
    !>
-   !> @param[in]  xi_i  Gaussian width of grid-point i
-   !> @param[in]  xi_j  Gaussian width of grid-point j
+   !> @param[in]  xi_i  Gaussian width of grid point i
+   !> @param[in]  xi_j  Gaussian width of grid point j
    !> @param[in]  r2    Squared separation
    !> @return     a     Reference kernel value erf(p*r)/r
    pure function reference_value(xi_i, xi_j, r2) result(a)
@@ -107,8 +107,8 @@ contains
 
    !> Boys argument x = (p*r)**2 of a sample point
    !>
-   !> @param[in]  xi_i  Gaussian width of grid-point i
-   !> @param[in]  xi_j  Gaussian width of grid-point j
+   !> @param[in]  xi_i  Gaussian width of grid point i
+   !> @param[in]  xi_j  Gaussian width of grid point j
    !> @param[in]  r2    Squared separation
    !> @return     x     Boys argument
    pure function boys_argument(xi_i, xi_j, r2) result(x)

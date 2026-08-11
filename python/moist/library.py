@@ -665,7 +665,7 @@ def get_anchor_gradient(cavity: CavityHandle) -> dict:
     error instead of writing past the buffers.
 
     The per-point area derivative ``a_i1_rA`` is the one a geometric surface
-    functional needs: the grid-point area carries a switching-function dependence
+    functional needs: the grid point area carries a switching-function dependence
     (``a_i ~ f_i / xi_i**2``), so it is not recoverable from ``xi1_rA`` alone.
     """
 

@@ -89,14 +89,14 @@ contains
    !> Call this only once the point is known to be usable -- a rejected point
    !> must not leave a half-contracted weight behind.
    !>
-   !> @param[in]    state     Per-grid-point forward state
+   !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
    !> @param[in]    igrid     Grid point
    !> @param[in]    lsf2_rr   Level-set Hessian at the projected point
    !> @param[inout] w_lsf1_pt Point-local level-set gradient adjoint
    !> @param[out]   w_xyz_pt  Effective position adjoint for every seed
    pure subroutine seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_pt)
-      !> Per-grid-point forward state
+      !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Folded surface adjoints
       type(drop_surface_weights_type), intent(in) :: eff
@@ -134,7 +134,7 @@ contains
    !> The results are point-local. `potential.f90` scatters them into
    !> `w_lsf*(..., igrid)`; `nuclear.f90` contracts them with `lsf*_rA`.
    !>
-   !> @param[in]    state     Per-grid-point forward state
+   !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
    !> @param[in]    igrid     Grid point
    !> @param[in]    phi1_r    Objective gradient at the projected point
@@ -145,7 +145,7 @@ contains
    !> @param[inout] w_lsf2_pt Point-local level-set Hessian adjoint
    subroutine seed_jet_basis(state, eff, igrid, phi1_r, kkt, w_xyz_pt, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
-      !> Per-grid-point forward state
+      !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Folded surface adjoints
       type(drop_surface_weights_type), intent(in) :: eff
@@ -218,7 +218,7 @@ contains
    !> That makes it three extra right-hand sides on the same factorization,
    !> independent of the number of spheres.
    !>
-   !> @param[in]    state      Per-grid-point forward state
+   !> @param[in]    state      Per-grid point forward state
    !> @param[in]    eff        Folded surface adjoints
    !> @param[in]    igrid      Grid point
    !> @param[in]    phi1_r     Objective gradient at the projected point
@@ -226,7 +226,7 @@ contains
    !> @param[in]    w_xyz_pt   Effective position adjoint from [[seed_normal_channel]]
    !> @param[inout] grad_owner Nuclear-gradient accumulator of the owner sphere
    subroutine seed_anchor(state, eff, igrid, phi1_r, kkt, w_xyz_pt, grad_owner)
-      !> Per-grid-point forward state
+      !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Folded surface adjoints
       type(drop_surface_weights_type), intent(in) :: eff

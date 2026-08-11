@@ -77,7 +77,7 @@ contains
       !> Per-thread LSF evaluation failure, handed to the latch
       type(error_type), allocatable :: lsf_error
 
-      !> Pre-resolved timer handles for the per-grid-point hot loop
+      !> Pre-resolved timer handles for the per-grid point hot loop
       integer :: h_grad, h_prim, h_pos, h_disp, h_dist, h_norm, h_cpj, h_gw, &
                  h_sw, h_area, h_vol, h_bw
 
@@ -254,7 +254,7 @@ contains
 
       call abort%reset()
 
-      ! Pre-resolve the per-grid-point timer handles under the "Gradients" node
+      ! Pre-resolve the per-grid point timer handles under the "Gradients" node
       ! once, before the parallel region. Inside the loop the single timing
       ! thread uses these handles for pure-index start/stop with no lookup.
       ! The caller (get_gradient_drop) opens "Gradients" by name first, so the

@@ -68,7 +68,7 @@ contains
 
    end subroutine setup_mol_cell_grid
 
-   !> Build grid-point neighbour list for density computation
+   !> Build grid point neighbour list for density computation
    !>
    !> @param[inout] self  Cavity instance (anchorxyz must be filled)
    !> @param[out]   error Error object

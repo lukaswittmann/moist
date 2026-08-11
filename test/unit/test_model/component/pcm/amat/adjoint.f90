@@ -6,7 +6,7 @@
 !>
 !> Comparisons:
 !>  * the surface-variable weights against 4-point central differences of the
-!>    contracted energy `q1^T A q2` on a molecular surface, where a grid-point has
+!>    contracted energy `q1^T A q2` on a molecular surface, where a grid point has
 !>    hundreds of partners spread across both kernel branches
 !>  * the nuclear gradient against a contraction of the dense derivative tensor
 !>    [[assemble_pcm_amat_with_gradient]] builds entry by entry, which is a
@@ -78,7 +78,7 @@ contains
       !> Left and right contraction vectors
       real(wp), allocatable, intent(out) :: q1(:), q2(:)
 
-      !> Grid-point index
+      !> Grid point index
       integer :: i
 
       allocate (q1(ngrid), q2(ngrid))
@@ -142,7 +142,7 @@ contains
       real(wp), allocatable :: q1(:), q2(:)
       !> Analytic adjoints
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
-      !> Grid-point, axis, stencil and stride indices; grid size
+      !> Grid point, axis, stencil and stride indices; grid size
       integer :: ip, ig, iax, k, stride, ngrid
       !> Per-branch pair counts of the differenced surface
       integer :: nfar, nnear
@@ -203,7 +203,7 @@ contains
          end do
          xi(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/dxi at grid-point ", ig
+         write (context, "(a,i0)") "dE/dxi at grid point ", ig
          call check(error, w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
          if (allocated(error)) return
@@ -222,7 +222,7 @@ contains
          end do
          f(ig) = saved
          fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-         write (context, "(a,i0)") "dE/df at grid-point ", ig
+         write (context, "(a,i0)") "dE/df at grid point ", ig
          call check(error, w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
          if (allocated(error)) return
@@ -241,7 +241,7 @@ contains
             end do
             xyz(iax, ig) = saved
             fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
-            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid-point ", ig
+            write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid point ", ig
             call check(error, w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                        more=trim(context))
             if (allocated(error)) return

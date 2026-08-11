@@ -61,7 +61,7 @@ module moist_cavity_drop
       !> Per-cell candidate atom lists for point-to-atom screening
       type(moist_cell_grid_type) :: mol_cell_grid
 
-      !> Grid-point neighbour list for density computation (CSR format)
+      !> Grid point neighbour list for density computation (CSR format)
       type(adjacency_list_type) :: grid_adj_list
 
       !> Unique numbering
@@ -76,7 +76,7 @@ module moist_cavity_drop
       !> Raw Lebedev quadrature weights (3, nsph, ngrid)
       real(wp), allocatable :: wleb1_rA(:, :, :)
 
-      !> Grid-point density scaling
+      !> Grid point density scaling
       real(wp), allocatable :: rho_scal0(:)
 
       !> Closest point Jacobian
@@ -187,7 +187,7 @@ module moist_cavity_drop
       integer, allocatable :: anchor_id(:)
       !> Number of branches in the anchor group of each grid point
       integer, allocatable :: branch_count(:)
-      !> Per-grid-point projection convergence flag (ngrid)
+      !> Per-grid point projection convergence flag (ngrid)
       logical, allocatable :: converged(:)
       !> Branch weight per grid point (ngrid) (1 = default/unbranched)
       real(wp), allocatable :: wbranch(:)
@@ -234,7 +234,7 @@ module moist_cavity_drop
 
       !> Build per-cell atom lists for point-to-atom screening
       procedure :: setup_mol_cell_grid
-      !> Build grid-point neighbour list for density computation
+      !> Build grid point neighbour list for density computation
       procedure :: setup_grid_adj_list
 
       !> Initialize grid arrays with Lebedev points on spheres
@@ -308,7 +308,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_switching_function
 
-      !> [properties.f90] Compute local grid-point density values
+      !> [properties.f90] Compute local grid point density values
       module subroutine compute_grid_point_density(self, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -336,7 +336,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine setup_mol_cell_grid
 
-      !> [setup.f90] Build grid-point neighbour list for density computation
+      !> [setup.f90] Build grid point neighbour list for density computation
       module subroutine setup_grid_adj_list(self, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -619,9 +619,9 @@ contains
    !> @param[inout] self              Cavity instance
    !> @param[in]    do_fine           Enable all optional properties (optional)
    !> @param[in]    do_curvature      Compute mean and Gaussian curvatures (optional)
-   !> @param[in]    do_grid_density   Compute local grid-point density (optional)
+   !> @param[in]    do_grid_density   Compute local grid point density (optional)
    !> @param[in]    do_normal         Store surface normal vectors (optional)
-   !> @param[in]    do_r_iI           Store sphere-center to grid-point distances (optional)
+   !> @param[in]    do_r_iI           Store sphere-center to grid point distances (optional)
    !> @param[in]    do_rho            Store anchor-to-projected-point displacements (optional)
    subroutine set_properties_drop(self, &
                                   do_fine, do_curvature, do_grid_density, &

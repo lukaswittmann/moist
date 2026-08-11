@@ -1668,7 +1668,7 @@ contains
 
       !> Deterministic pseudo-random weight for one raw point and channel
       pure function channel_weight(ipoint, ichannel) result(weight)
-         !> Raw grid-point index
+         !> Raw grid point index
          integer, intent(in) :: ipoint
          !> Channel identifier
          integer, intent(in) :: ichannel

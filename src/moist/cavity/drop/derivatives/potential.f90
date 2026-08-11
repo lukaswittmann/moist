@@ -6,7 +6,7 @@
 !> integration weight, area, switch factor, projected position, and normal) onto
 !> adjoint weights of the level set function value/gradient/Hessian
 !>
-!> The per-grid-point sensitivity kernel is shared with the nuclear path
+!> The per-grid point sensitivity kernel is shared with the nuclear path
 !> in [[moist_cavity_drop_derivatives_kernel]]
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
@@ -108,7 +108,7 @@ contains
       !> Level-set clone and objective used to rebuild the per-point jet
       type(lsf_thread_slot) :: lsf_slot
       type(moist_cavity_drop_objective_phi_type) :: phi
-      !> Shared per-grid-point sensitivity kernel state and its response
+      !> Shared per-grid point sensitivity kernel state and its response
       type(drop_seed_state_type) :: state
       !> Grid, seed and Cartesian indices
       integer :: igrid
