@@ -165,6 +165,11 @@ contains
 
       ngrid = cavity%ngrid
 
+      ! Deallocate if ext. pot. to make sure we get a fresh one even if ngrid is same
+      if (self%phi_source == potential_source%external) then
+         if (allocated(self%phi)) deallocate (self%phi)
+      end if
+
       ! Allocate charge array
       if (allocated(self%q)) then
          if (size(self%q) /= ngrid) deallocate (self%q)
