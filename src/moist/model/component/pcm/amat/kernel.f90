@@ -238,7 +238,7 @@ contains
    !> @param[in]  xi_j  Gaussian width of grid-point j
    !> @param[out] p     Pair width
    pure subroutine pcm_amat_width0(xi_i, xi_j, p)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -255,7 +255,7 @@ contains
    !> @param[out] p_i   dp/dxi_i
    !> @param[out] p_j   dp/dxi_j
    pure subroutine pcm_amat_width1(xi_i, xi_j, p, p_i, p_j)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -286,7 +286,7 @@ contains
    !> @param[out] p_ij  d2p/dxi_i dxi_j
    !> @param[out] p_jj  d2p/dxi_j**2
    pure subroutine pcm_amat_width2(xi_i, xi_j, p, p_i, p_j, p_ii, p_ij, p_jj)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Pair width
       real(wp), intent(out) :: p
@@ -434,7 +434,7 @@ contains
    !> @param[in]  r2    Squared separation
    !> @param[out] a     Kernel value
    pure subroutine pcm_amat_near_value(xi_i, xi_j, r2, a)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -465,7 +465,7 @@ contains
    !> @param[out] a_xi_j  dA/dxi_j
    !> @param[out] a_r2    dA/dr2
    pure subroutine pcm_amat_near_grad(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
@@ -513,7 +513,7 @@ contains
    pure subroutine pcm_amat_near_hess(xi_i, xi_j, r2, a, a_xi_i, a_xi_j, a_r2, &
                                       a_xi_i_xi_i, a_xi_i_xi_j, a_xi_j_xi_j, &
                                       a_xi_i_r2, a_xi_j_r2, a_r2_r2)
-      !> Gaussian widths of the two grid-pointe
+      !> Gaussian widths of the two grid points
       real(wp), intent(in) :: xi_i, xi_j
       !> Squared separation
       real(wp), intent(in) :: r2
