@@ -366,7 +366,7 @@ if(MOIST_TESTS)
     cavity_iswig cavity_numsa
     component_pcm_cpcm
     cavity_drop_primitives cavity_drop_cfc_kernel cavity_drop_lsf
-    cavity_drop_gradients cavity_drop_cpcm cavity_drop_integration_ref
+    cavity_drop_gradient cavity_drop_cpcm cavity_drop_integration
   )
   if(MOIST_RISM)
     list(APPEND moist_test_suites rism_1d rism_thermo)
