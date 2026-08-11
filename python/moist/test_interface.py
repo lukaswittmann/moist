@@ -2,7 +2,14 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
-from moist.interface import SolvationModel, Structure
+from moist.interface import (
+    CPCM,
+    DROPCavity,
+    GeneralSolvationModel,
+    PV,
+    SolvationModel,
+    Structure,
+)
 
 
 @pytest.fixture
@@ -14,9 +21,9 @@ def numbers() -> np.ndarray:
 def positions() -> np.ndarray:
     return np.array(
         [
-            [0.00000000000000, 0.00000000000000, -0.73578586109551],
-            [1.44183152868459, 0.00000000000000, 0.36789293054775],
-            [-1.44183152868459, 0.00000000000000, 0.36789293054775],
+            [ 0.00000000000000, 0.00000000000000, -0.73578586109551],
+            [ 1.44183152868459, 0.00000000000000,  0.36789293054775],
+            [-1.44183152868459, 0.00000000000000,  0.36789293054775],
         ]
     )
 
@@ -37,51 +44,26 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
         structure.update(positions, np.random.default_rng().random(7))
 
 
-# def test_gems_model_invalid_solvent() -> None:
-#     with raises(RuntimeError):
-#         SolvationModelGEMS("definitely-not-a-solvent")
+def test_general_model_iterates_cpcm_and_pv_components() -> None:
+    """A heterogeneous component list shares one authoritative live cavity."""
 
+    structure = Structure(
+        np.array([1, 1], dtype=np.int32),
+        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
+    )
+    pressure = 2.5e-4
+    model = GeneralSolvationModel(
+        DROPCavity(nleb=26),
+        [CPCM(32.0), PV(pressure)],
+    )
+    model.update(structure)
 
-# def test_gems_model_water(numbers: np.ndarray, positions: np.ndarray) -> None:
-#     structure = Structure(numbers, positions)
-#     model = SolvationModelGEMS("water")
+    energy, charges = model.solve(np.zeros(model.ngrid))
+    potential = model.get_potential()
 
-#     with raises(RuntimeError, match="updated before requesting the energy"):
-#         model.get_energy()
-
-#     with raises(RuntimeError, match="updated before requesting the cavity"):
-#         _ = model.cavity
-
-#     model.update(structure)
-
-#     energy = model.get_energy()
-#     cavity = model.cavity
-
-#     assert approx(energy, abs=1.0e-12) == 0.0064864129243683965
-#     assert cavity.ngrid > 0
-#     assert cavity.nsph == len(numbers)
-#     assert cavity.xyz.shape == (3, cavity.ngrid)
-#     assert cavity.a.shape == (cavity.ngrid,)
-#     assert cavity.owner.shape == (cavity.ngrid,)
-#     assert cavity.converged.shape == (cavity.ngrid,)
-#     assert cavity.radii.shape == (cavity.nsph,)
-#     assert cavity.asph.shape == (cavity.nsph,)
-#     assert cavity.normal0.shape == (3, cavity.ngrid)
-#     assert cavity.wleb.shape == (cavity.ngrid,)
-#     assert cavity.r_iI0.shape == (cavity.ngrid,)
-#     assert cavity.f.shape == (cavity.ngrid,)
-#     assert cavity.rho.shape == (cavity.ngrid,)
-#     assert cavity.area > 0.0
-#     assert cavity.volume > 0.0
-#     assert np.all(cavity.owner >= 0)
-#     assert np.all(cavity.owner < cavity.nsph)
-
-
-# def test_gems_model_base_type(numbers: np.ndarray, positions: np.ndarray) -> None:
-#     structure = Structure(numbers, positions)
-#     model = SolvationModelGEMS("water")
-
-#     assert isinstance(model, SolvationModel)
-
-#     model.update(structure)
-#     assert isinstance(model.get_energy(), float)
+    assert energy == approx(pressure * model.cavity.volume, abs=2.0e-13)
+    np.testing.assert_array_equal(charges, np.zeros(model.ngrid))
+    assert potential.w_umol.shape == (model.ngrid,)
+    assert potential.w_lsf0.shape == (model.ngrid,)
+    assert potential.w_lsf1.shape == (3, model.ngrid)
+    assert potential.w_lsf2.shape == (3, 3, model.ngrid)
