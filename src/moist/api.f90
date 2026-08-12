@@ -26,11 +26,11 @@ module moist_api
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
    use moist_type, only: cavity_type, solvation_model, solvation_model_component, &
-      coupling_type, potential_type
+                         coupling_type, potential_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
-      assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
-      pcm_amat_nuclear_gradient
+                                             assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
+                                             pcm_amat_nuclear_gradient
    use moist_model_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_component_pcm_type, only: potential_source
@@ -227,7 +227,7 @@ contains
       integer :: major, minor, patch
 
       call get_moist_version(major, minor, patch)
-      write (unit, '(a,1x,i0,a,i0,a,i0)') "moist version", major, ".", minor, ".", patch
+      write (unit, "(a,1x,i0,a,i0,a,i0)") "moist version", major, ".", minor, ".", patch
 
    end subroutine print_version_api
 
@@ -706,6 +706,8 @@ contains
       type(vp_model), pointer :: model
       type(c_ptr) :: vcav
       type(vp_cavity), pointer :: cav
+      class(cavity_type), pointer :: cavity_ptr
+      character(len=:), allocatable :: message
 
       vcav = c_null_ptr
 
@@ -723,23 +725,43 @@ contains
          return
       end if
 
-      select type (general => model%ptr)
-      type is (general_solvation_model)
-         if (.not. allocated(general%cavity)) then
-            call api_error(error%ptr, "get_solvation_model_cavity", &
-                           "General model cavity is not initialized")
-            return
-         end if
-         allocate (cav)
-         cav%ptr => general%cavity
-         cav%owned = .false.
-         vcav = c_loc(cav)
-      class default
-         call api_error(error%ptr, "get_solvation_model_cavity", &
-                        "This solvation model type does not expose a cavity")
-      end select
+      call borrow_general_cavity(model%ptr, cavity_ptr, message)
+      if (allocated(message)) then
+         call api_error(error%ptr, "get_solvation_model_cavity", message)
+         return
+      end if
+
+      allocate (cav)
+      cav%ptr => cavity_ptr
+      cav%owned = .false.
+      vcav = c_loc(cav)
 
    end function get_solvation_model_cavity_api
+
+   !> Point at the cavity a general solvation model owns, without taking it
+   subroutine borrow_general_cavity(model, cavity_ptr, message)
+      !> Solvation model that may own a cavity. `intent(inout)` because the
+      !> borrowed pointer stays live and the handle it feeds is read-write.
+      class(solvation_model), intent(inout), target :: model
+      !> Borrowed cavity, left null unless the model exposes one
+      class(cavity_type), pointer, intent(out) :: cavity_ptr
+      !> Reason the cavity could not be borrowed, unallocated on success
+      character(len=:), allocatable, intent(out) :: message
+
+      cavity_ptr => null()
+
+      select type (general => model)
+      type is (general_solvation_model)
+         if (.not. allocated(general%cavity)) then
+            message = "General model cavity is not initialized"
+            return
+         end if
+         cavity_ptr => general%cavity
+      class default
+         message = "This solvation model type does not expose a cavity"
+      end select
+
+   end subroutine borrow_general_cavity
 
 !> Allocate either PCM-family component behind the common opaque handle.
    subroutine new_pcm_component_common(verror, epsilon, solver, use_cosmo, &
@@ -3834,12 +3856,15 @@ contains
 
          call acc%init(ngrid)
          call acc%add_surface_weights(cavity_error, w_xi=w_xi, w_f=w_f, w_xyz=w_xyz)
-         if (.not. allocated(cavity_error) .and. associated(w_n)) &
-            call acc%add_surface_weights(cavity_error, w_n=w_n)
-         if (.not. allocated(cavity_error) .and. associated(w_k1)) &
-            call acc%add_surface_weights(cavity_error, w_k1=w_k1)
-         if (.not. allocated(cavity_error) .and. associated(w_k2)) &
-            call acc%add_surface_weights(cavity_error, w_k2=w_k2)
+         if (.not. allocated(cavity_error) .and. associated(w_n)) then
+           call acc%add_surface_weights(cavity_error, w_n=w_n)
+         end if
+         if (.not. allocated(cavity_error) .and. associated(w_k1)) then
+           call acc%add_surface_weights(cavity_error, w_k1=w_k1)
+         end if
+         if (.not. allocated(cavity_error) .and. associated(w_k2)) then
+           call acc%add_surface_weights(cavity_error, w_k2=w_k2)
+         end if
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "contract_surface_lsf_weights", cavity_error%message)
             return
