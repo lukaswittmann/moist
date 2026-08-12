@@ -787,46 +787,75 @@ class SolvationComponent:
         return self._handle
 
 
-class CPCMSolver(IntEnum):
+class PCMSolver(IntEnum):
+    """Linear solver shared by PCM-family components."""
+
     INVERSION = 1
     LU = 2
     CHOLESKY = 3
     ITERATIVE = 4
 
 
-class CPCM(SolvationComponent):
-    """Conductor-like polarizable continuum component."""
+# Historical name retained for callers that imported it directly.
+CPCMSolver = PCMSolver
+
+
+class _PCMComponent(SolvationComponent):
+    """Shared immutable configuration for PCM-family components."""
 
     coupling_channels = frozenset({CouplingChannel.ELECTROSTATICS})
-    _SOLVERS = {solver.name.lower(): solver for solver in CPCMSolver}
+    _SOLVERS = {solver.name.lower(): solver for solver in PCMSolver}
 
     def __init__(
         self,
         epsilon: float,
-        solver: str | int | CPCMSolver = CPCMSolver.CHOLESKY,
+        solver: str | int | PCMSolver,
+        constructor: Callable[[float, int], library.ComponentHandle],
     ) -> None:
         if isinstance(solver, str):
             try:
                 solver_value = self._SOLVERS[solver.lower()]
             except KeyError as exc:
                 choices = ", ".join(self._SOLVERS)
-                raise ValueError(f"Unknown CPCM solver {solver!r}; choose {choices}") from exc
+                raise ValueError(f"Unknown PCM solver {solver!r}; choose {choices}") from exc
         else:
             try:
-                solver_value = CPCMSolver(int(solver))
+                solver_value = PCMSolver(int(solver))
             except (TypeError, ValueError) as exc:
-                raise ValueError("CPCM solver enumeration must be between 1 and 4") from exc
+                raise ValueError("PCM solver enumeration must be between 1 and 4") from exc
         self._epsilon = float(epsilon)
         self._solver = solver_value
-        super().__init__(library.new_cpcm_component(self._epsilon, int(self._solver)))
+        super().__init__(constructor(self._epsilon, int(self._solver)))
 
     @property
     def epsilon(self) -> float:
         return self._epsilon
 
     @property
-    def solver(self) -> CPCMSolver:
+    def solver(self) -> PCMSolver:
         return self._solver
+
+
+class CPCM(_PCMComponent):
+    """Conductor-like polarizable continuum component."""
+
+    def __init__(
+        self,
+        epsilon: float,
+        solver: str | int | PCMSolver = PCMSolver.CHOLESKY,
+    ) -> None:
+        super().__init__(epsilon, solver, library.new_cpcm_component)
+
+
+class COSMO(_PCMComponent):
+    """Conductor-like screening-model component."""
+
+    def __init__(
+        self,
+        epsilon: float,
+        solver: str | int | PCMSolver = PCMSolver.CHOLESKY,
+    ) -> None:
+        super().__init__(epsilon, solver, library.new_cosmo_component)
 
 
 class PV(SolvationComponent):

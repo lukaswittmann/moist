@@ -8,6 +8,7 @@ from moist.interface import (
     ArrayCoupling,
     CPCM,
     CFCDROPCavity,
+    COSMO,
     Cavity,
     CavitySnapshot,
     CouplingTransaction,
@@ -18,6 +19,7 @@ from moist.interface import (
     GeneralSolvationModel,
     ISwiGCavity,
     PV,
+    PCMSolver,
     SvdWDROPCavity,
     SolvationCoupling,
     SolvationModel,
@@ -225,6 +227,51 @@ def test_general_model_iterates_cpcm_and_pv_components() -> None:
     assert potential.w_lsf0.shape == (model.ngrid,)
     assert potential.w_lsf1.shape == (3, model.ngrid)
     assert potential.w_lsf2.shape == (3, 3, model.ngrid)
+
+
+def test_cosmo_is_a_standalone_pcm_component() -> None:
+    cpcm = CPCM(32.0, solver="lu")
+    cosmo = COSMO(32.0, solver="lu")
+
+    assert cpcm.epsilon == cosmo.epsilon == 32.0
+    assert cpcm.solver is cosmo.solver is PCMSolver.LU
+    assert cpcm.coupling_channels == cosmo.coupling_channels
+    assert moist.CPCMSolver is moist.PCMSolver
+
+
+def test_cosmo_rejects_an_invalid_dielectric() -> None:
+    with raises(RuntimeError, match="Dielectric constant must be >= 1"):
+        COSMO(0.5)
+
+
+def test_cosmo_uses_its_own_dielectric_scaling(
+    numbers: np.ndarray,
+    positions: np.ndarray,
+) -> None:
+    """COSMO composes like CPCM but applies its distinct screening factor."""
+    structure = Structure(numbers, positions)
+    epsilon = 32.0
+    results = {}
+
+    for component_type in (CPCM, COSMO):
+        model = SolvationModel(SvdWDROPCavity(nleb=26), [component_type(epsilon)])
+        model.update(structure)
+        phi = np.linspace(-0.2, 0.3, model.ngrid)
+        results[component_type] = model.solve(phi)
+
+    cpcm_energy, cpcm_charges = results[CPCM]
+    cosmo_energy, cosmo_charges = results[COSMO]
+    factor_ratio = ((epsilon - 1.0) / (epsilon + 0.5)) / (
+        (epsilon - 1.0) / epsilon
+    )
+
+    assert cosmo_energy == approx(factor_ratio * cpcm_energy, rel=1.0e-13)
+    np.testing.assert_allclose(
+        cosmo_charges,
+        factor_ratio * cpcm_charges,
+        rtol=1.0e-13,
+        atol=1.0e-14,
+    )
 
 
 def test_general_model_evaluates_a_complete_array_coupling() -> None:

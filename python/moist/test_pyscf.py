@@ -53,6 +53,7 @@ except ImportError as exc:  # pragma: no cover - optional dependency
 from .interface import (
     CPCM,
     CFCDROPCavity,
+    COSMO,
     DROPCavity,
     GeneralSolvationModel,
     ISwiGCavity,
@@ -330,11 +331,15 @@ def sampled_coordinates(natm):
     [SvdWDROPCavity, CFCDROPCavity, ISwiGCavity],
     ids=("svdw-drop", "cfc-drop", "iswig"),
 )
-def test_l0_density_independent_cavity_types_share_the_pyscf_coupling(cavity_type):
-    """Every radii-based cavity uses the same CPCM/PySCF composition."""
+@pytest.mark.parametrize("component_type", [CPCM, COSMO], ids=("cpcm", "cosmo"))
+def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
+    cavity_type,
+    component_type,
+):
+    """Every PCM/cavity combination uses the same PySCF coupling."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     host = PySCFHost(mol)
-    model = GeneralSolvationModel(cavity_type(nleb=26), [CPCM(EPSILON)])
+    model = GeneralSolvationModel(cavity_type(nleb=26), [component_type(EPSILON)])
 
     result = model.evaluate(coupling=host.coupling(dm))
 

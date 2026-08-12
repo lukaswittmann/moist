@@ -448,6 +448,14 @@ def new_cpcm_component(epsilon: float, solver: int) -> ComponentHandle:
     )
 
 
+def new_cosmo_component(epsilon: float, solver: int) -> ComponentHandle:
+    """Create a COSMO component for a general solvation model."""
+
+    return ComponentHandle.with_gc(
+        error_check(lib.moist_new_cosmo_component)(float(epsilon), int(solver))
+    )
+
+
 def new_pv_component(pressure: float) -> ComponentHandle:
     """Create a pressure-volume component whose energy is pressure times volume."""
 
