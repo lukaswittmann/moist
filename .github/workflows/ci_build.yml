@@ -77,7 +77,7 @@ jobs:
           fflags="-fopenmp"
           if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
-          fpm test  --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
+          fpm test --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
 
   macos:
     name: macos (${{ matrix.toolchain.build }}, ${{ matrix.toolchain.name }})
@@ -154,7 +154,7 @@ jobs:
           flags="-O2 -fopenmp"
           link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
-          fpm test  --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
+          fpm test --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
 
   python:
     name: python (${{ matrix.name }}, gnu14, pyscf)
