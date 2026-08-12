@@ -13,7 +13,7 @@ Settings
 
 All three settings are optional constructor arguments.
 
-``nleb`` (integer, default ``194``)
+``nleb`` (integer, default ``110``)
    Number of Lebedev quadrature points per atomic sphere; the primary accuracy/cost setting.
    **Must be one of the supported sizes**: 14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202.
    Any other value raises an error, because each grid has a fitted Born ``zeta`` (the Gaussian width scale).
