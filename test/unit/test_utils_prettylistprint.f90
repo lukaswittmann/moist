@@ -72,6 +72,7 @@ contains
       call plp%end_row()
 
       call read_line(iu, path, 1, line)
+      call discard_scratch(path)
       call check(error, line, "____ab__________42", "cells are right-aligned and the skipped one is blank")
 
    end subroutine test_row_layout
@@ -125,6 +126,7 @@ contains
       call plp%end_row()
 
       call read_line(iu, path, 1, line)
+      call discard_scratch(path)
       call check(error, line, "+++++-----", "overflow markers carry the sign of the value")
 
    end subroutine test_real_overflow_marker
@@ -167,6 +169,24 @@ contains
       end do
       close (read_unit, status='delete')
    end subroutine count_lines
+
+   !> Delete a scratch file that `read_line` left behind
+   !>
+   !> `count_lines` discards the file itself; a test that only ever calls
+   !> `read_line` has to clean up explicitly. Skipping it leaks the file into the
+   !> working directory, which is the build tree under meson but the project root
+   !> under fpm.
+   !>
+   !> @param[in] path Scratch file name
+   subroutine discard_scratch(path)
+      !> Scratch file name
+      character(len=*), intent(in) :: path
+
+      integer :: unit, stat
+
+      open (newunit=unit, file=path, action='read', status='old', iostat=stat)
+      if (stat == 0) close (unit, status='delete')
+   end subroutine discard_scratch
 
    !> Read one line of printer output, keeping the scratch file for later reads
    !>

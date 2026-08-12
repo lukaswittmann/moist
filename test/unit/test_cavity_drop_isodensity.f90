@@ -401,8 +401,10 @@ contains
 
       character(len=:), allocatable :: source_root
 
-      source_root = get_env("MOIST_SOURCE_ROOT")
-      if (.not. allocated(source_root)) source_root = "."
+      ! get_env always returns an allocated string, so an `allocated` guard would
+      ! never fire; the default is what covers an unset variable. meson exports
+      ! the source root, fpm runs the tester from the project root.
+      source_root = get_env("MOIST_SOURCE_ROOT", default=".")
       filename = source_root//"/test/unit/data/" &
                  //trim(mol_tag(test_molecule_index(test)))//"_" &
                  //trim(basis_tag(test_basis_index(test)))//".density"

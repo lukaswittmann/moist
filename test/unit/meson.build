@@ -1,36 +1,62 @@
-# Test suites are grouped by module into subfolders that mirror src/moist/
+# One suite per file, flat: suite id <id> lives in test_<id>.f90 and defines
+# module test_<id>. Keeping the three names in lockstep is what lets this list
+# be the single source of truth -- the file name is derived, never spelled out.
 #
-# Accumulators the subdirs append to:
 #   tests         suite ids, passed to the tester as its argument
-#   test_srcs     sources of the tester executable (suites plus shared helpers)
 #   test_timeouts suite id -> timeout, for suites needing more than the default
-tests = []
+tests = [
+  'api',
+  'utils',
+  'utils_timer',
+  'utils_context',
+  'utils_mem',
+  'utils_prettylistprint',
+  'data',
+  'radii',
+  'math_linalg',
+  'math_smoothing_kernels',
+  'math_adjacency_list',
+  'math_cell_grid',
+  'math_solvers',
+  'math_sorters',
+  'math_trig',
+  'math_grid',
+  'cavity_drop_primitives',
+  'cavity_drop_cfc',
+  'cavity_drop_lsf',
+  'cavity_drop_isodensity',
+  'cavity_drop_gradient',
+  'cavity_drop_nuclear_adjoint',
+  'cavity_drop_integration',
+  'cavity_drop_cpcm',
+  'cavity_iswig',
+  'cavity_numsa',
+  'cavity_marchingcubes',
+  'model_component_pcm_amat',
+  'model_component_pcm_amat_kernel',
+  'model_component_pcm_amat_assembly',
+  'model_component_pcm_amat_adjoint',
+  'model_component_pcm_electrostatics',
+  'model_component_pcm_cpcm',
+  'model_component_gostshyp',
+  'model_component_pv',
+  'model_general',
+]
+if use_hdf5
+  tests += 'utils_hdf5'
+endif
+
 test_timeouts = {}
 
-# main driver plus the cross-cutting helper module (not registered as a suite).
+# Driver plus the shared fixture modules, which register no suite of their own.
 test_srcs = files(
   'main.F90',
   'test_helpers.f90',
+  'test_model_component_helper.f90',
 )
 
-subdir('test_math')
-subdir('test_cavity')
-subdir('test_model')
-subdir('test_utils')
-
-# Suites kept flat at the test/unit root, each in its own test_<id>.f90. Two kinds live
-# here: singletons whose suite id cannot take a folder prefix (a test_utils/ folder would
-# force every leaf to be 'utils_<leaf>', leaving a plain 'utils' suite unreachable), and
-# smoke tests for optional vendored dependencies, which exercise upstream modules
-# directly and so mirror nothing under src/moist/.
-root_tests = ['api', 'utils', 'radii', 'data']
-if use_hdf5
-  root_tests += 'utils_hdf5'
-endif
-
-foreach leaf : root_tests
-  tests += leaf
-  test_srcs += files('test_' + leaf + '.f90')
+foreach t : tests
+  test_srcs += files('test_' + t + '.f90')
 endforeach
 
 tester = executable(
