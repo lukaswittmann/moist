@@ -1,7 +1,6 @@
 !> Nuclear gradient of the PCM electrostatic surface coupling
 module moist_model_component_pcm_electrostatics
    use mctc_env, only: wp, error_type, fatal_error
-   !$ use omp_lib, only: omp_get_max_threads, omp_get_thread_num
    implicit none (type, external)
    private
 
@@ -113,10 +112,8 @@ contains
       real(wp) :: qi, rvec(3), r2, inv_r3, enuc(3), chain(3)
       !> Squared-distance threshold for coincident sources
       real(wp), parameter :: r2tol = 1.0e-30_wp
-      !> Thread identity and count for the manual reduction
-      integer :: ithread, nthreads
-      !> Per-thread gradient accumulator and the buffer collecting them
-      real(wp), allocatable :: acc(:, :), grad_buf(:, :, :)
+      !> Tmp reduction target; explicit shape
+      real(wp) :: acc(3, size(za))
 
       grad_rA = 0.0_wp
       ngrid = size(surface_q)
@@ -131,21 +128,11 @@ contains
          return
       end if
 
-      ! gfortran miscompiles reduction(+:) on an assumed-shape array dummy, so
-      ! the reduction is done by hand: each thread sums into a private
-      ! accumulator, parks it in its own slice, and the slices are added up
-      ! serially. That also makes the result independent of the thread count.
-      nthreads = 1
-      !$ nthreads = omp_get_max_threads()
-      allocate (grad_buf(3, nsph, nthreads), source=0.0_wp)
-
-      !$omp parallel default(none) &
-      !$omp shared(xyz, sphxyz, xyz1_rA, surface_q, qefield, za, ngrid, nsph, grad_buf) &
-      !$omp private(i, iatom, katom, qi, rvec, r2, inv_r3, enuc, chain, ithread, acc)
-      ithread = 1
-      !$ ithread = omp_get_thread_num() + 1
-      allocate (acc(3, nsph), source=0.0_wp)
-      !$omp do schedule(static)
+      acc = 0.0_wp
+      !$omp parallel do default(none) &
+      !$omp shared(xyz, sphxyz, xyz1_rA, surface_q, qefield, za, ngrid, nsph) &
+      !$omp private(i, iatom, katom, qi, rvec, r2, inv_r3, enuc, chain) &
+      !$omp reduction(+:acc) schedule(static)
       do i = 1, ngrid
          qi = surface_q(i)
          enuc = 0.0_wp
@@ -167,13 +154,9 @@ contains
                             + dot_product(xyz1_rA(:, 3, iatom, i), chain)
          end do
       end do
-      !$omp end do
-      grad_buf(:, :, ithread) = acc
-      !$omp end parallel
+      !$omp end parallel do
 
-      do ithread = 1, nthreads
-         grad_rA(:, :) = grad_rA(:, :) + grad_buf(:, :, ithread)
-      end do
+      grad_rA(:, :) = acc
    end subroutine pcm_electrostatic_nuclear_gradient
 
 end module moist_model_component_pcm_electrostatics
