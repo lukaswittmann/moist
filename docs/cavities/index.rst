@@ -33,7 +33,7 @@ Typical Use
 1. Construct a concrete cavity and configure its radii and discretization.
 2. Call ``update`` whenever its inputs change, for example after a geometry or
    density update.
-3. A ``general_solvation_model`` owns one authoritative cavity, updates it
+3. A ``solvation_model_general`` owns one authoritative cavity, updates it
    before its components, and passes the same cavity to each component.
 4. For the potential, components accumulate model surface weights and
    ``get_surface_potential`` maps them to host-response channels where needed.

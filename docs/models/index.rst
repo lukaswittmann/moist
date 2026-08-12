@@ -7,7 +7,7 @@ Their abstract interfaces are defined in ``src/moist/type.f90``.
 Solvation Model Interface
 -------------------------
 
-A ``solvation_model`` is the host-facing object for one complete solvation treatment.
+A ``solvation_model_type`` is the host-facing object for one complete solvation treatment.
 Concrete models implement four deferred procedures:
 
 ``update(mol, error)``
@@ -28,7 +28,7 @@ The ``coupling_type`` carries QM data from the host to the model;
 Model Component Interface
 -------------------------
 
-A ``solvation_model_component`` is one reusable energy term evaluated on a shared cavity.
+A ``solvation_model_component_type`` is one reusable energy term evaluated on a shared cavity.
 It stores a name, the current solute structure, and a linear ``scale`` as shared component state.
 
 Components implement ``update``, ``get_energy``, ``get_potential``, and ``get_gradient`` with the live ``cavity_type`` as an additional argument.
@@ -41,7 +41,7 @@ They may also override three default no-op response hooks:
 Composition and Lifecycle
 -------------------------
 
-The current ``general_solvation_model`` owns one authoritative cavity and an ordered list of components:
+The current ``solvation_model_general`` owns one authoritative cavity and an ordered list of components:
 
 1. Construct the model from a cavity and add all components before the first update.
 2. ``update`` refreshes the cavity first, then every component.
@@ -61,7 +61,7 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    use moist_cavity_drop_lsf_svdw, only: &
       & moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
-   use moist_model_general, only: general_solvation_model, new_general_model
+   use moist_model_general, only: solvation_model_general, new_model_general
    use moist_model_components, only: solvation_model_component_cpcm, &
       & new_component_cpcm, solvation_model_component_pv, new_component_pv
 
@@ -70,7 +70,7 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    type(cavity_type_drop) :: cavity
    type(solvation_model_component_cpcm) :: electrostatic
    type(solvation_model_component_pv) :: pressure_volume
-   type(general_solvation_model) :: model
+   type(solvation_model_general) :: model
    type(error_type), allocatable :: error
 
    ! Global context
@@ -90,7 +90,7 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    if (allocated(error)) error stop error%message
 
    ! Construct model
-   call new_general_model(model, cavity, ctx, error)
+   call new_model_general(model, cavity, ctx, error)
    if (allocated(error)) error stop error%message
 
    ! Add model components

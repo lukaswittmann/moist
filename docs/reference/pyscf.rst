@@ -164,7 +164,7 @@ The caller only constructs the objects and asks for one evaluation:
    fock = result.fock
    gradient = result.gradient
    surface = result.cavity
-   grid_points = surface.grid_points
+   grid_points = surface.xyz          # (3, ngrid) in bohr
 
 Components compose, and the host side is unchanged by which ones are present.
 Adding a pressure term makes the cavity-shape response dominant rather than a small correction, because the PV energy depends on the density *only* through the volume of the surface:

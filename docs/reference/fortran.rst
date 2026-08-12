@@ -2,7 +2,7 @@ Fortran API
 ===========
 
 In MOIST, all used components (cavities, solvation model components) are based on abstract types.
-For example, cavities extend ``cavity_type`` and all components extend ``solvation_model_component`` (both from ``moist_type``).
+For example, cavities extend ``cavity_type`` and all components extend ``solvation_model_component_type`` (both from ``moist_type``).
 This means, only their constructors are type-specific and model usage and evaluation are independent of the selected cavity and components.
 
 A shared ``moist_context_type`` controls output verbosity and carries a timer.
@@ -27,9 +27,9 @@ The examples below use CPCM radii, but ``moist_radii`` also provides, e.g. the S
 
 .. code-block:: fortran
 
-   use moist_radii, only : static_radius_type, new_cpcm_radii
+   use moist_radii, only : radius_type_static, new_cpcm_radii
 
-   type(static_radius_type) :: radii
+   type(radius_type_static) :: radii
 
    call new_cpcm_radii(radii)
 
@@ -210,7 +210,7 @@ See :doc:`/cavities/isodensity` for more details.
 Model components
 ----------------
 
-Components have different input data, but they are based on the ``solvation_model_component`` object.
+Components have different input data, but they are based on the ``solvation_model_component_type`` object.
 Because some solvation model components couple with the QM density, some quantities have to be exchanged between MOIST and the QM side.
 
 .. list-table:: Host exchange by component
@@ -345,13 +345,13 @@ Building a list-based model
 ---------------------------
 
 A simpler approach is using the list-based model template.
-This ``general_solvation_model`` owns the cavity and all added components. 
+This ``solvation_model_general`` owns the cavity and all added components. 
 
 .. code-block:: fortran
 
    use mctc_env, only : wp, error_type
    use moist_context, only : moist_context_type, new_context
-   use moist_radii, only : static_radius_type, new_cpcm_radii
+   use moist_radii, only : radius_type_static, new_cpcm_radii
    use moist_cavity_drop, only : cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only : &
       & moist_cavity_drop_lsf_svdw_type
@@ -359,13 +359,13 @@ This ``general_solvation_model`` owns the cavity and all added components.
       & new_component_cpcm, solvation_model_component_pv, new_component_pv, &
       & solvation_model_component_gostshyp, new_component_gostshyp, &
       & potential_source
-   use moist_model_general, only : general_solvation_model, new_general_model
+   use moist_model_general, only : solvation_model_general, new_model_general
    
    type(error_type), allocatable :: error
 
    type(moist_context_type), target :: ctx
    ! Cavity
-   type(static_radius_type) :: radii
+   type(radius_type_static) :: radii
    type(moist_cavity_drop_lsf_svdw_type) :: svdw
    type(cavity_type_drop) :: cavity
    ! Model components
@@ -373,7 +373,7 @@ This ``general_solvation_model`` owns the cavity and all added components.
    type(solvation_model_component_pv) :: pv
    type(solvation_model_component_gostshyp) :: gostshyp
    ! Model
-   type(general_solvation_model) :: model
+   type(solvation_model_general) :: model
 
    ! Conversion of GPa to a.u.
    real(wp), parameter :: gpa_to_au = 3.3989e-5_wp
@@ -395,7 +395,7 @@ This ``general_solvation_model`` owns the cavity and all added components.
    call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
    ! Construct model and add all components
-   call new_general_model(model, cavity, ctx, error)
+   call new_model_general(model, cavity, ctx, error)
    if (allocated(error)) error stop error%message
    call model%add_component(cpcm, error)
    if (allocated(error)) error stop error%message
