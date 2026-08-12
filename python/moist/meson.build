@@ -113,15 +113,20 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   #   vdw           electrostatic conventions on a density-independent cavity
   #   isodensity_*  the level-set chain rule, one target per component set
   #   conventions   channel semantics and the negative controls
-  #   scf           the self-consistent layer (slowest, ~21 s)
+  #   scf           the self-consistent layer (slowest)
+  #
+  # The timeouts are wall-clock and meson runs the targets concurrently, so they
+  # are set for the slowest CI runner under full load rather than for the times
+  # a developer sees locally -- a minute was not enough for either isodensity
+  # tier or for scf on the Ubuntu runners.
   foreach entry : [
-    ['pyscf_host', 'host', 60],
-    ['pyscf_vdw', 'vdw', 60],
-    ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 60],
-    ['pyscf_isodensity_pv', 'isodensity and pv', 60],
-    ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 60],
-    ['pyscf_conventions', 'conventions', 60],
-    ['pyscf_scf', 'scf', 60],
+    ['pyscf_host', 'host', 300],
+    ['pyscf_vdw', 'vdw', 300],
+    ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 300],
+    ['pyscf_isodensity_pv', 'isodensity and pv', 300],
+    ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 300],
+    ['pyscf_conventions', 'conventions', 300],
+    ['pyscf_scf', 'scf', 300],
   ]
     test(
       entry[0],
@@ -142,11 +147,11 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
   #   gostshyp_conventions channel semantics and the negative controls
   gostshyp_src = meson.current_build_dir() / 'test_gostshyp.py'
   foreach entry : [
-    ['gostshyp_integrals', 'gostshyp_integrals', 60],
-    ['gostshyp_params', 'gostshyp_params', 60],
-    ['gostshyp_fock', 'gostshyp_fock', 60],
-    ['gostshyp_gradient', 'gostshyp_gradient', 60],
-    ['gostshyp_conventions', 'gostshyp_conventions', 60],
+    ['gostshyp_integrals', 'gostshyp_integrals', 300],
+    ['gostshyp_params', 'gostshyp_params', 300],
+    ['gostshyp_fock', 'gostshyp_fock', 300],
+    ['gostshyp_gradient', 'gostshyp_gradient', 300],
+    ['gostshyp_conventions', 'gostshyp_conventions', 300],
   ]
     test(
       entry[0],

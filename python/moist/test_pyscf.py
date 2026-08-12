@@ -81,8 +81,17 @@ STEP_R = 2.5e-4
 REL_THR = 1e-9
 ABS_THR = REL_THR / 10.0
 #: Converged-SCF gradient tolerances
-SCF_REL_THR = 1e-9
-SCF_ABS_THR = SCF_REL_THR / 10.0
+#:
+#: The absolute floor is deliberately not ``SCF_REL_THR / 10``.  These
+#: references are differences of total energies near -75 Ha, so each sample
+#: carries about an ULP of noise, and ``fd4`` multiplies that by ``18 / (12 h)``
+#: -- roughly 6e3 at this step.  The FD side therefore cannot be trusted below
+#: ~1e-10 no matter how tightly the SCF converges: it moves by that much merely
+#: from changing the OpenMP thread count, and neither a smaller nor a larger
+#: step reduces it.  1e-10 would be sitting on that floor, so the check would
+#: report the quadrature noise rather than the gradient.
+SCF_REL_THR = 1e-10
+SCF_ABS_THR = 1e-9
 
 #: A negative control must miss by at least this many tolerances
 VACUITY_FACTOR = 100.0
