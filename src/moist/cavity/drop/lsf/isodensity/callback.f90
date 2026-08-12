@@ -9,6 +9,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_output_format, only: format_string
    implicit none (type, external)
    private
 
@@ -133,8 +134,6 @@ contains
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
       integer(c_int) :: status
-      character(len=16) :: status_buf
-      character(len=48) :: point_buf
 
       ! Only request the (expensive) density Hessian/third derivative for the
       ! orders the cavity actually needs.  The projection's value+gradient phase
@@ -167,10 +166,11 @@ contains
          ! The substitute state is not a derivative jet of anything
          self%prepared_deriv = -1
          ! Carry the point in the diagnostic
-         write (status_buf, "(i0)") int(status)
-         write (point_buf, "(3(1x,es13.6))") point
          call fatal_error(error, "External LSF evaluation failed with status "// &
-                          trim(status_buf)//" at point ("//trim(adjustl(point_buf))// &
+                          format_string(int(status), "(i0)")//" at point ("// &
+                          trim(adjustl(format_string(point(1), "(es13.6)")))//" "// &
+                          trim(adjustl(format_string(point(2), "(es13.6)")))//" "// &
+                          trim(adjustl(format_string(point(3), "(es13.6)")))// &
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if
