@@ -1,8 +1,4 @@
-!> Environment-variable lookup and output-directory resolution helpers.
-!>
-!> Centralizes the "read an env var, optionally fall back to a default, and
-!> create the directory" pattern shared by the RISM HDF5 output paths and the
-!> developer test fixtures.
+!> Environment-variable lookup and output-directory resolution helpers
 module moist_utils_env
 
    implicit none
@@ -14,13 +10,17 @@ module moist_utils_env
 
 contains
 
-   !> Read an environment variable into an allocatable string.
-   !> @param[in]  name  Environment variable name to query
-   !> @return           Trimmed value, or unallocated if the variable is unset or empty
-   function get_env(name) result(val)
+   !> Read an environment variable into an allocatable string
+   !>
+   !> @param[in]  name     Environment variable name to query
+   !> @param[in]  default  Optional: value used when the variable is unset or empty
+   !> @return              Trimmed value, `default`, or a zero-length string
+   function get_env(name, default) result(val)
       !> Environment variable name to query
       character(len=*), intent(in) :: name
-      !> Resolved value; unallocated when the variable is unset or empty
+      !> Value substituted when the variable is unset or empty
+      character(len=*), intent(in), optional :: default
+      !> Resolved value; always allocated
       character(len=:), allocatable :: val
       !> Length of the variable value as reported by the runtime
       integer :: length
@@ -32,7 +32,11 @@ contains
          allocate (character(len=length) :: val)
          call get_environment_variable(name, value=val)
          val = trim(val)
+         if (len(val) > 0) return
       end if
+
+      val = ""
+      if (present(default)) val = default
    end function get_env
 
    !> Resolve a directory from an environment variable, falling back to a default.
@@ -48,8 +52,7 @@ contains
       !> Resolved directory path
       character(len=:), allocatable :: dir
 
-      dir = get_env(env_name)
-      if (.not. allocated(dir)) dir = fallback
+      dir = get_env(env_name, default=fallback)
    end function resolve_dir
 
    !> Create a directory (and any missing parents) if it does not already exist.
