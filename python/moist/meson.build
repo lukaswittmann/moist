@@ -93,6 +93,7 @@ test(
     'pytest',
     'pyscf:dft,grad,gto,scf',
   ],
+  suite: 'python',
   timeout: 60,
 )
 
@@ -116,6 +117,7 @@ test(
   args: pytest_args + bindings_srcs,
   depends: moist_pyext,
   env: pytest_env,
+  suite: 'python',
   timeout: 60,
 )
 
@@ -141,6 +143,7 @@ foreach entry : [
     args: pytest_args + ['-m', entry[1], coupling_src],
     depends: moist_pyext,
     env: coupling_env,
+    suite: 'python',
     timeout: entry[2],
   )
 endforeach
@@ -166,6 +169,7 @@ foreach entry : [
     args: pytest_args + ['-m', entry[1], gostshyp_src],
     depends: moist_pyext,
     env: coupling_env,
+    suite: 'python',
     timeout: entry[2],
   )
 endforeach

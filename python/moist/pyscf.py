@@ -63,6 +63,7 @@ from .interface import (
     SolvationModel,
     Structure,
     TracePotential,
+    _immutable_array,
 )
 
 __all__ = ["PySCFCoupling", "PySCFHost", "PySCFIsodensityHost", "solvated_rhf"]
@@ -470,13 +471,14 @@ class PySCFCoupling(SolvationCoupling):
         density_matrix: np.ndarray,
     ) -> None:
         self.host = host
-        density = np.array(density_matrix, copy=True, order="C")
+        density = np.ascontiguousarray(density_matrix)
         expected = (host.mol.nao_nr(), host.mol.nao_nr())
         if density.shape != expected:
             raise ValueError(f"density_matrix must have shape {expected}")
-        self._density_matrix = np.frombuffer(
-            density.tobytes(order="C"), dtype=density.dtype
-        ).reshape(expected)
+        self._density_matrix = _immutable_array(density)
+        # The snapshot handed to fock()/gradient() deliberately carries values
+        # only, so density dependence cannot be asked of it there; prepare()
+        # runs first and leaves the answer here.
         self._include_lsf = True
         self._gostshyp = None
 
@@ -540,7 +542,7 @@ class PySCFCoupling(SolvationCoupling):
         fock = self.host.fock(
             cavity.xyz.T,
             potential,
-            include_lsf=self._density_dependent(cavity),
+            include_lsf=self._include_lsf,
         )
         if self._gostshyp is not None:
             fock = fock + self._gostshyp._fock_from(
@@ -559,7 +561,7 @@ class PySCFCoupling(SolvationCoupling):
         gradient = model_gradient() + self.host.gradient(
             cavity.xyz.T,
             potential,
-            include_lsf=self._density_dependent(cavity),
+            include_lsf=self._include_lsf,
         )
         if self._gostshyp is not None:
             gradient = gradient + self._gostshyp._integral_nuclear_gradient(
@@ -567,14 +569,6 @@ class PySCFCoupling(SolvationCoupling):
                 potential,
             )
         return gradient
-
-    def _density_dependent(self, _cavity: CavitySnapshot) -> bool:
-        # The snapshot deliberately contains values only; cavity construction
-        # semantics stay on the live object owned by the current model.
-        # ``prepare`` runs before result assembly, so the bound host can retain
-        # this one boolean without exposing the native model to result consumers.
-        return getattr(self, "_include_lsf", True)
-
 
 def solvated_rhf(
     mol,

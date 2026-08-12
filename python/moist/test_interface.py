@@ -1,3 +1,5 @@
+from typing import Callable
+
 import numpy as np
 import pytest
 from pytest import approx, raises
@@ -42,6 +44,26 @@ def positions() -> np.ndarray:
             [-1.44183152868459, 0.00000000000000,  0.36789293054775],
         ]
     )
+
+
+@pytest.fixture
+def diatomic() -> Callable[..., Structure]:
+    """Factory for an H2 structure with the atoms ``bond`` bohr apart along z.
+
+    The model and coupling tests only need *a* valid structure, and two atoms
+    keep the surface small enough that building several models per test stays
+    cheap -- the ``numbers``/``positions`` fixtures above are water, which those
+    tests would pay for without testing anything more.
+    """
+
+    def build(bond: float = 1.4) -> Structure:
+        half = 0.5 * bond
+        return Structure(
+            np.array([1, 1], dtype=np.int32),
+            np.array([[0.0, 0.0, -half], [0.0, 0.0, half]]),
+        )
+
+    return build
 
 
 def test_default_drop_surface_matches_the_svdw_defaults(
@@ -206,13 +228,10 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
         Structure(numbers.reshape(1, -1), positions)
 
 
-def test_general_model_iterates_cpcm_and_pv_components() -> None:
+def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     """A heterogeneous component list shares one authoritative live cavity."""
 
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+    structure = diatomic()
     pressure = 2.5e-4
     model = GeneralSolvationModel(
         CavityDROP(nleb=26),
@@ -276,11 +295,8 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     )
 
 
-def test_general_model_evaluates_a_complete_array_coupling() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
+    structure = diatomic()
     pressure = 2.5e-4
     model = GeneralSolvationModel(
         CavityDROP(nleb=26),
@@ -302,19 +318,13 @@ def test_general_model_evaluates_a_complete_array_coupling() -> None:
     np.testing.assert_array_equal(result.charges, np.zeros(result.cavity.ngrid))
     assert result.fock is None
     assert result.gradient.shape == (3, len(structure))
-    assert result.cavity.grid_points is result.cavity.xyz
-    assert result.cavity.grid_areas is result.cavity.a
-    assert result.potential.level_set_value_weights is result.potential.w_lsf0
     assert not result.cavity.xyz.flags.writeable
     assert not result.potential.w_lsf0.flags.writeable
     assert not result.gradient.flags.writeable
 
 
-def test_solvation_model_is_the_canonical_constructor() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_solvation_model_is_the_canonical_constructor(diatomic) -> None:
+    structure = diatomic()
     coupling = ArrayCoupling(structure)
     model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
 
@@ -324,26 +334,17 @@ def test_solvation_model_is_the_canonical_constructor() -> None:
     assert result.energy == approx(2.5e-4 * result.cavity.volume, abs=2.0e-13)
 
 
-def test_evaluation_rejects_a_structure_from_another_coupling() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
-    other = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.8], [0.0, 0.0, 0.8]]),
-    )
+def test_evaluation_rejects_a_structure_from_another_coupling(diatomic) -> None:
+    structure = diatomic()
+    other = diatomic(1.6)
     model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
 
     with raises(ValueError, match="does not match"):
         model.evaluate(structure, coupling=ArrayCoupling(other))
 
 
-def test_evaluation_results_use_irreversibly_read_only_buffers() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_evaluation_results_use_irreversibly_read_only_buffers(diatomic) -> None:
+    structure = diatomic()
     model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
     result = model.evaluate(structure)
 
@@ -353,11 +354,8 @@ def test_evaluation_results_use_irreversibly_read_only_buffers() -> None:
         result.potential.w_lsf0.setflags(write=True)
 
 
-def test_failed_coupling_preparation_invalidates_the_model() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_failed_coupling_preparation_invalidates_the_model(diatomic) -> None:
+    structure = diatomic()
 
     class FailingCoupling(SolvationCoupling):
         channels = frozenset({CouplingChannel.ELECTROSTATICS})
@@ -386,22 +384,16 @@ def test_failed_coupling_preparation_invalidates_the_model() -> None:
         model.cavity.snapshot()
 
 
-def test_general_model_rejects_missing_coupling_channels() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_general_model_rejects_missing_coupling_channels(diatomic) -> None:
+    structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
 
     with raises(ValueError, match="electrostatics"):
         model.evaluate(structure)
 
 
-def test_evaluation_gradient_rejects_a_superseded_model_state() -> None:
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+def test_evaluation_gradient_rejects_a_superseded_model_state(diatomic) -> None:
+    structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
     first = model.evaluate(structure)
     model.evaluate(structure)
@@ -410,13 +402,10 @@ def test_evaluation_gradient_rejects_a_superseded_model_state() -> None:
         _ = first.gradient
 
 
-def test_general_model_update_invalidates_supplied_electrostatics() -> None:
+def test_general_model_update_invalidates_supplied_electrostatics(diatomic) -> None:
     """Every geometry update requires a fresh external potential trace."""
 
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+    structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     model.solve(np.zeros(model.ngrid))
@@ -433,13 +422,10 @@ def test_general_model_update_invalidates_supplied_electrostatics() -> None:
         model.get_gradient(len(structure))
 
 
-def test_borrowed_model_cavity_rejects_standalone_updates() -> None:
+def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
     """A model-owned cavity may be inspected but not rebuilt out of band."""
 
-    structure = Structure(
-        np.array([1, 1], dtype=np.int32),
-        np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
-    )
+    structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentPV(1.0e-4)])
     model.update(structure)
     original_area = model.cavity.area

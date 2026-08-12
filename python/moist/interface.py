@@ -48,7 +48,22 @@ class _ImmutableArrayValue:
 
 @dataclass(frozen=True)
 class CavitySnapshot(_ImmutableArrayValue):
-    """Generic cavity data copied from one successful update."""
+    """Generic cavity data copied from one successful update.
+
+    Field names are moist's own, so a value read here can be matched against the
+    native arrays without a translation step:
+
+    ``xyz``
+        ``(3, ngrid)`` grid-point coordinates in bohr.
+    ``a``
+        ``(ngrid,)`` grid-point areas.
+    ``owner``
+        ``(ngrid,)`` index of the sphere each grid point belongs to.
+    ``converged``
+        ``(ngrid,)`` per-point projection success flags.
+    ``radii``, ``asph``
+        ``(nsph,)`` sphere radii and per-sphere surface areas.
+    """
 
     area: float
     volume: float
@@ -61,29 +76,24 @@ class CavitySnapshot(_ImmutableArrayValue):
     radii: np.ndarray
     asph: np.ndarray
 
-    @property
-    def grid_points(self) -> np.ndarray:
-        return self.xyz
-
-    @property
-    def grid_areas(self) -> np.ndarray:
-        return self.a
-
-    @property
-    def sphere_owner(self) -> np.ndarray:
-        return self.owner
-
-    @property
-    def sphere_radii(self) -> np.ndarray:
-        return self.radii
-
-    @property
-    def sphere_areas(self) -> np.ndarray:
-        return self.asph
 
 @dataclass(frozen=True)
 class CavitySnapshotDROP(CavitySnapshot):
-    """DROP-specific cavity data copied from one successful update."""
+    """DROP-specific cavity data copied from one successful update.
+
+    ``nmax``
+        Grid points allocated per sphere before pruning.
+    ``normal0``
+        ``(3, ngrid)`` initial (pre-projection) surface normals.
+    ``wleb``
+        ``(ngrid,)`` Lebedev quadrature weights.
+    ``r_iI0``
+        ``(3, ngrid)`` displacement of each grid point from its anchor atom.
+    ``f``
+        ``(ngrid,)`` switching-function values.
+    ``rho``
+        ``(ngrid,)`` level-set (density) values at the projected points.
+    """
 
     nmax: int
     normal0: np.ndarray
@@ -91,26 +101,6 @@ class CavitySnapshotDROP(CavitySnapshot):
     r_iI0: np.ndarray
     f: np.ndarray
     rho: np.ndarray
-
-    @property
-    def initial_normals(self) -> np.ndarray:
-        return self.normal0
-
-    @property
-    def lebedev_weights(self) -> np.ndarray:
-        return self.wleb
-
-    @property
-    def anchor_displacements(self) -> np.ndarray:
-        return self.r_iI0
-
-    @property
-    def switching_values(self) -> np.ndarray:
-        return self.f
-
-    @property
-    def density_values(self) -> np.ndarray:
-        return self.rho
 
 
 @dataclass(frozen=True)
@@ -135,6 +125,7 @@ class AnchorGradient(_ImmutableArrayValue):
     A_tot1_rA: np.ndarray
     V_tot1_rA: np.ndarray
 
+
 @dataclass(frozen=True)
 class TracePotential(_ImmutableArrayValue):
     """Direct host-trace adjoints used while preparing a coupling."""
@@ -150,7 +141,22 @@ class TracePotential(_ImmutableArrayValue):
 
 @dataclass(frozen=True)
 class GeneralPotential(_ImmutableArrayValue):
-    """Every adjoint channel returned by a general solvation model."""
+    """Every adjoint channel returned by a general solvation model.
+
+    Each ``w_*`` is the derivative of the model energy with respect to the host
+    quantity it names, so the host completes the chain rule by contracting it
+    with its own derivative of that quantity:
+
+    ``w_umol``, ``w_qmol``
+        ``(ngrid,)`` adjoints of the molecular potential and of the surface
+        charges.
+    ``w_lsf0``, ``w_lsf1``, ``w_lsf2``
+        ``(ngrid,)``, ``(3, ngrid)`` and ``(3, 3, ngrid)`` adjoints of the
+        **scaled** level set and of its gradient and Hessian.
+    ``w_gauss_g``, ``w_gauss_f``
+        ``(ngrid,)`` GOSTSHYP amplitudes for the Gaussian value and normal
+        derivative; ``None`` unless a GOSTSHYP component is present.
+    """
 
     w_umol: np.ndarray
     w_qmol: np.ndarray
@@ -159,34 +165,6 @@ class GeneralPotential(_ImmutableArrayValue):
     w_lsf2: np.ndarray
     w_gauss_g: Optional[np.ndarray] = None
     w_gauss_f: Optional[np.ndarray] = None
-
-    @property
-    def molecular_potential_weights(self) -> np.ndarray:
-        return self.w_umol
-
-    @property
-    def molecular_charge_weights(self) -> np.ndarray:
-        return self.w_qmol
-
-    @property
-    def level_set_value_weights(self) -> np.ndarray:
-        return self.w_lsf0
-
-    @property
-    def level_set_gradient_weights(self) -> np.ndarray:
-        return self.w_lsf1
-
-    @property
-    def level_set_hessian_weights(self) -> np.ndarray:
-        return self.w_lsf2
-
-    @property
-    def gaussian_value_weights(self) -> Optional[np.ndarray]:
-        return self.w_gauss_g
-
-    @property
-    def gaussian_normal_weights(self) -> Optional[np.ndarray]:
-        return self.w_gauss_f
 
 
 # -----------------------------------------------------------------------------
@@ -355,6 +333,26 @@ class Structure:
 # -----------------------------------------------------------------------------
 
 
+def _guarded_native_update(cavity: Cavity, native: Callable[[], None]) -> None:
+    """Run one native update, surfacing a Python callback failure either way.
+
+    A callback-backed cavity records an exception raised inside its level-set
+    callback rather than letting it cross the native frames, so the recorded
+    failure has to be re-raised on both paths: after a native error, where it is
+    the more specific cause, and after an apparently successful call, which the
+    native side can report when the callback was the one that failed.  Both
+    :meth:`Cavity.update` and :meth:`SolvationModel.update` drive the same
+    protocol; only the surrounding bookkeeping differs.
+    """
+    cavity._before_native_update()
+    try:
+        native()
+    except Exception:
+        cavity._raise_callback_failure()
+        raise
+    cavity._raise_callback_failure()
+
+
 class Cavity(ABC):
     """Live cavity object.
 
@@ -393,13 +391,9 @@ class Cavity(ABC):
         if not self._owned:
             raise RuntimeError("A model-owned cavity must be updated through its model")
         self._invalidate()
-        self._before_native_update()
-        try:
-            library.update_cavity(self._handle, structure._as_handle())
-        except Exception:
-            self._raise_callback_failure()
-            raise
-        self._raise_callback_failure()
+        _guarded_native_update(
+            self, lambda: library.update_cavity(self._handle, structure._as_handle())
+        )
         self._mark_updated()
 
     def _require_updated(self) -> None:
@@ -1173,13 +1167,10 @@ class SolvationModel:
 
     def update(self, structure: Structure) -> None:
         self._invalidate()
-        self._source_cavity._before_native_update()
-        try:
-            library.update_model(self._model, structure._as_handle())
-        except Exception:
-            self._source_cavity._raise_callback_failure()
-            raise
-        self._source_cavity._raise_callback_failure()
+        _guarded_native_update(
+            self._source_cavity,
+            lambda: library.update_model(self._model, structure._as_handle()),
+        )
         self._natoms = len(structure)
         self._updated = True
         self._cavity._mark_updated()

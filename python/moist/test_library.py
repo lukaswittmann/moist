@@ -1,4 +1,5 @@
 import functools
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -123,6 +124,33 @@ def water() -> tuple[np.ndarray, np.ndarray]:
         ]
     )
     return numbers, positions
+
+
+@pytest.fixture
+def flaky_lsf(water) -> SimpleNamespace:
+    """A level-set callback that can be switched to fail partway into a build.
+
+    ``arm(True)`` makes the callback raise once moist is 50 grid points in --
+    far enough that the abort has to unwind a partly built surface -- and resets
+    the call counter, so the trip point is always measured from the start of the
+    next build rather than from the fixture's lifetime.
+    """
+    _, positions = water
+    lsf = _GaussianLSF(positions)
+    state = SimpleNamespace(lsf=lsf, failing=False)
+
+    def callback(point, order):
+        if state.failing and lsf.calls >= 50:
+            raise RuntimeError("no density here")
+        return lsf._derivatives(point, order)
+
+    def arm(fail: bool = True) -> None:
+        state.failing = fail
+        lsf.calls = 0
+
+    state.callback = callback
+    state.arm = arm
+    return state
 
 
 def _build(callback, water, **kwargs):
@@ -276,72 +304,45 @@ def test_callback_failure_stops_further_calls(water) -> None:
     assert 50 < len(seen) < 500
 
 
-def test_callback_failure_is_not_sticky(water) -> None:
+def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
     """A cavity whose callback failed once must rebuild cleanly afterwards."""
-    numbers, positions = water
-    lsf = _GaussianLSF(positions)
-    fail = [True]
-
-    def flaky(point, order):
-        if fail[0] and lsf.calls >= 50:
-            raise RuntimeError("no density here")
-        return lsf._derivatives(point, order)
-
-    structure = Structure(numbers, positions)
-    cavity = CavityDROPIsodensity(flaky, nleb=26)
+    structure = Structure(*water)
+    cavity = CavityDROPIsodensity(flaky_lsf.callback, nleb=26)
+    flaky_lsf.arm()
 
     with raises(RuntimeError, match="no density here"):
         cavity.update(structure)
 
-    fail[0] = False
+    flaky_lsf.arm(False)
     cavity.update(structure)
     assert cavity.cavity.ngrid > 0
 
 
-def test_failed_rebuild_invalidates_previous_cavity_results(water) -> None:
+def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) -> None:
     """A failed second build must not leave the first surface readable as current."""
-    numbers, positions = water
-    lsf = _GaussianLSF(positions)
-    fail = [False]
-
-    def flaky(point, order):
-        if fail[0] and lsf.calls >= 50:
-            raise RuntimeError("no density here")
-        return lsf._derivatives(point, order)
-
-    cavity = CavityDROPIsodensity(flaky, nleb=26)
-    cavity.update(Structure(numbers, positions))
+    structure = Structure(*water)
+    cavity = CavityDROPIsodensity(flaky_lsf.callback, nleb=26)
+    cavity.update(structure)
     assert cavity.snapshot().ngrid > 0
 
-    fail[0] = True
-    lsf.calls = 0
+    flaky_lsf.arm()
     with raises(RuntimeError, match="no density here"):
-        cavity.update(Structure(numbers, positions))
+        cavity.update(structure)
 
     with raises(RuntimeError, match="successfully updated"):
         cavity.snapshot()
 
 
-def test_failed_model_rebuild_invalidates_its_cavity_view(water) -> None:
+def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> None:
     """Model updates propagate callback failures and invalidate their live view."""
-    numbers, positions = water
-    lsf = _GaussianLSF(positions)
-    fail = [False]
-
-    def flaky(point, order):
-        if fail[0] and lsf.calls >= 50:
-            raise RuntimeError("no density here")
-        return lsf._derivatives(point, order)
-
-    structure = Structure(numbers, positions)
+    structure = Structure(*water)
     model = GeneralSolvationModel(
-        CavityDROPIsodensity(flaky, nleb=26), [ModelComponentPV(1.0e-4)]
+        CavityDROPIsodensity(flaky_lsf.callback, nleb=26), [ModelComponentPV(1.0e-4)]
     )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0
 
-    fail[0] = True
-    lsf.calls = 0
+    flaky_lsf.arm()
     with raises(RuntimeError, match="no density here"):
         model.update(structure)
 
