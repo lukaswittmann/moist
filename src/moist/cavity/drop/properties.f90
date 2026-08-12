@@ -1,6 +1,6 @@
 !> DROP geometric property routines.
 submodule(moist_cavity_drop) moist_cavity_drop_properties
-   use omp_lib, only: omp_get_thread_num
+   !$ use omp_lib, only: omp_get_thread_num
    use mctc_io_constants, only: pi
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -292,7 +292,8 @@ contains
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
          if (abort%requested) cycle
-         thread_slot = omp_get_thread_num() + 1
+         thread_slot = 1
+         !$ thread_slot = omp_get_thread_num() + 1
 
          ! Compute SSD on-the-fly and evaluate LSF gradient (g) and Hessian (H)
          call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)

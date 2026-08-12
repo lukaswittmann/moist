@@ -1,6 +1,8 @@
 !> DROP projection and mapped Jacobian quadrature weight computation
+!  TODO: This file will be refactored soon
 submodule(moist_cavity_drop) moist_cavity_drop_projection
-   use omp_lib, only: omp_get_thread_num, omp_get_wtime
+   !$ use omp_lib, only: omp_get_thread_num, omp_get_wtime
+   use, intrinsic :: iso_fortran_env, only: int64
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -15,6 +17,23 @@ submodule(moist_cavity_drop) moist_cavity_drop_projection
    end type error_slot
 
 contains
+
+   !> Wall-clock seconds for the projector's progress report
+   !>
+   !> `omp_get_wtime` when the build has OpenMP, `system_clock` otherwise, so a
+   !> serial build neither references the OpenMP runtime nor loses its timings.
+   function drop_wall_time() result(seconds)
+      !> Elapsed wall time in seconds, measured from an unspecified origin
+      real(wp) :: seconds
+
+      !> Clock reading and tick rate of the serial fallback
+      integer(int64) :: ticks, rate
+
+      call system_clock(ticks, rate)
+      seconds = 0.0_wp
+      if (rate > 0_int64) seconds = real(ticks, wp)/real(rate, wp)
+      !$ seconds = omp_get_wtime()
+   end function drop_wall_time
 
    !* ================================================================================= *!
    !*             Memory management utilities for projection-coupled arrays             *!
@@ -194,13 +213,14 @@ contains
          call plp%separator()
       end if
 
-      wall_start = omp_get_wtime()
+      wall_start = drop_wall_time()
 
       !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, i, n_branch, append_ok, &
       !$omp& local_branched_anchor, local_branched_points, local_nbranch_min, local_nbranch_max, &
       !$omp& local_done, est_done, next_progress_pct, progress_last_time, now_time, progress_elapsed, &
       !$omp& progress_rate, progress_eta, trigger_time, trigger_pct)
-      thread_slot = omp_get_thread_num() + 1
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
 
       ! First-touch init inside the region so allocations are core-local
       call projectors(thread_slot)%destroy()
@@ -339,7 +359,7 @@ contains
          if (thread_slot == 1) then
             if (self%ctx%verbosity >= 2) then
                est_done = min(nmax_anchor, local_done*nthreads)
-               now_time = omp_get_wtime()
+               now_time = drop_wall_time()
 
                trigger_time = (now_time - progress_last_time) >= 5.0_wp
                trigger_pct = nmax_anchor > 0 .and. (100*est_done >= next_progress_pct*nmax_anchor)
@@ -382,7 +402,7 @@ contains
       thread_nbranch_max(thread_slot) = local_nbranch_max
       !$omp end parallel
 
-      wall_end = omp_get_wtime()
+      wall_end = drop_wall_time()
 
       ! Re-raise the first fatal error the loop hit. The lowest anchor index wins so
       ! the reported failure does not depend on the thread schedule; setup failures
@@ -599,7 +619,8 @@ contains
       !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
       !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
       !$omp& lsf_error)
-      thread_slot = omp_get_thread_num() + 1
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
 
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid

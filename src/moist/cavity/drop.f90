@@ -514,16 +514,20 @@ contains
    !> @param[in]    tolerance     Master numerical tolerance (optional)
    !> @param[in]    proj_maxiter  Maximum number of projection iterations (optional)
    !> @param[in]    proj_level    Projection refinement level (optional)
+   !> @param[in]    branch_weight_s Softmax scale for competing projection branches (optional, for testing)
+   !> @param[in]    rho_grid_h    Grid-density kernel length (optional)
+   !> @param[in]    wleb_prune_level Smooth Lebedev-weight pruning level (optional)
    !> @param[in]    radius_model  Atomic radius model to use for cavity construction
    !> @param[in]    lsf_model     LSF template (required; cavity stores a copy)
    !> @param[in]    do_fine      Enable all optional properties (optional)
    !> @param[out]   error         Error handling structure (optional)
    !> Initialize DROP cavity
+   ! TODO: Unify use of constructor optional arguments for parameters
    subroutine new_cavity_drop(self, &
                               ctx, &
                               nleb, &
                               tolerance, proj_maxiter, proj_level, &
-                              wleb_prune_level, &
+                              branch_weight_s, rho_grid_h, wleb_prune_level, &
                               do_fine, &
                               radius_model, &
                               lsf_model, &
@@ -541,6 +545,10 @@ contains
       integer, intent(in), optional :: proj_maxiter
       integer, intent(in), optional :: proj_level
 
+      !> Branch weighting and grid-density settings
+      real(wp), intent(in), optional :: branch_weight_s
+      real(wp), intent(in), optional :: rho_grid_h
+
       !> Weight switching level (0=off, 1-6=increasing aggressiveness)
       integer, intent(in), optional :: wleb_prune_level
 
@@ -556,6 +564,10 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      !> Preserve the established DROP-constructor default, which intentionally
+      !> differs from the bare parameter-container initialization.
+      real(wp) :: use_branch_weight_s
+
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
@@ -565,10 +577,13 @@ contains
       end if
 
       !> Parameter setup
+      ! FIXME: This is a poor (temporary) solution for now
+      use_branch_weight_s = 0.05_wp
+      if (present(branch_weight_s)) use_branch_weight_s = branch_weight_s
       call self%param%new( &
          nleb=nleb, &
          tolerance=tolerance, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-         branch_weight_s=0.05_wp, &
+         branch_weight_s=use_branch_weight_s, rho_grid_h=rho_grid_h, &
          wleb_prune_level=wleb_prune_level, &
          error=error)
       if (allocated(error)) return

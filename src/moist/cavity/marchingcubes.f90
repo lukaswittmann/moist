@@ -721,6 +721,8 @@ contains
       !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz, &
       !$omp&        abort_requested, error) &
       !$omp& private(lsf_priv, ptmp, ix, iy, iz, lsf_error)
+      ! TODO: Check
+      if (allocated(lsf_priv)) deallocate (lsf_priv)
       allocate (lsf_priv, source=lsf)
       call lsf_priv%set_max_deriv(0)
       !$omp do collapse(3) schedule(dynamic)
@@ -813,10 +815,16 @@ contains
       !$omp& reduction(+:area, volume, tri_count, n_cubes_processed, &
       !$omp&           n_cubes_skipped, n_cubes_refined, n_cubes_accepted) &
       !$omp& reduction(min:h_min_seen)
+      ! TODO: Check
+      if (allocated(lsf_priv)) deallocate (lsf_priv)
       allocate (lsf_priv, source=lsf)
       call lsf_priv%set_max_deriv(0)
+      ! TODO: Check
+      if (allocated(loc_stack)) deallocate (loc_stack)
       allocate (loc_stack(local_stack_size))
       if (export_mesh) then
+         ! TODO: Check
+         if (allocated(loc_buf%v)) deallocate (loc_buf%v)
          allocate (loc_buf%v(9, 1024))
          loc_buf%n = 0
       end if

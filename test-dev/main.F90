@@ -8,7 +8,7 @@ program dev_tester
    use test_cavity_drop_born_fit, only : collect_cavity_drop_born_fit
    use test_cavity_drop_timings, only : collect_cavity_drop_timings
    use test_cavity_drop_robustness, only : collect_cavity_drop_robustness
-   use test_cavity_drop_integration, only : collect_cavity_drop_integration
+   use test_cavity_drop_integration_dev, only : collect_cavity_drop_integration
    use test_cavity_drop_convergence, only : collect_cavity_drop_convergence
    use test_cavity_drop_deflation_comparison, only : collect_cavity_drop_deflation_comparison
 

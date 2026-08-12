@@ -24,7 +24,7 @@
 !>     It is contracted with a scalar weight
 !>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
-   use omp_lib, only: omp_get_thread_num
+   !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
@@ -143,7 +143,8 @@ contains
       !$omp& kkt_rhs, kkt_info, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, g_val, &
       !$omp& w_xyz_local, f1_rA_pt, anchor_xi_zero, lsf_error)
-      thread_slot = omp_get_thread_num() + 1
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
 
       allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
       allocate (lsf1_rA(3, self%nsph), source=0.0_wp)

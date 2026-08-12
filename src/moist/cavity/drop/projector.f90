@@ -1,24 +1,6 @@
 
-!> Project anchor points onto an implicit level set function (LSF) surface.
-!>
-!> Given an anchor point, this module finds the nearest point(s) on the
-!> surface LSF(x) = 0 by minimizing the quadratic anchor objective
-!> phi(x) = phi_alpha/2 * ||x - anchor||^2 subject to LSF(x) = 0. Multiple
-!> surface branches (e.g. near concave triple-junctions of the LSF) are
-!> enumerated, Newton-refined, classified, and deduplicated.
-!>
-!> The procedures below are grouped by the section banners they sit under:
-!>   1. Augmented-Lagrangian solver callbacks (Newton / KKT system)
-!>   2. Initialization and SSD screening
-!>   3. Solver callbacks (diagnostics, displacement control, SLSQP)
-!>   4. Seed generation: multi-start solver drivers
-!>   5. Projection pipeline (seed refinement and dispatch)
-!>   6. Candidate filtering and deduplication
-!>   7. Newton refinement of a single candidate
-!>   8. Check constrained optimality
-!>   9. Riemannian Newton escape from saddle points
-!>  10. Surface retraction
-!>  11. Cleanup and finalization
+!> Project anchor points onto an implicit level set function (LSF) surface
+!  TODO: This file will be refactored soon
 module moist_cavity_drop_projector
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error

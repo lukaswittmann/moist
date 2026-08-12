@@ -9,7 +9,7 @@
 !> until possible bugs or inconsistencies in the reverse implementation
 !> are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
-   use omp_lib, only: omp_get_thread_num
+   !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
@@ -302,7 +302,8 @@ contains
       !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
       !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
       !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
-      thread_slot = omp_get_thread_num() + 1
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
       ! lsf3_rr_rA is deliberately not allocated here: f3_rr_rA_screened takes

@@ -1,0 +1,18 @@
+name = "moist-test-support"
+version = "0.6.0"
+license = "LGPL-3.0-or-later"
+maintainer = ["@lukaswittmann"]
+author = ["Lukas Wittmann"]
+description = "Shared fixtures for the moist unit-test suite"
+
+# This package exists for fpm, not for reuse. fpm scopes test sources per
+# directory: a file under test/unit/<subdir>/ can use modules from its own
+# directory or below, never from a parent or sibling. The unit tests are grouped
+# into subfolders mirroring src/moist/, so the fixtures they all share have to
+# live somewhere every one of them can reach -- and a dependency is the only
+# scope that qualifies. It is a path dev-dependency of the root manifest and is
+# built only for the test targets; meson compiles these files straight into the
+# tester and never reads this file.
+#
+# It must sit outside test/, or fpm's recursive scan of test/ would also claim
+# these sources for the test targets and report duplicate module names.

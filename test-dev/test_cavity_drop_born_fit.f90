@@ -185,11 +185,7 @@ contains
 
       call new_context(ctx, verbosity=0)
 
-      !* Load MB16-43/H2 and reshape it into a sphere-at-origin carrier:
-      !* atom 1 sits at the origin (centers of the test sphere); atom 2 is
-      !* pushed to a far corner of space with a sub-millibohr radius so it
-      !* contributes negligibly to either the surface area or the CPCM
-      !* solve. See the module header for the tolerance budget.
+      ! Load MB16-43/H2 and reshape it into a sphere-at-origin
       call get_structure(mol, "MB16-43", "H2")
       mol%xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       mol%xyz(:, 2) = [100.0_wp, 100.0_wp, 100.0_wp]

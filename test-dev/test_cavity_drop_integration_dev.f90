@@ -1,4 +1,4 @@
-module test_cavity_drop_integration
+module test_cavity_drop_integration_dev
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -801,4 +801,4 @@ contains
       end do
    end subroutine fill_cpcm_radii
 
-end module test_cavity_drop_integration
+end module test_cavity_drop_integration_dev
