@@ -47,7 +47,8 @@ contains
       call plp%add(2.5_real64, fmt='f6.2')
       call plp%end_row()
 
-      call count_lines(iu, path, nlines)
+      call close_scratch(iu)
+      call count_lines(path, nlines)
       call check(error, nlines, 2, "header and one row were written")
 
    end subroutine test_healthy_printer_emits
@@ -71,7 +72,8 @@ contains
       call plp%add(42, fmt='I3')
       call plp%end_row()
 
-      call read_line(iu, path, 1, line)
+      call close_scratch(iu)
+      call read_line(path, 1, line)
       call discard_scratch(path)
       call check(error, line, "____ab__________42", "cells are right-aligned and the skipped one is blank")
 
@@ -94,15 +96,22 @@ contains
       call plp%separator()
       call plp%blank()
 
-      call read_line(iu, path, 1, line)
+      call close_scratch(iu)
+      call read_line(path, 1, line)
       call check(error, line, "==_h_i_===", "the title is spread and centered in '=' fill")
-      if (allocated(error)) return
+      if (allocated(error)) then
+         call discard_scratch(path)
+         return
+      end if
 
-      call read_line(iu, path, 2, line)
+      call read_line(path, 2, line)
       call check(error, len_trim(line), 10, "the separator spans the table width")
-      if (allocated(error)) return
+      if (allocated(error)) then
+         call discard_scratch(path)
+         return
+      end if
 
-      call count_lines(iu, path, nlines)
+      call count_lines(path, nlines)
       call check(error, nlines, 3, "header, separator and blank were written")
 
    end subroutine test_decorations
@@ -125,7 +134,8 @@ contains
       call plp%add(-1.0e12_real64, fmt='f6.2')
       call plp%end_row()
 
-      call read_line(iu, path, 1, line)
+      call close_scratch(iu)
+      call read_line(path, 1, line)
       call discard_scratch(path)
       call check(error, line, "+++++-----", "overflow markers carry the sign of the value")
 
@@ -144,14 +154,21 @@ contains
       open (newunit=iu, file=path, action='write', status='replace')
    end subroutine open_scratch
 
-   !> Count the lines a printer wrote, then discard the scratch file
+   !> Release the write unit once the printer is done with it
    !>
-   !> @param[in]  iu     Unit the printer wrote to
-   !> @param[in]  path   Scratch file name
-   !> @param[out] nlines Number of lines found
-   subroutine count_lines(iu, path, nlines)
+   !> @param[in] iu Unit the printer wrote to
+   subroutine close_scratch(iu)
       !> Unit the printer wrote to
       integer, intent(in) :: iu
+
+      close (iu)
+   end subroutine close_scratch
+
+   !> Count the lines a printer wrote, then discard the scratch file
+   !>
+   !> @param[in]  path   Scratch file name
+   !> @param[out] nlines Number of lines found
+   subroutine count_lines(path, nlines)
       !> Scratch file name
       character(len=*), intent(in) :: path
       !> Number of lines found
@@ -159,7 +176,6 @@ contains
 
       integer :: read_unit, stat
 
-      close (iu)
       nlines = 0
       open (newunit=read_unit, file=path, action='read', status='old')
       do
@@ -193,13 +209,10 @@ contains
    !> Blanks are rendered as '_' so that trailing spaces survive the comparison
    !> that `check` performs on trimmed strings.
    !>
-   !> @param[in]  iu     Unit the printer wrote to
    !> @param[in]  path   Scratch file name
    !> @param[in]  iline  One-based line to return
    !> @param[out] line   Line content with blanks mapped to '_'
-   subroutine read_line(iu, path, iline, line)
-      !> Unit the printer wrote to
-      integer, intent(in) :: iu
+   subroutine read_line(path, iline, line)
       !> Scratch file name
       character(len=*), intent(in) :: path
       !> One-based line to return
@@ -209,10 +222,6 @@ contains
 
       character(len=256) :: buf
       integer :: read_unit, stat, i, j
-      logical :: is_open
-
-      inquire (unit=iu, opened=is_open)
-      if (is_open) close (iu)
 
       line = ''
       open (newunit=read_unit, file=path, action='read', status='old')
