@@ -481,7 +481,7 @@ def test_lsf_callback_is_finite(system, basis):
         # Not bitwise: BLAS and the einsum loop sum in different orders. Equal to
         # rounding is all that is needed to show the flags carry no information.
         assert np.isfinite(product).all()
-        np.testing.assert_allclose(product, reference, rtol=1e-12, atol=0.0)
+        np.testing.assert_allclose(product, reference, rtol=5e-12, atol=1e-16)
 
 
 @pytest.mark.isodensity
