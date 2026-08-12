@@ -3,19 +3,11 @@ name: Coverage
 on:
   push:
     branches: [main]
-  # Coverage runs once when the pull request is opened; after only optionally
   pull_request:
-    types: [opened, edited, labeled]
 
 jobs:
   coverage:
     name: coverage (${{ matrix.leg.name }})
-    if: >-
-      github.event_name == 'push' ||
-      github.event.action == 'opened' ||
-      contains(format('{0} {1}', github.event.pull_request.title,
-                                 github.event.pull_request.body), '@codecov') ||
-      contains(github.event.pull_request.labels.*.name, 'coverage')
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
