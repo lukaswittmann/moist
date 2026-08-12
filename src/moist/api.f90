@@ -9,7 +9,6 @@
 !
 ! 2. ADDITIONAL CAVITY TYPES:
 !    - Implement moist_new_numsa_cavity() constructor
-!    - Implement moist_new_iswig_cavity() constructor
 !    - Add corresponding type-specific getters if needed
 !
 ! 3. GRADIENT API:
@@ -37,6 +36,7 @@ module moist_api
    use moist_model_component_pcm_type, only: potential_source
    use moist_model_component_gostshyp, only: gostshyp, new_gostshyp
    use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
+   use moist_model_component_pcm_cosmo, only: cosmo, new_cosmo
    use moist_model_component_pv, only: pv, new_pv
    use moist_model_general, only: general_solvation_model, new_general_model
    use moist_context, only: moist_context_type, new_context
@@ -47,10 +47,12 @@ module moist_api
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_isodensity_callback, only: &
       moist_cavity_drop_lsf_isodensity_callback_type
    use moist_cavity_drop_lsf_isodensity_internal, only: &
       moist_cavity_drop_lsf_isodensity_internal_type
+   use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_data_solvents, only: solvation_system_parameters, new_solvation_system_parameters, get_solvent_id
    use moist_version, only: get_moist_version
    use moist_output_ascii, only: ascii_moist_header => moist_header, &
@@ -114,7 +116,8 @@ module moist_api
    public :: get_solvation_model_cavity_api
    public :: delete_solvation_model_api
    ! General solvation model and its components
-   public :: new_cpcm_component_api, new_pv_component_api, new_gostshyp_component_api
+   public :: new_cpcm_component_api, new_cosmo_component_api
+   public :: new_pv_component_api, new_gostshyp_component_api
    public :: delete_solvation_component_api
    public :: new_general_solvation_model_api, general_model_add_component_api
    public :: general_model_supply_electrostatics_api, general_model_supply_gostshyp_api
@@ -124,6 +127,8 @@ module moist_api
    ! Type-specific constructors
    public :: new_drop_cavity_api
    public :: new_drop_cavity_with_radii_api
+   public :: new_cfc_drop_cavity_api
+   public :: new_iswig_cavity_api
    public :: new_drop_cavity_isodensity_callback_api
    public :: new_drop_cavity_isodensity_internal_api
    ! Generic cavity operations
@@ -736,23 +741,27 @@ contains
 
    end function get_solvation_model_cavity_api
 
-!> Create a CPCM component handle for use with a general model.
-   function new_cpcm_component_api(verror, epsilon, solver) result(vcomponent) &
-         & bind(C, name=namespace//"new_cpcm_component")
+!> Allocate either PCM-family component behind the common opaque handle.
+   subroutine new_pcm_component_common(verror, epsilon, solver, use_cosmo, &
+                                       routine_name, vcomponent)
       !> Error handle
       type(c_ptr), value :: verror
       !> Relative dielectric constant
       real(c_double), value :: epsilon
       !> PCM solver enumeration
       integer(c_int), value :: solver
+      !> Select COSMO rather than CPCM
+      logical, intent(in) :: use_cosmo
+      !> Public routine name used in error messages
+      character(len=*), intent(in) :: routine_name
       !> New component handle
-      type(c_ptr) :: vcomponent
+      type(c_ptr), intent(out) :: vcomponent
       !> Decoded error handle
       type(vp_error), pointer :: error
       !> Component wrapper
       type(vp_component), pointer :: component
-      !> Concrete CPCM component
-      type(cpcm) :: item
+      !> Concrete PCM-family component
+      class(solvation_model_component), allocatable :: item
       !> Constructor error
       type(error_type), allocatable :: component_error
 
@@ -762,10 +771,25 @@ contains
 
       allocate (component)
       call new_context(component%ctx, verbosity=0, debug=.false.)
-      call new_cpcm(item, component%ctx, real(epsilon, wp), solver=int(solver), &
-                    phi_source=potential_source%external, error=component_error)
+      if (use_cosmo) then
+         allocate (cosmo :: item)
+         select type (pcm => item)
+         type is (cosmo)
+            call new_cosmo(pcm, component%ctx, real(epsilon, wp), &
+                           solver=int(solver), phi_source=potential_source%external, &
+                           error=component_error)
+         end select
+      else
+         allocate (cpcm :: item)
+         select type (pcm => item)
+         type is (cpcm)
+            call new_cpcm(pcm, component%ctx, real(epsilon, wp), &
+                          solver=int(solver), phi_source=potential_source%external, &
+                          error=component_error)
+         end select
+      end if
       if (allocated(component_error)) then
-         call api_error(error%ptr, "new_cpcm_component", component_error%message)
+         call api_error(error%ptr, routine_name, component_error%message)
          call component%ctx%delete()
          deallocate (component)
          return
@@ -773,7 +797,33 @@ contains
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)
 
+   end subroutine new_pcm_component_common
+
+!> Create a CPCM component handle for use with a general model.
+   function new_cpcm_component_api(verror, epsilon, solver) result(vcomponent) &
+         & bind(C, name=namespace//"new_cpcm_component")
+      type(c_ptr), value :: verror
+      real(c_double), value :: epsilon
+      integer(c_int), value :: solver
+      type(c_ptr) :: vcomponent
+
+      call new_pcm_component_common(verror, epsilon, solver, .false., &
+                                    "new_cpcm_component", vcomponent)
+
    end function new_cpcm_component_api
+
+!> Create a COSMO component handle for use with a general model.
+   function new_cosmo_component_api(verror, epsilon, solver) result(vcomponent) &
+         & bind(C, name=namespace//"new_cosmo_component")
+      type(c_ptr), value :: verror
+      real(c_double), value :: epsilon
+      integer(c_int), value :: solver
+      type(c_ptr) :: vcomponent
+
+      call new_pcm_component_common(verror, epsilon, solver, .true., &
+                                    "new_cosmo_component", vcomponent)
+
+   end function new_cosmo_component_api
 
 !> Create a pressure-volume energy component handle.
    function new_pv_component_api(verror, pressure) result(vcomponent) &
@@ -1459,10 +1509,165 @@ contains
       ok = tolerance > 0.0_wp
    end function decode_drop_tolerance
 
+!> Decode the optional controls shared by every DROP constructor.
+   subroutine decode_drop_controls(c_proj_maxiter, c_proj_level, &
+                                   c_branch_weight_s, c_rho_grid_h, &
+                                   c_wleb_prune_level, use_proj_maxiter, &
+                                   use_proj_level, use_branch_weight_s, &
+                                   use_rho_grid_h, use_wleb_prune_level)
+      type(c_ptr), intent(in) :: c_proj_maxiter
+      type(c_ptr), intent(in) :: c_proj_level
+      type(c_ptr), intent(in) :: c_branch_weight_s
+      type(c_ptr), intent(in) :: c_rho_grid_h
+      type(c_ptr), intent(in) :: c_wleb_prune_level
+      integer, intent(out) :: use_proj_maxiter
+      integer, intent(out) :: use_proj_level
+      real(wp), intent(out) :: use_branch_weight_s
+      real(wp), intent(out) :: use_rho_grid_h
+      integer, intent(out) :: use_wleb_prune_level
+      integer(c_int), pointer :: p_proj_maxiter, p_proj_level
+      integer(c_int), pointer :: p_wleb_prune_level
+      real(c_double), pointer :: p_branch_weight_s, p_rho_grid_h
+      type(moist_cavity_drop_parameters_type) :: defaults
+
+      use_proj_maxiter = defaults%proj_maxiter
+      if (c_associated(c_proj_maxiter)) then
+         call c_f_pointer(c_proj_maxiter, p_proj_maxiter)
+         use_proj_maxiter = p_proj_maxiter
+      end if
+      use_proj_level = defaults%proj_level
+      if (c_associated(c_proj_level)) then
+         call c_f_pointer(c_proj_level, p_proj_level)
+         use_proj_level = p_proj_level
+      end if
+      ! new_cavity_drop has historically used 0.05 as its public default.
+      use_branch_weight_s = 0.05_wp
+      if (c_associated(c_branch_weight_s)) then
+         call c_f_pointer(c_branch_weight_s, p_branch_weight_s)
+         use_branch_weight_s = p_branch_weight_s
+      end if
+      use_rho_grid_h = defaults%rho_grid_h
+      if (c_associated(c_rho_grid_h)) then
+         call c_f_pointer(c_rho_grid_h, p_rho_grid_h)
+         use_rho_grid_h = p_rho_grid_h
+      end if
+      use_wleb_prune_level = defaults%wleb_prune_level
+      if (c_associated(c_wleb_prune_level)) then
+         call c_f_pointer(c_wleb_prune_level, p_wleb_prune_level)
+         use_wleb_prune_level = p_wleb_prune_level
+      end if
+   end subroutine decode_drop_controls
+
+!> Allocate and configure a DROP cavity from an already configured LSF.
+!> This is the common ownership/error-handling seam for the SvdW and CFC
+!> constructors; each public constructor only decodes its own shape settings.
+   subroutine new_drop_cavity_from_lsf(error, vradii, nleb, use_debug, use_verbose, &
+                                       use_do_fine, use_tolerance, use_proj_maxiter, &
+                                       use_proj_level, use_branch_weight_s, use_rho_grid_h, &
+                                       use_wleb_prune_level, lsf_template, &
+                                       routine_name, vcav)
+      type(vp_error), intent(inout) :: error
+      type(c_ptr), intent(in) :: vradii
+      type(c_ptr), intent(in) :: nleb
+      logical, intent(in) :: use_debug
+      integer, intent(in) :: use_verbose
+      logical, intent(in) :: use_do_fine
+      real(wp), intent(in) :: use_tolerance
+      integer, intent(in) :: use_proj_maxiter, use_proj_level
+      real(wp), intent(in) :: use_branch_weight_s, use_rho_grid_h
+      integer, intent(in) :: use_wleb_prune_level
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_template
+      character(len=*), intent(in) :: routine_name
+      type(c_ptr), intent(out) :: vcav
+      type(vp_radii), pointer :: radii_handle
+      integer(c_int), pointer :: pnleb
+      type(vp_cavity), pointer :: cav
+      logical :: use_explicit_radii
+      type(error_type), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+
+      vcav = c_null_ptr
+      use_explicit_radii = c_associated(vradii)
+      radii_handle => null()
+      if (use_explicit_radii) then
+         call c_f_pointer(vradii, radii_handle)
+         if (.not. allocated(radii_handle%ptr)) then
+            call api_error(error%ptr, routine_name, "Radii handle is not initialized")
+            return
+         end if
+      else
+         call new_radii("cpcm", radius_model, cavity_error)
+         if (allocated(cavity_error)) then
+            call api_error(error%ptr, routine_name, cavity_error%message)
+            return
+         end if
+      end if
+
+      allocate (cav)
+      allocate (cavity_type_drop :: cav%ptr)
+      call new_context(cav%ctx, verbosity=use_verbose, debug=use_debug)
+      pnleb => null()
+      if (c_associated(nleb)) call c_f_pointer(nleb, pnleb)
+
+      select type (cavity => cav%ptr)
+      type is (cavity_type_drop)
+         if (associated(pnleb)) then
+            if (use_explicit_radii) then
+               call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &
+                                    tolerance=use_tolerance, do_fine=use_do_fine, &
+                                    proj_maxiter=use_proj_maxiter, proj_level=use_proj_level, &
+                                    branch_weight_s=use_branch_weight_s, &
+                                    rho_grid_h=use_rho_grid_h, &
+                                    wleb_prune_level=use_wleb_prune_level, &
+                                    radius_model=radii_handle%ptr, lsf_model=lsf_template, &
+                                    error=cavity_error)
+            else
+               call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &
+                                    tolerance=use_tolerance, do_fine=use_do_fine, &
+                                    proj_maxiter=use_proj_maxiter, proj_level=use_proj_level, &
+                                    branch_weight_s=use_branch_weight_s, &
+                                    rho_grid_h=use_rho_grid_h, &
+                                    wleb_prune_level=use_wleb_prune_level, &
+                                    radius_model=radius_model, lsf_model=lsf_template, &
+                                    error=cavity_error)
+            end if
+         else
+            if (use_explicit_radii) then
+               call new_cavity_drop(cavity, cav%ctx, tolerance=use_tolerance, &
+                                    do_fine=use_do_fine, radius_model=radii_handle%ptr, &
+                                    proj_maxiter=use_proj_maxiter, proj_level=use_proj_level, &
+                                    branch_weight_s=use_branch_weight_s, &
+                                    rho_grid_h=use_rho_grid_h, &
+                                    wleb_prune_level=use_wleb_prune_level, &
+                                    lsf_model=lsf_template, error=cavity_error)
+            else
+               call new_cavity_drop(cavity, cav%ctx, tolerance=use_tolerance, &
+                                    do_fine=use_do_fine, radius_model=radius_model, &
+                                    proj_maxiter=use_proj_maxiter, proj_level=use_proj_level, &
+                                    branch_weight_s=use_branch_weight_s, &
+                                    rho_grid_h=use_rho_grid_h, &
+                                    wleb_prune_level=use_wleb_prune_level, &
+                                    lsf_model=lsf_template, error=cavity_error)
+            end if
+         end if
+      end select
+      if (allocated(cavity_error)) then
+         call api_error(error%ptr, routine_name, cavity_error%message)
+         if (associated(cav%ptr)) deallocate (cav%ptr)
+         call cav%ctx%delete()
+         deallocate (cav)
+         return
+      end if
+
+      vcav = c_loc(cav)
+   end subroutine new_drop_cavity_from_lsf
+
 !> Internal helper to create DROP cavity handles.
    subroutine new_drop_cavity_common(verror, vradii, nleb, c_debug, c_verbose, &
                                      c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, &
-                                     c_tolerance, routine_name, vcav)
+                                     c_tolerance, c_proj_maxiter, c_proj_level, &
+                                     c_branch_weight_s, c_rho_grid_h, &
+                                     c_wleb_prune_level, routine_name, vcav)
       type(c_ptr), value :: verror
       type(c_ptr), value :: vradii
       type(c_ptr), value :: nleb
@@ -1475,11 +1680,14 @@ contains
       type(c_ptr), value :: c_do_fine
       !> Optional master numerical tolerance (NULL selects the DROP default)
       type(c_ptr), value :: c_tolerance
+      type(c_ptr), value :: c_proj_maxiter
+      type(c_ptr), value :: c_proj_level
+      type(c_ptr), value :: c_branch_weight_s
+      type(c_ptr), value :: c_rho_grid_h
+      type(c_ptr), value :: c_wleb_prune_level
       character(len=*), intent(in) :: routine_name
       type(c_ptr), intent(out) :: vcav
       type(vp_error), pointer :: error
-      type(vp_radii), pointer :: radii_handle
-      integer(c_int), pointer :: pnleb
       logical(c_bool), pointer :: p_debug
       integer(c_int), pointer :: p_verbose
       real(c_double), pointer :: p_blendk
@@ -1487,7 +1695,6 @@ contains
       real(c_double), pointer :: p_blend2b
       real(c_double), pointer :: p_blend3b
       logical(c_bool), pointer :: p_do_fine
-      type(vp_cavity), pointer :: cav
       logical :: use_debug
       integer :: use_verbose
       real(wp) :: use_blendk, use_blend1b, use_blend2b, use_blend3b
@@ -1499,10 +1706,10 @@ contains
       !> how the two entry points silently drifted apart before.
       type(moist_cavity_drop_lsf_svdw_param_type) :: svdw_defaults
       logical :: use_do_fine
-      logical :: use_explicit_radii
       real(wp) :: use_tolerance
-      type(error_type), allocatable :: cavity_error
-      class(radius_type), allocatable :: radius_model
+      integer :: use_proj_maxiter, use_proj_level, use_wleb_prune_level
+      real(wp) :: use_branch_weight_s, use_rho_grid_h
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
 
       vcav = c_null_ptr
 
@@ -1527,7 +1734,7 @@ contains
          use_verbose = 0
       end if
 
-      ! Parse optional blendk parameter (default: 2.0)
+      ! Parse optional SvdW shape parameters from their native defaults.
       p_blendk => null()
       if (c_associated(c_blendk)) then
          call c_f_pointer(c_blendk, p_blendk)
@@ -1536,7 +1743,6 @@ contains
          use_blendk = svdw_defaults%blend_k
       end if
 
-      ! Parse optional blend1b parameter (default: 1.0)
       p_blend1b => null()
       if (c_associated(c_blend1b)) then
          call c_f_pointer(c_blend1b, p_blend1b)
@@ -1545,7 +1751,6 @@ contains
          use_blend1b = svdw_defaults%blend_1b
       end if
 
-      ! Parse optional blend2b parameter (default: 1.0)
       p_blend2b => null()
       if (c_associated(c_blend2b)) then
          call c_f_pointer(c_blend2b, p_blend2b)
@@ -1554,7 +1759,6 @@ contains
          use_blend2b = svdw_defaults%blend_2b
       end if
 
-      ! Parse optional blend3b parameter (default: 1.0)
       p_blend3b => null()
       if (c_associated(c_blend3b)) then
          call c_f_pointer(c_blend3b, p_blend3b)
@@ -1577,86 +1781,27 @@ contains
          call api_error(error%ptr, routine_name, "DROP tolerance must be positive")
          return
       end if
+      call decode_drop_controls(c_proj_maxiter, c_proj_level, &
+                                c_branch_weight_s, c_rho_grid_h, c_wleb_prune_level, &
+                                use_proj_maxiter, use_proj_level, use_branch_weight_s, &
+                                use_rho_grid_h, use_wleb_prune_level)
 
-      use_explicit_radii = c_associated(vradii)
-      radii_handle => null()
-      if (use_explicit_radii) then
-         call c_f_pointer(vradii, radii_handle)
-         if (.not. allocated(radii_handle%ptr)) then
-            call api_error(error%ptr, routine_name, "Radii handle is not initialized")
-            return
-         end if
-      end if
-
-      allocate (cav)
-      ! Allocate specific cavity_type_drop (not abstract base type)
-      allocate (cavity_type_drop :: cav%ptr)
-      call new_context(cav%ctx, verbosity=use_verbose, debug=use_debug)
-      pnleb => null()
-      if (c_associated(nleb)) call c_f_pointer(nleb, pnleb)
-
-      ! Use SELECT TYPE to access the DROP-specific type
-      select type (cavity => cav%ptr)
-      type is (cavity_type_drop)
-         if (.not. use_explicit_radii) then
-            call new_radii("cpcm", radius_model, cavity_error)
-            if (allocated(cavity_error)) then
-               call api_error(error%ptr, routine_name, cavity_error%message)
-               if (associated(cav%ptr)) deallocate (cav%ptr)
-               deallocate (cav)
-               return
-            end if
-         end if
-
-         block
-            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-
-            !> The cavity sets the LSF screening threshold from its own
-            !> tolerance, so we only forward the shape parameters here.
-            call svdw_template%new(blend_k=use_blendk, blend_1b=use_blend1b, &
-                                   blend_2b=use_blend2b, blend_3b=use_blend3b)
-
-            if (associated(pnleb)) then
-               if (use_explicit_radii) then
-                  call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &
-                                       tolerance=use_tolerance, &
-                                       do_fine=use_do_fine, radius_model=radii_handle%ptr, &
-                                       lsf_model=svdw_template, error=cavity_error)
-               else
-                  call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &
-                                       tolerance=use_tolerance, &
-                                       do_fine=use_do_fine, radius_model=radius_model, &
-                                       lsf_model=svdw_template, error=cavity_error)
-               end if
-            else
-               if (use_explicit_radii) then
-                  call new_cavity_drop(cavity, cav%ctx, &
-                                       tolerance=use_tolerance, &
-                                       do_fine=use_do_fine, radius_model=radii_handle%ptr, &
-                                       lsf_model=svdw_template, error=cavity_error)
-               else
-                  call new_cavity_drop(cavity, cav%ctx, &
-                                       tolerance=use_tolerance, &
-                                       do_fine=use_do_fine, radius_model=radius_model, &
-                                       lsf_model=svdw_template, error=cavity_error)
-               end if
-            end if
-         end block
-      end select
-      if (allocated(cavity_error)) then
-         call api_error(error%ptr, routine_name, cavity_error%message)
-         if (associated(cav%ptr)) deallocate (cav%ptr)
-         deallocate (cav)
-         return
-      end if
-
-      ! Constructor only initializes - user must call update_cavity to build
-      vcav = c_loc(cav)
+      ! The cavity derives the LSF screening threshold from its own tolerance,
+      ! so only the shape parameters are configured here.
+      call svdw_template%new(blend_k=use_blendk, blend_1b=use_blend1b, &
+                             blend_2b=use_blend2b, blend_3b=use_blend3b)
+      call new_drop_cavity_from_lsf(error, vradii, nleb, use_debug, use_verbose, &
+                                    use_do_fine, use_tolerance, use_proj_maxiter, &
+                                    use_proj_level, use_branch_weight_s, use_rho_grid_h, &
+                                    use_wleb_prune_level, svdw_template, &
+                                    routine_name, vcav)
    end subroutine new_drop_cavity_common
 
 !> Create new DROP cavity handle with default CPCM radii model.
    function new_drop_cavity_api(verror, nleb, c_debug, c_verbose, &
-         c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, c_tolerance) result(vcav) &
+         c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, c_tolerance, &
+         c_proj_maxiter, c_proj_level, c_branch_weight_s, c_rho_grid_h, &
+         c_wleb_prune_level) result(vcav) &
          & bind(C, name=namespace//"new_drop_cavity")
       type(c_ptr), value :: verror
       type(c_ptr), value :: nleb
@@ -1669,16 +1814,25 @@ contains
       type(c_ptr), value :: c_do_fine
       !> Optional master numerical tolerance (NULL selects the DROP default)
       type(c_ptr), value :: c_tolerance
+      type(c_ptr), value :: c_proj_maxiter
+      type(c_ptr), value :: c_proj_level
+      type(c_ptr), value :: c_branch_weight_s
+      type(c_ptr), value :: c_rho_grid_h
+      type(c_ptr), value :: c_wleb_prune_level
       type(c_ptr) :: vcav
 
       call new_drop_cavity_common(verror, c_null_ptr, nleb, c_debug, c_verbose, &
                                   c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, &
-                                  c_tolerance, "new_drop_cavity_api", vcav)
+                                  c_tolerance, c_proj_maxiter, c_proj_level, &
+                                  c_branch_weight_s, c_rho_grid_h, c_wleb_prune_level, &
+                                  "new_drop_cavity_api", vcav)
    end function new_drop_cavity_api
 
 !> Create new DROP cavity handle with an explicit radii model.
    function new_drop_cavity_with_radii_api(verror, vradii, nleb, c_debug, c_verbose, &
-         c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, c_tolerance) result(vcav) &
+         c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, c_tolerance, &
+         c_proj_maxiter, c_proj_level, c_branch_weight_s, c_rho_grid_h, &
+         c_wleb_prune_level) result(vcav) &
          & bind(C, name=namespace//"new_drop_cavity_with_radii")
       type(c_ptr), value :: verror
       type(c_ptr), value :: vradii
@@ -1692,12 +1846,195 @@ contains
       type(c_ptr), value :: c_do_fine
       !> Optional master numerical tolerance (NULL selects the DROP default)
       type(c_ptr), value :: c_tolerance
+      type(c_ptr), value :: c_proj_maxiter
+      type(c_ptr), value :: c_proj_level
+      type(c_ptr), value :: c_branch_weight_s
+      type(c_ptr), value :: c_rho_grid_h
+      type(c_ptr), value :: c_wleb_prune_level
       type(c_ptr) :: vcav
 
       call new_drop_cavity_common(verror, vradii, nleb, c_debug, c_verbose, &
                                   c_blendk, c_blend1b, c_blend2b, c_blend3b, c_do_fine, &
-                                  c_tolerance, "new_drop_cavity_with_radii_api", vcav)
+                                  c_tolerance, c_proj_maxiter, c_proj_level, &
+                                  c_branch_weight_s, c_rho_grid_h, c_wleb_prune_level, &
+                                  "new_drop_cavity_with_radii_api", vcav)
    end function new_drop_cavity_with_radii_api
+
+!> Create a CFC-DROP cavity handle with default CPCM radii.
+   function new_cfc_drop_cavity_api(verror, nleb, c_debug, c_verbose, &
+         c_a1, c_a2, c_c, c_m, c_screen_k, c_do_fine, c_tolerance, &
+         c_proj_maxiter, c_proj_level, c_branch_weight_s, c_rho_grid_h, &
+         c_wleb_prune_level) result(vcav) &
+         & bind(C, name=namespace//"new_cfc_drop_cavity")
+      type(c_ptr), value :: verror
+      type(c_ptr), value :: nleb
+      type(c_ptr), value :: c_debug
+      type(c_ptr), value :: c_verbose
+      type(c_ptr), value :: c_a1
+      type(c_ptr), value :: c_a2
+      type(c_ptr), value :: c_c
+      type(c_ptr), value :: c_m
+      type(c_ptr), value :: c_screen_k
+      type(c_ptr), value :: c_do_fine
+      type(c_ptr), value :: c_tolerance
+      type(c_ptr), value :: c_proj_maxiter
+      type(c_ptr), value :: c_proj_level
+      type(c_ptr), value :: c_branch_weight_s
+      type(c_ptr), value :: c_rho_grid_h
+      type(c_ptr), value :: c_wleb_prune_level
+      type(c_ptr) :: vcav
+      type(vp_error), pointer :: error
+      logical(c_bool), pointer :: p_debug, p_do_fine
+      integer(c_int), pointer :: p_verbose, p_m
+      real(c_double), pointer :: p_a1, p_a2, p_c, p_screen_k
+      logical :: use_debug, use_do_fine
+      integer :: use_verbose, use_m
+      real(wp) :: use_a1, use_a2, use_c, use_screen_k, use_tolerance
+      integer :: use_proj_maxiter, use_proj_level, use_wleb_prune_level
+      real(wp) :: use_branch_weight_s, use_rho_grid_h
+      type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
+
+      vcav = c_null_ptr
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+
+      use_debug = .false.
+      if (c_associated(c_debug)) then
+         call c_f_pointer(c_debug, p_debug)
+         use_debug = p_debug
+      end if
+      use_verbose = 0
+      if (c_associated(c_verbose)) then
+         call c_f_pointer(c_verbose, p_verbose)
+         use_verbose = p_verbose
+      end if
+      use_do_fine = .false.
+      if (c_associated(c_do_fine)) then
+         call c_f_pointer(c_do_fine, p_do_fine)
+         use_do_fine = p_do_fine
+      end if
+
+      use_a1 = cfc_template%a1
+      if (c_associated(c_a1)) then
+         call c_f_pointer(c_a1, p_a1)
+         use_a1 = p_a1
+      end if
+      use_a2 = cfc_template%a2
+      if (c_associated(c_a2)) then
+         call c_f_pointer(c_a2, p_a2)
+         use_a2 = p_a2
+      end if
+      use_c = cfc_template%c
+      if (c_associated(c_c)) then
+         call c_f_pointer(c_c, p_c)
+         use_c = p_c
+      end if
+      use_m = cfc_template%m
+      if (c_associated(c_m)) then
+         call c_f_pointer(c_m, p_m)
+         use_m = p_m
+      end if
+      use_screen_k = cfc_template%screen_k
+      if (c_associated(c_screen_k)) then
+         call c_f_pointer(c_screen_k, p_screen_k)
+         use_screen_k = p_screen_k
+      end if
+      if (.not. decode_drop_tolerance(c_tolerance, use_tolerance)) then
+         call api_error(error%ptr, "new_cfc_drop_cavity_api", &
+                        "DROP tolerance must be positive")
+         return
+      end if
+      call decode_drop_controls(c_proj_maxiter, c_proj_level, &
+                                c_branch_weight_s, c_rho_grid_h, c_wleb_prune_level, &
+                                use_proj_maxiter, use_proj_level, use_branch_weight_s, &
+                                use_rho_grid_h, use_wleb_prune_level)
+
+      call cfc_template%new(a1=use_a1, a2=use_a2, c=use_c, m=use_m, &
+                            screen_k=use_screen_k)
+      call new_drop_cavity_from_lsf(error, c_null_ptr, nleb, use_debug, use_verbose, &
+                                    use_do_fine, use_tolerance, use_proj_maxiter, &
+                                    use_proj_level, use_branch_weight_s, use_rho_grid_h, &
+                                    use_wleb_prune_level, cfc_template, &
+                                    "new_cfc_drop_cavity_api", vcav)
+   end function new_cfc_drop_cavity_api
+
+!> Create an iSwiG cavity handle with default CPCM radii.
+   function new_iswig_cavity_api(verror, nleb, c_debug, c_verbose, &
+         c_cut_a, c_cut_f) result(vcav) &
+         & bind(C, name=namespace//"new_iswig_cavity")
+      type(c_ptr), value :: verror
+      type(c_ptr), value :: nleb
+      type(c_ptr), value :: c_debug
+      type(c_ptr), value :: c_verbose
+      type(c_ptr), value :: c_cut_a
+      type(c_ptr), value :: c_cut_f
+      type(c_ptr) :: vcav
+      type(vp_error), pointer :: error
+      integer(c_int), pointer :: p_nleb, p_verbose
+      logical(c_bool), pointer :: p_debug
+      real(c_double), pointer :: p_cut_a, p_cut_f
+      integer :: use_nleb, use_verbose
+      logical :: use_debug
+      real(wp) :: use_cut_a, use_cut_f
+      type(cavity_type_iswig) :: iswig_defaults
+      type(vp_cavity), pointer :: cav
+      class(radius_type), allocatable :: radius_model
+      type(error_type), allocatable :: cavity_error
+
+      vcav = c_null_ptr
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+
+      use_nleb = iswig_defaults%num_leb
+      if (c_associated(nleb)) then
+         call c_f_pointer(nleb, p_nleb)
+         use_nleb = p_nleb
+      end if
+      use_debug = .false.
+      if (c_associated(c_debug)) then
+         call c_f_pointer(c_debug, p_debug)
+         use_debug = p_debug
+      end if
+      use_verbose = 0
+      if (c_associated(c_verbose)) then
+         call c_f_pointer(c_verbose, p_verbose)
+         use_verbose = p_verbose
+      end if
+      use_cut_a = iswig_defaults%cut_a
+      if (c_associated(c_cut_a)) then
+         call c_f_pointer(c_cut_a, p_cut_a)
+         use_cut_a = p_cut_a
+      end if
+      use_cut_f = iswig_defaults%cut_f
+      if (c_associated(c_cut_f)) then
+         call c_f_pointer(c_cut_f, p_cut_f)
+         use_cut_f = p_cut_f
+      end if
+
+      call new_radii("cpcm", radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call api_error(error%ptr, "new_iswig_cavity_api", cavity_error%message)
+         return
+      end if
+      allocate (cav)
+      allocate (cavity_type_iswig :: cav%ptr)
+      call new_context(cav%ctx, verbosity=use_verbose, debug=use_debug)
+      select type (cavity => cav%ptr)
+      type is (cavity_type_iswig)
+         call new_cavity_iswig(cavity, cav%ctx, nleb=use_nleb, &
+                               cut_a=use_cut_a, cut_f=use_cut_f, &
+                               radius_model=radius_model, error=cavity_error)
+      end select
+      if (allocated(cavity_error)) then
+         call api_error(error%ptr, "new_iswig_cavity_api", cavity_error%message)
+         if (associated(cav%ptr)) deallocate (cav%ptr)
+         call cav%ctx%delete()
+         deallocate (cav)
+         return
+      end if
+
+      vcav = c_loc(cav)
+   end function new_iswig_cavity_api
 
 !> Create new DROP cavity handle using an external isodensity LSF callback.
 !>

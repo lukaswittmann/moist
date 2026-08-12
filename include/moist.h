@@ -80,7 +80,7 @@ typedef struct _moist_component* moist_component;
 /// of the moist_delete dispatch below.
 typedef struct _moist_param* moist_param;
 
-/// PCM linear-solver selection, as accepted by moist_new_cpcm_component.
+/// PCM linear-solver selection, as accepted by the CPCM and COSMO constructors
 /// Mirrors the Fortran `solver_type` enumerator in
 /// src/moist/model/component/pcm/type.f90; the numeric values are ABI.
 typedef enum {
@@ -313,6 +313,13 @@ moist_API_ENTRY moist_component moist_API_CALL
 moist_new_cpcm_component(moist_error /* error */,
                          double /* epsilon */,
                          int /* solver */) moist_API_SUFFIX__V_0_6;
+
+/// Create a COSMO component for a general solvation model.
+/// `solver` uses the moist PCM solver enumeration (moist_pcm_solver).
+moist_API_ENTRY moist_component moist_API_CALL
+moist_new_cosmo_component(moist_error /* error */,
+                          double /* epsilon */,
+                          int /* solver */) moist_API_SUFFIX__V_0_6;
 
 /// Create a pressure-volume energy component equal to `pressure * cavity volume`.
 moist_API_ENTRY moist_component moist_API_CALL
