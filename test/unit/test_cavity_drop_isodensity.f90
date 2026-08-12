@@ -30,7 +30,7 @@ module test_cavity_drop_isodensity
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use mstore, only: get_structure
-   use test_helpers, only: fd4_scalar, get_test_points, center_at_origin
+   use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
    use moist_model_gems_utils, only: BuildSuperStructure
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart
@@ -133,6 +133,7 @@ contains
                   new_unittest("gto_grad_fd", test_gto_grad_fd), &
                   new_unittest("gto_hess_fd", test_gto_hess_fd), &
                   new_unittest("gto_third_fd", test_gto_third_fd), &
+                  new_unittest("gto_fourth_fd", test_gto_fourth_fd), &
                   new_unittest("gto_screening_separation", test_gto_screening_separation), &
                   new_unittest("internal_vs_callback", test_internal_vs_callback), &
                   new_unittest("max_deriv_gating_internal", test_max_deriv_internal), &
@@ -426,7 +427,8 @@ contains
    !> @param[out] drho   Density gradient
    !> @param[out] d2rho  Density Hessian; zero when nderiv < 2
    !> @param[out] d3rho  Third density derivative; zero when nderiv < 3
-   subroutine eval_at(gto, point, nderiv, rho, drho, d2rho, d3rho)
+   !> @param[out] d4rho  Fourth density derivative; zero when nderiv < 4
+   subroutine eval_at(gto, point, nderiv, rho, drho, d2rho, d3rho, d4rho)
       !> Basis + density
       type(moist_iso_gto_type), intent(in) :: gto
       !> Evaluation point in Bohr
@@ -441,23 +443,37 @@ contains
       real(wp), intent(out) :: d2rho(3, 3)
       !> Third density derivative
       real(wp), intent(out) :: d3rho(3, 3, 3)
+      !> Fourth density derivative
+      real(wp), intent(out), optional :: d4rho(3, 3, 3, 3)
 
-      real(wp), allocatable :: phi(:, :), t0(:), tm(:, :)
+      real(wp), allocatable :: phi(:, :), t0(:), tm(:, :), tmm(:, :)
       integer, allocatable :: act(:)
 
-      allocate (phi(gto%ncart, 0:19), t0(gto%ncart), tm(gto%ncart, 3), act(gto%ncart))
+      ! The fourth order packs 35 derivative slots and needs the extra
+      ! density-weighted Hessian scratch; the lower orders fit in 20
+      if (nderiv >= 4) then
+         allocate (phi(gto%ncart, 0:34), tmm(gto%ncart, 6))
+      else
+         allocate (phi(gto%ncart, 0:19))
+      end if
+      allocate (t0(gto%ncart), tm(gto%ncart, 3), act(gto%ncart))
 
       ! The evaluator computes exactly the orders it is asked to return, so the
       ! orders this helper does not request are zeroed here for its own callers
       d2rho = 0.0_wp
       d3rho = 0.0_wp
+      if (present(d4rho)) d4rho = 0.0_wp
       select case (nderiv)
       case (:1)
          call gto%eval(point, phi, t0, tm, act, rho, drho)
       case (2)
          call gto%eval(point, phi, t0, tm, act, rho, drho, d2rho=d2rho)
-      case default
+      case (3)
          call gto%eval(point, phi, t0, tm, act, rho, drho, d2rho=d2rho, d3rho=d3rho)
+      case default
+         if (.not. present(d4rho)) error stop "eval_at: nderiv 4 requires d4rho"
+         call gto%eval(point, phi, t0, tm, act, rho, drho, d2rho=d2rho, d3rho=d3rho, &
+                       d4rho=d4rho, tmm=tmm)
       end select
    end subroutine eval_at
 
@@ -651,6 +667,67 @@ contains
          end do
       end do
    end subroutine test_gto_third_fd
+
+   !> Analytic fourth derivative matches a 4-point central FD of the third
+   !>
+   !> @param[out] error Set on mismatch
+   subroutine test_gto_fourth_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_iso_gto_type) :: gto
+      type(structure_type) :: mol
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3), d4(3, 3, 3, 3)
+      real(wp) :: drr, dg(3), dh(3, 3)
+      real(wp) :: pp(3), dpp(3, 3, 3), dp(3, 3, 3), dm(3, 3, 3), dmm(3, 3, 3), fd
+      real(wp) :: dev
+      real(wp), parameter :: h = 2.0e-3_wp
+      integer :: ip, ax, ix, jx, kx
+
+      call build_test(gto, test_reference, error, mol)
+      if (allocated(error)) return
+      call get_test_points(mol, pts, 8)
+      do ip = 1, size(pts, 2)
+         call eval_at(gto, pts(:, ip), 4, rho, drho, d2, d3, d4)
+
+         dev = 0.0_wp
+         do ax = 1, ndim
+            do ix = 1, ndim
+               do jx = 1, ndim
+                  do kx = 1, ndim
+                     dev = max(dev, rel_deviation(d4(ax, ix, jx, kx), d4(ix, ax, jx, kx)))
+                     dev = max(dev, rel_deviation(d4(ax, ix, jx, kx), d4(ax, jx, ix, kx)))
+                     dev = max(dev, rel_deviation(d4(ax, ix, jx, kx), d4(ax, ix, kx, jx)))
+                  end do
+               end do
+            end do
+         end do
+         call check(error, dev, 0.0_wp, thr=1.0e-14_wp, more="d4 permutation symmetry")
+         if (allocated(error)) return
+
+         do ax = 1, ndim
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            call eval_at(gto, pp, 3, drr, dg, dh, dpp)
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            call eval_at(gto, pp, 3, drr, dg, dh, dp)
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            call eval_at(gto, pp, 3, drr, dg, dh, dm)
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            call eval_at(gto, pp, 3, drr, dg, dh, dmm)
+            do ix = 1, ndim
+               do jx = 1, ndim
+                  do kx = 1, ndim
+                     fd = fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), &
+                                     dm(ix, jx, kx), dmm(ix, jx, kx), h)
+                     call check(error, d4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     if (allocated(error)) return
+                  end do
+               end do
+            end do
+         end do
+      end do
+   end subroutine test_gto_fourth_fd
 
    !> Exercise screening while a translated molecular copy crosses the cutoff
    !>
