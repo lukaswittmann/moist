@@ -83,86 +83,89 @@ foreach name : [
   configure_file(input: files(name), output: name, copy: true)
 endforeach
 
-# pytest is an optional development dependency
-if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
-  pytest_args = [
-    '-m', 'pytest',
-    '--no-header', '-q',
-    '-p', 'no:cacheprovider',
-  ]
-  pytest_env = ['PYTHONPATH=' + meson.current_build_dir() / '..']
-  bindings_srcs = [
-    meson.current_build_dir() / 'test_interface.py',
-    meson.current_build_dir() / 'test_library.py',
-  ]
-  coupling_src = meson.current_build_dir() / 'test_pyscf.py'
+test(
+  'python_requirements',
+  python,
+  args: [
+    files('..'/'check_requirements.py'),
+    'cffi',
+    'numpy',
+    'pytest',
+    'pyscf:dft,grad,gto,scf',
+  ],
+  timeout: 60,
+)
 
-  # The CFFI bindings and the Python object model
+pytest_args = [
+  '-m', 'pytest',
+  '--no-header', '-q',
+  '-p', 'no:cacheprovider',
+]
+pytest_env = ['PYTHONPATH=' + meson.current_build_dir() / '..']
+coupling_env = pytest_env + ['MOIST_REQUIRE_PYSCF=1']
+bindings_srcs = [
+  meson.current_build_dir() / 'test_interface.py',
+  meson.current_build_dir() / 'test_library.py',
+]
+coupling_src = meson.current_build_dir() / 'test_pyscf.py'
+
+# The CFFI bindings and the Python object model
+test(
+  'python_api',
+  python,
+  args: pytest_args + bindings_srcs,
+  depends: moist_pyext,
+  env: pytest_env,
+  timeout: 60,
+)
+
+# Test MOIST--QM coupling (using PySCF) (mainly isodensity cavity + models)
+#
+#   host          the adapter's own derivative orders, moist not involved
+#   vdw           electrostatic conventions on a density-independent cavity
+#   isodensity_*  the level-set chain rule, one target per component set
+#   conventions   channel semantics and the negative controls
+#   scf           the self-consistent layer (slowest)
+foreach entry : [
+  ['pyscf_host', 'host', 300],
+  ['pyscf_vdw', 'vdw', 300],
+  ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 300],
+  ['pyscf_isodensity_pv', 'isodensity and pv', 300],
+  ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 300],
+  ['pyscf_conventions', 'conventions', 300],
+  ['pyscf_scf', 'scf', 600],
+]
   test(
-    'python_api',
+    entry[0],
     python,
-    args: pytest_args + bindings_srcs,
+    args: pytest_args + ['-m', entry[1], coupling_src],
     depends: moist_pyext,
-    env: pytest_env,
-    timeout: 60,
+    env: coupling_env,
+    timeout: entry[2],
   )
+endforeach
 
-  # Test MOIST--QM coupling (using PySCF) (mainly isodensity cavity + models)
-  #
-  #   host          the adapter's own derivative orders, moist not involved
-  #   vdw           electrostatic conventions on a density-independent cavity
-  #   isodensity_*  the level-set chain rule, one target per component set
-  #   conventions   channel semantics and the negative controls
-  #   scf           the self-consistent layer (slowest)
-  #
-  # The timeouts are wall-clock and meson runs the targets concurrently, so they
-  # are set for the slowest CI runner under full load rather than for the times
-  # a developer sees locally -- a minute was not enough for either isodensity
-  # tier or for scf on the Ubuntu runners.
-  foreach entry : [
-    ['pyscf_host', 'host', 300],
-    ['pyscf_vdw', 'vdw', 300],
-    ['pyscf_isodensity_cpcm', 'isodensity and cpcm', 300],
-    ['pyscf_isodensity_pv', 'isodensity and pv', 300],
-    ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 300],
-    ['pyscf_conventions', 'conventions', 300],
-    ['pyscf_scf', 'scf', 600],
-  ]
-    test(
-      entry[0],
-      python,
-      args: pytest_args + ['-m', entry[1], coupling_src],
-      depends: moist_pyext,
-      env: pytest_env,
-      timeout: entry[2],
-    )
-  endforeach
-
-  # The GOSTSHYP pressure model on the isodensity cavity
-  #
-  #   gostshyp_integrals   libcint fakemol constants and cartesian orders
-  #   gostshyp_params      surface-parameter derivatives at a frozen cavity
-  #   gostshyp_fock        energy and dE/dP on the moving surface
-  #   gostshyp_gradient    the three nuclear-gradient channels
-  #   gostshyp_conventions channel semantics and the negative controls
-  gostshyp_src = meson.current_build_dir() / 'test_gostshyp.py'
-  foreach entry : [
-    ['gostshyp_integrals', 'gostshyp_integrals', 300],
-    ['gostshyp_params', 'gostshyp_params', 300],
-    ['gostshyp_fock', 'gostshyp_fock', 300],
-    ['gostshyp_gradient', 'gostshyp_gradient', 300],
-    ['gostshyp_conventions', 'gostshyp_conventions', 300],
-  ]
-    test(
-      entry[0],
-      python,
-      args: pytest_args + ['-m', entry[1], gostshyp_src],
-      depends: moist_pyext,
-      env: pytest_env,
-      timeout: entry[2],
-    )
-  endforeach
-
-else
-  message('pytest not found: skipping the python test targets')
-endif
+# The GOSTSHYP pressure model on the isodensity cavity
+#
+#   gostshyp_integrals   libcint fakemol constants and cartesian orders
+#   gostshyp_params      surface-parameter derivatives at a frozen cavity
+#   gostshyp_fock        energy and dE/dP on the moving surface
+#   gostshyp_gradient    the three nuclear-gradient channels
+#   gostshyp_conventions channel semantics and the negative controls
+gostshyp_src = meson.current_build_dir() / 'test_gostshyp.py'
+foreach entry : [
+  ['gostshyp_integrals', 'gostshyp_integrals', 300],
+  ['gostshyp_params', 'gostshyp_params', 300],
+  ['gostshyp_fock', 'gostshyp_fock', 300],
+  ['gostshyp_gradient', 'gostshyp_gradient', 300],
+  ['gostshyp_conventions', 'gostshyp_conventions', 300],
+]
+  test(
+    entry[0],
+    python,
+    args: pytest_args + ['-m', entry[1], gostshyp_src],
+    depends: moist_pyext,
+    env: coupling_env,
+    timeout: entry[2],
+  )
+endforeach

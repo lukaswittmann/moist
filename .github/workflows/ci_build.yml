@@ -197,8 +197,6 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf
 
-      # The suite skips itself when pyscf cannot be imported, which is right for
-      # an optional dependency but would silently pass here. Fail loudly instead.
       - name: Verify pyscf is importable
         run: python -c "from pyscf import dft, grad, gto, scf; import pyscf; print(pyscf.__version__)"
 
