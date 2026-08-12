@@ -1,7 +1,4 @@
-# Codecov configuration for MOIST.
-# Coverage is reported for the core Fortran library (src/) only and is purely
-# informational — it never blocks a merge.
-# Reference: https://docs.codecov.com/docs/codecovyml-reference
+# Codecov configuration for MOIST
 
 coverage:
   status:
@@ -11,6 +8,19 @@ coverage:
     patch:
       default:
         informational: true
+
+# Merge the two coverage legs
+#   fortran   the Fortran unit tests and the C API example
+#   coupling  the Python bindings and the PySCF coupling tests
+flags:
+  fortran:
+    paths:
+      - src/
+    carryforward: false
+  coupling:
+    paths:
+      - src/
+    carryforward: false
 
 # Vendored subprojects, the test suite, the CLI driver and the Python wrapper
 # are not part of the core library coverage.
