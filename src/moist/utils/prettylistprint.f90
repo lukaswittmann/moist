@@ -226,7 +226,7 @@ contains
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
 
-      self%row = ""
+      self%row(:) = ""
       self%next_col = 1
    end subroutine begin_row
 
