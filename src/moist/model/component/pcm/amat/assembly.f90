@@ -52,7 +52,8 @@ contains
       bound = pcm_amat_x_far/(xi*xi)
    end subroutine saturation_bounds
 
-   !> Mirror the upper triangle of a square matrix onto the lower one.
+   !> Mirror the upper triangle of a square matrix onto the lower one
+   !>
    !> @param[inout] amat Matrix whose upper triangle is filled on entry
    subroutine mirror_upper_triangle(amat)
       !> Matrix whose upper triangle is filled on entry
@@ -109,6 +110,8 @@ contains
       real(wp) :: xi_i, xyz_i(3), bound_i
       !> Per-point saturation bounds
       real(wp), allocatable :: bound(:)
+      !> Per-thread squared-separation scratch for one matrix row
+      real(wp), allocatable :: r2(:)
 
       ! Every matrix element is written on the success path. Avoiding an
       ! initial zeroing pass preserves first-touch performance.
@@ -128,35 +131,33 @@ contains
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
 
+      ! The scratch row is a private allocatable: each thread allocates its own
+      ! copy inside the region. A block-local declaration would be cleaner, but
+      ! ifx rejects it under default(none).
       !$omp parallel default(none) shared(xi, f, xyz, amat, bound, ngrid) &
-      !$omp private(i, j, xi_i, xyz_i, bound_i)
-      block
-         !> Per-thread squared-separation scratch for one matrix row
-         real(wp), allocatable :: r2(:)
+      !$omp private(i, j, xi_i, xyz_i, bound_i, r2)
+      allocate (r2(ngrid))
+      !$omp do schedule(dynamic, 8)
+      do i = 1, ngrid
+         call pcm_amat_diag_value(xi(i), f(i), amat(i, i))
 
-         allocate (r2(ngrid))
-         !$omp do schedule(dynamic, 8)
-         do i = 1, ngrid
-            call pcm_amat_diag_value(xi(i), f(i), amat(i, i))
+         xi_i = xi(i)
+         xyz_i = xyz(:, i)
+         bound_i = bound(i)
 
-            xi_i = xi(i)
-            xyz_i = xyz(:, i)
-            bound_i = bound(i)
-
-            do j = 1, i - 1
-               r2(j) = max((xyz_i(1) - xyz(1, j))**2 + (xyz_i(2) - xyz(2, j))**2 &
-                           + (xyz_i(3) - xyz(3, j))**2, r2_floor)
-            end do
-
-            call pcm_amat_far_value_row(i - 1, r2, amat(1:i - 1, i))
-
-            do j = 1, i - 1
-               if (r2(j) >= bound_i + bound(j)) cycle
-               call pcm_amat_near_value(xi_i, xi(j), r2(j), amat(j, i))
-            end do
+         do j = 1, i - 1
+            r2(j) = max((xyz_i(1) - xyz(1, j))**2 + (xyz_i(2) - xyz(2, j))**2 &
+                        + (xyz_i(3) - xyz(3, j))**2, r2_floor)
          end do
-         !$omp end do
-      end block
+
+         call pcm_amat_far_value_row(i - 1, r2, amat(1:i - 1, i))
+
+         do j = 1, i - 1
+            if (r2(j) >= bound_i + bound(j)) cycle
+            call pcm_amat_near_value(xi_i, xi(j), r2(j), amat(j, i))
+         end do
+      end do
+      !$omp end do
       !$omp end parallel
 
       call mirror_upper_triangle(amat)

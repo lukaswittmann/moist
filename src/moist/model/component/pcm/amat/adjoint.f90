@@ -54,6 +54,8 @@ contains
       logical :: is_far
       !> Per-point saturation bounds
       real(wp), allocatable :: bound(:)
+      !> Per-thread squared-separation scratch for one matrix row
+      real(wp), allocatable :: r2(:)
 
       w_xi = 0.0_wp
       w_f = 0.0_wp
@@ -71,62 +73,60 @@ contains
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
 
+      ! The scratch row is a private allocatable: each thread allocates its own
+      ! copy inside the region. A block-local declaration would be cleaner, but
+      ! ifx rejects it under default(none).
       !$omp parallel default(none) &
       !$omp shared(xi, f, xyz, q1, q2, w_xi, w_f, w_xyz, bound, ngrid) &
-      !$omp private(i, j, xi_i, xyz_i, bound_i, q1i, q2i, qsym, r2s, scale, &
+      !$omp private(i, j, xi_i, xyz_i, bound_i, q1i, q2i, qsym, r2s, scale, r2, &
       !$omp         a, a_xi_i, a_xi_j, a_r2, a_diag, a_diag_xi, a_diag_f, acc, is_far)
-      block
-         !> Per-thread squared-separation scratch for one matrix row
-         real(wp), allocatable :: r2(:)
+      allocate (r2(ngrid))
+      !$omp do schedule(dynamic, 8)
+      do i = 1, ngrid
+         xi_i = xi(i)
+         xyz_i = xyz(:, i)
+         bound_i = bound(i)
+         q1i = q1(i)
+         q2i = q2(i)
 
-         allocate (r2(ngrid))
-         !$omp do schedule(dynamic, 8)
-         do i = 1, ngrid
-            xi_i = xi(i)
-            xyz_i = xyz(:, i)
-            bound_i = bound(i)
-            q1i = q1(i)
-            q2i = q2(i)
+         call pcm_amat_diag_grad(xi_i, f(i), a_diag, a_diag_xi, a_diag_f)
+         w_xi(i) = q1i*q2i*a_diag_xi
+         w_f(i) = q1i*q2i*a_diag_f
 
-            call pcm_amat_diag_grad(xi_i, f(i), a_diag, a_diag_xi, a_diag_f)
-            w_xi(i) = q1i*q2i*a_diag_xi
-            w_f(i) = q1i*q2i*a_diag_f
-
-            do j = 1, ngrid
-               r2(j) = max((xyz_i(1) - xyz(1, j))**2 + (xyz_i(2) - xyz(2, j))**2 &
-                           + (xyz_i(3) - xyz(3, j))**2, r2_floor)
-            end do
-
-            ! The saturated pass has no width channel. Near pairs and the self
-            ! term are masked and handled below.
-            acc = 0.0_wp
-            do j = 1, ngrid
-               is_far = r2(j) >= bound_i + bound(j)
-               qsym = q1i*q2(j) + q1(j)*q2i
-               r2s = merge(r2(j), 1.0_wp, is_far)
-               scale = merge(-qsym/(r2s*sqrt(r2s)), 0.0_wp, is_far)
-               acc(1) = acc(1) + scale*(xyz_i(1) - xyz(1, j))
-               acc(2) = acc(2) + scale*(xyz_i(2) - xyz(2, j))
-               acc(3) = acc(3) + scale*(xyz_i(3) - xyz(3, j))
-            end do
-
-            do j = 1, ngrid
-               if (j == i) cycle
-               if (r2(j) >= bound_i + bound(j)) cycle
-               qsym = q1i*q2(j) + q1(j)*q2i
-               if (abs(qsym) <= qtol) cycle
-               call pcm_amat_near_grad(xi_i, xi(j), r2(j), a, a_xi_i, a_xi_j, a_r2)
-               w_xi(i) = w_xi(i) + qsym*a_xi_i
-               scale = 2.0_wp*qsym*a_r2
-               acc(1) = acc(1) + scale*(xyz_i(1) - xyz(1, j))
-               acc(2) = acc(2) + scale*(xyz_i(2) - xyz(2, j))
-               acc(3) = acc(3) + scale*(xyz_i(3) - xyz(3, j))
-            end do
-
-            w_xyz(:, i) = acc
+         do j = 1, ngrid
+            r2(j) = max((xyz_i(1) - xyz(1, j))**2 + (xyz_i(2) - xyz(2, j))**2 &
+                        + (xyz_i(3) - xyz(3, j))**2, r2_floor)
          end do
-         !$omp end do
-      end block
+
+         ! The saturated pass has no width channel. Near pairs and the self
+         ! term are masked and handled below.
+         acc = 0.0_wp
+         do j = 1, ngrid
+            is_far = r2(j) >= bound_i + bound(j)
+            qsym = q1i*q2(j) + q1(j)*q2i
+            r2s = merge(r2(j), 1.0_wp, is_far)
+            scale = merge(-qsym/(r2s*sqrt(r2s)), 0.0_wp, is_far)
+            acc(1) = acc(1) + scale*(xyz_i(1) - xyz(1, j))
+            acc(2) = acc(2) + scale*(xyz_i(2) - xyz(2, j))
+            acc(3) = acc(3) + scale*(xyz_i(3) - xyz(3, j))
+         end do
+
+         do j = 1, ngrid
+            if (j == i) cycle
+            if (r2(j) >= bound_i + bound(j)) cycle
+            qsym = q1i*q2(j) + q1(j)*q2i
+            if (abs(qsym) <= qtol) cycle
+            call pcm_amat_near_grad(xi_i, xi(j), r2(j), a, a_xi_i, a_xi_j, a_r2)
+            w_xi(i) = w_xi(i) + qsym*a_xi_i
+            scale = 2.0_wp*qsym*a_r2
+            acc(1) = acc(1) + scale*(xyz_i(1) - xyz(1, j))
+            acc(2) = acc(2) + scale*(xyz_i(2) - xyz(2, j))
+            acc(3) = acc(3) + scale*(xyz_i(3) - xyz(3, j))
+         end do
+
+         w_xyz(:, i) = acc
+      end do
+      !$omp end do
       !$omp end parallel
    end subroutine pcm_amat_surface_weights
 
