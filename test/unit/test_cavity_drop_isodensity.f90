@@ -1112,6 +1112,18 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
+      !$omp critical(iso_reference_density)
+      call run_internal_vs_callback(error)
+      !$omp end critical(iso_reference_density)
+   end subroutine test_internal_vs_callback
+
+   !> Body of [[test_internal_vs_callback]], run under the `cb_gto` lock
+   !>
+   !> @param[out] error Set on mismatch
+   subroutine run_internal_vs_callback(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
       type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf_int
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
       type(structure_type) :: mol
@@ -1210,7 +1222,7 @@ contains
       if (allocated(error)) return
       call check(error, dev_third, 0.0_wp, thr=THR_THIRD, &
                  more="internal vs callback level set third derivative")
-   end subroutine test_internal_vs_callback
+   end subroutine run_internal_vs_callback
 
    !> max_deriv must gate what the internal backend caches, without disturbing
    !> the orders that are still requested
@@ -1273,6 +1285,18 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
+      !$omp critical(iso_reference_density)
+      call run_max_deriv_callback(error)
+      !$omp end critical(iso_reference_density)
+   end subroutine test_max_deriv_callback
+
+   !> Body of [[test_max_deriv_callback]], run under the `cb_gto` lock
+   !>
+   !> @param[out] error Set on contract violation
+   subroutine run_max_deriv_callback(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
       type(structure_type) :: mol
       real(wp), allocatable :: pts(:, :)
@@ -1318,7 +1342,7 @@ contains
 
       call check(error, any_nonzero, &
                  "callback isodensity LSF returned a zero Hessian at max_deriv=2")
-   end subroutine test_max_deriv_callback
+   end subroutine run_max_deriv_callback
 
    !> Shared assertions for one max_deriv=1 / max_deriv=2 evaluation pair
    !>

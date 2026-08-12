@@ -156,6 +156,10 @@ contains
 
       !> Surface, atom, Cartesian, and extent indices
       integer :: i, iatom, iaxis, ngrid, nsph
+      !> Thread identity and count for the manual reduction
+      integer :: ithread, nthreads
+      !> Per-thread gradient accumulator and the buffer collecting them
+      real(wp), allocatable :: acc(:, :), grad_buf(:, :, :)
 
       grad_rA = 0.0_wp
       ngrid = size(w_xi)
@@ -171,21 +175,39 @@ contains
          return
       end if
 
-      !$omp parallel do default(none) reduction(+:grad_rA) &
-      !$omp shared(xi1_rA, f1_rA, xyz1_rA, w_xi, w_f, w_xyz, ngrid, nsph) &
-      !$omp private(i, iatom, iaxis) schedule(static)
+      ! gfortran miscompiles reduction(+:) on an assumed-shape array dummy, so
+      ! the reduction is done by hand: each thread sums into a private
+      ! accumulator, parks it in its own slice, and the slices are added up
+      ! serially. That also makes the result independent of the thread count.
+      nthreads = 1
+      !$ nthreads = omp_get_max_threads()
+      allocate (grad_buf(3, nsph, nthreads), source=0.0_wp)
+
+      !$omp parallel default(none) &
+      !$omp shared(xi1_rA, f1_rA, xyz1_rA, w_xi, w_f, w_xyz, ngrid, nsph, grad_buf) &
+      !$omp private(i, iatom, iaxis, ithread, acc)
+      ithread = 1
+      !$ ithread = omp_get_thread_num() + 1
+      allocate (acc(3, nsph), source=0.0_wp)
+      !$omp do schedule(static)
       do i = 1, ngrid
          do iatom = 1, nsph
             do iaxis = 1, 3
-               grad_rA(iaxis, iatom) = grad_rA(iaxis, iatom) &
-                                       + w_xi(i)*xi1_rA(iaxis, iatom, i) &
-                                       + w_f(i)*f1_rA(iaxis, iatom, i) &
-                                       + dot_product( &
-                                          xyz1_rA(:, iaxis, iatom, i), w_xyz(:, i))
+               acc(iaxis, iatom) = acc(iaxis, iatom) &
+                                   + w_xi(i)*xi1_rA(iaxis, iatom, i) &
+                                   + w_f(i)*f1_rA(iaxis, iatom, i) &
+                                   + dot_product( &
+                                      xyz1_rA(:, iaxis, iatom, i), w_xyz(:, i))
             end do
          end do
       end do
-      !$omp end parallel do
+      !$omp end do
+      grad_buf(:, :, ithread) = acc
+      !$omp end parallel
+
+      do ithread = 1, nthreads
+         grad_rA(:, :) = grad_rA(:, :) + grad_buf(:, :, ithread)
+      end do
    end subroutine pcm_amat_nuclear_gradient
 
 end submodule moist_model_component_pcm_amat_adjoint

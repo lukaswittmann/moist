@@ -245,15 +245,14 @@ contains
       class(radius_type), allocatable :: default_model
       !> Resolved Lebedev order.
       integer :: num_leb
-      !> Borrowed by the cavity, so it must outlive this call -- see above.
-      type(moist_context_type), target, save :: ctx
+      !> Run context
+      type(moist_context_type), pointer :: ctx
 
       num_leb = default_nleb
       if (present(nleb)) num_leb = nleb
 
+      allocate (ctx)
       call new_context(ctx)
-      !* An absent `cut_f` stays absent through the call, so the cavity keeps
-      !* its own default.
       if (present(radius_model)) then
          call new_cavity_iswig(cavity, ctx, nleb=num_leb, cut_f=cut_f, &
                                radius_model=radius_model, error=error)

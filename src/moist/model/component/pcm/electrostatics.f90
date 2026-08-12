@@ -113,6 +113,10 @@ contains
       real(wp) :: qi, rvec(3), r2, inv_r3, enuc(3), chain(3)
       !> Squared-distance threshold for coincident sources
       real(wp), parameter :: r2tol = 1.0e-30_wp
+      !> Thread identity and count for the manual reduction
+      integer :: ithread, nthreads
+      !> Per-thread gradient accumulator and the buffer collecting them
+      real(wp), allocatable :: acc(:, :), grad_buf(:, :, :)
 
       grad_rA = 0.0_wp
       ngrid = size(surface_q)
@@ -127,9 +131,21 @@ contains
          return
       end if
 
-      !$omp parallel do default(none) reduction(+:grad_rA) &
-      !$omp shared(xyz, sphxyz, xyz1_rA, surface_q, qefield, za, ngrid, nsph) &
-      !$omp private(i, iatom, katom, qi, rvec, r2, inv_r3, enuc, chain) schedule(static)
+      ! gfortran miscompiles reduction(+:) on an assumed-shape array dummy, so
+      ! the reduction is done by hand: each thread sums into a private
+      ! accumulator, parks it in its own slice, and the slices are added up
+      ! serially. That also makes the result independent of the thread count.
+      nthreads = 1
+      !$ nthreads = omp_get_max_threads()
+      allocate (grad_buf(3, nsph, nthreads), source=0.0_wp)
+
+      !$omp parallel default(none) &
+      !$omp shared(xyz, sphxyz, xyz1_rA, surface_q, qefield, za, ngrid, nsph, grad_buf) &
+      !$omp private(i, iatom, katom, qi, rvec, r2, inv_r3, enuc, chain, ithread, acc)
+      ithread = 1
+      !$ ithread = omp_get_thread_num() + 1
+      allocate (acc(3, nsph), source=0.0_wp)
+      !$omp do schedule(static)
       do i = 1, ngrid
          qi = surface_q(i)
          enuc = 0.0_wp
@@ -139,19 +155,25 @@ contains
             if (r2 <= r2tol) cycle
             inv_r3 = 1.0_wp/(sqrt(r2)*r2)
             enuc = enuc + za(katom)*inv_r3*rvec
-            grad_rA(:, katom) = grad_rA(:, katom) + qi*za(katom)*inv_r3*rvec
+            acc(:, katom) = acc(:, katom) + qi*za(katom)*inv_r3*rvec
          end do
          chain = qefield(:, i) - qi*enuc
          do iatom = 1, nsph
-            grad_rA(1, iatom) = grad_rA(1, iatom) &
-                                + dot_product(xyz1_rA(:, 1, iatom, i), chain)
-            grad_rA(2, iatom) = grad_rA(2, iatom) &
-                                + dot_product(xyz1_rA(:, 2, iatom, i), chain)
-            grad_rA(3, iatom) = grad_rA(3, iatom) &
-                                + dot_product(xyz1_rA(:, 3, iatom, i), chain)
+            acc(1, iatom) = acc(1, iatom) &
+                            + dot_product(xyz1_rA(:, 1, iatom, i), chain)
+            acc(2, iatom) = acc(2, iatom) &
+                            + dot_product(xyz1_rA(:, 2, iatom, i), chain)
+            acc(3, iatom) = acc(3, iatom) &
+                            + dot_product(xyz1_rA(:, 3, iatom, i), chain)
          end do
       end do
-      !$omp end parallel do
+      !$omp end do
+      grad_buf(:, :, ithread) = acc
+      !$omp end parallel
+
+      do ithread = 1, nthreads
+         grad_rA(:, :) = grad_rA(:, :) + grad_buf(:, :, ithread)
+      end do
    end subroutine pcm_electrostatic_nuclear_gradient
 
 end module moist_model_component_pcm_electrostatics
