@@ -449,10 +449,15 @@ moist_delete_solvation_model(moist_model* /* model */) moist_API_SUFFIX__V_0_5;
 
 /// Create DROP cavity handle (does NOT build cavity - call moist_update_cavity after)
 /// Optional: nleb (Lebedev grid size), debug (enable debug output), verbose (verbosity level 0-2),
-///          blendk (blending k, default 2.0), blend1b (1-body weight, default 1.0),
-///          blend2b (2-body weight, default 1.0), blend3b (3-body weight, default 1.0),
+///          blendk (blending k, default 5.5), blend1b (1-body weight, default 1.0),
+///          blend2b (2-body weight, default 0.0), blend3b (3-body weight, default 3.0),
 ///          do_fine (enable all optional properties, default false),
-///          tolerance (master numerical tolerance, default from the DROP parameters)
+///          tolerance (master numerical tolerance, default from the DROP parameters),
+///          proj_maxiter (maximum projection iterations, default 150),
+///          proj_level (projection strategy, default 3),
+///          branch_weight_s (branch softmax scale, default 0.05),
+///          rho_grid_h (grid-density kernel length, default 1.0),
+///          wleb_prune_level (smooth weight pruning level 0-6, default 0)
 /// Pass NULL for any optional parameter to use the default.
 moist_API_ENTRY moist_cavity moist_API_CALL
 moist_new_drop_cavity(moist_error /* error */,
@@ -464,7 +469,12 @@ moist_new_drop_cavity(moist_error /* error */,
                      const double* /* blend2b */,
                      const double* /* blend3b */,
                      const bool* /* do_fine */,
-                     const double* /* tolerance */) moist_API_SUFFIX__V_0_6;
+                     const double* /* tolerance */,
+                     const int* /* proj_maxiter */,
+                     const int* /* proj_level */,
+                     const double* /* branch_weight_s */,
+                     const double* /* rho_grid_h */,
+                     const int* /* wleb_prune_level */) moist_API_SUFFIX__V_0_6;
 
 /// Create DROP cavity handle with explicit radii model (does NOT build cavity - call moist_update_cavity after)
 /// Optional parameters same as moist_new_drop_cavity. Pass NULL for any to use the default.
@@ -479,7 +489,46 @@ moist_new_drop_cavity_with_radii(moist_error /* error */,
                                 const double* /* blend2b */,
                                 const double* /* blend3b */,
                                 const bool* /* do_fine */,
-                                const double* /* tolerance */) moist_API_SUFFIX__V_0_6;
+                                const double* /* tolerance */,
+                                const int* /* proj_maxiter */,
+                                const int* /* proj_level */,
+                                const double* /* branch_weight_s */,
+                                const double* /* rho_grid_h */,
+                                const int* /* wleb_prune_level */) moist_API_SUFFIX__V_0_6;
+
+/// Create a CFC-DROP cavity with default CPCM radii.
+/// Optional: nleb, debug, verbose, CFC a1/a2/c/m/screen_k parameters,
+///          do_fine, and the shared DROP tolerance/projection/branching,
+///          grid-density, and weight-pruning controls.
+/// Pass NULL for any optional parameter to use the compiled default.
+moist_API_ENTRY moist_cavity moist_API_CALL
+moist_new_cfc_drop_cavity(moist_error /* error */,
+                          const int* /* nleb */,
+                          const bool* /* debug */,
+                          const int* /* verbose */,
+                          const double* /* a1 */,
+                          const double* /* a2 */,
+                          const double* /* c */,
+                          const int* /* m */,
+                          const double* /* screen_k */,
+                          const bool* /* do_fine */,
+                          const double* /* tolerance */,
+                          const int* /* proj_maxiter */,
+                          const int* /* proj_level */,
+                          const double* /* branch_weight_s */,
+                          const double* /* rho_grid_h */,
+                          const int* /* wleb_prune_level */) moist_API_SUFFIX__V_0_6;
+
+/// Create an iSwiG cavity with default CPCM radii.
+/// Optional: nleb, debug, verbose, area cutoff cut_a, and switching cutoff cut_f.
+/// Pass NULL for any optional parameter to use the compiled default.
+moist_API_ENTRY moist_cavity moist_API_CALL
+moist_new_iswig_cavity(moist_error /* error */,
+                       const int* /* nleb */,
+                       const bool* /* debug */,
+                       const int* /* verbose */,
+                       const double* /* cut_a */,
+                       const double* /* cut_f */) moist_API_SUFFIX__V_0_6;
 
 /// Create DROP cavity handle backed by an external isodensity LSF callback.
 /// The callback must remain valid until the cavity is deleted. The context

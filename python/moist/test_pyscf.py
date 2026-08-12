@@ -50,7 +50,16 @@ try:
 except ImportError as exc:  # pragma: no cover - optional dependency
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from .interface import CPCM, PV, DROPCavity, GeneralSolvationModel, IsodensityDROPCavity
+from .interface import (
+    CPCM,
+    CFCDROPCavity,
+    DROPCavity,
+    GeneralSolvationModel,
+    ISwiGCavity,
+    IsodensityDROPCavity,
+    PV,
+    SvdWDROPCavity,
+)
 from .pyscf import PySCFHost, PySCFIsodensityHost, solvated_rhf
 
 #: Dielectric constant of water
@@ -313,6 +322,26 @@ def sampled_coordinates(natm):
 # ----------------------------------------------------------------------
 # L0 -- solute-vdW cavity: electrostatic conventions only
 # ----------------------------------------------------------------------
+
+
+@pytest.mark.vdw
+@pytest.mark.parametrize(
+    "cavity_type",
+    [SvdWDROPCavity, CFCDROPCavity, ISwiGCavity],
+    ids=("svdw-drop", "cfc-drop", "iswig"),
+)
+def test_l0_density_independent_cavity_types_share_the_pyscf_coupling(cavity_type):
+    """Every radii-based cavity uses the same CPCM/PySCF composition."""
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = PySCFHost(mol)
+    model = GeneralSolvationModel(cavity_type(nleb=26), [CPCM(EPSILON)])
+
+    result = model.evaluate(coupling=host.coupling(dm))
+
+    assert np.isfinite(result.energy)
+    assert result.fock.shape == dm.shape
+    assert result.gradient.shape == (3, mol.natm)
+    assert result.cavity.ngrid > 0
 
 
 @pytest.mark.vdw

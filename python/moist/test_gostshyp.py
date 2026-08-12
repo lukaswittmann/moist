@@ -72,7 +72,13 @@ from .gostshyp import (
     GostshypWall,
     _int3c1e,
 )
-from .interface import IsodensityDROPCavity, Structure
+from .interface import (
+    CPCM,
+    Gostshyp,
+    IsodensityDROPCavity,
+    SolvationModel,
+    Structure,
+)
 from .pyscf import PySCFHost
 
 #: Every test in this module is a GOSTSHYP test; the second marker selects the
@@ -81,6 +87,8 @@ pytestmark = pytest.mark.gostshyp
 
 #: 50 GPa in Hartree / bohr^3
 PRESSURE = 50.0 * GPA_TO_AU
+#: Dielectric constant used by the component-composition check.
+EPSILON = 80.0
 #: Lebedev order
 NLEB = 26
 #: Cavity projection tolerance
@@ -311,7 +319,8 @@ def make_wall(mol, positions=None, *, dm, pressure=PRESSURE):
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
     host = PySCFHost(mol)
     host.dm = dm
-    wall = GostshypModel(host, pressure, nleb=NLEB, tolerance=PROJ_TOL)
+    with pytest.deprecated_call(match="Gostshyp"):
+        wall = GostshypModel(host, pressure, nleb=NLEB, tolerance=PROJ_TOL)
     wall.update(dm)
     return host, wall
 
@@ -738,12 +747,39 @@ def test_params_second_moment_matches_a_second_difference():
 
 
 @pytest.mark.gostshyp_fock
+def test_gostshyp_is_a_composable_model_component():
+    """One PySCF coupling completes GOSTSHYP alone or alongside CPCM."""
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+
+    def evaluate(components):
+        host = PySCFHost(mol)
+        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        model = SolvationModel(cavity=cavity, components=components)
+        return model.evaluate(coupling=host.coupling(dm))
+
+    gostshyp = evaluate([Gostshyp(PRESSURE)])
+    cpcm = evaluate([CPCM(EPSILON)])
+    combined = evaluate([CPCM(EPSILON), Gostshyp(PRESSURE)])
+
+    assert combined.energy == pytest.approx(cpcm.energy + gostshyp.energy, rel=1e-12)
+    np.testing.assert_allclose(combined.fock, cpcm.fock + gostshyp.fock, rtol=1e-11)
+    np.testing.assert_allclose(
+        combined.gradient,
+        cpcm.gradient + gostshyp.gradient,
+        rtol=1e-10,
+        atol=1e-11,
+    )
+
+
+@pytest.mark.gostshyp_fock
 def test_evaluation_owns_complete_gostshyp_results():
     """The generic result includes the wall's reverse-mode host response."""
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
-    wall = GostshypModel(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
+    with pytest.deprecated_call(match="Gostshyp"):
+        wall = GostshypModel(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
 
     result = wall.evaluate(dm)
     expected_gradient = wall.nuclear_gradient(dm)

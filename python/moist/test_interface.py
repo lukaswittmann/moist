@@ -2,18 +2,23 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
+import moist
 from moist import library
 from moist.interface import (
     ArrayCoupling,
     CPCM,
+    CFCDROPCavity,
     Cavity,
+    CavitySnapshot,
     CouplingTransaction,
     DROPCavitySnapshot,
     DROPCavity,
     Electrostatics,
     Evaluation,
     GeneralSolvationModel,
+    ISwiGCavity,
     PV,
+    SvdWDROPCavity,
     SolvationCoupling,
     SolvationModel,
     Structure,
@@ -60,6 +65,119 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     assert len(result.a) == 70
     assert np.asarray(result.a).sum() == approx(151.6278477636, rel=1e-10)
     assert result.volume == approx(173.4128767106, rel=1e-10)
+
+
+@pytest.mark.parametrize(
+    "cavity,snapshot_type",
+    [
+        (
+            SvdWDROPCavity(
+                nleb=26,
+                blend_k=5.5,
+                blend_1b=1.0,
+                blend_2b=0.0,
+                blend_3b=3.0,
+                debug=False,
+                verbosity=0,
+                do_fine=True,
+                tolerance=1.0e-10,
+                proj_maxiter=200,
+                proj_level=2,
+                branch_weight_s=0.08,
+                rho_grid_h=0.8,
+                wleb_prune_level=1,
+            ),
+            DROPCavitySnapshot,
+        ),
+        (
+            CFCDROPCavity(
+                nleb=26,
+                a1=-15.0,
+                a2=-9.0,
+                c=5.0,
+                m=4,
+                debug=False,
+                verbosity=0,
+                do_fine=True,
+                tolerance=1.0e-10,
+                proj_maxiter=200,
+                proj_level=2,
+                branch_weight_s=0.08,
+                rho_grid_h=0.8,
+                wleb_prune_level=1,
+            ),
+            DROPCavitySnapshot,
+        ),
+        (
+            ISwiGCavity(
+                nleb=26,
+                cut_a=0.0,
+                cut_f=1.0e-10,
+                debug=False,
+                verbosity=0,
+            ),
+            CavitySnapshot,
+        ),
+    ],
+    ids=("svdw-drop", "cfc-drop", "iswig"),
+)
+def test_public_cavity_types_accept_their_optional_arguments(
+    cavity: Cavity,
+    snapshot_type,
+    numbers: np.ndarray,
+    positions: np.ndarray,
+) -> None:
+    cavity.update(Structure(numbers, positions))
+    result = cavity.snapshot()
+
+    assert isinstance(result, snapshot_type)
+    assert result.ngrid > 0
+    assert result.nsph == len(numbers)
+    assert np.isfinite(result.area)
+    assert np.isfinite(result.volume)
+
+
+def test_drop_cavity_remains_the_svdw_compatibility_alias() -> None:
+    assert DROPCavity is SvdWDROPCavity
+    assert moist.DROPCavity is moist.SvdWDROPCavity
+
+
+@pytest.mark.parametrize("cavity_type", [SvdWDROPCavity, CFCDROPCavity])
+def test_drop_constructor_controls_are_validated_natively(cavity_type) -> None:
+    with raises(RuntimeError, match="wleb_prune_level.*0-6"):
+        cavity_type(wleb_prune_level=7)
+
+
+def test_cavity_specific_options_reach_the_native_implementations(
+    numbers: np.ndarray,
+    positions: np.ndarray,
+) -> None:
+    structure = Structure(numbers, positions)
+
+    def surface(cavity: Cavity) -> CavitySnapshot:
+        cavity.update(structure)
+        return cavity.snapshot()
+
+    svdw_default = surface(SvdWDROPCavity(nleb=26))
+    svdw_custom = surface(SvdWDROPCavity(nleb=26, blend_k=4.0))
+    assert svdw_custom.area != approx(svdw_default.area, rel=1.0e-6)
+
+    cfc_default = surface(CFCDROPCavity(nleb=26))
+    cfc_custom = surface(
+        CFCDROPCavity(
+            nleb=26,
+            a1=-12.0,
+            a2=-8.0,
+            c=4.0,
+            m=4,
+            screen_k=2.5,
+        )
+    )
+    assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)
+
+    iswig_default = surface(ISwiGCavity(nleb=26))
+    iswig_custom = surface(ISwiGCavity(nleb=26, cut_f=1.0e-2))
+    assert iswig_custom.ngrid < iswig_default.ngrid
 
 
 def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:

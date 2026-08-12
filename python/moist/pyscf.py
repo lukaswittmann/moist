@@ -446,23 +446,23 @@ class PySCFIsodensityHost(PySCFHost):
 class PySCFCoupling(SolvationCoupling):
     """Adapter for one moist evaluation at a fixed PySCF density matrix.
 
-    The adapter hides the two-pass electrostatic exchange: it first supplies the
-    molecular potential, obtains the surface charges, then supplies the
-    charge-dependent surface-position and nuclear-gradient response channels.
-    It also completes moist's adjoints into host Fock and nuclear-gradient
-    contributions.
+    The adapter supplies whichever host channels the model requests.  For
+    electrostatics it hides the two-pass surface-charge exchange; for GOSTSHYP
+    it builds the Gaussian density moments.  It completes all returned adjoints
+    into host Fock and nuclear-gradient contributions.
 
     Parameters
     ----------
     host
         A :class:`PySCFHost` providing the PySCF host operations and, for an
         isodensity cavity, its level-set source.
-        construct the model cavity.
     density_matrix
         Density matrix held fixed for this evaluation.
     """
 
-    channels = frozenset({CouplingChannel.ELECTROSTATICS})
+    channels = frozenset(
+        {CouplingChannel.ELECTROSTATICS, CouplingChannel.GOSTSHYP}
+    )
 
     def __init__(
         self,
@@ -478,6 +478,7 @@ class PySCFCoupling(SolvationCoupling):
             density.tobytes(order="C"), dtype=density.dtype
         ).reshape(expected)
         self._include_lsf = True
+        self._gostshyp = None
 
     @property
     def density_matrix(self) -> np.ndarray:
@@ -492,27 +493,43 @@ class PySCFCoupling(SolvationCoupling):
         # The isodensity callback runs during model.update(), before prepare().
         self.host.dm = self.density_matrix
 
+    def _set_gostshyp_response(self, response) -> None:
+        """Select host response state for a deprecated all-in-one wrapper."""
+        self._gostshyp = response
+
     def prepare(self, transaction: CouplingTransaction) -> None:
         self._include_lsf = transaction.density_dependent
-        if not transaction.requires(CouplingChannel.ELECTROSTATICS):
-            return
-        cavity = transaction.cavity
-        coords = cavity.xyz.T
-        phi = self.host.surface_potential(coords)
+        if transaction.requires(CouplingChannel.ELECTROSTATICS):
+            cavity = transaction.cavity
+            coords = cavity.xyz.T
+            phi = self.host.surface_potential(coords)
 
-        def electrostatics(
-            _cavity: CavitySnapshot,
-            trace: Optional[TracePotential],
-        ) -> Electrostatics:
-            if trace is None:
-                return Electrostatics(phi)
-            return Electrostatics(
-                phi,
-                w_xyz=self.host.surface_position_weights(coords, trace.molecular),
-                qefield=self.host.qefield(coords, trace.molecular),
-            )
+            def electrostatics(
+                _cavity: CavitySnapshot,
+                trace: Optional[TracePotential],
+            ) -> Electrostatics:
+                if trace is None:
+                    return Electrostatics(phi)
+                return Electrostatics(
+                    phi,
+                    w_xyz=self.host.surface_position_weights(
+                        coords, trace.molecular
+                    ),
+                    qefield=self.host.qefield(coords, trace.molecular),
+                )
 
-        transaction.exchange_electrostatics(electrostatics)
+            transaction.exchange_electrostatics(electrostatics)
+
+        if transaction.requires(CouplingChannel.GOSTSHYP):
+            if self._gostshyp is None:
+                # Local import keeps the public PySCF adapter independent of
+                # the optional host-side integral implementation at import time.
+                from .gostshyp import _PySCFGostshyp
+
+                self._gostshyp = _PySCFGostshyp(self.host)
+            self._gostshyp._prepare(transaction, self.density_matrix)
+        else:
+            self._gostshyp = None
 
     def fock(
         self,
@@ -520,11 +537,17 @@ class PySCFCoupling(SolvationCoupling):
         potential: GeneralPotential,
     ) -> np.ndarray:
         self.activate()
-        return self.host.fock(
+        fock = self.host.fock(
             cavity.xyz.T,
             potential,
             include_lsf=self._density_dependent(cavity),
         )
+        if self._gostshyp is not None:
+            fock = fock + self._gostshyp._fock_from(
+                potential,
+                include_cavity_response=False,
+            )
+        return fock
 
     def gradient(
         self,
@@ -533,11 +556,17 @@ class PySCFCoupling(SolvationCoupling):
         model_gradient,
     ) -> np.ndarray:
         self.activate()
-        return model_gradient() + self.host.gradient(
+        gradient = model_gradient() + self.host.gradient(
             cavity.xyz.T,
             potential,
             include_lsf=self._density_dependent(cavity),
         )
+        if self._gostshyp is not None:
+            gradient = gradient + self._gostshyp._integral_nuclear_gradient(
+                self.density_matrix,
+                potential,
+            )
+        return gradient
 
     def _density_dependent(self, _cavity: CavitySnapshot) -> bool:
         # The snapshot deliberately contains values only; cavity construction

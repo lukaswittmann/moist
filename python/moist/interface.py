@@ -456,6 +456,54 @@ class Cavity(ABC):
         return self.snapshot().asph
 
 
+class _GenericCavityBase(Cavity):
+    """Shared implementation for non-DROP native cavities."""
+
+    def _read_snapshot(self) -> CavitySnapshot:
+        return CavitySnapshot(**library.get_cavity_results(self._handle))
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _BorrowedGenericCavity(handle, self)
+
+
+class _BorrowedGenericCavity(_GenericCavityBase):
+    """High-level view of a non-DROP cavity owned by a model."""
+
+    def __init__(self, handle: library.CavityHandle, source: Cavity) -> None:
+        super().__init__(handle, owned=False)
+        self._source = source
+
+    @property
+    def density_dependent(self) -> bool:
+        return self._source.density_dependent
+
+
+class ISwiGCavity(_GenericCavityBase):
+    """iSwiG switching-Gaussian cavity with default CPCM radii.
+
+    ``nleb`` controls the Lebedev grid.  ``cut_a`` selects an area cutoff when
+    positive; otherwise ``cut_f`` is the switching-function cutoff.
+    """
+
+    def __init__(
+        self,
+        nleb: Optional[int] = None,
+        cut_a: Optional[float] = None,
+        cut_f: Optional[float] = None,
+        debug: bool = False,
+        verbosity: int = 0,
+    ) -> None:
+        super().__init__(
+            library.new_iswig_cavity(
+                nleb=nleb,
+                cut_a=cut_a,
+                cut_f=cut_f,
+                debug=debug,
+                verbosity=verbosity,
+            )
+        )
+
+
 class _DROPCavityBase(Cavity):
     """Shared behaviour for standalone and model-owned DROP cavities."""
 
@@ -545,8 +593,8 @@ class _BorrowedDROPCavity(_DROPCavityBase):
         return self._source.density_dependent
 
 
-class DROPCavity(_DROPCavityBase):
-    """Standard solute-vdW DROP cavity with a density-independent surface."""
+class SvdWDROPCavity(_DROPCavityBase):
+    """Smooth-van-der-Waals DROP cavity with default CPCM radii."""
 
     def __init__(
         self,
@@ -555,16 +603,80 @@ class DROPCavity(_DROPCavityBase):
         verbosity: int = 0,
         do_fine: bool = False,
         tolerance: Optional[float] = None,
+        blend_k: Optional[float] = None,
+        blend_1b: Optional[float] = None,
+        blend_2b: Optional[float] = None,
+        blend_3b: Optional[float] = None,
+        proj_maxiter: Optional[int] = None,
+        proj_level: Optional[int] = None,
+        branch_weight_s: Optional[float] = None,
+        rho_grid_h: Optional[float] = None,
+        wleb_prune_level: Optional[int] = None,
     ) -> None:
         super().__init__(
             library.new_drop_cavity(
                 nleb=nleb,
                 debug=debug,
                 verbosity=verbosity,
+                blend_k=blend_k,
+                blend_1b=blend_1b,
+                blend_2b=blend_2b,
+                blend_3b=blend_3b,
                 do_fine=do_fine,
                 tolerance=tolerance,
+                proj_maxiter=proj_maxiter,
+                proj_level=proj_level,
+                branch_weight_s=branch_weight_s,
+                rho_grid_h=rho_grid_h,
+                wleb_prune_level=wleb_prune_level,
             )
         )
+
+
+class CFCDROPCavity(_DROPCavityBase):
+    """COSMO Fine Cavity discretized with DROP."""
+
+    def __init__(
+        self,
+        nleb: Optional[int] = None,
+        a1: Optional[float] = None,
+        a2: Optional[float] = None,
+        c: Optional[float] = None,
+        m: Optional[int] = None,
+        screen_k: Optional[float] = None,
+        debug: bool = False,
+        verbosity: int = 0,
+        do_fine: bool = False,
+        tolerance: Optional[float] = None,
+        proj_maxiter: Optional[int] = None,
+        proj_level: Optional[int] = None,
+        branch_weight_s: Optional[float] = None,
+        rho_grid_h: Optional[float] = None,
+        wleb_prune_level: Optional[int] = None,
+    ) -> None:
+        super().__init__(
+            library.new_cfc_drop_cavity(
+                nleb=nleb,
+                a1=a1,
+                a2=a2,
+                c=c,
+                m=m,
+                screen_k=screen_k,
+                debug=debug,
+                verbosity=verbosity,
+                do_fine=do_fine,
+                tolerance=tolerance,
+                proj_maxiter=proj_maxiter,
+                proj_level=proj_level,
+                branch_weight_s=branch_weight_s,
+                rho_grid_h=rho_grid_h,
+                wleb_prune_level=wleb_prune_level,
+            )
+        )
+
+
+# Compatibility name for the historical generic SvdW-DROP constructor.
+DROPCavity = SvdWDROPCavity
 
 
 class IsodensitySource(Protocol):

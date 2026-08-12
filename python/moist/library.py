@@ -136,8 +136,17 @@ def new_drop_cavity(
     nleb: Optional[int] = None,
     debug: bool = False,
     verbosity: int = 0,
+    blend_k: Optional[float] = None,
+    blend_1b: Optional[float] = None,
+    blend_2b: Optional[float] = None,
+    blend_3b: Optional[float] = None,
     do_fine: bool = False,
     tolerance: Optional[float] = None,
+    proj_maxiter: Optional[int] = None,
+    proj_level: Optional[int] = None,
+    branch_weight_s: Optional[float] = None,
+    rho_grid_h: Optional[float] = None,
+    wleb_prune_level: Optional[int] = None,
 ) -> CavityHandle:
     """
     Create a standard solute-vdW (SvdW) DROP cavity with default CPCM radii.
@@ -151,12 +160,77 @@ def new_drop_cavity(
             _ref("int", nleb),
             _ref("bool", debug),
             _ref("int", verbosity),
-            _ref("double", None),
-            _ref("double", None),
-            _ref("double", None),
-            _ref("double", None),
+            _ref("double", blend_k),
+            _ref("double", blend_1b),
+            _ref("double", blend_2b),
+            _ref("double", blend_3b),
             _ref("bool", do_fine),
             _ref("double", tolerance),
+            _ref("int", proj_maxiter),
+            _ref("int", proj_level),
+            _ref("double", branch_weight_s),
+            _ref("double", rho_grid_h),
+            _ref("int", wleb_prune_level),
+        )
+    )
+
+
+def new_cfc_drop_cavity(
+    nleb: Optional[int] = None,
+    debug: bool = False,
+    verbosity: int = 0,
+    a1: Optional[float] = None,
+    a2: Optional[float] = None,
+    c: Optional[float] = None,
+    m: Optional[int] = None,
+    screen_k: Optional[float] = None,
+    do_fine: bool = False,
+    tolerance: Optional[float] = None,
+    proj_maxiter: Optional[int] = None,
+    proj_level: Optional[int] = None,
+    branch_weight_s: Optional[float] = None,
+    rho_grid_h: Optional[float] = None,
+    wleb_prune_level: Optional[int] = None,
+) -> CavityHandle:
+    """Create a CFC-DROP cavity with default CPCM radii."""
+
+    return CavityHandle.with_gc(
+        error_check(lib.moist_new_cfc_drop_cavity)(
+            _ref("int", nleb),
+            _ref("bool", debug),
+            _ref("int", verbosity),
+            _ref("double", a1),
+            _ref("double", a2),
+            _ref("double", c),
+            _ref("int", m),
+            _ref("double", screen_k),
+            _ref("bool", do_fine),
+            _ref("double", tolerance),
+            _ref("int", proj_maxiter),
+            _ref("int", proj_level),
+            _ref("double", branch_weight_s),
+            _ref("double", rho_grid_h),
+            _ref("int", wleb_prune_level),
+        )
+    )
+
+
+def new_iswig_cavity(
+    nleb: Optional[int] = None,
+    debug: bool = False,
+    verbosity: int = 0,
+    cut_a: Optional[float] = None,
+    cut_f: Optional[float] = None,
+) -> CavityHandle:
+    """Create an iSwiG cavity with default CPCM radii."""
+
+    return CavityHandle.with_gc(
+        error_check(lib.moist_new_iswig_cavity)(
+            _ref("int", nleb),
+            _ref("bool", debug),
+            _ref("int", verbosity),
+            _ref("double", cut_a),
+            _ref("double", cut_f),
         )
     )
 
