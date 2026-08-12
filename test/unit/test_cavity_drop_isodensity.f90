@@ -305,7 +305,10 @@ contains
 
       filename = test_filename(test)
       label = test_label(test)
+      ! Claim and release the unit under a critical section
+      !$omp critical(moist_test_scratch_unit)
       open (newunit=unit, file=filename, status="old", action="read", iostat=stat)
+      !$omp end critical(moist_test_scratch_unit)
       if (stat /= 0) then
          call test_failed(error, "cannot open PySCF density test: "//filename)
          return
@@ -316,7 +319,9 @@ contains
       if (stat == 0) read (unit, *, iostat=stat) nat, ncart, nelectron, energy, nshell, nprim
       if (stat == 0 .and. (nat < 1 .or. ncart < 1 .or. nshell < 1 .or. nprim < nshell)) stat = 1
       if (stat /= 0) then
+         !$omp critical(moist_test_scratch_unit)
          close (unit)
+         !$omp end critical(moist_test_scratch_unit)
          call test_failed(error, "cannot read PySCF density test header: "//filename)
          return
       end if
@@ -343,7 +348,9 @@ contains
          end do
       end if
       if (stat == 0) read (unit, *, iostat=stat) triangle
+      !$omp critical(moist_test_scratch_unit)
       close (unit)
+      !$omp end critical(moist_test_scratch_unit)
       if (stat /= 0) then
          call test_failed(error, "truncated PySCF density test: "//filename)
          return

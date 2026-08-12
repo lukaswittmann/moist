@@ -75,7 +75,9 @@ contains
       call close_scratch(iu)
       call read_line(path, 1, line)
       call discard_scratch(path)
-      call check(error, line, "____ab__________42", "cells are right-aligned and the skipped one is blank")
+      call check(error, line, "____ab__________42", &
+                 "cells are right-aligned and the skipped one is blank", &
+                 more="got '"//line//"'")
 
    end subroutine test_row_layout
 
@@ -98,7 +100,8 @@ contains
 
       call close_scratch(iu)
       call read_line(path, 1, line)
-      call check(error, line, "==_h_i_===", "the title is spread and centered in '=' fill")
+      call check(error, line, "==_h_i_===", "the title is spread and centered in '=' fill", &
+                 more="got '"//line//"'")
       if (allocated(error)) then
          call discard_scratch(path)
          return
@@ -137,7 +140,9 @@ contains
       call close_scratch(iu)
       call read_line(path, 1, line)
       call discard_scratch(path)
-      call check(error, line, "+++++-----", "overflow markers carry the sign of the value")
+      call check(error, line, "+++++-----", &
+                 "overflow markers carry the sign of the value", &
+                 more="got '"//line//"'")
 
    end subroutine test_real_overflow_marker
 
@@ -151,7 +156,9 @@ contains
       !> Unit connected to the truncated file
       integer, intent(out) :: iu
 
+      !$omp critical(moist_test_scratch_unit)
       open (newunit=iu, file=path, action='write', status='replace')
+      !$omp end critical(moist_test_scratch_unit)
    end subroutine open_scratch
 
    !> Release the write unit once the printer is done with it
@@ -161,7 +168,9 @@ contains
       !> Unit the printer wrote to
       integer, intent(in) :: iu
 
+      !$omp critical(moist_test_scratch_unit)
       close (iu)
+      !$omp end critical(moist_test_scratch_unit)
    end subroutine close_scratch
 
    !> Count the lines a printer wrote, then discard the scratch file
@@ -177,13 +186,17 @@ contains
       integer :: read_unit, stat
 
       nlines = 0
+      !$omp critical(moist_test_scratch_unit)
       open (newunit=read_unit, file=path, action='read', status='old')
+      !$omp end critical(moist_test_scratch_unit)
       do
          read (read_unit, *, iostat=stat)
          if (stat /= 0) exit
          nlines = nlines + 1
       end do
+      !$omp critical(moist_test_scratch_unit)
       close (read_unit, status='delete')
+      !$omp end critical(moist_test_scratch_unit)
    end subroutine count_lines
 
    !> Delete a scratch file that `read_line` left behind
@@ -200,8 +213,10 @@ contains
 
       integer :: unit, stat
 
+      !$omp critical(moist_test_scratch_unit)
       open (newunit=unit, file=path, action='read', status='old', iostat=stat)
       if (stat == 0) close (unit, status='delete')
+      !$omp end critical(moist_test_scratch_unit)
    end subroutine discard_scratch
 
    !> Read one line of printer output, keeping the scratch file for later reads
@@ -224,15 +239,18 @@ contains
       integer :: read_unit, stat, i, j
 
       line = ''
+      buf = ''
+      !$omp critical(moist_test_scratch_unit)
       open (newunit=read_unit, file=path, action='read', status='old')
+      !$omp end critical(moist_test_scratch_unit)
       do i = 1, iline
          read (read_unit, '(A)', iostat=stat) buf
-         if (stat /= 0) then
-            close (read_unit)
-            return
-         end if
+         if (stat /= 0) exit
       end do
+      !$omp critical(moist_test_scratch_unit)
       close (read_unit)
+      !$omp end critical(moist_test_scratch_unit)
+      if (stat /= 0) return
 
       line = trim(buf)
       do j = 1, len(line)

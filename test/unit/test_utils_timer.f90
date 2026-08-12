@@ -32,7 +32,7 @@ contains
 
    end subroutine collect_utils_timer
 
-   !> Spin the CPU for a short, measurable interval
+   !> Spin the CPU for a short but measurable interval
    subroutine busy()
       integer :: k
       real(wp) :: x
@@ -47,7 +47,7 @@ contains
    subroutine test_loop_accumulation(error)
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
-      real(wp) :: t_once, t_five
+      real(wp) :: t_once, t_first, t_five
       integer :: i
 
       call t%new()
@@ -58,7 +58,11 @@ contains
       t_once = t%get("once")
 
       call t%start("many")
-      do i = 1, 5
+      call t%start("inner")
+      call busy()
+      call t%stop()
+      t_first = t%get("many/inner")
+      do i = 2, 5
          call t%start("inner")
          call busy()
          call t%stop()
@@ -70,8 +74,8 @@ contains
       if (allocated(error)) return
       call check(error, .not. ieee_is_nan(t_five), "looped timer must not be NaN")
       if (allocated(error)) return
-      ! five iterations of the same work should exceed one iteration
-      call check(error, t_five > t_once, "five accumulations must exceed one")
+      ! re-entering the name must add to the node, not replace its time
+      call check(error, t_five > t_first, "five accumulations must exceed one")
       if (allocated(error)) return
       ! the parent must contain at least its child's time
       call check(error, t%get("many") >= t_five, "parent must contain child time")
