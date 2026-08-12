@@ -2,14 +2,14 @@
 
 !> LAPACK based eigenvalue solvers
 module moist_math_lapack_solver
-   use moist_math_lapack_type, only: solver_type, context_solver
+   use moist_math_lapack_type, only: eigen_solver_type, context_solver
    use moist_math_lapack_sygvd, only: sygvd_solver, new_sygvd
    use moist_math_lapack_sygvr, only: sygvr_solver, new_sygvr
    use mctc_env, only: sp, dp, error_type
    implicit none
    private
 
-   public :: solver_type, lapack_algorithm
+   public :: eigen_solver_type, lapack_algorithm
 
    !> Possible solvers provided by LAPACK
    type :: enum_lapack
@@ -40,7 +40,7 @@ contains
       !> Instance of the solver factory
       class(lapack_solver), intent(inout) :: self
       !> New electronic solver
-      class(solver_type), allocatable, intent(out) :: solver
+      class(eigen_solver_type), allocatable, intent(out) :: solver
       !> Dimension of the eigenvalue problem
       integer, intent(in) :: ndim
 
@@ -67,7 +67,7 @@ contains
       !> Instance of the solver factory
       class(lapack_solver), intent(inout) :: self
       !> Electronic solver instance
-      class(solver_type), allocatable, intent(inout) :: solver
+      class(eigen_solver_type), allocatable, intent(inout) :: solver
 
       if (allocated(solver)) deallocate (solver)
    end subroutine delete

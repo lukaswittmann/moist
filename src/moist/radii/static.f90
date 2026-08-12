@@ -11,7 +11,7 @@ module moist_radii_static
    implicit none (type, external)
    private
 
-   public :: static_radius_type
+   public :: radius_type_static
    public :: new_cpcm_radii
    public :: new_smd_radii
    public :: new_d3_radii
@@ -21,7 +21,7 @@ module moist_radii_static
    public :: new_gauss_radii
 
    !> Static, table-based radii model.
-   type, extends(radius_type) :: static_radius_type
+   type, extends(radius_type) :: radius_type_static
       !> Selected legacy radius-model tag.
       integer :: model_tag = rad_type%cpcm
       !> Atomic numbers for the current structure.
@@ -31,7 +31,7 @@ module moist_radii_static
       procedure :: update => update_static_radii
       !> Print unique elemental radii for the current molecule.
       procedure :: print => print_static_radii
-   end type static_radius_type
+   end type radius_type_static
 
 contains
 
@@ -42,7 +42,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_static_radii(self, model_tag, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Legacy radii selector tag
       integer, intent(in) :: model_tag
       !> Optional print level
@@ -63,7 +63,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_cpcm_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -76,7 +76,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_smd_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -89,7 +89,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_d3_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -102,7 +102,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_cosmo_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -115,7 +115,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_bondi_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -128,7 +128,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_rahm_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -141,7 +141,7 @@ contains
    !> @param[in]  verbosity  optional print level for diagnostics
    subroutine new_gauss_radii(self, verbosity)
       !> Static radii model
-      type(static_radius_type), intent(out) :: self
+      type(radius_type_static), intent(out) :: self
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -154,7 +154,7 @@ contains
    !> @param[in] unit  optional output unit
    subroutine print_static_radii(self, unit)
       !> Static radii model
-      class(static_radius_type), intent(in) :: self
+      class(radius_type_static), intent(in) :: self
       !> Optional output unit
       integer, intent(in), optional :: unit
 
@@ -222,7 +222,7 @@ contains
    !> @param[out]   error  error handle on invalid input/lookup
    subroutine update_static_radii(self, mol, error)
       !> Static radii model
-      class(static_radius_type), intent(inout) :: self
+      class(radius_type_static), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Error handle

@@ -16,7 +16,7 @@ module moist_type
    public :: potential_type
    public :: cavity_surface_adjoint_type
    public :: coupling_type
-   public :: solvation_model, solvation_model_component
+   public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
    public :: write_cavity_xyz_debug
    public :: write_cavity_csv_debug
@@ -203,7 +203,7 @@ module moist_type
    end type coupling_type
 
    !> Abstract base solvation model
-   type, abstract :: solvation_model
+   type, abstract :: solvation_model_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
       !> owned by the top-level caller. Never allocated/freed by the model.
       type(moist_context_type), pointer :: ctx => null()
@@ -215,16 +215,16 @@ module moist_type
       procedure(get_model_potential), deferred :: get_potential
       procedure(get_model_gradient), deferred :: get_gradient
 
-   end type solvation_model
+   end type solvation_model_type
 
    abstract interface
 
       !> Update the solvation model with the current molecular structure
       !> Calculate all structure-dependent properties
       subroutine update_model(self, mol, error)
-         import solvation_model, structure_type, error_type
+         import solvation_model_type, structure_type, error_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Molecular structure data
          class(structure_type), intent(in) :: mol
          !> Error handling
@@ -233,9 +233,9 @@ module moist_type
 
       !> Evaluate the solvation energy
       subroutine get_model_energy(self, coupling, energy, error)
-         import solvation_model, structure_type, wp, error_type, coupling_type
+         import solvation_model_type, structure_type, wp, error_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Solvation energy
@@ -246,9 +246,9 @@ module moist_type
 
       !> Get the solvation potential (only for self-consistent models)
       subroutine get_model_potential(self, coupling, potential, error)
-         import solvation_model, structure_type, wp, error_type, potential_type, coupling_type
+         import solvation_model_type, structure_type, wp, error_type, potential_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Solvation potential for the component
@@ -259,9 +259,9 @@ module moist_type
 
       !> Get the solvation energy gradient
       subroutine get_model_gradient(self, coupling, gradient, error)
-         import solvation_model, structure_type, wp, error_type, coupling_type
+         import solvation_model_type, structure_type, wp, error_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Solvation gradient
@@ -273,7 +273,7 @@ module moist_type
    end interface
 
    !> Abstract solvation model component
-   type, abstract :: solvation_model_component
+   type, abstract :: solvation_model_component_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
       !> owned by the top-level caller. Never allocated/freed by the component.
       type(moist_context_type), pointer :: ctx => null()
@@ -306,15 +306,15 @@ module moist_type
       !> Accumulate nuclear-gradient terms that do not flow through the surface.
       procedure :: get_direct_gradient => get_component_direct_gradient_default
 
-   end type solvation_model_component
+   end type solvation_model_component_type
 
    abstract interface
 
       !> Update the solvation model component with the current molecular structure
       subroutine update_component(self, mol, cavity, error)
-         import solvation_model_component, structure_type, cavity_type, error_type
+         import solvation_model_component_type, structure_type, cavity_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Molecular structure data
          type(structure_type), intent(in) :: mol
          !> Cavity type data
@@ -325,9 +325,9 @@ module moist_type
 
       !> Evaluate the solvation energy for the component
       subroutine get_component_energy(self, coupling, cavity, energy, error)
-         import solvation_model_component, cavity_type, wp, coupling_type, error_type
+         import solvation_model_component_type, cavity_type, wp, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Live cavity owned by the orchestrating model
@@ -340,9 +340,9 @@ module moist_type
 
       !> Get the solvation potential for the component
       subroutine get_component_potential(self, coupling, cavity, potential, error)
-         import solvation_model_component, cavity_type, potential_type, coupling_type, error_type
+         import solvation_model_component_type, cavity_type, potential_type, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Live cavity owned by the orchestrating model
@@ -355,9 +355,9 @@ module moist_type
 
       !> Get the solvation energy gradient for the component
       subroutine get_component_gradient(self, coupling, cavity, gradient, error)
-         import solvation_model_component, cavity_type, wp, coupling_type, error_type
+         import solvation_model_component_type, cavity_type, wp, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Live cavity owned by the orchestrating model
@@ -488,7 +488,7 @@ contains
    !> @param[out]   error     Error object
    subroutine get_component_trace_potential_default(self, coupling, cavity, potential, error)
       !> Solvation component
-      class(solvation_model_component), intent(inout) :: self
+      class(solvation_model_component_type), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -508,7 +508,7 @@ contains
    !> @param[out]   error   Error object
    subroutine get_component_surface_weights_default(self, coupling, cavity, acc, error)
       !> Solvation component
-      class(solvation_model_component), intent(inout) :: self
+      class(solvation_model_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Cavity data
@@ -536,7 +536,7 @@ contains
    !> @param[out]   error    Error object
    subroutine get_component_host_surface_weights_default(self, coupling, acc, ngrid, error)
       !> Solvation component
-      class(solvation_model_component), intent(inout) :: self
+      class(solvation_model_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Cavity-specific surface-adjoint accumulator
@@ -562,7 +562,7 @@ contains
    !> @param[out]   error    Error object
    subroutine get_component_gradient_surface_weights_default(self, coupling, cavity, acc, error)
       !> Solvation component
-      class(solvation_model_component), intent(inout) :: self
+      class(solvation_model_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Cavity data
@@ -589,7 +589,7 @@ contains
    !> @param[out]   error    Error object
    subroutine get_component_direct_gradient_default(self, coupling, cavity, gradient, error)
       !> Solvation component
-      class(solvation_model_component), intent(inout) :: self
+      class(solvation_model_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Cavity data

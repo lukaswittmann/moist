@@ -14,8 +14,8 @@ module moist_cavity_drop
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_smooth_step_swif, new_smooth_step_swif
-   use moist_cavity_drop_switching, only: moist_cavity_drop_sigmoid_bump_swif, new_sigmoid_bump_swif
+   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, new_swif_smooth_step
+   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig
    use moist_cavity_drop_projector, only: drop_projector_type
    use moist_cavity_drop_types, only: projection_buffer_type, projection_workspace_type
@@ -27,7 +27,7 @@ module moist_cavity_drop
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
-   use moist_math_smoothing_kernels, only: wendland_kernel_type
+   use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
    use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
    use moist_cavity_drop_request, only: drop_property_request, &
@@ -159,11 +159,11 @@ module moist_cavity_drop
       !* ----------------------------- Switching functions ---------------------------- *!
 
       !> Critical level set switching function
-      type(moist_cavity_drop_sigmoid_bump_swif) :: f_crit
+      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit
       !> Focal/branching point switching function
-      type(moist_cavity_drop_sigmoid_bump_swif) :: f_foc
+      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_foc
       !> Lebedev weight pruning function (suppresses near-zero weights)
-      type(moist_cavity_drop_sigmoid_bump_swif) :: f_wleb
+      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_wleb
 
       !> Weight switching values per point (ngrid)
       real(wp), allocatable :: w_f0(:)
@@ -599,15 +599,15 @@ contains
       self%lsf_model%screening_threshold = self%param%screening_threshold
 
       !> Set up weight switching function
-      call new_sigmoid_bump_swif(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
+      call new_swif_sigmoid_bump(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, a_lo=self%param%w_0ls_a)
 
-      call new_sigmoid_bump_swif(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
+      call new_swif_sigmoid_bump(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
                                  p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, a_lo=self%param%w_0ls_a)
 
       !> Set up Lebedev weight switching function (optional)
       if (self%param%wleb_prune_level > 0) then
-         call new_sigmoid_bump_swif(self%f_wleb, &
+         call new_swif_sigmoid_bump(self%f_wleb, &
                                     self%param%wleb_prune_from, self%param%wleb_prune_to)
       end if
 

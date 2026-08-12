@@ -10,7 +10,7 @@ module test_math_smoothing_kernels
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_math_smoothing_kernels, only: wendland_kernel_type
+   use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
    implicit none(type, external)
    private
 
@@ -41,7 +41,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
       type(moist_error_type), allocatable :: rejected
       integer :: orders(3), iorder, idim
 
@@ -75,7 +75,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
       type(moist_error_type), allocatable :: rejected
       integer :: orders(3), iorder
 
@@ -99,7 +99,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
       type(moist_error_type), allocatable :: rejected
 
       call kernel%init(order=3, dimension=2, h=h_ref, error=rejected)
@@ -116,7 +116,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
       type(moist_error_type), allocatable :: rejected
 
       call kernel%init(order=2, dimension=2, h=0.0_wp, error=rejected)
@@ -140,7 +140,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
       type(moist_error_type), allocatable :: rejected
 
       call kernel%init(order=2, dimension=2, h=h_ref, error=rejected)

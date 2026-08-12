@@ -7,12 +7,12 @@ module moist_radii_custom
    implicit none
    private
 
-   public :: custom_radius_type
+   public :: radius_type_custom
    public :: new_custom_radii_atoms
    public :: new_custom_radii_elements
 
    !> Custom radii model with user-supplied, geometry-invariant radii.
-   type, extends(radius_type) :: custom_radius_type
+   type, extends(radius_type) :: radius_type_custom
       !> If true, radii are supplied per atom in molecular order.
       logical :: has_atom_radii = .false.
       !> If true, radii are supplied per element by atomic number.
@@ -26,7 +26,7 @@ module moist_radii_custom
       procedure :: update => update_custom_radii
       !> Print custom radii model status.
       procedure :: print => print_custom_radii
-   end type custom_radius_type
+   end type radius_type_custom
 
 contains
 
@@ -39,7 +39,7 @@ contains
       !> Per-atom radii (bohr)
       real(wp), intent(in) :: radii(:)
       !> Custom radii model
-      type(custom_radius_type), intent(out) :: self
+      type(radius_type_custom), intent(out) :: self
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
       !> Optional print level
@@ -85,7 +85,7 @@ contains
       !> Radii values matching atomic_numbers (bohr)
       real(wp), intent(in) :: radii(:)
       !> Custom radii model
-      type(custom_radius_type), intent(out) :: self
+      type(radius_type_custom), intent(out) :: self
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
       !> Optional print level
@@ -148,7 +148,7 @@ contains
    !> @param[in] unit  optional output unit
    subroutine print_custom_radii(self, unit)
       !> Custom radii model
-      class(custom_radius_type), intent(in) :: self
+      class(radius_type_custom), intent(in) :: self
       !> Optional output unit
       integer, intent(in), optional :: unit
 
@@ -176,7 +176,7 @@ contains
    !> @param[out]   error  error handle on invalid setup/input
    subroutine update_custom_radii(self, mol, error)
       !> Custom radii model
-      class(custom_radius_type), intent(inout) :: self
+      class(radius_type_custom), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Error handle

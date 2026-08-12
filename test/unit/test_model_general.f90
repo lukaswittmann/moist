@@ -14,9 +14,9 @@ module test_model_general
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
-   use moist_model_general, only: general_solvation_model, new_general_model
+   use moist_model_general, only: solvation_model_general, new_model_general
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_radii, only: static_radius_type
+   use moist_radii, only: radius_type_static
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: build_test_cavity, make_charge_coupling
 
@@ -53,10 +53,10 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(general_solvation_model) :: model
+      type(solvation_model_general) :: model
       type(solvation_model_component_cpcm) :: pcm_component, pcm_reference
       type(cavity_type_iswig) :: cavity
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
       type(potential_type) :: potential
       real(wp) :: energy, reference_energy
@@ -79,7 +79,7 @@ contains
          return
       end if
 
-      call new_general_model(model, cavity, ctx, err)
+      call new_model_general(model, cavity, ctx, err)
       if (allocated(err)) then
          call test_failed(error, "General-model construction failed: "//err%message)
          return
@@ -185,10 +185,10 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(general_solvation_model) :: model_pcm, model_pv, model_zero
+      type(solvation_model_general) :: model_pcm, model_pv, model_zero
       type(solvation_model_component_cpcm) :: pcm_component
       type(cavity_type_iswig) :: cavity
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
       type(potential_type) :: potential
       real(wp) :: energy_pcm, energy_pv, energy_zero, volume
@@ -342,7 +342,7 @@ contains
    subroutine build_pv_model(model, cavity, ctx, pcm_component, with_pv, pressure, mol, error)
 
       !> Model to build
-      type(general_solvation_model), intent(out) :: model
+      type(solvation_model_general), intent(out) :: model
 
       !> Cavity template copied into the model
       type(cavity_type_iswig), intent(in) :: cavity
@@ -367,7 +367,7 @@ contains
 
       type(solvation_model_component_pv) :: pv_component
 
-      call new_general_model(model, cavity, ctx, error)
+      call new_model_general(model, cavity, ctx, error)
       if (allocated(error)) return
       call model%add_component(pcm_component, error)
       if (allocated(error)) return

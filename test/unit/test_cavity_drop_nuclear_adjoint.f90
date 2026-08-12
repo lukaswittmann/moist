@@ -31,7 +31,7 @@ module test_cavity_drop_nuclear_adjoint
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
    use moist_type, only: coupling_type
-   use moist_model_general, only: general_solvation_model, new_general_model
+   use moist_model_general, only: solvation_model_general, new_model_general
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
@@ -371,7 +371,7 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(general_solvation_model) :: model_rev, model_fwd
+      type(solvation_model_general) :: model_rev, model_fwd
       type(solvation_model_component_cpcm) :: pcm_component
       type(solvation_model_component_pv) :: pv_component
       type(coupling_type) :: coupling
@@ -447,7 +447,7 @@ contains
    !> @param[out]   error  Error handle
    subroutine build_model(model, cavity, ctx, pcmc, pvc, mol, error)
       !> Model to build
-      type(general_solvation_model), intent(out) :: model
+      type(solvation_model_general), intent(out) :: model
       !> Cavity template copied into the model
       type(cavity_type_drop), intent(in) :: cavity
       !> Run context owned by the caller
@@ -462,7 +462,7 @@ contains
 
       type(mctc_error), allocatable :: err
 
-      call new_general_model(model, cavity, ctx, err)
+      call new_model_general(model, cavity, ctx, err)
       if (.not. allocated(err)) call model%add_component(pcmc, err)
       if (.not. allocated(err)) call model%add_component(pvc, err)
       if (.not. allocated(err)) call model%update(mol, err)

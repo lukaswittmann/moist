@@ -12,7 +12,7 @@ module moist_data_solvents
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_context, only: moist_context_type, new_context
-   use moist_radii_static, only: static_radius_type, new_bondi_radii
+   use moist_radii_static, only: radius_type_static, new_bondi_radii
    implicit none
 
    integer, parameter, public :: max_solvents = 180
@@ -195,7 +195,7 @@ contains
 
       ! NumSA and radius model for packing fraction calculation
       type(cavity_type_iswig), allocatable :: cavity
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       !> Local run context borrowed by the throw-away packing-fraction cavity
       type(moist_context_type), target :: cav_ctx
 

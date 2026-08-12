@@ -7,7 +7,7 @@ module test_cavity_numsa
    use mstore, only: get_structure
    use moist_data_radii_legacy, only: get_radius_func
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_radii, only: static_radius_type
+   use moist_radii, only: radius_type_static
    use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
    use moist_context, only: moist_context_type, new_context
    implicit none (type, external)
@@ -38,7 +38,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
 
       real(wp), parameter :: probe = 1.4_wp*aatoau
@@ -96,7 +96,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
       real(wp), parameter :: probe = 1.2_wp*aatoau
       integer, parameter :: nleb = 230
@@ -147,7 +147,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
       real(wp), parameter :: probe = 0.2_wp*aatoau
       integer, parameter :: nleb = 110
@@ -198,7 +198,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
@@ -250,7 +250,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
@@ -302,7 +302,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j

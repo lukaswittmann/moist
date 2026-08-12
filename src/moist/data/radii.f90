@@ -20,7 +20,7 @@ module moist_data_radii_legacy
    integer, parameter :: max_elem_gauss = 118
 
    !> Model tags
-   type, public :: radius_type
+   type, public :: radius_tag_type
       integer :: cpcm = 1
       integer :: smd = 2
       integer :: d3 = 3
@@ -28,9 +28,9 @@ module moist_data_radii_legacy
       integer :: bondi = 5
       integer :: rahm = 6
       integer :: gauss = 7
-   end type radius_type
+   end type radius_tag_type
 
-   type(radius_type), parameter, public :: rad_type = radius_type()
+   type(radius_tag_type), parameter, public :: rad_type = radius_tag_type()
 
    !> CPCM radii (already scaled)
    real(wp), parameter :: cpcm_vdw_rad(max_elem_cpcm) = aatoau*[ &

@@ -5,7 +5,7 @@ module moist_model_component_pcm_type
    use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: error_type
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component, cavity_type, &
+   use moist_type, only: solvation_model_component_type, cavity_type, &
       & potential_type, coupling_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
@@ -48,7 +48,7 @@ module moist_model_component_pcm_type
    !> Provides common infrastructure for PCM-family methods (CPCM, COSMO, IEF-PCM).
    !> Matrix assembly uses the generic Gaussian surface kernel (assemble_pcm_amat).
    !> Wraps general moist solvers for the linear system solution.
-   type, abstract, extends(solvation_model_component) :: solvation_model_component_pcm
+   type, abstract, extends(solvation_model_component_type) :: solvation_model_component_pcm
 
       !> Dielectric constant of the solvent
       real(wp) :: epsilon

@@ -10,7 +10,7 @@ module moist_math_smoothing_kernels
    implicit none (type, external)
    private
 
-   public :: wendland_kernel_type
+   public :: smoothing_kernel_wendland_type
 
    !> Abstract base type for smoothing kernels
    type, abstract :: smoothing_kernel_type
@@ -27,7 +27,7 @@ module moist_math_smoothing_kernels
    end type smoothing_kernel_type
 
    !> Wendland smoothing kernel type (supports C2, C4, C6, etc.)
-   type, extends(smoothing_kernel_type) :: wendland_kernel_type
+   type, extends(smoothing_kernel_type) :: smoothing_kernel_wendland_type
       real(wp) :: prefactor      !< Precomputed normalization factor (includes h^n)
       procedure(wendland_compute_interface), pointer, nopass :: compute => null()
       procedure(wendland_compute_interface), pointer, nopass :: compute_deriv => null()
@@ -37,7 +37,7 @@ module moist_math_smoothing_kernels
       procedure :: f1 => wendland_f1
       procedure :: gradient => wendland_gradient
       procedure :: gradient_h => wendland_gradient_h
-   end type wendland_kernel_type
+   end type smoothing_kernel_wendland_type
 
    abstract interface
       !> Function signature for dimension-specific kernel computation
@@ -266,7 +266,7 @@ contains
    !> @param[in]    h         Smoothing length, must be positive
    !> @param[out]   error     Unsupported order/dimension, or non-positive `h`
    subroutine wendland_init(self, order, dimension, h, error)
-      class(wendland_kernel_type), intent(inout) :: self
+      class(smoothing_kernel_wendland_type), intent(inout) :: self
       integer, intent(in) :: order
       integer, intent(in) :: dimension
       real(wp), intent(in) :: h
@@ -395,7 +395,7 @@ contains
 
    !> Evaluate Wendland kernel at distance r
    pure function wendland_f0(self, r) result(kernel_val)
-      class(wendland_kernel_type), intent(in) :: self
+      class(smoothing_kernel_wendland_type), intent(in) :: self
       real(wp), intent(in) :: r
       real(wp) :: kernel_val
       real(wp) :: q
@@ -406,7 +406,7 @@ contains
 
    !> Evaluate derivative dW/dr at distance r
    pure function wendland_f1(self, r) result(derivative)
-      class(wendland_kernel_type), intent(in) :: self
+      class(smoothing_kernel_wendland_type), intent(in) :: self
       real(wp), intent(in) :: r
       real(wp) :: derivative
       real(wp) :: q
@@ -418,7 +418,7 @@ contains
 
    !> Compute gradient vector dW = ( dW/ dx, dW/ dy, dW/ dz)
    pure subroutine wendland_gradient(self, r, xij, grad)
-      class(wendland_kernel_type), intent(in) :: self
+      class(smoothing_kernel_wendland_type), intent(in) :: self
       real(wp), intent(in) :: r
       real(wp), intent(in) :: xij(3)
       real(wp), intent(out) :: grad(3)
@@ -439,7 +439,7 @@ contains
 
    !> Compute derivative with respect to smoothing length h: dW/dh
    pure function wendland_gradient_h(self, r) result(dwdh)
-      class(wendland_kernel_type), intent(in) :: self
+      class(smoothing_kernel_wendland_type), intent(in) :: self
       real(wp), intent(in) :: r
       real(wp) :: dwdh
       real(wp) :: q, w, dwdq

@@ -8,11 +8,11 @@ module moist_output_citations
    implicit none
    private
 
-   public :: citation_entry, moist_citations, num_citations
+   public :: citation_entry_type, moist_citations, num_citations
    public :: print_citations, print_citations_by_category, print_citations_by_label
 
    !> A single literature reference.
-   type :: citation_entry
+   type :: citation_entry_type
       !> Broad grouping: "General", "Cavities", "Models", or "Solvers"
       character(len=:), allocatable :: category
       !> Short identifier, e.g. "iSwiG", "GEMS", "ALPB"
@@ -25,13 +25,13 @@ module moist_output_citations
       character(len=:), allocatable :: journal
       !> DOI URL
       character(len=:), allocatable :: doi
-   end type citation_entry
+   end type citation_entry_type
 
    !> Number of entries in the registry
    integer, parameter :: num_citations = 20
 
    !> The global citation registry, populated in init_citations().
-   type(citation_entry), target :: moist_citations(num_citations)
+   type(citation_entry_type), target :: moist_citations(num_citations)
 
    !> Guard against repeated initialisation
    logical :: initialised = .false.
@@ -46,7 +46,7 @@ contains
       if (initialised) return
 
       ! No dedicated toolkit paper yet; cite the DROP cavity work for now.
-      moist_citations(1) = citation_entry( &
+      moist_citations(1) = citation_entry_type( &
                            category="General", &
                            label="moist", &
                            authors="Wittmann, L., Pausch, A.", &
@@ -55,7 +55,7 @@ contains
                            journal="ChemRxiv 2026", &
                            doi="https://doi.org/10.26434/chemrxiv.15003893/v2")
 
-      moist_citations(2) = citation_entry( &
+      moist_citations(2) = citation_entry_type( &
                            category="Cavities", &
                            label="DROP/SvdW", &
                            authors="Wittmann, L., Pausch, A.", &
@@ -64,7 +64,7 @@ contains
                            journal="ChemRxiv 2026", &
                            doi="https://doi.org/10.26434/chemrxiv.15003893/v2")
 
-      moist_citations(3) = citation_entry( &
+      moist_citations(3) = citation_entry_type( &
                            category="Cavities", &
                            label="DROP/Isodensity", &
                            authors="Wittmann, L.", &
@@ -73,7 +73,7 @@ contains
                            journal="ChemRxiv, 06 August 2026", &
                            doi="https://doi.org/10.26434/chemrxiv.15007095/v1")
 
-      moist_citations(4) = citation_entry( &
+      moist_citations(4) = citation_entry_type( &
                            category="Cavities", &
                            label="Improved Switching Gaussian Approach (iSwiG)", &
                            authors="Lange, A.W., Herbert, J.M.", &
@@ -82,7 +82,7 @@ contains
                            journal="J. Chem. Phys. 2010, 133", &
                            doi="https://doi.org/10.1063/1.3511297")
 
-      moist_citations(5) = citation_entry( &
+      moist_citations(5) = citation_entry_type( &
                            category="Cavities", &
                            label="Improved Switching Gaussian Approach (iSwiG) with adaptive radii", &
                            authors="Wittmann, L., Garcia-Rates, M., Riplinger, C.", &
@@ -91,7 +91,7 @@ contains
                            journal="J. Comput. Chem. 2025, 46", &
                            doi="https://doi.org/10.1002/jcc.70099")
 
-      moist_citations(6) = citation_entry( &
+      moist_citations(6) = citation_entry_type( &
                            category="Cavities", &
                            label="Numerical Surface Area (numSA)", &
                            authors="Im, W., Lee, M.S., Brooks, C.L.", &
@@ -99,7 +99,7 @@ contains
                            journal="J. Comput. Chem. 2003, 24", &
                            doi="https://doi.org/10.1002/jcc.10321")
 
-      moist_citations(7) = citation_entry( &
+      moist_citations(7) = citation_entry_type( &
                            category="Cavities", &
                            label="COSMO Fine Cavity (CFC)", &
                            authors="Klamt, A., Diedenhofen, M.", &
@@ -107,7 +107,7 @@ contains
                            journal="J. Comput. Chem. 2018, 39, 1648-1655", &
                            doi="https://doi.org/10.1002/jcc.25342")
 
-      moist_citations(8) = citation_entry( &
+      moist_citations(8) = citation_entry_type( &
                            category="Models", &
                            label="ALPB", &
                            authors="Ehlert, S., Stahn, M., Spicher, S., Grimme, S.", &
@@ -116,7 +116,7 @@ contains
                            journal="J. Chem. Theory Comput. 2021, 17", &
                            doi="https://doi.org/10.1021/acs.jctc.1c00471")
 
-      moist_citations(9) = citation_entry( &
+      moist_citations(9) = citation_entry_type( &
                            category="Models", &
                            label="SMD", &
                            authors="Marenich, A.V., Cramer, C.J., Truhlar, D.G.", &
@@ -126,7 +126,7 @@ contains
                            journal="J. Phys. Chem. B 2009, 113, 18", &
                            doi="https://doi.org/10.1021/jp810292n")
 
-      moist_citations(10) = citation_entry( &
+      moist_citations(10) = citation_entry_type( &
                             category="Solvers", &
                             label="SLSQP", &
                             authors="Kraft, D.", &
@@ -134,7 +134,7 @@ contains
                             journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
                             doi="")
 
-      moist_citations(11) = citation_entry( &
+      moist_citations(11) = citation_entry_type( &
                             category="Solvers", &
                             label="SLSQP", &
                             authors="Kraft, D.", &
@@ -143,7 +143,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1994, 20, 262-281", &
                             doi="https://doi.org/10.1145/192115.192124")
 
-      moist_citations(12) = citation_entry( &
+      moist_citations(12) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Byrd, R.H., Lu, P., Nocedal, J., Zhu, C.", &
@@ -151,7 +151,7 @@ contains
                             journal="SIAM J. Sci. Comput. 1995, 16, 1190-1208", &
                             doi="https://doi.org/10.1137/0916069")
 
-      moist_citations(13) = citation_entry( &
+      moist_citations(13) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Zhu, C., Byrd, R.H., Lu, P., Nocedal, J.", &
@@ -160,7 +160,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1997, 23, 550-560", &
                             doi="https://doi.org/10.1145/279232.279236")
 
-      moist_citations(14) = citation_entry( &
+      moist_citations(14) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Morales, J.L., Nocedal, J.", &
@@ -169,7 +169,7 @@ contains
                             journal="ACM Trans. Math. Softw. 2011, 38, 7", &
                             doi="https://doi.org/10.1145/2049662.2049669")
 
-      moist_citations(15) = citation_entry( &
+      moist_citations(15) = citation_entry_type( &
                             category="Solvers", &
                             label="fmin", &
                             authors="Brent, R.P.", &
@@ -177,7 +177,7 @@ contains
                             journal="Prentice-Hall, Englewood Cliffs, NJ, 1973", &
                             doi="https://maths-people.anu.edu.au/~brent/pub/pub011.html")
 
-      moist_citations(16) = citation_entry( &
+      moist_citations(16) = citation_entry_type( &
                             category="Solvers", &
                             label="LSQR", &
                             authors="Paige, C.C., Saunders, M.A.", &
@@ -186,7 +186,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1982, 8, 43-71", &
                             doi="https://doi.org/10.1145/355984.355989")
 
-      moist_citations(17) = citation_entry( &
+      moist_citations(17) = citation_entry_type( &
                             category="Solvers", &
                             label="LSMR", &
                             authors="Fong, D.C.-L., Saunders, M.A.", &
@@ -195,7 +195,7 @@ contains
                             journal="SIAM J. Sci. Comput. 2011, 33, 2950-2971", &
                             doi="https://doi.org/10.1137/10079687X")
 
-      moist_citations(18) = citation_entry( &
+      moist_citations(18) = citation_entry_type( &
                             category="Solvers", &
                             label="LUSOL", &
                             authors="Gill, P.E., Murray, W., Saunders, M.A., Wright, M.H.", &
@@ -203,7 +203,7 @@ contains
                             journal="Linear Algebra Appl. 1987, 88-89, 239-270", &
                             doi="https://doi.org/10.1016/0024-3795(87)90112-1")
 
-      moist_citations(19) = citation_entry( &
+      moist_citations(19) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Spooner, J., Yanciw, B., Wiebe, B., Weinberg, N.", &
@@ -211,7 +211,7 @@ contains
                             journal="J. Phys. Chem. A 2014, 118, 765-777", &
                             doi="https://doi.org/10.1021/jp410496t")
 
-      moist_citations(20) = citation_entry( &
+      moist_citations(20) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Zeller, F., Pracht, P., Neudecker, T.", &
@@ -241,7 +241,7 @@ contains
       !> Fortran I/O unit
       integer, intent(in) :: unit
       !> Citation to print
-      type(citation_entry), intent(in) :: entry
+      type(citation_entry_type), intent(in) :: entry
 
       call print_wrapped(unit, entry%authors, "    ", wrap_width)
       call print_wrapped(unit, entry%title, "    ", wrap_width)

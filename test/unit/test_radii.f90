@@ -6,7 +6,7 @@ module test_radii
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_data_radii_legacy, only: get_radius_func
-   use moist_radii, only: radius_type, static_radius_type
+   use moist_radii, only: radius_type, radius_type_static
    use moist_radii, only: new_cpcm_radii, new_smd_radii, new_d3_radii
    use moist_radii, only: new_cosmo_radii, new_bondi_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
@@ -64,7 +64,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
       real(wp) :: ref
       integer :: iat
@@ -99,7 +99,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
       real(wp) :: ref
 
@@ -180,7 +180,7 @@ contains
    subroutine test_constructor_verbosity(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(static_radius_type) :: static_model
+      type(radius_type_static) :: static_model
       class(radius_type), allocatable :: model
       type(moist_error_type), allocatable :: err
 
@@ -216,7 +216,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
 
       call make_test_molecule(mol)
@@ -245,7 +245,7 @@ contains
    subroutine test_static_requires_update(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
 
       call new_cpcm_radii(model)
 

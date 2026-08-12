@@ -17,7 +17,7 @@ module moist_driver
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
-   use moist_type, only: coupling_type, cavity_type, solvation_model
+   use moist_type, only: coupling_type, cavity_type, solvation_model_type
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
 ! #ifdef WITH_MKL
@@ -55,7 +55,7 @@ contains
       type(structure_type) :: mol
 
       !> Solvation model
-      class(solvation_model), allocatable :: sm
+      class(solvation_model_type), allocatable :: sm
 
       !> Shared run context owned for the whole run borrowed by everything
       type(moist_context_type), target :: ctx

@@ -28,7 +28,7 @@ module moist_model_parameters
    private
 
    !> Base interface for a single parameter entry
-   type, abstract :: parameter_binding
+   type, abstract :: parameter_binding_type
       !> JSON key identifying the parameter
       character(len=:), allocatable :: key
    contains
@@ -37,16 +37,16 @@ module moist_model_parameters
       !> Write the parameter to a JSON object
       procedure(write_json_ifc), deferred :: write_json
       procedure(print_value_ifc), deferred :: print_value
-   end type parameter_binding
+   end type parameter_binding_type
 
    !> Wrapper node stored inside the list
    type :: parameter_node
       !> Actual polymorphic binding
-      class(parameter_binding), allocatable :: item
+      class(parameter_binding_type), allocatable :: item
    end type parameter_node
 
    !> Binding for a real scalar parameter
-   type, extends(parameter_binding) :: real_scalar_parameter
+   type, extends(parameter_binding_type) :: parameter_binding_real_scalar
       !> Pointer to the target variable
       real(wp), pointer :: value => null()
    contains
@@ -54,10 +54,10 @@ module moist_model_parameters
       procedure :: read_json => read_real_scalar
       procedure :: write_json => write_real_scalar
       procedure :: print_value => print_real_scalar
-   end type real_scalar_parameter
+   end type parameter_binding_real_scalar
 
    !> Binding for an integer scalar parameter
-   type, extends(parameter_binding) :: int_scalar_parameter
+   type, extends(parameter_binding_type) :: parameter_binding_int_scalar
       !> Pointer to the target variable
       integer, pointer :: value => null()
    contains
@@ -65,10 +65,10 @@ module moist_model_parameters
       procedure :: read_json => read_int_scalar
       procedure :: write_json => write_int_scalar
       procedure :: print_value => print_int_scalar
-   end type int_scalar_parameter
+   end type parameter_binding_int_scalar
 
    !> Binding for a real vector parameter
-   type, extends(parameter_binding) :: real_vector_parameter
+   type, extends(parameter_binding_type) :: parameter_binding_real_vector
       !> Pointer to the target array
       real(wp), pointer :: value(:) => null()
    contains
@@ -76,10 +76,10 @@ module moist_model_parameters
       procedure :: read_json => read_real_vector
       procedure :: write_json => write_real_vector
       procedure :: print_value => print_real_vector
-   end type real_vector_parameter
+   end type parameter_binding_real_vector
 
    !> Binding for a character string parameter
-   type, extends(parameter_binding) :: string_parameter
+   type, extends(parameter_binding_type) :: parameter_binding_string
       !> Pointer to the target character variable
       character(len=:), pointer :: value => null()
    contains
@@ -87,10 +87,10 @@ module moist_model_parameters
       procedure :: read_json => read_string
       procedure :: write_json => write_string
       procedure :: print_value => print_string
-   end type string_parameter
+   end type parameter_binding_string
 
    !> Binding for a logical scalar parameter
-   type, extends(parameter_binding) :: logical_parameter
+   type, extends(parameter_binding_type) :: parameter_binding_logical
       !> Pointer to the target logical variable
       logical, pointer :: value => null()
    contains
@@ -98,7 +98,7 @@ module moist_model_parameters
       procedure :: read_json => read_logical
       procedure :: write_json => write_logical
       procedure :: print_value => print_logical
-   end type logical_parameter
+   end type parameter_binding_logical
 
    public :: moist_model_parameters_type
 
@@ -144,25 +144,25 @@ module moist_model_parameters
 
    abstract interface
       subroutine read_json_ifc(self, json)
-         import :: parameter_binding, json_object
+         import :: parameter_binding_type, json_object
          implicit none(type, external)
-         class(parameter_binding), intent(inout) :: self
+         class(parameter_binding_type), intent(inout) :: self
          type(json_object), pointer :: json
       end subroutine read_json_ifc
 
       subroutine write_json_ifc(self, unit, is_last, indent)
-         import :: parameter_binding
+         import :: parameter_binding_type
          implicit none(type, external)
-         class(parameter_binding), intent(in) :: self
+         class(parameter_binding_type), intent(in) :: self
          integer, intent(in) :: unit
          logical, intent(in) :: is_last
          integer, intent(in) :: indent
       end subroutine write_json_ifc
 
       subroutine print_value_ifc(self, pp)
-         import :: parameter_binding, prettyprinter
+         import :: parameter_binding_type, prettyprinter
          implicit none(type, external)
-         class(parameter_binding), intent(in) :: self
+         class(parameter_binding_type), intent(in) :: self
          type(prettyprinter), intent(inout) :: pp
       end subroutine print_value_ifc
    end interface
@@ -358,7 +358,7 @@ contains
    subroutine push_parameter(self, binding)
       class(moist_model_parameters_type), intent(inout) :: self
       !> Parameter binding to append
-      class(parameter_binding), intent(in) :: binding
+      class(parameter_binding_type), intent(in) :: binding
       type(parameter_node), allocatable :: tmp(:)
       integer :: n, new_size
 
@@ -509,7 +509,7 @@ contains
       character(len=*), intent(in) :: key
       !> Target real variable
       real(wp), target, intent(inout) :: value
-      type(real_scalar_parameter) :: binding
+      type(parameter_binding_real_scalar) :: binding
 
       call binding%init(key, value)
       call self%push_parameter(binding)
@@ -522,7 +522,7 @@ contains
       character(len=*), intent(in) :: key
       !> Target integer variable
       integer, target, intent(inout) :: value
-      type(int_scalar_parameter) :: binding
+      type(parameter_binding_int_scalar) :: binding
 
       call binding%init(key, value)
       call self%push_parameter(binding)
@@ -535,7 +535,7 @@ contains
       character(len=*), intent(in) :: key
       !> Target real array
       real(wp), target, intent(inout) :: values(:)
-      type(real_vector_parameter) :: binding
+      type(parameter_binding_real_vector) :: binding
 
       call binding%init(key, values)
       call self%push_parameter(binding)
@@ -548,7 +548,7 @@ contains
       character(len=*), intent(in) :: key
       !> Target character variable
       character(len=*), target, intent(inout) :: value
-      type(string_parameter) :: binding
+      type(parameter_binding_string) :: binding
 
       call binding%init(key, value)
       call self%push_parameter(binding)
@@ -561,7 +561,7 @@ contains
       character(len=*), intent(in) :: key
       !> Target logical variable
       logical, target, intent(inout) :: value
-      type(logical_parameter) :: binding
+      type(parameter_binding_logical) :: binding
 
       call binding%init(key, value)
       call self%push_parameter(binding)
@@ -569,7 +569,7 @@ contains
 
    !> Associate a key and target variable for a real scalar binding
    subroutine init_real_scalar(self, key, value)
-      class(real_scalar_parameter), intent(inout) :: self
+      class(parameter_binding_real_scalar), intent(inout) :: self
       !> JSON key name
       character(len=*), intent(in) :: key
       !> Target real variable
@@ -581,7 +581,7 @@ contains
 
    !> Read a real scalar from JSON
    subroutine read_real_scalar(self, json)
-      class(real_scalar_parameter), intent(inout) :: self
+      class(parameter_binding_real_scalar), intent(inout) :: self
       type(json_object), pointer :: json
       type(json_object), pointer :: parent
       character(:), allocatable :: leaf
@@ -596,7 +596,7 @@ contains
 
    !> Write a real scalar to JSON
    subroutine write_real_scalar(self, unit, is_last, indent)
-      class(real_scalar_parameter), intent(in) :: self
+      class(parameter_binding_real_scalar), intent(in) :: self
       integer, intent(in) :: unit
       logical, intent(in) :: is_last
       integer, intent(in) :: indent
@@ -607,7 +607,7 @@ contains
 
    !> Print a real scalar value
    subroutine print_real_scalar(self, pp)
-      class(real_scalar_parameter), intent(in) :: self
+      class(parameter_binding_real_scalar), intent(in) :: self
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv(key_leaf(self%key), self%value)
@@ -615,7 +615,7 @@ contains
 
    !> Associate a key and target variable for an integer scalar binding
    subroutine init_int_scalar(self, key, value)
-      class(int_scalar_parameter), intent(inout) :: self
+      class(parameter_binding_int_scalar), intent(inout) :: self
       !> JSON key name
       character(len=*), intent(in) :: key
       !> Target integer variable
@@ -627,7 +627,7 @@ contains
 
    !> Read an integer scalar from JSON
    subroutine read_int_scalar(self, json)
-      class(int_scalar_parameter), intent(inout) :: self
+      class(parameter_binding_int_scalar), intent(inout) :: self
       type(json_object), pointer :: json
       type(json_object), pointer :: parent
       character(:), allocatable :: leaf
@@ -642,7 +642,7 @@ contains
 
    !> Write an integer scalar to JSON
    subroutine write_int_scalar(self, unit, is_last, indent)
-      class(int_scalar_parameter), intent(in) :: self
+      class(parameter_binding_int_scalar), intent(in) :: self
       integer, intent(in) :: unit
       logical, intent(in) :: is_last
       integer, intent(in) :: indent
@@ -653,7 +653,7 @@ contains
 
    !> Print an integer scalar value
    subroutine print_int_scalar(self, pp)
-      class(int_scalar_parameter), intent(in) :: self
+      class(parameter_binding_int_scalar), intent(in) :: self
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv(key_leaf(self%key), self%value)
@@ -661,7 +661,7 @@ contains
 
    !> Associate a key and target array for a real vector binding
    subroutine init_real_vector(self, key, value)
-      class(real_vector_parameter), intent(inout) :: self
+      class(parameter_binding_real_vector), intent(inout) :: self
       !> JSON key name
       character(len=*), intent(in) :: key
       !> Target real array
@@ -673,7 +673,7 @@ contains
 
    !> Read a real vector from JSON (requires fixed-size target)
    subroutine read_real_vector(self, json)
-      class(real_vector_parameter), intent(inout) :: self
+      class(parameter_binding_real_vector), intent(inout) :: self
       type(json_object), pointer :: json
       type(json_object), pointer :: parent
       character(:), allocatable :: leaf
@@ -709,7 +709,7 @@ contains
 
    !> Write a real vector to JSON
    subroutine write_real_vector(self, unit, is_last, indent)
-      class(real_vector_parameter), intent(in) :: self
+      class(parameter_binding_real_vector), intent(in) :: self
       integer, intent(in) :: unit
       logical, intent(in) :: is_last
       integer, intent(in) :: indent
@@ -733,7 +733,7 @@ contains
 
    !> Print a real vector as a compact 3-wide table
    subroutine print_real_vector(self, pp)
-      class(real_vector_parameter), intent(in) :: self
+      class(parameter_binding_real_vector), intent(in) :: self
       type(prettyprinter), intent(inout) :: pp
       type(prettylistprinter) :: plp
       integer :: n, nrows, row, col, idx
@@ -773,7 +773,7 @@ contains
 
    !> Associate a key and target variable for a string binding
    subroutine init_string(self, key, value)
-      class(string_parameter), intent(inout) :: self
+      class(parameter_binding_string), intent(inout) :: self
       !> JSON key name
       character(len=*), intent(in) :: key
       !> Target character variable
@@ -785,7 +785,7 @@ contains
 
    !> Read a string from JSON
    subroutine read_string(self, json)
-      class(string_parameter), intent(inout) :: self
+      class(parameter_binding_string), intent(inout) :: self
       type(json_object), pointer :: json
       type(json_object), pointer :: parent
       character(:), allocatable :: leaf
@@ -799,7 +799,7 @@ contains
 
    !> Write a string to JSON
    subroutine write_string(self, unit, is_last, indent)
-      class(string_parameter), intent(in) :: self
+      class(parameter_binding_string), intent(in) :: self
       integer, intent(in) :: unit
       logical, intent(in) :: is_last
       integer, intent(in) :: indent
@@ -811,7 +811,7 @@ contains
 
    !> Print a string value
    subroutine print_string(self, pp)
-      class(string_parameter), intent(in) :: self
+      class(parameter_binding_string), intent(in) :: self
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv(key_leaf(self%key), trim(self%value))
@@ -819,7 +819,7 @@ contains
 
    !> Associate a key and target variable for a logical binding
    subroutine init_logical(self, key, value)
-      class(logical_parameter), intent(inout) :: self
+      class(parameter_binding_logical), intent(inout) :: self
       !> JSON key name
       character(len=*), intent(in) :: key
       !> Target logical variable
@@ -831,7 +831,7 @@ contains
 
    !> Read a logical from JSON
    subroutine read_logical(self, json)
-      class(logical_parameter), intent(inout) :: self
+      class(parameter_binding_logical), intent(inout) :: self
       type(json_object), pointer :: json
       type(json_object), pointer :: parent
       character(:), allocatable :: leaf
@@ -846,7 +846,7 @@ contains
 
    !> Write a logical to JSON
    subroutine write_logical(self, unit, is_last, indent)
-      class(logical_parameter), intent(in) :: self
+      class(parameter_binding_logical), intent(in) :: self
       integer, intent(in) :: unit
       logical, intent(in) :: is_last
       integer, intent(in) :: indent
@@ -858,7 +858,7 @@ contains
 
    !> Print a logical value
    subroutine print_logical(self, pp)
-      class(logical_parameter), intent(in) :: self
+      class(parameter_binding_logical), intent(in) :: self
       type(prettyprinter), intent(inout) :: pp
 
       call pp%kv(key_leaf(self%key), merge('true ', 'false', self%value))

@@ -15,7 +15,7 @@ module test_model_component_pcm_cpcm
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
-   use moist_radii, only: static_radius_type, new_cosmo_radii, &
+   use moist_radii, only: radius_type_static, new_cosmo_radii, &
       & new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
    use test_model_component_helper, only: surface_fixture, &
@@ -206,7 +206,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -309,7 +309,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -378,7 +378,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -463,7 +463,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -514,7 +514,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -598,7 +598,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_scalar, pcm_spin
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling_scalar, coupling_spin
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -711,7 +711,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -763,7 +763,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -822,7 +822,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_reused, pcm_fresh
       type(cavity_type_iswig) :: cavity_small, cavity_large
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_small, radius_large
+      type(radius_type_static) :: radius_small, radius_large
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -930,7 +930,7 @@ contains
       type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: qat_vals(*) = [&
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
          &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
@@ -1029,7 +1029,7 @@ contains
       type(structure_type) :: mol
       type(solvation_model_component_cpcm) :: pcm_model, pcm_fresh
       type(cavity_type_iswig) :: cavity
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
       real(wp), parameter :: epsilon = 78.4_wp
       !> Uniform factor applied to the charges between the two "SCF cycles"
@@ -1171,7 +1171,7 @@ contains
       type(coupling_type) :: coupling
       real(wp) :: energy_array
       real(wp) :: energy_lu, energy_cholesky, energy_iterative, energy_inversion
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       integer :: solvers(4)
       character(len=20) :: solver_names(4)
       real(wp) :: energies(4)
@@ -1263,7 +1263,7 @@ contains
       type(coupling_type) :: coupling
       real(wp) :: energy_array
       real(wp), allocatable :: qat(:)
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       real(wp), parameter :: epsilon = 78.4_wp
       integer :: n_ala, ii, i
       integer(8) :: t1, t2, rate

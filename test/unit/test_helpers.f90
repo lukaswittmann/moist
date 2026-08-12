@@ -39,7 +39,7 @@ module test_helpers
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
-                          static_radius_type, new_cosmo_radii
+                          radius_type_static, new_cosmo_radii
    use moist_type, only: coupling_type
    use moist_data_radii_legacy, only: get_radius_func
    use testdrive, only: error_type, test_failed
@@ -294,7 +294,7 @@ contains
       type(moist_context_type), intent(in), target :: ctx
 
       !> Radius model storage
-      type(static_radius_type), intent(out) :: radius_model
+      type(radius_type_static), intent(out) :: radius_model
 
       !> Constructed cavity
       type(cavity_type_iswig), intent(out) :: cavity

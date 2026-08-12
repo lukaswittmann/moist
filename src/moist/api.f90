@@ -25,7 +25,7 @@ module moist_api
    use iso_c_binding
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
-   use moist_type, only: cavity_type, solvation_model, solvation_model_component, &
+   use moist_type, only: cavity_type, solvation_model_type, solvation_model_component_type, &
                          coupling_type, potential_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
@@ -41,9 +41,9 @@ module moist_api
    use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, &
       & new_component_cosmo
    use moist_model_component_pv, only: solvation_model_component_pv, new_component_pv
-   use moist_model_general, only: general_solvation_model, new_general_model
+   use moist_model_general, only: solvation_model_general, new_model_general
    use moist_context, only: moist_context_type, new_context
-   use moist_radii, only: radius_type, new_radii, custom_radius_type
+   use moist_radii, only: radius_type, new_radii, radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -92,7 +92,7 @@ module moist_api
       !> concrete model (and on to its components), the way the cavity handles
       !> do below. It is torn down in `delete_solvation_model_api`.
       type(moist_context_type) :: ctx
-      class(solvation_model), allocatable :: ptr
+      class(solvation_model_type), allocatable :: ptr
       !> Host coupling data owned by this handle (traces, response arrays)
       type(coupling_type) :: coupling
    end type vp_model
@@ -103,7 +103,7 @@ module moist_api
       !> context so the copy stays valid after this handle is deleted.
       type(moist_context_type) :: ctx
       !> Concrete component owned by this opaque handle
-      class(solvation_model_component), allocatable :: ptr
+      class(solvation_model_component_type), allocatable :: ptr
    end type vp_component
 
    public :: vp_error, vp_structure, vp_cavity, vp_radii, vp_model, vp_component
@@ -484,7 +484,7 @@ contains
       call c_f_pointer(verror, error)
 
       allocate (radii)
-      allocate (custom_radius_type :: radii%ptr)
+      allocate (radius_type_custom :: radii%ptr)
       vradii = c_loc(radii)
    end function new_custom_radii_api
 
@@ -527,7 +527,7 @@ contains
       atom_radii_wp(:) = atom_radii(:natoms)
 
       select type (model => radii%ptr)
-      type is (custom_radius_type)
+      type is (radius_type_custom)
          call new_custom_radii_atoms(atom_radii_wp, model, radii_error)
          if (allocated(radii_error)) then
             call api_error(error%ptr, "set_custom_radii_atoms", radii_error%message)
@@ -580,7 +580,7 @@ contains
       element_radii_wp(:) = element_radii(:nentries)
 
       select type (model => radii%ptr)
-      type is (custom_radius_type)
+      type is (radius_type_custom)
          call new_custom_radii_elements(atomic_numbers_f, element_radii_wp, model, radii_error)
          if (allocated(radii_error)) then
             call api_error(error%ptr, "set_custom_radii_elements", radii_error%message)
@@ -745,7 +745,7 @@ contains
    subroutine borrow_general_cavity(model, cavity_ptr, message)
       !> Solvation model that may own a cavity. `intent(inout)` because the
       !> borrowed pointer stays live and the handle it feeds is read-write.
-      class(solvation_model), intent(inout), target :: model
+      class(solvation_model_type), intent(inout), target :: model
       !> Borrowed cavity, left null unless the model exposes one
       class(cavity_type), pointer, intent(out) :: cavity_ptr
       !> Reason the cavity could not be borrowed, unallocated on success
@@ -754,7 +754,7 @@ contains
       cavity_ptr => null()
 
       select type (general => model)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. allocated(general%cavity)) then
             message = "General model cavity is not initialized"
             return
@@ -786,7 +786,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete PCM-family component
-      class(solvation_model_component), allocatable :: item
+      class(solvation_model_component_type), allocatable :: item
       !> Constructor error
       type(error_type), allocatable :: component_error
 
@@ -951,7 +951,7 @@ contains
       !> Model wrapper
       type(vp_model), pointer :: model
       !> Concrete general model
-      type(general_solvation_model) :: general
+      type(solvation_model_general) :: general
       !> Constructor error
       type(error_type), allocatable :: model_error
 
@@ -971,7 +971,7 @@ contains
 
       allocate (model)
       call new_context(model%ctx, verbosity=int(c_verbose), debug=logical(c_debug))
-      call new_general_model(general, cavity%ptr, model%ctx, model_error)
+      call new_model_general(general, cavity%ptr, model%ctx, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "new_general_solvation_model", model_error%message)
          call model%ctx%delete()
@@ -1018,7 +1018,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          ! The model stores a copy, so hand it the model-owned context first:
          ! the copy keeps whatever pointer the source carried, and this handle's
          ! own context dies with `moist_delete_solvation_component`.
@@ -1070,7 +1070,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
             call api_error(error%ptr, "general_model_supply_electrostatics", &
                            "Grid size does not match the updated general-model cavity")
@@ -1161,7 +1161,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
             call api_error(error%ptr, "general_model_supply_gostshyp", &
                            "Grid size does not match the updated general-model cavity")
@@ -1220,7 +1220,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
             call api_error(error%ptr, "general_model_get_trace_potential", &
                            "Grid size does not match the updated general-model cavity")
@@ -1238,7 +1238,7 @@ contains
       w_qmol = 0.0_c_double
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          call general%get_trace_potential(model%coupling, potential, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
@@ -1291,7 +1291,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
             call api_error(error%ptr, "general_model_get_potential", &
                            "Grid size does not match the updated general-model cavity")
@@ -1315,7 +1315,7 @@ contains
       w2 = 0.0_c_double
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          call general%get_potential(model%coupling, potential, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
@@ -1391,7 +1391,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
             call api_error(error%ptr, "general_model_get_potential_extended", &
                            "Grid size does not match the updated general-model cavity")
@@ -1423,7 +1423,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          call general%get_potential(model%coupling, potential, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
@@ -1480,7 +1480,7 @@ contains
       end if
 
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          if (.not. general%updated .or. nat /= general%cavity%nsph) then
             call api_error(error%ptr, "general_model_get_gradient", &
                            "Atom count does not match the updated general-model cavity")
@@ -1495,7 +1495,7 @@ contains
       call c_f_pointer(c_gradient, gradient, [3, int(nat)])
       allocate (local(3, int(nat)), source=0.0_wp)
       select type (general => model%ptr)
-      type is (general_solvation_model)
+      type is (solvation_model_general)
          call general%get_gradient(model%coupling, local, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")

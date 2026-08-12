@@ -17,7 +17,7 @@ module test_model_component_pv
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_radii, only: radius_type, static_radius_type, new_cosmo_radii, &
+   use moist_radii, only: radius_type, radius_type_static, new_cosmo_radii, &
       & new_radii_custom_atoms
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: get_test_structures, center_at_origin, &
@@ -505,7 +505,7 @@ contains
       !> Cavity without per-point volume derivatives
       type(cavity_type_numsa) :: cavity
       !> Radius model borrowed by the cavity
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Component under test
@@ -580,7 +580,7 @@ contains
       !> Cavity left unupdated, then updated for the shape guard
       type(cavity_type_iswig) :: cavity
       !> Radius model borrowed by the cavity
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Potential accumulator PV must leave alone

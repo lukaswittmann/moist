@@ -3,23 +3,23 @@ module moist_model_general
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_type, only: solvation_model, solvation_model_component, cavity_type, &
+   use moist_type, only: solvation_model_type, solvation_model_component_type, cavity_type, &
       & coupling_type, potential_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none
    private
 
-   public :: general_solvation_model, new_general_model
+   public :: solvation_model_general, new_model_general
 
    !> Owning box that makes heterogeneous components storable in one array
    type :: solvation_component_slot
       !> Concrete component owned by this slot
-      class(solvation_model_component), allocatable :: item
+      class(solvation_model_component_type), allocatable :: item
    end type solvation_component_slot
 
    !> General solvation model with one cavity and an ordered component list
-   type, extends(solvation_model) :: general_solvation_model
+   type, extends(solvation_model_type) :: solvation_model_general
       !> Authoritative cavity shared by all components
       class(cavity_type), allocatable :: cavity
       !> Ordered heterogeneous component collection
@@ -35,7 +35,7 @@ module moist_model_general
       procedure :: get_energy => general_get_energy
       procedure :: get_potential => general_get_potential
       procedure :: get_gradient => general_get_gradient
-   end type general_solvation_model
+   end type solvation_model_general
 
 contains
 
@@ -45,9 +45,9 @@ contains
    !> @param[in]  cavity Cavity configuration to copy
    !> @param[in]  ctx    Shared run context, which must outlive the model
    !> @param[out] error  Error handling
-   subroutine new_general_model(self, cavity, ctx, error)
+   subroutine new_model_general(self, cavity, ctx, error)
       !> General model
-      type(general_solvation_model), intent(out) :: self
+      type(solvation_model_general), intent(out) :: self
       !> Cavity configuration to copy
       class(cavity_type), intent(in) :: cavity
       !> Shared run context
@@ -62,7 +62,7 @@ contains
       self%updated = .false.
       if (.not. allocated(self%cavity)) call fatal_error(error, "Failed to copy model cavity")
 
-   end subroutine new_general_model
+   end subroutine new_model_general
 
    !> Append an owned copy of a component before the first update
    !>
@@ -71,9 +71,9 @@ contains
    !> @param[out]   error     Error handling
    subroutine add_component(self, component, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Component to copy
-      class(solvation_model_component), intent(in) :: component
+      class(solvation_model_component_type), intent(in) :: component
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -104,7 +104,7 @@ contains
    !> @param[out]   error Error handling
    subroutine general_update(self, mol, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Molecular structure
       class(structure_type), intent(in) :: mol
       !> Error handling
@@ -136,7 +136,7 @@ contains
    !> @param[out]   error     Error handling
    subroutine general_get_trace_potential(self, coupling, potential, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Potential accumulator
@@ -167,7 +167,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine general_get_energy(self, coupling, energy, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Energy accumulator
@@ -198,7 +198,7 @@ contains
    !> @param[out]   error     Error handling
    subroutine general_get_potential(self, coupling, potential, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Potential accumulator
@@ -236,7 +236,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine general_get_gradient(self, coupling, gradient, error)
       !> General model
-      class(general_solvation_model), intent(inout) :: self
+      class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Nuclear-gradient accumulator
@@ -291,7 +291,7 @@ contains
    !> @param[out] error Error handling
    subroutine require_updated(self, error)
       !> General model
-      class(general_solvation_model), intent(in) :: self
+      class(solvation_model_general), intent(in) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 

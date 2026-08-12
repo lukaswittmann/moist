@@ -8,8 +8,8 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_smooth_step_swif, &
-                                          new_smooth_step_swif
+   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
+                                          new_swif_smooth_step
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none (type, external)
    private
@@ -1074,7 +1074,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol_base, mol_shift
       type(moist_cavity_drop_lsf_svdw_type) :: prim
-      type(moist_cavity_drop_smooth_step_swif) :: sw
+      type(moist_cavity_drop_swif_smooth_step_type) :: sw
       real(wp), allocatable :: radii(:), points(:, :)
       real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
       integer :: icase, ipt, atom, axis
@@ -1097,7 +1097,7 @@ contains
          call get_test_points(mol_base, points)
          allocate (centers_base(ndim, mol_base%nat), centers_local(ndim, mol_base%nat))
          centers_base = mol_base%xyz
-         call new_smooth_step_swif(sw, -0.5_wp, 0.5_wp)
+         call new_swif_smooth_step(sw, -0.5_wp, 0.5_wp)
 
          prim%screening_threshold = 0.0_wp
          call prim%new()

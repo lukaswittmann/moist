@@ -1,7 +1,7 @@
 module moist_math_lapack_sygvr
    use mctc_env, only: sp, dp, error_type, fatal_error
    use moist_output_format, only: format_string
-   use moist_math_lapack_type, only: solver_type
+   use moist_math_lapack_type, only: eigen_solver_type
    use moist_math_lapack_sygst, only: wrap_sygst
    use moist_math_lapack_potrf, only: wrap_potrf
    use moist_math_blas_level3, only: wrap_trsm
@@ -70,7 +70,7 @@ module moist_math_lapack_sygvr
       end subroutine dsyevr
    end interface lapack_syevr
 
-   type, public, extends(solver_type) :: sygvr_solver
+   type, public, extends(eigen_solver_type) :: sygvr_solver
       private
       integer :: n = 0
       integer, allocatable :: iwork(:)

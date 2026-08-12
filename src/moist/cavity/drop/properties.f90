@@ -35,7 +35,7 @@ contains
       real(wp) :: d, d2, h, mean_wleb, four_h2
       real(wp) :: xi, yi, zi, xj, yj, zj, dx, dy, dz
       real(wp) :: kval
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
 
       ! Allocate output arrays
       if (allocated(self%rho_grid)) deallocate (self%rho_grid)

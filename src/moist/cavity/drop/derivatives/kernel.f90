@@ -21,7 +21,7 @@
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
-   use moist_cavity_drop_switching, only: moist_cavity_drop_swif
+   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_type
 
    implicit none (type, external)
    private
@@ -176,7 +176,7 @@ contains
       !> Seed state
       type(drop_seed_state_type), intent(inout) :: state
       !> Switching functions owned by the cavity
-      class(moist_cavity_drop_swif), intent(in) :: f_crit, f_foc, f_wleb
+      class(moist_cavity_drop_swif_type), intent(in) :: f_crit, f_foc, f_wleb
       !> Whether Lebedev-weight pruning is active
       logical, intent(in) :: use_wleb_prune
       !> Degeneracy status

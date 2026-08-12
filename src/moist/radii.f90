@@ -3,18 +3,18 @@ module moist_radii
    use mctc_env, only: error_type, fatal_error
    use moist_data_radii_legacy, only: rad_type
    use moist_radius_type, only: radius_type
-   use moist_radii_static, only: static_radius_type
+   use moist_radii_static, only: radius_type_static
    use moist_radii_static, only: new_cpcm_radii, new_smd_radii
    use moist_radii_static, only: new_d3_radii, new_cosmo_radii, new_bondi_radii
-   use moist_radii_custom, only: custom_radius_type
+   use moist_radii_custom, only: radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use mctc_io_utils, only: to_lower
    implicit none
    private
 
    public :: radius_type
-   public :: static_radius_type
-   public :: custom_radius_type
+   public :: radius_type_static
+   public :: radius_type_custom
    public :: new_cpcm_radii
    public :: new_smd_radii
    public :: new_d3_radii
@@ -37,7 +37,7 @@ contains
    !> @return radii          CPCM static radii model
    function default_cpcm_radii(verbosity) result(radii)
       !> CPCM static radii model
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
@@ -59,9 +59,9 @@ contains
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
-      allocate (custom_radius_type :: model)
+      allocate (radius_type_custom :: model)
       select type (model)
-      type is (custom_radius_type)
+      type is (radius_type_custom)
          call new_custom_radii_atoms(radii, model, error, verbosity)
       end select
    end subroutine new_radii_custom_atoms
@@ -84,9 +84,9 @@ contains
       !> Optional print level
       integer, intent(in), optional :: verbosity
 
-      allocate (custom_radius_type :: model)
+      allocate (radius_type_custom :: model)
       select type (model)
-      type is (custom_radius_type)
+      type is (radius_type_custom)
          call new_custom_radii_elements(atomic_numbers, radii, model, error, verbosity)
       end select
    end subroutine new_radii_custom_elements
@@ -110,33 +110,33 @@ contains
 
       select case (model_tag)
       case (rad_type%cpcm)
-         allocate (static_radius_type :: model)
+         allocate (radius_type_static :: model)
          select type (model)
-         type is (static_radius_type)
+         type is (radius_type_static)
             call new_cpcm_radii(model, verbosity)
          end select
       case (rad_type%smd)
-         allocate (static_radius_type :: model)
+         allocate (radius_type_static :: model)
          select type (model)
-         type is (static_radius_type)
+         type is (radius_type_static)
             call new_smd_radii(model, verbosity)
          end select
       case (rad_type%d3)
-         allocate (static_radius_type :: model)
+         allocate (radius_type_static :: model)
          select type (model)
-         type is (static_radius_type)
+         type is (radius_type_static)
             call new_d3_radii(model, verbosity)
          end select
       case (rad_type%cosmo)
-         allocate (static_radius_type :: model)
+         allocate (radius_type_static :: model)
          select type (model)
-         type is (static_radius_type)
+         type is (radius_type_static)
             call new_cosmo_radii(model, verbosity)
          end select
       case (rad_type%bondi)
-         allocate (static_radius_type :: model)
+         allocate (radius_type_static :: model)
          select type (model)
-         type is (static_radius_type)
+         type is (radius_type_static)
             call new_bondi_radii(model, verbosity)
          end select
       case default

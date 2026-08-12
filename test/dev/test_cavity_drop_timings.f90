@@ -9,7 +9,7 @@ module test_cavity_drop_timings
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_radii, only: default_cpcm_radii
-   use moist_radii_static, only: static_radius_type
+   use moist_radii_static, only: radius_type_static
    use moist_cavity_marchingcubes, only: integrate_surface_marching_cubes
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -653,7 +653,7 @@ contains
       type(mctc_error), allocatable :: mc_error
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(static_radius_type) :: radius_model
+      type(radius_type_static) :: radius_model
       type(mctc_error), allocatable :: radii_error
 
       !> Number of polyalanine structures to benchmark

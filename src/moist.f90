@@ -7,7 +7,7 @@ module moist
    use moist_radii, only: radius_type, new_radii
    use moist_build_info
 
-   use moist_model, only: solvation_model
+   use moist_model, only: solvation_model_type
    implicit none
    public
 

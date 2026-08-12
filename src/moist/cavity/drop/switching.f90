@@ -1,11 +1,11 @@
 !> Switching functions for DROP
 !>
-!> All switching functions in this module share an abstract base type [[moist_cavity_drop_swif]]
+!> All switching functions in this module share an abstract base type [[moist_cavity_drop_swif_type]]
 !> that provides chain-rule helpers for propagating derivatives through the switching function
 !>
 !> Implemented functions:
 !>
-!> * [[moist_cavity_drop_sigmoid_bump_swif]] - partition-of-unity bump
+!> * [[moist_cavity_drop_swif_sigmoid_bump_type]] - partition-of-unity bump
 !>
 !>     Xlo = min(from, to); Xhi = max(from, to); W = Xhi - Xlo
 !>     u(X) = 1                                        if X <= Xlo
@@ -19,7 +19,7 @@
 !>   Numerically S_up is evaluated via the equivalent stable sigmoid form
 !>     S_up = 1 / (1 + exp(g)),  g = -aHi*u^(-pHi) + aLo*(1-u)^(-pLo)
 !>
-!> * [[moist_cavity_drop_smooth_step_swif]] - erf-based bump (not used)
+!> * [[moist_cavity_drop_swif_smooth_step_type]] - erf-based bump (not used)
 !>
 !>     lo = min(from, to); hi = max(from, to)
 !>     B(x) = 0                                        if x <= lo
@@ -36,9 +36,9 @@ module moist_cavity_drop_switching
    implicit none
    private
 
-   public :: moist_cavity_drop_swif
-   public :: moist_cavity_drop_smooth_step_swif, new_smooth_step_swif
-   public :: moist_cavity_drop_sigmoid_bump_swif, new_sigmoid_bump_swif
+   public :: moist_cavity_drop_swif_type
+   public :: moist_cavity_drop_swif_smooth_step_type, new_swif_smooth_step
+   public :: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
 
    integer, parameter :: ndim = 3
    real(wp), parameter :: inv_sqrtpi = 1.0_wp/sqrt(pi)
@@ -48,13 +48,13 @@ module moist_cavity_drop_switching
    real(wp), parameter :: g_cutoff = 50.0_wp
 
    !> Abstract base type for scalar switching functions `S: R -> [0, 1]`
-   type, abstract :: moist_cavity_drop_swif
+   type, abstract :: moist_cavity_drop_swif_type
    contains
       procedure(swif_eval_iface), deferred :: eval
       procedure :: f0 => swif_f0
       procedure :: f1_rA => swif_f1_rA
       procedure :: f2_rArB => swif_f2_rArB
-   end type moist_cavity_drop_swif
+   end type moist_cavity_drop_swif_type
 
    abstract interface
       !> Evaluate a scalar switching function and its scalar derivatives.
@@ -64,8 +64,8 @@ module moist_cavity_drop_switching
       !> @param[out] f1    First derivative with respect to x0
       !> @param[out] f2    Second derivative with respect to x0
       pure subroutine swif_eval_iface(self, x0, f0, f1, f2)
-         import :: wp, moist_cavity_drop_swif
-         class(moist_cavity_drop_swif), intent(in) :: self
+         import :: wp, moist_cavity_drop_swif_type
+         class(moist_cavity_drop_swif_type), intent(in) :: self
          !> Input value
          real(wp), intent(in) :: x0
          !> Switching value
@@ -81,7 +81,7 @@ module moist_cavity_drop_switching
    !>
    !> Transitions from 0 to 1 on the interval [from, to] using
    !> a compact-support bump construction
-   type, extends(moist_cavity_drop_swif) :: moist_cavity_drop_smooth_step_swif
+   type, extends(moist_cavity_drop_swif_type) :: moist_cavity_drop_swif_smooth_step_type
       !> Start of transition region (0 before)
       real(wp) :: from = 0.0_wp
       !> End of transition region (1 after)
@@ -90,14 +90,14 @@ module moist_cavity_drop_switching
       real(wp) :: k = 1.0_wp
    contains
       procedure :: eval => smooth_step_eval
-   end type moist_cavity_drop_smooth_step_swif
+   end type moist_cavity_drop_swif_smooth_step_type
 
    !> Partition-of-unity bump switching function
    !>
    !> Transitions from 0 to 1 on the interval [from, to] using
    !> mutually-vanishing exponentials `A(u) = exp(-aHi/u^pHi)` and
    !> `B(u) = exp(-aLo/(1-u)^pLo)` glued as `B/(A+B)`
-   type, extends(moist_cavity_drop_swif) :: moist_cavity_drop_sigmoid_bump_swif
+   type, extends(moist_cavity_drop_swif_type) :: moist_cavity_drop_swif_sigmoid_bump_type
       !> Start of transition region (0 before)
       real(wp) :: from = 0.0_wp
       !> End of transition region (1 after)
@@ -112,7 +112,7 @@ module moist_cavity_drop_switching
       real(wp) :: a_lo = 1.0_wp
    contains
       procedure :: eval => sigmoid_bump_eval
-   end type moist_cavity_drop_sigmoid_bump_swif
+   end type moist_cavity_drop_swif_sigmoid_bump_type
 
 contains
 
@@ -125,8 +125,8 @@ contains
    !> @param[in]    from_val  Start value of the transition region
    !> @param[in]    to_val    End value of the transition region
    !> @param[in]    k_val     Optional bump steepness parameter
-   subroutine new_smooth_step_swif(self, from_val, to_val, k_val)
-      class(moist_cavity_drop_smooth_step_swif), intent(inout) :: self
+   subroutine new_swif_smooth_step(self, from_val, to_val, k_val)
+      class(moist_cavity_drop_swif_smooth_step_type), intent(inout) :: self
       !> Start of transition region
       real(wp), intent(in) :: from_val
       !> End of transition region
@@ -139,7 +139,7 @@ contains
       self%k = 1.0_wp
       if (present(k_val)) self%k = k_val
 
-   end subroutine new_smooth_step_swif
+   end subroutine new_swif_smooth_step
 
    !> Construct a new sigmoid bump switching function
    !>
@@ -153,8 +153,8 @@ contains
    !> @param[in]    a_hi      Optional upper plateau prefactor
    !> @param[in]    p_lo      Optional lower plateau exponent
    !> @param[in]    a_lo      Optional lower plateau prefactor
-   subroutine new_sigmoid_bump_swif(self, from_val, to_val, p_hi, a_hi, p_lo, a_lo)
-      class(moist_cavity_drop_sigmoid_bump_swif), intent(inout) :: self
+   subroutine new_swif_sigmoid_bump(self, from_val, to_val, p_hi, a_hi, p_lo, a_lo)
+      class(moist_cavity_drop_swif_sigmoid_bump_type), intent(inout) :: self
       !> Start of transition region
       real(wp), intent(in) :: from_val
       !> End of transition region
@@ -179,7 +179,7 @@ contains
       if (present(p_lo)) self%p_lo = p_lo
       if (present(a_lo)) self%a_lo = a_lo
 
-   end subroutine new_sigmoid_bump_swif
+   end subroutine new_swif_sigmoid_bump
 
    !> Evaluate the erf-bump switching value and its first two scalar
    !> derivatives
@@ -190,7 +190,7 @@ contains
    !> @param[out] f1    First derivative with respect to x0
    !> @param[out] f2    Second derivative with respect to x0
    pure subroutine smooth_step_eval(self, x0, f0, f1, f2)
-      class(moist_cavity_drop_smooth_step_swif), intent(in) :: self
+      class(moist_cavity_drop_swif_smooth_step_type), intent(in) :: self
       !> Input value
       real(wp), intent(in) :: x0
       !> Switching value
@@ -266,7 +266,7 @@ contains
    !> @param[out] f1    First derivative with respect to x0
    !> @param[out] f2    Second derivative with respect to x0
    pure subroutine sigmoid_bump_eval(self, x0, f0, f1, f2)
-      class(moist_cavity_drop_sigmoid_bump_swif), intent(in) :: self
+      class(moist_cavity_drop_swif_sigmoid_bump_type), intent(in) :: self
       !> Input value
       real(wp), intent(in) :: x0
       !> Switching value
@@ -364,7 +364,7 @@ contains
    !> @param[in] self  Switching-function instance
    !> @param[in] x0    Input value
    pure function swif_f0(self, x0) result(val)
-      class(moist_cavity_drop_swif), intent(in) :: self
+      class(moist_cavity_drop_swif_type), intent(in) :: self
       !> Input value
       real(wp), intent(in) :: x0
       real(wp) :: val
@@ -382,7 +382,7 @@ contains
    !> @param[in] x1      Gradient of x0 w.r.t. nuclear coordinates (3, ncenters)
    !> @param[in] active  Optional list of active atom indices
    pure function swif_f1_rA(self, x0, x1, active) result(grad)
-      class(moist_cavity_drop_swif), intent(in) :: self
+      class(moist_cavity_drop_swif_type), intent(in) :: self
       !> Input scalar value
       real(wp), intent(in) :: x0
       !> Gradient of x0 w.r.t. nuclear positions (3, ncenters)
@@ -417,7 +417,7 @@ contains
    !> @param[in] x1    Gradient of x0 (3, ncenters)
    !> @param[in] x2    Hessian of x0 (3, 3, ncenters, ncenters)
    pure function swif_f2_rArB(self, x0, x1, x2) result(hess)
-      class(moist_cavity_drop_swif), intent(in) :: self
+      class(moist_cavity_drop_swif_type), intent(in) :: self
       !> Input scalar value
       real(wp), intent(in) :: x0
       !> Gradient of x0 w.r.t. nuclear positions

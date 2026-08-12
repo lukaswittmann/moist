@@ -2,7 +2,7 @@
 module moist_model_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component, cavity_type, coupling_type, potential_type
+   use moist_type, only: solvation_model_component_type, cavity_type, coupling_type, potential_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none (type, external)
@@ -11,7 +11,7 @@ module moist_model_component_pv
    public :: solvation_model_component_pv, new_component_pv
 
    !> Pressure-volume energy contribution `pressure * cavity_volume`
-   type, extends(solvation_model_component) :: solvation_model_component_pv
+   type, extends(solvation_model_component_type) :: solvation_model_component_pv
       !> Pressure multiplying the cavity volume in atomic units
       real(wp) :: pressure = 0.0_wp
    contains
