@@ -6,6 +6,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_projection
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_math_sorter, only: counting_argsort
    implicit none
 
    !> Per-thread error slot
@@ -171,6 +172,7 @@ contains
       type(error_slot), allocatable :: thread_error(:)
       integer, allocatable :: thread_nout(:), thread_branched_anchor(:), thread_branched_points(:)
       integer, allocatable :: thread_nbranch_min(:), thread_nbranch_max(:)
+      integer, allocatable :: order(:)
       type(drop_projector_type), allocatable :: projectors(:)
       type(projection_buffer_type), allocatable :: proj_buffers(:)
       type(projection_workspace_type), allocatable :: works(:)
@@ -329,6 +331,9 @@ contains
 
          ! Branch weights are computed once on the final surviving set in compute_branch_weights after filter
          works(thread_slot)%branch_weights(1:n_branch) = 1.0_wp
+
+         ! Fix the branch index to the surface
+         call canonicalize_branch_order(works(thread_slot), n_branch)
 
          if (n_branch > 1) then
             local_branched_anchor = local_branched_anchor + 1
@@ -491,6 +496,9 @@ contains
             idx = iend
          end do
 
+         ! Restore anchor order, which the concatenation above does not preserve
+         call reorder_by_anchor(self, nout, order)
+
          ! Per-point finalize: converged points get their owner-sphere distance
          do idx = 1, nout
             if (self%converged(idx)) then
@@ -528,6 +536,132 @@ contains
       end if
 
    end subroutine project_all_points
+
+   !> Sort the flat projection arrays into ascending anchor order
+   !>
+   !> `counting_argsort` is stable, so points sharing an `anchor_id` keep the
+   !> relative order they were appended in, which is ascending branch index.
+   !> Anchor ids are the one-based positions assigned in `fill_arrays`, so they
+   !> are their own bucket indices.
+   !>
+   !> @param[inout] self  Cavity whose projection arrays are reordered
+   !> @param[in]    nout  Number of projected points
+   !> @param[inout] order Scratch permutation, allocated here on first use
+   subroutine reorder_by_anchor(self, nout, order)
+      !> Cavity whose projection arrays are reordered
+      class(cavity_type_drop), intent(inout) :: self
+      !> Number of projected points
+      integer, intent(in) :: nout
+      !> Scratch permutation
+      integer, allocatable, intent(inout) :: order(:)
+
+      integer :: max_anchor_id
+
+      if (nout <= 1) return
+
+      max_anchor_id = maxval(self%anchor_id(1:nout))
+      if (allocated(order)) deallocate (order)
+      allocate (order(nout))
+      call counting_argsort(self%anchor_id(1:nout), max_anchor_id, order)
+
+      self%xyz(:, 1:nout) = self%xyz(:, order)
+      self%anchorxyz(:, 1:nout) = self%anchorxyz(:, order)
+      self%normal0(:, 1:nout) = self%normal0(:, order)
+
+      self%wleb(1:nout) = self%wleb(order)
+      self%anchor_wleb0(1:nout) = self%anchor_wleb0(order)
+      self%lambda0(1:nout) = self%lambda0(order)
+      self%iswig_f0(1:nout) = self%iswig_f0(order)
+      self%f(1:nout) = self%f(order)
+      self%anchor_xi0(1:nout) = self%anchor_xi0(order)
+      self%rho(1:nout) = self%rho(order)
+      self%wbranch(1:nout) = self%wbranch(order)
+      self%phi0(1:nout) = self%phi0(order)
+
+      self%owner(1:nout) = self%owner(order)
+      self%branch(1:nout) = self%branch(order)
+      self%anchor_id(1:nout) = self%anchor_id(order)
+      self%branch_count(1:nout) = self%branch_count(order)
+
+      self%converged(1:nout) = self%converged(order)
+   end subroutine reorder_by_anchor
+
+   !> Put one anchor's branches into a canonical, geometry-derived order
+   !>
+   !> The multistart refinement returns an anchor's branches in whatever order
+   !> its seeds happened to converge and deduplicate, which is decided by
+   !> rounding once two minima are related by a symmetry of the molecule. The
+   !> branch index feeds `numbering`, the identity a point is tracked by across
+   !> displaced geometries, so an order that rounding can permute makes that
+   !> identity meaningless: the same physical branch answers to different
+   !> numbers on two builds of the same code, and a caller correlating a
+   !> displaced surface with the undisplaced one silently pairs up the wrong
+   !> branches.
+   !>
+   !> Ordering by position instead makes the index a property of the surface.
+   !> Coordinates are compared with a tolerance so that components equal by
+   !> symmetry -- which agree only to rounding -- fall through to the next
+   !> component rather than deciding the order by their noise.
+   !>
+   !> @param[inout] work     Workspace holding one anchor's branches
+   !> @param[in]    n_branch Number of branches stored in `work`
+   subroutine canonicalize_branch_order(work, n_branch)
+      !> Workspace holding one anchor's branches
+      type(projection_workspace_type), intent(inout) :: work
+      !> Number of branches stored in the workspace
+      integer, intent(in) :: n_branch
+
+      !> Separation below which a coordinate pair counts as tied
+      real(wp), parameter :: tie_tol = 1.0e-8_wp
+
+      !> Permutation putting the branches in canonical order
+      integer :: order(n_branch)
+      !> Insertion-sort cursors and the branch being placed
+      integer :: i, j, moved
+
+      if (n_branch <= 1) return
+
+      ! Insertion sort: an anchor carries a handful of branches at most
+      order = [(i, i=1, n_branch)]
+      do i = 2, n_branch
+         moved = order(i)
+         j = i - 1
+         do while (j >= 1)
+            if (.not. branch_precedes(moved, order(j))) exit
+            order(j + 1) = order(j)
+            j = j - 1
+         end do
+         order(j + 1) = moved
+      end do
+
+      work%points(:, 1:n_branch) = work%points(:, order)
+      work%normals(:, 1:n_branch) = work%normals(:, order)
+
+      work%rho(1:n_branch) = work%rho(order)
+      work%lambda(1:n_branch) = work%lambda(order)
+      work%phi(1:n_branch) = work%phi(order)
+      work%branch_weights(1:n_branch) = work%branch_weights(order)
+
+      work%converged(1:n_branch) = work%converged(order)
+
+   contains
+
+      !> Whether branch `a` sorts before branch `b`
+      logical function branch_precedes(a, b) result(before)
+         !> Branches to compare, indexing the workspace
+         integer, intent(in) :: a, b
+         !> Cartesian component
+         integer :: k
+
+         before = .false.
+         do k = 1, 3
+            if (abs(work%points(k, a) - work%points(k, b)) <= tie_tol) cycle
+            before = work%points(k, a) < work%points(k, b)
+            return
+         end do
+      end function branch_precedes
+
+   end subroutine canonicalize_branch_order
 
    !* ================================================================================= *!
    !*                           Closest-point Jacobian scaling                          *!
