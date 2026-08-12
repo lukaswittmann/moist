@@ -18,3 +18,7 @@ Optional settings:
 ``m`` (integer, default ``4``)
    Pair-term polynomial power.
    The kernel is generated for ``m = 4``; other values are currently ignored.
+
+``screen_k`` (real, default ``3.0``)
+   Sharpness of the conservative screening using the SvdW SSD.
+   This affects computational cost, but not the CFC pseudo-density itself.
