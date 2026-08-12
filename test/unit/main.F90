@@ -34,6 +34,7 @@ program tester
    use test_utils_hdf5, only: collect_utils_hdf5
 #endif
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
+   use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
    use test_model_component_pcm_amat_assembly, only: collect_model_component_pcm_amat_assembly
@@ -77,6 +78,7 @@ program tester
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
       & new_testsuite("cavity_drop_integration", collect_cavity_drop_integration), &
+      & new_testsuite("cavity_drop_filter", collect_cavity_drop_filter), &
       & new_testsuite("cavity_drop_cpcm", collect_cavity_drop_cpcm), &
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
