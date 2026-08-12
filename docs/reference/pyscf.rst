@@ -12,7 +12,7 @@ The PySCF interface separates four roles:
 ``PySCFHost``
    Adapts a PySCF molecule and density to the level set, electrostatic, Fock, and nuclear-gradient operations MOIST needs.
 
-``IsodensityDROPCavity(host, ...)``
+``CavityDROPIsodensity(host, ...)``
    Constructs the cavity from the host's level set.
    The cavity owns its native state and configuration while retaining the host that supplies ``lsf(point, order)`` and the matching scale.
 
@@ -28,26 +28,26 @@ The PySCF interface separates four roles:
 Using CPCM and COSMO
 --------------------
 
-The :class:`~moist.interface.CPCM` model can be used as follows.
+The :class:`~moist.interface.ModelComponentCPCM` model can be used as follows.
 
 .. code-block:: python
 
-   from moist import CPCM, IsodensityDROPCavity, SolvationModel
+   from moist import CavityDROPIsodensity, ModelComponentCPCM, SolvationModel
    from moist.pyscf import PySCFHost
 
    host = PySCFHost(mol)
    model = SolvationModel(
-      cavity=IsodensityDROPCavity(host, nleb=194),
-      components=[CPCM(80.0)]
+      cavity=CavityDROPIsodensity(host, nleb=194),
+      components=[ModelComponentCPCM(80.0)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
 
-With a density-independent cavity, a component such as :class:`~moist.interface.PV` requires no host data and
+With a density-independent cavity, a component such as :class:`~moist.interface.ModelComponentPV` requires no host data and
 ``model.evaluate(structure)`` is sufficient.
 An isodensity cavity still needs ``host.coupling(dm)`` to get the density used by its level set callback, even when none of its model components needs an additional host channel.
 Non-PySCF hosts that already own native-order arrays can use :class:`~moist.interface.ArrayCoupling` instead.
 
-:class:`~moist.interface.COSMO` uses a dfferent constructor but with the same electrostatic host coupling as :class:`~moist.interface.CPCM`.
+:class:`~moist.interface.ModelComponentCOSMO` uses a dfferent constructor but with the same electrostatic host coupling as :class:`~moist.interface.ModelComponentCPCM`.
 CPCM applies :math:`(\epsilon-1)/\epsilon`, whereas COSMO applies :math:`(\epsilon-1)/(\epsilon+1/2)`.
 
 Both CPCM and COSMO accept the optional ``solver`` argument.
@@ -64,10 +64,10 @@ For example, the following are three alternative CPCM models; keep the construct
 .. code-block:: python
 
    from moist import (
-       CPCM,
-       CFCDROPCavity,
-       ISwiGCavity,
-       SvdWDROPCavity,
+       CavityDROPCFC,
+       CavityDROPSvdW,
+       CavityISwiG,
+       ModelComponentCPCM,
        SolvationModel,
    )
    from moist.pyscf import PySCFHost
@@ -75,7 +75,7 @@ For example, the following are three alternative CPCM models; keep the construct
    host = PySCFHost(mol)
 
    # Smooth van der Waals (SvdW) DROP cavity
-   cavity = SvdWDROPCavity(
+   cavity = CavityDROPSvdW(
        nleb=194,
        blend_k=5.5,
        blend_1b=1.0,
@@ -93,7 +93,7 @@ For example, the following are three alternative CPCM models; keep the construct
    )
 
    # COSMO Fine Cavity (CFC) DROP cavity
-   cavity = CFCDROPCavity(
+   cavity = CavityDROPCFC(
        nleb=194,
        a1=-15.0,
        a2=-9.0,
@@ -112,7 +112,7 @@ For example, the following are three alternative CPCM models; keep the construct
    )
 
    # Improved Switching-Gaussian cavity
-   cavity = ISwiGCavity(
+   cavity = CavityISwiG(
        nleb=194,
        cut_a=0.0,
        cut_f=1.0e-10,
@@ -121,7 +121,7 @@ For example, the following are three alternative CPCM models; keep the construct
    )
 
    # Setup solvation model using the cavity
-   model = SolvationModel(cavity=cavity, components=[CPCM(80.0)])
+   model = SolvationModel(cavity=cavity, components=[ModelComponentCPCM(80.0)])
    result = model.evaluate(coupling=host.coupling(dm))
 
 All constructor arguments are optional.
@@ -131,9 +131,9 @@ The two DROP constructors also accept ``do_fine`` to request all optional surfac
 Their remaining shared controls are ``proj_maxiter`` and ``proj_level`` for surface projection, ``branch_weight_s`` for weighting competing projection branches, ``rho_grid_h`` for the grid-density kernel, and ``wleb_prune_level`` (0--6) for smooth pruning of negligible quadrature weights.
 See :doc:`/cavities/drop` for details.
 
-For :class:`~moist.interface.SvdWDROPCavity` (:doc:`/cavities/svdw`), ``blend_k`` and ``blend_1b``/``blend_2b``/``blend_3b`` control the smooth one-, two-, and three-body blend.
-For :class:`~moist.interface.CFCDROPCavity` (:doc:`/cavities/cfc`), ``a1``, ``a2``, ``c``, and ``m`` are the CFC pseudo-density parameters; ``screen_k`` controls only neighbour screening.
-For :class:`~moist.interface.ISwiGCavity` (:doc:`/cavities/iswig`), a positive ``cut_a`` selects area-based pruning; otherwise ``cut_f`` is the switching-function cutoff.
+For :class:`~moist.interface.CavityDROPSvdW` (:doc:`/cavities/svdw`), ``blend_k`` and ``blend_1b``/``blend_2b``/``blend_3b`` control the smooth one-, two-, and three-body blend.
+For :class:`~moist.interface.CavityDROPCFC` (:doc:`/cavities/cfc`), ``a1``, ``a2``, ``c``, and ``m`` are the CFC pseudo-density parameters; ``screen_k`` controls only neighbour screening.
+For :class:`~moist.interface.CavityISwiG` (:doc:`/cavities/iswig`), a positive ``cut_a`` selects area-based pruning; otherwise ``cut_f`` is the switching-function cutoff.
 
 Isodensity ρ-DROP + CPCM
 ------------------------
@@ -145,7 +145,7 @@ The caller only constructs the objects and asks for one evaluation:
 .. code-block:: python
 
    from pyscf import gto, scf
-   from moist import CPCM, IsodensityDROPCavity, SolvationModel
+   from moist import CavityDROPIsodensity, ModelComponentCPCM, SolvationModel
    from moist.pyscf import PySCFHost
 
    mol = gto.M(atom="O 0 0 -0.7357; H 1.4418 0 0.3679; H -1.4418 0 0.3679",
@@ -155,8 +155,8 @@ The caller only constructs the objects and asks for one evaluation:
 
    host = PySCFHost(mol)
    model = SolvationModel(
-      cavity=IsodensityDROPCavity(host, nleb=194),
-      components=[CPCM(80.0)]
+      cavity=CavityDROPIsodensity(host, nleb=194),
+      components=[ModelComponentCPCM(80.0)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
 
@@ -171,16 +171,16 @@ Adding a pressure term makes the cavity-shape response dominant rather than a sm
 
 .. code-block:: python
 
-   from moist import PV
+   from moist import ModelComponentPV
 
    pressure = 1.0e10 / 2.9421015697e13        # 10 GPa in E_h / a_0^3
    model = SolvationModel(
-      cavity=IsodensityDROPCavity(host, nleb=194),
-      components=[CPCM(80.0), PV(pressure)]
+      cavity=CavityDROPIsodensity(host, nleb=194),
+      components=[ModelComponentCPCM(80.0), ModelComponentPV(pressure)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
 
-With ``PV`` alone the surface charges vanish and the entire Fock contribution is the ``w_lsf`` contraction;
+With ``ModelComponentPV`` alone the surface charges vanish and the entire Fock contribution is the ``w_lsf`` contraction;
 useful when checking a host implementation, since nothing else can mask an error in it.
 
 For a self-consistent calculation, :func:`~moist.pyscf.solvated_rhf` wraps the whole cycle, rebuilding the cavity on every SCF iteration because the surface follows the density:
@@ -197,13 +197,18 @@ Isodensity ρ-DROP + GOSTSHYP
 
 GOSTSHYP inverts the usual direction of the coupling.
 The host computes AO-basis three-center integrals *for* MOIST—the Gaussian moments of the density about every grid point—and receives amplitudes to fold into its Fock matrix.
-It is nevertheless an ordinary :class:`~moist.interface.SolvationComponent`:
+It is nevertheless an ordinary :class:`~moist.interface.SolvationModelComponent`:
 the cavity owns ``nleb``, the component owns the pressure, and the PySCF coupling performs the host-specific moment exchange.
 
 .. code-block:: python
 
    from pyscf import gto, scf
-   from moist import CPCM, Gostshyp, IsodensityDROPCavity, SolvationModel
+   from moist import (
+       CavityDROPIsodensity,
+       ModelComponentCPCM,
+       ModelComponentGOSTSHYP,
+       SolvationModel,
+   )
    from moist.gostshyp import GPA_TO_AU
    from moist.pyscf import PySCFHost
 
@@ -213,8 +218,8 @@ the cavity owns ``nleb``, the component owns the pressure, and the PySCF couplin
 
    host = PySCFHost(mol)
    model = SolvationModel(
-       cavity=IsodensityDROPCavity(host, nleb=194),
-       components=[Gostshyp(50.0 * GPA_TO_AU)],
+       cavity=CavityDROPIsodensity(host, nleb=194),
+       components=[ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
    )
 
    result = model.evaluate(coupling=host.coupling(dm))
@@ -230,8 +235,8 @@ coupling:
 .. code-block:: python
 
    model = SolvationModel(
-       cavity=IsodensityDROPCavity(host, nleb=194),
-       components=[CPCM(80.0), Gostshyp(50.0 * GPA_TO_AU)],
+       cavity=CavityDROPIsodensity(host, nleb=194),
+       components=[ModelComponentCPCM(80.0), ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
    )
    result = model.evaluate(coupling=host.coupling(dm))
 
@@ -250,7 +255,7 @@ These are easy to get wrong and are verified against finite differences in ``moi
 
 ``phi`` is the bare point potential
    moist builds the nuclear half of the surface-motion adjoint from an    unblurred ``Z_A (r_i - R_A)/r^3``.  A Gaussian-blurred potential would be inconsistent with it.
-   The widths from :meth:`~moist.interface.DROPCavity.get_gaussian` enter only the A-matrix.
+   The widths from :meth:`~moist.interface.CavityDROP.get_gaussian` enter only the A-matrix.
 
 ``qefield`` and ``w_xyz`` are different quantities
    Both are charge-weighted potential gradients at the  grid points, but    ``qefield`` (gradient path) carries the *electronic* part only -- moist adds the nuclear part itself -- while ``w_xyz`` (potential path) must be the    *total*.

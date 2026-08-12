@@ -11,7 +11,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from enum import Enum, IntEnum
-from typing import Callable, Optional, Protocol
+from typing import Callable, Iterator, Optional, Protocol, Union
 import warnings
 
 import numpy as np
@@ -31,7 +31,7 @@ def _immutable_array(array: np.ndarray) -> np.ndarray:
     return np.frombuffer(buffer, dtype=array.dtype).reshape(array.shape, order=order)
 
 
-def _freeze_result_arrays(value) -> None:
+def _freeze_result_arrays(value: _ImmutableArrayValue) -> None:
     """Replace ndarray fields with immutable-buffer copies."""
     for field in fields(value):
         array = getattr(value, field.name)
@@ -82,7 +82,7 @@ class CavitySnapshot(_ImmutableArrayValue):
         return self.asph
 
 @dataclass(frozen=True)
-class DROPCavitySnapshot(CavitySnapshot):
+class CavitySnapshotDROP(CavitySnapshot):
     """DROP-specific cavity data copied from one successful update."""
 
     nmax: int
@@ -142,7 +142,7 @@ class TracePotential(_ImmutableArrayValue):
     molecular: np.ndarray
     normal: np.ndarray
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[np.ndarray]:
         """Preserve tuple unpacking used by the pre-evaluation interface."""
         yield self.molecular
         yield self.normal
@@ -187,6 +187,17 @@ class GeneralPotential(_ImmutableArrayValue):
     @property
     def gaussian_normal_weights(self) -> Optional[np.ndarray]:
         return self.w_gauss_f
+
+
+# -----------------------------------------------------------------------------
+# Host input values
+# -----------------------------------------------------------------------------
+#
+# These travel the other way: a coupling adapter fills them from host data and
+# hands them to the model.  They deliberately do not use _ImmutableArrayValue,
+# because the buffers belong to the host and copying them on every exchange
+# would cost more than the protection is worth here.
+
 
 @dataclass(frozen=True)
 class Electrostatics:
@@ -456,17 +467,17 @@ class Cavity(ABC):
         return self.snapshot().asph
 
 
-class _GenericCavityBase(Cavity):
+class _CavityGenericBase(Cavity):
     """Shared implementation for non-DROP native cavities."""
 
     def _read_snapshot(self) -> CavitySnapshot:
         return CavitySnapshot(**library.get_cavity_results(self._handle))
 
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
-        return _BorrowedGenericCavity(handle, self)
+        return _CavityGenericBorrowed(handle, self)
 
 
-class _BorrowedGenericCavity(_GenericCavityBase):
+class _CavityGenericBorrowed(_CavityGenericBase):
     """High-level view of a non-DROP cavity owned by a model."""
 
     def __init__(self, handle: library.CavityHandle, source: Cavity) -> None:
@@ -478,7 +489,7 @@ class _BorrowedGenericCavity(_GenericCavityBase):
         return self._source.density_dependent
 
 
-class ISwiGCavity(_GenericCavityBase):
+class CavityISwiG(_CavityGenericBase):
     """iSwiG switching-Gaussian cavity with default CPCM radii.
 
     ``nleb`` controls the Lebedev grid.  ``cut_a`` selects an area cutoff when
@@ -504,16 +515,16 @@ class ISwiGCavity(_GenericCavityBase):
         )
 
 
-class _DROPCavityBase(Cavity):
+class _CavityDROPBase(Cavity):
     """Shared behaviour for standalone and model-owned DROP cavities."""
 
-    def _read_snapshot(self) -> DROPCavitySnapshot:
+    def _read_snapshot(self) -> CavitySnapshotDROP:
         generic = library.get_cavity_results(self._handle)
         drop = library.get_drop_specific(self._handle, ngrid=generic["ngrid"])
-        return DROPCavitySnapshot(**generic, **drop)
+        return CavitySnapshotDROP(**generic, **drop)
 
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
-        return _BorrowedDROPCavity(handle, self)
+        return _CavityDROPBorrowed(handle, self)
 
     def assemble_amat(self) -> tuple[np.ndarray, np.ndarray]:
         self._require_updated()
@@ -581,7 +592,7 @@ class _DROPCavityBase(Cavity):
         return self.snapshot().rho
 
 
-class _BorrowedDROPCavity(_DROPCavityBase):
+class _CavityDROPBorrowed(_CavityDROPBase):
     """High-level view of the authoritative cavity owned by a model."""
 
     def __init__(self, handle: library.CavityHandle, source: Cavity) -> None:
@@ -593,7 +604,7 @@ class _BorrowedDROPCavity(_DROPCavityBase):
         return self._source.density_dependent
 
 
-class SvdWDROPCavity(_DROPCavityBase):
+class CavityDROPSvdW(_CavityDROPBase):
     """Smooth-van-der-Waals DROP cavity with default CPCM radii."""
 
     def __init__(
@@ -633,7 +644,7 @@ class SvdWDROPCavity(_DROPCavityBase):
         )
 
 
-class CFCDROPCavity(_DROPCavityBase):
+class CavityDROPCFC(_CavityDROPBase):
     """COSMO Fine Cavity discretized with DROP."""
 
     def __init__(
@@ -675,8 +686,19 @@ class CFCDROPCavity(_DROPCavityBase):
         )
 
 
-# Compatibility name for the historical generic SvdW-DROP constructor.
-DROPCavity = SvdWDROPCavity
+# Short name for the default DROP cavity: SvdW is the surface a caller who does
+# not name a level set means.
+CavityDROP = CavityDROPSvdW
+
+
+#: ``(value, grad)``, ``(value, grad, hess)`` or ``(value, grad, hess, third)``:
+#: the tuple grows with the requested order so a caller never pays for a
+#: derivative it did not ask for.
+LevelSetDerivatives = tuple[Union[float, np.ndarray], ...]
+
+#: A raw level-set callback.  It takes ``(point, order)``, or just ``(point)``
+#: when the cavity was built with ``pass_order=False``.
+IsodensityCallback = Callable[..., LevelSetDerivatives]
 
 
 class IsodensitySource(Protocol):
@@ -684,12 +706,12 @@ class IsodensitySource(Protocol):
 
     scale: float
 
-    def lsf(self, point: np.ndarray, order: int):
+    def lsf(self, point: np.ndarray, order: int) -> LevelSetDerivatives:
         """Return the level-set value and spatial derivatives through ``order``."""
         ...
 
 
-class IsodensityDROPCavity(_DROPCavityBase):
+class CavityDROPIsodensity(_CavityDROPBase):
     """DROP cavity driven by an isodensity source or a raw Python callback.
 
     A source exposes ``lsf(point, order)`` and ``scale``.  Passing a source is
@@ -701,7 +723,7 @@ class IsodensityDROPCavity(_DROPCavityBase):
 
     def __init__(
         self,
-        source=None,
+        source: Optional[Union[IsodensitySource, IsodensityCallback]] = None,
         nleb: Optional[int] = None,
         scale: Optional[float] = None,
         debug: bool = False,
@@ -710,7 +732,7 @@ class IsodensityDROPCavity(_DROPCavityBase):
         wleb_prune_level: Optional[int] = None,
         tolerance: Optional[float] = None,
         pass_order: Optional[bool] = None,
-        callback=None,
+        callback: Optional[IsodensityCallback] = None,
     ) -> None:
         if callback is not None:
             if source is not None:
@@ -722,7 +744,7 @@ class IsodensityDROPCavity(_DROPCavityBase):
             )
             source = callback
         if source is None:
-            raise TypeError("IsodensityDROPCavity requires a level-set source")
+            raise TypeError("CavityDROPIsodensity requires a level-set source")
 
         provider_callback = getattr(source, "lsf", None)
         if callable(provider_callback):
@@ -775,7 +797,7 @@ class CouplingChannel(str, Enum):
     GOSTSHYP = "gostshyp"
 
 
-class SolvationComponent:
+class SolvationModelComponent:
     """Immutable model-component configuration backed by a native constructor."""
 
     coupling_channels: frozenset[CouplingChannel] = frozenset()
@@ -800,7 +822,7 @@ class PCMSolver(IntEnum):
 CPCMSolver = PCMSolver
 
 
-class _PCMComponent(SolvationComponent):
+class _ModelComponentPCMBase(SolvationModelComponent):
     """Shared immutable configuration for PCM-family components."""
 
     coupling_channels = frozenset({CouplingChannel.ELECTROSTATICS})
@@ -836,7 +858,7 @@ class _PCMComponent(SolvationComponent):
         return self._solver
 
 
-class CPCM(_PCMComponent):
+class ModelComponentCPCM(_ModelComponentPCMBase):
     """Conductor-like polarizable continuum component."""
 
     def __init__(
@@ -847,7 +869,7 @@ class CPCM(_PCMComponent):
         super().__init__(epsilon, solver, library.new_cpcm_component)
 
 
-class COSMO(_PCMComponent):
+class ModelComponentCOSMO(_ModelComponentPCMBase):
     """Conductor-like screening-model component."""
 
     def __init__(
@@ -858,7 +880,7 @@ class COSMO(_PCMComponent):
         super().__init__(epsilon, solver, library.new_cosmo_component)
 
 
-class PV(SolvationComponent):
+class ModelComponentPV(SolvationModelComponent):
     """Pressure-volume energy component ``pressure * cavity volume``."""
 
     def __init__(self, pressure: float) -> None:
@@ -870,7 +892,7 @@ class PV(SolvationComponent):
         return self._pressure
 
 
-class Gostshyp(SolvationComponent):
+class ModelComponentGOSTSHYP(SolvationModelComponent):
     """GOSTSHYP hydrostatic-pressure component."""
 
     coupling_channels = frozenset({CouplingChannel.GOSTSHYP})
@@ -1102,7 +1124,7 @@ class SolvationModel:
     def __init__(
         self,
         cavity: Cavity,
-        components: list[SolvationComponent] | tuple[SolvationComponent, ...],
+        components: list[SolvationModelComponent] | tuple[SolvationModelComponent, ...],
         debug: bool = False,
         verbosity: int = 0,
     ) -> None:
@@ -1111,8 +1133,8 @@ class SolvationModel:
         items = tuple(components)
         if not items:
             raise ValueError("A solvation model requires at least one component")
-        if any(not isinstance(item, SolvationComponent) for item in items):
-            raise TypeError("components must contain only SolvationComponent objects")
+        if any(not isinstance(item, SolvationModelComponent) for item in items):
+            raise TypeError("components must contain only SolvationModelComponent objects")
 
         self._updated = False
         self._natoms: Optional[int] = None
@@ -1136,7 +1158,7 @@ class SolvationModel:
         return self._epoch
 
     @property
-    def components(self) -> tuple[SolvationComponent, ...]:
+    def components(self) -> tuple[SolvationModelComponent, ...]:
         return self._components
 
     @property
@@ -1178,7 +1200,8 @@ class SolvationModel:
     def gradient(self) -> np.ndarray:
         """Return the native model gradient for the last updated structure."""
         self._require_updated()
-        assert self._natoms is not None
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
         return library.general_model_get_gradient(self._model, self._natoms)
 
     def get_gradient(self, natoms: Optional[int] = None) -> np.ndarray:

@@ -62,13 +62,13 @@ import numpy as np
 from pyscf import gto
 
 from .interface import (
+    CavityDROPIsodensity,
     CavitySnapshot,
     CouplingTransaction,
     Evaluation,
     GeneralPotential,
-    Gostshyp,
     GostshypMoments,
-    IsodensityDROPCavity,
+    ModelComponentGOSTSHYP,
     SolvationModel,
 )
 from .pyscf import PySCFHost
@@ -526,7 +526,7 @@ class _PySCFGostshyp:
 class GostshypModel(_PySCFGostshyp):
     """Deprecated all-in-one wrapper for an isodensity GOSTSHYP model.
 
-    Use :class:`~moist.interface.Gostshyp` in a regular
+    Use :class:`~moist.interface.ModelComponentGOSTSHYP` in a regular
     :class:`~moist.interface.SolvationModel` and evaluate it with
     :meth:`moist.pyscf.PySCFHost.coupling` instead.
     """
@@ -538,15 +538,16 @@ class GostshypModel(_PySCFGostshyp):
         **cavity_kwargs,
     ) -> None:
         warnings.warn(
-            "GostshypModel is deprecated; use Gostshyp as a SolvationModel component",
+            "GostshypModel is deprecated; use ModelComponentGOSTSHYP as a "
+            "SolvationModel component",
             DeprecationWarning,
             stacklevel=2,
         )
         super().__init__(host)
         self.pressure = float(pressure)
-        self.component = Gostshyp(self.pressure)
+        self.component = ModelComponentGOSTSHYP(self.pressure)
         self.model = SolvationModel(
-            IsodensityDROPCavity(host, **cavity_kwargs), [self.component]
+            CavityDROPIsodensity(host, **cavity_kwargs), [self.component]
         )
 
     def evaluate(self, dm: np.ndarray) -> Evaluation:

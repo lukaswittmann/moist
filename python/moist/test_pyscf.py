@@ -36,30 +36,29 @@ error falls under the finite-difference noise.
 """
 
 import functools
+import os
 from dataclasses import dataclass
 
 import numpy as np
 import pytest
 
 try:
-    # Import what is actually used rather than the top-level package alone, and
-    # skip on any ImportError: pyscf imports fine while pyscf.scf fails when a
-    # broken h5py shadows the HDF5 runtime, and importorskip re-raises for an
-    # ImportError raised by a transitive dependency rather than the named module.
     from pyscf import grad, gto, scf
-except ImportError as exc:  # pragma: no cover - optional dependency
+except ImportError as exc:
+    if os.environ.get("MOIST_REQUIRE_PYSCF"):
+        raise
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
 from .interface import (
-    CPCM,
-    CFCDROPCavity,
-    COSMO,
-    DROPCavity,
+    CavityDROP,
+    CavityDROPCFC,
+    CavityDROPIsodensity,
+    CavityDROPSvdW,
+    CavityISwiG,
     GeneralSolvationModel,
-    ISwiGCavity,
-    IsodensityDROPCavity,
-    PV,
-    SvdWDROPCavity,
+    ModelComponentCOSMO,
+    ModelComponentCPCM,
+    ModelComponentPV,
 )
 from .pyscf import PySCFHost, PySCFIsodensityHost, solvated_rhf
 
@@ -157,9 +156,9 @@ PRIMARY_CASE = CASES[0]
 #: the three: with no electrostatic component the surface charges are zero, so
 #: the whole Fock matrix is the level-set contraction.
 COMPONENTS = {
-    "cpcm": lambda: [CPCM(EPSILON)],
-    "pv": lambda: [PV(PRESSURE)],
-    "cpcm+pv": lambda: [CPCM(EPSILON), PV(PRESSURE)],
+    "cpcm": lambda: [ModelComponentCPCM(EPSILON)],
+    "pv": lambda: [ModelComponentPV(PRESSURE)],
+    "cpcm+pv": lambda: [ModelComponentCPCM(EPSILON), ModelComponentPV(PRESSURE)],
 }
 
 
@@ -229,40 +228,41 @@ def make_host(mol, positions=None, *, dm):
     return host
 
 
-@pytest.mark.host
+@pytest.mark.conventions
 def test_pyscf_host_is_an_isodensity_cavity_source():
     mol = molecule(*PRIMARY_CASE)
     host = PySCFHost(mol)
 
-    cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
 
-    assert isinstance(cavity, IsodensityDROPCavity)
+    assert isinstance(cavity, CavityDROPIsodensity)
     with pytest.deprecated_call(match="PySCFHost"):
         legacy = PySCFIsodensityHost(mol)
-    with pytest.deprecated_call(match="IsodensityDROPCavity"):
+    with pytest.deprecated_call(match="CavityDROPIsodensity"):
         compatibility_cavity = host.make_cavity(nleb=NLEB)
     assert isinstance(legacy, PySCFHost)
-    assert isinstance(compatibility_cavity, IsodensityDROPCavity)
+    assert isinstance(compatibility_cavity, CavityDROPIsodensity)
 
 
 def solve(host, *, isodensity, components="cpcm"):
     """Build a cavity plus components and evaluate one coherent coupling."""
     if isodensity:
-        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
     else:
-        cavity = DROPCavity(nleb=NLEB)
+        cavity = CavityDROP(nleb=NLEB)
     model = GeneralSolvationModel(cavity, COMPONENTS[components]())
     result = model.evaluate(coupling=host.coupling(host.dm))
     return result.energy, result.potential, result.cavity.xyz.T, model
 
 
-@pytest.mark.host
+@pytest.mark.isodensity
+@pytest.mark.cpcm
 def test_evaluation_exposes_complete_pyscf_results():
     """The evaluation owns the host Fock and complete nuclear gradient."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     host = make_host(mol, dm=dm)
     model = GeneralSolvationModel(
-        IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL),
+        CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL),
         COMPONENTS["cpcm"](),
     )
 
@@ -337,10 +337,14 @@ def sampled_coordinates(natm):
 @pytest.mark.vdw
 @pytest.mark.parametrize(
     "cavity_type",
-    [SvdWDROPCavity, CFCDROPCavity, ISwiGCavity],
+    [CavityDROPSvdW, CavityDROPCFC, CavityISwiG],
     ids=("svdw-drop", "cfc-drop", "iswig"),
 )
-@pytest.mark.parametrize("component_type", [CPCM, COSMO], ids=("cpcm", "cosmo"))
+@pytest.mark.parametrize(
+    "component_type",
+    [ModelComponentCPCM, ModelComponentCOSMO],
+    ids=("cpcm", "cosmo"),
+)
 def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
     cavity_type,
     component_type,

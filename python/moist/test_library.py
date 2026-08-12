@@ -4,7 +4,12 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
-from moist.interface import GeneralSolvationModel, IsodensityDROPCavity, PV, Structure
+from moist.interface import (
+    CavityDROPIsodensity,
+    GeneralSolvationModel,
+    ModelComponentPV,
+    Structure,
+)
 from moist.library import _callback_takes_order, get_api_version
 
 
@@ -123,7 +128,7 @@ def water() -> tuple[np.ndarray, np.ndarray]:
 def _build(callback, water, **kwargs):
     numbers, positions = water
     structure = Structure(numbers, positions)
-    cavity = IsodensityDROPCavity(callback, nleb=26, **kwargs)
+    cavity = CavityDROPIsodensity(callback, nleb=26, **kwargs)
     cavity.update(structure)
     return cavity.cavity
 
@@ -132,14 +137,14 @@ def test_isodensity_cavity_accepts_a_level_set_source(water) -> None:
     """The cavity constructor owns source adaptation and scale matching."""
     numbers, positions = water
     source = _GaussianSource(positions)
-    cavity = IsodensityDROPCavity(source, nleb=26)
+    cavity = CavityDROPIsodensity(source, nleb=26)
 
     cavity.update(Structure(numbers, positions))
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
     with raises(ValueError, match="scale must match"):
-        IsodensityDROPCavity(source, nleb=26, scale=1000.0)
+        CavityDROPIsodensity(source, nleb=26, scale=1000.0)
 
 
 def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None:
@@ -147,9 +152,9 @@ def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None
     source = _GaussianLSF(positions)
 
     with pytest.deprecated_call(match="source"):
-        cavity = IsodensityDROPCavity(callback=source.with_order, nleb=26)
+        cavity = CavityDROPIsodensity(callback=source.with_order, nleb=26)
 
-    assert isinstance(cavity, IsodensityDROPCavity)
+    assert isinstance(cavity, CavityDROPIsodensity)
 
 
 def test_callback_both_forms_agree(water) -> None:
@@ -283,7 +288,7 @@ def test_callback_failure_is_not_sticky(water) -> None:
         return lsf._derivatives(point, order)
 
     structure = Structure(numbers, positions)
-    cavity = IsodensityDROPCavity(flaky, nleb=26)
+    cavity = CavityDROPIsodensity(flaky, nleb=26)
 
     with raises(RuntimeError, match="no density here"):
         cavity.update(structure)
@@ -304,7 +309,7 @@ def test_failed_rebuild_invalidates_previous_cavity_results(water) -> None:
             raise RuntimeError("no density here")
         return lsf._derivatives(point, order)
 
-    cavity = IsodensityDROPCavity(flaky, nleb=26)
+    cavity = CavityDROPIsodensity(flaky, nleb=26)
     cavity.update(Structure(numbers, positions))
     assert cavity.snapshot().ngrid > 0
 
@@ -329,7 +334,9 @@ def test_failed_model_rebuild_invalidates_its_cavity_view(water) -> None:
         return lsf._derivatives(point, order)
 
     structure = Structure(numbers, positions)
-    model = GeneralSolvationModel(IsodensityDROPCavity(flaky, nleb=26), [PV(1.0e-4)])
+    model = GeneralSolvationModel(
+        CavityDROPIsodensity(flaky, nleb=26), [ModelComponentPV(1.0e-4)]
+    )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0
 

@@ -52,13 +52,13 @@ import warnings
 import numpy as np
 
 from .interface import (
-    CPCM,
+    CavityDROPIsodensity,
     CavitySnapshot,
     CouplingChannel,
     CouplingTransaction,
     Electrostatics,
     GeneralPotential,
-    IsodensityDROPCavity,
+    ModelComponentCPCM,
     SolvationCoupling,
     SolvationModel,
     Structure,
@@ -102,7 +102,7 @@ class PySCFHost:
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     :param rho_iso: Density contour defining the surface.
     :param scale: Constant multiplier moist applies to the level set; must match
-        the value passed to :class:`~moist.interface.IsodensityDROPCavity`.
+        the value passed to :class:`~moist.interface.CavityDROPIsodensity`.
     """
 
     def __init__(
@@ -144,7 +144,7 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def lsf(self, point: np.ndarray, order: int):
-        """Level-set callback for :class:`~moist.interface.IsodensityDROPCavity`.
+        """Level-set callback for :class:`~moist.interface.CavityDROPIsodensity`.
 
         Returns the **unscaled** ``rho_iso - rho`` and its spatial derivatives up
         to ``order`` only, so the projection's value+gradient phase never pays
@@ -194,14 +194,14 @@ class PySCFHost:
                     )
         return value, grad, hess, third
 
-    def make_cavity(self, **kwargs) -> IsodensityDROPCavity:
-        """Deprecated compatibility factory for ``IsodensityDROPCavity(self)``."""
+    def make_cavity(self, **kwargs) -> CavityDROPIsodensity:
+        """Deprecated compatibility factory for ``CavityDROPIsodensity(self)``."""
         warnings.warn(
-            "host.make_cavity() is deprecated; use IsodensityDROPCavity(host, ...)",
+            "host.make_cavity() is deprecated; use CavityDROPIsodensity(host, ...)",
             DeprecationWarning,
             stacklevel=2,
         )
-        return IsodensityDROPCavity(self, **kwargs)
+        return CavityDROPIsodensity(self, **kwargs)
 
     def coupling(self, density_matrix: np.ndarray) -> "PySCFCoupling":
         """Bind one density matrix to this host for a coherent evaluation."""
@@ -604,7 +604,7 @@ def solvated_rhf(
 
         def _solvent(self, dm):
             model = SolvationModel(
-                IsodensityDROPCavity(host, **cavity_kwargs), [CPCM(epsilon)]
+                CavityDROPIsodensity(host, **cavity_kwargs), [ModelComponentCPCM(epsilon)]
             )
             result = model.evaluate(coupling=host.coupling(dm))
             return result.energy, result.fock

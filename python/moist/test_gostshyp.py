@@ -50,6 +50,7 @@ than the energy alone.
 
 import functools
 import math
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -57,7 +58,9 @@ import pytest
 
 try:
     from pyscf import dft, gto, scf
-except ImportError as exc:  # pragma: no cover - optional dependency
+except ImportError as exc:
+    if os.environ.get("MOIST_REQUIRE_PYSCF"):
+        raise
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
 from .gostshyp import (
@@ -73,9 +76,9 @@ from .gostshyp import (
     _int3c1e,
 )
 from .interface import (
-    CPCM,
-    Gostshyp,
-    IsodensityDROPCavity,
+    CavityDROPIsodensity,
+    ModelComponentCPCM,
+    ModelComponentGOSTSHYP,
     SolvationModel,
     Structure,
 )
@@ -754,13 +757,13 @@ def test_gostshyp_is_a_composable_model_component():
 
     def evaluate(components):
         host = PySCFHost(mol)
-        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
         model = SolvationModel(cavity=cavity, components=components)
         return model.evaluate(coupling=host.coupling(dm))
 
-    gostshyp = evaluate([Gostshyp(PRESSURE)])
-    cpcm = evaluate([CPCM(EPSILON)])
-    combined = evaluate([CPCM(EPSILON), Gostshyp(PRESSURE)])
+    gostshyp = evaluate([ModelComponentGOSTSHYP(PRESSURE)])
+    cpcm = evaluate([ModelComponentCPCM(EPSILON)])
+    combined = evaluate([ModelComponentCPCM(EPSILON), ModelComponentGOSTSHYP(PRESSURE)])
 
     assert combined.energy == pytest.approx(cpcm.energy + gostshyp.energy, rel=1e-12)
     np.testing.assert_allclose(combined.fock, cpcm.fock + gostshyp.fock, rtol=1e-11)
@@ -792,7 +795,7 @@ def test_evaluation_owns_complete_gostshyp_results():
     assert not result.gradient.flags.writeable
 
 
-@pytest.mark.gostshyp_fock
+@pytest.mark.gostshyp_conventions
 def test_gostshyp_wall_name_remains_compatible():
     mol = molecule(*PRIMARY_CASE)
     host = PySCFHost(mol)
@@ -937,7 +940,7 @@ def test_gradient_surface_channel_matches_fd(system, basis):
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
-        cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
         cavity.update(Structure(numbers, displaced))
         result = cavity.cavity
         centers = np.ascontiguousarray(result.xyz.T)
@@ -1140,7 +1143,7 @@ def test_conventions_anchor_area_derivatives_sum_to_the_total():
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
     host.dm = dm
-    cavity = IsodensityDROPCavity(host, nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
     cavity.update(host.structure())
 
     cavity.compute_anchor_gradient()

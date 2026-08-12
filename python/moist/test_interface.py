@@ -6,21 +6,22 @@ import moist
 from moist import library
 from moist.interface import (
     ArrayCoupling,
-    CPCM,
-    CFCDROPCavity,
-    COSMO,
     Cavity,
+    CavityDROP,
+    CavityDROPCFC,
+    CavityDROPSvdW,
+    CavityISwiG,
     CavitySnapshot,
+    CavitySnapshotDROP,
+    CouplingChannel,
     CouplingTransaction,
-    DROPCavitySnapshot,
-    DROPCavity,
     Electrostatics,
     Evaluation,
     GeneralSolvationModel,
-    ISwiGCavity,
-    PV,
+    ModelComponentCOSMO,
+    ModelComponentCPCM,
+    ModelComponentPV,
     PCMSolver,
-    SvdWDROPCavity,
     SolvationCoupling,
     SolvationModel,
     Structure,
@@ -60,7 +61,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     Only an absolute value can see a changed default, which is what this is.
     Regenerate deliberately if the default surface is ever meant to change.
     """
-    cavity = DROPCavity(nleb=26)
+    cavity = CavityDROP(nleb=26)
     cavity.update(Structure(numbers, positions))
     result = cavity.cavity
 
@@ -73,7 +74,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     "cavity,snapshot_type",
     [
         (
-            SvdWDROPCavity(
+            CavityDROPSvdW(
                 nleb=26,
                 blend_k=5.5,
                 blend_1b=1.0,
@@ -89,10 +90,10 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 rho_grid_h=0.8,
                 wleb_prune_level=1,
             ),
-            DROPCavitySnapshot,
+            CavitySnapshotDROP,
         ),
         (
-            CFCDROPCavity(
+            CavityDROPCFC(
                 nleb=26,
                 a1=-15.0,
                 a2=-9.0,
@@ -108,10 +109,10 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 rho_grid_h=0.8,
                 wleb_prune_level=1,
             ),
-            DROPCavitySnapshot,
+            CavitySnapshotDROP,
         ),
         (
-            ISwiGCavity(
+            CavityISwiG(
                 nleb=26,
                 cut_a=0.0,
                 cut_f=1.0e-10,
@@ -139,12 +140,13 @@ def test_public_cavity_types_accept_their_optional_arguments(
     assert np.isfinite(result.volume)
 
 
-def test_drop_cavity_remains_the_svdw_compatibility_alias() -> None:
-    assert DROPCavity is SvdWDROPCavity
-    assert moist.DROPCavity is moist.SvdWDROPCavity
+def test_cavity_drop_is_the_svdw_surface() -> None:
+    """The unqualified DROP name is the SvdW cavity, not a distinct surface."""
+    assert CavityDROP is CavityDROPSvdW
+    assert moist.CavityDROP is moist.CavityDROPSvdW
 
 
-@pytest.mark.parametrize("cavity_type", [SvdWDROPCavity, CFCDROPCavity])
+@pytest.mark.parametrize("cavity_type", [CavityDROPSvdW, CavityDROPCFC])
 def test_drop_constructor_controls_are_validated_natively(cavity_type) -> None:
     with raises(RuntimeError, match="wleb_prune_level.*0-6"):
         cavity_type(wleb_prune_level=7)
@@ -160,13 +162,13 @@ def test_cavity_specific_options_reach_the_native_implementations(
         cavity.update(structure)
         return cavity.snapshot()
 
-    svdw_default = surface(SvdWDROPCavity(nleb=26))
-    svdw_custom = surface(SvdWDROPCavity(nleb=26, blend_k=4.0))
+    svdw_default = surface(CavityDROPSvdW(nleb=26))
+    svdw_custom = surface(CavityDROPSvdW(nleb=26, blend_k=4.0))
     assert svdw_custom.area != approx(svdw_default.area, rel=1.0e-6)
 
-    cfc_default = surface(CFCDROPCavity(nleb=26))
+    cfc_default = surface(CavityDROPCFC(nleb=26))
     cfc_custom = surface(
-        CFCDROPCavity(
+        CavityDROPCFC(
             nleb=26,
             a1=-12.0,
             a2=-8.0,
@@ -177,8 +179,8 @@ def test_cavity_specific_options_reach_the_native_implementations(
     )
     assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)
 
-    iswig_default = surface(ISwiGCavity(nleb=26))
-    iswig_custom = surface(ISwiGCavity(nleb=26, cut_f=1.0e-2))
+    iswig_default = surface(CavityISwiG(nleb=26))
+    iswig_custom = surface(CavityISwiG(nleb=26, cut_f=1.0e-2))
     assert iswig_custom.ngrid < iswig_default.ngrid
 
 
@@ -213,8 +215,8 @@ def test_general_model_iterates_cpcm_and_pv_components() -> None:
     )
     pressure = 2.5e-4
     model = GeneralSolvationModel(
-        DROPCavity(nleb=26),
-        [CPCM(32.0), PV(pressure)],
+        CavityDROP(nleb=26),
+        [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
 
@@ -230,8 +232,8 @@ def test_general_model_iterates_cpcm_and_pv_components() -> None:
 
 
 def test_cosmo_is_a_standalone_pcm_component() -> None:
-    cpcm = CPCM(32.0, solver="lu")
-    cosmo = COSMO(32.0, solver="lu")
+    cpcm = ModelComponentCPCM(32.0, solver="lu")
+    cosmo = ModelComponentCOSMO(32.0, solver="lu")
 
     assert cpcm.epsilon == cosmo.epsilon == 32.0
     assert cpcm.solver is cosmo.solver is PCMSolver.LU
@@ -241,7 +243,7 @@ def test_cosmo_is_a_standalone_pcm_component() -> None:
 
 def test_cosmo_rejects_an_invalid_dielectric() -> None:
     with raises(RuntimeError, match="Dielectric constant must be >= 1"):
-        COSMO(0.5)
+        ModelComponentCOSMO(0.5)
 
 
 def test_cosmo_uses_its_own_dielectric_scaling(
@@ -253,14 +255,14 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     epsilon = 32.0
     results = {}
 
-    for component_type in (CPCM, COSMO):
-        model = SolvationModel(SvdWDROPCavity(nleb=26), [component_type(epsilon)])
+    for component_type in (ModelComponentCPCM, ModelComponentCOSMO):
+        model = SolvationModel(CavityDROPSvdW(nleb=26), [component_type(epsilon)])
         model.update(structure)
         phi = np.linspace(-0.2, 0.3, model.ngrid)
         results[component_type] = model.solve(phi)
 
-    cpcm_energy, cpcm_charges = results[CPCM]
-    cosmo_energy, cosmo_charges = results[COSMO]
+    cpcm_energy, cpcm_charges = results[ModelComponentCPCM]
+    cosmo_energy, cosmo_charges = results[ModelComponentCOSMO]
     factor_ratio = ((epsilon - 1.0) / (epsilon + 0.5)) / (
         (epsilon - 1.0) / epsilon
     )
@@ -281,8 +283,8 @@ def test_general_model_evaluates_a_complete_array_coupling() -> None:
     )
     pressure = 2.5e-4
     model = GeneralSolvationModel(
-        DROPCavity(nleb=26),
-        [CPCM(32.0), PV(pressure)],
+        CavityDROP(nleb=26),
+        [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     coupling = ArrayCoupling(
         structure,
@@ -294,7 +296,7 @@ def test_general_model_evaluates_a_complete_array_coupling() -> None:
     result = model.evaluate(coupling=coupling)
 
     assert isinstance(result, Evaluation)
-    assert isinstance(result.cavity, DROPCavitySnapshot)
+    assert isinstance(result.cavity, CavitySnapshotDROP)
     assert isinstance(model.cavity, Cavity)
     assert result.energy == approx(pressure * result.cavity.volume, abs=2.0e-13)
     np.testing.assert_array_equal(result.charges, np.zeros(result.cavity.ngrid))
@@ -314,7 +316,7 @@ def test_solvation_model_is_the_canonical_constructor() -> None:
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
     coupling = ArrayCoupling(structure)
-    model = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
 
     result = model.evaluate(structure, coupling=coupling)
 
@@ -331,7 +333,7 @@ def test_evaluation_rejects_a_structure_from_another_coupling() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.8], [0.0, 0.0, 0.8]]),
     )
-    model = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
 
     with raises(ValueError, match="does not match"):
         model.evaluate(structure, coupling=ArrayCoupling(other))
@@ -342,7 +344,8 @@ def test_evaluation_results_use_irreversibly_read_only_buffers() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
-    result = SolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)]).evaluate(structure)
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
+    result = model.evaluate(structure)
 
     with raises(ValueError, match="WRITEABLE"):
         result.cavity.xyz.setflags(write=True)
@@ -357,7 +360,7 @@ def test_failed_coupling_preparation_invalidates_the_model() -> None:
     )
 
     class FailingCoupling(SolvationCoupling):
-        channels = frozenset({"electrostatics"})
+        channels = frozenset({CouplingChannel.ELECTROSTATICS})
 
         @property
         def structure(self) -> Structure:
@@ -371,7 +374,7 @@ def test_failed_coupling_preparation_invalidates_the_model() -> None:
 
             transaction.exchange_electrostatics(fail_after_first_supply)
 
-    model = SolvationModel(DROPCavity(nleb=26), [CPCM(32.0)])
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
 
     with raises(RuntimeError, match="host response failed"):
         model.evaluate(coupling=FailingCoupling())
@@ -388,7 +391,7 @@ def test_general_model_rejects_missing_coupling_channels() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
-    model = GeneralSolvationModel(DROPCavity(nleb=26), [CPCM(32.0)])
+    model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
 
     with raises(ValueError, match="electrostatics"):
         model.evaluate(structure)
@@ -399,7 +402,7 @@ def test_evaluation_gradient_rejects_a_superseded_model_state() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
-    model = GeneralSolvationModel(DROPCavity(nleb=26), [PV(2.5e-4)])
+    model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5e-4)])
     first = model.evaluate(structure)
     model.evaluate(structure)
 
@@ -414,7 +417,7 @@ def test_general_model_update_invalidates_supplied_electrostatics() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
-    model = GeneralSolvationModel(DROPCavity(nleb=26), [CPCM(32.0)])
+    model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     model.solve(np.zeros(model.ngrid))
 
@@ -437,7 +440,7 @@ def test_borrowed_model_cavity_rejects_standalone_updates() -> None:
         np.array([1, 1], dtype=np.int32),
         np.array([[0.0, 0.0, -0.7], [0.0, 0.0, 0.7]]),
     )
-    model = GeneralSolvationModel(DROPCavity(nleb=26), [PV(1.0e-4)])
+    model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentPV(1.0e-4)])
     model.update(structure)
     original_area = model.cavity.area
 
