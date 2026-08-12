@@ -61,12 +61,11 @@ module test_cavity_drop_nuclear_adjoint
    !> Below this the reference gradient is too small to carry a relative test
    real(wp), parameter :: VACUITY_THR = 1.0E-6_wp
 
-   !> Softmax scale for the branching fixture. The production value set by
-   !> `new_cavity_drop` (0.05) is peaked enough that the branch prune in
-   !> filter.f90 keeps a single sibling and `branch_count` collapses to 1,
-   !> which would silently retire the softmax reverse pass from the test.
-   !> Measured branching onset for this fixture is s ~ 0.2.
-   real(wp), parameter :: BRANCH_SOFTMAX_S = 1.0_wp
+   !> Softmax scale for the branching test
+   real(wp), parameter :: BRANCH_SOFTMAX_S = 0.5_wp
+
+   !> Symmetry-breaking displacement for branching fixture
+   real(wp), parameter :: FIXTURE_NUDGE = 1.0E-4_wp
 
    !> Channel identifiers, in the order [[apply_channel]] understands
    integer, parameter :: CH_XI = 1, CH_F = 2, CH_A = 3, CH_W = 4
@@ -196,9 +195,11 @@ contains
 
       real(wp) :: fd_coeff(NSTEP), fd_delta(NSTEP)
       real(wp), allocatable :: grad_ana(:, :), wmap(:), xi_store(:, :), w_xi(:)
-      logical, allocatable :: have(:, :), usable(:)
+      logical, allocatable :: have(:, :), usable(:), in_ref(:)
+      !> Branch count per persistent numbering at each stencil geometry
+      integer, allocatable :: bc_store(:, :)
       real(wp) :: lvals(NSTEP), num_deriv, ana_deriv, diff
-      integer :: max_num, istep, igrid, inum, ngrid, ncommon
+      integer :: max_num, istep, igrid, inum, ngrid, ncommon, nphantom
 
       fd_coeff = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/(12.0_wp*FD_STEP)
       fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*FD_STEP
@@ -220,6 +221,7 @@ contains
       end do
       allocate (xi_store(max_num, NSTEP), source=0.0_wp)
       allocate (have(max_num, NSTEP), source=.false.)
+      allocate (bc_store(max_num, NSTEP), source=0)
 
       ! Collect xi at each stencil geometry, keyed on the persistent numbering
       do istep = 1, NSTEP
@@ -234,6 +236,7 @@ contains
                if (inum < 1 .or. inum > max_num) cycle
                have(inum, istep) = .true.
                xi_store(inum, istep) = cavity_fd%xi0(igrid)
+               bc_store(inum, istep) = cavity_fd%branch_count(igrid)
             end do
          end block
       end do
@@ -241,6 +244,34 @@ contains
       ! Only points present at every geometry carry weight
       allocate (usable(max_num))
       usable = all(have, dim=2)
+
+      allocate (in_ref(max_num), source=.false.)
+      do igrid = 1, ngrid
+         inum = cavity%numbering(igrid)
+         if (inum >= 1 .and. inum <= max_num) in_ref(inum) = .true.
+      end do
+      nphantom = count(usable .and. .not. in_ref)
+      if (nphantom > 0) then
+         call test_failed(error, "stencil point set does not match the reference cavity: "// &
+                          to_string(nphantom)//" of "//to_string(count(usable))//" numbers common "// &
+                          "to every displaced geometry are absent from the reference surface ("// &
+                          to_string(ngrid)//" points), so the FD reference and the analytic sum "// &
+                          "would cover different points")
+         return
+      end if
+
+      do inum = 1, max_num
+         if (.not. usable(inum)) cycle
+         if (any(bc_store(inum, :) /= bc_store(inum, 1))) then
+            call test_failed(error, "branch topology is not constant across the stencil for "// &
+                             "point "//to_string(inum)//": branch counts "// &
+                             to_string(bc_store(inum, 1))//", "//to_string(bc_store(inum, 2))// &
+                             ", "//to_string(bc_store(inum, 3))//", "//to_string(bc_store(inum, 4))// &
+                             ", so its xi is compared across different branch weightings")
+            return
+         end if
+      end do
+
       ncommon = count(usable)
       if (ncommon < 10) then
          call test_failed(error, "too few grid points survive the stencil ("// &
@@ -712,8 +743,20 @@ contains
       !> Fixture structure
       type(structure_type), intent(out) :: mol
 
+      !> Displacement axis and atom indices for the symmetry-breaking nudge
+      integer :: iat, iaxis
+      !> Unit direction of the nudge for one atom
+      real(wp) :: dvec(3)
+
       if (branching) then
          call get_test_cross(mol)
+         ! Add tiny perturbation so we find all branches on all systems
+         do iat = 1, mol%nat
+            do iaxis = 1, 3
+               dvec(iaxis) = sin(2.7_wp*real(iat, wp) + 1.1_wp*real(iaxis, wp))
+            end do
+            mol%xyz(:, iat) = mol%xyz(:, iat) + FIXTURE_NUDGE*dvec/norm2(dvec)
+         end do
       else
          call new(mol, [8, 6, 1], reshape([ &
                                           0.00_wp, 0.00_wp, 0.00_wp, &

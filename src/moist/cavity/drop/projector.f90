@@ -885,11 +885,11 @@ contains
       ! Newton-deflation works on the full 4-D KKT system z = (x, lambda),
       ! so its branch needs separate seed handling.
       !
-      !   level == 8 : fine SLSQP multistart reference                    -- 3D
-      !   level == 7 : regular SLSQP multistart baseline                  -- 3D
-      !   level == 6 : Newton-deflation on the 4D KKT system               -- 4D
-      !   level 4-5  : SLSQP-deflation (iterated Farrell deflation)        -- 3D
-      !   level <  4 : multi-tangent (cheap local rings)                  -- 3D
+      !   level == 8 : fine SLSQP multistart reference               -- 3D
+      !   level == 7 : regular SLSQP multistart baseline            -- 3D
+      !   level == 6 : Newton-deflation on the 4D KKT system         -- 4D
+      !   level 4-5  : SLSQP-deflation (iterated Farrell deflation)   -- 3D
+      !   level <  4 : multi-tangent (cheap local rings)            -- 3D
       if (level >= 8) then
          call build_fine_multistart_profile(fine_radii, fine_n_points)
          call new_slsqp_multistart_solver( &
