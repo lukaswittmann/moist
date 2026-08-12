@@ -269,7 +269,7 @@ endif()
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(moist PRIVATE
     -ffree-line-length-none -fbacktrace
-    -fopenmp-simd --param max-inline-insns-auto=300
+    -fopenmp-simd
   )
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
   # -fp-model=precise: ifx defaults to a fast FP model that reassociates
