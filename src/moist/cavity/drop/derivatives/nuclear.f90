@@ -153,7 +153,7 @@ contains
       allocate (f1_rA_pt(3, self%nsph), source=0.0_wp)
       allocate (anchor_xi_zero(3, self%nsph), source=0.0_wp)
 
-      !$omp do schedule(dynamic)
+      !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
          if (abort%requested) cycle
 
