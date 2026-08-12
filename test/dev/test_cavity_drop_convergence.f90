@@ -144,7 +144,7 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
       type(moist_cavity_drop_parameters_type) :: param
       real(wp), allocatable :: radii(:)
-      real(wp) :: areas(7), volumes(7)
+      real(wp) :: areas(8), volumes(8)
       real(wp) :: ref_area, ref_volume
       integer :: igrid, imol
 
