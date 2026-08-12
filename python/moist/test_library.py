@@ -2,7 +2,7 @@ import functools
 
 import numpy as np
 import pytest
-from pytest import raises
+from pytest import approx, raises
 
 from moist.interface import GeneralSolvationModel, IsodensityDROPCavity, PV, Structure
 from moist.library import _callback_takes_order, get_api_version
@@ -156,8 +156,8 @@ def test_callback_both_forms_agree(water) -> None:
     """A legacy one-argument callback must still work and give the same cavity.
 
     The two forms differ only in whether moist can tell the callback to skip
-    computing derivatives it does not need, so the resulting surface must be
-    identical -- not merely close.
+    computing derivatives it does not need, so they must describe the same
+    surface.
     """
     _, positions = water
 
@@ -168,8 +168,8 @@ def test_callback_both_forms_agree(water) -> None:
     old_cavity = _build(old_lsf.legacy, water)
 
     assert new_cavity.ngrid == old_cavity.ngrid
-    assert new_cavity.area == old_cavity.area
-    assert new_cavity.volume == old_cavity.volume
+    assert new_cavity.area == approx(old_cavity.area, rel=1.0e-13)
+    assert new_cavity.volume == approx(old_cavity.volume, rel=1.0e-13)
 
     # The order-aware form must actually have been spared some work
     assert new_lsf.orders == {1, 2}

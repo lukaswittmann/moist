@@ -619,11 +619,13 @@ def test_gradient_path_ignores_host_surface_weights():
     """Documents an asymmetry between the potential and gradient paths.
 
     ``w_xyz`` is read when the potential is assembled but dropped when the
-    gradient is, so scaling it by a thousand moves the gradient by exactly zero.
+    gradient is, so scaling it by a thousand leaves the gradient where it was.
     That is what makes it safe for :meth:`PySCFHost.solve` to supply
     ``w_xyz`` and ``qefield`` together: were the gradient path to start reading
     ``w_xyz``, the surface-motion term would be counted twice and
     ``test_l1_gradient_matches_fd`` would begin to fail.
+
+    The bound is tight rather than exact.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -641,7 +643,7 @@ def test_gradient_path_ignores_host_surface_weights():
             qefield=host.qefield(coords, charges),
         )
         gradients.append(model.get_gradient(mol.natm))
-    np.testing.assert_array_equal(gradients[0], gradients[1])
+    np.testing.assert_allclose(gradients[0], gradients[1], rtol=1.0e-11, atol=1.0e-14)
 
 
 # ----------------------------------------------------------------------

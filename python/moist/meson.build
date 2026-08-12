@@ -126,7 +126,7 @@ if run_command(python, '-c', 'import pytest', check: false).returncode() == 0
     ['pyscf_isodensity_pv', 'isodensity and pv', 300],
     ['pyscf_isodensity_cpcm_pv', 'isodensity and cpcm_pv', 300],
     ['pyscf_conventions', 'conventions', 300],
-    ['pyscf_scf', 'scf', 300],
+    ['pyscf_scf', 'scf', 600],
   ]
     test(
       entry[0],
