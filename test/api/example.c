@@ -173,7 +173,7 @@ int test_drop_cavity(void)
 
     cav = moist_new_drop_cavity_with_radii(error, radii_model,
                                            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL);
+                                           NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -318,7 +318,7 @@ int test_custom_radii(void)
 
     cav = moist_new_drop_cavity_with_radii(error, radii_model,
                                            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL);
+                                           NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -376,7 +376,7 @@ int test_custom_radii(void)
 
     cav = moist_new_drop_cavity_with_radii(error, radii_model,
                                            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                                           NULL);
+                                           NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -469,7 +469,8 @@ int test_h2o_cavity(void)
     }
 
     // Create DROP cavity handle (does not build yet)
-    cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -628,7 +629,8 @@ int test_cavity_gradient(void)
     }
 
     // Create DROP cavity
-    cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1826,7 +1828,8 @@ int test_update_drop_cavity_keeps_params(void)
     }
 
     cav = moist_new_drop_cavity(error, &nleb, NULL, NULL, NULL, NULL,
-                                NULL, NULL, NULL, &tolerance_in);
+                                NULL, NULL, NULL, &tolerance_in,
+                                NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1951,7 +1954,8 @@ int test_capacity_validation(void)
 
     mol = make_h2o(error);
     cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL,
-                                NULL, NULL, NULL, NULL);
+                                NULL, NULL, NULL, NULL,
+                                NULL, NULL, NULL, NULL, NULL);
     moist_update_cavity(error, cav, mol);
 
     int ngrid = 0, nsph = 0;

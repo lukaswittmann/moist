@@ -105,8 +105,7 @@ module test_cavity_drop_isodensity
    !> Level set multiplier used by both backends in the agreement tests
    real(wp), parameter :: lsf_scale = 1.0_wp/rho_iso_ref
 
-   !> Reference density shared with the C-interoperable callback. Module state
-   !> keeps the callback a plain, standard-conforming bind(C) procedure.
+   !> Reference density shared with the C-interoperable callback
    type(moist_iso_gto_type), save :: cb_gto
 
    !> Packed spatial derivative multi-indices through third order.
