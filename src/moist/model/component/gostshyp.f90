@@ -29,7 +29,7 @@ module moist_model_component_gostshyp
    implicit none (type, external)
    private
 
-   public :: gostshyp, new_gostshyp
+   public :: solvation_model_component_gostshyp, new_component_gostshyp
 
    !> Relative floor on `|ftilde_i|` below which a grid point is inactive
    !>
@@ -43,7 +43,7 @@ module moist_model_component_gostshyp
    real(wp), parameter :: pi_ln2 = 3.14159265358979323846_wp*0.69314718055994530942_wp
 
    !> GOSTSHYP hydrostatic pressure contribution
-   type, extends(solvation_model_component) :: gostshyp
+   type, extends(solvation_model_component) :: solvation_model_component_gostshyp
       !> Applied hydrostatic pressure in atomic units, Hartree/bohr**3
       real(wp) :: pressure = 0.0_wp
    contains
@@ -52,7 +52,7 @@ module moist_model_component_gostshyp
       procedure :: get_potential => gostshyp_get_potential
       procedure :: get_gradient => gostshyp_get_gradient
       procedure :: get_surface_weights => gostshyp_get_surface_weights
-   end type gostshyp
+   end type solvation_model_component_gostshyp
 
 contains
 
@@ -64,16 +64,16 @@ contains
    !>
    !> @param[out] self     Component instance
    !> @param[in]  pressure Applied pressure in Hartree/bohr**3
-   subroutine new_gostshyp(self, pressure)
+   subroutine new_component_gostshyp(self, pressure)
       !> Component instance
-      type(gostshyp), intent(out) :: self
+      type(solvation_model_component_gostshyp), intent(out) :: self
       !> Applied pressure
       real(wp), intent(in) :: pressure
 
       self%name = "GOSTSHYP"
       self%pressure = pressure
 
-   end subroutine new_gostshyp
+   end subroutine new_component_gostshyp
 
    !> Bind the current molecular structure
    !>
@@ -83,7 +83,7 @@ contains
    !> @param[out]   error  Error handling
    subroutine gostshyp_update(self, mol, cavity, error)
       !> Component instance
-      class(gostshyp), intent(inout) :: self
+      class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Live model cavity
@@ -121,7 +121,7 @@ contains
    subroutine gostshyp_amplitudes(self, coupling, cavity, omega, ftilde, alpha, beta, error, &
                                   ninactive)
       !> Component instance
-      class(gostshyp), intent(in) :: self
+      class(solvation_model_component_gostshyp), intent(in) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -239,7 +239,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine gostshyp_get_energy(self, coupling, cavity, energy, error)
       !> Component instance
-      class(gostshyp), intent(inout) :: self
+      class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -293,7 +293,7 @@ contains
    !> @param[out]   error     Error handling
    subroutine gostshyp_get_potential(self, coupling, cavity, potential, error)
       !> Component instance
-      class(gostshyp), intent(inout) :: self
+      class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -348,7 +348,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine gostshyp_get_surface_weights(self, coupling, cavity, acc, error)
       !> Component instance
-      class(gostshyp), intent(inout) :: self
+      class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -423,7 +423,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine gostshyp_get_gradient(self, coupling, cavity, gradient, error)
       !> Component instance
-      class(gostshyp), intent(inout) :: self
+      class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity

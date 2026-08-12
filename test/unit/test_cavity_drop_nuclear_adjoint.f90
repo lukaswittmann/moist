@@ -32,9 +32,9 @@ module test_cavity_drop_nuclear_adjoint
    use moist_context, only: moist_context_type, new_context
    use moist_type, only: coupling_type
    use moist_model_general, only: general_solvation_model, new_general_model
-   use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
+   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_type, only: solver_type
-   use moist_model_components, only: pv, new_pv
+   use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use test_helpers, only: make_charge_coupling, fill_legacy_radii
    implicit none(type, external)
    private
@@ -372,8 +372,8 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(general_solvation_model) :: model_rev, model_fwd
-      type(cpcm) :: pcm_component
-      type(pv) :: pv_component
+      type(solvation_model_component_cpcm) :: pcm_component
+      type(solvation_model_component_pv) :: pv_component
       type(coupling_type) :: coupling
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
@@ -388,12 +388,12 @@ contains
       nat = mol%nat
 
       call make_charge_coupling(qat_vals, coupling)
-      call new_cpcm(pcm_component, ctx, epsilon_r, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_component, ctx, epsilon_r, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
       end if
-      call new_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure)
 
       call build_model(model_rev, cavity, ctx, pcm_component, pv_component, mol, error)
       if (allocated(error)) return
@@ -453,8 +453,8 @@ contains
       !> Run context owned by the caller
       type(moist_context_type), intent(in), target :: ctx
       !> Component templates
-      type(cpcm), intent(in) :: pcmc
-      type(pv), intent(in) :: pvc
+      type(solvation_model_component_cpcm), intent(in) :: pcmc
+      type(solvation_model_component_pv), intent(in) :: pvc
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Error handle

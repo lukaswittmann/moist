@@ -62,13 +62,14 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
       & moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
    use moist_model_general, only: general_solvation_model, new_general_model
-   use moist_model_components, only: cpcm, new_cpcm, pv, new_pv
+   use moist_model_components, only: solvation_model_component_cpcm, &
+      & new_component_cpcm, solvation_model_component_pv, new_component_pv
 
    type(moist_context_type), target :: ctx
    type(moist_cavity_drop_lsf_svdw_type) :: svdw
    type(cavity_type_drop) :: cavity
-   type(cpcm) :: electrostatic
-   type(pv) :: pressure_volume
+   type(solvation_model_component_cpcm) :: electrostatic
+   type(solvation_model_component_pv) :: pressure_volume
    type(general_solvation_model) :: model
    type(error_type), allocatable :: error
 
@@ -82,10 +83,10 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    if (allocated(error)) error stop error%message
 
    ! Construct CPCM (water)
-   call new_cpcm(electrostatic, ctx, epsilon=80.0_wp, error=error)
+   call new_component_cpcm(electrostatic, ctx, epsilon=80.0_wp, error=error)
    if (allocated(error)) error stop error%message
    ! Construct pressure model (1 GPa)
-   call new_pv(pressure_volume, pressure=3.40E-5_wp, error=error)
+   call new_component_pv(pressure_volume, pressure=3.40E-5_wp, error=error)
    if (allocated(error)) error stop error%message
 
    ! Construct model

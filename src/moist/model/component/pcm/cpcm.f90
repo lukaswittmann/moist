@@ -7,27 +7,27 @@ module moist_model_component_pcm_cpcm
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_type, only: cavity_type, coupling_type
-   use moist_model_component_pcm_type, only: pcm_base, solver_type, &
+   use moist_model_component_pcm_type, only: solvation_model_component_pcm, solver_type, &
       & potential_source
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none (type, external)
    private
 
-   public :: cpcm
-   public :: new_cpcm
+   public :: solvation_model_component_cpcm
+   public :: new_component_cpcm
 
    !> CPCM (Conductor-like Polarizable Continuum Model) variant
    !> Uses f epsilon = ( epsilon -1)/ epsilon scaling
-   type, extends(pcm_base) :: cpcm
-   end type cpcm
+   type, extends(solvation_model_component_pcm) :: solvation_model_component_cpcm
+   end type solvation_model_component_cpcm
 
 contains
 
    !> Constructor for CPCM variant
    !> Sets f epsilon = ( epsilon -1)/ epsilon and configures solver and potential source.
-   subroutine new_cpcm(self, ctx, epsilon, solver, phi_source, external_matrix, error)
+   subroutine new_component_cpcm(self, ctx, epsilon, solver, phi_source, external_matrix, error)
       !> CPCM instance to initialize
-      type(cpcm), intent(out) :: self
+      type(solvation_model_component_cpcm), intent(out) :: self
       !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
       type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
@@ -49,7 +49,7 @@ contains
       ! The `epsilon /= epsilon` test rejects a NaN input.
       if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
          call fatal_error(error, &
-            & "[new_cpcm] Dielectric constant must be >= 1")
+            & "[new_component_cpcm] Dielectric constant must be >= 1")
          return
       end if
       self%epsilon = epsilon
@@ -81,6 +81,6 @@ contains
       ! Set component name
       self%name = "CPCM"
 
-   end subroutine new_cpcm
+   end subroutine new_component_cpcm
 
 end module moist_model_component_pcm_cpcm

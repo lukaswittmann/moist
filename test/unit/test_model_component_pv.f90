@@ -12,7 +12,7 @@ module test_model_component_pv
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_type, only: coupling_type, potential_type
-   use moist_model_components, only: pv, new_pv
+   use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
@@ -79,7 +79,7 @@ contains
       !> Radius model pinning the sphere radius exactly
       class(radius_type), allocatable :: radius_model
       !> Component under test
-      type(pv) :: pv_component
+      type(solvation_model_component_pv) :: pv_component
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Energy accumulator and the analytic reference volume
@@ -126,7 +126,7 @@ contains
             end if
 
             do ipres = 1, size(test_pressures)
-               call new_pv(pv_component, test_pressures(ipres))
+               call new_component_pv(pv_component, test_pressures(ipres))
                call pv_component%update(mol, cavity, err)
                if (allocated(err)) then
                   call test_failed(error, "PV update failed: "//err%message)
@@ -172,7 +172,7 @@ contains
          return
       end if
 
-      call new_pv(pv_component, test_pressures(size(test_pressures)))
+      call new_component_pv(pv_component, test_pressures(size(test_pressures)))
       call pv_component%update(mol_pair, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update on the two-sphere cavity failed: "//err%message)
@@ -213,7 +213,7 @@ contains
       !> Cavity rebuilt at the reference and at every displaced geometry
       type(cavity_type_iswig) :: cavity
       !> Components at unit and at scaled pressure
-      type(pv) :: pv_component, pv_scaled
+      type(solvation_model_component_pv) :: pv_component, pv_scaled
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Gradient accumulators at unit and at scaled pressure
@@ -250,7 +250,7 @@ contains
          return
       end if
 
-      call new_pv(pv_component, unit_pressure)
+      call new_component_pv(pv_component, unit_pressure)
       call pv_component%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -268,7 +268,7 @@ contains
       if (allocated(error)) return
 
       ! The pressure enters as a pure prefactor, so this holds to roundoff.
-      call new_pv(pv_scaled, scaled_pressure)
+      call new_component_pv(pv_scaled, scaled_pressure)
       call pv_scaled%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Scaled PV update failed: "//err%message)
@@ -361,7 +361,7 @@ contains
       !> Synthetic DROP surface carrying the volume adjoint fields
       type(cavity_type_drop) :: cavity
       !> Components at finite and at zero pressure
-      type(pv) :: pv_component, pv_zero
+      type(solvation_model_component_pv) :: pv_component, pv_zero
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Analytic surface weights, and a prefilled accumulator PV must not touch
@@ -406,7 +406,7 @@ contains
             & + sw_areas(igrid)*dot_product(sw_xyz(:, igrid), normals(:, igrid))/3.0_wp
       end do
 
-      call new_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -439,7 +439,7 @@ contains
       prefilled%w_xyz = prefill
       prefilled%w_n = prefill
 
-      call new_pv(pv_zero, 0.0_wp)
+      call new_component_pv(pv_zero, 0.0_wp)
       call pv_zero%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -509,7 +509,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Component under test
-      type(pv) :: pv_component
+      type(solvation_model_component_pv) :: pv_component
       !> Gradient accumulator carrying a sentinel
       real(wp), allocatable :: gradient(:, :)
 
@@ -534,7 +534,7 @@ contains
       allocate (gradient(3, mol%nat), source=1.5_wp)
 
       ! Zero pressure: no cavity call at all, accumulator untouched.
-      call new_pv(pv_component, 0.0_wp)
+      call new_component_pv(pv_component, 0.0_wp)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -550,7 +550,7 @@ contains
       if (allocated(error)) return
 
       ! Finite pressure: the missing cavity hook must surface as an error.
-      call new_pv(pv_component, 0.75_wp)
+      call new_component_pv(pv_component, 0.75_wp)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -586,7 +586,7 @@ contains
       !> Potential accumulator PV must leave alone
       type(potential_type) :: potential
       !> Component under test
-      type(pv) :: pv_component
+      type(solvation_model_component_pv) :: pv_component
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
       !> Gradient accumulator of the wrong shape
@@ -611,7 +611,7 @@ contains
       end if
 
       ! Never updated: no total volume, so neither update nor get_energy may run.
-      call new_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure)
       call pv_component%update(mol, cavity, err)
       call check(error, allocated(err), &
          & more="PV accepted a cavity that was never updated")

@@ -16,7 +16,7 @@ module test_model_component_gostshyp
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_type, only: coupling_type, potential_type
-   use moist_model_components, only: gostshyp, new_gostshyp
+   use moist_model_components, only: solvation_model_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop, only: cavity_type_drop
    use test_model_component_helper, only: surface_fixture, &
@@ -261,7 +261,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Potential accumulator receiving the amplitudes
       type(potential_type) :: potential
       !> Radial normal field
@@ -279,7 +279,7 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -348,7 +348,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Fixture mirroring the synthetic surface for the harness
@@ -384,7 +384,7 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -454,7 +454,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Radial normal field
@@ -466,7 +466,7 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -505,7 +505,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -516,13 +516,13 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, 0.0_wp)
+      call new_component_gostshyp(component, 0.0_wp)
       call check_inert(error, component, coupling, cavity, mol, "zero pressure")
       if (allocated(error)) return
 
       ! A component scaled to zero contributes nothing either, and must reach
       ! that conclusion without asking for moments it will not use.
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
       component%scale = 0.0_wp
       call check_inert(error, component, coupling, cavity, mol, "zero scale")
       if (allocated(error)) return
@@ -544,7 +544,7 @@ contains
       !> Test failure information
       type(error_type), allocatable, intent(out) :: error
       !> Component under test
-      type(gostshyp), intent(inout) :: component
+      type(solvation_model_component_gostshyp), intent(inout) :: component
       !> Coupling data carrying no moments
       type(coupling_type), intent(in) :: coupling
       !> Synthetic DROP surface.  Not `intent(in)`: the component's own energy
@@ -627,7 +627,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Cavity missing its surface arrays
       type(cavity_type_drop) :: bare
       !> Radial normal field
@@ -641,7 +641,7 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
 
       ! An un-updated cavity carries no surface arrays at all.
       bare%ngrid = ngrid_sw
@@ -718,7 +718,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(gostshyp) :: component
+      type(solvation_model_component_gostshyp) :: component
       !> Potential accumulator receiving the amplitudes
       type(potential_type) :: potential
       !> Radial normal field
@@ -732,7 +732,7 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)

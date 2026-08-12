@@ -1,7 +1,7 @@
 Polarizable Continuum Model
 ===========================
 
-PCM-family components extend the abstract ``pcm_base`` and share the same Gaussian-surface machinery.
+PCM-family components extend the abstract ``solvation_model_component_pcm`` and share the same Gaussian-surface machinery.
 The cavity must provide grid positions, Gaussian widths, and switching function values.
 
 The base implementation assembles the surface interaction matrix :math:`A`, solves

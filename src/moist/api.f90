@@ -34,10 +34,13 @@ module moist_api
    use moist_model_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_component_pcm_type, only: potential_source
-   use moist_model_component_gostshyp, only: gostshyp, new_gostshyp
-   use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
-   use moist_model_component_pcm_cosmo, only: cosmo, new_cosmo
-   use moist_model_component_pv, only: pv, new_pv
+   use moist_model_component_gostshyp, only: solvation_model_component_gostshyp, &
+      & new_component_gostshyp
+   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, &
+      & new_component_cpcm
+   use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, &
+      & new_component_cosmo
+   use moist_model_component_pv, only: solvation_model_component_pv, new_component_pv
    use moist_model_general, only: general_solvation_model, new_general_model
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: radius_type, new_radii, custom_radius_type
@@ -794,20 +797,20 @@ contains
       allocate (component)
       call new_context(component%ctx, verbosity=0, debug=.false.)
       if (use_cosmo) then
-         allocate (cosmo :: item)
+         allocate (solvation_model_component_cosmo :: item)
          select type (pcm => item)
-         type is (cosmo)
-            call new_cosmo(pcm, component%ctx, real(epsilon, wp), &
-                           solver=int(solver), phi_source=potential_source%external, &
-                           error=component_error)
+         type is (solvation_model_component_cosmo)
+            call new_component_cosmo(pcm, component%ctx, real(epsilon, wp), &
+                                     solver=int(solver), phi_source=potential_source%external, &
+                                     error=component_error)
          end select
       else
-         allocate (cpcm :: item)
+         allocate (solvation_model_component_cpcm :: item)
          select type (pcm => item)
-         type is (cpcm)
-            call new_cpcm(pcm, component%ctx, real(epsilon, wp), &
-                          solver=int(solver), phi_source=potential_source%external, &
-                          error=component_error)
+         type is (solvation_model_component_cpcm)
+            call new_component_cpcm(pcm, component%ctx, real(epsilon, wp), &
+                                    solver=int(solver), phi_source=potential_source%external, &
+                                    error=component_error)
          end select
       end if
       if (allocated(component_error)) then
@@ -861,7 +864,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete pressure-volume component
-      type(pv) :: item
+      type(solvation_model_component_pv) :: item
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -869,7 +872,7 @@ contains
 
       allocate (component)
       call new_context(component%ctx, verbosity=0, debug=.false.)
-      call new_pv(item, real(pressure, wp))
+      call new_component_pv(item, real(pressure, wp))
       item%ctx => component%ctx
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)
@@ -895,7 +898,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete GOSTSHYP component
-      type(gostshyp) :: item
+      type(solvation_model_component_gostshyp) :: item
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -903,7 +906,7 @@ contains
 
       allocate (component)
       call new_context(component%ctx, verbosity=0, debug=.false.)
-      call new_gostshyp(item, real(pressure, wp))
+      call new_component_gostshyp(item, real(pressure, wp))
       item%ctx => component%ctx
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)

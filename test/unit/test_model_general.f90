@@ -12,8 +12,8 @@ module test_model_general
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_type, only: coupling_type, potential_type
    use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
-   use moist_model_components, only: pv, new_pv
+   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
+   use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use moist_model_general, only: general_solvation_model, new_general_model
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_radii, only: static_radius_type
@@ -54,7 +54,7 @@ contains
 
       type(structure_type) :: mol
       type(general_solvation_model) :: model
-      type(cpcm) :: pcm_component, pcm_reference
+      type(solvation_model_component_cpcm) :: pcm_component, pcm_reference
       type(cavity_type_iswig) :: cavity
       type(static_radius_type) :: radius_model
       type(coupling_type) :: coupling
@@ -93,7 +93,7 @@ contains
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
 
-      call new_cpcm(pcm_component, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_component, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "General-model CPCM construction failed: "//err%message)
          return
@@ -118,7 +118,7 @@ contains
       end if
 
       ! Procedural reference on an independently updated cavity.
-      call new_cpcm(pcm_reference, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_reference, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "Reference CPCM construction failed: "//err%message)
          return
@@ -186,7 +186,7 @@ contains
 
       type(structure_type) :: mol
       type(general_solvation_model) :: model_pcm, model_pv, model_zero
-      type(cpcm) :: pcm_component
+      type(solvation_model_component_cpcm) :: pcm_component
       type(cavity_type_iswig) :: cavity
       type(static_radius_type) :: radius_model
       type(coupling_type) :: coupling
@@ -214,7 +214,7 @@ contains
          return
       end if
 
-      call new_cpcm(pcm_component, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_component, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -351,7 +351,7 @@ contains
       type(moist_context_type), intent(in), target :: ctx
 
       !> CPCM component template
-      type(cpcm), intent(in) :: pcm_component
+      type(solvation_model_component_cpcm), intent(in) :: pcm_component
 
       !> Whether to append a PV component
       logical, intent(in) :: with_pv
@@ -365,14 +365,14 @@ contains
       !> Error handling
       type(moist_error_type), allocatable, intent(out) :: error
 
-      type(pv) :: pv_component
+      type(solvation_model_component_pv) :: pv_component
 
       call new_general_model(model, cavity, ctx, error)
       if (allocated(error)) return
       call model%add_component(pcm_component, error)
       if (allocated(error)) return
       if (with_pv) then
-         call new_pv(pv_component, pressure)
+         call new_component_pv(pv_component, pressure)
          call model%add_component(pv_component, error)
          if (allocated(error)) return
       end if

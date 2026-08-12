@@ -553,7 +553,7 @@ contains
    !> For most components the surface adjoint of the energy is one object, so
    !> the reverse-mode nuclear gradient can reuse `get_surface_weights`
    !> verbatim. A component whose gradient legitimately consumes a different
-   !> set of host channels overrides this (see `pcm_base`).
+   !> set of host channels overrides this (see `solvation_model_component_pcm`).
    !>
    !> @param[inout] self     Solvation component
    !> @param[in]    coupling Wavefunction data

@@ -8,10 +8,10 @@ module moist_model_component_pv
    implicit none (type, external)
    private
 
-   public :: pv, new_pv
+   public :: solvation_model_component_pv, new_component_pv
 
    !> Pressure-volume energy contribution `pressure * cavity_volume`
-   type, extends(solvation_model_component) :: pv
+   type, extends(solvation_model_component) :: solvation_model_component_pv
       !> Pressure multiplying the cavity volume in atomic units
       real(wp) :: pressure = 0.0_wp
    contains
@@ -20,7 +20,7 @@ module moist_model_component_pv
       procedure :: get_potential => pv_get_potential
       procedure :: get_gradient => pv_get_gradient
       procedure :: get_surface_weights => pv_get_surface_weights
-   end type pv
+   end type solvation_model_component_pv
 
 contains
 
@@ -28,16 +28,16 @@ contains
    !>
    !> @param[out] self     Component instance
    !> @param[in]  pressure Pressure multiplying the cavity volume
-   subroutine new_pv(self, pressure)
+   subroutine new_component_pv(self, pressure)
       !> Component instance
-      type(pv), intent(out) :: self
+      type(solvation_model_component_pv), intent(out) :: self
       !> Pressure multiplying the cavity volume
       real(wp), intent(in) :: pressure
 
       self%name = "PV"
       self%pressure = pressure
 
-   end subroutine new_pv
+   end subroutine new_component_pv
 
    !> Bind the current molecular structure
    !>
@@ -47,7 +47,7 @@ contains
    !> @param[out]   error  Error handling
    subroutine pv_update(self, mol, cavity, error)
       !> Component instance
-      class(pv), intent(inout) :: self
+      class(solvation_model_component_pv), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Live model cavity
@@ -71,7 +71,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine pv_get_energy(self, coupling, cavity, energy, error)
       !> Component instance
-      class(pv), intent(inout) :: self
+      class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -98,7 +98,7 @@ contains
    !> @param[out]   error     Error handling
    subroutine pv_get_potential(self, coupling, cavity, potential, error)
       !> Component instance
-      class(pv), intent(inout) :: self
+      class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -124,7 +124,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine pv_get_surface_weights(self, coupling, cavity, acc, error)
       !> Component instance
-      class(pv), intent(inout) :: self
+      class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
@@ -171,7 +171,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine pv_get_gradient(self, coupling, cavity, gradient, error)
       !> Component instance
-      class(pv), intent(inout) :: self
+      class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity

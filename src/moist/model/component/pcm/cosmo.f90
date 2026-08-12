@@ -7,28 +7,28 @@ module moist_model_component_pcm_cosmo
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_type, only: cavity_type, coupling_type
-   use moist_model_component_pcm_type, only: pcm_base, solver_type, &
+   use moist_model_component_pcm_type, only: solvation_model_component_pcm, solver_type, &
       & potential_source
    implicit none (type, external)
    private
 
-   public :: cosmo
-   public :: new_cosmo
+   public :: solvation_model_component_cosmo
+   public :: new_component_cosmo
 
    !> COSMO (Conductor-like Screening Model) variant
    !> Uses f epsilon = ( epsilon -1)/( epsilon +0.5) scaling
-   type, extends(pcm_base) :: cosmo
+   type, extends(solvation_model_component_pcm) :: solvation_model_component_cosmo
 
-   end type cosmo
+   end type solvation_model_component_cosmo
 
 contains
 
    !> Constructor for COSMO variant
    !> Sets f epsilon = ( epsilon -1)/( epsilon +0.5) and configures solver and potential source.
-   subroutine new_cosmo(self, ctx, epsilon, solver, phi_source, &
-                        & external_matrix, error)
+   subroutine new_component_cosmo(self, ctx, epsilon, solver, phi_source, &
+                                  & external_matrix, error)
       !> COSMO instance to initialize
-      type(cosmo), intent(out) :: self
+      type(solvation_model_component_cosmo), intent(out) :: self
       !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
       type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
@@ -49,7 +49,7 @@ contains
       ! negative, so the model is undefined there.
       if (epsilon < 1.0_wp) then
          call fatal_error(error, &
-            & "[new_cosmo] Dielectric constant must be >= 1")
+            & "[new_component_cosmo] Dielectric constant must be >= 1")
          return
       end if
       self%epsilon = epsilon
@@ -77,6 +77,6 @@ contains
       ! Set component name
       self%name = "COSMO"
 
-   end subroutine new_cosmo
+   end subroutine new_component_cosmo
 
 end module moist_model_component_pcm_cosmo

@@ -16,7 +16,7 @@ module moist_model_component_pcm_type
    implicit none (type, external)
    private
 
-   public :: pcm_base
+   public :: solvation_model_component_pcm
    public :: pcm_solver_type, pcm_potential_source
    public :: solver_type, potential_source
 
@@ -48,7 +48,7 @@ module moist_model_component_pcm_type
    !> Provides common infrastructure for PCM-family methods (CPCM, COSMO, IEF-PCM).
    !> Matrix assembly uses the generic Gaussian surface kernel (assemble_pcm_amat).
    !> Wraps general moist solvers for the linear system solution.
-   type, abstract, extends(solvation_model_component) :: pcm_base
+   type, abstract, extends(solvation_model_component) :: solvation_model_component_pcm
 
       !> Dielectric constant of the solvent
       real(wp) :: epsilon
@@ -89,40 +89,40 @@ module moist_model_component_pcm_type
    contains
 
       !> Update PCM component: assembles matrix and prepares for charge solution
-      procedure :: update => pcm_base_update
+      procedure :: update => pcm_component_update
 
       !> Compute PCM solvation energy
-      procedure :: get_energy => pcm_base_get_energy
+      procedure :: get_energy => pcm_component_get_energy
 
       !> Compute PCM reaction potential
-      procedure :: get_potential => pcm_base_get_potential
+      procedure :: get_potential => pcm_component_get_potential
 
       !> Compute the direct electrostatic trace adjoint (the surface charges)
-      procedure :: get_trace_potential => pcm_base_get_trace_potential
+      procedure :: get_trace_potential => pcm_component_get_trace_potential
 
       !> Compute PCM gradient with respect to nuclear coordinates
-      procedure :: get_gradient => pcm_base_get_gradient
+      procedure :: get_gradient => pcm_component_get_gradient
 
       !> Accumulate the PCM cavity surface adjoint weights
-      procedure :: get_surface_weights => pcm_base_get_surface_weights
+      procedure :: get_surface_weights => pcm_component_get_surface_weights
 
       !> Accumulate the surface adjoints the reverse-mode gradient consumes
-      procedure :: get_gradient_surface_weights => pcm_base_get_gradient_surface_weights
+      procedure :: get_gradient_surface_weights => pcm_component_get_gradient_surface_weights
 
       !> Nuclear gradient contributions that bypass the cavity surface
-      procedure :: get_direct_gradient => pcm_base_get_direct_gradient
+      procedure :: get_direct_gradient => pcm_component_get_direct_gradient
 
       !> Resolve the electronic field and moving point charges
-      procedure :: electrostatic_sources => pcm_base_electrostatic_sources
+      procedure :: electrostatic_sources => pcm_component_electrostatic_sources
 
       !> Contract the current PCM charges to Gaussian-surface weights
-      procedure :: amat_surface_weights => pcm_base_amat_surface_weights
+      procedure :: amat_surface_weights => pcm_component_amat_surface_weights
 
       !> Contract the current PCM charges to the A-matrix nuclear gradient
-      procedure :: amat_nuclear_gradient => pcm_base_amat_nuclear_gradient
+      procedure :: amat_nuclear_gradient => pcm_component_amat_nuclear_gradient
 
       !> Fold the host's direct trace-geometry weights into the accumulator
-      procedure :: get_host_surface_weights => pcm_base_get_host_surface_weights
+      procedure :: get_host_surface_weights => pcm_component_get_host_surface_weights
 
       !> Solve for the surface charges unless they are already current
       procedure :: ensure_charges => pcm_ensure_charges
@@ -136,16 +136,16 @@ module moist_model_component_pcm_type
       !> Set external electrostatic potential at cavity grid points
       procedure :: input_potential => pcm_input_potential
 
-   end type pcm_base
+   end type solvation_model_component_pcm
 
 contains
 
    !> Update PCM base component
    !> Stores references to mol/cavity and assembles the PCM matrix
    !> (unless using an external matrix).
-   subroutine pcm_base_update(self, mol, cavity, error)
+   subroutine pcm_component_update(self, mol, cavity, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Molecular structure data
       type(structure_type), intent(in) :: mol
       !> Cavity type data
@@ -192,7 +192,7 @@ contains
 
          if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f)) then
             call fatal_error(error, &
-               & "[pcm_base_update] Cavity does not provide a Gaussian PCM surface")
+               & "[pcm_component_update] Cavity does not provide a Gaussian PCM surface")
             call self%ctx%timer%unwind(d0)
             return
          end if
@@ -208,13 +208,13 @@ contains
       else
          if (.not. allocated(self%amat)) then
             call fatal_error(error, &
-               & "[pcm_base_update] External PCM matrix requested but not allocated")
+               & "[pcm_component_update] External PCM matrix requested but not allocated")
             call self%ctx%timer%unwind(d0)
             return
          end if
          if (size(self%amat, 1) /= ngrid .or. size(self%amat, 2) /= ngrid) then
             call fatal_error(error, &
-               & "[pcm_base_update] External PCM matrix dimension mismatch")
+               & "[pcm_component_update] External PCM matrix dimension mismatch")
             call self%ctx%timer%unwind(d0)
             return
          end if
@@ -227,7 +227,7 @@ contains
 
       call self%ctx%timer%stop("PCM setup")
 
-   end subroutine pcm_base_update
+   end subroutine pcm_component_update
 
    !> Solve for the induced surface charges unless they are already current
    !>
@@ -237,7 +237,7 @@ contains
    !> @param[out]   error    Error handling
    subroutine pcm_ensure_charges(self, coupling, cavity, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Wavefunction data (used only when no external potential is set)
       class(coupling_type), intent(in) :: coupling
       !> Live cavity used to assemble the current matrix
@@ -329,9 +329,9 @@ contains
    !> E_solv = 0.5 * dot(q, phi)
    !> If an external potential was provided via input_potential, uses that;
    !> otherwise computes the potential internally from atomic point charges.
-   subroutine pcm_base_get_energy(self, coupling, cavity, energy, error)
+   subroutine pcm_component_get_energy(self, coupling, cavity, energy, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Wavefunction data (used only when no external potential is set)
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
@@ -362,7 +362,7 @@ contains
 
       call self%ctx%timer%stop("PCM energy")
 
-   end subroutine pcm_base_get_energy
+   end subroutine pcm_component_get_energy
 
    !> Compute the PCM reaction potential channel
    !>
@@ -371,9 +371,9 @@ contains
    !> which is returned in `potential%w_elstat_umol`; the host contracts it with
    !> its own potential integrals to build the Fock contribution
    !> F_uv += sum_i q_i V_uv(r_i)
-   subroutine pcm_base_get_potential(self, coupling, cavity, potential, error)
+   subroutine pcm_component_get_potential(self, coupling, cavity, potential, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
@@ -385,7 +385,7 @@ contains
 
       call self%get_trace_potential(coupling, cavity, potential, error)
 
-   end subroutine pcm_base_get_potential
+   end subroutine pcm_component_get_potential
 
    !> Accumulate the direct electrostatic trace adjoint
    !>
@@ -394,9 +394,9 @@ contains
    !> @param[inout] cavity    Live model cavity
    !> @param[inout] potential Direct trace-potential accumulator
    !> @param[out]   error     Error handling
-   subroutine pcm_base_get_trace_potential(self, coupling, cavity, potential, error)
+   subroutine pcm_component_get_trace_potential(self, coupling, cavity, potential, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
@@ -423,7 +423,7 @@ contains
 
       potential%w_elstat_umol(:) = potential%w_elstat_umol(:) + self%q(:)
 
-   end subroutine pcm_base_get_trace_potential
+   end subroutine pcm_component_get_trace_potential
 
    !> Compute the PCM energy gradient with respect to nuclear coordinates
    !>
@@ -433,16 +433,16 @@ contains
    !>    dE/dR_A = q^T dphi/dR_A
    !>              + 1/(2 f(eps)) q^T (dA/dR_A) q.
    !>
-   !> The A-matrix contribution is obtained from [[pcm_base_amat_nuclear_gradient]]
+   !> The A-matrix contribution is obtained from [[pcm_component_amat_nuclear_gradient]]
    !>
    !> @param[inout] self     PCM component instance
    !> @param[in]    coupling Wavefunction and electrostatic coupling data
    !> @param[inout] cavity   Live cavity owned by the orchestrating model
    !> @param[inout] gradient Solvation gradient accumulator
    !> @param[out]   error    Error handling
-   subroutine pcm_base_get_gradient(self, coupling, cavity, gradient, error)
+   subroutine pcm_component_get_gradient(self, coupling, cavity, gradient, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
@@ -466,12 +466,12 @@ contains
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid
       if (size(gradient, 1) /= 3 .or. size(gradient, 2) /= nat) then
-         call fatal_error(error, "[pcm_base_get_gradient] gradient shape mismatch")
+         call fatal_error(error, "[pcm_component_get_gradient] gradient shape mismatch")
          return
       end if
       if (cavity%nsph /= nat) then
          call fatal_error(error, &
-            & "[pcm_base_get_gradient] cavity sphere count does not match the solute")
+            & "[pcm_component_get_gradient] cavity sphere count does not match the solute")
          return
       end if
 
@@ -505,7 +505,7 @@ contains
       if (allocated(coupling%elstat_w_xi)) then
          if (size(coupling%elstat_w_xi) /= ngrid) then
             call fatal_error(error, &
-               & "[pcm_base_get_gradient] host Gaussian-width weights have wrong size")
+               & "[pcm_component_get_gradient] host Gaussian-width weights have wrong size")
             return
          end if
          do igrid = 1, ngrid
@@ -517,7 +517,7 @@ contains
       gradient = gradient + 0.5_wp*grad_amat/self%feps + &
          & grad_electrostatic + grad_width
 
-   end subroutine pcm_base_get_gradient
+   end subroutine pcm_component_get_gradient
 
    !> Resolve the moving point charges and the electronic field at the surface
    !>
@@ -531,9 +531,9 @@ contains
    !> @param[out]   qefield       Charge-weighted electronic field (3, ngrid)
    !> @param[out]   source_charge Moving point charges (nat)
    !> @param[out]   error         Error handling
-   subroutine pcm_base_electrostatic_sources(self, coupling, ngrid, qefield, source_charge, error)
+   subroutine pcm_component_electrostatic_sources(self, coupling, ngrid, qefield, source_charge, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
       class(coupling_type), intent(in) :: coupling
       !> Cavity grid size
@@ -556,12 +556,12 @@ contains
       case (potential_source%charges)
          if (.not. allocated(coupling%qat)) then
             call fatal_error(error, &
-               & "[pcm_base_get_gradient] internal potential requires atomic charges")
+               & "[pcm_component_get_gradient] internal potential requires atomic charges")
             return
          end if
          if (size(coupling%qat, 1) /= nat .or. size(coupling%qat, 2) < 1) then
             call fatal_error(error, &
-               & "[pcm_base_get_gradient] atomic charge shape mismatch")
+               & "[pcm_component_get_gradient] atomic charge shape mismatch")
             return
          end if
          do iatom = 1, nat
@@ -577,23 +577,23 @@ contains
             if (size(coupling%elstat_qefield, 1) /= 3 .or. &
                 size(coupling%elstat_qefield, 2) /= ngrid) then
                call fatal_error(error, &
-                  & "[pcm_base_get_gradient] electronic field shape mismatch")
+                  & "[pcm_component_get_gradient] electronic field shape mismatch")
                return
             end if
             qefield = coupling%elstat_qefield
          end if
 
       case default
-         call fatal_error(error, "[pcm_base_get_gradient] unknown potential source")
+         call fatal_error(error, "[pcm_component_get_gradient] unknown potential source")
          return
       end select
 
-   end subroutine pcm_base_electrostatic_sources
+   end subroutine pcm_component_electrostatic_sources
 
    !> Surface adjoints the PCM *nuclear gradient* consumes
    !>
    !> Deliberately not the same accumulator the potential builds. The forward
-   !> gradient in [[pcm_base_get_gradient]] draws its surface-position term
+   !> gradient in [[pcm_component_get_gradient]] draws its surface-position term
    !> from `coupling%elstat_qefield` plus the internally computed nuclear
    !> field, and its width term from `coupling%elstat_w_xi`; it never reads
    !> `elstat_w_xyz`, `elstat_w_f` or `elstat_w_n`, which the potential path
@@ -609,9 +609,9 @@ contains
    !> @param[in]    cavity   Cavity the PCM matrix was assembled on
    !> @param[inout] acc      Accumulated cavity surface adjoints
    !> @param[out]   error    Error handling
-   subroutine pcm_base_get_gradient_surface_weights(self, coupling, cavity, acc, error)
+   subroutine pcm_component_get_gradient_surface_weights(self, coupling, cavity, acc, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
       class(coupling_type), intent(in) :: coupling
       !> Cavity the PCM matrix was assembled on
@@ -643,7 +643,7 @@ contains
       if (allocated(error)) return
 
       ! Electrostatic channel: the surface-position adjoint only; the direct
-      ! nuclear term is delivered by [[pcm_base_get_direct_gradient]]
+      ! nuclear term is delivered by [[pcm_component_get_direct_gradient]]
       call self%electrostatic_sources(coupling, ngrid, qefield, source_charge, error)
       if (allocated(error)) return
       allocate (w_xyz_elstat(3, ngrid), grad_direct(3, self%mol_solu%nat))
@@ -657,14 +657,14 @@ contains
       if (allocated(coupling%elstat_w_xi)) then
          if (size(coupling%elstat_w_xi) /= ngrid) then
             call fatal_error(error, &
-               & "[pcm_base_get_gradient_surface_weights] host Gaussian-width "// &
+               & "[pcm_component_get_gradient_surface_weights] host Gaussian-width "// &
                & "weights have wrong size")
             return
          end if
          call acc%add_surface_weights(error, w_xi=coupling%elstat_w_xi)
       end if
 
-   end subroutine pcm_base_get_gradient_surface_weights
+   end subroutine pcm_component_get_gradient_surface_weights
 
    !> Nuclear gradient of the PCM electrostatics at fixed surface
    !>
@@ -677,9 +677,9 @@ contains
    !> @param[inout] cavity   Live cavity
    !> @param[inout] gradient Nuclear-gradient accumulator
    !> @param[out]   error    Error handling
-   subroutine pcm_base_get_direct_gradient(self, coupling, cavity, gradient, error)
+   subroutine pcm_component_get_direct_gradient(self, coupling, cavity, gradient, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity
@@ -699,7 +699,7 @@ contains
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid
       if (size(gradient, 1) /= 3 .or. size(gradient, 2) /= nat) then
-         call fatal_error(error, "[pcm_base_get_direct_gradient] gradient shape mismatch")
+         call fatal_error(error, "[pcm_component_get_direct_gradient] gradient shape mismatch")
          return
       end if
 
@@ -717,7 +717,7 @@ contains
 
       gradient = gradient + grad_direct
 
-   end subroutine pcm_base_get_direct_gradient
+   end subroutine pcm_component_get_direct_gradient
 
    !> Contract the current PCM charges to Gaussian-surface A-matrix weights
    !>
@@ -731,9 +731,9 @@ contains
    !> @param[out] w_f     Switching-factor weights
    !> @param[out] w_xyz   Grid point-position weights
    !> @param[out] error   Error handling
-   subroutine pcm_base_amat_surface_weights(self, cavity, w_xi, w_f, w_xyz, error)
+   subroutine pcm_component_amat_surface_weights(self, cavity, w_xi, w_f, w_xyz, error)
       !> PCM component with current surface charges
-      class(pcm_base), intent(in) :: self
+      class(solvation_model_component_pcm), intent(in) :: self
       !> Live cavity carrying the Gaussian PCM surface
       class(cavity_type), intent(in) :: cavity
       !> Gaussian-width weights
@@ -746,13 +746,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (.not. self%charges_valid .or. .not. allocated(self%q)) then
-         call fatal_error(error, "[pcm_base_amat_surface_weights] "// &
+         call fatal_error(error, "[pcm_component_amat_surface_weights] "// &
             & "surface charges are unavailable - call ensure_charges first")
          return
       end if
       if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) .or. &
           .not. allocated(cavity%xyz)) then
-         call fatal_error(error, "[pcm_base_amat_surface_weights] "// &
+         call fatal_error(error, "[pcm_component_amat_surface_weights] "// &
             & "cavity does not provide a Gaussian PCM surface")
          return
       end if
@@ -760,7 +760,7 @@ contains
       call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, self%q, &
          & self%q, w_xi, w_f, w_xyz, error)
 
-   end subroutine pcm_base_amat_surface_weights
+   end subroutine pcm_component_amat_surface_weights
 
    !> Contract the current PCM charges to the A-matrix nuclear gradient.
    !>
@@ -772,9 +772,9 @@ contains
    !> @param[in]  cavity   Live cavity carrying Gaussian-surface derivatives
    !> @param[out] grad_rA  A-matrix nuclear gradient
    !> @param[out] error    Error handling
-   subroutine pcm_base_amat_nuclear_gradient(self, cavity, grad_rA, error)
+   subroutine pcm_component_amat_nuclear_gradient(self, cavity, grad_rA, error)
       !> PCM component with current surface charges
-      class(pcm_base), intent(in) :: self
+      class(solvation_model_component_pcm), intent(in) :: self
       !> Live cavity carrying Gaussian-surface derivatives
       class(cavity_type), intent(in) :: cavity
       !> A-matrix nuclear gradient
@@ -791,7 +791,7 @@ contains
 
       if (.not. allocated(cavity%xi1_rA) .or. .not. allocated(cavity%f1_rA) .or. &
           .not. allocated(cavity%xyz1_rA)) then
-         call fatal_error(error, "[pcm_base_amat_nuclear_gradient] "// &
+         call fatal_error(error, "[pcm_component_amat_nuclear_gradient] "// &
             & "Gaussian PCM derivatives are unavailable - compute the cavity gradient first")
          return
       end if
@@ -803,7 +803,7 @@ contains
       call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, &
          & cavity%xyz1_rA, w_xi, w_f, w_xyz, grad_rA, error)
 
-   end subroutine pcm_base_amat_nuclear_gradient
+   end subroutine pcm_component_amat_nuclear_gradient
 
    !> Accumulate the PCM cavity surface adjoint weights
    !>
@@ -821,9 +821,9 @@ contains
    !> @param[in]    cavity   Cavity the PCM matrix was assembled on
    !> @param[inout] acc      Accumulated cavity surface adjoints
    !> @param[out]   error    Error handling
-   subroutine pcm_base_get_surface_weights(self, coupling, cavity, acc, error)
+   subroutine pcm_component_get_surface_weights(self, coupling, cavity, acc, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
       class(coupling_type), intent(in) :: coupling
       !> Cavity the PCM matrix was assembled on
@@ -845,13 +845,13 @@ contains
 
       ngrid = cavity%ngrid
       if (size(self%q) /= ngrid) then
-         call fatal_error(error, "[pcm_base_get_surface_weights] "// &
+         call fatal_error(error, "[pcm_component_get_surface_weights] "// &
             & "surface charges do not match the cavity grid")
          return
       end if
       if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f)) then
          call fatal_error(error, &
-            & "[pcm_base_get_surface_weights] Cavity does not provide a Gaussian PCM surface")
+            & "[pcm_component_get_surface_weights] Cavity does not provide a Gaussian PCM surface")
          return
       end if
 
@@ -868,12 +868,12 @@ contains
       if (allocated(error)) return
       call self%get_host_surface_weights(coupling, acc, ngrid, error)
 
-   end subroutine pcm_base_get_surface_weights
+   end subroutine pcm_component_get_surface_weights
 
    !> Fold the host's direct trace-geometry weights into the surface accumulator
    !>
    !> The PCM energy depends on the cavity twice: through the matrix A the
-   !> component builds itself (handled in [[pcm_base_get_surface_weights]]) and
+   !> component builds itself (handled in [[pcm_component_get_surface_weights]]) and
    !> through the potential trace phi the *host* evaluates at the grid points
    !>
    !> Host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%elstat_w_*`,
@@ -887,9 +887,9 @@ contains
    !> @param[inout] acc      Accumulated cavity surface adjoints
    !> @param[in]    ngrid    Expected electrostatic grid size
    !> @param[out]   error    Error handling
-   subroutine pcm_base_get_host_surface_weights(self, coupling, acc, ngrid, error)
+   subroutine pcm_component_get_host_surface_weights(self, coupling, acc, ngrid, error)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
       class(coupling_type), intent(in) :: coupling
       !> Accumulated cavity surface adjoints
@@ -941,13 +941,13 @@ contains
             & w_xyz=w_xyz, w_n=w_n)
       end block
 
-   end subroutine pcm_base_get_host_surface_weights
+   end subroutine pcm_component_get_host_surface_weights
 
    !> Set external matrix (bypasses internal assembly)
    !> Allows user to provide a pre-computed PCM matrix.
    subroutine pcm_set_external_matrix(self, amat)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> External matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
 
@@ -964,7 +964,7 @@ contains
       use moist_model_component_pcm_solvers, only: solve_pcm_lu, &
          & solve_pcm_cholesky, solve_pcm_iterative, solve_pcm_inversion
       !> PCM component instance
-      class(pcm_base), intent(in) :: self
+      class(solvation_model_component_pcm), intent(in) :: self
       !> System matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
       !> Right-hand side (ngrid)
@@ -1014,7 +1014,7 @@ contains
    !> @param[in] phi Electrostatic potential at grid points (ngrid)
    subroutine pcm_input_potential(self, phi)
       !> PCM component instance
-      class(pcm_base), intent(inout) :: self
+      class(solvation_model_component_pcm), intent(inout) :: self
       !> Electrostatic potential at cavity grid points (ngrid)
       real(wp), intent(in) :: phi(:)
 

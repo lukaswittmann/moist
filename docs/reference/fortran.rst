@@ -232,24 +232,24 @@ Because some solvation model components couple with the QM density, some quantit
 CPCM
 ~~~~
 
-``new_cpcm`` constructs the conductor-like PCM component with
+``new_component_cpcm`` constructs the conductor-like PCM component with
 :math:`f(\varepsilon)=\dfrac{\varepsilon-1}{\varepsilon}`:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : cpcm, new_cpcm, solver_type, &
-      & potential_source
+   use moist_model_components, only : solvation_model_component_cpcm, &
+      & new_component_cpcm, solver_type, potential_source
 
-   type(cpcm) :: electrostatic
+   type(solvation_model_component_cpcm) :: cpcm
 
-   call new_cpcm(electrostatic, ctx, epsilon=80.0_wp, &
+   call new_component_cpcm(cpcm, ctx, epsilon=80.0_wp, &
       & solver=solver_type%cholesky, &
       & phi_source=potential_source%external, error=error)
    if (allocated(error)) error stop error%message
 
 The default ``potential_source%charges`` computes the molecular potential from
 ``coupling%qat``.  A QM host should normally select
-``potential_source%external``, evaluate the molecular electrostatic potential
+``potential_source%external``, evaluate the molecular cpcm potential
 on the current cavity grid, and return it through ``coupling%elstat_umol``.
 
 Available solvers are ``inversion``, ``lu``, ``cholesky`` (the default), and ``iterative``.
@@ -262,11 +262,12 @@ cavity:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : pv, new_pv
+   use moist_model_components, only : solvation_model_component_pv, &
+      & new_component_pv
 
-   type(pv) :: pressure_volume
+   type(solvation_model_component_pv) :: pv
 
-   call new_pv(pressure_volume, pressure=1.0_wp*gpa_to_au)
+   call new_component_pv(pv, pressure=1.0_wp*gpa_to_au)
 
 PV needs no host coupling data.  With ρ-DROP its surface response is returned
 through the level set potential channels, making the density-dependent
@@ -280,11 +281,12 @@ to reproduce the requested pressure:
 
 .. code-block:: fortran
 
-   use moist_model_components, only : gostshyp, new_gostshyp
+   use moist_model_components, only : solvation_model_component_gostshyp, &
+      & new_component_gostshyp
 
-   type(gostshyp) :: hydrostatic
+   type(solvation_model_component_gostshyp) :: gostshyp
 
-   call new_gostshyp(hydrostatic, pressure=50.0_wp*gpa_to_au)
+   call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
 After every cavity update, the host must rebuild all four Gaussian density
 moments in ``coupling_type`` for the new grid.  ``get_potential`` returns the
@@ -353,8 +355,10 @@ This ``general_solvation_model`` owns the cavity and all added components.
    use moist_cavity_drop, only : cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only : &
       & moist_cavity_drop_lsf_svdw_type
-   use moist_model_components, only : cpcm, new_cpcm, pv, new_pv, &
-      & gostshyp, new_gostshyp, potential_source
+   use moist_model_components, only : solvation_model_component_cpcm, &
+      & new_component_cpcm, solvation_model_component_pv, new_component_pv, &
+      & solvation_model_component_gostshyp, new_component_gostshyp, &
+      & potential_source
    use moist_model_general, only : general_solvation_model, new_general_model
    
    type(error_type), allocatable :: error
@@ -365,9 +369,9 @@ This ``general_solvation_model`` owns the cavity and all added components.
    type(moist_cavity_drop_lsf_svdw_type) :: svdw
    type(cavity_type_drop) :: cavity
    ! Model components
-   type(cpcm) :: electrostatic
-   type(pv) :: pressure_volume
-   type(gostshyp) :: hydrostatic
+   type(solvation_model_component_cpcm) :: cpcm
+   type(solvation_model_component_pv) :: pv
+   type(solvation_model_component_gostshyp) :: gostshyp
    ! Model
    type(general_solvation_model) :: model
 
@@ -384,20 +388,20 @@ This ``general_solvation_model`` owns the cavity and all added components.
    if (allocated(error)) error stop error%message
 
    ! Construct all model components
-   call new_cpcm(electrostatic, ctx, epsilon=80.0_wp, &
+   call new_component_cpcm(cpcm, ctx, epsilon=80.0_wp, &
       & phi_source=potential_source%external, error=error)
    if (allocated(error)) error stop error%message
-   call new_pv(pressure_volume, pressure=10.0_wp*gpa_to_au)
-   call new_gostshyp(hydrostatic, pressure=50.0_wp*gpa_to_au)
+   call new_component_pv(pv, pressure=10.0_wp*gpa_to_au)
+   call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
    ! Construct model and add all components
    call new_general_model(model, cavity, ctx, error)
    if (allocated(error)) error stop error%message
-   call model%add_component(electrostatic, error)
+   call model%add_component(cpcm, error)
    if (allocated(error)) error stop error%message
-   call model%add_component(pressure_volume, error)
+   call model%add_component(pv, error)
    if (allocated(error)) error stop error%message
-   call model%add_component(hydrostatic, error)
+   call model%add_component(gostshyp, error)
    if (allocated(error)) error stop error%message
 
 The model usage is similar to the components:

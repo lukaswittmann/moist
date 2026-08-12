@@ -8,8 +8,8 @@ module test_model_component_pcm_cpcm
    use mstore, only: get_structure
    use moist_type, only: coupling_type
    use moist_model_component_pcm_type, only: solver_type, potential_source
-   use moist_model_component_pcm_cpcm, only: cpcm, new_cpcm
-   use moist_model_component_pcm_cosmo, only: cosmo, new_cosmo
+   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
+   use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, new_component_cosmo
    use moist_model_component_pcm_solvers, only: solve_pcm_lu
    use moist_model_component_pcm_amat, only: assemble_pcm_amat
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -84,7 +84,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       class(radius_type), allocatable :: radius_model
@@ -129,7 +129,7 @@ contains
             return
          end if
 
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -203,7 +203,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -253,7 +253,7 @@ contains
 
       ! Test all 4 solvers
       do i = 1, 4
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solvers(i), error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solvers(i), error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
@@ -306,7 +306,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -337,7 +337,7 @@ contains
       call make_charge_coupling(qat_vals, coupling)
 
       do i = 1, 4
-         call new_cpcm(pcm_model, ctx, 1.0_wp, solver=solvers(i), error=err)
+         call new_component_cpcm(pcm_model, ctx, 1.0_wp, solver=solvers(i), error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed ("//trim(solver_names(i))//")")
             return
@@ -375,7 +375,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_internal, pcm_external
+      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -398,7 +398,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_internal, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_internal, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "Internal CPCM initialization failed: "//err%message)
          return
@@ -420,7 +420,7 @@ contains
       allocate (phi_ref, source=pcm_internal%phi)
       allocate (q_ref, source=pcm_internal%q)
 
-      call new_cpcm(pcm_external, ctx, 78.4_wp, solver=solver_type%cholesky, &
+      call new_component_cpcm(pcm_external, ctx, 78.4_wp, solver=solver_type%cholesky, &
          & phi_source=potential_source%external, error=err)
       if (allocated(err)) then
          call test_failed(error, "External-potential CPCM initialization failed: "//err%message)
@@ -460,7 +460,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -482,7 +482,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%cholesky, &
+      call new_component_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%cholesky, &
          & phi_source=potential_source%external, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
@@ -511,7 +511,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_internal, pcm_external
+      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -534,7 +534,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_internal, ctx, 78.4_wp, solver=solver_type%lu, error=err)
+      call new_component_cpcm(pcm_internal, ctx, 78.4_wp, solver=solver_type%lu, error=err)
       if (allocated(err)) then
          call test_failed(error, "Internal CPCM initialization failed: "//err%message)
          return
@@ -556,7 +556,7 @@ contains
       allocate (amat_ref, source=pcm_internal%amat)
       allocate (q_ref, source=pcm_internal%q)
 
-      call new_cpcm(pcm_external, ctx, 78.4_wp, solver=solver_type%lu, &
+      call new_component_cpcm(pcm_external, ctx, 78.4_wp, solver=solver_type%lu, &
          & external_matrix=amat_ref, error=err)
       if (allocated(err)) then
          call test_failed(error, "External-matrix CPCM initialization failed: "//err%message)
@@ -595,7 +595,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_scalar, pcm_spin
+      type(solvation_model_component_cpcm) :: pcm_scalar, pcm_spin
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling_scalar, coupling_spin
       type(static_radius_type) :: radius_model
@@ -621,7 +621,7 @@ contains
       coupling_spin%qat(:, 1) = 0.25_wp*qat_vals
       coupling_spin%qat(:, 2) = 0.75_wp*qat_vals
 
-      call new_cpcm(pcm_scalar, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_scalar, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "Scalar-charge CPCM initialization failed: "//err%message)
          return
@@ -638,7 +638,7 @@ contains
          return
       end if
 
-      call new_cpcm(pcm_spin, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_spin, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "Spin-charge CPCM initialization failed: "//err%message)
          return
@@ -673,7 +673,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(coupling_type) :: coupling
       !> Never updated; only its (empty) grid data reach the component
       type(cavity_type_iswig) :: cavity
@@ -686,7 +686,7 @@ contains
       call new_context(ctx)
 
       call make_charge_coupling(qat_vals, coupling)
-      call new_cpcm(pcm_model, ctx, 78.4_wp, error=err)
+      call new_component_cpcm(pcm_model, ctx, 78.4_wp, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -708,7 +708,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -730,7 +730,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_model, ctx, 78.4_wp, solver=-1, error=err)
+      call new_component_cpcm(pcm_model, ctx, 78.4_wp, solver=-1, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization unexpectedly failed: "//err%message)
          return
@@ -760,7 +760,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -790,7 +790,7 @@ contains
          bad_amat(i, i) = -1.0_wp
       end do
 
-      call new_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%iterative, &
+      call new_component_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%iterative, &
          & external_matrix=bad_amat, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
@@ -819,7 +819,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_reused, pcm_fresh
+      type(solvation_model_component_cpcm) :: pcm_reused, pcm_fresh
       type(cavity_type_iswig) :: cavity_small, cavity_large
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_small, radius_large
@@ -846,7 +846,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_reused, ctx, 78.4_wp, solver=solver_type%lu, error=err)
+      call new_component_cpcm(pcm_reused, ctx, 78.4_wp, solver=solver_type%lu, error=err)
       if (allocated(err)) then
          call test_failed(error, "Reused CPCM initialization failed: "//err%message)
          return
@@ -887,7 +887,7 @@ contains
          return
       end if
 
-      call new_cpcm(pcm_fresh, ctx, 78.4_wp, solver=solver_type%lu, error=err)
+      call new_component_cpcm(pcm_fresh, ctx, 78.4_wp, solver=solver_type%lu, error=err)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -927,7 +927,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(static_radius_type) :: radius_model
@@ -952,7 +952,7 @@ contains
       end if
       call make_charge_coupling(qat_vals, coupling)
 
-      call new_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_model, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1027,7 +1027,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model, pcm_fresh
+      type(solvation_model_component_cpcm) :: pcm_model, pcm_fresh
       type(cavity_type_iswig) :: cavity
       type(static_radius_type) :: radius_model
       type(coupling_type) :: coupling
@@ -1052,7 +1052,7 @@ contains
          return
       end if
 
-      call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -1116,7 +1116,7 @@ contains
       if (allocated(error)) return
 
       ! Same statement against an independently constructed model
-      call new_cpcm(pcm_fresh, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_fresh, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "Fresh CPCM initialization failed: "//err%message)
          return
@@ -1166,7 +1166,7 @@ contains
       !> System name for error messages
       character(len=*), intent(in) :: system_name
 
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1204,7 +1204,7 @@ contains
 
       ! Test all 4 solvers
       do i = 1, 4
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solvers(i), error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solvers(i), error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed for "// &
                              trim(solver_names(i))//" solver")
@@ -1258,7 +1258,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1325,7 +1325,7 @@ contains
 
          ! ===== Time LU solver (reference) =====
          call system_clock(t1)
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (lu)")
             return
@@ -1349,7 +1349,7 @@ contains
 
          ! ===== Time Cholesky solver =====
          call system_clock(t1)
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (cholesky)")
             return
@@ -1373,7 +1373,7 @@ contains
 
          ! ===== Time iterative solver =====
          call system_clock(t1)
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%iterative, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%iterative, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (iterative)")
             return
@@ -1397,7 +1397,7 @@ contains
 
          ! ===== Time inversion solver =====
          call system_clock(t1)
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%inversion, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%inversion, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed (inversion)")
             return
@@ -1461,8 +1461,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(cpcm) :: pcm_model
-      type(cosmo) :: cosmo_model
+      type(solvation_model_component_cpcm) :: pcm_model
+      type(solvation_model_component_cosmo) :: cosmo_model
       !> Dielectric constants that must be rejected
       real(wp), parameter :: bad_epsilon(*) = [0.0_wp, 0.5_wp, -1.0_wp]
       !> Index over the rejected dielectric constants
@@ -1474,7 +1474,7 @@ contains
       call new_context(ctx)
 
       do ieps = 1, size(bad_epsilon)
-         call new_cpcm(pcm_model, ctx, bad_epsilon(ieps), error=err)
+         call new_component_cpcm(pcm_model, ctx, bad_epsilon(ieps), error=err)
          call check(error, allocated(err), "CPCM accepted a dielectric below one")
          if (allocated(error)) return
          call check(error, index(err%message, "must be >= 1") > 0, &
@@ -1482,7 +1482,7 @@ contains
          if (allocated(error)) return
          deallocate (err)
 
-         call new_cosmo(cosmo_model, ctx, bad_epsilon(ieps), error=err)
+         call new_component_cosmo(cosmo_model, ctx, bad_epsilon(ieps), error=err)
          call check(error, allocated(err), "COSMO accepted a dielectric below one")
          if (allocated(error)) return
          call check(error, index(err%message, "must be >= 1") > 0, &
@@ -1492,14 +1492,14 @@ contains
       end do
 
       ! The vacuum limit is a valid model, not an error.
-      call new_cpcm(pcm_model, ctx, 1.0_wp, error=err)
+      call new_component_cpcm(pcm_model, ctx, 1.0_wp, error=err)
       call check(error, .not. allocated(err), "CPCM rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, pcm_model%feps, 0.0_wp, thr=thr, &
          & message="CPCM f(eps) is not zero at eps = 1")
       if (allocated(error)) return
 
-      call new_cosmo(cosmo_model, ctx, 1.0_wp, error=err)
+      call new_component_cosmo(cosmo_model, ctx, 1.0_wp, error=err)
       call check(error, .not. allocated(err), "COSMO rejected the vacuum limit eps = 1")
       if (allocated(error)) return
       call check(error, cosmo_model%feps, 0.0_wp, thr=thr, &
@@ -1520,7 +1520,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_drop) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(surface_fixture) :: surface
@@ -1560,7 +1560,7 @@ contains
       allocate (cavity%xyz, source=sw_xyz)
       allocate (cavity%normal0, source=sw_normals)
 
-      call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, &
+      call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, &
          & phi_source=potential_source%external, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
@@ -1700,7 +1700,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(coupling_type) :: coupling
@@ -1756,7 +1756,7 @@ contains
          phi(ig) = 0.05_wp*sin(0.83_wp*real(ig, wp)) - 0.01_wp
       end do
 
-      call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, &
+      call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%lu, &
          & phi_source=potential_source%external, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
@@ -1884,7 +1884,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Fixed point-charge coupling data
       type(coupling_type) :: coupling
@@ -1926,7 +1926,7 @@ contains
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
          return
@@ -2018,7 +2018,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Valid and deliberately malformed external coupling data
       type(coupling_type) :: coupling, bad_coupling
@@ -2060,7 +2060,7 @@ contains
          return
       end if
 
-      call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, &
+      call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, &
          & phi_source=potential_source%external, error=err)
       if (allocated(err)) then
          call test_failed(error, "CPCM initialization failed: "//err%message)
@@ -2204,7 +2204,7 @@ contains
 
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: shifted
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)
@@ -2237,7 +2237,7 @@ contains
             call test_failed(error, "Cavity setup failed: "//err%message)
             return
          end if
-         call new_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
+         call new_component_cpcm(pcm_model, ctx, epsilon, solver=solver_type%cholesky, error=err)
          if (allocated(err)) then
             call test_failed(error, "CPCM initialization failed: "//err%message)
             return
@@ -2307,7 +2307,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(cpcm) :: pcm_model
+      type(solvation_model_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)
@@ -2343,7 +2343,7 @@ contains
          feps_ref = 0.0_wp
          do ieps = 1, size(epsilons)
             feps = (epsilons(ieps) - 1.0_wp)/epsilons(ieps)
-            call new_cpcm(pcm_model, ctx, epsilons(ieps), solver=solver_type%cholesky, error=err)
+            call new_component_cpcm(pcm_model, ctx, epsilons(ieps), solver=solver_type%cholesky, error=err)
             if (allocated(err)) then
                call test_failed(error, "CPCM initialization failed: "//err%message)
                return
