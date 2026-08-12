@@ -77,7 +77,8 @@ module test_api
       end subroutine moist_delete_structure
 
       function moist_new_drop_cavity(verror, nleb, debug, verbose, blendk, &
-            & blend1b, blend2b, blend3b, do_fine, tolerance) result(vcav) &
+            & blend1b, blend2b, blend3b, do_fine, tolerance, proj_maxiter, &
+            & proj_level, branch_weight_s, rho_grid_h, wleb_prune_level) result(vcav) &
             & bind(C, name="moist_new_drop_cavity")
          import :: c_ptr
          type(c_ptr), value :: verror
@@ -90,6 +91,11 @@ module test_api
          type(c_ptr), value :: blend3b
          type(c_ptr), value :: do_fine
          type(c_ptr), value :: tolerance
+         type(c_ptr), value :: proj_maxiter
+         type(c_ptr), value :: proj_level
+         type(c_ptr), value :: branch_weight_s
+         type(c_ptr), value :: rho_grid_h
+         type(c_ptr), value :: wleb_prune_level
          type(c_ptr) :: vcav
       end function moist_new_drop_cavity
 
@@ -393,7 +399,8 @@ contains
       vmol = moist_new_structure(verror, 3_c_int, numbers, positions)
       vcav = moist_new_drop_cavity(verror, c_loc(nleb), c_null_ptr, c_null_ptr, &
                                    c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, &
-                                   c_null_ptr, c_null_ptr)
+                                   c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, &
+                                   c_null_ptr, c_null_ptr, c_null_ptr)
       call moist_update_cavity(verror, vcav, vmol)
       call moist_get_cavity_sizes(verror, vcav, ngrid, nsph)
 
