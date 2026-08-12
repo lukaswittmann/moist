@@ -54,6 +54,17 @@ static inline double gto_s_norm(double alpha)
     return pow(2.0 * alpha / acos(-1.0), 0.75);
 }
 
+/* Agreement between two independently summed results, measured relative to the
+ * magnitude involved.*/
+static int agrees_to(double a, double b, double rel_tol)
+{
+    double scale = fabs(a) > fabs(b) ? fabs(a) : fabs(b);
+    if (scale < 1.0) {
+        scale = 1.0;
+    }
+    return fabs(a - b) <= rel_tol * scale;
+}
+
 /* Fortran column-major flattening helpers */
 static inline size_t idx_f2(int i0, int i1, int d0)
 {
@@ -817,12 +828,12 @@ int test_cavity_gradient(void)
     }
 
     int contract_ok = 1;
-    const double contract_tol = 1e-9;
+    const double contract_tol = 1e-12;
     double contract_norm = 0.0;
     for (int iatom = 0; iatom < nsph && contract_ok; iatom++) {
         for (int iaxis = 0; iaxis < 3; iaxis++) {
             size_t idx = idx_f2(iaxis, iatom, 3);
-            if (fabs(grad_contract[idx] - grad_ref[idx]) > contract_tol) {
+            if (!agrees_to(grad_contract[idx], grad_ref[idx], contract_tol)) {
                 printf("  Error: contract_amat1_q1q2_rA symmetry check failed at axis=%d atom=%d\n", iaxis, iatom);
                 contract_ok = 0;
                 break;
@@ -894,7 +905,7 @@ int test_cavity_gradient(void)
         goto cleanup;
     }
 
-    const double homo_tol = 1e-9;
+    const double homo_tol = 1e-12;
     for (int iatom = 0; iatom < nsph && nuc_elec_ok; iatom++) {
         for (int iaxis = 0; iaxis < 3; iaxis++) {
             size_t idx = idx_f2(iaxis, iatom, 3);
@@ -903,7 +914,7 @@ int test_cavity_gradient(void)
                 nuc_elec_ok = 0;
                 break;
             }
-            if (fabs(grad_ne_scaled[idx] - 2.0 * grad_ne[idx]) > homo_tol) {
+            if (!agrees_to(grad_ne_scaled[idx], 2.0 * grad_ne[idx], homo_tol)) {
                 printf("  Error: contract_nuc_elec_qefield_rA homogeneity check failed\n");
                 nuc_elec_ok = 0;
                 break;
