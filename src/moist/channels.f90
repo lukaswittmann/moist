@@ -1,19 +1,12 @@
 !> Data envelopes exchanged between a host program and moist
 !>
-!> Two directional envelopes carry everything that crosses the boundary for one
-!> coupling step: [[coupling_type]] runs host -> moist and [[response_type]]
-!> runs moist -> host. Each is a small set of named groups, one per physical
-!> channel, so a call site reads `coupling%electrostatics%phi` rather than a
-!> flat prefixed name.
+!> The directions treat a missing array differently:
 !>
-!> The two directions deliberately treat an absent array differently:
-!>
-!> * A missing **input** is a host mistake. Consumers assert what they need at
-!>   the point of use with [[require_channel]] instead of reading zeros.
-!> * A missing **output** is a statement about the physics -- a cavity with
-!>   field-independent geometry has no level-set response, and a model without
-!>   a GOSTSHYP component has no Gaussian amplitudes. Hosts that *require* a
-!>   channel assert that at the API boundary.
+!> * A missing input is a host mistake; consumers assert what they need at
+!>   the point of use with [[require_channel]]
+!> * A missing output reflects correct physics; a cavity with, e.g.,
+!>   field-independent geometry has no level set response; or a model without
+!>   GOSTSHYP has no Gaussian amplitudes
 module moist_channels
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -158,7 +151,7 @@ module moist_channels
       procedure :: clear => clear_electrostatic_response
    end type electrostatic_response_type
 
-   !> Cavity level-set response returned to the host
+   !> Cavity level set response returned to the host
    type, extends(response_channel_type) :: lsf_response_type
       !> Adjoint weights for cavity level set values (ngrid)
       real(wp), allocatable :: w_value(:)
@@ -167,7 +160,7 @@ module moist_channels
       !> Adjoint weights for cavity level set Hessians (3, 3, ngrid)
       real(wp), allocatable :: w_hessian(:, :, :)
    contains
-      !> Clear the level-set response
+      !> Clear the level set response
       procedure :: clear => clear_lsf_response
    end type lsf_response_type
 
@@ -197,13 +190,13 @@ module moist_channels
    !>
    !> A channel left unallocated means the model has no contribution to it,
    !> which is a statement about the physics rather than an error: a cavity
-   !> with field-independent geometry has no level-set response, and a model
+   !> with field-independent geometry has no level set response, and a model
    !> without a GOSTSHYP component has no Gaussian amplitudes. Hosts that
    !> *require* a channel assert that at the API boundary.
    type :: response_type
       !> Electrostatic response
       type(electrostatic_response_type) :: electrostatics
-      !> Cavity level-set response
+      !> Cavity level set response
       type(lsf_response_type) :: lsf
       !> GOSTSHYP response
       type(gostshyp_response_type) :: gostshyp
@@ -271,9 +264,9 @@ contains
 
    end subroutine clear_electrostatic_response
 
-   !> Clear the level-set response
+   !> Clear the level set response
    subroutine clear_lsf_response(self)
-      !> Level-set response to clear
+      !> level set response to clear
       class(lsf_response_type), intent(inout) :: self
 
       if (allocated(self%w_value)) deallocate (self%w_value)
@@ -419,7 +412,7 @@ contains
 
       string = "("
       do i = 1, size(extents)
-         write (buffer, '(i0)') extents(i)
+         write (buffer, "(i0)") extents(i)
          if (i > 1) string = string//", "
          string = string//trim(buffer)
       end do
