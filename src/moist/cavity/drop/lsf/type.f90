@@ -47,6 +47,8 @@ module moist_cavity_drop_lsf_base
       procedure :: require_deriv => lsf_base_require_deriv
       !> Optionally relabel the molecular cell-grid candidate lists into the actual LSF's internal atom ordering
       procedure :: remap_candidate_grid => lsf_base_remap_candidate_grid
+      !> Radius of a ball around the evaluation point provably free of surface
+      procedure :: exclusion_radius => lsf_base_exclusion_radius
       !> Cache per-point screening / state
       procedure(lsf_prepare_iface), deferred :: prepare
       !> Cache per-point state with a caller-provided candidate list.
@@ -240,6 +242,34 @@ contains
          trim(want)//" but prepare ran at "//trim(got)// &
          " -- raise set_max_deriv before prepare"
    end subroutine lsf_base_require_deriv
+
+   !> Radius of a ball around the evaluation point provably free of surface
+   !>
+   !> Returns `r` such that `S` has no zero in `B(x, r)`, given `S(x)`. The
+   !> generic construction is `r = |S(x)| / L` with `L` a bound on the gradient
+   !> norm over the region: `S` cannot travel from `S(x)` to zero in less than
+   !> that distance. Concrete LSFs override with their own `L` (SvdW has the
+   !> exact `L = 1`).
+   !>
+   !> This is what lets the certified branch search (`proj_level = 9`)
+   !> enumerate *all* branches carrying weight: minima live on the surface, so
+   !> a region proven free of surface holds no minimum.
+   !>
+   !> Zero is the safe answer and the base returns it unconditionally: it
+   !> certifies nothing, so a search built on it prunes nothing and runs into
+   !> its own box budget rather than silently reporting a false certificate.
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] lsf0  LSF value at the evaluation point
+   !> @returns   r     Surface-free radius (zero when uncertified)
+   pure function lsf_base_exclusion_radius(self, lsf0) result(r)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: lsf0
+      real(wp) :: r
+
+      r = 0.0_wp
+      if (self%ncenters < 0 .and. lsf0 /= 0.0_wp) r = 0.0_wp
+   end function lsf_base_exclusion_radius
 
    !> Default candidate-grid remap
    !>

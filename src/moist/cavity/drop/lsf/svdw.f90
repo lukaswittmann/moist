@@ -82,6 +82,8 @@ module moist_cavity_drop_lsf_svdw
       !> Per-atom screening cutoff (radial offset from atom surface where
       !> the SvdW contribution falls below the inherited `screening_threshold`)
       procedure, public :: neighbor_cutoff => lsf_neighbor_cutoff
+      !> Exact surface-free radius from the 1-Lipschitz property
+      procedure, public :: exclusion_radius => lsf_svdw_exclusion_radius
       !> Finalizer
       final :: finalize_lsf_svdw
    end type moist_cavity_drop_lsf_svdw_type
@@ -3125,5 +3127,42 @@ contains
 
       cutoff_distance = upper
    end function lsf_neighbor_cutoff
+
+!* ================================================================================= *!
+!*                           Surface-free exclusion certificate                       *!
+!* ================================================================================= *!
+
+   !> Exact surface-free radius from the 1-Lipschitz property
+   !>
+   !> `S = -(1/k) ln Z` is a log-sum-exp soft minimum of atomic signed
+   !> distances. Its gradient is the blend-weighted mean of the gradients of
+   !> the per-term exponents, and each of those is itself an average of unit
+   !> vectors `(r - r_I)/||r - r_I||`, so every term contributes a vector of
+   !> norm at most one. The blend weights sum to one, hence `||grad S|| <= 1`
+   !> and `S` cannot reach zero from `S(x)` in less than `|S(x)|`: the ball
+   !> `B(x, |S(x)|)` contains no point of the zero level set. This is the
+   !> tightest radius a Lipschitz argument can give, and it costs nothing
+   !> beyond the value the caller already holds.
+   !>
+   !> The bound needs the blend weights to be non-negative, which holds exactly
+   !> when the many-body coefficients are. A negative coefficient turns the
+   !> weighted mean into an extrapolation and the bound is lost, so such a
+   !> parameterization certifies nothing and gets the safe answer of zero.
+   !>
+   !> @param[in] self LSF instance
+   !> @param[in] lsf0 LSF value at the evaluation point
+   !> @returns   r    Radius of a ball around the point free of surface
+   pure function lsf_svdw_exclusion_radius(self, lsf0) result(r)
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      real(wp), intent(in) :: lsf0
+      real(wp) :: r
+
+      r = 0.0_wp
+      if (self%param%blend_1b < 0.0_wp) return
+      if (self%param%blend_2b < 0.0_wp) return
+      if (self%param%blend_3b < 0.0_wp) return
+
+      r = abs(lsf0)
+   end function lsf_svdw_exclusion_radius
 
 end module moist_cavity_drop_lsf_svdw
