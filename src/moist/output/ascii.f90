@@ -5,7 +5,7 @@
 module moist_output_ascii
    use moist_build_info, only: git_commit
    use moist_version, only: get_moist_version
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Header style constants

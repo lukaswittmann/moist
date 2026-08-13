@@ -16,7 +16,7 @@
 module moist_math_adjacency_list
    use mctc_env, only: wp, error_type
    use moist_math_sorter_quicksort, only: qsort
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: adjacency_list_type

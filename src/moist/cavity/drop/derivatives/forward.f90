@@ -9,12 +9,12 @@
 !> until possible bugs or inconsistencies in the reverse implementation
 !> are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
-   !$ use omp_lib, only: omp_get_thread_num
+!$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
@@ -303,7 +303,7 @@ contains
       !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
       !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
       thread_slot = 1
-      !$ thread_slot = omp_get_thread_num() + 1
+!$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
       ! lsf3_rr_rA is deliberately not allocated here: f3_rr_rA_screened takes
@@ -509,7 +509,7 @@ contains
 
                ! Persist only when user requested normal derivatives
                if (allocated(self%normal1_rA)) then
-                 self%normal1_rA(:, iatom, iaxis, igrid) = dn_dR
+                  self%normal1_rA(:, iatom, iaxis, igrid) = dn_dR
                end if
             end do ! iaxis
          end do ! i (active atoms)
@@ -853,7 +853,7 @@ contains
 
          !> xi depends on cp_jac_scal (and derivative) *and* on anchor_xi (and derivative)
          if (allocated(self%xi1_rA)) then
-           self%xi1_rA(:, :, igrid) = self%iswig%xi1_rA( &
+            self%xi1_rA(:, :, igrid) = self%iswig%xi1_rA( &
                                        owner_idx, self%wleb(igrid), self%wleb1_rA(:, :, igrid), &
                                        active=active_idx(1:n_active))
          end if
@@ -904,8 +904,8 @@ contains
 
                ! Volume derivative: dv_i/dr_A = (1/3) * [da_i/dr_A * (r_i.n_i) + a_i * d(r_i.n_i)/dr_A]
                self%v1_rA(iaxis, iatom, igrid) = (1.0_wp/3.0_wp)*( &
-                                                   self%a_i1_rA(iaxis, iatom, igrid)*r_hat_dot_r &
-                                                   + self%a(igrid)*grad_r_hat_dot_r(iaxis))
+                                                 self%a_i1_rA(iaxis, iatom, igrid)*r_hat_dot_r &
+                                                 + self%a(igrid)*grad_r_hat_dot_r(iaxis))
 
             end do ! iaxis
          end do ! i (active atoms)

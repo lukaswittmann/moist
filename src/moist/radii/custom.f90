@@ -110,7 +110,7 @@ contains
          return
       end if
       if (size(atomic_numbers) /= size(radii)) then
-         write (msg, '(a,i0,a,i0,a)') "new_custom_radii_elements: atomic_numbers size (", &
+         write (msg, "(a,i0,a,i0,a)") "new_custom_radii_elements: atomic_numbers size (", &
             size(atomic_numbers), ") does not match radii size (", size(radii), ")."
          call fatal_error(error, trim(msg))
          return
@@ -157,16 +157,16 @@ contains
       iu = output_unit
       if (present(unit)) iu = unit
 
-      write (iu, '(a)') "Custom radii model:"
-      write (iu, '(a,l1)') "  has_atom_radii: ", self%has_atom_radii
-      write (iu, '(a,l1)') "  has_element_radii: ", self%has_element_radii
-      write (iu, '(a,i0)') "  cached nat: ", self%nat
+      write (iu, "(a)") "Custom radii model:"
+      write (iu, "(a,l1)") "  has_atom_radii: ", self%has_atom_radii
+      write (iu, "(a,l1)") "  has_element_radii: ", self%has_element_radii
+      write (iu, "(a,i0)") "  cached nat: ", self%nat
 
       if (self%has_atom_radii .and. allocated(self%atom_radii)) then
-         write (iu, '(a,i0)') "  number of atom radii: ", size(self%atom_radii)
+         write (iu, "(a,i0)") "  number of atom radii: ", size(self%atom_radii)
       end if
       if (self%has_element_radii .and. allocated(self%element_radii)) then
-         write (iu, '(a,i0)') "  max atomic number in element radii table: ", size(self%element_radii)
+         write (iu, "(a,i0)") "  max atomic number in element radii table: ", size(self%element_radii)
       end if
    end subroutine print_custom_radii
 
@@ -188,7 +188,7 @@ contains
 
       self%nat = mol%nat
       if (self%nat < 1) then
-         write (msg, '(a,i0)') "Invalid atom count in structure: ", self%nat
+         write (msg, "(a,i0)") "Invalid atom count in structure: ", self%nat
          call fatal_error(error, trim(msg))
          return
       end if
@@ -209,7 +209,7 @@ contains
             return
          end if
          if (size(self%atom_radii) /= self%nat) then
-            write (msg, '(a,i0,a,i0,a)') "Custom atom radii size (", &
+            write (msg, "(a,i0,a,i0,a)") "Custom atom radii size (", &
                size(self%atom_radii), ") does not match mol%nat (", self%nat, ")."
             call fatal_error(error, trim(msg))
             return
@@ -226,12 +226,12 @@ contains
       do iat = 1, self%nat
          z = mol%num(mol%id(iat))
          if (z < 1 .or. z > size(self%element_radii)) then
-            write (msg, '(a,i0,a)') "No custom radius provided for atomic number ", z, "."
+            write (msg, "(a,i0,a)") "No custom radius provided for atomic number ", z, "."
             call fatal_error(error, trim(msg))
             return
          end if
          if (self%element_radii(z) <= 0.0_wp) then
-            write (msg, '(a,i0,a)') "No custom radius provided for atomic number ", z, "."
+            write (msg, "(a,i0,a)") "No custom radius provided for atomic number ", z, "."
             call fatal_error(error, trim(msg))
             return
          end if

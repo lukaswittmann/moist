@@ -740,7 +740,7 @@ contains
 
       !> Pre-filter points below switching cutoff (reduces projection workload)
       call self%ctx%timer%start("Pre-filter")
-      call self%filter_arrays('Prefilter', error)
+      call self%filter_arrays("Prefilter", error)
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
          return
@@ -797,7 +797,7 @@ contains
 
       !> Filter out points below cutoff
       call self%ctx%timer%start("Filter")
-      call self%filter_arrays('Postfilter', error)
+      call self%filter_arrays("Postfilter", error)
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
          return
@@ -899,7 +899,7 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)
 
-      if (self%ctx%verbosity > 1) write (self%ctx%unit, '(a)') "[Info] Computing gradients ..."
+      if (self%ctx%verbosity > 1) write (self%ctx%unit, "(a)") "[Info] Computing gradients ..."
       call self%compute_gradient_drop(error)
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
@@ -985,23 +985,23 @@ contains
       logical :: val_converged
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_csv_debug: cavity grid not allocated')
+         call fatal_error(error, "write_csv_debug: cavity grid not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_csv_debug: no grid points to write')
+         call fatal_error(error, "write_csv_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open CSV file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open CSV file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(a)') 'ngrid,numbering,x,y,z,owner,area,switch_f,w_leb,rho_scal0,rad,r_iI0,rho,'// &
-         'anch_x,anch_y,anch_z,n_x,n_y,n_z,rho_grid,rho_grid_anchor,KM,KG,cpjac_scal,'// &
-         ',converged'
+      write (unit, "(a)") "ngrid,numbering,x,y,z,owner,area,switch_f,w_leb,rho_scal0,rad,r_iI0,rho,"// &
+         "anch_x,anch_y,anch_z,n_x,n_y,n_z,rho_grid,rho_grid_anchor,KM,KG,cpjac_scal,"// &
+         ",converged"
 
       do i = 1, self%ngrid
 
@@ -1038,7 +1038,7 @@ contains
       end do
       close (unit)
 
-      write (self%ctx%unit, '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (self%ctx%unit, "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
 

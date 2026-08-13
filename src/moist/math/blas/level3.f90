@@ -215,14 +215,14 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if ((tra == 'n' .or. tra == 'N')) then
+      if ((tra == "n" .or. tra == "N")) then
          k = size(amat, 2)
       else
          k = size(amat, 1)
@@ -259,14 +259,14 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if ((tra == 'n' .or. tra == 'N')) then
+      if ((tra == "n" .or. tra == "N")) then
          k = size(amat, 2)
       else
          k = size(amat, 1)
@@ -292,9 +292,9 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
-      if (any(tra == ['n', 'N'])) then
+      if (any(tra == ["n", "N"])) then
          aptr(1:size(amat, 1)*size(amat, 2), 1:size(amat, 3)) => amat
       else
          aptr(1:size(amat, 1), 1:size(amat, 2)*size(amat, 3)) => amat
@@ -316,9 +316,9 @@ contains
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if (any(trb == ['n', 'N'])) then
+      if (any(trb == ["n", "N"])) then
          bptr(1:size(bmat, 1), 1:size(bmat, 2)*size(bmat, 3)) => bmat
       else
          bptr(1:size(bmat, 1)*size(bmat, 2), 1:size(bmat, 3)) => bmat
@@ -340,19 +340,19 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if (any(tra == ['n', 'N'])) then
+      if (any(tra == ["n", "N"])) then
          aptr(1:size(amat, 1), 1:size(amat, 2)*size(amat, 3)) => amat
       else
          aptr(1:size(amat, 1)*size(amat, 2), 1:size(amat, 3)) => amat
       end if
-      if (any(trb == ['n', 'N'])) then
+      if (any(trb == ["n", "N"])) then
          bptr(1:size(bmat, 1)*size(bmat, 2), 1:size(bmat, 3)) => bmat
       else
          bptr(1:size(bmat, 1), 1:size(bmat, 2)*size(bmat, 3)) => bmat
@@ -373,9 +373,9 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
-      if (any(tra == ['n', 'N'])) then
+      if (any(tra == ["n", "N"])) then
          aptr(1:size(amat, 1)*size(amat, 2), 1:size(amat, 3)) => amat
       else
          aptr(1:size(amat, 1), 1:size(amat, 2)*size(amat, 3)) => amat
@@ -397,9 +397,9 @@ contains
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if (any(trb == ['n', 'N'])) then
+      if (any(trb == ["n", "N"])) then
          bptr(1:size(bmat, 1), 1:size(bmat, 2)*size(bmat, 3)) => bmat
       else
          bptr(1:size(bmat, 1)*size(bmat, 2), 1:size(bmat, 3)) => bmat
@@ -421,19 +421,19 @@ contains
       if (present(transa)) then
          tra = transa
       else
-         tra = 'n'
+         tra = "n"
       end if
       if (present(transb)) then
          trb = transb
       else
-         trb = 'n'
+         trb = "n"
       end if
-      if (any(tra == ['n', 'N'])) then
+      if (any(tra == ["n", "N"])) then
          aptr(1:size(amat, 1), 1:size(amat, 2)*size(amat, 3)) => amat
       else
          aptr(1:size(amat, 1)*size(amat, 2), 1:size(amat, 3)) => amat
       end if
-      if (any(trb == ['n', 'N'])) then
+      if (any(trb == ["n", "N"])) then
          bptr(1:size(bmat, 1)*size(bmat, 2), 1:size(bmat, 3)) => bmat
       else
          bptr(1:size(bmat, 1), 1:size(bmat, 2)*size(bmat, 3)) => bmat
@@ -455,13 +455,13 @@ contains
 
       a = 1.0_sp
       if (present(alpha)) a = alpha
-      dga = 'n'
+      dga = "n"
       if (present(diag)) dga = diag
-      sda = 'l'
+      sda = "l"
       if (present(side)) sda = side
-      tra = 'n'
+      tra = "n"
       if (present(transa)) tra = transa
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = max(1, size(amat, 1))
       ldb = max(1, size(bmat, 1))
@@ -484,13 +484,13 @@ contains
 
       a = 1.0_dp
       if (present(alpha)) a = alpha
-      dga = 'n'
+      dga = "n"
       if (present(diag)) dga = diag
-      sda = 'l'
+      sda = "l"
       if (present(side)) sda = side
-      tra = 'n'
+      tra = "n"
       if (present(transa)) tra = transa
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = max(1, size(amat, 1))
       ldb = max(1, size(bmat, 1))
@@ -514,15 +514,15 @@ contains
       if (present(alpha)) a = alpha
       b = 0.0_sp
       if (present(beta)) b = beta
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
-      tra = 'n'
+      tra = "n"
       if (present(trans)) tra = trans
 
       ldc = max(1, size(cmat, 1))
       n = size(cmat, 1)
       lda = max(1, size(amat, 1))
-      if (tra == 'n' .or. tra == 'N') then
+      if (tra == "n" .or. tra == "N") then
          k = size(amat, 2)
       else
          k = size(amat, 1)
@@ -546,15 +546,15 @@ contains
       if (present(alpha)) a = alpha
       b = 0.0_dp
       if (present(beta)) b = beta
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
-      tra = 'n'
+      tra = "n"
       if (present(trans)) tra = trans
 
       ldc = max(1, size(cmat, 1))
       n = size(cmat, 1)
       lda = max(1, size(amat, 1))
-      if (tra == 'n' .or. tra == 'N') then
+      if (tra == "n" .or. tra == "N") then
          k = size(amat, 2)
       else
          k = size(amat, 1)

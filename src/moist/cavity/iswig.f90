@@ -300,7 +300,7 @@ contains
    !> Accumulates `dE/dR_A` for the energy whose surface adjoints `acc` holds,
    !> without ever forming the `(3, nsph, ngrid)` forward Jacobians
    !>
-   !> The result is *added* to `gradient`, so several passes can share one 
+   !> The result is *added* to `gradient`, so several passes can share one
    !> accumulator
    !>
    !> @param[in]    self     iSwiG cavity instance (must hold an updated grid)

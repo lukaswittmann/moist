@@ -1097,16 +1097,21 @@ contains
 
       call c_f_pointer(c_phi, phi, [int(ngrid)])
       model%coupling%electrostatics%phi = real(phi, wp)
-      if (allocated(model%coupling%electrostatics%w_xi)) &
-         & deallocate (model%coupling%electrostatics%w_xi)
-      if (allocated(model%coupling%electrostatics%w_f)) &
-         & deallocate (model%coupling%electrostatics%w_f)
-      if (allocated(model%coupling%electrostatics%w_xyz)) &
-         & deallocate (model%coupling%electrostatics%w_xyz)
-      if (allocated(model%coupling%electrostatics%w_normal)) &
-         & deallocate (model%coupling%electrostatics%w_normal)
-      if (allocated(model%coupling%electrostatics%qefield)) &
-         & deallocate (model%coupling%electrostatics%qefield)
+      if (allocated(model%coupling%electrostatics%w_xi)) then
+        deallocate (model%coupling%electrostatics%w_xi)
+      end if
+      if (allocated(model%coupling%electrostatics%w_f)) then
+        deallocate (model%coupling%electrostatics%w_f)
+      end if
+      if (allocated(model%coupling%electrostatics%w_xyz)) then
+        deallocate (model%coupling%electrostatics%w_xyz)
+      end if
+      if (allocated(model%coupling%electrostatics%w_normal)) then
+        deallocate (model%coupling%electrostatics%w_normal)
+      end if
+      if (allocated(model%coupling%electrostatics%qefield)) then
+        deallocate (model%coupling%electrostatics%qefield)
+      end if
       if (c_associated(c_w_xi)) then
          call c_f_pointer(c_w_xi, w_xi, [int(ngrid)])
          model%coupling%electrostatics%w_xi = real(w_xi, wp)
@@ -3959,13 +3964,13 @@ contains
          call acc%init(ngrid)
          call acc%add_surface_weights(cavity_error, w_xi=w_xi, w_f=w_f, w_xyz=w_xyz)
          if (.not. allocated(cavity_error) .and. associated(w_n)) then
-           call acc%add_surface_weights(cavity_error, w_n=w_n)
+            call acc%add_surface_weights(cavity_error, w_n=w_n)
          end if
          if (.not. allocated(cavity_error) .and. associated(w_k1)) then
-           call acc%add_surface_weights(cavity_error, w_k1=w_k1)
+            call acc%add_surface_weights(cavity_error, w_k1=w_k1)
          end if
          if (.not. allocated(cavity_error) .and. associated(w_k2)) then
-           call acc%add_surface_weights(cavity_error, w_k2=w_k2)
+            call acc%add_surface_weights(cavity_error, w_k2=w_k2)
          end if
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "contract_surface_lsf_weights", cavity_error%message)

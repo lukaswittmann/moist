@@ -111,7 +111,7 @@ contains
       radius = 0.0_wp
 
       if (number < 1 .or. number > max_elem) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", number, " out of range [1, ", max_elem, "]"
          call fatal_error(error, trim(msg))
          return
@@ -164,7 +164,7 @@ contains
       radius = 0.0_wp
 
       if (number < 1 .or. number > max_elem) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", number, " out of range [1, ", max_elem, "]"
          call fatal_error(error, trim(msg))
          return

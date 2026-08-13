@@ -299,7 +299,7 @@ contains
       !> Rendered grid index
       character(len=32) :: idx
 
-      write (idx, '(i0)') igrid
+      write (idx, "(i0)") igrid
       call fatal_error(error, "[Error] "//context//": "//seed_status_message(status)// &
                        " at grid point "//trim(idx))
    end subroutine degenerate_point_error

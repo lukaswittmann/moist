@@ -27,7 +27,7 @@ module moist_model_component_gostshyp
    use moist_channels, only: coupling_type, response_type, require_channel
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solvation_model_component_gostshyp, new_component_gostshyp
@@ -160,7 +160,7 @@ contains
          !> ftilde is derived rather than supplied: it must share one normal
          !> convention with the derivatives built from the same moments.
          ftilde(igrid) = -2.0_wp*omega(igrid) &
-            & *dot_product(cavity%normal0(:, igrid), coupling%gostshyp%pt(:, igrid))
+                        & *dot_product(cavity%normal0(:, igrid), coupling%gostshyp%pt(:, igrid))
       end do
 
       floor = overlap_floor*maxval(abs(ftilde))
@@ -269,7 +269,7 @@ contains
       !> Reported here rather than in `gostshyp_amplitudes` so one energy
       !> evaluation produces one line, not three.
       if (associated(self%ctx) .and. ninactive > 0) then
-         write (report, '(a,i0,a,i0,a)') &
+         write (report, "(a,i0,a,i0,a)") &
             & "GOSTSHYP: ", ninactive, " of ", cavity%ngrid, &
             & " grid points below the density-overlap floor"
          call self%ctx%message(trim(report), level=2)
