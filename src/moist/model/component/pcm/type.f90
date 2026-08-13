@@ -5,8 +5,8 @@ module moist_model_component_pcm_type
    use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: error_type
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type, &
-      & potential_type, coupling_type
+   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_channels, only: response_type, coupling_type, require_channel
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
@@ -95,10 +95,10 @@ module moist_model_component_pcm_type
       procedure :: get_energy => pcm_component_get_energy
 
       !> Compute PCM reaction potential
-      procedure :: get_potential => pcm_component_get_potential
+      procedure :: get_response => pcm_component_get_response
 
       !> Compute the direct electrostatic trace adjoint (the surface charges)
-      procedure :: get_trace_potential => pcm_component_get_trace_potential
+      procedure :: get_trace_response => pcm_component_get_trace_response
 
       !> Compute PCM gradient with respect to nuclear coordinates
       procedure :: get_gradient => pcm_component_get_gradient
@@ -284,8 +284,8 @@ contains
       case (potential_source%external)
          ! Prefer the coupling trace. The explicit input_potential method remains
          ! available as a compatibility adapter for direct component users.
-         if (allocated(coupling%elstat_umol)) then
-            if (size(coupling%elstat_umol) /= ngrid) then
+         if (allocated(coupling%electrostatics%phi)) then
+            if (size(coupling%electrostatics%phi) /= ngrid) then
                call fatal_error(error, &
                   & "[pcm_ensure_charges] External potential size mismatch")
                return
@@ -294,10 +294,10 @@ contains
                self%charges_valid = .false.
             else if (size(self%phi) /= ngrid) then
                self%charges_valid = .false.
-            else if (any(self%phi /= coupling%elstat_umol)) then
+            else if (any(self%phi /= coupling%electrostatics%phi)) then
                self%charges_valid = .false.
             end if
-            self%phi = coupling%elstat_umol
+            self%phi = coupling%electrostatics%phi
          end if
          if (.not. allocated(self%phi)) then
             call fatal_error(error, &
@@ -368,41 +368,41 @@ contains
    !>
    !>    dE/dphi_i = q_i
    !>
-   !> which is returned in `potential%w_elstat_umol`; the host contracts it with
+   !> which is returned in `response%electrostatics%surface_charge`; the host contracts it with
    !> its own potential integrals to build the Fock contribution
    !> F_uv += sum_i q_i V_uv(r_i)
-   subroutine pcm_component_get_potential(self, coupling, cavity, potential, error)
+   subroutine pcm_component_get_response(self, coupling, cavity, response, error)
       !> PCM component instance
       class(solvation_model_component_pcm), intent(inout) :: self
       !> Wavefunction data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
       class(cavity_type), intent(inout) :: cavity
-      !> Solvation potential
-      type(potential_type), intent(inout) :: potential
+      !> Solvation response
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%get_trace_potential(coupling, cavity, potential, error)
+      call self%get_trace_response(coupling, cavity, response, error)
 
-   end subroutine pcm_component_get_potential
+   end subroutine pcm_component_get_response
 
    !> Accumulate the direct electrostatic trace adjoint
    !>
    !> @param[inout] self      PCM component
    !> @param[in]    coupling  Host coupling data
    !> @param[inout] cavity    Live model cavity
-   !> @param[inout] potential Direct trace-potential accumulator
+   !> @param[inout] response  Direct trace-response accumulator
    !> @param[out]   error     Error handling
-   subroutine pcm_component_get_trace_potential(self, coupling, cavity, potential, error)
+   subroutine pcm_component_get_trace_response(self, coupling, cavity, response, error)
       !> PCM component instance
       class(solvation_model_component_pcm), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live cavity owned by the orchestrating model
       class(cavity_type), intent(inout) :: cavity
-      !> Direct trace-potential accumulator
-      type(potential_type), intent(inout) :: potential
+      !> Direct trace-response accumulator
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -414,16 +414,20 @@ contains
 
       ngrid = cavity%ngrid
 
-      if (allocated(potential%w_elstat_umol)) then
-         if (size(potential%w_elstat_umol) /= ngrid) deallocate (potential%w_elstat_umol)
+      if (allocated(response%electrostatics%surface_charge)) then
+         if (size(response%electrostatics%surface_charge) /= ngrid) &
+            & deallocate (response%electrostatics%surface_charge)
       end if
-      if (.not. allocated(potential%w_elstat_umol)) then
-         allocate (potential%w_elstat_umol(ngrid), source=0.0_wp)
+      if (.not. allocated(response%electrostatics%surface_charge)) then
+         allocate (response%electrostatics%surface_charge(ngrid), source=0.0_wp)
       end if
 
-      potential%w_elstat_umol(:) = potential%w_elstat_umol(:) + self%q(:)
+      ! The PCM surface charge is dE/dphi by stationarity, so accumulating it
+      ! here keeps the channel's charge-only invariant intact.
+      response%electrostatics%surface_charge(:) = &
+         & response%electrostatics%surface_charge(:) + self%q(:)
 
-   end subroutine pcm_component_get_trace_potential
+   end subroutine pcm_component_get_trace_response
 
    !> Compute the PCM energy gradient with respect to nuclear coordinates
    !>
@@ -502,15 +506,15 @@ contains
       if (allocated(error)) return
 
       allocate (grad_width(3, nat), source=0.0_wp)
-      if (allocated(coupling%elstat_w_xi)) then
-         if (size(coupling%elstat_w_xi) /= ngrid) then
+      if (allocated(coupling%electrostatics%w_xi)) then
+         if (size(coupling%electrostatics%w_xi) /= ngrid) then
             call fatal_error(error, &
                & "[pcm_component_get_gradient] host Gaussian-width weights have wrong size")
             return
          end if
          do igrid = 1, ngrid
             grad_width = grad_width + &
-               & coupling%elstat_w_xi(igrid)*cavity%xi1_rA(:, :, igrid)
+               & coupling%electrostatics%w_xi(igrid)*cavity%xi1_rA(:, :, igrid)
          end do
       end if
 
@@ -554,18 +558,18 @@ contains
 
       select case (self%phi_source)
       case (potential_source%charges)
-         if (.not. allocated(coupling%qat)) then
+         if (.not. allocated(coupling%electrostatics%qat)) then
             call fatal_error(error, &
                & "[pcm_component_get_gradient] internal potential requires atomic charges")
             return
          end if
-         if (size(coupling%qat, 1) /= nat .or. size(coupling%qat, 2) < 1) then
+         if (size(coupling%electrostatics%qat, 1) /= nat .or. size(coupling%electrostatics%qat, 2) < 1) then
             call fatal_error(error, &
                & "[pcm_component_get_gradient] atomic charge shape mismatch")
             return
          end if
          do iatom = 1, nat
-            source_charge(iatom) = sum(coupling%qat(iatom, :))
+            source_charge(iatom) = sum(coupling%electrostatics%qat(iatom, :))
          end do
 
       case (potential_source%external)
@@ -573,15 +577,12 @@ contains
             source_charge(iatom) = &
                & real(self%mol_solu%num(self%mol_solu%id(iatom)), wp)
          end do
-         if (allocated(coupling%elstat_qefield)) then
-            if (size(coupling%elstat_qefield, 1) /= 3 .or. &
-                size(coupling%elstat_qefield, 2) /= ngrid) then
-               call fatal_error(error, &
-                  & "[pcm_component_get_gradient] electronic field shape mismatch")
-               return
-            end if
-            qefield = coupling%elstat_qefield
-         end if
+         ! Required: an absent field would silently drop the entire electronic
+         ! contribution to the surface-position term and hand back a wrong gradient.
+         call require_channel(coupling%electrostatics%qefield, &
+            & "electrostatics%qefield", 3, ngrid, error)
+         if (allocated(error)) return
+         qefield = coupling%electrostatics%qefield
 
       case default
          call fatal_error(error, "[pcm_component_get_gradient] unknown potential source")
@@ -594,9 +595,9 @@ contains
    !>
    !> Deliberately not the same accumulator the potential builds. The forward
    !> gradient in [[pcm_component_get_gradient]] draws its surface-position term
-   !> from `coupling%elstat_qefield` plus the internally computed nuclear
-   !> field, and its width term from `coupling%elstat_w_xi`; it never reads
-   !> `elstat_w_xyz`, `elstat_w_f` or `elstat_w_n`, which the potential path
+   !> from `coupling%electrostatics%qefield` plus the internally computed nuclear
+   !> field, and its width term from `coupling%electrostatics%w_xi`; it never reads
+   !> `w_xyz`, `w_f` or `w_normal`, which the potential path
    !> does read. Mirroring exactly that set keeps the reverse-mode gradient
    !> numerically equal to the legacy one for every host.
    !>
@@ -654,14 +655,14 @@ contains
       if (allocated(error)) return
 
       ! Host width channel, the one host adjoint the forward gradient uses
-      if (allocated(coupling%elstat_w_xi)) then
-         if (size(coupling%elstat_w_xi) /= ngrid) then
+      if (allocated(coupling%electrostatics%w_xi)) then
+         if (size(coupling%electrostatics%w_xi) /= ngrid) then
             call fatal_error(error, &
                & "[pcm_component_get_gradient_surface_weights] host Gaussian-width "// &
                & "weights have wrong size")
             return
          end if
-         call acc%add_surface_weights(error, w_xi=coupling%elstat_w_xi)
+         call acc%add_surface_weights(error, w_xi=coupling%electrostatics%w_xi)
       end if
 
    end subroutine pcm_component_get_gradient_surface_weights
@@ -876,7 +877,7 @@ contains
    !> component builds itself (handled in [[pcm_component_get_surface_weights]]) and
    !> through the potential trace phi the *host* evaluates at the grid points
    !>
-   !> Host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%elstat_w_*`,
+   !> Host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%electrostatics%w_*`,
    !> already contracted with the surface charges
    !>
    !> Unallocated channels are treated as zero, so a host with only a position
@@ -907,35 +908,35 @@ contains
          allocate (w_xyz(3, ngrid), source=0.0_wp)
          allocate (w_n(3, ngrid), source=0.0_wp)
 
-         if (allocated(coupling%elstat_w_xi)) then
-            if (size(coupling%elstat_w_xi) /= ngrid) then
+         if (allocated(coupling%electrostatics%w_xi)) then
+            if (size(coupling%electrostatics%w_xi) /= ngrid) then
                call fatal_error(error, "Host electrostatic xi weights have wrong size")
                return
             end if
-            w_xi = coupling%elstat_w_xi
+            w_xi = coupling%electrostatics%w_xi
          end if
-         if (allocated(coupling%elstat_w_f)) then
-            if (size(coupling%elstat_w_f) /= ngrid) then
+         if (allocated(coupling%electrostatics%w_f)) then
+            if (size(coupling%electrostatics%w_f) /= ngrid) then
                call fatal_error(error, "Host electrostatic f weights have wrong size")
                return
             end if
-            w_f = coupling%elstat_w_f
+            w_f = coupling%electrostatics%w_f
          end if
-         if (allocated(coupling%elstat_w_xyz)) then
-            if (size(coupling%elstat_w_xyz, 1) /= 3 .or. &
-                size(coupling%elstat_w_xyz, 2) /= ngrid) then
+         if (allocated(coupling%electrostatics%w_xyz)) then
+            if (size(coupling%electrostatics%w_xyz, 1) /= 3 .or. &
+                size(coupling%electrostatics%w_xyz, 2) /= ngrid) then
                call fatal_error(error, "Host electrostatic xyz weights have wrong shape")
                return
             end if
-            w_xyz = coupling%elstat_w_xyz
+            w_xyz = coupling%electrostatics%w_xyz
          end if
-         if (allocated(coupling%elstat_w_n)) then
-            if (size(coupling%elstat_w_n, 1) /= 3 .or. &
-                size(coupling%elstat_w_n, 2) /= ngrid) then
+         if (allocated(coupling%electrostatics%w_normal)) then
+            if (size(coupling%electrostatics%w_normal, 1) /= 3 .or. &
+                size(coupling%electrostatics%w_normal, 2) /= ngrid) then
                call fatal_error(error, "Host electrostatic normal weights have wrong shape")
                return
             end if
-            w_n = coupling%elstat_w_n
+            w_n = coupling%electrostatics%w_normal
          end if
          call acc%add_surface_weights(error, w_xi=w_xi, w_f=w_f, &
             & w_xyz=w_xyz, w_n=w_n)
@@ -1073,10 +1074,10 @@ contains
             if (r_dist < min_dist) cycle
 
             ! Get atomic charge (sum over spin channels if present)
-            if (size(coupling%qat, 2) == 1) then
-               q_atom = coupling%qat(j, 1)
+            if (size(coupling%electrostatics%qat, 2) == 1) then
+               q_atom = coupling%electrostatics%qat(j, 1)
             else
-               q_atom = sum(coupling%qat(j, :))
+               q_atom = sum(coupling%electrostatics%qat(j, :))
             end if
 
             ! Accumulate Coulomb potential

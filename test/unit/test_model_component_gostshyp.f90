@@ -15,7 +15,7 @@ module test_model_component_gostshyp
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_type, only: coupling_type, potential_type
+   use moist_channels, only: coupling_type, response_type
    use moist_model_components, only: solvation_model_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop, only: cavity_type_drop
@@ -150,15 +150,15 @@ contains
 
       ngrid = size(areas)
       call coupling%clear()
-      allocate (coupling%gauss_gt(ngrid))
-      allocate (coupling%gauss_pt(3, ngrid))
-      allocate (coupling%gauss_mt(3, 3, ngrid))
-      allocate (coupling%gauss_rt(3, ngrid))
+      allocate (coupling%gostshyp%gt(ngrid))
+      allocate (coupling%gostshyp%pt(3, ngrid))
+      allocate (coupling%gostshyp%mt(3, 3, ngrid))
+      allocate (coupling%gostshyp%rt(3, ngrid))
 
       do igrid = 1, ngrid
          call model_moments(centers(:, igrid), gaussian_width(areas(igrid)), &
-            & coupling%gauss_gt(igrid), coupling%gauss_pt(:, igrid), &
-            & coupling%gauss_mt(:, :, igrid), coupling%gauss_rt(:, igrid))
+            & coupling%gostshyp%gt(igrid), coupling%gostshyp%pt(:, igrid), &
+            & coupling%gostshyp%mt(:, :, igrid), coupling%gostshyp%rt(:, igrid))
       end do
 
    end subroutine set_model_moments
@@ -263,7 +263,7 @@ contains
       !> Component under test
       type(solvation_model_component_gostshyp) :: component
       !> Potential accumulator receiving the amplitudes
-      type(potential_type) :: potential
+      type(response_type) :: response
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -298,27 +298,28 @@ contains
          & more="GOSTSHYP energy does not match the independent surface sum")
       if (allocated(error)) return
 
-      call component%get_potential(coupling, cavity, potential, err)
+      call component%get_response(coupling, cavity, response, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      if (.not. allocated(potential%w_gauss_g) .or. .not. allocated(potential%w_gauss_f)) then
+      if (.not. allocated(response%gostshyp%w_overlap) .or. &
+          & .not. allocated(response%gostshyp%w_normal_deriv)) then
          call test_failed(error, "GOSTSHYP wrote no host amplitudes")
          return
       end if
 
       ! E = sum_i alpha_i gtilde_i, and beta_i = gtilde_i alpha_i / ftilde_i, so
       ! contracting the amplitudes against the traces the host would supply must
-      ! return the energy: sum_i [w_gauss_g gtilde + w_gauss_f ftilde] = E - E = 0
+      ! return the energy: sum_i [w_overlap gtilde + w_normal_deriv ftilde] = E - E = 0
       ! for the f channel alone, hence the two are checked separately.
-      rebuilt = dot_product(potential%w_gauss_g, coupling%gauss_gt)
+      rebuilt = dot_product(response%gostshyp%w_overlap, coupling%gostshyp%gt)
       call check(error, rebuilt, energy, thr=thr, &
          & more="GOSTSHYP amplitudes do not reproduce the reported energy")
       if (allocated(error)) return
 
       do igrid = 1, ngrid_sw
-         call check(error, potential%w_gauss_f(igrid) < 0.0_wp, &
+         call check(error, response%gostshyp%w_normal_deriv(igrid) < 0.0_wp, &
             & more="GOSTSHYP f-amplitude lost its sign fold")
          if (allocated(error)) return
       end do
@@ -559,7 +560,7 @@ contains
       !> Prefilled accumulator the component must not touch
       type(cavity_surface_adjoint_type) :: prefilled
       !> Potential accumulator the component must not touch
-      type(potential_type) :: potential
+      type(response_type) :: response
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
 
@@ -583,12 +584,18 @@ contains
          & more="GOSTSHYP moved the energy at "//label)
       if (allocated(error)) return
 
-      call component%get_potential(coupling, cavity, potential, err)
+      call component%get_response(coupling, cavity, response, err)
       call check(error, .not. allocated(err), &
          & more="GOSTSHYP potential failed at "//label)
       if (allocated(error)) return
-      call check(error, .not. allocated(potential%w_gauss_g), &
-         & more="GOSTSHYP allocated host amplitudes at "//label)
+      ! A switched-off component is present and contributing nothing, so it
+      ! still publishes its channels -- filled with exact zeros. Leaving them
+      ! unallocated would be indistinguishable from having no GOSTSHYP at all.
+      call check(error, allocated(response%gostshyp%w_overlap), &
+         & more="GOSTSHYP dropped its host amplitudes at "//label)
+      if (allocated(error)) return
+      call check(error, maxval(abs(response%gostshyp%w_overlap)), 0.0_wp, thr=0.0_wp, &
+         & more="GOSTSHYP wrote nonzero amplitudes at "//label)
       if (allocated(error)) return
 
       call prefilled%init(ngrid_sw)
@@ -698,7 +705,7 @@ contains
    !>
    !> The activity floor is *relative*, so it can only compare grid points with
    !> one another -- a moment supply that is wrong by a uniform factor passes it
-   !> untouched and only fails at the divisions. Here `gauss_pt` alone is scaled
+   !> untouched and only fails at the divisions. Here `gostshyp%pt` alone is scaled
    !> into the far underflow, which leaves `alpha = p a / ftilde` large but
    !> perfectly finite and sends `beta = gtilde alpha / ftilde` past the largest
    !> double: the energy would look plausible while the amplitude the host folds
@@ -720,7 +727,7 @@ contains
       !> Component under test
       type(solvation_model_component_gostshyp) :: component
       !> Potential accumulator receiving the amplitudes
-      type(potential_type) :: potential
+      type(response_type) :: response
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -741,7 +748,7 @@ contains
 
       !> Uniform, so every point keeps its share of the total and the relative
       !> floor has nothing to bite on.
-      coupling%gauss_pt = coupling%gauss_pt*1.0e-300_wp
+      coupling%gostshyp%pt = coupling%gostshyp%pt*1.0e-300_wp
 
       energy = 0.0_wp
       call component%get_energy(coupling, cavity, energy, err)
@@ -756,16 +763,17 @@ contains
          & more="GOSTSHYP kept an unrepresentable grid point in the energy")
       if (allocated(error)) return
 
-      call component%get_potential(coupling, cavity, potential, err)
+      call component%get_response(coupling, cavity, response, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      call check(error, all(ieee_is_finite(potential%w_gauss_g)) &
-         & .and. all(ieee_is_finite(potential%w_gauss_f)), &
+      call check(error, all(ieee_is_finite(response%gostshyp%w_overlap)) &
+         & .and. all(ieee_is_finite(response%gostshyp%w_normal_deriv)), &
          & more="GOSTSHYP handed the host a non-finite amplitude")
       if (allocated(error)) return
-      call check(error, maxval(abs(potential%w_gauss_g)) + maxval(abs(potential%w_gauss_f)), &
+      call check(error, maxval(abs(response%gostshyp%w_overlap)) + &
+         & maxval(abs(response%gostshyp%w_normal_deriv)), &
          & 0.0_wp, thr=0.0_wp, &
          & more="GOSTSHYP kept an unrepresentable grid point in the amplitudes")
 

@@ -25,7 +25,7 @@ Concrete cavity types must implement two deferred procedures:
    they are needed.
 
 The base type also provides optional response hooks. 
-``get_surface_potential`` maps model surface weights to host-potential contributions.
+``get_surface_response`` maps model surface weights to host-response contributions.
 
 Typical Use
 -----------
@@ -36,7 +36,7 @@ Typical Use
 3. A ``solvation_model_general`` owns one authoritative cavity, updates it
    before its components, and passes the same cavity to each component.
 4. For the potential, components accumulate model surface weights and
-   ``get_surface_potential`` maps them to host-response channels where needed.
+   ``get_surface_response`` maps them to host-response channels where needed.
 5. Call ``get_gradient`` before requesting supported nuclear derivatives.
 
 The shared ``print``, ``write_xyz_debug``, ``write_csv_debug``, and ``write_pqr_debug`` procedures provide diagnostics and grid export; ``find_disconnected_cavities`` checks the grid for disconnected cavities.

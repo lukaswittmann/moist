@@ -240,14 +240,14 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     model.update(structure)
 
     energy, charges = model.solve(np.zeros(model.ngrid))
-    potential = model.get_potential()
+    response = model.response()
 
     assert energy == approx(pressure * model.cavity.volume, abs=2.0e-13)
     np.testing.assert_array_equal(charges, np.zeros(model.ngrid))
-    assert potential.w_umol.shape == (model.ngrid,)
-    assert potential.w_lsf0.shape == (model.ngrid,)
-    assert potential.w_lsf1.shape == (3, model.ngrid)
-    assert potential.w_lsf2.shape == (3, 3, model.ngrid)
+    assert response.electrostatics.surface_charge.shape == (model.ngrid,)
+    assert response.lsf.w_value.shape == (model.ngrid,)
+    assert response.lsf.w_gradient.shape == (3, model.ngrid)
+    assert response.lsf.w_hessian.shape == (3, 3, model.ngrid)
 
 
 def test_cosmo_is_a_standalone_pcm_component() -> None:
@@ -304,8 +304,11 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
     )
     coupling = ArrayCoupling(
         structure,
+        # qefield is required by the external-potential gradient path; with
+        # phi = 0 the correct value is an explicit zero field.
         electrostatics=lambda cavity, _trace: Electrostatics(
-            np.zeros(cavity.ngrid)
+            np.zeros(cavity.ngrid),
+            qefield=np.zeros((3, cavity.ngrid), order="F"),
         ),
     )
 
@@ -315,11 +318,13 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
     assert isinstance(result.cavity, CavitySnapshotDROP)
     assert isinstance(model.cavity, Cavity)
     assert result.energy == approx(pressure * result.cavity.volume, abs=2.0e-13)
+    # CPCM is present and was handed phi = 0, so zero charges is a genuine
+    # result rather than an absent channel.
     np.testing.assert_array_equal(result.charges, np.zeros(result.cavity.ngrid))
     assert result.fock is None
     assert result.gradient.shape == (3, len(structure))
     assert not result.cavity.xyz.flags.writeable
-    assert not result.potential.w_lsf0.flags.writeable
+    assert not result.response.lsf.w_value.flags.writeable
     assert not result.gradient.flags.writeable
 
 
@@ -351,7 +356,7 @@ def test_evaluation_results_use_irreversibly_read_only_buffers(diatomic) -> None
     with raises(ValueError, match="WRITEABLE"):
         result.cavity.xyz.setflags(write=True)
     with raises(ValueError, match="WRITEABLE"):
-        result.potential.w_lsf0.setflags(write=True)
+        result.response.lsf.w_value.setflags(write=True)
 
 
 def test_failed_coupling_preparation_invalidates_the_model(diatomic) -> None:
@@ -379,7 +384,7 @@ def test_failed_coupling_preparation_invalidates_the_model(diatomic) -> None:
     with raises(RuntimeError, match="successfully updated"):
         _ = model.energy
     with raises(RuntimeError, match="successfully updated"):
-        model.potential()
+        model.response()
     with raises(RuntimeError, match="successfully updated"):
         model.cavity.snapshot()
 
@@ -417,7 +422,7 @@ def test_general_model_update_invalidates_supplied_electrostatics(diatomic) -> N
     with raises(RuntimeError, match="phi not supplied"):
         model.get_energy()
     with raises(RuntimeError, match="phi not supplied"):
-        model.get_potential()
+        model.response()
     with raises(RuntimeError, match="phi not supplied"):
         model.get_gradient(len(structure))
 

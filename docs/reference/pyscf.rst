@@ -180,7 +180,7 @@ Adding a pressure term makes the cavity-shape response dominant rather than a sm
       )
    result = model.evaluate(coupling=host.coupling(dm))
 
-With ``ModelComponentPV`` alone the surface charges vanish and the entire Fock contribution is the ``w_lsf`` contraction;
+With ``ModelComponentPV`` alone the surface charges vanish and the entire Fock contribution is the ``lsf`` contraction;
 useful when checking a host implementation, since nothing else can mask an error in it.
 
 For a self-consistent calculation, :func:`~moist.pyscf.solvated_rhf` wraps the whole cycle, rebuilding the cavity on every SCF iteration because the surface follows the density:

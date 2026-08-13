@@ -25,8 +25,8 @@ module moist_api
    use iso_c_binding
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
-   use moist_type, only: cavity_type, solvation_model_type, solvation_model_component_type, &
-                         coupling_type, potential_type
+   use moist_type, only: cavity_type, solvation_model_type, solvation_model_component_type
+   use moist_channels, only: coupling_type, response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
                                              assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
@@ -124,8 +124,8 @@ module moist_api
    public :: delete_solvation_component_api
    public :: new_general_solvation_model_api, general_model_add_component_api
    public :: general_model_supply_electrostatics_api, general_model_supply_gostshyp_api
-   public :: general_model_get_trace_potential_api, general_model_get_potential_api
-   public :: general_model_get_potential_extended_api
+   public :: general_model_get_trace_response_api, general_model_get_response_api
+   public :: general_model_get_response_extended_api
    public :: general_model_get_gradient_api
    ! Type-specific constructors
    public :: new_drop_cavity_api
@@ -169,6 +169,19 @@ contains
       character(len=*), intent(in) :: msg
       call fatal_error(error, "["//routine//"] "//msg)
    end subroutine api_error
+
+!> Report a response channel the caller asked for but this model cannot produce
+!>
+!> A non-null output pointer is a requirement, not a hint: the caller is told
+!> that nothing feeds the channel rather than receiving a zero-filled buffer it
+!> cannot tell apart from a genuine zero. Passing null skips the channel.
+   subroutine api_channel_absent(error, routine, channel)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: routine
+      character(len=*), intent(in) :: channel
+      call api_error(error, routine, "Requested response channel '"//channel// &
+                     & "' is not produced by this model configuration; pass NULL to skip it")
+   end subroutine api_channel_absent
 
 !> Obtain library version as major * 10000 + minor * 100 + patch
    function get_version_api() result(version) &
@@ -1083,31 +1096,36 @@ contains
       end select
 
       call c_f_pointer(c_phi, phi, [int(ngrid)])
-      model%coupling%elstat_umol = real(phi, wp)
-      if (allocated(model%coupling%elstat_w_xi)) deallocate (model%coupling%elstat_w_xi)
-      if (allocated(model%coupling%elstat_w_f)) deallocate (model%coupling%elstat_w_f)
-      if (allocated(model%coupling%elstat_w_xyz)) deallocate (model%coupling%elstat_w_xyz)
-      if (allocated(model%coupling%elstat_w_n)) deallocate (model%coupling%elstat_w_n)
-      if (allocated(model%coupling%elstat_qefield)) deallocate (model%coupling%elstat_qefield)
+      model%coupling%electrostatics%phi = real(phi, wp)
+      if (allocated(model%coupling%electrostatics%w_xi)) &
+         & deallocate (model%coupling%electrostatics%w_xi)
+      if (allocated(model%coupling%electrostatics%w_f)) &
+         & deallocate (model%coupling%electrostatics%w_f)
+      if (allocated(model%coupling%electrostatics%w_xyz)) &
+         & deallocate (model%coupling%electrostatics%w_xyz)
+      if (allocated(model%coupling%electrostatics%w_normal)) &
+         & deallocate (model%coupling%electrostatics%w_normal)
+      if (allocated(model%coupling%electrostatics%qefield)) &
+         & deallocate (model%coupling%electrostatics%qefield)
       if (c_associated(c_w_xi)) then
          call c_f_pointer(c_w_xi, w_xi, [int(ngrid)])
-         model%coupling%elstat_w_xi = real(w_xi, wp)
+         model%coupling%electrostatics%w_xi = real(w_xi, wp)
       end if
       if (c_associated(c_w_f)) then
          call c_f_pointer(c_w_f, w_f, [int(ngrid)])
-         model%coupling%elstat_w_f = real(w_f, wp)
+         model%coupling%electrostatics%w_f = real(w_f, wp)
       end if
       if (c_associated(c_w_xyz)) then
          call c_f_pointer(c_w_xyz, w_xyz, [3, int(ngrid)])
-         model%coupling%elstat_w_xyz = real(w_xyz, wp)
+         model%coupling%electrostatics%w_xyz = real(w_xyz, wp)
       end if
       if (c_associated(c_w_n)) then
          call c_f_pointer(c_w_n, w_n, [3, int(ngrid)])
-         model%coupling%elstat_w_n = real(w_n, wp)
+         model%coupling%electrostatics%w_normal = real(w_n, wp)
       end if
       if (c_associated(c_qefield)) then
          call c_f_pointer(c_qefield, qefield, [3, int(ngrid)])
-         model%coupling%elstat_qefield = real(qefield, wp)
+         model%coupling%electrostatics%qefield = real(qefield, wp)
       end if
 
    end subroutine general_model_supply_electrostatics_api
@@ -1177,44 +1195,48 @@ contains
       call c_f_pointer(c_pt, pt, [3, int(ngrid)])
       call c_f_pointer(c_mt, mt, [3, 3, int(ngrid)])
       call c_f_pointer(c_rt, rt, [3, int(ngrid)])
-      model%coupling%gauss_gt = real(gt, wp)
-      model%coupling%gauss_pt = real(pt, wp)
-      model%coupling%gauss_mt = real(mt, wp)
-      model%coupling%gauss_rt = real(rt, wp)
+      model%coupling%gostshyp%gt = real(gt, wp)
+      model%coupling%gostshyp%pt = real(pt, wp)
+      model%coupling%gostshyp%mt = real(mt, wp)
+      model%coupling%gostshyp%rt = real(rt, wp)
 
    end subroutine general_model_supply_gostshyp_api
 
-!> Return direct trace adjoints from a general model.
-   subroutine general_model_get_trace_potential_api(verror, vmodel, ngrid, c_w_umol, c_w_qmol) &
-      & bind(C, name=namespace//"general_model_get_trace_potential")
+!> Return the direct trace response from a general model.
+!>
+!> `surface_charge` may be null, which states that the caller does not want the
+!> channel. A non-null pointer is a requirement: if no component produces surface
+!> charges the call fails rather than handing back a zero-filled buffer that
+!> reads like a converged answer.
+   subroutine general_model_get_trace_response_api(verror, vmodel, ngrid, c_surface_charge) &
+      & bind(C, name=namespace//"general_model_get_trace_response")
       !> Error and model handles
       type(c_ptr), value :: verror, vmodel
       !> Electrostatic grid size
       integer(c_int), value :: ngrid
-      !> Output arrays
-      type(c_ptr), value :: c_w_umol, c_w_qmol
+      !> Output array
+      type(c_ptr), value :: c_surface_charge
       !> Decoded error wrapper
       type(vp_error), pointer :: error
       !> Decoded model wrapper
       type(vp_model), pointer :: model
-      !> Output views
-      real(c_double), pointer :: w_umol(:), w_qmol(:)
-      !> Fortran potential result
-      type(potential_type) :: potential
+      !> Output view
+      real(c_double), pointer :: surface_charge(:)
+      !> Fortran response result
+      type(response_type) :: response
       !> Model error
       type(error_type), allocatable :: model_error
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
 
-      if (.not. c_associated(vmodel) .or. .not. c_associated(c_w_umol) .or. &
-          .not. c_associated(c_w_qmol)) then
-         call api_error(error%ptr, "general_model_get_trace_potential", "Null pointer provided")
+      if (.not. c_associated(vmodel)) then
+         call api_error(error%ptr, "general_model_get_trace_response", "Null pointer provided")
          return
       end if
       call c_f_pointer(vmodel, model)
       if (.not. allocated(model%ptr)) then
-         call api_error(error%ptr, "general_model_get_trace_potential", &
+         call api_error(error%ptr, "general_model_get_trace_response", &
                         "Model is not initialized")
          return
       end if
@@ -1222,229 +1244,306 @@ contains
       select type (general => model%ptr)
       type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
-            call api_error(error%ptr, "general_model_get_trace_potential", &
+            call api_error(error%ptr, "general_model_get_trace_response", &
                            "Grid size does not match the updated general-model cavity")
             return
          end if
       class default
-         call api_error(error%ptr, "general_model_get_trace_potential", &
+         call api_error(error%ptr, "general_model_get_trace_response", &
                         "Model is not a general solvation model")
          return
       end select
 
-      call c_f_pointer(c_w_umol, w_umol, [int(ngrid)])
-      call c_f_pointer(c_w_qmol, w_qmol, [int(ngrid)])
-      w_umol = 0.0_c_double
-      w_qmol = 0.0_c_double
+      if (c_associated(c_surface_charge)) then
+         call c_f_pointer(c_surface_charge, surface_charge, [int(ngrid)])
+         surface_charge = 0.0_c_double
+      end if
 
       select type (general => model%ptr)
       type is (solvation_model_general)
-         call general%get_trace_potential(model%coupling, potential, model_error)
+         call general%get_trace_response(model%coupling, response, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
       end select
       if (allocated(model_error)) then
-         call api_error(error%ptr, "general_model_get_trace_potential", model_error%message)
+         call api_error(error%ptr, "general_model_get_trace_response", model_error%message)
          return
       end if
-      if (allocated(potential%w_elstat_umol)) w_umol = potential%w_elstat_umol
-      if (allocated(potential%w_elstat_qmol)) w_qmol = potential%w_elstat_qmol
 
-   end subroutine general_model_get_trace_potential_api
+      if (c_associated(c_surface_charge)) then
+         if (.not. allocated(response%electrostatics%surface_charge)) then
+            call api_channel_absent(error%ptr, "general_model_get_trace_response", &
+                                    "electrostatics%surface_charge")
+            return
+         end if
+         surface_charge = response%electrostatics%surface_charge
+      end if
 
-!> Return complete direct and level-set potential channels.
-   subroutine general_model_get_potential_api(verror, vmodel, ngrid, c_w_umol, c_w_qmol, &
-                                              c_w_lsf0, c_w_lsf1, c_w_lsf2) &
-      & bind(C, name=namespace//"general_model_get_potential")
+   end subroutine general_model_get_trace_response_api
+
+!> Return the direct and level-set response channels.
+!>
+!> Every output pointer is optional. A null pointer states that the caller does
+!> not want that channel; a non-null pointer states that the caller requires it,
+!> and the call fails if this model configuration produces nothing for it. That
+!> distinction matters because "absent" is a legitimate physical answer here --
+!> a cavity with field-independent geometry has no level-set response -- and a
+!> silently zero-filled buffer is indistinguishable from a converged zero.
+   subroutine general_model_get_response_api(verror, vmodel, ngrid, c_surface_charge, &
+                                             c_w_value, c_w_gradient, c_w_hessian) &
+      & bind(C, name=namespace//"general_model_get_response")
       !> Error and model handles
       type(c_ptr), value :: verror, vmodel
       !> Cavity grid size
       integer(c_int), value :: ngrid
-      !> Output arrays
-      type(c_ptr), value :: c_w_umol, c_w_qmol, c_w_lsf0, c_w_lsf1, c_w_lsf2
+      !> Output arrays, each optional
+      type(c_ptr), value :: c_surface_charge, c_w_value, c_w_gradient, c_w_hessian
       !> Decoded error wrapper
       type(vp_error), pointer :: error
       !> Decoded model wrapper
       type(vp_model), pointer :: model
       !> Scalar outputs
-      real(c_double), pointer :: w_umol(:), w_qmol(:), w0(:)
+      real(c_double), pointer :: surface_charge(:), w_value(:)
       !> Tensor outputs
-      real(c_double), pointer :: w1(:, :), w2(:, :, :)
-      !> Fortran potential result
-      type(potential_type) :: potential
+      real(c_double), pointer :: w_gradient(:, :), w_hessian(:, :, :)
+      !> Fortran response result
+      type(response_type) :: response
       !> Model error
       type(error_type), allocatable :: model_error
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
 
-      if (.not. c_associated(vmodel) .or. .not. c_associated(c_w_umol) .or. &
-          .not. c_associated(c_w_qmol) .or. .not. c_associated(c_w_lsf0) .or. &
-          .not. c_associated(c_w_lsf1) .or. .not. c_associated(c_w_lsf2)) then
-         call api_error(error%ptr, "general_model_get_potential", "Null pointer provided")
+      if (.not. c_associated(vmodel)) then
+         call api_error(error%ptr, "general_model_get_response", "Null pointer provided")
          return
       end if
       call c_f_pointer(vmodel, model)
       if (.not. allocated(model%ptr)) then
-         call api_error(error%ptr, "general_model_get_potential", "Model is not initialized")
+         call api_error(error%ptr, "general_model_get_response", "Model is not initialized")
          return
       end if
 
       select type (general => model%ptr)
       type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
-            call api_error(error%ptr, "general_model_get_potential", &
+            call api_error(error%ptr, "general_model_get_response", &
                            "Grid size does not match the updated general-model cavity")
             return
          end if
       class default
-         call api_error(error%ptr, "general_model_get_potential", &
+         call api_error(error%ptr, "general_model_get_response", &
                         "Model is not a general solvation model")
          return
       end select
 
-      call c_f_pointer(c_w_umol, w_umol, [int(ngrid)])
-      call c_f_pointer(c_w_qmol, w_qmol, [int(ngrid)])
-      call c_f_pointer(c_w_lsf0, w0, [int(ngrid)])
-      call c_f_pointer(c_w_lsf1, w1, [3, int(ngrid)])
-      call c_f_pointer(c_w_lsf2, w2, [3, 3, int(ngrid)])
-      w_umol = 0.0_c_double
-      w_qmol = 0.0_c_double
-      w0 = 0.0_c_double
-      w1 = 0.0_c_double
-      w2 = 0.0_c_double
+      if (c_associated(c_surface_charge)) then
+         call c_f_pointer(c_surface_charge, surface_charge, [int(ngrid)])
+         surface_charge = 0.0_c_double
+      end if
+      if (c_associated(c_w_value)) then
+         call c_f_pointer(c_w_value, w_value, [int(ngrid)])
+         w_value = 0.0_c_double
+      end if
+      if (c_associated(c_w_gradient)) then
+         call c_f_pointer(c_w_gradient, w_gradient, [3, int(ngrid)])
+         w_gradient = 0.0_c_double
+      end if
+      if (c_associated(c_w_hessian)) then
+         call c_f_pointer(c_w_hessian, w_hessian, [3, 3, int(ngrid)])
+         w_hessian = 0.0_c_double
+      end if
 
       select type (general => model%ptr)
       type is (solvation_model_general)
-         call general%get_potential(model%coupling, potential, model_error)
+         call general%get_response(model%coupling, response, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
       end select
       if (allocated(model_error)) then
-         call api_error(error%ptr, "general_model_get_potential", model_error%message)
+         call api_error(error%ptr, "general_model_get_response", model_error%message)
          return
       end if
-      if (allocated(potential%w_elstat_umol)) w_umol = potential%w_elstat_umol
-      if (allocated(potential%w_elstat_qmol)) w_qmol = potential%w_elstat_qmol
-      if (allocated(potential%w_lsf0)) w0 = potential%w_lsf0
-      if (allocated(potential%w_lsf1)) w1 = potential%w_lsf1
-      if (allocated(potential%w_lsf2)) w2 = potential%w_lsf2
 
-   end subroutine general_model_get_potential_api
+      if (c_associated(c_surface_charge)) then
+         if (.not. allocated(response%electrostatics%surface_charge)) then
+            call api_channel_absent(error%ptr, "general_model_get_response", "electrostatics%surface_charge")
+            return
+         end if
+         surface_charge = response%electrostatics%surface_charge
+      end if
+      if (c_associated(c_w_value)) then
+         if (.not. allocated(response%lsf%w_value)) then
+            call api_channel_absent(error%ptr, "general_model_get_response", "lsf%w_value")
+            return
+         end if
+         w_value = response%lsf%w_value
+      end if
+      if (c_associated(c_w_gradient)) then
+         if (.not. allocated(response%lsf%w_gradient)) then
+            call api_channel_absent(error%ptr, "general_model_get_response", "lsf%w_gradient")
+            return
+         end if
+         w_gradient = response%lsf%w_gradient
+      end if
+      if (c_associated(c_w_hessian)) then
+         if (.not. allocated(response%lsf%w_hessian)) then
+            call api_channel_absent(error%ptr, "general_model_get_response", "lsf%w_hessian")
+            return
+         end if
+         w_hessian = response%lsf%w_hessian
+      end if
 
-!> Return every potential channel, including the host Gaussian amplitudes.
+   end subroutine general_model_get_response_api
+
+!> Return every response channel, including the host Gaussian amplitudes.
 !>
-!> `general_model_get_potential` widened additively rather than in place, so no
-!> existing caller's signature moves. The amplitudes are the GOSTSHYP component's
-!> half of the Fock matrix: the host completes it as
+!> Identical to `general_model_get_response` but also reports the GOSTSHYP
+!> amplitudes, which are the component's half of the Fock matrix: the host
+!> completes it as
 !>
-!>    F_uv += sum_i [ w_gauss_g(i) g_uv,i + w_gauss_f(i) f_uv,i ]
+!>    F_uv += sum_i [ w_overlap(i) g_uv,i + w_normal_deriv(i) f_uv,i ]
 !>
-!> Both amplitude pointers may be null, and both are zero-filled when no
-!> component supplies them, so a model without GOSTSHYP is not an error.
+!> The same optional-pointer contract applies to every channel, so a host
+!> without GOSTSHYP passes null for the two amplitude pointers rather than
+!> receiving zeros it cannot distinguish from a real result.
 !>
 !> This exists rather than a standalone amplitude getter because assembling a
-!> potential runs every component and contracts the cavity surface adjoints
+!> response runs every component and contracts the cavity surface adjoints
 !> once; splitting the read in two would pay that cost twice.
-   subroutine general_model_get_potential_extended_api(verror, vmodel, ngrid, c_w_umol, &
-                                                       c_w_qmol, c_w_lsf0, c_w_lsf1, c_w_lsf2, &
-                                                       c_w_gauss_g, c_w_gauss_f) &
-      & bind(C, name=namespace//"general_model_get_potential_extended")
+   subroutine general_model_get_response_extended_api(verror, vmodel, ngrid, c_surface_charge, &
+                                                      c_w_value, c_w_gradient, c_w_hessian, &
+                                                      c_w_overlap, c_w_normal_deriv) &
+      & bind(C, name=namespace//"general_model_get_response_extended")
       !> Error and model handles
       type(c_ptr), value :: verror, vmodel
       !> Cavity grid size
       integer(c_int), value :: ngrid
-      !> Output arrays
-      type(c_ptr), value :: c_w_umol, c_w_qmol, c_w_lsf0, c_w_lsf1, c_w_lsf2
+      !> Output arrays, each optional
+      type(c_ptr), value :: c_surface_charge, c_w_value, c_w_gradient, c_w_hessian
       !> Optional Gaussian-amplitude outputs
-      type(c_ptr), value :: c_w_gauss_g, c_w_gauss_f
+      type(c_ptr), value :: c_w_overlap, c_w_normal_deriv
       !> Decoded error wrapper
       type(vp_error), pointer :: error
       !> Decoded model wrapper
       type(vp_model), pointer :: model
       !> Scalar outputs
-      real(c_double), pointer :: w_umol(:), w_qmol(:), w0(:)
+      real(c_double), pointer :: surface_charge(:), w_value(:)
       !> Tensor outputs
-      real(c_double), pointer :: w1(:, :), w2(:, :, :)
+      real(c_double), pointer :: w_gradient(:, :), w_hessian(:, :, :)
       !> Gaussian-amplitude outputs
-      real(c_double), pointer :: wg(:), wf(:)
-      !> Fortran potential result
-      type(potential_type) :: potential
+      real(c_double), pointer :: w_overlap(:), w_normal_deriv(:)
+      !> Fortran response result
+      type(response_type) :: response
       !> Model error
       type(error_type), allocatable :: model_error
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
 
-      if (.not. c_associated(vmodel) .or. .not. c_associated(c_w_umol) .or. &
-          .not. c_associated(c_w_qmol) .or. .not. c_associated(c_w_lsf0) .or. &
-          .not. c_associated(c_w_lsf1) .or. .not. c_associated(c_w_lsf2)) then
-         call api_error(error%ptr, "general_model_get_potential_extended", &
-                        "Null pointer provided")
+      if (.not. c_associated(vmodel)) then
+         call api_error(error%ptr, "general_model_get_response_extended", "Null pointer provided")
          return
       end if
       call c_f_pointer(vmodel, model)
       if (.not. allocated(model%ptr)) then
-         call api_error(error%ptr, "general_model_get_potential_extended", &
-                        "Model is not initialized")
+         call api_error(error%ptr, "general_model_get_response_extended", "Model is not initialized")
          return
       end if
 
       select type (general => model%ptr)
       type is (solvation_model_general)
          if (.not. general%updated .or. ngrid /= general%cavity%ngrid) then
-            call api_error(error%ptr, "general_model_get_potential_extended", &
+            call api_error(error%ptr, "general_model_get_response_extended", &
                            "Grid size does not match the updated general-model cavity")
             return
          end if
       class default
-         call api_error(error%ptr, "general_model_get_potential_extended", &
+         call api_error(error%ptr, "general_model_get_response_extended", &
                         "Model is not a general solvation model")
          return
       end select
 
-      call c_f_pointer(c_w_umol, w_umol, [int(ngrid)])
-      call c_f_pointer(c_w_qmol, w_qmol, [int(ngrid)])
-      call c_f_pointer(c_w_lsf0, w0, [int(ngrid)])
-      call c_f_pointer(c_w_lsf1, w1, [3, int(ngrid)])
-      call c_f_pointer(c_w_lsf2, w2, [3, 3, int(ngrid)])
-      w_umol = 0.0_c_double
-      w_qmol = 0.0_c_double
-      w0 = 0.0_c_double
-      w1 = 0.0_c_double
-      w2 = 0.0_c_double
-      if (c_associated(c_w_gauss_g)) then
-         call c_f_pointer(c_w_gauss_g, wg, [int(ngrid)])
-         wg = 0.0_c_double
+      if (c_associated(c_surface_charge)) then
+         call c_f_pointer(c_surface_charge, surface_charge, [int(ngrid)])
+         surface_charge = 0.0_c_double
       end if
-      if (c_associated(c_w_gauss_f)) then
-         call c_f_pointer(c_w_gauss_f, wf, [int(ngrid)])
-         wf = 0.0_c_double
+      if (c_associated(c_w_value)) then
+         call c_f_pointer(c_w_value, w_value, [int(ngrid)])
+         w_value = 0.0_c_double
+      end if
+      if (c_associated(c_w_gradient)) then
+         call c_f_pointer(c_w_gradient, w_gradient, [3, int(ngrid)])
+         w_gradient = 0.0_c_double
+      end if
+      if (c_associated(c_w_hessian)) then
+         call c_f_pointer(c_w_hessian, w_hessian, [3, 3, int(ngrid)])
+         w_hessian = 0.0_c_double
+      end if
+      if (c_associated(c_w_overlap)) then
+         call c_f_pointer(c_w_overlap, w_overlap, [int(ngrid)])
+         w_overlap = 0.0_c_double
+      end if
+      if (c_associated(c_w_normal_deriv)) then
+         call c_f_pointer(c_w_normal_deriv, w_normal_deriv, [int(ngrid)])
+         w_normal_deriv = 0.0_c_double
       end if
 
       select type (general => model%ptr)
       type is (solvation_model_general)
-         call general%get_potential(model%coupling, potential, model_error)
+         call general%get_response(model%coupling, response, model_error)
       class default
          call fatal_error(model_error, "Model is not a general solvation model")
       end select
       if (allocated(model_error)) then
-         call api_error(error%ptr, "general_model_get_potential_extended", model_error%message)
+         call api_error(error%ptr, "general_model_get_response_extended", model_error%message)
          return
       end if
-      if (allocated(potential%w_elstat_umol)) w_umol = potential%w_elstat_umol
-      if (allocated(potential%w_elstat_qmol)) w_qmol = potential%w_elstat_qmol
-      if (allocated(potential%w_lsf0)) w0 = potential%w_lsf0
-      if (allocated(potential%w_lsf1)) w1 = potential%w_lsf1
-      if (allocated(potential%w_lsf2)) w2 = potential%w_lsf2
-      if (c_associated(c_w_gauss_g) .and. allocated(potential%w_gauss_g)) then
-         wg = potential%w_gauss_g
+
+      if (c_associated(c_surface_charge)) then
+         if (.not. allocated(response%electrostatics%surface_charge)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "electrostatics%surface_charge")
+            return
+         end if
+         surface_charge = response%electrostatics%surface_charge
       end if
-      if (c_associated(c_w_gauss_f) .and. allocated(potential%w_gauss_f)) then
-         wf = potential%w_gauss_f
+      if (c_associated(c_w_value)) then
+         if (.not. allocated(response%lsf%w_value)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "lsf%w_value")
+            return
+         end if
+         w_value = response%lsf%w_value
+      end if
+      if (c_associated(c_w_gradient)) then
+         if (.not. allocated(response%lsf%w_gradient)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "lsf%w_gradient")
+            return
+         end if
+         w_gradient = response%lsf%w_gradient
+      end if
+      if (c_associated(c_w_hessian)) then
+         if (.not. allocated(response%lsf%w_hessian)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "lsf%w_hessian")
+            return
+         end if
+         w_hessian = response%lsf%w_hessian
+      end if
+      if (c_associated(c_w_overlap)) then
+         if (.not. allocated(response%gostshyp%w_overlap)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "gostshyp%w_overlap")
+            return
+         end if
+         w_overlap = response%gostshyp%w_overlap
+      end if
+      if (c_associated(c_w_normal_deriv)) then
+         if (.not. allocated(response%gostshyp%w_normal_deriv)) then
+            call api_channel_absent(error%ptr, "general_model_get_response_extended", "gostshyp%w_normal_deriv")
+            return
+         end if
+         w_normal_deriv = response%gostshyp%w_normal_deriv
       end if
 
-   end subroutine general_model_get_potential_extended_api
+   end subroutine general_model_get_response_extended_api
 
 !> Return the general-model nuclear gradient.
    subroutine general_model_get_gradient_api(verror, vmodel, nat, c_gradient) &

@@ -16,14 +16,14 @@ Concrete models implement four deferred procedures:
 ``get_energy(coupling, energy, error)``
    Add the model energy for the supplied QM coupling data.
 
-``get_potential(coupling, potential, error)``
+``get_response(coupling, response, error)``
    Add the self-consistent host-potential contributions.
 
 ``get_gradient(coupling, gradient, error)``
    Add the nuclear-gradient contribution.
 
 The ``coupling_type`` carries QM data from the host to the model;
-``potential_type`` returns the corresponding potential and response weights.
+``response_type`` returns the corresponding response channels.
 
 Model Component Interface
 -------------------------
@@ -31,10 +31,10 @@ Model Component Interface
 A ``solvation_model_component_type`` is one reusable energy term evaluated on a shared cavity.
 It stores a name, the current solute structure, and a linear ``scale`` as shared component state.
 
-Components implement ``update``, ``get_energy``, ``get_potential``, and ``get_gradient`` with the live ``cavity_type`` as an additional argument.
+Components implement ``update``, ``get_energy``, ``get_response``, and ``get_gradient`` with the live ``cavity_type`` as an additional argument.
 They may also override three default no-op response hooks:
 
-- ``get_trace_potential`` for direct host-trace adjoints;
+- ``get_trace_response`` for direct host-trace adjoints;
 - ``get_surface_weights`` for model-specific cavity surface weights;
 - ``get_host_surface_weights`` for host-computed trace-geometry weights.
 

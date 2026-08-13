@@ -11,7 +11,7 @@ module test_model_component_pv
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_type, only: coupling_type, potential_type
+   use moist_channels, only: coupling_type, response_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
@@ -584,7 +584,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Potential accumulator PV must leave alone
-      type(potential_type) :: potential
+      type(response_type) :: response
       !> Component under test
       type(solvation_model_component_pv) :: pv_component
       !> Energy accumulator carrying a sentinel
@@ -640,13 +640,13 @@ contains
       end if
 
       ! A volume contribution carries no host-trace potential.
-      call pv_component%get_potential(coupling, cavity, potential, err)
+      call pv_component%get_response(coupling, cavity, response, err)
       if (allocated(err)) then
          call test_failed(error, "PV potential failed: "//err%message)
          return
       end if
-      call check(error, .not. allocated(potential%w_lsf0) &
-         & .and. .not. allocated(potential%w_elstat_umol), &
+      call check(error, .not. allocated(response%lsf%w_value) &
+         & .and. .not. allocated(response%electrostatics%surface_charge), &
          & more="PV wrote to the host potential")
       if (allocated(error)) return
 

@@ -330,7 +330,7 @@ moist_new_pv_component(moist_error /* error */,
 /// Hartree/bohr^3. The component cannot form its own density traces: supply the
 /// Gaussian moments with moist_general_model_supply_gostshyp after every cavity
 /// update, and read the amplitudes back with
-/// moist_general_model_get_potential_extended.
+/// moist_general_model_get_response_extended.
 moist_API_ENTRY moist_component moist_API_CALL
 moist_new_gostshyp_component(moist_error /* error */,
                              double /* pressure */) moist_API_SUFFIX__V_0_6;
@@ -383,36 +383,50 @@ moist_general_model_supply_gostshyp(
     const double* /* mt: Fortran (3,3,ngrid) */,
     const double* /* rt: Fortran (3,ngrid) */) moist_API_SUFFIX__V_0_6;
 
-/// Return direct molecular-trace adjoints from all model components.
+/// Return the direct molecular-trace response from all model components.
+/// `surface_charge` is the surface charge q_i, equal to dE/dphi_i by
+/// stationarity; the host contracts it as `F_uv += sum_i q_i V_uv(r_i)`.
+/// The pointer may be NULL to skip the channel. A non-NULL pointer is a
+/// REQUIREMENT: if no component produces surface charges the call fails rather
+/// than returning zeros that read like a converged result.
 moist_API_ENTRY void moist_API_CALL
-moist_general_model_get_trace_potential(
+moist_general_model_get_trace_response(
     moist_error /* error */, moist_model /* model */, int /* ngrid */,
-    double* /* w_umol[ngrid] */, double* /* w_qmol[ngrid] */) moist_API_SUFFIX__V_0_6;
+    double* /* surface_charge[ngrid] or NULL */) moist_API_SUFFIX__V_0_6;
 
-/// Return direct trace and level-set adjoints from all model components.
+/// Return the direct trace and level-set response from all model components.
+///
+/// EVERY output pointer is optional and carries the same contract: NULL means
+/// "I do not want this channel"; non-NULL means "I require it", and the call
+/// fails if this model configuration produces nothing for it. Absence is a
+/// legitimate physical answer here -- a cavity with field-independent geometry
+/// has no level-set response -- so a zero-filled buffer could not be told apart
+/// from a genuine zero, and is therefore never returned silently.
 moist_API_ENTRY void moist_API_CALL
-moist_general_model_get_potential(
+moist_general_model_get_response(
     moist_error /* error */, moist_model /* model */, int /* ngrid */,
-    double* /* w_umol[ngrid] */, double* /* w_qmol[ngrid] */,
-    double* /* w_lsf0[ngrid] */, double* /* w_lsf1: Fortran (3,ngrid) */,
-    double* /* w_lsf2: Fortran (3,3,ngrid) */) moist_API_SUFFIX__V_0_6;
+    double* /* surface_charge[ngrid] or NULL */,
+    double* /* w_value[ngrid] or NULL */,
+    double* /* w_gradient: Fortran (3,ngrid), or NULL */,
+    double* /* w_hessian: Fortran (3,3,ngrid), or NULL */) moist_API_SUFFIX__V_0_6;
 
-/// Return every potential channel, including the GOSTSHYP host amplitudes.
-/// Identical to moist_general_model_get_potential but also reports the
+/// Return every response channel, including the GOSTSHYP host amplitudes.
+/// Identical to moist_general_model_get_response but also reports the
 /// amplitudes conjugate to the host's Gaussian integral blocks, which the host
-/// contracts as `F_uv += sum_i [w_gauss_g[i] g_uv,i + w_gauss_f[i] f_uv,i]`.
-/// Both amplitude pointers may be NULL, and both are zero-filled when no
-/// component supplies them, so a model without GOSTSHYP is not an error.
-/// Prefer this over two calls: assembling a potential contracts the cavity
+/// contracts as `F_uv += sum_i [w_overlap[i] g_uv,i + w_normal_deriv[i] f_uv,i]`.
+/// The same optional-pointer contract applies to every channel, so a host
+/// without GOSTSHYP passes NULL for the two amplitude pointers.
+/// Prefer this over two calls: assembling a response contracts the cavity
 /// surface adjoints once, and splitting the read would pay that cost twice.
 moist_API_ENTRY void moist_API_CALL
-moist_general_model_get_potential_extended(
+moist_general_model_get_response_extended(
     moist_error /* error */, moist_model /* model */, int /* ngrid */,
-    double* /* w_umol[ngrid] */, double* /* w_qmol[ngrid] */,
-    double* /* w_lsf0[ngrid] */, double* /* w_lsf1: Fortran (3,ngrid) */,
-    double* /* w_lsf2: Fortran (3,3,ngrid) */,
-    double* /* w_gauss_g[ngrid] or NULL */,
-    double* /* w_gauss_f[ngrid] or NULL */) moist_API_SUFFIX__V_0_6;
+    double* /* surface_charge[ngrid] or NULL */,
+    double* /* w_value[ngrid] or NULL */,
+    double* /* w_gradient: Fortran (3,ngrid), or NULL */,
+    double* /* w_hessian: Fortran (3,3,ngrid), or NULL */,
+    double* /* w_overlap[ngrid] or NULL */,
+    double* /* w_normal_deriv[ngrid] or NULL */) moist_API_SUFFIX__V_0_6;
 
 /// Return the accumulated nuclear gradient from all model components.
 moist_API_ENTRY void moist_API_CALL

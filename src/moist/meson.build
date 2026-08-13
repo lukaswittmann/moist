@@ -10,6 +10,7 @@ srcs += files(
   'context.f90',
   'math.f90',
   'cavity.f90',
+  'channels.f90',
   'data.f90',
   'radii.f90',
   'model.f90',

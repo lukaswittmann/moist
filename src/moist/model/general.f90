@@ -3,8 +3,8 @@ module moist_model_general
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_type, only: solvation_model_type, solvation_model_component_type, cavity_type, &
-      & coupling_type, potential_type
+   use moist_type, only: solvation_model_type, solvation_model_component_type, cavity_type
+   use moist_channels, only: coupling_type, response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none
@@ -31,9 +31,9 @@ module moist_model_general
    contains
       procedure :: add_component
       procedure :: update => general_update
-      procedure :: get_trace_potential => general_get_trace_potential
+      procedure :: get_trace_response => general_get_trace_response
       procedure :: get_energy => general_get_energy
-      procedure :: get_potential => general_get_potential
+      procedure :: get_response => general_get_response
       procedure :: get_gradient => general_get_gradient
    end type solvation_model_general
 
@@ -132,32 +132,32 @@ contains
    !>
    !> @param[inout] self      General model
    !> @param[in]    coupling  Host coupling data
-   !> @param[inout] potential Potential accumulator
+   !> @param[inout] response  Response accumulator
    !> @param[out]   error     Error handling
-   subroutine general_get_trace_potential(self, coupling, potential, error)
+   subroutine general_get_trace_response(self, coupling, response, error)
       !> General model
       class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Potential accumulator
-      type(potential_type), intent(inout) :: potential
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Transactional local potential
-      type(potential_type) :: local
+      !> Transactional local response
+      type(response_type) :: local
       !> Component index
       integer :: i
 
       call require_updated(self, error)
       if (allocated(error)) return
       do i = 1, size(self%components)
-         call self%components(i)%item%get_trace_potential(coupling, self%cavity, local, error)
+         call self%components(i)%item%get_trace_response(coupling, self%cavity, local, error)
          if (allocated(error)) return
       end do
-      call add_potential(potential, local, error)
+      call add_response(response, local, error)
 
-   end subroutine general_get_trace_potential
+   end subroutine general_get_trace_response
 
    !> Accumulate the energy of every component
    !>
@@ -191,23 +191,23 @@ contains
 
    end subroutine general_get_energy
 
-   !> Assemble direct trace and cavity-response potential channels.
+   !> Assemble direct trace and cavity-response channels.
    !> @param[inout] self      General model
    !> @param[in]    coupling  Host coupling data
-   !> @param[inout] potential Potential accumulator
+   !> @param[inout] response  Response accumulator
    !> @param[out]   error     Error handling
-   subroutine general_get_potential(self, coupling, potential, error)
+   subroutine general_get_response(self, coupling, response, error)
       !> General model
       class(solvation_model_general), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Potential accumulator
-      type(potential_type), intent(inout) :: potential
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Transactional local potential
-      type(potential_type) :: local
+      !> Transactional local response
+      type(response_type) :: local
       !> Shared surface accumulator
       type(cavity_surface_adjoint_type) :: acc
       !> Component index
@@ -217,16 +217,16 @@ contains
       if (allocated(error)) return
       call acc%init(self%cavity%ngrid)
       do i = 1, size(self%components)
-         call self%components(i)%item%get_potential(coupling, self%cavity, local, error)
+         call self%components(i)%item%get_response(coupling, self%cavity, local, error)
          if (allocated(error)) return
          call self%components(i)%item%get_surface_weights(coupling, self%cavity, acc, error)
          if (allocated(error)) return
       end do
-      call self%cavity%get_surface_potential(acc, local, error)
+      call self%cavity%get_surface_response(acc, local, error)
       if (allocated(error)) return
-      call add_potential(potential, local, error)
+      call add_response(response, local, error)
 
-   end subroutine general_get_potential
+   end subroutine general_get_response
 
    !> Accumulate the nuclear gradient of every component
    !>
@@ -299,36 +299,37 @@ contains
 
    end subroutine require_updated
 
-   !> Add every allocated channel from one potential to another
+   !> Add every allocated channel from one response to another
    !>
    !> @param[inout] target Destination accumulator
    !> @param[in]    source Source contribution
    !> @param[out]   error  Error handling
-   subroutine add_potential(target, source, error)
+   subroutine add_response(target, source, error)
       !> Destination accumulator
-      type(potential_type), intent(inout) :: target
+      type(response_type), intent(inout) :: target
       !> Source contribution
-      type(potential_type), intent(in) :: source
+      type(response_type), intent(in) :: source
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call add_vector(target%w_elstat_umol, source%w_elstat_umol, "w_elstat_umol", error)
+      call add_vector(target%electrostatics%surface_charge, &
+         & source%electrostatics%surface_charge, "electrostatics%surface_charge", error)
       if (allocated(error)) return
-      call add_vector(target%w_elstat_qmol, source%w_elstat_qmol, "w_elstat_qmol", error)
+      call add_vector(target%gostshyp%w_overlap, source%gostshyp%w_overlap, &
+         & "gostshyp%w_overlap", error)
       if (allocated(error)) return
-      call add_vector(target%w_gauss_g, source%w_gauss_g, "w_gauss_g", error)
+      call add_vector(target%gostshyp%w_normal_deriv, source%gostshyp%w_normal_deriv, &
+         & "gostshyp%w_normal_deriv", error)
       if (allocated(error)) return
-      call add_vector(target%w_gauss_f, source%w_gauss_f, "w_gauss_f", error)
+      call add_vector(target%lsf%w_value, source%lsf%w_value, "lsf%w_value", error)
       if (allocated(error)) return
-      call add_vector(target%w_lsf0, source%w_lsf0, "w_lsf0", error)
+      call add_matrix(target%lsf%w_gradient, source%lsf%w_gradient, "lsf%w_gradient", error)
       if (allocated(error)) return
-      call add_matrix(target%w_lsf1, source%w_lsf1, "w_lsf1", error)
-      if (allocated(error)) return
-      call add_tensor3(target%w_lsf2, source%w_lsf2, "w_lsf2", error)
+      call add_tensor3(target%lsf%w_hessian, source%lsf%w_hessian, "lsf%w_hessian", error)
 
-   end subroutine add_potential
+   end subroutine add_response
 
-   !> Add an allocated vector contribution to a potential channel
+   !> Add an allocated vector contribution to a response channel
    !>
    !> @param[inout] target Destination accumulator
    !> @param[in]    source Source contribution
@@ -355,7 +356,7 @@ contains
 
    end subroutine add_vector
 
-   !> Add an allocated matrix contribution to a potential channel
+   !> Add an allocated matrix contribution to a response channel
    !>
    !> @param[inout] target Destination accumulator
    !> @param[in]    source Source contribution
@@ -382,7 +383,7 @@ contains
 
    end subroutine add_matrix
 
-   !> Add an allocated rank-three contribution to a potential channel
+   !> Add an allocated rank-three contribution to a response channel
    !>
    !> @param[inout] target Destination accumulator
    !> @param[in]    source Source contribution

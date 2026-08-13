@@ -127,44 +127,79 @@ class AnchorGradient(_ImmutableArrayValue):
 
 
 @dataclass(frozen=True)
-class TracePotential(_ImmutableArrayValue):
-    """Direct host-trace adjoints used while preparing a coupling."""
+class ElectrostaticResponse(_ImmutableArrayValue):
+    """Electrostatic channel of a solvation response.
 
-    molecular: np.ndarray
-    normal: np.ndarray
+    ``surface_charge``
+        ``(ngrid,)`` surface charge ``q_i``, which equals ``dE/dphi_i`` by
+        stationarity.  The host contracts it as ``F += sum_i q_i V(r_i)``.
+    """
 
-    def __iter__(self) -> Iterator[np.ndarray]:
-        """Preserve tuple unpacking used by the pre-evaluation interface."""
-        yield self.molecular
-        yield self.normal
+    surface_charge: np.ndarray
 
 
 @dataclass(frozen=True)
-class GeneralPotential(_ImmutableArrayValue):
-    """Every adjoint channel returned by a general solvation model.
+class LsfResponse(_ImmutableArrayValue):
+    """Cavity level-set channel of a solvation response.
 
-    Each ``w_*`` is the derivative of the model energy with respect to the host
-    quantity it names, so the host completes the chain rule by contracting it
-    with its own derivative of that quantity:
-
-    ``w_umol``, ``w_qmol``
-        ``(ngrid,)`` adjoints of the molecular potential and of the surface
-        charges.
-    ``w_lsf0``, ``w_lsf1``, ``w_lsf2``
+    ``w_value``, ``w_gradient``, ``w_hessian``
         ``(ngrid,)``, ``(3, ngrid)`` and ``(3, 3, ngrid)`` adjoints of the
         **scaled** level set and of its gradient and Hessian.
-    ``w_gauss_g``, ``w_gauss_f``
-        ``(ngrid,)`` GOSTSHYP amplitudes for the Gaussian value and normal
-        derivative; ``None`` unless a GOSTSHYP component is present.
     """
 
-    w_umol: np.ndarray
-    w_qmol: np.ndarray
-    w_lsf0: np.ndarray
-    w_lsf1: np.ndarray
-    w_lsf2: np.ndarray
-    w_gauss_g: Optional[np.ndarray] = None
-    w_gauss_f: Optional[np.ndarray] = None
+    w_value: np.ndarray
+    w_gradient: np.ndarray
+    w_hessian: np.ndarray
+
+
+@dataclass(frozen=True)
+class GostshypResponse(_ImmutableArrayValue):
+    """GOSTSHYP channel of a solvation response.
+
+    ``w_overlap``, ``w_normal_deriv``
+        ``(ngrid,)`` amplitudes for the Gaussian value and its normal
+        derivative; the host completes its Fock contribution as
+        ``F += sum_i [w_overlap[i] g[..., i] + w_normal_deriv[i] f[..., i]]``.
+    """
+
+    w_overlap: np.ndarray
+    w_normal_deriv: np.ndarray
+
+
+@dataclass(frozen=True)
+class Response(_ImmutableArrayValue):
+    """Every channel group returned by a general solvation model.
+
+    Each group is the derivative of the model energy with respect to the host
+    quantities it names, so the host completes the chain rule by contracting it
+    with its own derivative of those quantities.
+
+    A group is ``None`` when the caller did not request it.  A requested group
+    is always populated: asking for a channel the model configuration does not
+    produce raises rather than returning zeros.
+    """
+
+    electrostatics: Optional[ElectrostaticResponse] = None
+    lsf: Optional[LsfResponse] = None
+    gostshyp: Optional[GostshypResponse] = None
+
+    @classmethod
+    def _from_groups(cls, groups: dict) -> "Response":
+        """Build from the flat group dictionary the library layer returns."""
+        electrostatics = groups.get("electrostatics")
+        lsf = groups.get("lsf")
+        gostshyp = groups.get("gostshyp")
+        return cls(
+            electrostatics=(
+                ElectrostaticResponse(**electrostatics)
+                if electrostatics is not None
+                else None
+            ),
+            lsf=LsfResponse(**lsf) if lsf is not None else None,
+            gostshyp=(
+                GostshypResponse(**gostshyp) if gostshyp is not None else None
+            ),
+        )
 
 
 # -----------------------------------------------------------------------------
@@ -364,6 +399,12 @@ class Cavity(ABC):
 
     density_dependent = False
 
+    #: Whether this cavity kind contributes a level-set response.  Only DROP
+    #: cavities differentiate a level set; a cavity with field-independent
+    #: geometry produces no ``lsf`` channel at all, which is a statement about
+    #: the physics rather than a missing result.
+    produces_lsf_response = False
+
     def __init__(self, handle: library.CavityHandle, *, owned: bool = True) -> None:
         self._handle = handle
         self._owned = owned
@@ -511,6 +552,8 @@ class CavityISwiG(_CavityGenericBase):
 
 class _CavityDROPBase(Cavity):
     """Shared behaviour for standalone and model-owned DROP cavities."""
+
+    produces_lsf_response = True
 
     def _read_snapshot(self) -> CavitySnapshotDROP:
         generic = library.get_cavity_results(self._handle)
@@ -925,7 +968,7 @@ class SolvationCoupling(ABC):
     def fock(
         self,
         cavity: CavitySnapshot,
-        potential: GeneralPotential,
+        response: Response,
     ) -> Optional[np.ndarray]:
         """Return a host Fock contribution, or ``None`` when unavailable."""
         return None
@@ -933,7 +976,7 @@ class SolvationCoupling(ABC):
     def gradient(
         self,
         cavity: CavitySnapshot,
-        potential: GeneralPotential,
+        response: Response,
         model_gradient: Callable[[], np.ndarray],
     ) -> np.ndarray:
         """Return the complete nuclear gradient for this coupling."""
@@ -941,7 +984,7 @@ class SolvationCoupling(ABC):
 
 
 ElectrostaticsProvider = Callable[
-    [CavitySnapshot, Optional[TracePotential]], Electrostatics
+    [CavitySnapshot, Optional[Response]], Electrostatics
 ]
 
 
@@ -973,7 +1016,7 @@ class CouplingTransaction:
     def exchange_electrostatics(self, provider: ElectrostaticsProvider) -> None:
         """Complete moist's two-pass electrostatic host exchange."""
         self._model._supply_electrostatics(provider(self._cavity, None))
-        trace = self._model.trace_potential()
+        trace = self._model.trace_response()
         self._model._supply_electrostatics(provider(self._cavity, trace))
 
     def supply_gostshyp(self, moments: GostshypMoments) -> None:
@@ -1014,7 +1057,7 @@ class ArrayCoupling(SolvationCoupling):
     def _electrostatic_data(
         self,
         cavity: CavitySnapshot,
-        trace: Optional[TracePotential],
+        trace: Optional[Response],
     ) -> Electrostatics:
         provider = self._electrostatics
         if provider is None:
@@ -1044,7 +1087,7 @@ class Evaluation:
         "_gradient",
         "_cavity_result",
         "_energy",
-        "_potential_result",
+        "_response_result",
         "_fock_result",
     )
 
@@ -1056,7 +1099,7 @@ class Evaluation:
         coupling: SolvationCoupling,
         cavity: CavitySnapshot,
         energy: float,
-        potential: GeneralPotential,
+        response: Response,
         fock: Optional[np.ndarray],
     ) -> None:
         self._model = model
@@ -1065,7 +1108,7 @@ class Evaluation:
         self._gradient: Optional[np.ndarray] = None
         self._cavity_result = cavity
         self._energy = float(energy)
-        self._potential_result = potential
+        self._response_result = response
         self._fock_result = None if fock is None else _immutable_array(fock)
 
     @property
@@ -1077,8 +1120,8 @@ class Evaluation:
         return self._energy
 
     @property
-    def potential(self) -> GeneralPotential:
-        return self._potential_result
+    def response(self) -> Response:
+        return self._response_result
 
     @property
     def fock(self) -> Optional[np.ndarray]:
@@ -1086,8 +1129,18 @@ class Evaluation:
 
     @property
     def charges(self) -> np.ndarray:
-        """Direct molecular-potential adjoints (surface charges for CPCM)."""
-        return self.potential.w_umol
+        """Surface charges accumulated by the electrostatic components.
+
+        Raises when this model has no electrostatic component: it produces no
+        surface charges at all, which is not the same as producing zeros.
+        """
+        electrostatics = self.response.electrostatics
+        if electrostatics is None:
+            raise RuntimeError(
+                "This model has no electrostatic component, so it produces no "
+                "surface charges"
+            )
+        return electrostatics.surface_charge
 
     @property
     def gradient(self) -> np.ndarray:
@@ -1100,7 +1153,7 @@ class Evaluation:
             self._gradient = _immutable_array(
                 self._coupling.gradient(
                     self.cavity,
-                    self.potential,
+                    self.response,
                     self._model.gradient,
                 )
             )
@@ -1271,40 +1324,51 @@ class SolvationModel:
         """Compatibility shim for manually staged GOSTSHYP moments."""
         self._supply_gostshyp(GostshypMoments(gt, pt, mt, rt))
 
-    def trace_potential(self) -> TracePotential:
+    def trace_response(self) -> Response:
+        """Return the direct trace response, with only ``electrostatics`` filled.
+
+        Mirrors the Fortran trace phase, which populates exactly one group.
+        """
         self._require_updated()
-        molecular, normal = library.general_model_get_trace_potential(
+        surface_charge = library.general_model_get_trace_response(
             self._model, self.ngrid
         )
-        return TracePotential(molecular, normal)
-
-    def get_trace_potential(self) -> tuple[np.ndarray, np.ndarray]:
-        """Compatibility tuple form of :meth:`trace_potential`."""
-        trace = self.trace_potential()
-        return trace.molecular, trace.normal
-
-    def get_potential(self) -> GeneralPotential:
-        """Compatibility read without optional Gaussian response channels."""
-        self._require_updated()
-        return GeneralPotential(
-            **library.general_model_get_potential(self._model, self.ngrid)
+        return Response(
+            electrostatics=ElectrostaticResponse(surface_charge=surface_charge)
         )
 
-    def potential(self) -> GeneralPotential:
-        """Return every response channel in one composed value."""
-        self._require_updated()
-        return GeneralPotential(
-            **library.general_model_get_potential_extended(self._model, self.ngrid)
-        )
+    def response(
+        self,
+        *,
+        electrostatics: bool = True,
+        lsf: Optional[bool] = None,
+        gostshyp: bool = False,
+    ) -> Response:
+        """Return the requested response groups in one composed value.
 
-    def get_potential_extended(self) -> GeneralPotential:
-        """Compatibility alias for :meth:`potential`."""
-        return self.potential()
+        A group that is not requested comes back ``None``.  A requested group
+        must be produced by this model configuration, or the call raises --
+        zeros for a channel nothing feeds are indistinguishable from a genuine
+        result.  ``lsf`` defaults to whether the model's cavity differentiates
+        a level set at all; pass it explicitly to assert either way.
+        """
+        self._require_updated()
+        if lsf is None:
+            lsf = self._cavity.produces_lsf_response
+        return Response._from_groups(
+            library.general_model_get_response(
+                self._model,
+                self.ngrid,
+                electrostatics=electrostatics,
+                lsf=lsf,
+                gostshyp=gostshyp,
+            )
+        )
 
     def solve(self, phi: np.ndarray) -> tuple[float, np.ndarray]:
         """Compatibility helper for energy/charge-only electrostatic solves."""
         self.supply_electrostatics(phi)
-        return self.energy, self.trace_potential().molecular
+        return self.energy, self.trace_response().electrostatics.surface_charge
 
     def evaluate(
         self,
@@ -1338,16 +1402,23 @@ class SolvationModel:
             coupling.prepare(CouplingTransaction(self))
 
             energy = self.energy
-            potential = self.potential()
+            # Request exactly what this model configuration produces.  The
+            # coupling's `channels` say what the host can *offer*; the model's
+            # required channels say what it actually consumes and answers with.
+            required = self.required_coupling_channels
+            response = self.response(
+                electrostatics=CouplingChannel.ELECTROSTATICS in required,
+                gostshyp=CouplingChannel.GOSTSHYP in required,
+            )
             cavity = self._cavity.snapshot()
-            fock = coupling.fock(cavity, potential)
+            fock = coupling.fock(cavity, response)
             return Evaluation(
                 model=self,
                 epoch=self.epoch,
                 coupling=coupling,
                 cavity=cavity,
                 energy=energy,
-                potential=potential,
+                response=response,
                 fock=fock,
             )
         except Exception:

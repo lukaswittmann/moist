@@ -701,7 +701,7 @@ def test_params_update_drops_the_previous_surfaces_moments():
     assert wall.model.ngrid == wall.ngrid
     assert not np.allclose(wall.model.cavity.xyz, original_xyz)
 
-    with pytest.raises(RuntimeError, match="supply"):
+    with pytest.raises(RuntimeError, match="not supplied by the host"):
         wall.model.get_energy()
 
     # Going through the wrapper re-supplies, and the energy tracks the geometry.
@@ -1049,20 +1049,20 @@ def test_conventions_fock_requires_cavity_response():
 def test_conventions_amplitudes_are_both_needed():
     """Both host amplitudes carry a non-negligible share of the frozen Fock.
 
-    ``w_gauss_g`` and ``w_gauss_f`` arrive as a pair with their signs already
+    ``w_overlap`` and ``w_normal_deriv`` arrive as a pair with their signs already
     folded in, so the natural failure is using one and dropping the other, or
     flipping the fold.  Either would leave a Fock that still looks plausible.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    potential = wall.potential
+    response = wall.response
 
-    assert np.abs(potential.w_gauss_g).max() > MIN_SIGNAL
-    assert np.abs(potential.w_gauss_f).max() > MIN_SIGNAL
+    assert np.abs(response.gostshyp.w_overlap).max() > MIN_SIGNAL
+    assert np.abs(response.gostshyp.w_normal_deriv).max() > MIN_SIGNAL
     # The fold is a sign, not an absolute value: the two channels oppose.
-    assert potential.w_gauss_g.max() > 0.0
-    assert potential.w_gauss_f.min() < 0.0
+    assert response.gostshyp.w_overlap.max() > 0.0
+    assert response.gostshyp.w_normal_deriv.min() < 0.0
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd4(
@@ -1080,7 +1080,9 @@ def test_conventions_amplitudes_are_both_needed():
         STEP_DM,
     )
 
-    g_only = np.einsum("j,uvj->uv", potential.w_gauss_g, wall._G, optimize=True)
+    g_only = np.einsum(
+        "j,uvj->uv", response.gostshyp.w_overlap, wall._G, optimize=True
+    )
     starved = float(np.einsum("uv,uv->", 0.5 * (g_only + g_only.T), direction))
     assert deviation(starved, numerical, thr_rel=FROZEN_REL_THR) > VACUITY_FACTOR
     # ...and the pair together is the quantity that does close.
@@ -1205,10 +1207,10 @@ def test_conventions_failed_update_publishes_nothing_partial(monkeypatch):
     _host, wall = make_wall(mol, dm=dm)
 
     def boom(*_args, **_kwargs):
-        raise RuntimeError("potential assembly failed")
+        raise RuntimeError("response assembly failed")
 
-    monkeypatch.setattr(wall.model, "potential", boom)
-    with pytest.raises(RuntimeError, match="potential assembly failed"):
+    monkeypatch.setattr(wall.model, "response", boom)
+    with pytest.raises(RuntimeError, match="response assembly failed"):
         wall.update(dm)
 
     assert wall.amplitudes is None
@@ -1305,15 +1307,15 @@ def test_conventions_matches_the_frozen_reference(system, basis):
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    weights = wall.potential
+    weights = wall.response
     actual = {"energy": float(wall.energy), "ngrid": int(wall.ngrid)}
     actual.update(_golden_summary("alpha", wall.amplitudes))
     actual.update(
         _golden_summary("fock_frozen", wall.fock(dm, include_cavity_response=False))
     )
-    actual.update(_golden_summary("w_lsf0", weights.w_lsf0))
-    actual.update(_golden_summary("w_lsf1", weights.w_lsf1))
-    actual.update(_golden_summary("w_lsf2", weights.w_lsf2))
+    actual.update(_golden_summary("w_lsf0", weights.lsf.w_value))
+    actual.update(_golden_summary("w_lsf1", weights.lsf.w_gradient))
+    actual.update(_golden_summary("w_lsf2", weights.lsf.w_hessian))
     actual.update(_golden_summary("gradient", wall.nuclear_gradient(dm)))
 
     expected = GOLDEN[(system, basis)]

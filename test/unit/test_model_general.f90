@@ -10,7 +10,7 @@ module test_model_general
    use mctc_io, only: structure_type
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_type, only: coupling_type, potential_type
+   use moist_channels, only: coupling_type, response_type
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
@@ -58,7 +58,7 @@ contains
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
-      type(potential_type) :: potential
+      type(response_type) :: response
       real(wp) :: energy, reference_energy
 
       real(wp), parameter :: epsilon = 32.0_wp
@@ -140,15 +140,15 @@ contains
       if (allocated(error)) return
 
       ! The direct trace channel must carry the component surface charges.
-      call model%get_trace_potential(coupling, potential, err)
+      call model%get_trace_response(coupling, response, err)
       if (allocated(err)) then
          call test_failed(error, "General-model trace potential failed: "//err%message)
          return
       end if
-      call check(error, allocated(potential%w_elstat_umol), &
+      call check(error, allocated(response%electrostatics%surface_charge), &
          & more="general model did not expose CPCM surface charges")
       if (allocated(error)) return
-      call check(error, maxval(abs(potential%w_elstat_umol - pcm_reference%q)), 0.0_wp, &
+      call check(error, maxval(abs(response%electrostatics%surface_charge - pcm_reference%q)), 0.0_wp, &
          & thr=thr2, &
          & message="general-model CPCM charges differ from the procedural reference")
       if (allocated(error)) return
@@ -190,7 +190,7 @@ contains
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
-      type(potential_type) :: potential
+      type(response_type) :: response
       real(wp) :: energy_pcm, energy_pv, energy_zero, volume
       real(wp), allocatable :: gradient_pcm(:, :), gradient_pv(:, :)
       real(wp), allocatable :: gradient_zero(:, :), volume_gradient(:, :)
@@ -273,23 +273,23 @@ contains
       if (allocated(error)) return
 
       ! The shared surface-adjoint accumulator must survive two components.
-      call model_pv%get_potential(coupling, potential, err)
+      call model_pv%get_response(coupling, response, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM+PV potential failed: "//err%message)
          return
       end if
-      call check(error, allocated(potential%w_elstat_umol), &
+      call check(error, allocated(response%electrostatics%surface_charge), &
          & more="CPCM+PV model produced no electrostatic potential channel")
       if (allocated(error)) return
 
       ! The direct trace channel must still carry the CPCM surface charges when
       ! a second, non-electrostatic component shares the accumulator.
-      call model_pv%get_trace_potential(coupling, potential, err)
+      call model_pv%get_trace_response(coupling, response, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM+PV trace potential failed: "//err%message)
          return
       end if
-      call check(error, allocated(potential%w_elstat_umol), &
+      call check(error, allocated(response%electrostatics%surface_charge), &
          & more="CPCM+PV model did not expose CPCM surface charges")
       if (allocated(error)) return
 

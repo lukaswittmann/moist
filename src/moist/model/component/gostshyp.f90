@@ -15,7 +15,7 @@
 !>
 !> Host supplies
 !> * the AO three-center integrals
-!> * the two higher Gaussian moments, in `coupling%gauss_gt/pt/mt/rt`
+!> * the two higher Gaussian moments, in `coupling%gostshyp%gt/pt/mt/rt`
 !>
 !> Only the relative s/p/d/f angular normalization matters for the moments;
 !> the per-point Gaussian normalization cancels between energy and amplitudes
@@ -23,7 +23,8 @@ module moist_model_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type, coupling_type, potential_type
+   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_channels, only: coupling_type, response_type, require_channel
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none (type, external)
@@ -49,7 +50,7 @@ module moist_model_component_gostshyp
    contains
       procedure :: update => gostshyp_update
       procedure :: get_energy => gostshyp_get_energy
-      procedure :: get_potential => gostshyp_get_potential
+      procedure :: get_response => gostshyp_get_response
       procedure :: get_gradient => gostshyp_get_gradient
       procedure :: get_surface_weights => gostshyp_get_surface_weights
    end type solvation_model_component_gostshyp
@@ -159,7 +160,7 @@ contains
          !> ftilde is derived rather than supplied: it must share one normal
          !> convention with the derivatives built from the same moments.
          ftilde(igrid) = -2.0_wp*omega(igrid) &
-            & *dot_product(cavity%normal0(:, igrid), coupling%gauss_pt(:, igrid))
+            & *dot_product(cavity%normal0(:, igrid), coupling%gostshyp%pt(:, igrid))
       end do
 
       floor = overlap_floor*maxval(abs(ftilde))
@@ -168,7 +169,7 @@ contains
          active = abs(ftilde(igrid)) > floor
          if (active) then
             alpha_i = self%scale*self%pressure*cavity%a(igrid)/ftilde(igrid)
-            beta_i = coupling%gauss_gt(igrid)*alpha_i/ftilde(igrid)
+            beta_i = coupling%gostshyp%gt(igrid)*alpha_i/ftilde(igrid)
             !> The floor is *relative*, so it says nothing about the absolute
             !> size of `ftilde`: a grid uniformly down at the denormals clears it
             !> intact and the two divisions above then leave the reals. No SCF
@@ -203,20 +204,16 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      if (.not. allocated(coupling%gauss_gt) .or. .not. allocated(coupling%gauss_pt) .or. &
-          .not. allocated(coupling%gauss_mt) .or. .not. allocated(coupling%gauss_rt)) then
-         call fatal_error(error, "GOSTSHYP requires the host to supply Gaussian density "// &
-            & "moments for the current cavity")
-         return
-      end if
-
-      if (size(coupling%gauss_gt) /= cavity%ngrid .or. &
-          any(shape(coupling%gauss_pt) /= [3, cavity%ngrid]) .or. &
-          any(shape(coupling%gauss_mt) /= [3, 3, cavity%ngrid]) .or. &
-          any(shape(coupling%gauss_rt) /= [3, cavity%ngrid])) then
-         call fatal_error(error, "GOSTSHYP Gaussian moments do not match the cavity grid; "// &
-            & "they must be rebuilt after every cavity update")
-      end if
+      ! Every moment is required: GOSTSHYP has no meaningful amplitude without
+      ! the full set, so an absent channel is a host mistake, not a zero.
+      call require_channel(coupling%gostshyp%gt, "gostshyp%gt", cavity%ngrid, error)
+      if (allocated(error)) return
+      call require_channel(coupling%gostshyp%pt, "gostshyp%pt", 3, cavity%ngrid, error)
+      if (allocated(error)) return
+      call require_channel(coupling%gostshyp%mt, "gostshyp%mt", 3, 3, cavity%ngrid, error)
+      if (allocated(error)) return
+      call require_channel(coupling%gostshyp%rt, "gostshyp%rt", 3, cavity%ngrid, error)
+      if (allocated(error)) return
 
       !> Only the shapes are checked. The Gaussians sit *on* the grid points, so
       !> every cavity update invalidates every moment -- but a geometry step
@@ -261,12 +258,12 @@ contains
          & ninactive=ninactive)
       if (allocated(error)) return
 
-      energy = energy + dot_product(alpha, coupling%gauss_gt)
+      energy = energy + dot_product(alpha, coupling%gostshyp%gt)
 
       !> Reported unconditionally rather than above a threshold: a sizeable
       !> inactive fraction is *normal* (15% for fluoroacetate/STO-3G at 50 GPa),
       !> so any threshold loose enough to stay quiet would also stay quiet for
-      !> the failure worth catching -- a systematically wrong `gauss_pt`, which
+      !> the failure worth catching -- a systematically wrong `gostshyp%pt`, which
       !> shrinks every `ftilde` and pushes points under the floor. The number is
       !> the diagnostic; what counts as too many is the reader's call.
       !> Reported here rather than in `gostshyp_amplitudes` so one energy
@@ -283,15 +280,15 @@ contains
    !> Hand the host the amplitudes conjugate to its Gaussian integral blocks
    !>
    !> The host rebuilds its Fock contribution as
-   !> `F_uv += sum_i [w_gauss_g(i) g_uv,i + w_gauss_f(i) f_uv,i]`; both signs
+   !> `F_uv += sum_i [w_overlap(i) g_uv,i + w_normal_deriv(i) f_uv,i]`; both signs
    !> are folded in here.
    !>
    !> @param[inout] self      Component instance
    !> @param[in]    coupling  Host coupling data
    !> @param[inout] cavity    Live model cavity
-   !> @param[inout] potential Potential accumulator
+   !> @param[inout] response  Response accumulator
    !> @param[out]   error     Error handling
-   subroutine gostshyp_get_potential(self, coupling, cavity, potential, error)
+   subroutine gostshyp_get_response(self, coupling, cavity, response, error)
       !> Component instance
       class(solvation_model_component_gostshyp), intent(inout) :: self
       !> Host coupling data
@@ -299,28 +296,32 @@ contains
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
       !> Potential accumulator
-      type(potential_type), intent(inout) :: potential
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       !> Gaussian widths, traces and amplitudes
       real(wp), allocatable :: omega(:), ftilde(:), alpha(:), beta(:)
 
+      ! A component switched off by zero pressure or zero scale still publishes
+      ! its channels, filled with zeros. It is present and contributing nothing,
+      ! which is a different statement from having no GOSTSHYP component at all,
+      ! and only the latter may leave the channels unallocated.
+      if (.not. allocated(response%gostshyp%w_overlap)) then
+         allocate (response%gostshyp%w_overlap(cavity%ngrid), source=0.0_wp)
+      end if
+      if (.not. allocated(response%gostshyp%w_normal_deriv)) then
+         allocate (response%gostshyp%w_normal_deriv(cavity%ngrid), source=0.0_wp)
+      end if
+
       if (self%pressure == 0.0_wp .or. self%scale == 0.0_wp) return
       call gostshyp_amplitudes(self, coupling, cavity, omega, ftilde, alpha, beta, error)
       if (allocated(error)) return
 
-      if (.not. allocated(potential%w_gauss_g)) then
-         allocate (potential%w_gauss_g(cavity%ngrid), source=0.0_wp)
-      end if
-      if (.not. allocated(potential%w_gauss_f)) then
-         allocate (potential%w_gauss_f(cavity%ngrid), source=0.0_wp)
-      end if
+      response%gostshyp%w_overlap = response%gostshyp%w_overlap + alpha
+      response%gostshyp%w_normal_deriv = response%gostshyp%w_normal_deriv - beta
 
-      potential%w_gauss_g = potential%w_gauss_g + alpha
-      potential%w_gauss_f = potential%w_gauss_f - beta
-
-   end subroutine gostshyp_get_potential
+   end subroutine gostshyp_get_response
 
    !> Add the GOSTSHYP surface adjoints
    !>
@@ -382,21 +383,21 @@ contains
          !> route below would divide by a trace that carries only round-off.
          if (alpha(igrid) == 0.0_wp) cycle
 
-         n_pt = dot_product(cavity%normal0(:, igrid), coupling%gauss_pt(:, igrid))
-         n_mt = matmul(cavity%normal0(:, igrid), coupling%gauss_mt(:, :, igrid))
-         n_rt = dot_product(cavity%normal0(:, igrid), coupling%gauss_rt(:, igrid))
+         n_pt = dot_product(cavity%normal0(:, igrid), coupling%gostshyp%pt(:, igrid))
+         n_mt = matmul(cavity%normal0(:, igrid), coupling%gostshyp%mt(:, :, igrid))
+         n_rt = dot_product(cavity%normal0(:, igrid), coupling%gostshyp%rt(:, igrid))
 
-         dgdr = 2.0_wp*omega(igrid)*coupling%gauss_pt(:, igrid)
-         dfdr = 2.0_wp*omega(igrid)*cavity%normal0(:, igrid)*coupling%gauss_gt(igrid) &
+         dgdr = 2.0_wp*omega(igrid)*coupling%gostshyp%pt(:, igrid)
+         dfdr = 2.0_wp*omega(igrid)*cavity%normal0(:, igrid)*coupling%gostshyp%gt(igrid) &
             & - 4.0_wp*omega(igrid)**2*n_mt
-         dgdw = -(coupling%gauss_mt(1, 1, igrid) + coupling%gauss_mt(2, 2, igrid) &
-            &     + coupling%gauss_mt(3, 3, igrid))
+         dgdw = -(coupling%gostshyp%mt(1, 1, igrid) + coupling%gostshyp%mt(2, 2, igrid) &
+            &     + coupling%gostshyp%mt(3, 3, igrid))
          dfdw = -2.0_wp*n_pt + 2.0_wp*omega(igrid)*n_rt
 
          w_xyz(:, igrid) = alpha(igrid)*dgdr - beta(igrid)*dfdr
          !> Only ftilde depends on the normal, through ftilde = n . (-2 w Pt).
-         w_n(:, igrid) = 2.0_wp*omega(igrid)*beta(igrid)*coupling%gauss_pt(:, igrid)
-         w_a(igrid) = self%scale*self%pressure*coupling%gauss_gt(igrid)/ftilde(igrid) &
+         w_n(:, igrid) = 2.0_wp*omega(igrid)*beta(igrid)*coupling%gostshyp%pt(:, igrid)
+         w_a(igrid) = self%scale*self%pressure*coupling%gostshyp%gt(igrid)/ftilde(igrid) &
             & + (alpha(igrid)*dgdw - beta(igrid)*dfdw)*(-omega(igrid)/cavity%a(igrid))
       end do
 

@@ -218,16 +218,16 @@ Because some solvation model components couple with the QM density, some quantit
 
    * - Component
      - Host data in ``coupling_type``
-     - Main response in ``potential_type``
+     - Main response in ``response_type``
    * - CPCM
-     - ``qat`` for the point-charge mode, or ``elstat_umol`` and derivative data for a QM potential
-     - ``w_elstat_umol`` plus cavity-response (for isodensity cavity)
+     - ``electrostatics%qat`` for the point-charge mode, or ``electrostatics%phi`` and derivative data for a QM potential
+     - ``electrostatics%surface_charge`` plus cavity-response (for isodensity cavity)
    * - PV
      - None
      - Cavity-response (for isodensity cavity)
    * - GOSTSHYP
-     - ``gauss_gt``, ``gauss_pt``, ``gauss_mt``, and ``gauss_rt``
-     - ``w_gauss_g``, ``w_gauss_f``, and cavity-response (for isodensity cavity)
+     - ``gostshyp%gt``, ``gostshyp%pt``, ``gostshyp%mt``, and ``gostshyp%rt``
+     - ``gostshyp%w_overlap``, ``gostshyp%w_normal_deriv``, and cavity-response (for isodensity cavity)
 
 CPCM
 ~~~~
@@ -248,9 +248,9 @@ CPCM
    if (allocated(error)) error stop error%message
 
 The default ``potential_source%charges`` computes the molecular potential from
-``coupling%qat``.  A QM host should normally select
+``coupling%electrostatics%qat``.  A QM host should normally select
 ``potential_source%external``, evaluate the molecular cpcm potential
-on the current cavity grid, and return it through ``coupling%elstat_umol``.
+on the current cavity grid, and return it through ``coupling%electrostatics%phi``.
 
 Available solvers are ``inversion``, ``lu``, ``cholesky`` (the default), and ``iterative``.
 
@@ -289,24 +289,24 @@ to reproduce the requested pressure:
    call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
 After every cavity update, the host must rebuild all four Gaussian density
-moments in ``coupling_type`` for the new grid.  ``get_potential`` returns the
-``w_gauss_g`` and ``w_gauss_f`` amplitudes that the host contracts with its
+moments in ``coupling_type`` for the new grid.  ``get_response`` returns the
+``w_overlap`` and ``w_normal_deriv`` amplitudes that the host contracts with its
 Gaussian integral blocks to form the Fock contribution.
 
 Using a component
 ~~~~~~~~~~~~~~~~~
 
 Solvation model components can be used directly (manual way).
-Every model component has the same ``update``, ``get_energy``, ``get_potential``, and ``get_gradient`` routines.
-The ``coupling_type`` contains data from the host to MOIST, while ``potential_type`` carries the corresponding response from MOIST back to the host.
+Every model component has the same ``update``, ``get_energy``, ``get_response``, and ``get_gradient`` routines.
+The ``coupling_type`` contains data from the host to MOIST, while ``response_type`` carries the corresponding response from MOIST back to the host.
 For the CPCM component below, a manual, direct-component implementation looks like this:
 
 .. code-block:: fortran
 
-   use moist_type, only : coupling_type, potential_type
+   use moist_channels, only : coupling_type, response_type
 
    type(coupling_type) :: coupling
-   type(potential_type) :: potential
+   type(response_type) :: response
    real(wp), allocatable :: phi(:), gradient(:, :)
    real(wp) :: energy
 
@@ -318,7 +318,7 @@ For the CPCM component below, a manual, direct-component implementation looks li
    if (allocated(error)) error stop error%message
 
    ! Host -> MOIST: evaluate the solute potential on cavity%xyz
-   coupling%elstat_umol = host_cpcm_elstat_pot(cavity%xyz)
+   coupling%electrostatics%phi = host_cpcm_elstat_pot(cavity%xyz)
 
    ! Get CPCM energy contribution
    energy = 0.0_wp
@@ -326,12 +326,12 @@ For the CPCM component below, a manual, direct-component implementation looks li
    if (allocated(error)) error stop error%message
 
    ! Get Fock potential
-   call cpcm%get_potential(coupling, cavity, potential, error)
+   call cpcm%get_response(coupling, cavity, response, error)
    if (allocated(error)) error stop error%message
-   ! potential%w_elstat_umol contains surface-charge response
+   ! response%electrostatics%surface_charge contains the surface charges
 
    ! Host -> MOIST: charge-weighted electronic potential gradient
-   coupling%elstat_qefield(:, i) = &
+   coupling%electrostatics%qefield(:, i) = &
       host_cpcm_deriv_elstat_pot(cpcm%q, cavity%xyz, ...)
 
    ! Get CPCM nuclear gradient contribution
@@ -407,4 +407,4 @@ This ``solvation_model_general`` owns the cavity and all added components.
 The model usage is similar to the components:
 update the model for the current geometry ``model%update`` with an initialized ``structure_type``; 
 host fills all needed ``coupling_type`` for the current ``model%cavity``;
-get energy, potential and gradient via ``model%get_energy``, ``model%get_potential``, and ``model%get_gradient``.
+get energy, response and gradient via ``model%get_energy``, ``model%get_response``, and ``model%get_gradient``.

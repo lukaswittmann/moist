@@ -9,7 +9,8 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, potential_type
+   use moist_type, only: cavity_type
+   use moist_channels, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -221,8 +222,8 @@ module moist_cavity_drop
 
       !> Contract surface-coordinate weights to LSF adjoint weights
       procedure :: contract_surface_lsf_weights
-      !> Map surface-coordinate weights into generic potential channels
-      procedure :: get_surface_potential => get_surface_potential_drop
+      !> Map surface-coordinate weights into generic response channels
+      procedure :: get_surface_response => get_surface_response_drop
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
 
@@ -466,14 +467,14 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine contract_surface_lsf_weights
 
-      !> [deriv/potential.f90] Map accumulated surface adjoints into the generic potential
-      module subroutine get_surface_potential_drop(self, acc, potential, error)
+      !> [deriv/potential.f90] Map accumulated surface adjoints into the generic response
+      module subroutine get_surface_response_drop(self, acc, response, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
-         type(potential_type), intent(inout) :: potential
+         type(response_type), intent(inout) :: response
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_surface_potential_drop
+      end subroutine get_surface_response_drop
 
       !> [deriv/nuclear.f90] Contract accumulated surface adjoints into dE/dR_A
       !>

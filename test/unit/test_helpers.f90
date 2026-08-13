@@ -40,7 +40,7 @@ module test_helpers
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
                           radius_type_static, new_cosmo_radii
-   use moist_type, only: coupling_type
+   use moist_channels, only: coupling_type
    use moist_data_radii_legacy, only: get_radius_func
    use testdrive, only: error_type, test_failed
    implicit none
@@ -322,7 +322,7 @@ contains
       !> Wavefunction to populate
       type(coupling_type), intent(out) :: coupling
 
-      coupling%qat = reshape(qat, [size(qat), 1])
+      coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
    end subroutine make_charge_coupling
 

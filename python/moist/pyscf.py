@@ -38,7 +38,7 @@ Conventions this module depends on, each verified against finite differences by
 * ``qefield_i = q_i * grad_r phi_elec(r_i)`` -- a gradient of the electronic
   potential.  Despite the C header calling it "the electronic field" it is not
   negated.
-* The ``w_lsf`` weights are adjoints of the **scaled** level set, while the
+* The ``lsf`` weights are adjoints of the **scaled** level set, while the
   callback returns the unscaled one, so the host chain rule carries ``scale``.
 * Nuclear charges come from the structure's atomic numbers, so ECPs are not
   supported here.
@@ -57,12 +57,11 @@ from .interface import (
     CouplingChannel,
     CouplingTransaction,
     Electrostatics,
-    GeneralPotential,
+    Response,
     ModelComponentCPCM,
     SolvationCoupling,
     SolvationModel,
     Structure,
-    TracePotential,
     _immutable_array,
 )
 
@@ -262,7 +261,7 @@ class PySCFHost:
         When the density changes, the isodensity surface moves and ``phi_i =
         phi(r_i)`` changes with it; that route is the dominant part of the
         cavity response and moist cannot see it, because ``phi`` is the host's
-        function.  Omitting it does not fail -- it silently returns ``w_lsf``
+        function.  Omitting it does not fail -- it silently returns ``lsf``
         weights that are missing their largest contribution.
 
         Unlike :meth:`qefield` this is the **total** potential gradient.  moist
@@ -282,41 +281,47 @@ class PySCFHost:
         ``w_xyz`` (consumed by the potential path) and ``qefield`` (consumed by
         the gradient path).
 
-        Returns ``(energy, potential)``.
+        Returns ``(energy, response)``.
         """
         coords = np.asarray(coords)
         phi = self.surface_potential(coords)
         model.supply_electrostatics(phi)
-        q, _ = model.get_trace_potential()
+        q = model.trace_response().electrostatics.surface_charge
         model.supply_electrostatics(
             phi,
             w_xyz=self.surface_position_weights(coords, q),
             qefield=self.qefield(coords, q),
         )
-        return model.get_energy(), model.get_potential()
+        return model.get_energy(), model.response()
 
     # ------------------------------------------------------------------
     # analytic derivatives
     # ------------------------------------------------------------------
 
-    def fock(self, coords: np.ndarray, potential, *, include_lsf: bool = True) -> np.ndarray:
+    def fock(self, coords: np.ndarray, response, *, include_lsf: bool = True) -> np.ndarray:
         """Solvation contribution to the Fock matrix, ``(nao, nao)``.
 
-        :param potential: the :class:`~moist.interface.GeneralPotential` from
-            :meth:`SolvationModel.get_potential`.
+        :param response: the :class:`~moist.interface.Response` from
+            :meth:`SolvationModel.response`.
         :param include_lsf: contract the level-set adjoints.  Must be ``False``
-            for a density-independent cavity, whose ``w_lsf`` weights describe a
+            for a density-independent cavity, whose ``lsf`` weights describe a
             level set that has nothing to do with the electron density.
         """
         coords = np.asarray(coords)
-        q = np.asarray(potential.w_umol)
-        vgrids = self.mol.intor("int1e_grids", grids=coords)
-        fock = -np.einsum("i,iuv->uv", q, vgrids)
+        nao = self.mol.nao
+        if response.electrostatics is None:
+            # No electrostatic component, so there is no charge term at all --
+            # distinct from a component that returned zero charges.
+            fock = np.zeros((nao, nao))
+        else:
+            q = np.asarray(response.electrostatics.surface_charge)
+            vgrids = self.mol.intor("int1e_grids", grids=coords)
+            fock = -np.einsum("i,iuv->uv", q, vgrids)
         if include_lsf:
-            fock += self._fock_lsf(coords, potential)
+            fock += self._fock_lsf(coords, response)
         return fock
 
-    def _fock_lsf(self, coords: np.ndarray, potential) -> np.ndarray:
+    def _fock_lsf(self, coords: np.ndarray, response) -> np.ndarray:
         """``dS/dP`` contracted with the level-set adjoints.
 
         With ``S = scale (rho_iso - rho)`` and ``rho = sum P_uv chi_u chi_v``,
@@ -324,9 +329,9 @@ class PySCFHost:
         product of AO derivative blocks summed over the grid.
         """
         ao = self._ao(coords, 2)
-        w0 = np.asarray(potential.w_lsf0)
-        w1 = np.asarray(potential.w_lsf1)
-        w2 = np.asarray(potential.w_lsf2)
+        w0 = np.asarray(response.lsf.w_value)
+        w1 = np.asarray(response.lsf.w_gradient)
+        w2 = np.asarray(response.lsf.w_hessian)
 
         def outer(weight, left, right):
             return np.einsum("i,iu,iv->uv", weight, left, right)
@@ -350,7 +355,7 @@ class PySCFHost:
     def gradient(
         self,
         coords: np.ndarray,
-        potential,
+        response,
         *,
         include_lsf: bool = True,
     ) -> np.ndarray:
@@ -364,9 +369,14 @@ class PySCFHost:
         :meth:`SolvationModel.get_gradient`.
         """
         coords = np.asarray(coords)
-        gradient = self._gradient_phi(coords, np.asarray(potential.w_umol))
+        if response.electrostatics is None:
+            gradient = np.zeros((3, self.mol.natm))
+        else:
+            gradient = self._gradient_phi(
+                coords, np.asarray(response.electrostatics.surface_charge)
+            )
         if include_lsf:
-            gradient += self._gradient_lsf(coords, potential)
+            gradient += self._gradient_lsf(coords, response)
         return gradient
 
     def _gradient_phi(self, coords: np.ndarray, q: np.ndarray) -> np.ndarray:
@@ -383,7 +393,7 @@ class PySCFHost:
             gradient[:, atom] = weighted[:, lo:hi].sum(axis=1)
         return np.asfortranarray(gradient)
 
-    def _gradient_lsf(self, coords: np.ndarray, potential) -> np.ndarray:
+    def _gradient_lsf(self, coords: np.ndarray, response) -> np.ndarray:
         """Level-set adjoints contracted with ``dS/dR_A`` at fixed P.
 
         Because ``d/dR_A`` commutes with the spatial derivatives, every order is
@@ -397,9 +407,9 @@ class PySCFHost:
         """
         dm = self._density_matrix()
         ao = self._ao(coords, 3)
-        w0 = np.asarray(potential.w_lsf0)
-        w1 = np.asarray(potential.w_lsf1)
-        w2 = np.asarray(potential.w_lsf2)
+        w0 = np.asarray(response.lsf.w_value)
+        w1 = np.asarray(response.lsf.w_gradient)
+        w2 = np.asarray(response.lsf.w_hessian)
 
         # right[c, i, u] = sum_v ao[c, i, v] P_uv
         right = np.einsum("civ,uv->ciu", ao, dm)
@@ -508,16 +518,18 @@ class PySCFCoupling(SolvationCoupling):
 
             def electrostatics(
                 _cavity: CavitySnapshot,
-                trace: Optional[TracePotential],
+                trace: Optional[Response],
             ) -> Electrostatics:
                 if trace is None:
                     return Electrostatics(phi)
                 return Electrostatics(
                     phi,
                     w_xyz=self.host.surface_position_weights(
-                        coords, trace.molecular
+                        coords, trace.electrostatics.surface_charge
                     ),
-                    qefield=self.host.qefield(coords, trace.molecular),
+                    qefield=self.host.qefield(
+                        coords, trace.electrostatics.surface_charge
+                    ),
                 )
 
             transaction.exchange_electrostatics(electrostatics)
@@ -536,17 +548,17 @@ class PySCFCoupling(SolvationCoupling):
     def fock(
         self,
         cavity: CavitySnapshot,
-        potential: GeneralPotential,
+        response: Response,
     ) -> np.ndarray:
         self.activate()
         fock = self.host.fock(
             cavity.xyz.T,
-            potential,
+            response,
             include_lsf=self._include_lsf,
         )
         if self._gostshyp is not None:
             fock = fock + self._gostshyp._fock_from(
-                potential,
+                response,
                 include_cavity_response=False,
             )
         return fock
@@ -554,19 +566,19 @@ class PySCFCoupling(SolvationCoupling):
     def gradient(
         self,
         cavity: CavitySnapshot,
-        potential: GeneralPotential,
+        response: Response,
         model_gradient,
     ) -> np.ndarray:
         self.activate()
         gradient = model_gradient() + self.host.gradient(
             cavity.xyz.T,
-            potential,
+            response,
             include_lsf=self._include_lsf,
         )
         if self._gostshyp is not None:
             gradient = gradient + self._gostshyp._integral_nuclear_gradient(
                 self.density_matrix,
-                potential,
+                response,
             )
         return gradient
 

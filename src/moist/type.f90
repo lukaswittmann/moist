@@ -7,15 +7,14 @@ module moist_type
    use moist_radius_type, only: radius_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_channels, only: coupling_type, response_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none
    private
 
    public :: cavity_type
-   public :: potential_type
    public :: cavity_surface_adjoint_type
-   public :: coupling_type
    public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
    public :: write_cavity_xyz_debug
@@ -83,8 +82,8 @@ module moist_type
    contains
       procedure(update_cavity), deferred :: update
       procedure(get_cavity_gradient), deferred :: get_gradient
-      !> Map accumulated surface-observable adjoints to host potential channels
-      procedure :: get_surface_potential => get_cavity_surface_potential_default
+      !> Map accumulated surface-observable adjoints to host response channels
+      procedure :: get_surface_response => get_cavity_surface_response_default
       !> Contract accumulated surface-observable adjoints into the nuclear gradient
       procedure :: get_surface_gradient => get_cavity_surface_gradient_default
       !> Write grid to XYZ file for visualization
@@ -117,91 +116,6 @@ module moist_type
 
    end interface
 
-   !> Type for potential data (idential to tblite)
-   type :: potential_type
-
-      !* -------------------- Adjoint weights for cavity level set -------------------- *!
-
-      !> Adjoint weights for cavity level set values (ngrid)
-      real(wp), allocatable :: w_lsf0(:)
-      !> Adjoint weights for cavity level set gradients (3, ngrid)
-      real(wp), allocatable :: w_lsf1(:, :)
-      !> Adjoint weights for cavity level set Hessians (3, 3, ngrid)
-      real(wp), allocatable :: w_lsf2(:, :, :)
-
-      !* ------------------------------- Electrostatics ------------------------------- *!
-
-      !> Electrostatics adjoint dE/dumol on the electrostatic grid
-      real(wp), allocatable :: w_elstat_umol(:)
-      !> Electrostatics adjoint dE/dqmol on the electrostatic grid
-      real(wp), allocatable :: w_elstat_qmol(:)
-
-      !* ---------------------------------- GOSTSHYP ---------------------------------- *!
-
-      !> Amplitudes conjugate to the host's Gaussian integral blocks (ngrid)
-      !> (counterpart of the `gauss_*` coupling moments)
-      !> Host builds Fock contribution as plain sum over grid points,
-      !>
-      !>    F_uv += sum_i [ w_gauss_g(i) g_uv,i + w_gauss_f(i) f_uv,i ]
-      !>
-      !> with `g_uv,i = <u|G_i|v>` and `f_uv,i = n_i . grad_r g_uv,i`
-      !>
-      !> Both signs are folded in here so the host never has to know the convention
-      !>
-      !> Grid points the model has switched off carry exactly zero, so the mask
-      !> propagates without the host repeating it
-      real(wp), allocatable :: w_gauss_g(:)
-      !> See `w_gauss_g` (ngrid)
-      real(wp), allocatable :: w_gauss_f(:)
-   end type potential_type
-
-   !> QM/solute data supplied to solvation models for one coupling step.
-   type :: coupling_type
-      !> Number of electrons for each atom (nat, spin)
-      real(wp), allocatable :: qat(:, :)
-
-      !* ------------------------------- Electrostatics ------------------------------- *!
-
-      !> Molecular potential trace on the electrostatic cavity (ngrid)
-      real(wp), allocatable :: elstat_umol(:)
-      !> Molecular outward normal-derivative trace on the cavity (ngrid)
-      real(wp), allocatable :: elstat_qmol(:)
-      !> Direct host trace-geometry weights for Gaussian widths (ngrid)
-      real(wp), allocatable :: elstat_w_xi(:)
-      !> Direct host trace-geometry weights for switch factors (ngrid)
-      real(wp), allocatable :: elstat_w_f(:)
-      !> Direct host trace-geometry weights for positions (3, ngrid)
-      real(wp), allocatable :: elstat_w_xyz(:, :)
-      !> Direct host trace-geometry weights for normals (3, ngrid)
-      real(wp), allocatable :: elstat_w_n(:, :)
-      !> Charge-weighted electronic field on the electrostatic cavity (3, ngrid)
-      !  (distinct from `elstat_w_xyz`, which is an adjoint with respect to surface positions)
-      real(wp), allocatable :: elstat_qefield(:, :)
-
-      !* ---------------------------------- GOSTSHYP ---------------------------------- *!
-
-      !> Moments of the solute density against an unnormalized Gaussian
-      !> `G_i = exp(-w_i |r - r_i|^2)` centereda cavity grid point
-      !>
-      !> The width `w_i` is the model's own, so the host must read it back
-      !> from the cavity before forming these
-      !>
-      !> AO-basis three-center integrals contracted with the density, needs
-      !> QM density and integrals
-      !>
-      !> `<G_i>` (ngrid)
-      real(wp), allocatable :: gauss_gt(:)
-      !> `<(r - r_i) G_i>` (3, ngrid)
-      real(wp), allocatable :: gauss_pt(:, :)
-      !> `<(r - r_i)(r - r_i) G_i>` (3, 3, ngrid) (symmetric in the first two)
-      real(wp), allocatable :: gauss_mt(:, :, :)
-      !> `<(r - r_i) |r - r_i|^2 G_i>` (3, ngrid)
-      real(wp), allocatable :: gauss_rt(:, :)
-   contains
-      !> Clear all supplied coupling arrays.
-      procedure :: clear => clear_coupling
-   end type coupling_type
-
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
@@ -212,7 +126,7 @@ module moist_type
 
       procedure(update_model), deferred :: update
       procedure(get_model_energy), deferred :: get_energy
-      procedure(get_model_potential), deferred :: get_potential
+      procedure(get_model_response), deferred :: get_response
       procedure(get_model_gradient), deferred :: get_gradient
 
    end type solvation_model_type
@@ -244,18 +158,18 @@ module moist_type
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_model_energy
 
-      !> Get the solvation potential (only for self-consistent models)
-      subroutine get_model_potential(self, coupling, potential, error)
-         import solvation_model_type, structure_type, wp, error_type, potential_type, coupling_type
+      !> Get the solvation response (only for self-consistent models)
+      subroutine get_model_response(self, coupling, response, error)
+         import solvation_model_type, structure_type, wp, error_type, response_type, coupling_type
          !> Instance of the solvation model
          class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
-         !> Solvation potential for the component
-         type(potential_type), intent(inout) :: potential
+         !> Solvation response for the component
+         type(response_type), intent(inout) :: response
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_model_potential
+      end subroutine get_model_response
 
       !> Get the solvation energy gradient
       subroutine get_model_gradient(self, coupling, gradient, error)
@@ -282,7 +196,7 @@ module moist_type
       !> Molecular structure data for the component
       type(structure_type) :: mol_solu
       !> Linear scale factor applied to this contribution.  The component
-      !> multiplies its energy, solvation potential, and surface/level set
+      !> multiplies its energy, solvation response, and surface/level set
       !> response by this constant so the contribution stays variational: 1.0
       !> leaves it unchanged, 0.0 disables it.
       real(wp) :: scale = 1.0_wp
@@ -292,11 +206,11 @@ module moist_type
 
       procedure(update_component), deferred :: update
       procedure(get_component_energy), deferred :: get_energy
-      procedure(get_component_potential), deferred :: get_potential
+      procedure(get_component_response), deferred :: get_response
       procedure(get_component_gradient), deferred :: get_gradient
       !> Accumulate direct host-trace adjoints needed before the host can build
       !> its charge-dependent response quantities.
-      procedure :: get_trace_potential => get_component_trace_potential_default
+      procedure :: get_trace_response => get_component_trace_response_default
       !> Accumulate component-specific surface adjoint weights.
       procedure :: get_surface_weights => get_component_surface_weights_default
       !> Accumulate the host's direct trace-geometry surface adjoint weights.
@@ -338,20 +252,20 @@ module moist_type
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_component_energy
 
-      !> Get the solvation potential for the component
-      subroutine get_component_potential(self, coupling, cavity, potential, error)
-         import solvation_model_component_type, cavity_type, potential_type, coupling_type, error_type
+      !> Get the solvation response for the component
+      subroutine get_component_response(self, coupling, cavity, response, error)
+         import solvation_model_component_type, cavity_type, response_type, coupling_type, error_type
          !> Instance of the solvation model component
          class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
          class(coupling_type), intent(in) :: coupling
          !> Live cavity owned by the orchestrating model
          class(cavity_type), intent(inout) :: cavity
-         !> Solvation potential for the component
-         type(potential_type), intent(inout) :: potential
+         !> Solvation response for the component
+         type(response_type), intent(inout) :: response
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_component_potential
+      end subroutine get_component_response
 
       !> Get the solvation energy gradient for the component
       subroutine get_component_gradient(self, coupling, cavity, gradient, error)
@@ -418,23 +332,23 @@ contains
 
    end function cavity_unit
 
-   !> Default surface-potential hook for cavities without field-dependent geometry
+   !> Default surface-response hook for cavities without field-dependent geometry
    !>
    !> @param[inout] self      Cavity instance, unchanged
    !> @param[in]    acc       Surface-observable adjoints, unused
-   !> @param[inout] potential Potential accumulator, unchanged
+   !> @param[inout] response  Response accumulator, unchanged
    !> @param[out]   error     Error handling
-   subroutine get_cavity_surface_potential_default(self, acc, potential, error)
+   subroutine get_cavity_surface_response_default(self, acc, response, error)
       !> Cavity instance
       class(cavity_type), intent(inout) :: self
       !> Surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Potential accumulator
-      type(potential_type), intent(inout) :: potential
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-   end subroutine get_cavity_surface_potential_default
+   end subroutine get_cavity_surface_response_default
 
    !> Default reverse-mode nuclear-gradient hook
    !>
@@ -460,45 +374,26 @@ contains
 
    end subroutine get_cavity_surface_gradient_default
 
-   !> Clear all arrays supplied for one QM-solvation coupling step.
-   subroutine clear_coupling(self)
-      !> Coupling data to clear
-      class(coupling_type), intent(inout) :: self
-
-      if (allocated(self%qat)) deallocate (self%qat)
-      if (allocated(self%elstat_umol)) deallocate (self%elstat_umol)
-      if (allocated(self%elstat_qmol)) deallocate (self%elstat_qmol)
-      if (allocated(self%elstat_w_xi)) deallocate (self%elstat_w_xi)
-      if (allocated(self%elstat_w_f)) deallocate (self%elstat_w_f)
-      if (allocated(self%elstat_w_xyz)) deallocate (self%elstat_w_xyz)
-      if (allocated(self%elstat_w_n)) deallocate (self%elstat_w_n)
-      if (allocated(self%elstat_qefield)) deallocate (self%elstat_qefield)
-      if (allocated(self%gauss_gt)) deallocate (self%gauss_gt)
-      if (allocated(self%gauss_pt)) deallocate (self%gauss_pt)
-      if (allocated(self%gauss_mt)) deallocate (self%gauss_mt)
-      if (allocated(self%gauss_rt)) deallocate (self%gauss_rt)
-   end subroutine clear_coupling
-
-   !> Default no-op direct trace-potential hook
+   !> Default no-op direct trace-response hook
    !>
    !> @param[inout] self      Solvation component
    !> @param[in]    coupling  Host coupling data
    !> @param[inout] cavity    Live model cavity
-   !> @param[inout] potential Direct trace-potential accumulator
+   !> @param[inout] response  Direct trace-response accumulator
    !> @param[out]   error     Error object
-   subroutine get_component_trace_potential_default(self, coupling, cavity, potential, error)
+   subroutine get_component_trace_response_default(self, coupling, cavity, response, error)
       !> Solvation component
       class(solvation_model_component_type), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(in) :: coupling
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
-      !> Direct trace-potential accumulator
-      type(potential_type), intent(inout) :: potential
+      !> Direct trace-response accumulator
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-   end subroutine get_component_trace_potential_default
+   end subroutine get_component_trace_response_default
 
    !> Default no-op surface-weight hook for components without cavity response.
    !> @param[inout] self    Solvation component
@@ -524,7 +419,7 @@ contains
    !>
    !> Surface traces built from the host's QM integrals (potential, normal
    !> derivative, ...) carry a surface dependence moist cannot differentiate, so
-   !> the host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%elstat_w_*`.
+   !> the host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%electrostatics%w_*`.
    !>
    !> Components with such a trace override this hook to add those channels to
    !> the shared surface-adjoint accumulator; the rest inherit the no-op.
@@ -548,7 +443,7 @@ contains
 
    end subroutine get_component_host_surface_weights_default
 
-   !> Default gradient-side surface weights: the same ones the potential uses
+   !> Default gradient-side surface weights: the same ones the response uses
    !>
    !> For most components the surface adjoint of the energy is one object, so
    !> the reverse-mode nuclear gradient can reuse `get_surface_weights`
@@ -611,31 +506,31 @@ contains
       integer :: unit, stat, i
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_xyz_debug: cavity grid not allocated')
+         call fatal_error(error, "write_xyz_debug: cavity grid not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_xyz_debug: no grid points to write')
+         call fatal_error(error, "write_xyz_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open XYZ file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open XYZ file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(i0)') self%ngrid
-      write (unit, '(a)') 'drop cavity grid points as He (Angstrom)'
+      write (unit, "(i0)") self%ngrid
+      write (unit, "(a)") "drop cavity grid points as He (Angstrom)"
       do i = 1, self%ngrid
-         write (unit, '(a2,1x,3f16.8)') 'He', &
+         write (unit, "(a2,1x,3f16.8)") "He", &
             self%xyz(1, i)*autoaa, &
             self%xyz(2, i)*autoaa, &
             self%xyz(3, i)*autoaa
       end do
       close (unit)
 
-      write (cavity_unit(self), '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_xyz_debug
 
@@ -648,29 +543,29 @@ contains
       integer :: stat, i, unit
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_csv_debug: cavity grid not allocated')
+         call fatal_error(error, "write_csv_debug: cavity grid not allocated")
          return
       end if
       if (.not. allocated(self%a)) then
-         call fatal_error(error, 'write_csv_debug: point areas not allocated')
+         call fatal_error(error, "write_csv_debug: point areas not allocated")
          return
       end if
       if (.not. allocated(self%owner)) then
-         call fatal_error(error, 'write_csv_debug: point owners not allocated')
+         call fatal_error(error, "write_csv_debug: point owners not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_csv_debug: no grid points to write')
+         call fatal_error(error, "write_csv_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open CSV file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open CSV file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(a)') 'ngrid,x,y,z,owner,area'
+      write (unit, "(a)") "ngrid,x,y,z,owner,area"
 
       do i = 1, self%ngrid
          write (unit, '(i0,7('','',g0))') i, &
@@ -679,7 +574,7 @@ contains
       end do
       close (unit)
 
-      write (cavity_unit(self), '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
 
@@ -702,44 +597,43 @@ contains
       integer :: unit, stat, i
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_pqr_debug: cavity grid not allocated')
+         call fatal_error(error, "write_pqr_debug: cavity grid not allocated")
          return
       end if
       if (.not. allocated(self%a)) then
-         call fatal_error(error, 'write_pqr_debug: point areas not allocated')
+         call fatal_error(error, "write_pqr_debug: point areas not allocated")
          return
       end if
       if (.not. allocated(self%owner)) then
-         call fatal_error(error, 'write_pqr_debug: point owners not allocated')
+         call fatal_error(error, "write_pqr_debug: point owners not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_pqr_debug: no grid points to write')
+         call fatal_error(error, "write_pqr_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open PQR file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open PQR file for writing: "//trim(filename))
          return
       end if
 
       do i = 1, self%ngrid
-         write (unit, '(a6,i5,1x,a4,a1,a3,1x,a1,i4,4x,3f8.3,f8.4,f7.4)') &
-            'HETATM', i, 'GP  ', ' ', 'GRD', 'A', self%owner(i), &
+         write (unit, "(a6,i5,1x,a4,a1,a3,1x,a1,i4,4x,3f8.3,f8.4,f7.4)") &
+            "HETATM", i, "GP  ", " ", "GRD", "A", self%owner(i), &
             self%xyz(1, i)*autoaa, &
             self%xyz(2, i)*autoaa, &
             self%xyz(3, i)*autoaa, &
             0.0_wp, &
             (sqrt(self%a(i)/(2.0_wp*pi))*autoaa + 0.0001_wp)
       end do
-      write (unit, '(a)') 'END'
+      write (unit, "(a)") "END"
       close (unit)
 
-      write (cavity_unit(self), '(a,1x,a)') '[Info] Wrote cavity PQR to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity PQR to", trim(filename)
 
    end subroutine write_cavity_pqr_debug
-   
 
    !> Print basic cavity information (grid points, total area, total volume)
    subroutine print_cavity_info(self, unit)
@@ -752,22 +646,21 @@ contains
       if (present(unit)) iunit = unit
 
       if (.not. allocated(self%total_area) .or. .not. allocated(self%total_volume)) then
-         write (iunit, '(a)') '[Warning] Cavity not fully initialized'
+         write (iunit, "(a)") "[Warning] Cavity not fully initialized"
          return
       end if
 
       pp = new_prettyprinter(unit=iunit, fmt_len=20)
 
       call pp%blank()
-      call pp%push('Results:')
-      call pp%kv('Cavity points', self%ngrid)
-      call pp%kv('Total area', self%total_area, 'bohr^2')
-      call pp%kv('Total volume', self%total_volume, 'bohr^3')
+      call pp%push("Results:")
+      call pp%kv("Cavity points", self%ngrid)
+      call pp%kv("Total area", self%total_area, "bohr^2")
+      call pp%kv("Total volume", self%total_volume, "bohr^3")
       call pp%pop()
       call pp%blank()
 
    end subroutine print_cavity_info
-
 
    !> Find disconnected grid points / cavities / islands
    subroutine find_disconnected_cavities_base(self, disconnection_thrs, verbose_inp, error)
@@ -809,11 +702,11 @@ contains
       iunit = cavity_unit(self)
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'find_disconnected_cavities: grid not allocated')
+         call fatal_error(error, "find_disconnected_cavities: grid not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: no grid points')
+         call fatal_error(error, "find_disconnected_cavities: no grid points")
          return
       end if
 
@@ -832,27 +725,27 @@ contains
 
       allocate (head(ncell), source=0, stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for head')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for head")
          return
       end if
       allocate (next(self%ngrid), source=0, stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for next')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for next")
          return
       end if
       allocate (cell_ix(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_ix')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_ix")
          return
       end if
       allocate (cell_iy(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_iy')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_iy")
          return
       end if
       allocate (cell_iz(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_iz')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_iz")
          return
       end if
 
@@ -904,14 +797,14 @@ contains
       end do
 
       if (nspacing_count == 0 .or. spacing_est <= 0.0_wp) then
-         call fatal_error(error, 'find_disconnected_cavities: could not estimate grid spacing')
+         call fatal_error(error, "find_disconnected_cavities: could not estimate grid spacing")
          deallocate (head, next, cell_ix, cell_iy, cell_iz)
          return
       end if
 
       if (verbose > 1) then
-         write (iunit, '(a,i0,a,1x,f7.4,1x,a)') '[Info] Estimated average grid spacing: ', &
-            nspacing_count, ' points, ', spacing_est/real(nspacing_count, wp), 'bohr'
+         write (iunit, "(a,i0,a,1x,f7.4,1x,a)") "[Info] Estimated average grid spacing: ", &
+            nspacing_count, " points, ", spacing_est/real(nspacing_count, wp), "bohr"
       end if
 
       spacing_est = spacing_est/real(nspacing_count, wp)
@@ -920,8 +813,8 @@ contains
       cell_size2 = cell_size*cell_size
 
       if (verbose > 1) then
-         write (iunit, '(a,1x,f7.4,1x,a)') '[Info] Using cell size for connectivity search:', &
-            cell_size, 'bohr'
+         write (iunit, "(a,1x,f7.4,1x,a)") "[Info] Using cell size for connectivity search:", &
+            cell_size, "bohr"
       end if
 
       ! Rebuild grid for connectivity search with final cell size.
@@ -934,7 +827,7 @@ contains
          deallocate (head)
          allocate (head(ncell), source=0, stat=alloc_stat)
          if (alloc_stat /= 0) then
-            call fatal_error(error, 'find_disconnected_cavities: allocation failed for head resize')
+            call fatal_error(error, "find_disconnected_cavities: allocation failed for head resize")
             return
          end if
       else
@@ -959,17 +852,17 @@ contains
       if (allocated(visited)) deallocate (visited)
       allocate (queue(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for queue')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for queue")
          return
       end if
       allocate (comp_sizes(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for comp_sizes')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for comp_sizes")
          return
       end if
       allocate (visited(self%ngrid), source=.false., stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for visited')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for visited")
          return
       end if
 
@@ -1024,14 +917,14 @@ contains
 
       if (verbose > 1) then
          if (comp == 1) then
-            write (iunit, '(a)') '[Info] No disconnected cavities found.'
+            write (iunit, "(a)") "[Info] No disconnected cavities found."
             return
          else
-            write (iunit, '(a,i3)') '[Info] Disconnected cavities found:', comp
-            write (iunit, '(1x,a10,a10,a10)') 'id', 'npoints', '%'
-            write (iunit, '(1x,a10,a10,a10)') '---------', '---------', '---------'
+            write (iunit, "(a,i3)") "[Info] Disconnected cavities found:", comp
+            write (iunit, "(1x,a10,a10,a10)") "id", "npoints", "%"
+            write (iunit, "(1x,a10,a10,a10)") "---------", "---------", "---------"
             do i = 1, comp
-               write (iunit, '(1x,i10,i10,f10.2)') i, comp_sizes(i), &
+               write (iunit, "(1x,i10,i10,f10.2)") i, comp_sizes(i), &
                   real(comp_sizes(i), wp)/real(self%ngrid, wp)*100.0_wp
             end do
          end if

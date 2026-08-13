@@ -2,7 +2,8 @@
 module moist_model_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type, coupling_type, potential_type
+   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_channels, only: coupling_type, response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none (type, external)
@@ -17,7 +18,7 @@ module moist_model_component_pv
    contains
       procedure :: update => pv_update
       procedure :: get_energy => pv_get_energy
-      procedure :: get_potential => pv_get_potential
+      procedure :: get_response => pv_get_response
       procedure :: get_gradient => pv_get_gradient
       procedure :: get_surface_weights => pv_get_surface_weights
    end type solvation_model_component_pv
@@ -89,14 +90,14 @@ contains
 
    end subroutine pv_get_energy
 
-   !> No direct host-trace potential is produced by a volume contribution
+   !> No direct host-trace response is produced by a volume contribution
    !>
    !> @param[inout] self      Component instance
    !> @param[in]    coupling  Host coupling data, unused
    !> @param[inout] cavity    Live model cavity, unused
-   !> @param[inout] potential Potential accumulator, unchanged
+   !> @param[inout] response  Response accumulator, unchanged
    !> @param[out]   error     Error handling
-   subroutine pv_get_potential(self, coupling, cavity, potential, error)
+   subroutine pv_get_response(self, coupling, cavity, response, error)
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
@@ -104,11 +105,11 @@ contains
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
       !> Potential accumulator
-      type(potential_type), intent(inout) :: potential
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-   end subroutine pv_get_potential
+   end subroutine pv_get_response
 
    !> Add pressure-scaled total-volume surface adjoints
    !>

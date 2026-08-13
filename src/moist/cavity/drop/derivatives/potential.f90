@@ -19,19 +19,19 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
 
 contains
 
-   !> Map accumulated surface adjoints into the generic potential container
+   !> Map accumulated surface adjoints into the generic response container
    !>
-   !> @param[inout] self      DROP cavity instance
-   !> @param[in]    acc       Accumulated surface-observable adjoints
-   !> @param[inout] potential Potential accumulator receiving the LSF channels
-   !> @param[out]   error     Error object
-   module subroutine get_surface_potential_drop(self, acc, potential, error)
+   !> @param[inout] self     DROP cavity instance
+   !> @param[in]    acc      Accumulated surface-observable adjoints
+   !> @param[inout] response Response accumulator receiving the LSF channels
+   !> @param[out]   error    Error object
+   module subroutine get_surface_response_drop(self, acc, response, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(inout) :: self
       !> Accumulated surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Potential accumulator receiving the LSF channels
-      type(potential_type), intent(inout) :: potential
+      !> Response accumulator receiving the LSF channels
+      type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -41,19 +41,19 @@ contains
       call self%contract_surface_lsf_weights(acc, w0, w1, w2, error)
       if (allocated(error)) return
 
-      if (.not. allocated(potential%w_lsf0)) then
-         allocate (potential%w_lsf0(self%ngrid), source=0.0_wp)
-         allocate (potential%w_lsf1(3, self%ngrid), source=0.0_wp)
-         allocate (potential%w_lsf2(3, 3, self%ngrid), source=0.0_wp)
-      else if (size(potential%w_lsf0) /= self%ngrid) then
-         call fatal_error(error, "DROP surface potential grid-size mismatch")
+      if (.not. allocated(response%lsf%w_value)) then
+         allocate (response%lsf%w_value(self%ngrid), source=0.0_wp)
+         allocate (response%lsf%w_gradient(3, self%ngrid), source=0.0_wp)
+         allocate (response%lsf%w_hessian(3, 3, self%ngrid), source=0.0_wp)
+      else if (size(response%lsf%w_value) /= self%ngrid) then
+         call fatal_error(error, "DROP surface response grid-size mismatch")
          return
       end if
-      potential%w_lsf0 = potential%w_lsf0 + w0
-      potential%w_lsf1 = potential%w_lsf1 + w1
-      potential%w_lsf2 = potential%w_lsf2 + w2
+      response%lsf%w_value = response%lsf%w_value + w0
+      response%lsf%w_gradient = response%lsf%w_gradient + w1
+      response%lsf%w_hessian = response%lsf%w_hessian + w2
 
-   end subroutine get_surface_potential_drop
+   end subroutine get_surface_response_drop
 
    !> Contract per-grid surface adjoint weights to LSF value/gradient/Hessian adjoints
    !>

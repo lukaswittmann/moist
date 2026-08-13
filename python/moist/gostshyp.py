@@ -22,11 +22,11 @@ parameters are in moist's ``gostshyp`` solvation-model component in
 
 This requires one exchange per cavity update::
     host -> moist    gt, Pt, Mt, Rt        Gaussian moments of the density
-    moist -> host    w_gauss_g, w_gauss_f  amplitudes for the host's Fock
+    moist -> host    w_overlap, w_normal_deriv  amplitudes for the host's Fock
 
 where the moments are ``<G>``, ``<(r-C) G>``, ``<(r-C)(r-C) G>`` and
 ``<(r-C) |r-C|^2 G>``, and the host computes its Fock contribution as
-``F += sum_j [w_gauss_g_j g_j + w_gauss_f_j f_j]``
+``F += sum_j [w_overlap_j g_j + w_normal_deriv_j f_j]``
 
 Note ``ftilde`` is not exchanged: moist derives it as ``-2 omega_j (n_j . Pt_j)``
 from the same moments it differentiates (normal convention)
@@ -66,7 +66,7 @@ from .interface import (
     CavitySnapshot,
     CouplingTransaction,
     Evaluation,
-    GeneralPotential,
+    Response,
     GostshypMoments,
     ModelComponentGOSTSHYP,
     SolvationModel,
@@ -154,7 +154,7 @@ class _PySCFGostshyp:
         self.mol = host.mol
         self.energy = 0.0
         self.ngrid = 0
-        self._potential: Optional[GeneralPotential] = None
+        self._response: Optional[Response] = None
         self._evaluation: Optional[Evaluation] = None
         self._traces: Optional[tuple[np.ndarray, np.ndarray]] = None
         self._c2s: Optional[np.ndarray] = None
@@ -357,27 +357,27 @@ class _PySCFGostshyp:
     # results
     # ------------------------------------------------------------------
 
-    def _require_potential(self) -> GeneralPotential:
-        if self._potential is None:
+    def _require_response(self) -> Response:
+        if self._response is None:
             raise RuntimeError("call update(dm) successfully before reading GOSTSHYP results")
-        return self._potential
+        return self._response
 
     @property
-    def potential(self) -> GeneralPotential:
-        """Every adjoint channel moist returned for the last :meth:`update`.
+    def response(self) -> Response:
+        """Every channel group moist returned for the last :meth:`update`.
 
         Carries both the amplitudes the host contracts into its Fock matrix and
-        the level-set adjoints ``w_lsf0/1/2`` that
+        the level-set adjoints in ``lsf`` that
         :meth:`~moist.pyscf.PySCFHost._fock_lsf` consumes.
         """
 
-        return self._require_potential()
+        return self._require_response()
 
     @property
     def amplitudes(self) -> Optional[np.ndarray]:
         """The per-grid-point amplitudes ``p_j`` of the last :meth:`update`."""
 
-        return None if self._potential is None else self._potential.w_gauss_g
+        return None if self._response is None else self._response.gostshyp.w_overlap
 
     @property
     def inactive_count(self) -> int:
@@ -395,7 +395,7 @@ class _PySCFGostshyp:
         ``p_inp = 0`` they report every point as dropped.
         """
 
-        self._require_potential()
+        self._require_response()
         _, ftilde = self.live_traces
         floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
         return int(np.count_nonzero(np.abs(ftilde) <= floor))
@@ -428,7 +428,7 @@ class _PySCFGostshyp:
         ``energy / pressure``, which fails if the two conventions ever drift.
         """
 
-        self._require_potential()
+        self._require_response()
         gt, ftilde = self.live_traces
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = self.areas * gt / ftilde
@@ -448,22 +448,26 @@ class _PySCFGostshyp:
         """
 
         return self._fock_from(
-            self._require_potential(),
+            self._require_response(),
             include_cavity_response=include_cavity_response,
         )
 
     def _fock_from(
         self,
-        potential: GeneralPotential,
+        response: Response,
         *,
         include_cavity_response: bool,
     ) -> np.ndarray:
-        """Contract a captured potential with the current integral blocks."""
-        fock = np.einsum("j,uvj->uv", potential.w_gauss_g, self._G, optimize=True)
-        fock += np.einsum("j,uvj->uv", potential.w_gauss_f, self._F, optimize=True)
+        """Contract a captured response with the current integral blocks."""
+        fock = np.einsum(
+            "j,uvj->uv", response.gostshyp.w_overlap, self._G, optimize=True
+        )
+        fock += np.einsum(
+            "j,uvj->uv", response.gostshyp.w_normal_deriv, self._F, optimize=True
+        )
         fock = 0.5 * (fock + fock.T)
         if include_cavity_response:
-            fock = fock + self.host._fock_lsf(self.centers, potential)
+            fock = fock + self.host._fock_lsf(self.centers, response)
         return fock
 
     # ------------------------------------------------------------------
@@ -473,12 +477,12 @@ class _PySCFGostshyp:
     def _integral_nuclear_gradient(
         self,
         dm: np.ndarray,
-        potential: Optional[GeneralPotential] = None,
+        response: Optional[Response] = None,
     ) -> np.ndarray:
         """AO centers move, surface frozen.  Fortran ``(3, natm)``."""
 
-        if potential is None:
-            potential = self._require_potential()
+        if response is None:
+            response = self._require_response()
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
 
@@ -490,8 +494,12 @@ class _PySCFGostshyp:
             "j,xpqja,ja->xpqj", self.omega, ip1_p, self.normals, optimize=True
         )
 
-        kernel = np.einsum("j,xpqj->xpq", potential.w_gauss_g, ip1_g, optimize=True)
-        kernel += np.einsum("j,xpqj->xpq", potential.w_gauss_f, ip1_f, optimize=True)
+        kernel = np.einsum(
+            "j,xpqj->xpq", response.gostshyp.w_overlap, ip1_g, optimize=True
+        )
+        kernel += np.einsum(
+            "j,xpqj->xpq", response.gostshyp.w_normal_deriv, ip1_f, optimize=True
+        )
         row = np.einsum("xpq,pq->xp", kernel, dm_cart, optimize=True)
 
         # Cartesian AO rows fold onto atoms through the cartesian slices.
@@ -507,19 +515,19 @@ class _PySCFGostshyp:
         """The level set's own dependence on the nuclei, through the AO basis."""
 
         self.host.dm = dm
-        return self.host._gradient_lsf(self.centers, self._require_potential())
+        return self.host._gradient_lsf(self.centers, self._require_response())
 
     def _nuclear_gradient_from(
         self,
         dm: np.ndarray,
-        potential: GeneralPotential,
+        response: Response,
         model_gradient,
     ) -> np.ndarray:
         """Assemble every gradient route for one captured evaluation."""
         self.host.dm = dm
         return (
-            self._integral_nuclear_gradient(dm, potential)
-            + self.host._gradient_lsf(self.centers, potential)
+            self._integral_nuclear_gradient(dm, response)
+            + self.host._gradient_lsf(self.centers, response)
             + model_gradient()
         )
 
@@ -559,7 +567,7 @@ class GostshypModel(_PySCFGostshyp):
         reporting coherent-looking numbers for a surface that no longer exists.
         """
 
-        self._potential = None
+        self._response = None
         self._traces = None
         self._evaluation = None
         self.energy = 0.0
@@ -572,14 +580,14 @@ class GostshypModel(_PySCFGostshyp):
             # ``prepare`` necessarily builds transient host data before the
             # native model can finish.  The compatibility wrapper publishes
             # none of it when the enclosing evaluation fails.
-            self._potential = None
+            self._response = None
             self._traces = None
             self._evaluation = None
             self.energy = 0.0
             raise
         assert self._traces is not None
         self.energy = result.energy
-        self._potential = result.potential
+        self._response = result.response
         self._evaluation = result
         return result
 
@@ -597,7 +605,7 @@ class GostshypModel(_PySCFGostshyp):
         normals or Hessians by hand.
         """
 
-        self._require_potential()
+        self._require_response()
         return self.model.gradient()
 
     def nuclear_gradient(self, dm: np.ndarray) -> np.ndarray:
@@ -612,7 +620,7 @@ class GostshypModel(_PySCFGostshyp):
 
         return self._nuclear_gradient_from(
             dm,
-            self._require_potential(),
+            self._require_response(),
             self.model.gradient,
         )
 

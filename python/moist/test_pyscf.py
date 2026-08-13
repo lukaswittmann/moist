@@ -14,7 +14,7 @@ The suite is layered so a failure localises:
     conventions (``phi``, ``qefield``, nuclear charges) on their own.
 ``L1``
     Isodensity cavity at a *fixed* density matrix, over three component sets.
-    Only the ``w_lsf`` routes are new relative to L0.
+    Only the ``lsf`` routes are new relative to L0.
 ``L2``
     Self-consistent solvated SCF and its total nuclear gradient.
 
@@ -252,7 +252,7 @@ def solve(host, *, isodensity, components="cpcm"):
         cavity = CavityDROP(nleb=NLEB)
     model = GeneralSolvationModel(cavity, COMPONENTS[components]())
     result = model.evaluate(coupling=host.coupling(host.dm))
-    return result.energy, result.potential, result.cavity.xyz.T, model
+    return result.energy, result.response, result.cavity.xyz.T, model
 
 
 @pytest.mark.isodensity
@@ -273,7 +273,7 @@ def test_evaluation_exposes_complete_pyscf_results():
 
     np.testing.assert_allclose(
         result.fock,
-        host.fock(coords, result.potential, include_lsf=True),
+        host.fock(coords, result.response, include_lsf=True),
     )
     with pytest.raises(ValueError, match="WRITEABLE"):
         coupling.density_matrix.setflags(write=True)
@@ -282,7 +282,7 @@ def test_evaluation_exposes_complete_pyscf_results():
     density.fill(0.0)
     np.testing.assert_allclose(
         result.gradient,
-        model.gradient() + host.gradient(coords, result.potential, include_lsf=True),
+        model.gradient() + host.gradient(coords, result.response, include_lsf=True),
     )
 
 
@@ -396,25 +396,21 @@ def test_l0_gradient_matches_fd(system, basis):
 
 @pytest.mark.conventions
 def test_l0_gradient_requires_qefield():
-    """Without ``qefield`` moist keeps only the nuclear half of the surface motion.
+    """Without ``qefield`` the gradient is refused rather than silently wrong.
 
-    The omission is silent -- an unsupplied channel is treated as zero -- so this
-    guards the failure mode rather than the formula.
+    An unsupplied channel used to be read as zero, which kept only the nuclear
+    half of the surface motion and returned a plausible, wrong gradient.  The
+    external-potential gradient path now requires the channel outright.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    positions = mol.atom_coords()
     host = make_host(mol, dm=dm)
     _, _, coords, model = solve(host, isodensity=False)
 
     phi = host.surface_potential(coords)
     model.supply_electrostatics(phi)  # no qefield
-    starved = model.get_gradient(mol.natm) + host.gradient(
-        coords, model.get_potential(), include_lsf=False
-    )
-
-    numerical = fd_position(mol, positions, dm, 2, isodensity=False)
-    assert deviation(starved.flatten(order="F")[2], numerical) > VACUITY_FACTOR
+    with pytest.raises(RuntimeError, match="electrostatics%qefield"):
+        model.get_gradient(mol.natm)
 
 
 # ----------------------------------------------------------------------
@@ -524,17 +520,18 @@ def test_l1_gradient_matches_fd(system, basis, components):
 
 @pytest.mark.conventions
 def test_pv_alone_makes_the_fock_purely_level_set():
-    """With no electrostatic component the whole Fock is the ``w_lsf`` contraction.
+    """With no electrostatic component the whole Fock is the ``lsf`` contraction.
 
-    The surface charges are identically zero, so nothing survives except the
-    cavity-shape response -- the sharpest available isolation of the weights.
+    A pv-only model produces no electrostatic channel at all, so nothing
+    survives except the cavity-shape response -- the sharpest available
+    isolation of the weights.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
     _, potential, coords, _ = solve(host, isodensity=True, components="pv")
 
-    np.testing.assert_array_equal(potential.w_umol, np.zeros_like(potential.w_umol))
+    assert potential.electrostatics is None
     full = host.fock(coords, potential, include_lsf=True)
     np.testing.assert_allclose(full, host._fock_lsf(coords, potential), atol=1e-14)
 
@@ -591,7 +588,7 @@ def test_l1_potential_requires_surface_position_weights():
     When the density changes the  grid points move and ``phi(r_i)`` moves with them.
     moist cannot see that route -- ``phi`` is the host's function -- so it has to
     arrive as ``w_xyz`` before the potential is read.  Omitting it returns
-    ``w_lsf`` weights that look perfectly healthy and are badly wrong.
+    ``lsf`` weights that look perfectly healthy and are badly wrong.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -600,22 +597,12 @@ def test_l1_potential_requires_surface_position_weights():
 
     phi = host.surface_potential(coords)
     model.supply_electrostatics(phi)  # no w_xyz
-    starved = host.fock(coords, model.get_potential(), include_lsf=True)
+    starved = host.fock(coords, model.response(), include_lsf=True)
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd_density(mol, dm, direction, isodensity=True)
     analytic = float(np.einsum("uv,uv->", starved, direction))
     assert deviation(analytic, numerical) > VACUITY_FACTOR
-
-
-@pytest.mark.conventions
-def test_cpcm_leaves_qmol_untouched():
-    """CPCM writes no normal-derivative trace, so ``w_qmol`` must stay zero."""
-    system, basis = PRIMARY_CASE
-    mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, potential, _, _ = solve(host, isodensity=True)
-    np.testing.assert_array_equal(potential.w_qmol, np.zeros_like(potential.w_qmol))
 
 
 @pytest.mark.conventions
@@ -637,7 +624,7 @@ def test_gradient_path_ignores_host_surface_weights():
     _, _, coords, model = solve(host, isodensity=True)
     phi = host.surface_potential(coords)
     model.supply_electrostatics(phi)
-    charges, _ = model.get_trace_potential()
+    charges = model.trace_response().electrostatics.surface_charge
 
     gradients = []
     for factor in (0.0, 1000.0):

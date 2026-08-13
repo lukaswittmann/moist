@@ -18,7 +18,10 @@ from .interface import (
     CouplingTransaction,
     Electrostatics,
     Evaluation,
-    GeneralPotential,
+    ElectrostaticResponse,
+    GostshypResponse,
+    LsfResponse,
+    Response,
     GeneralSolvationModel,
     GostshypMoments,
     IsodensitySource,
@@ -31,7 +34,6 @@ from .interface import (
     SolvationModel,
     SolvationModelComponent,
     Structure,
-    TracePotential,
 )
 
 __all__ = [
@@ -50,7 +52,10 @@ __all__ = [
     "CouplingTransaction",
     "Electrostatics",
     "Evaluation",
-    "GeneralPotential",
+    "ElectrostaticResponse",
+    "GostshypResponse",
+    "LsfResponse",
+    "Response",
     "GeneralSolvationModel",
     "GostshypMoments",
     "IsodensitySource",
@@ -63,6 +68,5 @@ __all__ = [
     "SolvationModel",
     "SolvationModelComponent",
     "Structure",
-    "TracePotential",
 ]
 __version__ = "0.6.0"

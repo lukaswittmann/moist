@@ -6,7 +6,7 @@ module test_model_component_pcm_cpcm
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use moist_type, only: coupling_type
+   use moist_channels, only: coupling_type
    use moist_model_component_pcm_type, only: solver_type, potential_source
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, new_component_cosmo
@@ -246,7 +246,7 @@ contains
       end if
 
       ! Setup wavefunction
-      coupling%qat = reshape(qat_vals, [size(qat_vals), 1])
+      coupling%electrostatics%qat = reshape(qat_vals, [size(qat_vals), 1])
 
       ! Allocate storage for all solver results
       allocate (charges(cavity%ngrid, 4))
@@ -617,9 +617,9 @@ contains
       end if
 
       call make_charge_coupling(qat_vals, coupling_scalar)
-      allocate (coupling_spin%qat(size(qat_vals), 2))
-      coupling_spin%qat(:, 1) = 0.25_wp*qat_vals
-      coupling_spin%qat(:, 2) = 0.75_wp*qat_vals
+      allocate (coupling_spin%electrostatics%qat(size(qat_vals), 2))
+      coupling_spin%electrostatics%qat(:, 1) = 0.25_wp*qat_vals
+      coupling_spin%electrostatics%qat(:, 2) = 0.75_wp*qat_vals
 
       call new_component_cpcm(pcm_scalar, ctx, 78.4_wp, solver=solver_type%cholesky, error=err)
       if (allocated(err)) then
@@ -1012,14 +1012,14 @@ contains
 !> re-solve for the surface charges.
 !>
 !> This is the ordinary SCF pattern - the geometry is fixed, so the host calls
-!> update() once and then feeds new `coupling%qat` on every cycle.
+!> update() once and then feeds new `coupling%electrostatics%qat` on every cycle.
 !> [[pcm_ensure_charges]] used to recompute phi from those charges but leave
 !> `charges_valid` untouched, so the second cycle paired a fresh phi with the
 !> stale q and the energy came out linear in q instead of quadratic.
 !>
-!> The caching half is tested too: an unchanged `coupling%qat` must still
+!> The caching half is tested too: an unchanged `coupling%electrostatics%qat` must still
 !> short-circuit before the linear solve, otherwise every accessor call - and
-!> the general model issues two per get_potential - pays for another solve.
+!> the general model issues two per get_response - pays for another solve.
    subroutine test_cpcm_stale_charge_regression(error)
 
       !> Error handling
@@ -1200,7 +1200,7 @@ contains
          call test_failed(error, "Cavity update failed: "//err%message)
          return
       end if
-      coupling%qat = reshape(qat, [size(qat), 1])
+      coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
       ! Test all 4 solvers
       do i = 1, 4
@@ -1308,7 +1308,7 @@ contains
          do ii = 1, mol%nat
             qat(ii) = 0.3_wp*sin(real(ii, wp))
          end do
-         coupling%qat = reshape(qat, [size(qat), 1])
+         coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
          ! Build cavity
          call new_cosmo_radii(radius_model)
@@ -1919,7 +1919,7 @@ contains
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
       call make_neutral_charges(mols(1)%nat, qat)
-      coupling%qat = reshape(qat, [size(qat), 1])
+      coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb)
       if (allocated(err)) then
@@ -2002,7 +2002,7 @@ contains
 !>
 !> The supplied potential is the sum of the solute nuclear potential and a
 !> linear electronic potential. The latter has a constant spatial derivative,
-!> so `coupling%elstat_qefield(:,i) = q_i*dphi_elec/dr_i` is known exactly. This
+!> so `coupling%electrostatics%qefield(:,i) = q_i*dphi_elec/dr_i` is known exactly. This
 !> exercises the external branch's nuclear-charge construction and electronic
 !> field contribution through the complete component entry point.
 !>
@@ -2080,9 +2080,9 @@ contains
          return
       end if
 
-      allocate (coupling%elstat_qefield(3, cavity%ngrid))
+      allocate (coupling%electrostatics%qefield(3, cavity%ngrid))
       do igrid = 1, cavity%ngrid
-         coupling%elstat_qefield(:, igrid) = pcm_model%q(igrid)*electronic_field
+         coupling%electrostatics%qefield(:, igrid) = pcm_model%q(igrid)*electronic_field
       end do
       allocate (gradient(3, mols(1)%nat), source=0.0_wp)
       call pcm_model%get_gradient(coupling, cavity, gradient, err)
@@ -2090,13 +2090,13 @@ contains
          call test_failed(error, "External CPCM nuclear gradient failed: "//err%message)
          return
       end if
-      call check(error, maxval(abs(coupling%elstat_qefield)) > 1.0e-8_wp, &
+      call check(error, maxval(abs(coupling%electrostatics%qefield)) > 1.0e-8_wp, &
          & more="external electronic-field contribution is zero, the test is vacuous")
       if (allocated(error)) return
 
       bad_coupling = coupling
-      deallocate (bad_coupling%elstat_qefield)
-      allocate (bad_coupling%elstat_qefield(2, cavity%ngrid), source=0.0_wp)
+      deallocate (bad_coupling%electrostatics%qefield)
+      allocate (bad_coupling%electrostatics%qefield(2, cavity%ngrid), source=0.0_wp)
       allocate (bad_gradient(3, mols(1)%nat), source=1.0_wp)
       call pcm_model%get_gradient(bad_coupling, cavity, bad_gradient, err)
       call check(error, allocated(err), &
@@ -2230,7 +2230,7 @@ contains
       do imol = 1, size(mols)
          call center_at_origin(mols(imol))
          call make_neutral_charges(mols(imol)%nat, qat)
-         coupling%qat = reshape(qat, [size(qat), 1])
+         coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
          call get_test_cavity_iswig(mols(imol), cavity, err, nleb=nleb)
          if (allocated(err)) then
@@ -2331,7 +2331,7 @@ contains
       do imol = 1, size(mols)
          call center_at_origin(mols(imol))
          call make_neutral_charges(mols(imol)%nat, qat)
-         coupling%qat = reshape(qat, [size(qat), 1])
+         coupling%electrostatics%qat = reshape(qat, [size(qat), 1])
 
          call get_test_cavity_iswig(mols(imol), cavity, err, nleb=nleb)
          if (allocated(err)) then

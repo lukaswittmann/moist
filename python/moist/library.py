@@ -586,87 +586,101 @@ def general_model_supply_gostshyp(
     )
 
 
-def general_model_get_trace_potential(
+def general_model_get_trace_response(
     model: ModelHandle, ngrid: int
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return the accumulated molecular-potential and normal-trace adjoints."""
+) -> np.ndarray:
+    """Return the accumulated surface charges from all model components.
 
-    w_umol = np.zeros(ngrid, dtype=np.float64)
-    w_qmol = np.zeros(ngrid, dtype=np.float64)
-    error_check(lib.moist_general_model_get_trace_potential)(
-        model.handle,
-        int(ngrid),
-        _cast("double*", w_umol),
-        _cast("double*", w_qmol),
-    )
-    return w_umol, w_qmol
-
-
-def general_model_get_potential(model: ModelHandle, ngrid: int) -> dict:
-    """Return all direct trace and level-set adjoints from a general model."""
-
-    w_umol = np.zeros(ngrid, dtype=np.float64)
-    w_qmol = np.zeros(ngrid, dtype=np.float64)
-    w_lsf0 = np.zeros(ngrid, dtype=np.float64)
-    w_lsf1 = np.zeros((3, ngrid), dtype=np.float64, order="F")
-    w_lsf2 = np.zeros((3, 3, ngrid), dtype=np.float64, order="F")
-    error_check(lib.moist_general_model_get_potential)(
-        model.handle,
-        int(ngrid),
-        _cast("double*", w_umol),
-        _cast("double*", w_qmol),
-        _cast("double*", w_lsf0),
-        _cast("double*", w_lsf1),
-        _cast("double*", w_lsf2),
-    )
-    return {
-        "w_umol": w_umol,
-        "w_qmol": w_qmol,
-        "w_lsf0": w_lsf0,
-        "w_lsf1": w_lsf1,
-        "w_lsf2": w_lsf2,
-    }
-
-
-def general_model_get_potential_extended(model: ModelHandle, ngrid: int) -> dict:
-    """Return every potential channel, including the GOSTSHYP host amplitudes.
-
-    ``w_gauss_g``/``w_gauss_f`` are the amplitudes conjugate to the host's own
-    Gaussian integral blocks; the host completes its Fock contribution as
-    ``F += sum_i [w_gauss_g[i] g[..., i] + w_gauss_f[i] f[..., i]]``.  They come
-    back zero when no component supplies them.
-
-    Prefer this over calling :func:`general_model_get_potential` and a separate
-    amplitude read: assembling a potential contracts the cavity surface
-    adjoints once, and splitting the read would pay that cost twice.
+    The surface charge ``q_i`` equals ``dE/dphi_i`` by stationarity; the host
+    contracts it as ``F += sum_i q_i V(r_i)``.  Requesting it from a model that
+    produces no surface charges raises rather than returning zeros.
     """
 
-    w_umol = np.zeros(ngrid, dtype=np.float64)
-    w_qmol = np.zeros(ngrid, dtype=np.float64)
-    w_lsf0 = np.zeros(ngrid, dtype=np.float64)
-    w_lsf1 = np.zeros((3, ngrid), dtype=np.float64, order="F")
-    w_lsf2 = np.zeros((3, 3, ngrid), dtype=np.float64, order="F")
-    w_gauss_g = np.zeros(ngrid, dtype=np.float64)
-    w_gauss_f = np.zeros(ngrid, dtype=np.float64)
-    error_check(lib.moist_general_model_get_potential_extended)(
+    surface_charge = np.zeros(ngrid, dtype=np.float64)
+    error_check(lib.moist_general_model_get_trace_response)(
         model.handle,
         int(ngrid),
-        _cast("double*", w_umol),
-        _cast("double*", w_qmol),
-        _cast("double*", w_lsf0),
-        _cast("double*", w_lsf1),
-        _cast("double*", w_lsf2),
-        _cast("double*", w_gauss_g),
-        _cast("double*", w_gauss_f),
+        _cast("double*", surface_charge),
     )
+    return surface_charge
+
+
+def general_model_get_response(
+    model: ModelHandle,
+    ngrid: int,
+    *,
+    electrostatics: bool = True,
+    lsf: bool = True,
+    gostshyp: bool = False,
+) -> dict:
+    """Return the requested response channels from a general model.
+
+    Each keyword selects one channel group.  A group that is *not* requested is
+    skipped entirely (a NULL pointer at the C boundary) and comes back ``None``.
+    A group that *is* requested must be produced by the model configuration, or
+    the call raises: absence is a legitimate physical answer here -- a cavity
+    with field-independent geometry has no level-set response -- so zeros could
+    not be told apart from a genuine result and are never returned silently.
+
+    Requesting ``gostshyp`` uses the extended entry point, which reports the
+    amplitudes conjugate to the host's Gaussian integral blocks; the host
+    completes its Fock contribution as
+    ``F += sum_i [w_overlap[i] g[..., i] + w_normal_deriv[i] f[..., i]]``.
+
+    Prefer one call with every group you need: assembling a response contracts
+    the cavity surface adjoints once, and splitting the read pays that twice.
+    """
+
+    surface_charge = np.zeros(ngrid, dtype=np.float64) if electrostatics else None
+    w_value = np.zeros(ngrid, dtype=np.float64) if lsf else None
+    w_gradient = (
+        np.zeros((3, ngrid), dtype=np.float64, order="F") if lsf else None
+    )
+    w_hessian = (
+        np.zeros((3, 3, ngrid), dtype=np.float64, order="F") if lsf else None
+    )
+    w_overlap = np.zeros(ngrid, dtype=np.float64) if gostshyp else None
+    w_normal_deriv = np.zeros(ngrid, dtype=np.float64) if gostshyp else None
+
+    if gostshyp:
+        error_check(lib.moist_general_model_get_response_extended)(
+            model.handle,
+            int(ngrid),
+            _cast("double*", surface_charge),
+            _cast("double*", w_value),
+            _cast("double*", w_gradient),
+            _cast("double*", w_hessian),
+            _cast("double*", w_overlap),
+            _cast("double*", w_normal_deriv),
+        )
+    else:
+        error_check(lib.moist_general_model_get_response)(
+            model.handle,
+            int(ngrid),
+            _cast("double*", surface_charge),
+            _cast("double*", w_value),
+            _cast("double*", w_gradient),
+            _cast("double*", w_hessian),
+        )
+
     return {
-        "w_umol": w_umol,
-        "w_qmol": w_qmol,
-        "w_lsf0": w_lsf0,
-        "w_lsf1": w_lsf1,
-        "w_lsf2": w_lsf2,
-        "w_gauss_g": w_gauss_g,
-        "w_gauss_f": w_gauss_f,
+        "electrostatics": (
+            {"surface_charge": surface_charge} if electrostatics else None
+        ),
+        "lsf": (
+            {
+                "w_value": w_value,
+                "w_gradient": w_gradient,
+                "w_hessian": w_hessian,
+            }
+            if lsf
+            else None
+        ),
+        "gostshyp": (
+            {"w_overlap": w_overlap, "w_normal_deriv": w_normal_deriv}
+            if gostshyp
+            else None
+        ),
     }
 
 
