@@ -806,7 +806,9 @@ contains
 
       !> Setup grid point adjacency list for density computation
       call self%ctx%timer%start("Grid adj. list")
-      call self%setup_grid_adj_list(error)
+      if (self%request%grid_point_density .or. self%ctx%verbosity >= 3) then
+         call self%setup_grid_adj_list(error)
+      end if
       if (allocated(error)) then
          call self%ctx%timer%unwind(d0)
          return
@@ -870,7 +872,7 @@ contains
       call self%ctx%timer%stop("Properties")
 
       !> Run grid diagnostics
-      if (self%ctx%verbosity >= 2) then
+      if (self%ctx%verbosity >= 3) then
          call self%ctx%timer%start("Analysis", category=cat_properties)
          call self%analyze_cavity(error)
          if (allocated(error)) then
