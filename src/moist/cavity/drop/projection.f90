@@ -230,7 +230,6 @@ contains
       ! init() sets solver tolerances and branching cutoffs
       call projectors(thread_slot)%init(self%param, self%lsf_model, &
                                         branch_sep_cut=self%param%branch_sep_cut, &
-                                        branch_rho_cut=self%param%branch_rho_cut, &
                                         verbosity=self%ctx%verbosity, &
                                         debug=self%ctx%debug, tol=self%param%proj_tol, maxiter=self%param%proj_maxiter)
       call proj_buffers(thread_slot)%init(nloc, thread_error(thread_slot)%e)
@@ -294,9 +293,10 @@ contains
                   work=works(thread_slot) &
                   )
 
-               ! An LSF evaluation failure invalidates the whole build
-               if (allocated(projectors(thread_slot)%lsf_error)) then
-                  call move_alloc(projectors(thread_slot)%lsf_error, &
+               ! An LSF evaluation failure, or a certified search that could
+               ! not finish, invalidates the whole build
+               if (allocated(projectors(thread_slot)%abort_error)) then
+                  call move_alloc(projectors(thread_slot)%abort_error, &
                                   thread_error(thread_slot)%e)
                   append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
                else if (allocated(proj_error)) then

@@ -110,7 +110,13 @@ contains
                   new_unittest("svdw_pou_f2_rr", test_svdw_pou_f2_rr), &
                   new_unittest("svdw_pou_f2_r_ra", test_svdw_pou_f2_r_rA), &
                   new_unittest("svdw_normalized_f1_ra", test_svdw_normalized_f1_rA), &
-                  new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling) &
+                  new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling), &
+                  new_unittest("svdw_exclusion_radius_never_overclaims", &
+                               test_svdw_exclusion_radius), &
+                  new_unittest("svdw_exclusion_radius_gated_on_blends", &
+                               test_svdw_exclusion_radius_gate), &
+                  new_unittest("cfc_supplies_no_exclusion_radius", &
+                               test_cfc_exclusion_radius) &
                   ]
    end subroutine collect_cavity_drop_lsf
 
@@ -1860,5 +1866,132 @@ contains
       expected = sum(d3)/3.0_wp
       call check(error, lsf0, expected, thr_abs=ABS_THR, thr_rel=REL_THR)
    end subroutine test_svdw_body_order_scaling
+
+   !* ================================================================================= *!
+   !*                        Surface-free exclusion certificate                          *!
+   !* ================================================================================= *!
+
+   !> The exclusion radius must never over-claim.
+   !>
+   !> `exclusion_radius(S(x))` promises that `S` has no zero inside `B(x, r)`.
+   !> The certified branch search rests entirely on that promise -- a radius one
+   !> per cent too large silently hides branches -- so this samples the ball
+   !> around a spread of points and insists `S` keeps its sign throughout.
+   !>
+   !> The SvdW claim is `r = |S(x)|` from the 1-Lipschitz property, which is
+   !> tight: points at distance exactly `r` may sit on the surface. Sampling
+   !> stops just inside at `0.999 r`.
+   subroutine test_svdw_exclusion_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Fraction of the claimed radius actually probed
+      real(wp), parameter :: probe_frac = 0.999_wp
+
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: centre(ndim), probe(ndim), dir(ndim)
+      real(wp) :: lsf_centre, lsf_probe, r, dir_norm
+      integer :: ipoint, idir, iblend
+
+      ! A deterministic spread of probe directions; no RNG, so a failure here
+      ! reproduces exactly.
+      integer, parameter :: ndir = 14
+      real(wp), parameter :: dirs(ndim, ndir) = reshape([ &
+                             1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
+                             0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, &
+                             0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, &
+                             1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, &
+                             1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, 1.0_wp], &
+                             [ndim, ndir])
+
+      call get_structure(mol, "MB16-43", "01")
+      call get_test_radii(mol, radii)
+      call get_test_points(mol, points)
+
+      do iblend = 1, n_svdw_blends
+         call init_lsf(lsf, mol, radii, 0, kind_svdw, &
+                       blend_k=svdw_blend_k_values(iblend))
+
+         do ipoint = 1, size(points, 2)
+            centre = points(:, ipoint)
+
+            call lsf%prepare(centre, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+            call lsf%f0_screened(lsf_centre)
+
+            r = lsf%exclusion_radius(lsf_centre)
+            if (r <= 0.0_wp) cycle
+
+            do idir = 1, ndir
+               dir = dirs(:, idir)
+               dir_norm = norm2(dir)
+               probe = centre + probe_frac*r*dir/dir_norm
+
+               call lsf%prepare(probe, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                  return
+               end if
+               call lsf%f0_screened(lsf_probe)
+
+               if (lsf_probe*lsf_centre <= 0.0_wp) then
+                  call test_failed(error, &
+                                   "exclusion radius over-claims: S changes sign inside "// &
+                                   "the ball it certifies as surface-free")
+                  return
+               end if
+            end do
+         end do
+      end do
+   end subroutine test_svdw_exclusion_radius
+
+   !> The 1-Lipschitz bound needs non-negative blend coefficients. With a
+   !> negative one the weighted mean of unit vectors becomes an extrapolation,
+   !> the bound is lost, and the LSF must decline to certify anything rather
+   !> than hand back a radius it cannot stand behind.
+   subroutine test_svdw_exclusion_radius_gate(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:)
+
+      call get_structure(mol, "MB16-43", "LiH")
+      call get_test_radii(mol, radii)
+
+      call init_lsf(lsf, mol, radii, 0, kind_svdw, blend_2b=1.0_wp)
+      call check(error, lsf%exclusion_radius(-1.0_wp), 1.0_wp, thr=0.0_wp, &
+                 message="non-negative blends should certify r = |S|")
+      if (allocated(error)) return
+
+      call init_lsf(lsf, mol, radii, 0, kind_svdw, blend_2b=-1.0_wp)
+      call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="a negative blend coefficient must certify nothing")
+   end subroutine test_svdw_exclusion_radius_gate
+
+   !> CFC has no derived gradient bound yet, so it inherits the base "no
+   !> certificate" answer. Level 9 then runs out of budget instead of
+   !> reporting a completeness it cannot back up.
+   subroutine test_cfc_exclusion_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:)
+
+      call get_structure(mol, "MB16-43", "LiH")
+      call get_test_radii(mol, radii)
+      call init_lsf(lsf, mol, radii, 0, kind_cfc)
+
+      call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="CFC must not claim an exclusion radius")
+   end subroutine test_cfc_exclusion_radius
 
 end module test_cavity_drop_lsf

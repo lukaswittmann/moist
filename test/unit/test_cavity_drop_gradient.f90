@@ -362,7 +362,7 @@ contains
 
    !> Test gradient of gridpoints w.r.t. atomic positions
    subroutine do_test(error, mol, radii, blend_k_override, blend_3b_override, nleb_override, proj_level_override, &
-                      branch_rho_cut_override, branch_weight_s_override, require_branching)
+                      branch_weight_s_override, require_branching)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
@@ -377,8 +377,6 @@ contains
       integer, intent(in), optional :: nleb_override
       !> Optional override for projection level
       integer, intent(in), optional :: proj_level_override
-      !> Optional override for branch rho cutoff
-      real(wp), intent(in), optional :: branch_rho_cut_override
       !> Optional override for branch-weight softmax scale (larger = softer)
       real(wp), intent(in), optional :: branch_weight_s_override
       !> Require the reference build to actually produce branched anchors
@@ -490,11 +488,13 @@ contains
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
       ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
       ! to magnitudes where FD noise dominate
-      if (present(branch_rho_cut_override)) then
-         cavity%param%branch_rho_cut = branch_rho_cut_override
-      end if
       if (present(branch_weight_s_override)) then
          cavity%param%branch_weight_s = branch_weight_s_override
+         ! The admissible branch set is derived from the softmax scale, so it
+         ! has to be recomputed alongside it.
+         call cavity%param%compute_derived(cavity_error)
+         if (allocated(cavity_error)) &
+            call test_failed(error, "Failed to recompute derived parameters: "//cavity_error%message)
          call cavity%branch_weight%init(branch_weight_s_override)
       end if
       call cavity%update(mol, error=cavity_error)

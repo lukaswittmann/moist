@@ -81,7 +81,27 @@ module moist_cavity_drop_parameters
       !> 6 = Newton-deflation on 4D KKT system
       !> 7 = Regular SLSQP multistart
       !> 8 = Fine SLSQP multistart reference (very expensive)
+      !> 9 = Certified octree branch search
       integer :: proj_level = 3
+
+      !> ========== Certified octree branch search (level 9) ==========
+
+      !> Edge length at which a surviving box stops splitting and becomes a
+      !> seed candidate (Bohr). This is the resolution at which two distinct
+      !> minima are still told apart.
+      real(wp) :: octree_seed_size = 0.2_wp
+      !> Box budget per anchor. Exhausting it aborts the build rather than
+      !> truncating the search: a partial search carries no certificate, and a
+      !> surface quietly missing points is worse than no surface. Scratch grows
+      !> on demand, so a generous budget costs nothing on an easy anchor.
+      integer :: octree_max_boxes = 200000
+      !> Surviving-leaf budget per anchor
+      integer :: octree_max_survivors = 200000
+      !> Octree depth limit
+      integer :: octree_max_depth = 12
+      !> Seed extraction: 1 = one seed per discrete local minimum of the
+      !> survivor set, 2 = one seed per surviving leaf (slower reference)
+      integer :: octree_seed_mode = 1
 
       !> ========== Screening ==========
 
@@ -127,8 +147,15 @@ module moist_cavity_drop_parameters
 
       !> Softmax scale parameter for branch weight model (smoothness)
       real(wp) :: branch_weight_s = 0.0025_wp
-      !> Rho cutoff for branch separation (derived from `branch_weight_s` and `wleb_cut`)
-      real(wp) :: branch_rho_cut
+      !> Branch weight below which a branch carries no quadrature contribution.
+      !> Zero (the default) means "follow `wleb_cut`", so a branch is admissible
+      !> exactly while its softmax weight can still reach the quadrature floor.
+      !> A positive value pins the floor independently of the quadrature cutoff.
+      real(wp) :: branch_weight_floor = 0.0_wp
+      !> Largest objective excess a branch may have over the closest one and still
+      !> clear `branch_weight_floor` (derived: `branch_weight_s * ln(1/branch_weight_floor)`).
+      !> Consumed through [[rho_max_from_rho_min]]; see there for the geometry.
+      real(wp) :: branch_dphi_max = 0.0_wp
       !> Branch separation cutoff (derived from tolerance)
       real(wp) :: branch_sep_cut = 1.0E-8_wp
 
@@ -160,8 +187,10 @@ module moist_cavity_drop_parameters
       procedure :: new => new_moist_cavity_drop_parameters_type
       !> Register parameters for JSON configuration parsing
       procedure :: register_entries => register_cavity_drop_entries
-      !> Recompute all derived parameters from user-facing fields
-      procedure, private :: compute_derived => compute_drop_derived
+      !> Recompute all derived parameters from user-facing fields. Public so a
+      !> caller that pokes a user-facing field after construction (tests
+      !> widening the branch softmax, say) can restore consistency.
+      procedure :: compute_derived => compute_drop_derived
       !> Load parameters from JSON file and recompute derived values.
       !> Use this instead of read_file to ensure derived parameters
       !> (Born zeta, Jacobian regularization, etc.) stay consistent.
@@ -172,6 +201,8 @@ module moist_cavity_drop_parameters
       procedure :: print => print_parameters
       !> Return a human-readable description for the current projection level
       procedure :: proj_level_label => get_proj_level_label
+      !> Largest projection distance a branch may have and still carry weight
+      procedure :: rho_max_from => rho_max_from_rho_min
 
    end type moist_cavity_drop_parameters_type
 
@@ -239,6 +270,12 @@ contains
       ! Projection
       self%proj_maxiter = fresh%proj_maxiter
       self%proj_level = fresh%proj_level
+      ! Certified octree branch search
+      self%octree_seed_size = fresh%octree_seed_size
+      self%octree_max_boxes = fresh%octree_max_boxes
+      self%octree_max_survivors = fresh%octree_max_survivors
+      self%octree_max_depth = fresh%octree_max_depth
+      self%octree_seed_mode = fresh%octree_seed_mode
       ! Screening
       self%cell_grid_full_scan_below = fresh%cell_grid_full_scan_below
       self%cell_grid_fraction = fresh%cell_grid_fraction
@@ -253,8 +290,10 @@ contains
       self%wleb_prune_level = fresh%wleb_prune_level
       ! Density
       self%rho_grid_h = fresh%rho_grid_h
-      ! Branching
+      ! Branching (branch_dphi_max is derived; a zero floor means it follows
+      ! wleb_cut, see compute_derived)
       self%branch_weight_s = fresh%branch_weight_s
+      self%branch_weight_floor = fresh%branch_weight_floor
       ! Disconnected points
       self%disconnection_thrs = fresh%disconnection_thrs
    end subroutine init_cavity_drop_defaults
@@ -269,6 +308,9 @@ contains
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
+      !> Effective branch weight floor for this parameter set
+      real(wp) :: weight_floor
+
       !> Derive tolerance hierarchy from master tolerance
       !> (tightest to loosest: wleb_cut < screening < proj_tol < branch_sep)
       self%wleb_cut = self%tolerance*0.05_wp
@@ -276,8 +318,14 @@ contains
       self%proj_tol = self%tolerance
       self%branch_sep_cut = self%tolerance*10.0_wp
 
-      !> Branch rho cutoff from weight cutoff and softmax scale
-      self%branch_rho_cut = log(1.0_wp/self%wleb_cut)*sqrt(self%branch_weight_s)
+      !> Branch admissibility from the softmax weight floor. A branch is kept
+      !> while its weight can still reach the floor, which tracks the
+      !> quadrature cutoff unless the user pinned it explicitly. The user field
+      !> is left alone so it keeps meaning "follow wleb_cut" across a later
+      !> tolerance change.
+      weight_floor = self%branch_weight_floor
+      if (weight_floor <= 0.0_wp) weight_floor = self%wleb_cut
+      self%branch_dphi_max = self%branch_weight_s*log(1.0_wp/weight_floor)
 
       !> Grid point adjacency list cutoff from density kernel length
       self%adj_list_grid_cutoff = 4.0_wp*self%rho_grid_h
@@ -339,6 +387,12 @@ contains
       ! Projection
       call self%register_int_scalar("projection.maxiter", self%proj_maxiter)
       call self%register_int_scalar("projection.level", self%proj_level)
+      ! Certified octree branch search (projection level 9)
+      call self%register_real_scalar("projection.octree.seed_size", self%octree_seed_size)
+      call self%register_int_scalar("projection.octree.max_boxes", self%octree_max_boxes)
+      call self%register_int_scalar("projection.octree.max_survivors", self%octree_max_survivors)
+      call self%register_int_scalar("projection.octree.max_depth", self%octree_max_depth)
+      call self%register_int_scalar("projection.octree.seed_mode", self%octree_seed_mode)
       ! Screening
       call self%register_int_scalar("screening.cell_grid_full_scan_below", &
                                     self%cell_grid_full_scan_below)
@@ -355,8 +409,9 @@ contains
       call self%register_int_scalar("switching.wleb_prune_level", self%wleb_prune_level)
       ! Density
       call self%register_real_scalar("density.rho_grid_h", self%rho_grid_h)
-      ! Branching
+      ! Branching (branch_dphi_max is derived from the two below)
       call self%register_real_scalar("branching.softmax_scale", self%branch_weight_s)
+      call self%register_real_scalar("branching.weight_floor", self%branch_weight_floor)
       ! Disconnected points
       call self%register_real_scalar("disconnection.threshold", self%disconnection_thrs)
 
@@ -424,10 +479,38 @@ contains
          label = "Regular SLSQP multistart"
       case (8)
          label = "Fine SLSQP multistart reference"
+      case (9)
+         label = "Certified octree branch search"
       case default
          label = "unknown"
       end select
    end function get_proj_level_label
+
+   !> Largest projection distance a competing branch may have and still carry weight
+   !>
+   !> A branch enters the quadrature with the softmax weight
+   !> `p_b = exp[-(Phi_b - Phi_min)/sigma] / Z`. Dropping the normalization
+   !> (`Z >= 1`, so the bound errs towards keeping branches) it clears the
+   !> weight floor only while `Phi_b - Phi_min <= branch_dphi_max`. With the
+   !> quadratic objective `Phi = (alpha/2) rho^2` that admissible set is a
+   !> difference of *squares*, not of radii:
+   !>
+   !>     rho_max = sqrt( rho_min^2 + 2*branch_dphi_max/phi_alpha )
+   !>
+   !> At the default parameters this is `sqrt(rho_min^2 + 0.260)`, i.e. a shell
+   !> only ~0.12 Bohr thick at `rho_min = 1` and thinner still further out --
+   !> which is what makes a certified search over that volume affordable.
+   !>
+   !> @param[in] self    Parameter container
+   !> @param[in] rho_min Projection distance of the closest branch found so far
+   !> @return    rho_max Radius beyond which no branch can carry weight
+   pure function rho_max_from_rho_min(self, rho_min) result(rho_max)
+      class(moist_cavity_drop_parameters_type), intent(in) :: self
+      real(wp), intent(in) :: rho_min
+      real(wp) :: rho_max
+
+      rho_max = sqrt(rho_min*rho_min + 2.0_wp*self%branch_dphi_max/self%phi_alpha)
+   end function rho_max_from_rho_min
 
    !> Print current parameter values
    !> @param[in] self Parameter container to display
@@ -484,11 +567,17 @@ contains
       call pp%push("Projection settings:")
       call pp%kv("Projection level", self%proj_level, self%proj_level_label())
       call pp%kv("Maximum iterations", self%proj_maxiter)
+      if (self%proj_level >= 9) then
+         call pp%kv("Octree seed size", self%octree_seed_size, "Bohr")
+         call pp%kv("Octree box budget", self%octree_max_boxes)
+         call pp%kv("Octree seed mode", self%octree_seed_mode)
+      end if
       call pp%pop()
 
       call pp%push("Branching:")
       call pp%kv("Softmax scale", self%branch_weight_s)
-      call pp%kv("Rho cutoff", self%branch_rho_cut, "Bohr")
+      call pp%kv("Weight floor", self%branch_weight_floor)
+      call pp%kv("Max. objective excess", self%branch_dphi_max)
       call pp%pop()
 
       call pp%push("Screening:")

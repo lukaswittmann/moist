@@ -579,7 +579,7 @@ contains
 
       !> Parameter setup
       ! FIXME: This is a poor (temporary) solution for now
-      use_branch_weight_s = 0.05_wp
+      use_branch_weight_s = 0.0025_wp
       if (present(branch_weight_s)) use_branch_weight_s = branch_weight_s
       call self%param%new( &
          nleb=nleb, &

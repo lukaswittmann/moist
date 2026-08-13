@@ -752,7 +752,8 @@ contains
          choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
             "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
             "5=SLSQP-deflation", "6=Newton-deflation", &
-            "7=Multistart", "8=Fine multistart"], &
+            "7=Multistart", "8=Fine multistart", &
+            "9=Certified octree"], &
          print_choices=.true., &
          group_idx=grp_technical)
       call p%add_argument('--wleb-switch', data_type='integer', &
