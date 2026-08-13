@@ -6,11 +6,12 @@ module test_radii
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_data_radii_legacy, only: get_radius_func
-   use moist_radii, only: radius_type, static_radius_type, draco_radius_type
+   use moist_radii, only: radius_type, radius_type_static
    use moist_radii, only: new_cpcm_radii, new_smd_radii, new_d3_radii
-   use moist_radii, only: new_cosmo_radii, new_bondi_radii, new_draco_radii
+   use moist_radii, only: new_cosmo_radii, new_bondi_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -25,26 +26,25 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("StaticRadiiCPCM", test_static_radii_cpcm), &
-                  new_unittest("StaticRadiiConstructors", test_static_constructors), &
-                  new_unittest("RadiiConstructorVerbosity", test_constructor_verbosity), &
-                  new_unittest("StaticRadiiZeroGradient", test_static_zero_gradient), &
-                  new_unittest("StaticRadiiNeedsUpdate", test_static_requires_update), &
-                  new_unittest("DracoRadiiDummy", test_draco_dummy), &
-                  new_unittest("CustomRadiiAtomsWorks", test_custom_atoms_dropcess), &
-                  new_unittest("CustomRadiiElementsWorks", test_custom_elements_dropcess), &
-                  new_unittest("CustomRadiiCavityIntegration", test_custom_radii_cavity_integration), &
-                  new_unittest("CustomRadiiAtomsBadEmpty", test_custom_atoms_empty_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiAtomsBadValue", test_custom_atoms_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiAtomsBadNat", test_custom_atoms_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadEmpty", test_custom_elements_empty_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadSize", test_custom_elements_size_mismatch_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadZ", test_custom_elements_invalid_z_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadValue", test_custom_elements_nonpositive_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsBadDuplicate", test_custom_elements_duplicate_fails, should_fail=.true.), &
-                  new_unittest("CustomRadiiElementsMissing", test_custom_elements_missing_for_molecule_fails, &
+                  new_unittest("static_radii_cpcm", test_static_radii_cpcm), &
+                  new_unittest("static_radii_constructors", test_static_constructors), &
+                  new_unittest("radii_constructor_verbosity", test_constructor_verbosity), &
+                  new_unittest("static_radii_zero_gradient", test_static_zero_gradient), &
+                  new_unittest("static_radii_needs_update", test_static_requires_update), &
+                  new_unittest("custom_radii_atoms_works", test_custom_atoms_dropcess), &
+                  new_unittest("custom_radii_elements_works", test_custom_elements_dropcess), &
+                  new_unittest("custom_radii_cavity_integration", test_custom_radii_cavity_integration), &
+                  new_unittest("custom_radii_atoms_bad_empty", test_custom_atoms_empty_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_value", test_custom_atoms_nonpositive_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_atoms_bad_nat", test_custom_atoms_size_mismatch_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_empty", test_custom_elements_empty_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_size", test_custom_elements_size_mismatch_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_z", test_custom_elements_invalid_z_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_value", test_custom_elements_nonpositive_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_bad_duplicate", test_custom_elements_duplicate_fails, should_fail=.true.), &
+                  new_unittest("custom_radii_elements_missing", test_custom_elements_missing_for_molecule_fails, &
                                should_fail=.true.), &
-                  new_unittest("CustomRadiiStringGuidance", test_custom_string_guidance, should_fail=.true.) &
+                  new_unittest("custom_radii_string_guidance", test_custom_string_guidance, should_fail=.true.) &
                   ]
    end subroutine collect_radii
 
@@ -64,8 +64,9 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
+      real(wp) :: ref
       integer :: iat
 
       call make_test_molecule(mol)
@@ -83,7 +84,12 @@ contains
       end if
 
       do iat = 1, mol%nat
-         call check(error, model%f0(iat), get_radius_func(mol%num(mol%id(iat)), "cpcm"), thr=thr, &
+         ref = get_radius_func(mol%num(mol%id(iat)), "cpcm", err)
+         if (allocated(err)) then
+            call test_failed(error, "CPCM reference lookup failed: "//trim(err%message))
+            return
+         end if
+         call check(error, model%f0(iat), ref, thr=thr, &
                     more="CPCM static radii mismatch")
          if (allocated(error)) return
       end do
@@ -93,8 +99,9 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
+      real(wp) :: ref
 
       call make_test_molecule(mol)
 
@@ -108,8 +115,12 @@ contains
          call test_failed(error, "SMD static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "smd"), thr=thr, &
-                 more="SMD radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "smd", err)
+      if (allocated(err)) then
+         call test_failed(error, "smd reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="SMD radius mismatch")
       if (allocated(error)) return
 
       call new_d3_radii(model)
@@ -122,8 +133,12 @@ contains
          call test_failed(error, "D3 static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "d3"), thr=thr, &
-                 more="D3 radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "d3", err)
+      if (allocated(err)) then
+         call test_failed(error, "d3 reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="D3 radius mismatch")
       if (allocated(error)) return
 
       call new_cosmo_radii(model)
@@ -136,8 +151,12 @@ contains
          call test_failed(error, "COSMO static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "cosmo"), thr=thr, &
-                 more="COSMO radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "cosmo", err)
+      if (allocated(err)) then
+         call test_failed(error, "cosmo reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="COSMO radius mismatch")
       if (allocated(error)) return
 
       call new_bondi_radii(model)
@@ -150,14 +169,18 @@ contains
          call test_failed(error, "Bondi static update did not cache f0")
          return
       end if
-      call check(error, model%f0(1), get_radius_func(mol%num(mol%id(1)), "bondi"), thr=thr, &
-                 more="Bondi radius mismatch")
+      ref = get_radius_func(mol%num(mol%id(1)), "bondi", err)
+      if (allocated(err)) then
+         call test_failed(error, "bondi reference lookup failed: "//trim(err%message))
+         return
+      end if
+      call check(error, model%f0(1), ref, thr=thr, more="Bondi radius mismatch")
    end subroutine test_static_constructors
 
    subroutine test_constructor_verbosity(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(static_radius_type) :: static_model
+      type(radius_type_static) :: static_model
       class(radius_type), allocatable :: model
       type(moist_error_type), allocatable :: err
 
@@ -193,7 +216,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
       type(moist_error_type), allocatable :: err
 
       call make_test_molecule(mol)
@@ -222,7 +245,7 @@ contains
    subroutine test_static_requires_update(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(static_radius_type) :: model
+      type(radius_type_static) :: model
 
       call new_cpcm_radii(model)
 
@@ -236,21 +259,6 @@ contains
       end if
    end subroutine test_static_requires_update
 
-   subroutine test_draco_dummy(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(structure_type) :: mol
-      type(draco_radius_type) :: model
-      type(moist_error_type), allocatable :: err
-
-      call make_test_molecule(mol)
-      call new_draco_radii(model)
-
-      call model%update(mol, err)
-      if (.not. allocated(err)) then
-         call test_failed(error, "DRACO dummy update should report not implemented")
-      end if
-   end subroutine test_draco_dummy
 
    subroutine test_custom_atoms_dropcess(error)
       type(error_type), allocatable, intent(out) :: error
@@ -440,6 +448,10 @@ contains
       class(radius_type), allocatable :: model
       type(moist_error_type), allocatable :: err
       real(wp), parameter :: radii(4) = [2.15_wp, 1.35_wp, 1.35_wp, 1.35_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       call make_test_molecule(mol)
 
@@ -452,8 +464,8 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=2.5_wp, blend_3b=1.0_wp)
-         call new_cavity_drop(cavity, nleb=110, &
-                              debug=.false., verbose=0, radius_model=model, &
+         call new_cavity_drop(cavity, ctx, nleb=110, &
+                              radius_model=model, &
                               lsf_model=svdw_template, error=err)
       end block
       if (allocated(err)) then

@@ -7,8 +7,10 @@ subdir('utils')
 subdir('output')
 
 srcs += files(
+  'context.f90',
   'math.f90',
   'cavity.f90',
+  'channels.f90',
   'data.f90',
   'radii.f90',
   'model.f90',
@@ -18,11 +20,7 @@ srcs += files(
   'utils.f90',
 )
 
-# Build-info module: the short git commit is stamped in at build time from
-# build_info.f90.in. Reproducible (commit only, no host/user/date) and
-# regenerated on every build; falls back to "unknown" outside a git checkout.
-# fpm cannot do this (no build-time codegen) and uses the committed
-# src/moist/build_info.f90 fallback, which reports "unknown".
+# Build-info module
 srcs += vcs_tag(
   command: ['git', 'rev-parse', '--short', 'HEAD'],
   fallback: 'unknown',

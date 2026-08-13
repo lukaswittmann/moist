@@ -2,7 +2,7 @@ dev_tests = [
   'cavity_drop_born_fit',
   'cavity_drop_timings',
   'cavity_drop_robustness',
-  'cavity_drop_integration',
+  'cavity_drop_integration_dev',
   'cavity_drop_convergence',
   'cavity_drop_deflation_comparison',
 ]

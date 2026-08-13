@@ -269,7 +269,7 @@ endif()
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
   target_compile_options(moist PRIVATE
     -ffree-line-length-none -fbacktrace
-    -fopenmp-simd --param max-inline-insns-auto=300
+    -fopenmp-simd
   )
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
   # -fp-model=precise: ifx defaults to a fast FP model that reassociates
@@ -357,16 +357,21 @@ if(MOIST_TESTS)
   set(_moist_allow_tests ON)  # re-enable the shadowed add_test() for moist's suite
   set(_unit "${CMAKE_CURRENT_SOURCE_DIR}/test/unit")
 
-  # Kept in sync with the `tests` list in test/unit/meson.build (model_gems and
-  # component_cds are intentionally omitted there as well).
+  # Kept in sync with the `tests` list in test/unit/meson.build.
   set(moist_test_suites
-    utils radii
-    math_linalg math_adjacency_list math_cell_grid math_solvers
-    math_sorters math_trig math_grid math_numdiff
-    cavity_iswig cavity_numsa
-    component_pcm_cpcm
-    cavity_drop_primitives cavity_drop_cfc_kernel cavity_drop_lsf
-    cavity_drop_gradients cavity_drop_cpcm cavity_drop_integration_ref
+    api utils utils_timer utils_context utils_mem utils_prettylistprint
+    data radii
+    math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
+    math_solvers math_sorters math_trig math_grid
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf
+    cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
+    cavity_drop_integration cavity_drop_cpcm
+    cavity_iswig cavity_numsa cavity_marchingcubes
+    model_component_pcm_amat model_component_pcm_amat_kernel
+    model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
+    model_component_pcm_electrostatics model_component_pcm_cpcm
+    model_component_gostshyp model_component_pv
+    model_general
   )
   if(MOIST_RISM)
     list(APPEND moist_test_suites rism_1d rism_thermo)
@@ -375,7 +380,12 @@ if(MOIST_TESTS)
     list(APPEND moist_test_suites utils_hdf5)
   endif()
 
-  set(moist_test_srcs "${_unit}/main.F90" "${_unit}/test_helpers.f90")
+  # Driver plus the shared fixture modules, which register no suite of their own.
+  set(moist_test_srcs
+    "${_unit}/main.F90"
+    "${_unit}/test_helpers.f90"
+    "${_unit}/test_model_component_helper.f90"
+  )
   foreach(suite IN LISTS moist_test_suites)
     list(APPEND moist_test_srcs "${_unit}/test_${suite}.f90")
   endforeach()

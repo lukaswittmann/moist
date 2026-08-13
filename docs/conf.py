@@ -4,7 +4,7 @@ import sys, os.path as op
 sys.path.insert(0, op.join(op.dirname(__file__), "..", "python"))
 
 try:
-    import moist  # noqa: F401
+    import moist
 except ImportError:
     pass
 
@@ -24,9 +24,7 @@ extensions = [
     "sphinxcontrib.bibtex",
 ]
 
-# Global bibliography (sphinxcontrib-bibtex). Cite from any page with the
-# :cite:t: / :cite:p: roles; the entries are defined in references.bib and the
-# collected list is rendered once on the References page.
+# Global bibliography (sphinxcontrib-bibtex)
 bibtex_bibfiles = ["_static/references.bib"]
 
 html_theme = "sphinx_book_theme"
@@ -46,9 +44,6 @@ html_theme_options = {
 
 html_sidebars = {}
 
-html_css_files = [
-    "css/custom.css",
-]
 html_static_path = ["_static"]
 templates_path = ["_templates"]
 

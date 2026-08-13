@@ -1,18 +1,23 @@
 module moist_data_mass
    use mctc_env, only: wp
+   use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
    implicit none
    private
 
    public :: get_mass
+   public :: max_elem
 
    interface get_mass
       module procedure :: get_mass_num
       module procedure :: get_mass_sym
    end interface get_mass
 
+   !> Highest atomic number this table covers
+   integer, parameter :: max_elem = 118
+
    !> Atomic masses from NIST in atomic mass units (u)
-   real(wp), parameter :: atomic_masses(1:118) = [ &
+   real(wp), parameter :: atomic_masses(max_elem) = [ &
       &   1.00794075_wp, 4.00260193_wp, 6.94003660_wp, 9.01218307_wp,&
       &  10.81102805_wp, 12.01073590_wp, 14.00670321_wp, 15.99940492_wp,&
       &  18.99840316_wp, 20.18004638_wp, 22.98976928_wp, 24.30505162_wp,&
@@ -46,34 +51,57 @@ module moist_data_mass
 
 contains
 
-   !> Get chemical mass for a given element symbol
-   elemental function get_mass_sym(sym) result(eta)
+   !> Get atomic mass for a given element symbol
+   subroutine get_mass_sym(sym, eta, error)
 
       !> Element symbol
       character(len=*), intent(in) :: sym
 
-      !> Chemical mass
-      real(wp) :: eta
+      !> Atomic mass
+      real(wp), intent(out) :: eta
 
-      eta = get_mass(to_number(sym))
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-   end function get_mass_sym
+      integer :: num
 
-   !> Get chemical mass for a given atomic number
-   elemental function get_mass_num(num) result(eta)
+      eta = 0.0_wp
+
+      num = to_number(trim(sym))
+      if (num < 1) then
+         call fatal_error(error, "Unknown element symbol: '"//trim(sym)//"'")
+         return
+      end if
+
+      call get_mass_num(num, eta, error)
+
+   end subroutine get_mass_sym
+
+   !> Get atomic mass for a given atomic number
+   subroutine get_mass_num(num, eta, error)
 
       !> Atomic number
       integer, intent(in) :: num
 
-      !> Chemical mass
-      real(wp) :: eta
+      !> Atomic mass
+      real(wp), intent(out) :: eta
 
-      if (num > 0 .and. num <= size(atomic_masses)) then
-         eta = atomic_masses(num)
-      else
-         eta = 0.0_wp
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      character(len=64) :: msg
+
+      eta = 0.0_wp
+
+      if (num < 1 .or. num > max_elem) then
+         write (msg, '(a,i0,a,i0,a)') &
+            "Atomic number ", num, " out of range [1, ", max_elem, "]"
+         call fatal_error(error, trim(msg))
+         return
       end if
 
-   end function get_mass_num
+      eta = atomic_masses(num)
+
+   end subroutine get_mass_num
 
 end module moist_data_mass

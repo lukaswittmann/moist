@@ -1,12 +1,40 @@
 !> DROP projection and mapped Jacobian quadrature weight computation
+!  TODO: This file will be refactored soon
 submodule(moist_cavity_drop) moist_cavity_drop_projection
-   use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_wtime
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
+   !$ use omp_lib, only: omp_get_thread_num, omp_get_wtime
+   use, intrinsic :: iso_fortran_env, only: int64
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_math_sorter, only: counting_argsort
    implicit none
 
+   !> Per-thread error slot
+   type :: error_slot
+      !> Error raised by this thread, unallocated while the thread is healthy
+      type(error_type), allocatable :: e
+      !> Anchor index the error was raised at (0 for setup), picks a deterministic winner
+      integer :: ianchor = huge(1)
+   end type error_slot
+
 contains
+
+   !> Wall-clock seconds for the projector's progress report
+   !>
+   !> `omp_get_wtime` when the build has OpenMP, `system_clock` otherwise, so a
+   !> serial build neither references the OpenMP runtime nor loses its timings.
+   function drop_wall_time() result(seconds)
+      !> Elapsed wall time in seconds, measured from an unspecified origin
+      real(wp) :: seconds
+
+      !> Clock reading and tick rate of the serial fallback
+      integer(int64) :: ticks, rate
+
+      call system_clock(ticks, rate)
+      seconds = 0.0_wp
+      if (rate > 0_int64) seconds = real(ticks, wp)/real(rate, wp)
+      !$ seconds = omp_get_wtime()
+   end function drop_wall_time
 
    !* ================================================================================= *!
    !*             Memory management utilities for projection-coupled arrays             *!
@@ -30,41 +58,91 @@ contains
 
    !> Ensure all projection-coupled arrays share at least the requested capacity
    !>
-   !> TODO: Error propagation is missing
-   module subroutine ensure_projection_capacity(self, new_capacity)
+   !> `grow_array` refuses to shrink, so a request below the capacity these
+   !> arrays already hold is reported rather than acted on. Each call is checked
+   !> individually because they do not all start from the same size: `fill_arrays`
+   !> releases `phi0` without reallocating it, so it is grown from zero here
+   !> while its neighbours are grown from the pre-filter grid size.
+   !>
+   !> @param[inout] self         Cavity instance
+   !> @param[in]    new_capacity Capacity every coupled array must reach
+   !> @param[out]   error        Refused resize
+   module subroutine ensure_projection_capacity(self, new_capacity, error)
       class(cavity_type_drop), intent(inout) :: self
       integer, intent(in) :: new_capacity
+      type(error_type), allocatable, intent(out) :: error
 
       !> Grow 2D real arrays
-      call grow_array(self%xyz, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%anchorxyz, 3, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%normal0, 3, new_capacity, fill_value=0.0_wp)
+      call grow_array(self%xyz, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchorxyz, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%normal0, 3, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
 
       !> Grow 1D real arrays
-      call grow_array(self%wleb, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%anchor_wleb0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%lambda0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%iswig_f0, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%f, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%anchor_xi0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%rho, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%r_iI0, new_capacity, fill_value=0.0_wp)
-      call grow_array(self%wbranch, new_capacity, fill_value=1.0_wp)
-      call grow_array(self%phi0, new_capacity, fill_value=0.0_wp)
+      call grow_array(self%wleb, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_wleb0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%lambda0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%iswig_f0, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%f, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_xi0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%rho, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%r_iI0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%wbranch, new_capacity, fill_value=1.0_wp, error=error)
+      if (allocated(error)) return
+      call grow_array(self%phi0, new_capacity, fill_value=0.0_wp, error=error)
+      if (allocated(error)) return
 
       !> Grow 1D integer arrays
-      call grow_array(self%owner, new_capacity, fill_value=0)
-      call grow_array(self%branch, new_capacity, fill_value=1)
-      call grow_array(self%anchor_id, new_capacity, fill_value=0)
-      call grow_array(self%branch_count, new_capacity, fill_value=1)
+      call grow_array(self%owner, new_capacity, fill_value=0, error=error)
+      if (allocated(error)) return
+      call grow_array(self%branch, new_capacity, fill_value=1, error=error)
+      if (allocated(error)) return
+      call grow_array(self%anchor_id, new_capacity, fill_value=0, error=error)
+      if (allocated(error)) return
+      call grow_array(self%branch_count, new_capacity, fill_value=1, error=error)
+      if (allocated(error)) return
 
       !> Grow 1D logical arrays
-      call grow_array(self%converged, new_capacity, fill_value=.false.)
+      call grow_array(self%converged, new_capacity, fill_value=.false., error=error)
+      if (allocated(error)) return
    end subroutine ensure_projection_capacity
 
    !* ================================================================================= *!
    !*                                     Projection                                    *!
    !* ================================================================================= *!
+
+   !> Promote a fatal per-thread error into a loop-wide abort request
+   !>
+   !> Returns `.true.` when `slot` carries an error, so the caller can leave the
+   !> iteration. The flag is what actually stops the loop: `!$omp cancel` is a
+   !> no-op unless cancellation is enabled in the runtime, so every iteration
+   !> re-reads `abort_requested` and skips its body
+   !>
+   !> @param[inout] slot            Calling thread's error slot
+   !> @param[in]    ianchor         Anchor index that failed (0 for setup failures)
+   !> @param[inout] abort_requested Shared abort flag, raised on failure
+   logical function abort_on_error(slot, ianchor, abort_requested) result(failed)
+      type(error_slot), intent(inout) :: slot
+      integer, intent(in) :: ianchor
+      logical, intent(inout) :: abort_requested
+
+      failed = allocated(slot%e)
+      if (.not. failed) return
+
+      slot%ianchor = ianchor
+      !$omp atomic write
+      abort_requested = .true.
+   end function abort_on_error
 
    !> Project all grid points onto SDF surface
    !>
@@ -76,7 +154,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(prettyprinter) :: pp
       type(prettylistprinter) :: plp
-      integer :: i, idx, ithread
+      integer :: i, idx, ithread, ifail
       integer :: iend, ibeg, nloc
       integer :: nmax_anchor, nout, n_branch
       integer :: n_branched_anchor, n_branched_points
@@ -86,13 +164,15 @@ contains
       integer :: local_branched_anchor, local_branched_points
       integer :: local_nbranch_min, local_nbranch_max
       integer :: local_done, est_done, next_progress_pct
-      integer :: n_append_fail, n_proj_fail
       real(wp) :: progress_last_time, now_time, progress_elapsed, progress_rate, progress_eta
       real(wp) :: wall_start, wall_end
       logical :: append_ok
       logical :: trigger_time, trigger_pct
+      logical :: abort_requested
+      type(error_slot), allocatable :: thread_error(:)
       integer, allocatable :: thread_nout(:), thread_branched_anchor(:), thread_branched_points(:)
       integer, allocatable :: thread_nbranch_min(:), thread_nbranch_max(:)
+      integer, allocatable :: order(:)
       type(drop_projector_type), allocatable :: projectors(:)
       type(projection_buffer_type), allocatable :: proj_buffers(:)
       type(projection_workspace_type), allocatable :: works(:)
@@ -101,12 +181,16 @@ contains
       nmax_anchor = self%nmax
       nout = 0
 
-      nthreads = max(1, omp_get_max_threads())
+      nthreads = self%ctx%get_num_threads()
 
       ! Private per-thread projector, output buffer and scratch workspace
       allocate (projectors(nthreads))
       allocate (proj_buffers(nthreads))
       allocate (works(nthreads))
+
+      ! Per-thread error slots, reduced to a single `error` after the region
+      allocate (thread_error(nthreads))
+      abort_requested = .false.
 
       ! Per-thread tallies, reduced serially below (for now)
       allocate (thread_nout(nthreads), source=0)
@@ -117,15 +201,13 @@ contains
 
       ! Buffer preallocation: expected share + 10% slack to avoid mid-loop regrow
       nloc = max(1, ceiling(1.1_wp*real(max(1, nmax_anchor/max(1, nthreads)), wp)))
-      n_append_fail = 0
-      n_proj_fail = 0
 
       !*------------------------- Project all points------------------------- *!
 
-      if (self%verbosity >= 2) then
+      if (self%ctx%verbosity >= 2) then
          plp = new_prettylistprinter([12, 8, 12, 12], &
                                      [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
-                                     unit=output_unit)
+                                     unit=self%ctx%unit)
          call plp%blank()
          call plp%header("PROJECTOR")
          call plp%blank()
@@ -133,13 +215,14 @@ contains
          call plp%separator()
       end if
 
-      wall_start = omp_get_wtime()
+      wall_start = drop_wall_time()
 
       !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, i, n_branch, append_ok, &
       !$omp& local_branched_anchor, local_branched_points, local_nbranch_min, local_nbranch_max, &
       !$omp& local_done, est_done, next_progress_pct, progress_last_time, now_time, progress_elapsed, &
       !$omp& progress_rate, progress_eta, trigger_time, trigger_pct)
-      thread_slot = omp_get_thread_num() + 1
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
 
       ! First-touch init inside the region so allocations are core-local
       call projectors(thread_slot)%destroy()
@@ -148,12 +231,19 @@ contains
       call projectors(thread_slot)%init(self%param, self%lsf_model, &
                                         branch_sep_cut=self%param%branch_sep_cut, &
                                         branch_rho_cut=self%param%branch_rho_cut, &
-                                        verbosity=self%verbosity, &
-                                        debug=self%debug, tol=self%param%proj_tol, maxiter=self%param%proj_maxiter)
-      call proj_buffers(thread_slot)%init(nloc)
-      call works(thread_slot)%init()
-      !init_primitives() binds the objective/LSF to this molecule, radii and screening grid
-      call projectors(thread_slot)%init_primitives(self%mol, self%radii, self%mol_cell_grid)
+                                        verbosity=self%ctx%verbosity, &
+                                        debug=self%ctx%debug, tol=self%param%proj_tol, maxiter=self%param%proj_maxiter)
+      call proj_buffers(thread_slot)%init(nloc, thread_error(thread_slot)%e)
+      if (.not. allocated(thread_error(thread_slot)%e)) then
+         call works(thread_slot)%init(error=thread_error(thread_slot)%e)
+      end if
+
+      ! A thread that failed setup must not touch its buffers below, and it cannot
+      ! leave the region either, so it raises the flag and idles through the loop.
+      if (.not. abort_on_error(thread_error(thread_slot), 0, abort_requested)) then
+         !init_primitives() binds the objective/LSF to this molecule, radii and screening grid
+         call projectors(thread_slot)%init_primitives(self%mol, self%radii, self%mol_cell_grid)
+      end if
 
       local_branched_anchor = 0
       local_branched_points = 0
@@ -163,22 +253,32 @@ contains
       progress_last_time = wall_start
       next_progress_pct = 10
 
+      ! Publish a setup failure on any thread before the first iteration starts
+      !$omp barrier
+
       !$omp do schedule(dynamic)
       do i = 1, nmax_anchor
+         !$omp cancellation point do
+         if (abort_requested) cycle
 
          ! Reset workspace size (keeps allocation) so no leftover branches survive
          call works(thread_slot)%clear()
 
          ! f below cutoff; downstream weight filtering will remove that point
          if (self%f(i) < self%param%wleb_cut) then
-            if (self%verbosity >= 3) then
+            if (self%ctx%verbosity >= 3) then
                !$omp critical (projection_warning_print)
-               write (output_unit, '(x,a,i0,a)') &
+               write (self%ctx%unit, "(x,a,i0,a)") &
                   "Skipping projection for gridpoint ", i, " (f below cutoff)"
                !$omp end critical (projection_warning_print)
             end if
-            call works(thread_slot)%set_single(self%anchorxyz(:, i), .true.)
+            call works(thread_slot)%set_single(self%anchorxyz(:, i), .true., thread_error(thread_slot)%e)
+            if (abort_on_error(thread_error(thread_slot), i, abort_requested)) then
+               !$omp cancel do
+               cycle
+            end if
          else
+            append_ok = .true.
             block
                type(error_type), allocatable :: proj_error
 
@@ -194,29 +294,46 @@ contains
                   work=works(thread_slot) &
                   )
 
-               if (allocated(proj_error)) then
-                  !$omp atomic update
-                  n_proj_fail = n_proj_fail + 1
+               ! An LSF evaluation failure invalidates the whole build
+               if (allocated(projectors(thread_slot)%lsf_error)) then
+                  call move_alloc(projectors(thread_slot)%lsf_error, &
+                                  thread_error(thread_slot)%e)
+                  append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
+               else if (allocated(proj_error)) then
                   !$omp critical (projection_warning_print)
-                  print '(a,i0)', "Warning: Projection failed for gridpoint ", i
-                  print '(a)', proj_error%message
-                  print '(a)', "Debug info:"
-                  print '(a,i0)', "  gridpoint ID: ", i
-                  print '(a,3(es12.4))', "  anchor: ", self%anchorxyz(:, i)
+                  print "(a,i0)", "Warning: Projection failed for gridpoint ", i
+                  print "(a)", proj_error%message
+                  print "(a)", "Debug info:"
+                  print "(a,i0)", "  gridpoint ID: ", i
+                  print "(a,3(es12.4))", "  anchor: ", self%anchorxyz(:, i)
                   !$omp end critical (projection_warning_print)
-                  ! On failure keep the anchor but flag it not converged so it is
-                  ! later assigned f=0 and excluded from the quadrature.
-                  call works(thread_slot)%set_single(self%anchorxyz(:, i), .false.)
+                  ! A failed projection is not fatal: keep the anchor but flag it not
+                  ! converged so it is later assigned f=0 and excluded from the quadrature.
+                  ! Only the workspace write below can abort the run.
+                  call works(thread_slot)%set_single(self%anchorxyz(:, i), .false., thread_error(thread_slot)%e)
+                  append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
                end if
             end block
+
+            if (.not. append_ok) then
+               !$omp cancel do
+               cycle
+            end if
          end if
 
          ! Branches actually produced for this anchor (1 normally, >1 if branched)
          n_branch = works(thread_slot)%size()
-         call works(thread_slot)%reserve(n_branch)
+         call works(thread_slot)%reserve(n_branch, thread_error(thread_slot)%e)
+         if (abort_on_error(thread_error(thread_slot), i, abort_requested)) then
+            !$omp cancel do
+            cycle
+         end if
 
          ! Branch weights are computed once on the final surviving set in compute_branch_weights after filter
          works(thread_slot)%branch_weights(1:n_branch) = 1.0_wp
+
+         ! Fix the branch index to the surface
+         call canonicalize_branch_order(works(thread_slot), n_branch)
 
          if (n_branch > 1) then
             local_branched_anchor = local_branched_anchor + 1
@@ -236,18 +353,18 @@ contains
             f=self%f(i), &
             anchor_xi0=self%anchor_xi0(i), &
             anchor_id=self%anchor_id(i), &
-            ok=append_ok)
-         if (.not. append_ok) then
-            !$omp atomic update
-            n_append_fail = n_append_fail + 1
+            error=thread_error(thread_slot)%e)
+         if (abort_on_error(thread_error(thread_slot), i, abort_requested)) then
+            !$omp cancel do
+            cycle
          end if
 
          ! Progress is reported only by thread 1, extrapolating its own count to all threads (est_done)
          local_done = local_done + 1
          if (thread_slot == 1) then
-            if (self%verbosity >= 2) then
+            if (self%ctx%verbosity >= 2) then
                est_done = min(nmax_anchor, local_done*nthreads)
-               now_time = omp_get_wtime()
+               now_time = drop_wall_time()
 
                trigger_time = (now_time - progress_last_time) >= 5.0_wp
                trigger_pct = nmax_anchor > 0 .and. (100*est_done >= next_progress_pct*nmax_anchor)
@@ -266,9 +383,9 @@ contains
                   !$omp critical (projection_warning_print)
                   call plp%begin_row()
                   call plp%add(est_done)
-                  call plp%add(100.0_wp*real(est_done, wp)/real(max(1, nmax_anchor), wp), fmt='f6.2')
-                  call plp%add(progress_elapsed, fmt='f8.2')
-                  call plp%add(progress_eta, fmt='f8.2')
+                  call plp%add(100.0_wp*real(est_done, wp)/real(max(1, nmax_anchor), wp), fmt="f6.2")
+                  call plp%add(progress_elapsed, fmt="f8.2")
+                  call plp%add(progress_eta, fmt="f8.2")
                   call plp%end_row()
                   !$omp end critical (projection_warning_print)
 
@@ -290,20 +407,38 @@ contains
       thread_nbranch_max(thread_slot) = local_nbranch_max
       !$omp end parallel
 
-      wall_end = omp_get_wtime()
-      if (self%verbosity >= 2) then
+      wall_end = drop_wall_time()
+
+      ! Re-raise the first fatal error the loop hit. The lowest anchor index wins so
+      ! the reported failure does not depend on the thread schedule; setup failures
+      ! carry index 0 and therefore outrank any per-anchor error.
+      if (abort_requested) then
+         ifail = 0
+         do ithread = 1, nthreads
+            if (.not. allocated(thread_error(ithread)%e)) cycle
+            if (ifail == 0) then
+               ifail = ithread
+            else if (thread_error(ithread)%ianchor < thread_error(ifail)%ianchor) then
+               ifail = ithread
+            end if
+         end do
+
+         if (ifail > 0) then
+            call move_alloc(thread_error(ifail)%e, error)
+         else
+            call fatal_error(error, "Projection aborted without an error. (unreachable in normal execution)")
+         end if
+         return
+      end if
+
+      if (self%ctx%verbosity >= 2) then
          call plp%separator()
          call plp%begin_row()
          call plp%add(nmax_anchor)
          call plp%add("")
-         call plp%add(wall_end - wall_start, fmt='f8.2')
-         call plp%add(0.0_wp, fmt='f8.2')
+         call plp%add(wall_end - wall_start, fmt="f8.2")
+         call plp%add(0.0_wp, fmt="f8.2")
          call plp%end_row()
-      end if
-
-      if (n_append_fail > 0) then
-         call fatal_error(error, "Error: Invalid branch payload in projection buffer append.")
-         return
       end if
 
       ! Total output count is now known: sum each thread buffer's size
@@ -313,7 +448,8 @@ contains
       end do
 
       ! Grow the cavity's coupled arrays to fit nout
-      call ensure_projection_capacity(self, max(1, nout))
+      call ensure_projection_capacity(self, max(1, nout), error)
+      if (allocated(error)) return
       self%rho = 0.0_wp
       self%r_iI0 = 0.0_wp
       self%converged = .false.
@@ -360,6 +496,9 @@ contains
             idx = iend
          end do
 
+         ! Restore anchor order, which the concatenation above does not preserve
+         call reorder_by_anchor(self, nout, order)
+
          ! Per-point finalize: converged points get their owner-sphere distance
          do idx = 1, nout
             if (self%converged(idx)) then
@@ -386,19 +525,143 @@ contains
       n_branched_anchor = sum(thread_branched_anchor)
       n_branched_points = sum(thread_branched_points)
 
-      if (self%verbosity >= 1) then
-         pp = new_prettyprinter(unit=output_unit)
+      if (self%ctx%verbosity >= 1) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Projection results:')
-         call pp%kv('Failed projections', n_proj_fail)
-         call pp%kv('Workspace append fails', n_append_fail)
-         call pp%kv('Total points', nout)
-         call pp%kv('Anchors with branches', n_branched_anchor)
-         call pp%kv('New branched points', n_branched_points)
+         call pp%push("Projection results:")
+         call pp%kv("Total points", nout)
+         call pp%kv("Anchors with branches", n_branched_anchor)
+         call pp%kv("New branched points", n_branched_points)
          call pp%pop()
       end if
 
    end subroutine project_all_points
+
+   !> Sort the flat projection arrays into ascending anchor order
+   !>
+   !> `counting_argsort` is stable, so points sharing an `anchor_id` keep the
+   !> relative order they were appended in, which is ascending branch index.
+   !> Anchor ids are the one-based positions assigned in `fill_arrays`, so they
+   !> are their own bucket indices.
+   !>
+   !> @param[inout] self  Cavity whose projection arrays are reordered
+   !> @param[in]    nout  Number of projected points
+   !> @param[inout] order Scratch permutation, allocated here on first use
+   subroutine reorder_by_anchor(self, nout, order)
+      !> Cavity whose projection arrays are reordered
+      class(cavity_type_drop), intent(inout) :: self
+      !> Number of projected points
+      integer, intent(in) :: nout
+      !> Scratch permutation
+      integer, allocatable, intent(inout) :: order(:)
+
+      integer :: max_anchor_id
+
+      if (nout <= 1) return
+
+      max_anchor_id = maxval(self%anchor_id(1:nout))
+      if (allocated(order)) deallocate (order)
+      allocate (order(nout))
+      call counting_argsort(self%anchor_id(1:nout), max_anchor_id, order)
+
+      self%xyz(:, 1:nout) = self%xyz(:, order)
+      self%anchorxyz(:, 1:nout) = self%anchorxyz(:, order)
+      self%normal0(:, 1:nout) = self%normal0(:, order)
+
+      self%wleb(1:nout) = self%wleb(order)
+      self%anchor_wleb0(1:nout) = self%anchor_wleb0(order)
+      self%lambda0(1:nout) = self%lambda0(order)
+      self%iswig_f0(1:nout) = self%iswig_f0(order)
+      self%f(1:nout) = self%f(order)
+      self%anchor_xi0(1:nout) = self%anchor_xi0(order)
+      self%rho(1:nout) = self%rho(order)
+      self%wbranch(1:nout) = self%wbranch(order)
+      self%phi0(1:nout) = self%phi0(order)
+
+      self%owner(1:nout) = self%owner(order)
+      self%branch(1:nout) = self%branch(order)
+      self%anchor_id(1:nout) = self%anchor_id(order)
+      self%branch_count(1:nout) = self%branch_count(order)
+
+      self%converged(1:nout) = self%converged(order)
+   end subroutine reorder_by_anchor
+
+   !> Put one anchor's branches into a canonical, geometry-derived order
+   !>
+   !> The multistart refinement returns an anchor's branches in whatever order
+   !> its seeds happened to converge and deduplicate, which is decided by
+   !> rounding once two minima are related by a symmetry of the molecule. The
+   !> branch index feeds `numbering`, the identity a point is tracked by across
+   !> displaced geometries, so an order that rounding can permute makes that
+   !> identity meaningless: the same physical branch answers to different
+   !> numbers on two builds of the same code, and a caller correlating a
+   !> displaced surface with the undisplaced one silently pairs up the wrong
+   !> branches.
+   !>
+   !> Ordering by position instead makes the index a property of the surface.
+   !> Coordinates are compared with a tolerance so that components equal by
+   !> symmetry -- which agree only to rounding -- fall through to the next
+   !> component rather than deciding the order by their noise.
+   !>
+   !> @param[inout] work     Workspace holding one anchor's branches
+   !> @param[in]    n_branch Number of branches stored in `work`
+   subroutine canonicalize_branch_order(work, n_branch)
+      !> Workspace holding one anchor's branches
+      type(projection_workspace_type), intent(inout) :: work
+      !> Number of branches stored in the workspace
+      integer, intent(in) :: n_branch
+
+      !> Separation below which a coordinate pair counts as tied
+      real(wp), parameter :: tie_tol = 1.0e-8_wp
+
+      !> Permutation putting the branches in canonical order
+      integer :: order(n_branch)
+      !> Insertion-sort cursors and the branch being placed
+      integer :: i, j, moved
+
+      if (n_branch <= 1) return
+
+      ! Insertion sort: an anchor carries a handful of branches at most
+      order = [(i, i=1, n_branch)]
+      do i = 2, n_branch
+         moved = order(i)
+         j = i - 1
+         do while (j >= 1)
+            if (.not. branch_precedes(moved, order(j))) exit
+            order(j + 1) = order(j)
+            j = j - 1
+         end do
+         order(j + 1) = moved
+      end do
+
+      work%points(:, 1:n_branch) = work%points(:, order)
+      work%normals(:, 1:n_branch) = work%normals(:, order)
+
+      work%rho(1:n_branch) = work%rho(order)
+      work%lambda(1:n_branch) = work%lambda(order)
+      work%phi(1:n_branch) = work%phi(order)
+      work%branch_weights(1:n_branch) = work%branch_weights(order)
+
+      work%converged(1:n_branch) = work%converged(order)
+
+   contains
+
+      !> Whether branch `a` sorts before branch `b`
+      logical function branch_precedes(a, b) result(before)
+         !> Branches to compare, indexing the workspace
+         integer, intent(in) :: a, b
+         !> Cartesian component
+         integer :: k
+
+         before = .false.
+         do k = 1, 3
+            if (abs(work%points(k, a) - work%points(k, b)) <= tie_tol) cycle
+            before = work%points(k, a) < work%points(k, b)
+            return
+         end do
+      end function branch_precedes
+
+   end subroutine canonicalize_branch_order
 
    !* ================================================================================= *!
    !*                           Closest-point Jacobian scaling                          *!
@@ -423,13 +686,13 @@ contains
    module subroutine compute_cp_jacobian_scaling(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      integer :: igrid, nthreads, thread_slot
+      integer :: igrid, thread_slot
       real(wp) :: proj_point(3), anchor_point(3), lambda_val
       real(wp) :: lsf0
       real(wp), allocatable :: lsf1_r_threads(:, :), lsf2_rr_threads(:, :, :)
       real(wp) :: A(3, 3), g_vec(3), g_norm_sq, g_norm
       real(wp) :: alpha_coeff
-      type(lsf_thread_slot), allocatable :: lsf_threads(:)
+      type(drop_worker_slots_type) :: slots
       ! Surface tangent frame Q = [q1, q2] from n = g/|g|
       real(wp) :: n_surf(3), q1(3), q2(3)
 
@@ -452,7 +715,9 @@ contains
       ! Jacobian computation
       real(wp) :: y1(3), y2(3), cross_prod(3), J_i
 
-      logical :: abort_requested
+      type(drop_abort_latch_type) :: abort
+      !> Per-thread LSF evaluation failure, handed to the latch
+      type(error_type), allocatable :: lsf_error
 
       ! Tangent-restricted KKT diagnostics (debug only)
       logical :: do_diag
@@ -462,16 +727,14 @@ contains
       logical, allocatable :: diag_mask(:)
       integer :: c_critical, c_warning, c_safe
 
-      abort_requested = .false.
+      call abort%reset()
 
-      ! Initialize SSD systems and thread-local SSD evaluators
-      nthreads = max(1, omp_get_max_threads())
-      allocate (lsf_threads(nthreads))
-      allocate (lsf1_r_threads(3, nthreads), source=0.0_wp)
-      allocate (lsf2_rr_threads(3, 3, nthreads), source=0.0_wp)
-      do thread_slot = 1, nthreads
-         allocate (lsf_threads(thread_slot)%lsf, source=self%lsf_model)
-      end do
+      ! Initialize SSD systems and thread-local SSD evaluators.
+      ! This loop reads the LSF Hessian (lsf2_rr) below, so the cached callback
+      ! LSF must be told to compute up to second order.
+      call slots%init(self%ctx, self%lsf_model, 2)
+      allocate (lsf1_r_threads(3, slots%nthreads), source=0.0_wp)
+      allocate (lsf2_rr_threads(3, 3, slots%nthreads), source=0.0_wp)
 
       ! Initialize Jacobian scaling array
       if (allocated(self%cpjac_scal0)) deallocate (self%cpjac_scal0)
@@ -485,16 +748,18 @@ contains
       alpha_coeff = self%param%phi_alpha
 
       ! Loop over all grid points to compute Jacobian scaling
-      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, igrid, proj_point, &
+      !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, proj_point, &
       !$omp& anchor_point, lambda_val, lsf0, A, g_vec, g_norm_sq, g_norm, n_surf, q1, q2, &
       !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
-      !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i)
-      thread_slot = omp_get_thread_num() + 1
+      !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
+      !$omp& lsf_error)
+      thread_slot = 1
+      !$ thread_slot = omp_get_thread_num() + 1
 
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
          !$omp cancellation point do
-         if (abort_requested) cycle
+         if (abort%requested) cycle
 
          ! Skip if below switching cutoff.
          if (self%f(igrid) < self%param%wleb_cut) then
@@ -507,10 +772,19 @@ contains
          lambda_val = self%lambda0(igrid)
 
          ! Compute SSD on-the-fly for this point
-         call lsf_threads(thread_slot)%lsf%prepare(proj_point)
+         call slots%lsf(thread_slot)%lsf%prepare(proj_point, lsf_error)
+
+         ! The failure cannot be returned from inside this worksharing construct,
+         ! so hand it to the shared `error` slot and let the flag drain the loop.
+         ! The LSF's cached derivatives are substitutes; stop before reading them.
+         if (allocated(lsf_error)) then
+            call abort%latch_error(lsf_error, igrid)
+            !$omp cancel do
+            cycle
+         end if
 
          ! Compute lsf derivatives
-         call lsf_threads(thread_slot)%lsf%f012_r_screened(lsf0, &
+         call slots%lsf(thread_slot)%lsf%f012_r_screened(lsf0, &
                                                            lsf1_r_threads(:, thread_slot), lsf2_rr_threads(:, :, thread_slot))
 
          g_vec = lsf1_r_threads(:, thread_slot)
@@ -558,12 +832,8 @@ contains
          if (self%w_f0(igrid) < self%param%wleb_cut) cycle
 
          if (abs(det_B) <= det_B_guard) then
-            !$omp critical (compute_cpjac_abort)
-            if (.not. abort_requested) then
-               abort_requested = .true.
-               call fatal_error(error, "[Error] Tangent Jacobian matrix B is singular after switching")
-            end if
-            !$omp end critical (compute_cpjac_abort)
+            call abort%latch_message( &
+               "[Error] Tangent Jacobian matrix B is singular after switching", igrid)
             !$omp cancel do
             cycle
          end if
@@ -607,9 +877,13 @@ contains
       !$omp end do
       !$omp end parallel
 
-      if (allocated(error)) return
-      if (abort_requested) then
-         call fatal_error(error, "Jacobian scaling computation aborted. (unreachable in normal execution)")
+      if (abort%requested) then
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Jacobian scaling computation aborted. (unreachable in normal execution)")
+         end if
          return
       end if
 

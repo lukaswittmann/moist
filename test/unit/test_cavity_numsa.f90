@@ -7,10 +7,10 @@ module test_cavity_numsa
    use mstore, only: get_structure
    use moist_data_radii_legacy, only: get_radius_func
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
-   use moist_radii, only: static_radius_type
+   use moist_radii, only: radius_type_static
    use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
-
-   implicit none
+   use moist_context, only: moist_context_type, new_context
+   implicit none (type, external)
    private
 
    public :: collect_cavity_numsa
@@ -38,7 +38,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
 
       real(wp), parameter :: probe = 1.4_wp*aatoau
@@ -60,15 +60,25 @@ contains
          & 5.79746582175529E+01_wp, &
          & 6.69252984752073E+00_wp, &
          & 4.86484694486336E+01_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
+
+      !> The cavity must *borrow* the caller-owned run context, not copy it
+      call check(error, associated(cav%ctx, ctx), &
+                 "NUMSA cavity does not borrow the caller-owned run context")
+      if (allocated(error)) return
+
       call cav%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -86,7 +96,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
       real(wp), parameter :: probe = 1.2_wp*aatoau
       integer, parameter :: nleb = 230
@@ -107,11 +117,15 @@ contains
          & 5.95926059359978E+01_wp, &
          & 2.96614646358023E+00_wp, &
          & 1.44874751490690E+02_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "02")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -133,7 +147,7 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       integer :: i
       real(wp), parameter :: probe = 0.2_wp*aatoau
       integer, parameter :: nleb = 110
@@ -154,11 +168,15 @@ contains
          & 4.16287245622076E+01_wp, &
          & 9.95930646536509E+01_wp, &
          & 2.36024718294637E+01_wp]
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -180,18 +198,22 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
       real(wp), parameter :: probe = 1.4_wp*aatoau
       integer, parameter :: nleb = 110
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -201,7 +223,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
@@ -224,18 +250,22 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
       real(wp), parameter :: probe = 1.2_wp*aatoau
       integer, parameter :: nleb = 110
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "05")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -245,7 +275,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad
@@ -268,18 +302,22 @@ contains
       type(structure_type) :: mol
       type(cavity_type_numsa) :: cav
       type(mctc_error), allocatable :: cavity_error
-      type(static_radius_type) :: radii
+      type(radius_type_static) :: radii
       real(wp), allocatable :: grad_analytic(:, :)
       real(wp), allocatable :: grad_numeric(:, :)
       integer :: i, j
 
       real(wp), parameter :: probe = 0.2_wp*aatoau
       integer, parameter :: nleb = 110
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -289,7 +327,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (grad_analytic(3, mol%nat))
       grad_analytic = cav%area_grad

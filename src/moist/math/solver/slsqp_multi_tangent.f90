@@ -128,7 +128,7 @@ contains
    end subroutine build_tangent_basis
 
    !> Generate seed points on a single tangent-plane ring around the anchor.
-   !> @param[in]    anchor    Centre of the ring
+   !> @param[in]    anchor    Center of the ring
    !> @param[in]    t1        First tangent basis vector
    !> @param[in]    t2        Second tangent basis vector
    !> @param[in]    radius    Ring radius

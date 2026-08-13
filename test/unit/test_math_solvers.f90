@@ -76,34 +76,34 @@ contains
    subroutine collect_math_solvers(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
-         & new_unittest("rosenbrock-newton", test_rosenbrock_newton), &
-         & new_unittest("circle-newton-lagrangian", test_circle_newton_lagrangian), &
-         & new_unittest("rosenbrock-slsqp", test_rosenbrock_slsqp), &
-         & new_unittest("circle-slsqp-explicit", test_circle_slsqp_explicit), &
-         & new_unittest("rosenbrock-slsqp-multistart", test_rosenbrock_slsqp_multistart), &
-         & new_unittest("circle-slsqp-multistart", test_circle_slsqp_multistart), &
-         & new_unittest("rosenbrock-lbfgsb", test_rosenbrock_lbfgsb), &
-         & new_unittest("circle-lbfgsb-penalty", test_circle_lbfgsb_penalty), &
-         & new_unittest("slsqp-deflation-two-circle-union", test_slsqp_deflation_two_circle_union), &
-         & new_unittest("newton-deflation-cubic", test_newton_deflation_cubic), &
-         & new_unittest("slsqp-kernel-rosenbrock-inequality", test_slsqp_rosenbrock), &
-         & new_unittest("slsqp-kernel-quadratic-eq-ineq", test_slsqp_quadratic), &
-         & new_unittest("slsqp-kernel-fd-gradients", test_slsqp_fd_gradients), &
-         & new_unittest("slsqp-kernel-hock-schittkowski-71", test_slsqp_hs71), &
-         & new_unittest("slsqp-kernel-stopping-nan-bounds", test_slsqp_stopping), &
-         & new_unittest("lbfgsb-kernel-driver1-default", test_lbfgsb_driver1), &
-         & new_unittest("lbfgsb-kernel-driver2-eval-limit", test_lbfgsb_driver2), &
-         & new_unittest("lbfgsb-kernel-driver3-large-budget", test_lbfgsb_driver3), &
-         & new_unittest("fmin-kernel-sin", test_fmin_sin), &
-         & new_unittest("fmin-kernel-parabola", test_fmin_parabola), &
-         & new_unittest("newton-kernel-dense-sweep", test_newton_dense), &
-         & new_unittest("newton-kernel-sparse-sweep", test_newton_sparse), &
-         & new_unittest("lbfgsb-invalid-memory", test_lbfgsb_invalid_memory, should_fail=.true.), &
-         & new_unittest("newton-maxiter-fail", test_newton_maxiter_fail, should_fail=.true.), &
-         & new_unittest("slsqp-maxiter-fail", test_slsqp_maxiter_fail, should_fail=.true.), &
-         & new_unittest("newton-deflation-max-roots", test_newton_deflation_max_roots), &
-         & new_unittest("deflation-operator-gradient-fd", test_deflation_operator_gradient_fd), &
-         & new_unittest("lbfgsb-kernel-bound-active", test_lbfgsb_bound_active) &
+         & new_unittest("rosenbrock_newton", test_rosenbrock_newton), &
+         & new_unittest("circle_newton_lagrangian", test_circle_newton_lagrangian), &
+         & new_unittest("rosenbrock_slsqp", test_rosenbrock_slsqp), &
+         & new_unittest("circle_slsqp_explicit", test_circle_slsqp_explicit), &
+         & new_unittest("rosenbrock_slsqp_multistart", test_rosenbrock_slsqp_multistart), &
+         & new_unittest("circle_slsqp_multistart", test_circle_slsqp_multistart), &
+         & new_unittest("rosenbrock_lbfgsb", test_rosenbrock_lbfgsb), &
+         & new_unittest("circle_lbfgsb_penalty", test_circle_lbfgsb_penalty), &
+         & new_unittest("slsqp_deflation_two_circle_union", test_slsqp_deflation_two_circle_union), &
+         & new_unittest("newton_deflation_cubic", test_newton_deflation_cubic), &
+         & new_unittest("slsqp_kernel_rosenbrock_inequality", test_slsqp_rosenbrock), &
+         & new_unittest("slsqp_kernel_quadratic_eq_ineq", test_slsqp_quadratic), &
+         & new_unittest("slsqp_kernel_fd_gradients", test_slsqp_fd_gradients), &
+         & new_unittest("slsqp_kernel_hock_schittkowski_71", test_slsqp_hs71), &
+         & new_unittest("slsqp_kernel_stopping_nan_bounds", test_slsqp_stopping), &
+         & new_unittest("lbfgsb_kernel_driver1_default", test_lbfgsb_driver1), &
+         & new_unittest("lbfgsb_kernel_driver2_eval_limit", test_lbfgsb_driver2), &
+         & new_unittest("lbfgsb_kernel_driver3_large_budget", test_lbfgsb_driver3), &
+         & new_unittest("fmin_kernel_sin", test_fmin_sin), &
+         & new_unittest("fmin_kernel_parabola", test_fmin_parabola), &
+         & new_unittest("newton_kernel_dense_sweep", test_newton_dense), &
+         & new_unittest("newton_kernel_sparse_sweep", test_newton_sparse), &
+         & new_unittest("lbfgsb_invalid_memory", test_lbfgsb_invalid_memory, should_fail=.true.), &
+         & new_unittest("newton_maxiter_fail", test_newton_maxiter_fail, should_fail=.true.), &
+         & new_unittest("slsqp_maxiter_fail", test_slsqp_maxiter_fail, should_fail=.true.), &
+         & new_unittest("newton_deflation_max_roots", test_newton_deflation_max_roots), &
+         & new_unittest("deflation_operator_gradient_fd", test_deflation_operator_gradient_fd), &
+         & new_unittest("lbfgsb_kernel_bound_active", test_lbfgsb_bound_active) &
          & ]
    end subroutine collect_math_solvers
 
@@ -1463,17 +1463,19 @@ contains
       f = 0.0_wp
       g = 0.0_wp
 
-      task = 'START'
-      do while (task(1:2) == 'FG' .or. task(1:5) == 'NEW_X' .or. task(1:5) == 'START')
+      task = "START"
+      do while (task(1:2) == "FG" .or. task(1:5) == "NEW_X" .or. task(1:5) == "START")
          call setulb(lbfgsb_n, lbfgsb_m, x, l, u, nbd, f, g, lbfgsb_factr, lbfgsb_pgtol, &
                      wa, iwa, task, -1, csave, lsave, isave, dsave)
-         if (task(1:2) == 'FG') then
+         if (task(1:2) == "FG") then
             call lbfgsb_rosenbrock_eval(x, f, g)
-         else if (task(1:5) == 'NEW_X' .and. max_nfg > 0) then
-            if (isave(34) >= max_nfg) &
-               task = 'STOP: total f and g evaluation limit reached'
-            if (dsave(13) <= 1.0e-10_wp*(1.0_wp + abs(f))) &
-               task = 'STOP: projected gradient sufficiently small'
+         else if (task(1:5) == "NEW_X" .and. max_nfg > 0) then
+            if (isave(34) >= max_nfg) then
+              task = "STOP: total f and g evaluation limit reached"
+            end if
+            if (dsave(13) <= 1.0e-10_wp*(1.0_wp + abs(f))) then
+              task = "STOP: projected gradient sufficiently small"
+            end if
          end if
       end do
 
@@ -1974,11 +1976,11 @@ contains
       f = 0.0_wp
       g = 0.0_wp
 
-      task = 'START'
-      do while (task(1:2) == 'FG' .or. task(1:5) == 'NEW_X' .or. task(1:5) == 'START')
+      task = "START"
+      do while (task(1:2) == "FG" .or. task(1:5) == "NEW_X" .or. task(1:5) == "START")
          call setulb(n, m, x, l, u, nbd, f, g, lbfgsb_factr, lbfgsb_pgtol, &
                      wa, iwa, task, -1, csave, lsave, isave, dsave)
-         if (task(1:2) == 'FG') then
+         if (task(1:2) == "FG") then
             f = sum((x - 3.0_wp)**2)
             g = 2.0_wp*(x - 3.0_wp)
          end if

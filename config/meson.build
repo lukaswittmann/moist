@@ -47,6 +47,14 @@ elif fc_id == 'intel'
   else
     warning('libunwind not found; Intel traceback output may be unavailable at runtime')
   endif
+  # Use intel thread-safe Fortran runtime libifcoremt
+  if get_option('openmp')
+    ifcoremt_dep = cc.find_library('ifcoremt', required: true)
+    add_project_link_arguments(
+      '-Wl,--no-as-needed', '-lifcoremt', '-Wl,--as-needed',
+      language: has_cc ? ['fortran', 'c'] : ['fortran'],
+    )
+  endif
 elif fc_id == 'pgi' or fc_id == 'nvidia_hpc'
   add_project_arguments(
     '-Mbackslash',

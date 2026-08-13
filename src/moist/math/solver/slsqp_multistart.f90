@@ -105,7 +105,7 @@ module moist_math_solver_slsqp_multistart
 contains
 
    !> Generate seed points on a single Lebedev shell around the anchor.
-   !> @param[in]    anchor   Centre of the shell
+   !> @param[in]    anchor   Center of the shell
    !> @param[in]    radius   Shell radius
    !> @param[in]    num_leb  Number of Lebedev points on this shell
    !> @param[inout] seeds    Seed array to populate (3, total_seeds)

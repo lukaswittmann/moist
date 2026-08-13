@@ -8,6 +8,8 @@ module moist_cavity_iswig
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
    use moist_type, only: cavity_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
 
    implicit none
@@ -24,17 +26,6 @@ module moist_cavity_iswig
       !> Default iSwiG value cutoff
       real(wp) :: cut_f = 1.0E-10_wp
 
-      ! Spheres of system
-      !> Number of spheres (atoms) in the cavity
-      integer :: nsph
-      !> Coordinates of sphere centers (3, nsph), in Bohr
-      real(wp), allocatable :: sphxyz(:, :)
-
-      ! Surface properties
-      !> Gaussian-widths at each point (ngrid)
-      real(wp), allocatable :: xi(:)
-      !> Switching function (ngrid)
-      real(wp), allocatable :: f(:)
       !> Raw Lebedev weights (ngrid)
       real(wp), allocatable :: wleb(:)
       !> Accumulated gradient of total area w.r.t. atom positions (3, nsph)
@@ -54,19 +45,20 @@ module moist_cavity_iswig
    contains
       procedure :: update => update_cavity_iswig
       procedure :: get_gradient => compute_gradient_iswig
-      procedure :: contract_amat1_q1q2_rA => contract_amat1_q1q2_rA_iswig
+      !> Contract surface-observable adjoints into the nuclear gradient
+      procedure :: get_surface_gradient => get_surface_gradient_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
-      !> iSwiG-specific matrix assembly (symmetric, diagonally dominant)
-      procedure :: get_amat => get_amat_iswig
    end type cavity_type_iswig
 
 contains
 
    !> Constructor for iSwiG cavity
    !> Initialize an already-declared object; no allocation of the object itself.
-   subroutine new_cavity_iswig(self, nleb, cut_a, cut_f, radius_model, error)
+   subroutine new_cavity_iswig(self, ctx, nleb, cut_a, cut_f, radius_model, error)
       !> Cavity type instance to initialize
       type(cavity_type_iswig), intent(inout) :: self
+      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      type(moist_context_type), intent(in), target :: ctx
       !> Number of lebedev grid points per unit sphere
       integer, intent(in), optional :: nleb
       !> Settings for iSwiG cavity
@@ -76,6 +68,9 @@ contains
       class(radius_type), intent(in) :: radius_model
       !> Constructor error
       type(error_type), allocatable, intent(out) :: error
+
+      !> Borrow the shared run context (owns verbosity/debug/timer)
+      self%ctx => ctx
 
       !> Set configuration values (leave previously allocated buffers untouched)
       if (present(nleb)) self%num_leb = nleb
@@ -94,13 +89,13 @@ contains
 
       integer :: unit, stat, ipt
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open CSV file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open CSV file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(a)') 'ngrid,numbering,x,y,z,owner,radius,area,w_leb,f'
+      write (unit, "(a)") "ngrid,numbering,x,y,z,owner,radius,area,w_leb,f"
 
       do ipt = 1, self%ngrid
          write (unit, '(i0,10('','',g0))') ipt, self%numbering(ipt), &
@@ -110,7 +105,7 @@ contains
       end do
       close (unit)
 
-      write (output_unit, '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (output_unit, "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
 
@@ -122,6 +117,15 @@ contains
 
       !> Set number of spheres
       self%nsph = mol%nat
+
+      ! Nuclear derivative arrays belong to the previous geometry until the
+      ! caller explicitly requests a fresh gradient build.
+      if (allocated(self%area_grad)) deallocate (self%area_grad)
+      if (allocated(self%volume_grad)) deallocate (self%volume_grad)
+      if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
+      if (allocated(self%f1_rA)) deallocate (self%f1_rA)
+      if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
+      if (allocated(self%v1_rA)) deallocate (self%v1_rA)
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
@@ -159,10 +163,12 @@ contains
          ngrid=self%ngrid, &
          owner=self%owner, &
          grid_xyz=self%xyz, &
-         xi=self%xi, &
+         xi=self%xi0, &
          f=self%f, &
          wleb=self%wleb, &
          a=self%a, &
+         normal0=self%normal0, &
+         v=self%v, &
          numbering=self%numbering, &
          asph=self%asph, &
          total_area=self%total_area, &
@@ -182,33 +188,45 @@ contains
    !> The area and volume gradients differ only in the weight applied:
    !>   area:   dA/ds  = sum_p  R^2 * w * (df/ds)
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
-   subroutine compute_gradient_iswig(self)
+   subroutine compute_gradient_iswig(self, error)
       class(cavity_type_iswig), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
-      integer :: nsph, ip, iat, jat
+      integer :: nsph, ip, iat, jat, iaxis
       real(wp) :: weight, zeta, r_own
       real(wp) :: px, py, pz, rx, ry, rz, r_dot_p
-      real(wp) :: dx, dy, dz, dist, arg_plus, arg_minus, arg_plus_sq, arg_minus_sq
-      real(wp) :: switch_pair
-      real(wp) :: pref, pref_zeta, pref_pair, dswitch
+      real(wp) :: dx, dy, dz, dvec(3)
+      real(wp) :: dfdR, dswitch
       real(wp) :: area_weight, vol_weight
 
       nsph = size(self%radii)
 
-      if (.not. allocated(self%area_grad)) allocate (self%area_grad(3, nsph))
-      if (.not. allocated(self%volume_grad)) allocate (self%volume_grad(3, nsph))
-      self%area_grad = 0.0_wp
-      self%volume_grad = 0.0_wp
+      if (allocated(self%area_grad)) deallocate (self%area_grad)
+      if (allocated(self%volume_grad)) deallocate (self%volume_grad)
+      if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
+      if (allocated(self%f1_rA)) deallocate (self%f1_rA)
+      if (allocated(self%xyz1_rA)) deallocate (self%xyz1_rA)
+      if (allocated(self%v1_rA)) deallocate (self%v1_rA)
+      allocate (self%area_grad(3, nsph), source=0.0_wp)
+      allocate (self%volume_grad(3, nsph), source=0.0_wp)
+      allocate (self%xi1_rA(3, nsph, self%ngrid), source=0.0_wp)
+      allocate (self%f1_rA(3, nsph, self%ngrid), source=0.0_wp)
+      allocate (self%xyz1_rA(3, 3, nsph, self%ngrid), source=0.0_wp)
+      allocate (self%v1_rA(3, nsph, self%ngrid), source=0.0_wp)
 
       if (self%ngrid <= 0) return
 
       do ip = 1, self%ngrid
          iat = self%owner(ip)
          r_own = self%radii(iat)
+         do iaxis = 1, 3
+            self%xyz1_rA(iaxis, iaxis, iat, ip) = 1.0_wp
+         end do
 
          ! Per-point quantities
          weight = self%wleb(ip)
-         zeta = self%xi(ip)
+         zeta = self%xi0(ip)
          px = self%xyz(1, ip)
          py = self%xyz(2, ip)
          pz = self%xyz(3, ip)
@@ -219,11 +237,9 @@ contains
          rz = pz - self%sphxyz(3, iat)
          r_dot_p = rx*px + ry*py + rz*pz
 
-         ! Common base factor for switching function derivative
-         pref = -r_own*r_own*weight*self%f(ip)/sqrt(pi)
-         pref_zeta = pref*zeta
-
-         ! Per-grid-point weights for each gradient type
+         ! Per-grid point weights for each gradient type:
+         !   area:   R^2 w df/dR
+         !   volume: R w (n dot c)/3 df/dR
          area_weight = 1.0_wp
          vol_weight = r_dot_p/(3.0_wp*r_own)
 
@@ -231,15 +247,15 @@ contains
          do jat = 1, nsph
             if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
 
-            call factors_swi_derivs([px, py, pz], self%sphxyz(:, jat), zeta, self%radii(jat), &
-                                    dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
+            call swi_pair_dfdr([px, py, pz], self%sphxyz(:, jat), zeta, self%radii(jat), &
+                               self%f(ip), dvec, dfdR)
+            dx = dvec(1)
+            dy = dvec(2)
+            dz = dvec(3)
 
-            arg_plus = zeta*(self%radii(jat) + dist)
-            arg_minus = zeta*(self%radii(jat) - dist)
-            switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
-
-            pref_pair = pref_zeta/(switch_pair*dist)
-            dswitch = pref_pair*(exp(-arg_plus_sq) - exp(-arg_minus_sq))
+            self%f1_rA(:, iat, ip) = self%f1_rA(:, iat, ip) + dfdR*dvec
+            self%f1_rA(:, jat, ip) = self%f1_rA(:, jat, ip) - dfdR*dvec
+            dswitch = r_own*r_own*weight*dfdR
 
             ! Area gradient
             self%area_grad(1, iat) = self%area_grad(1, iat) + dswitch*area_weight*dx
@@ -249,13 +265,20 @@ contains
             self%area_grad(2, jat) = self%area_grad(2, jat) - dswitch*area_weight*dy
             self%area_grad(3, jat) = self%area_grad(3, jat) - dswitch*area_weight*dz
 
-            ! Volume gradient (switching function part)
+            ! Volume gradient (switching function part), accumulated both per
+            ! grid point and into the total; contracting v1_rA over the grid
+            ! reproduces volume_grad up to summation order.
             self%volume_grad(1, iat) = self%volume_grad(1, iat) + dswitch*vol_weight*dx
             self%volume_grad(2, iat) = self%volume_grad(2, iat) + dswitch*vol_weight*dy
             self%volume_grad(3, iat) = self%volume_grad(3, iat) + dswitch*vol_weight*dz
             self%volume_grad(1, jat) = self%volume_grad(1, jat) - dswitch*vol_weight*dx
             self%volume_grad(2, jat) = self%volume_grad(2, jat) - dswitch*vol_weight*dy
             self%volume_grad(3, jat) = self%volume_grad(3, jat) - dswitch*vol_weight*dz
+
+            self%v1_rA(:, iat, ip) = self%v1_rA(:, iat, ip) &
+               & + dswitch*vol_weight*dvec
+            self%v1_rA(:, jat, ip) = self%v1_rA(:, jat, ip) &
+               & - dswitch*vol_weight*dvec
          end do
 
          ! Volume geometric term (owner atom only)
@@ -265,109 +288,105 @@ contains
             & + r_own*weight*self%f(ip)/3.0_wp*ry
          self%volume_grad(3, iat) = self%volume_grad(3, iat) &
             & + r_own*weight*self%f(ip)/3.0_wp*rz
+
+         self%v1_rA(:, iat, ip) = self%v1_rA(:, iat, ip) &
+            & + r_own*weight*self%f(ip)/3.0_wp*[rx, ry, rz]
       end do
 
    end subroutine compute_gradient_iswig
 
-   !> Compute the contracted A-matrix derivative grad = q1^T (dA/dR) q2
+   !> Contract a surface adjoint into the nuclear gradient (reverse mode)
    !>
-   !> @param[in]  q1    first charge vector (ngrid)
-   !> @param[in]  q2    second charge vector (ngrid)
-   !> @param[out] grad  contracted gradient (3, nsph)
-   !> @param[out] error error handling
-   subroutine contract_amat1_q1q2_rA_iswig(self, q1, q2, grad, error)
+   !> Accumulates `dE/dR_A` for the energy whose surface adjoints `acc` holds,
+   !> without ever forming the `(3, nsph, ngrid)` forward Jacobians
+   !>
+   !> The result is *added* to `gradient`, so several passes can share one
+   !> accumulator
+   !>
+   !> @param[in]    self     iSwiG cavity instance (must hold an updated grid)
+   !> @param[in]    acc      Accumulated surface-observable adjoints
+   !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
+   !> @param[out]   error    Error object, allocated on failure
+   subroutine get_surface_gradient_iswig(self, acc, gradient, error)
+      !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
-      !> First charge vector (ngrid)
-      real(wp), intent(in) :: q1(:)
-      !> Second charge vector (ngrid)
-      real(wp), intent(in) :: q2(:)
-      !> Contracted gradient (3, nsph)
-      real(wp), intent(out) :: grad(:, :)
+      !> Accumulated surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: nsph, ngrid, ip, jp, iat, jat
-      real(wp) :: px, py, pz, zeta, switch, diag_w
-      real(wp) :: dx, dy, dz, dist
-      real(wp) :: arg_plus, arg_minus, arg_plus_sq, arg_minus_sq, switch_pair
-      real(wp) :: pref, pref_pair, dswitch
-      real(wp) :: r_vec(3), r_dist, zeta_pq, zr, dS_dr, pair_weight
+      !> Grid, owner and neighbour sphere indices
+      integer :: igrid, iat, jat
+      !> Effective switching adjoint, area channel folded in
+      real(wp) :: w_f_eff
+      !> Point-to-center separation and the radial switching derivative
+      real(wp) :: dvec(3), dfdr
+      !> Gradient contribution of one (point, sphere) pair
+      real(wp) :: contribution(3)
 
-      nsph = size(self%radii)
-      ngrid = self%ngrid
+      if (.not. acc%is_initialized()) then
+         call fatal_error(error, "get_surface_gradient_iswig: accumulator is not initialized")
+         return
+      end if
+      if (size(acc%w_xi) /= self%ngrid) then
+         call fatal_error(error, "get_surface_gradient_iswig: accumulator grid size mismatch")
+         return
+      end if
+      if (any(shape(gradient) /= [3, self%nsph])) then
+         call fatal_error(error, "get_surface_gradient_iswig: gradient shape mismatch")
+         return
+      end if
+      if (.not. allocated(self%xyz) .or. .not. allocated(self%owner) .or. &
+          .not. allocated(self%sphxyz) .or. .not. allocated(self%radii) .or. &
+          .not. allocated(self%wleb) .or. .not. allocated(self%xi0) .or. &
+          .not. allocated(self%f)) then
+         call fatal_error(error, "get_surface_gradient_iswig: cavity surface data are incomplete")
+         return
+      end if
 
-      grad = 0.0_wp
-      if (ngrid <= 0) return
+      ! Geometry-dependent radii would move the width, weight, normal and
+      ! curvature channels this routine drops, and the forward path in
+      ! [[compute_gradient_iswig]] ignores them just as completely.
+      if (allocated(self%radius_model)) then
+         if (allocated(self%radius_model%f1_rA)) then
+            if (any(self%radius_model%f1_rA /= 0.0_wp)) then
+               call fatal_error(error, "get_surface_gradient_iswig: radii models with a "// &
+                                "nuclear dependence are not supported")
+               return
+            end if
+         end if
+      end if
 
-      ! Part 1: diagonal terms through the switching function F_p
-      ! dA_pp/dF_p = -xi_p sqrt(2/pi) / F_p^2, with
-      ! dF_p/ds = (F_p/f_pk) df_pk/dr * dr/ds for other spheres k
-      do ip = 1, ngrid
-         diag_w = q1(ip)*q2(ip)
-         if (abs(diag_w) < epsilon(1.0_wp)) cycle
+      if (self%ngrid <= 0) return
 
-         iat = self%owner(ip)
-         zeta = self%xi(ip)
-         switch = self%f(ip)
-         px = self%xyz(1, ip)
-         py = self%xyz(2, ip)
-         pz = self%xyz(3, ip)
+      do igrid = 1, self%ngrid
+         iat = self%owner(igrid)
 
-         ! pref = q1_p q2_p * dA_pp/dF_p * F_p * (-zeta/sqrt(pi))
-         pref = diag_w*zeta*sqrt(2.0_wp/pi)/switch*zeta/sqrt(pi)
+         !* --------------------------- Position channel --------------------------- *!
+         gradient(:, iat) = gradient(:, iat) + acc%w_xyz(:, igrid)
 
-         do jat = 1, nsph
+         !* -------------------------- Switching channel -------------------------- *!
+         ! a_i = R_I^2 wleb_i f_i, and neither radius nor Lebedev weight moves,
+         ! so the area adjoint enters purely through df_i/dR_A.
+         w_f_eff = acc%w_f(igrid) &
+                   + acc%w_a(igrid)*self%radii(iat)**2*self%wleb(igrid)
+         if (w_f_eff == 0.0_wp) cycle
+
+         do jat = 1, self%nsph
             if (jat == iat .or. self%radii(jat) == 0.0_wp) cycle
 
-            call factors_swi_derivs([px, py, pz], self%sphxyz(:, jat), zeta, self%radii(jat), &
-                                    dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
+            call swi_pair_dfdr(self%xyz(:, igrid), self%sphxyz(:, jat), self%xi0(igrid), &
+                               self%radii(jat), self%f(igrid), dvec, dfdr)
 
-            arg_plus = zeta*(self%radii(jat) + dist)
-            arg_minus = zeta*(self%radii(jat) - dist)
-            switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
-
-            ! df_pk/dr = -(zeta/sqrt(pi)) (exp(-arg_plus^2) - exp(-arg_minus^2))
-            ! combined: dswitch = q1q2 * (-zeta sqrt(2/pi)/F^2) * (F/f_pk)
-            !                     * df_pk/dr / r
-            pref_pair = pref/(switch_pair*dist)
-            dswitch = pref_pair*(exp(-arg_plus_sq) - exp(-arg_minus_sq))
-
-            grad(1, iat) = grad(1, iat) + dswitch*dx
-            grad(2, iat) = grad(2, iat) + dswitch*dy
-            grad(3, iat) = grad(3, iat) + dswitch*dz
-
-            grad(1, jat) = grad(1, jat) - dswitch*dx
-            grad(2, jat) = grad(2, jat) - dswitch*dy
-            grad(3, jat) = grad(3, jat) - dswitch*dz
+            contribution = w_f_eff*dfdr*dvec
+            gradient(:, iat) = gradient(:, iat) + contribution
+            gradient(:, jat) = gradient(:, jat) - contribution
          end do
       end do
 
-      ! Part 2: off-diagonal terms through the interpoint distances
-      ! d/dr [erf(zr)/r] = (2z/sqrt(pi)) exp(-(zr)^2)/r - erf(zr)/r^2
-      do ip = 1, ngrid
-         iat = self%owner(ip)
-         do jp = ip + 1, ngrid
-            if (self%owner(jp) == iat) cycle
-
-            pair_weight = q1(ip)*q2(jp) + q1(jp)*q2(ip)
-            if (abs(pair_weight) < epsilon(1.0_wp)) cycle
-
-            zeta_pq = self%xi(ip)*self%xi(jp) &
-               & /sqrt(self%xi(ip)**2 + self%xi(jp)**2)
-
-            r_vec = self%xyz(:, ip) - self%xyz(:, jp)
-            r_dist = sqrt(sum(r_vec**2))
-            zr = zeta_pq*r_dist
-
-            dS_dr = (2.0_wp*zeta_pq/sqrt(pi))*exp(-zr*zr)/r_dist &
-               & - erf(zr)/r_dist**2
-
-            grad(:, iat) = grad(:, iat) + pair_weight*dS_dr/r_dist*r_vec
-            grad(:, self%owner(jp)) = grad(:, self%owner(jp)) - pair_weight*dS_dr/r_dist*r_vec
-         end do
-      end do
-
-   end subroutine contract_amat1_q1q2_rA_iswig
+   end subroutine get_surface_gradient_iswig
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
    subroutine ensure_lebedev_cache(self, error)
@@ -396,10 +415,10 @@ contains
          if (self%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
       end do
       if (iswig_order < 0) then
-         write (error_unit, '(a,i0)') "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
-         write (error_unit, '(a)') "Supported sizes:"
-         write (error_unit, '(8i10)') iswig_grid_sizes(1:8)
-         write (error_unit, '(8i10)') iswig_grid_sizes(9:)
+         write (error_unit, "(a,i0)") "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
+         write (error_unit, "(a)") "Supported sizes:"
+         write (error_unit, "(8i10)") iswig_grid_sizes(1:8)
+         write (error_unit, "(8i10)") iswig_grid_sizes(9:)
          call fatal_error(error, "Unsupported Lebedev size in iSwiG")
          return
       end if
@@ -427,7 +446,8 @@ contains
       nsph, centers, radii, &
       cut_a, cut_f, &
       oleb, zeta_born, ang_grid, ang_weight, &
-      ngrid, owner, grid_xyz, xi, f, wleb, a, numbering, asph, total_area, total_volume, error)
+      ngrid, owner, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
+      total_area, total_volume, error)
 
       integer, intent(in) :: nsph
       real(wp), intent(in) :: centers(3, nsph)
@@ -445,6 +465,10 @@ contains
       real(wp), allocatable, intent(out) :: xi(:)
       real(wp), allocatable, intent(out) :: f(:)
       real(wp), allocatable, intent(out) :: wleb(:)
+      !> Outward unit normals (3, ngrid)
+      real(wp), allocatable, intent(out) :: normal0(:, :)
+      !> Point volume elements (ngrid)
+      real(wp), allocatable, intent(out) :: v(:)
       integer, allocatable, intent(out) :: numbering(:)
       real(wp), intent(out) :: asph(:)
       real(wp), intent(out) :: total_area
@@ -492,6 +516,8 @@ contains
       allocate (xi(ngrid), source=0.0_wp)
       allocate (f(ngrid), source=0.0_wp)
       allocate (wleb(ngrid), source=0.0_wp)
+      allocate (normal0(3, ngrid), source=0.0_wp)
+      allocate (v(ngrid), source=0.0_wp)
       allocate (numbering(ngrid), source=-1)
 
       if (ngrid == 0) then
@@ -531,9 +557,18 @@ contains
          rx = grid_xyz(1, ipt) - centers(1, owner(ipt))
          ry = grid_xyz(2, ipt) - centers(2, owner(ipt))
          rz = grid_xyz(3, ipt) - centers(3, owner(ipt))
-         total_volume = total_volume + a(ipt)* &
-                        (rx*grid_xyz(1, ipt) + ry*grid_xyz(2, ipt) + rz*grid_xyz(3, ipt))/ &
-                        (3.0_wp*radii(owner(ipt)))
+
+         ! Points sit on their owner sphere, so the outward unit normal is the
+         ! radial direction and the volume element is the divergence-theorem
+         ! contribution a_i (r_i . n_i)/3 that the total below accumulates.
+         normal0(1, ipt) = rx/radii(owner(ipt))
+         normal0(2, ipt) = ry/radii(owner(ipt))
+         normal0(3, ipt) = rz/radii(owner(ipt))
+
+         v(ipt) = a(ipt)* &
+                  (rx*grid_xyz(1, ipt) + ry*grid_xyz(2, ipt) + rz*grid_xyz(3, ipt))/ &
+                  (3.0_wp*radii(owner(ipt)))
+         total_volume = total_volume + v(ipt)
       end do
 
    end subroutine setup_iswig_surface
@@ -696,42 +731,60 @@ contains
 
    end subroutine factors_swi_derivs
 
-   !> Assemble the iSwiG Amat
-   !> @param[out] amat  Interaction matrix (ngrid, ngrid)
-   !> @param[out] error Error handling
-   subroutine get_amat_iswig(self, amat, error)
-      !> iSwiG cavity instance
-      class(cavity_type_iswig), intent(in) :: self
-      !> Output: assembled matrix (ngrid, ngrid)
-      real(wp), intent(out) :: amat(:, :)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
+   !> Derivative of a switching factor with respect to one sphere center
+   !>
+   !> `f_i` is the product of the elementary switching factors over all spheres
+   !> other than the owner, so its derivative with respect to the separation
+   !> from sphere `j` factorizes into `f_i` times the logarithmic derivative of
+   !> that one factor. The result is returned as the radial coefficient `dfdr`
+   !> and the separation vector `dvec`, with
+   !>
+   !>   d f_i / d r  =  dfdr * dvec  =  -d f_i / d c_j
+   !>
+   !> Shared by the forward Jacobian in [[compute_gradient_iswig]] and the
+   !> reverse contraction in [[get_surface_gradient_iswig]] so that both paths
+   !> evaluate the identical expression.
+   !>
+   !> @param[in]  point  Grid point position
+   !> @param[in]  center Sphere center position
+   !> @param[in]  zeta   Gaussian width of the grid point
+   !> @param[in]  radius Radius of the sphere
+   !> @param[in]  f_val  Switching factor of the grid point
+   !> @param[out] dvec   Separation of point and sphere center
+   !> @param[out] dfdr   Radial derivative coefficient
+   pure subroutine swi_pair_dfdr(point, center, zeta, radius, f_val, dvec, dfdr)
+      !> Grid point position
+      real(wp), intent(in) :: point(3)
+      !> Sphere center position
+      real(wp), intent(in) :: center(3)
+      !> Gaussian width of the grid point
+      real(wp), intent(in) :: zeta
+      !> Radius of the sphere
+      real(wp), intent(in) :: radius
+      !> Switching factor of the grid point
+      real(wp), intent(in) :: f_val
 
-      integer :: ip, jp, ngrid
-      real(wp) :: r_vec(3), r_dist, xi_i, zeta_ij
+      !> Separation of point and sphere center
+      real(wp), intent(out) :: dvec(3)
+      !> Radial derivative coefficient
+      real(wp), intent(out) :: dfdr
 
-      ngrid = self%ngrid
+      !> Separation components and distance
+      real(wp) :: dx, dy, dz, dist
+      !> Error-function arguments and the elementary switching factor
+      real(wp) :: arg_plus, arg_minus, arg_plus_sq, arg_minus_sq, switch_pair
 
-      ! Check dimensions
-      if (size(amat, 1) /= ngrid .or. size(amat, 2) /= ngrid) then
-         call fatal_error(error, &
-            & "[get_amat_iswig] Matrix dimension mismatch")
-         return
-      end if
+      call factors_swi_derivs(point, center, zeta, radius, &
+                              dx, dy, dz, dist, arg_plus_sq, arg_minus_sq)
 
-      do ip = 1, ngrid
-         xi_i = self%xi(ip)
-         ! Gaussian self-interaction, switching function in the diagonal (iSwiG)
-         amat(ip, ip) = xi_i*sqrt(2.0_wp/pi)/self%f(ip)
-         do jp = ip + 1, ngrid
-            zeta_ij = xi_i*self%xi(jp)/sqrt(xi_i**2 + self%xi(jp)**2)
-            r_vec(:) = self%xyz(:, ip) - self%xyz(:, jp)
-            r_dist = sqrt(sum(r_vec**2))
-            amat(ip, jp) = erf(zeta_ij*r_dist)/r_dist
-            amat(jp, ip) = amat(ip, jp)
-         end do
-      end do
+      arg_plus = zeta*(radius + dist)
+      arg_minus = zeta*(radius - dist)
+      switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
 
-   end subroutine get_amat_iswig
+      dfdr = -f_val*zeta/(sqrt(pi)*switch_pair*dist) &
+            & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))
+      dvec = [dx, dy, dz]
+
+   end subroutine swi_pair_dfdr
 
 end module moist_cavity_iswig

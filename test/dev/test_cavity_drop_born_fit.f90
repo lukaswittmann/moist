@@ -19,9 +19,11 @@ module test_cavity_drop_born_fit
    use moist_math_grid_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
    use moist_model_component_pcm_solvers, only : solve_pcm_cholesky
+   use moist_model_component_pcm_amat, only : assemble_pcm_amat
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -178,12 +180,12 @@ contains
       class(radius_type), allocatable :: radius_model
       real(wp) :: radii(2)
       integer :: ir
+      !> Run context borrowed by the cavity returned to the caller
+      type(moist_context_type), target, save :: ctx
 
-      !* Load MB16-43/H2 and reshape it into a sphere-at-origin carrier:
-      !* atom 1 sits at the origin (centre of the test sphere); atom 2 is
-      !* pushed to a far corner of space with a sub-millibohr radius so it
-      !* contributes negligibly to either the surface area or the CPCM
-      !* solve. See the module header for the tolerance budget.
+      call new_context(ctx, verbosity=0)
+
+      ! Load MB16-43/H2 and reshape it into a sphere-at-origin
       call get_structure(mol, "MB16-43", "H2")
       mol%xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       mol%xyz(:, 2) = [100.0_wp, 100.0_wp, 100.0_wp]
@@ -202,9 +204,9 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(blend_k=3.0_wp, blend_1b=1.0_wp, &
                blend_2b=1.0_wp, blend_3b=1.0_wp)
-            call new_cavity_drop(cavities(ir), nleb=nleb, &
+            call new_cavity_drop(cavities(ir), ctx, nleb=nleb, &
                tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2, &
-               radius_model=radius_model, verbose=0, debug=.false., &
+               radius_model=radius_model, &
                lsf_model=svdw_template, error=cavity_error)
          end block
          if (allocated(cavity_error)) then
@@ -371,7 +373,8 @@ contains
          return
       end if
 
-      call cavity%Amat012_rA(amat, error=cavity_error)
+      allocate(amat(cavity%ngrid, cavity%ngrid))
+      call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat, cavity_error)
       if (allocated(cavity_error)) then
          message = "DROP A-matrix assembly failed: " // trim(cavity_error%message)
          return

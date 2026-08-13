@@ -5,14 +5,9 @@ Python API
 
 .. automodule:: moist
 
+.. automodule:: moist.interface
 
 .. toctree::
 
    ase
    pyscf
-
-
-Library interface
------------------
-
-.. automodule:: moist.interface

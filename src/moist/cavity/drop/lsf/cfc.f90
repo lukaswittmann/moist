@@ -1,4 +1,4 @@
-!> COSMO Fine Cavity (CFC) level-set function
+!> COSMO Fine Cavity (CFC) level set function
 !>
 !> Concrete LSF implementing the Diedenhofen & Klamt 2018 pseudo-density
 !>   PD(r) = sum_a   exp{ a1 (s_a - 1) }                                     (atomic)
@@ -15,13 +15,14 @@
 !> TODO: (screening): the SSD uses `screen_k = 3`, which matches the pair-term decay rate (|a2|/3 = 3)
 !> but is *over*-conservative for the atomic-term decay (|a1|/3 = 5)
 module moist_cavity_drop_lsf_cfc
+   use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw_ssd, only: moist_cavity_drop_lsf_svdw_ssd_type, ssd0
    use moist_cavity_drop_lsf_cfc_kernel, only: cfc_atomic_term_eval, &
                                                cfc_pair_term_eval, cfc_log_lift
-   implicit none
+   implicit none (type, external)
    private
 
    integer, parameter :: ndim = 3
@@ -65,7 +66,7 @@ module moist_cavity_drop_lsf_cfc
       !> Cached `[1..ncenters]` for `prepare()` to feed to `ssd_system%compute`
       integer, allocatable :: all_indices(:)
 
-      ! ------- Per-evaluation-point caches (filled by prepare) ---------- *!
+      !* -------------------- Per-evaluation-point caches (prepare) ------------------- *!
 
       !> Pseudo-density value at the cached evaluation point
       real(wp) :: PD0 = 0.0_wp
@@ -76,7 +77,7 @@ module moist_cavity_drop_lsf_cfc
       !> Pseudo-density third spatial derivative [ndim, ndim, ndim]
       real(wp), allocatable :: PD3(:, :, :)
 
-      ! --- Per-atom accumulators for nuclear-derivative assembly ------- *!
+      !* ---------------- Per-atom accumulators for nuclear-derivatives --------------- *!
 
       !> Q1^A(alpha) = dPD/d(d_A,alpha) for atom A (collected from atom-A
       !> self-term and every pair involving A) [ndim, n_alloc]
@@ -241,20 +242,20 @@ contains
    end subroutine lsf_set_max_deriv
 
    !> Run screening at the evaluation point and refresh CFC caches
-   subroutine lsf_prepare(self, point)
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
-
+      type(error_type), allocatable, intent(out) :: error
       call self%ssd_system%compute(point, self%all_indices)
       call cfc_compute_caches(self, point)
    end subroutine lsf_prepare
 
    !> Run screening + cache refresh for a caller-provided candidate list
-   subroutine lsf_prepare_subset(self, point, candidate_indices)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
-
+      type(error_type), allocatable, intent(out) :: error
       call self%ssd_system%compute(point, candidate_indices)
       call cfc_compute_caches(self, point)
    end subroutine lsf_prepare_subset

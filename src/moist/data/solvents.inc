@@ -1168,7 +1168,7 @@ data alias_list(:,51) / &
 &     "2-propenol",                                     &
 &     "1-propen-3-ol",                                  &
 &     "vinyl carbinol",                                 &
-&     "weed drench"                                     /
+&     "2-propen-1-ol"                                   /
 
 
 !E-2-PENTENE
@@ -1189,7 +1189,7 @@ data alias_list(:,52) / &
 &     "2-pentene",                                      &
 &     "2-pentene, (e)-",                                &
 &     "trans-pent-2-ene",                               &
-&     "2-pentene, (2e)-",                               &
+&     "e-2-pentene",                                    &
 &     "(2e)-2-pentene",                                 &
 &     "pent-2-ene"                                      /
 
@@ -1283,7 +1283,7 @@ data alias_list(:,56) / &
 &     "4-methyl-2-oxopentane",                          &
 &     "methylisobutylketon",                            &
 &     "isohexanone",                                    &
-&     "shell mibk"                                      /
+&     "4-methyl-2-pentanone"                            /
 
 
 !4-METHYLPYRIDINE
@@ -1697,7 +1697,7 @@ data alias_list(:,74) / &
 &     "meetco",                                         &
 &     "methyl acetone",                                 &
 &     "methylethylketone",                              &
-&     "3-butanone"                                      /
+&     "butanone"                                        /
 
 
 !BUTYRONITRILE
@@ -1950,7 +1950,7 @@ data alias_list(:,85) / &
 &     "benzylchlorid",                                  &
 &     "tolyl chloride",                                 &
 &     "chlorure de benzyle",                            &
-&     "alpha-chlortoluol"                               /
+&     "a-chlorotoluene"                                 /
 
 
 !O-CHLOROTOLUENE
@@ -2247,7 +2247,7 @@ data alias_list(:,98) / &
 &     "butane, 1,1'-oxybis-",                           &
 &     "n-butyl ether",                                  &
 &     "1,1'-oxydibutane",                               &
-&     "ccris 6010",                                     &
+&     "dibutylether",                                   &
 &     "hsdb 306",                                       &
 &     "1-butoxy-butane"                                 /
 
@@ -2294,7 +2294,7 @@ data alias_list(:,100) / &
 &     "ethene, 1,2-dichloro-, (1e)-",                   &
 &     "trans-acetylene dichloride",                     &
 &     "ethene, 1,2-dichloro-, (e)-",                    &
-&     "rcra waste number u079",                         &
+&     "e-1,2-dichloroethene",                           &
 &     "ethylene, 1,2-dichloro-, (e)-"                   /
 
 
@@ -2314,7 +2314,7 @@ data alias_list(:,101) / &
 &     "156-59-2",                                       &
 &     "(z)-1,2-dichloroethylene",                       &
 &     "cis-dichloroethylene",                           &
-&     "acetalyne dichloride",                           &
+&     "z-1,2-dichloroethene",                           &
 &     "acetylene dichloride, cis-",                     &
 &     "ethene, 1,2-dichloro-, (z)-",                    &
 &     "ethylene, 1,2-dichloro-, (z)-",                  &
@@ -3211,7 +3211,7 @@ data alias_list(:,140) / &
 &     "methyl propylate",                               &
 &     "propionate de methyle",                          &
 &     "fema no. 2742",                                  &
-&     "fema number 2742",                               &
+&     "methyl propanoate",                              &
 &     "methyl propionate (natural)",                    &
 &     "nsc 9375",                                       &
 &     "hsdb 5688",                                      &
@@ -3536,7 +3536,7 @@ data alias_list(:,154) / &
 &     "acetic acid, pentyl ester",                      &
 &     "amyl acetic ester",                              &
 &     "1-pentyl acetate",                               &
-&     "birnenoel",                                      &
+&     "pentyl ethanoate",                               &
 &     "n-pentyl ethanoate"                              /
 
 
@@ -3790,7 +3790,7 @@ data alias_list(:,165) / &
 &     "1,1-dioxothiolan",                               &
 &     "sulpholane",                                     &
 &     "sulfalone",                                      &
-&     "sulphoxaline"                                    /
+&     "tetrahydrothiophene-s,s-dioxide"                 /
 
 
 !TETRALIN

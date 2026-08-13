@@ -1,5 +1,6 @@
 !> DROP setup and preprocessing routines.
 submodule(moist_cavity_drop) moist_cavity_drop_setup
+   use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none
@@ -33,32 +34,32 @@ contains
       ! Build iSwig atom-atom neighbour list (sorted by distance for early exit)
       call self%iswig%update(self%mol, self%radii, wleb_max=maxval(self%anchor_wleb0))
 
-      if (self%verbosity >= 2) then
-         pp = new_prettyprinter(unit=output_unit)
+      if (self%ctx%verbosity >= 2) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Molecular cell grid:')
+         call pp%push("Molecular cell grid:")
          if (self%mol_cell_grid%full_scan) then
-            call pp%kv('Mode', 'full-scan (single cell)')
-            call pp%kv('Atoms', self%mol_cell_grid%natoms)
+            call pp%kv("Mode", "full-scan (single cell)")
+            call pp%kv("Atoms", self%mol_cell_grid%natoms)
          else
-            call pp%kv('Mode', 'spatial binning')
-            call pp%kv('Cell fraction', self%mol_cell_grid%cell_fraction)
-            call pp%kv('Cell side', self%mol_cell_grid%cell_side, 'bohr')
-            call pp%kv('Grid nx', self%mol_cell_grid%nx)
-            call pp%kv('Grid ny', self%mol_cell_grid%ny)
-            call pp%kv('Grid nz', self%mol_cell_grid%nz)
-            call pp%kv('Total cells', self%mol_cell_grid%ncells)
+            call pp%kv("Mode", "spatial binning")
+            call pp%kv("Cell fraction", self%mol_cell_grid%cell_fraction)
+            call pp%kv("Cell side", self%mol_cell_grid%cell_side, "bohr")
+            call pp%kv("Grid nx", self%mol_cell_grid%nx)
+            call pp%kv("Grid ny", self%mol_cell_grid%ny)
+            call pp%kv("Grid nz", self%mol_cell_grid%nz)
+            call pp%kv("Total cells", self%mol_cell_grid%ncells)
             if (self%mol_cell_grid%ncells > 0) then
-               call pp%kv('Maximum atoms per cell', maxval(self%mol_cell_grid%cell_nnl))
-               call pp%kv('Minimum atoms per cell', minval(self%mol_cell_grid%cell_nnl))
-               call pp%kv('Average atoms per cell', &
+               call pp%kv("Maximum atoms per cell", maxval(self%mol_cell_grid%cell_nnl))
+               call pp%kv("Minimum atoms per cell", minval(self%mol_cell_grid%cell_nnl))
+               call pp%kv("Average atoms per cell", &
                           real(sum(self%mol_cell_grid%cell_nnl), wp) &
-                          /real(self%mol_cell_grid%ncells, wp), fmt='(f14.4)')
+                          /real(self%mol_cell_grid%ncells, wp), fmt="(f14.4)")
             end if
-            call pp%kv('Total cell entries', size(self%mol_cell_grid%cell_nlat))
-            call pp%kv('Entries per atom', &
+            call pp%kv("Total cell entries", size(self%mol_cell_grid%cell_nlat))
+            call pp%kv("Entries per atom", &
                        real(size(self%mol_cell_grid%cell_nlat), wp)/real(self%nsph, wp), &
-                       fmt='(f14.4)')
+                       fmt="(f14.4)")
          end if
          call pp%pop()
       end if
@@ -67,7 +68,7 @@ contains
 
    end subroutine setup_mol_cell_grid
 
-   !> Build grid-point neighbour list for density computation
+   !> Build grid point neighbour list for density computation
    !>
    !> @param[inout] self  Cavity instance (anchorxyz must be filled)
    !> @param[out]   error Error object
@@ -82,22 +83,22 @@ contains
       call self%grid_adj_list%init(cutoff=cutoff)
       call self%grid_adj_list%update(self%xyz(:, 1:self%ngrid))
 
-      if (self%verbosity >= 2) then
-         pp = new_prettyprinter(unit=output_unit)
+      if (self%ctx%verbosity >= 2) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Grid neighbour list:')
-         call pp%kv('Cutoff distance', cutoff, 'bohr')
-         call pp%kv('Number of points', self%ngrid)
-         call pp%kv('Maximum neighbours', maxval(self%grid_adj_list%nnl))
-         call pp%kv('Minimum neighbours', minval(self%grid_adj_list%nnl))
-         call pp%kv('Average neighbours', &
-                    real(sum(self%grid_adj_list%nnl), wp)/real(self%ngrid, wp), fmt='(f14.4)')
-         call pp%kv('Average neighbours (%)', &
-                    real(sum(self%grid_adj_list%nnl), wp)/real(self%ngrid, wp)/real(self%ngrid, wp)*100.0_wp, '%', &
-                    fmt='(f14.4)')
-         call pp%kv('Total pairs', size(self%grid_adj_list%nlat))
-         call pp%kv('Total pairs (%)', &
-                    real(size(self%grid_adj_list%nlat), wp)/real(self%ngrid**2, wp)*100.0_wp, '%', fmt='(f14.4)')
+         call pp%push("Grid neighbour list:")
+         call pp%kv("Cutoff distance", cutoff, "bohr")
+         call pp%kv("Number of points", self%ngrid)
+         call pp%kv("Maximum neighbours", maxval(self%grid_adj_list%nnl))
+         call pp%kv("Minimum neighbours", minval(self%grid_adj_list%nnl))
+         call pp%kv("Average neighbours", &
+                    real(sum(self%grid_adj_list%nnl), wp)/real(self%ngrid, wp), fmt="(f14.4)")
+         call pp%kv("Average neighbours (%)", &
+                    real(sum(self%grid_adj_list%nnl), wp)/real(self%ngrid, wp)/real(self%ngrid, wp)*100.0_wp, "%", &
+                    fmt="(f14.4)")
+         call pp%kv("Total pairs", size(self%grid_adj_list%nlat))
+         call pp%kv("Total pairs (%)", &
+                    real(size(self%grid_adj_list%nlat), wp)/real(self%ngrid**2, wp)*100.0_wp, "%", fmt="(f14.4)")
          call pp%pop()
       end if
 
@@ -221,7 +222,7 @@ contains
       !> Total switching function
       self%f = self%iswig_f0
 
-      if (self%verbosity > 1) then
+      if (self%ctx%verbosity > 1) then
          n_iswig_removed = count(self%iswig_f0 < self%param%wleb_cut)
          n_anchor_additional = count((self%iswig_f0 >= self%param%wleb_cut) .and. &
                                      (self%f < self%param%wleb_cut))
@@ -234,13 +235,13 @@ contains
             perc_anchor = 0.0_wp
          end if
 
-         pp = new_prettyprinter(unit=output_unit)
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Pre-filter:')
-         call pp%kv('Points before removal', self%nmax)
-         call pp%kv('iSwig removed', n_iswig_removed)
-         call pp%kv('anchor_f additional', n_anchor_additional)
-         call pp%kv('Points to project', self%nmax - n_iswig_removed - n_anchor_additional)
+         call pp%push("Pre-filter:")
+         call pp%kv("Points before removal", self%nmax)
+         call pp%kv("iSwig removed", n_iswig_removed)
+         call pp%kv("anchor_f additional", n_anchor_additional)
+         call pp%kv("Points to project", self%nmax - n_iswig_removed - n_anchor_additional)
          call pp%pop()
       end if
 

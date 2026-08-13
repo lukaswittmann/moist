@@ -3,7 +3,6 @@ module test_utils
    use testdrive, only : new_unittest, unittest_type, error_type, check, test_failed
    use moist_data_solvents, only : solvation_system_parameters, &
       & new_solvation_system_parameters, get_solvent_id, max_solvents
-   use moist_utils, only : is_exceptional
    use mctc_env_error, only : moist_error_type => error_type
    use, intrinsic :: ieee_arithmetic
    implicit none
@@ -18,8 +17,8 @@ contains
 subroutine collect_utils(testsuite)
    type(unittest_type), allocatable, intent(out) :: testsuite(:)
    testsuite = [ &
-      & new_unittest("SumSolventProperties", test_sum_solvent_properties), &
-      & new_unittest("SolventIDFinder", test_solvent_id_finder) &
+      & new_unittest("sum_solvent_properties", test_sum_solvent_properties), &
+      & new_unittest("solvent_id_finder", test_solvent_id_finder) &
 
       & ]
 end subroutine collect_utils

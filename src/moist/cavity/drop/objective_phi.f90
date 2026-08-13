@@ -1,8 +1,8 @@
 !> Closest-point projection objective phi for DROP cavity grid projection.
 !>
 !> This module implements the quadratic objective \(\phi\) used by the
-!> projector to find the closest point on the DROP level-set surface.
-!> The level-set constraint is owned and evaluated by the projector.
+!> projector to find the closest point on the DROP level set surface.
+!> The level set constraint is owned and evaluated by the projector.
 module moist_cavity_drop_objective_phi
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type

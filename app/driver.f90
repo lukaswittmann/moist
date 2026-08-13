@@ -6,22 +6,20 @@ module moist_driver
    use mctc_io, only: structure_type, read_structure, filetype
    use mctc_io_utils, only: to_lower
    use moist_cli, only: run_config
-   use moist_output_ascii, only: moist_header, moist_build_header, gems_header, cavity_header
+   use moist_output_ascii, only: moist_header, moist_build_header, cavity_header
    use moist_data_solvents, only: get_solvent_id
    use moist_data_solvents, only: solvation_system_parameters, new_solvation_system_parameters
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
-   use moist_type, only: wavefunction_type, cavity_type, solvation_model
-   ! use moist_model_gems, only: gems_model, new_gems_model
-#ifdef WITH_RISM
-   ! use moist_model_rism1d, only: rism1d_model, new_rism1d_model
-   ! use moist_model_rism3d, only: rism3d_model, new_rism3d_model
-#endif
-   use moist_utils_timer, only: timer_type
+   use moist_type, only: cavity_type, solvation_model_type
+   use moist_channels, only: coupling_type
+   use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
 ! #ifdef WITH_MKL
 ! !$ use mkl_service
@@ -58,10 +56,10 @@ contains
       type(structure_type) :: mol
 
       !> Solvation model
-      class(solvation_model), allocatable :: sm
+      class(solvation_model_type), allocatable :: sm
 
-      !> Timer for performance measurement
-      type(timer_type) :: timer
+      !> Shared run context owned for the whole run borrowed by everything
+      type(moist_context_type), target :: ctx
 
       !> Solvation system type
       type(solvation_system_parameters), allocatable :: system
@@ -70,7 +68,7 @@ contains
       character(len=:), allocatable :: solvent
 
       real(wp) :: energy
-      type(wavefunction_type) :: wfn
+      type(coupling_type) :: coupling
 
       integer :: solvent_id
 
@@ -79,21 +77,26 @@ contains
       character(len=256) :: tmp
       real(wp) :: tmp_wp
 
-      call timer%new(2, .true.)
-      call timer%measure(1, 'total')
+      !> Open the run context; every cavity/model borrows it, so all sub-timers
+      !> started later nest under the "total" node opened here.
+      call new_context(ctx, verbosity=config%verbosity, debug=config%debug)
+      call ctx%timer%start("total")
 
       !* ---------------------------- Thread configuration --------------------------- *!
+      !> Routed through the context so it stays the single place the thread budget
+      !> is changed -- `get_num_threads` and `print_settings` then report what the
+      !> run is actually using, and the pin is released again on `ctx%delete`.
       if (config%num_threads > 0) then
 !$       if (.false.) then
-            write (output_unit, '(a)') &
+            write (ctx%unit, '(a)') &
                "[Warn] Program compiled without OpenMP support, ignoring --threads"
 !$       else
-!$          call omp_set_num_threads(config%num_threads)
+!$          call ctx%set_num_threads(config%num_threads)
 ! #ifdef WITH_MKL
 ! !$       call mkl_set_num_threads(config%num_threads)
 ! #endif
 !$          if (config%verbosity > 0) then
-!$             write (output_unit, '(a,i0,a)') &
+!$             write (ctx%unit, '(a,i0,a)') &
 !$                "[Info] OpenMP threads set to ", config%num_threads, ""
 !$          end if
 !$       end if
@@ -160,6 +163,7 @@ contains
       ! Cavity-only modes: build cavity grid and optionally write output
       if (to_lower(config%mode) == "numsa" .or. &
           to_lower(config%mode) == "drop" .or. &
+          to_lower(config%mode) == "mc" .or. &
           to_lower(config%mode) == "iswig") then
 
          block
@@ -176,7 +180,7 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_numsa(tmp_cavity, nleb=config%nleb, &
+                  call new_cavity_numsa(tmp_cavity, ctx, nleb=config%nleb, &
                                         radii=radius_model, error=error)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
@@ -187,7 +191,7 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_iswig(tmp_cavity, nleb=config%nleb, &
+                  call new_cavity_iswig(tmp_cavity, ctx, nleb=config%nleb, &
                                         radius_model=radius_model, error=error)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
@@ -205,37 +209,67 @@ contains
                         !> its own tolerance (passed below as `tolerance`),
                         !> so we only forward the shape parameters here.
                         call svdw_template%new( &
-                           blend_k =config%drop_blend_k, &
+                           blend_k=config%drop_blend_k, &
                            blend_1b=config%drop_blend_1b, &
                            blend_2b=config%drop_blend_2b, &
                            blend_3b=config%drop_blend_3b)
-                        call new_cavity_drop(tmp_cavity, &
-                                            debug=config%debug, verbose=config%verbosity, &
-                                            nleb=config%nleb, &
-                                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                                            wleb_prune_level=config%drop_wleb_prune_level, &
-                                            radius_model=radius_model, &
-                                            lsf_model=svdw_template, error=error)
+                        call new_cavity_drop(tmp_cavity, ctx, &
+                                             nleb=config%nleb, &
+                                             tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
+                                             wleb_prune_level=config%drop_wleb_prune_level, &
+                                             radius_model=radius_model, &
+                                             lsf_model=svdw_template, error=error)
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
-                           c=config%cfc_c, m=config%cfc_m, screen_k=config%cfc_screen_k)
-                        call new_cavity_drop(tmp_cavity, &
-                                            debug=config%debug, verbose=config%verbosity, &
-                                            nleb=config%nleb, &
-                                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                                            wleb_prune_level=config%drop_wleb_prune_level, &
-                                            radius_model=radius_model, &
-                                            lsf_model=cfc_template, error=error)
+                                              c=config%cfc_c, m=config%cfc_m, screen_k=config%cfc_screen_k)
+                        call new_cavity_drop(tmp_cavity, ctx, &
+                                             nleb=config%nleb, &
+                                             tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
+                                             wleb_prune_level=config%drop_wleb_prune_level, &
+                                             radius_model=radius_model, &
+                                             lsf_model=cfc_template, error=error)
                      end block
                   else
                      call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
                   end if
                   if (allocated(error)) return
-                  call tmp_cavity%properties(do_fine=config%cavity_fine, &
-                                             do_mc=config%cavity_mc)
+                  call tmp_cavity%properties(do_fine=config%cavity_fine)
+                  call move_alloc(tmp_cavity, cavity)
+               end block
+            else if (to_lower(config%mode) == "mc") then
+               block
+                  type(cavity_type_marchingcubes), allocatable :: tmp_cavity
+                  allocate (tmp_cavity)
+                  call new_radii(config%radii, radius_model, error)
+                  if (allocated(error)) return
+                  !> Marching cubes writes its mesh while integrating, so the
+                  !> export paths have to be known before update runs.
+                  if (to_lower(config%drop_variant) == "svdw") then
+                     block
+                        type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+                        call svdw_template%new( &
+                           blend_k=config%drop_blend_k, &
+                           blend_1b=config%drop_blend_1b, &
+                           blend_2b=config%drop_blend_2b, &
+                           blend_3b=config%drop_blend_3b)
+                        call new_mc_cavity(tmp_cavity, ctx, radius_model, svdw_template, &
+                                           config%cavity_mc_spacing, config%dump, error)
+                     end block
+                  else if (to_lower(config%drop_variant) == "cfc") then
+                     block
+                        type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
+                        call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
+                                              c=config%cfc_c, m=config%cfc_m, screen_k=config%cfc_screen_k)
+                        call new_mc_cavity(tmp_cavity, ctx, radius_model, cfc_template, &
+                                           config%cavity_mc_spacing, config%dump, error)
+                     end block
+                  else
+                     call fatal_error(error, "Unknown level set function: "//trim(config%drop_variant))
+                  end if
+                  if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
             end if
@@ -246,15 +280,17 @@ contains
 
             ! Gradient if asked for
             if (config%grad) then
-               call cavity%get_gradient()
+               call cavity%get_gradient(error)
+               if (allocated(error)) return
             end if
 
-            ! Print results
-            call cavity%print(output_unit)
-            if (config%verbosity > 2) call cavity%print_fine(output_unit)
+            ! Print results; with no unit the cavity follows its own context
+            call cavity%print()
 
-            ! Write cavity files (xyz, csv, pqr) only when --dump is given
-            if (config%dump) then
+            ! Write cavity files (xyz, csv, pqr) only when --dump is given.
+            ! Marching cubes has no grid points to dump; it already wrote its
+            ! triangle mesh (cavity.obj/cavity.pqr) during update.
+            if (config%dump .and. to_lower(config%mode) /= "mc") then
                call cavity%write_xyz_debug('cavity.xyz', error=error)
                if (allocated(error)) return
                call cavity%write_csv_debug('cavity.csv', error=error)
@@ -264,6 +300,8 @@ contains
             end if
 
          end block
+         call report_run_timings()
+         call ctx%delete()
          return
       end if
 
@@ -309,105 +347,56 @@ contains
          return
       end if
 
-!       ! gems model
-!       if (to_lower(config%mode) == "gems") then
-!          call gems_header(output_unit)
-!          block
-!             type(gems_model), allocatable :: tmp
-!             allocate (tmp)
+      call report_run_timings()
+      call ctx%delete()
 
-!             ! todo: here one needs to pass also the info about the system, i.e. solvent, temperature, etc.
-!             call new_gems_model(error, tmp, system, &
-!                                  debug=config%debug, verbosity=config%verbosity, &
-!                                  read_parameters=config%read_parameters, parameter_file=config%parameters_path &
-!                                  )
+   contains
 
-!             call move_alloc(tmp, sm)
-!          end block
-
-!          ! rism1d model
-!       else if (to_lower(config%mode) == "rism1d") then
-! #ifdef WITH_RISM
-!          block
-!             type(rism1d_model), allocatable :: tmp
-!             allocate (tmp)
-!             call new_rism1d_model(error, tmp, &
-!                & theory=trim(config%theory), closure=trim(config%closure), &
-!                & solver=trim(config%solver), &
-!                & verbosity=config%verbosity, system_parameters=system)
-!             if (allocated(error)) return
-!             call move_alloc(tmp, sm)
-!          end block
-! #else
-!          call fatal_error(error, "RISM support not enabled at build time (-Drism=true)")
-!          return
-! #endif
-
-!          ! rism3d model
-!       else if (to_lower(config%mode) == "rism3d") then
-! #ifdef WITH_RISM
-!          block
-!             type(rism3d_model), allocatable :: tmp
-!             allocate (tmp)
-!             call new_rism3d_model(error, tmp, &
-!                & theory=trim(config%theory), closure=trim(config%closure), &
-!                & solver=trim(config%solver), &
-!                & verbosity=config%verbosity, system_parameters=system)
-!             if (allocated(error)) return
-!             call move_alloc(tmp, sm)
-!          end block
-! #else
-!          call fatal_error(error, "RISM support not enabled at build time (-Drism=true)")
-!          return
-! #endif
-
-!          ! alpb model
-!       else if (to_lower(config%mode) == "alpb") then
-!          call fatal_error(error, "ALPB not implemented yet")
-!          return
-
-!          ! else if(to_lower(config%mode) == "smd") then
-!          !    block
-!          !       type(smd_model), allocatable :: tmp
-!          !       allocate(tmp)
-!          !       call new_smd_model(error, tmp, system, debug=config%debug, verbosity=config%verbosity)
-!          !       call move_alloc(tmp, sm)
-!          !    end block
-
-!       else
-!          call fatal_error(error, "Unknown model selected")
-!          return
-!       end if
-
-!       !> Initialize the solvation model
-!       call sm%update(mol, error)
-!       if (allocated(error)) return
-
-!       !> Get the solvation energy
-!       call sm%get_energy(wfn, energy, error)
-!       if (allocated(error)) return
-
-!       call timer%measure(1)
-
-!       !> Print the solvation energy
-!       if (config%verbosity > 0) write (output_unit, '(a,f20.10,a,f20.6,a)') &
-!          "Final solvation free energy ", energy, &
-!          " Eh ", energy*627.509, " kcal/mol", ""
-
-!       if (config%writeenergy) then
-!          !> Write the energy to a file
-!          open (file=".GSOLV", newunit=unit, status='replace', action='write', iostat=stat)
-!          if (stat /= 0) then
-!             call fatal_error(error, "Could not open file for writing: "//trim(filename))
-!             return
-!          end if
-!          write (unit, '(f20.12)') energy
-!          close (unit)
-!       end if
-
-      call timer%write_timing(output_unit, 1, 'total', .true.)
+      !> Stop the top-level timer and print the accumulated timing tree. Every
+      !> cavity/model sub-timer nests under "total" (opened at run start), so this
+      !> prints the full hierarchical breakdown for the run.
+      subroutine report_run_timings()
+         call ctx%timer%stop("total")
+         if (config%verbosity > 0) &
+            call ctx%timer%write(output_unit, "moist", max_depth=ctx%report_depth())
+      end subroutine report_run_timings
 
    end subroutine run_main
+
+   !> Construct a marching-cubes cavity, wiring up mesh export when --dump is set
+   !>
+   !> The integrator writes its triangle mesh during `update`, so the export paths
+   !> have to be decided at construction; this wrapper keeps that branch out of the
+   !> per-level-set blocks above.
+   !>
+   !> @param[inout] cavity        Cavity instance to initialize
+   !> @param[in]    ctx           Shared run context
+   !> @param[in]    radius_model  Atomic radius model
+   !> @param[in]    lsf_model     Level set function template
+   !> @param[in]    spacing       Finest grid spacing in bohr
+   !> @param[in]    dump          Write the triangle mesh to cavity.obj/cavity.pqr
+   !> @param[out]   error         Error handling
+   subroutine new_mc_cavity(cavity, ctx, radius_model, lsf_model, spacing, dump, error)
+      type(cavity_type_marchingcubes), intent(inout) :: cavity
+      type(moist_context_type), intent(in), target :: ctx
+      class(radius_type), intent(in) :: radius_model
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
+      real(wp), intent(in) :: spacing
+      logical, intent(in) :: dump
+      type(error_type), allocatable, intent(out) :: error
+
+      if (dump) then
+         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, &
+                                       lsf_model=lsf_model, spacing=spacing, &
+                                       obj_file='cavity.obj', pqr_file='cavity.pqr', &
+                                       error=error)
+      else
+         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, &
+                                       lsf_model=lsf_model, spacing=spacing, &
+                                       error=error)
+      end if
+
+   end subroutine new_mc_cavity
 
 !> Construct path by joining strings with os file separator
    function join(a1, a2) result(path)

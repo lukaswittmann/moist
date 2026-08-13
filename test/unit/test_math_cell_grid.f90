@@ -1,4 +1,4 @@
-!> Test suite for the per-cell atom screening grid in moist_math_cell_grid.
+!> Test suite for the per-cell atom screening grid in moist_math_cell_grid
 module test_math_cell_grid
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check
@@ -10,7 +10,7 @@ module test_math_cell_grid
 
 contains
 
-   !> Collect all cell-grid tests.
+   !> Collect all cell-grid tests
    subroutine collect_math_cell_grid(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)

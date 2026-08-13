@@ -1,4 +1,4 @@
-!> Orchestrator-level unit tests for the DROP level-set functions (LSF)
+!> Orchestrator-level unit tests for the DROP level set functions (LSF)
 !>
 !> Each common FD check is written once against the abstract
 !> [[moist_cavity_drop_lsf_type]] and dispatched twice in the collector:
@@ -38,6 +38,7 @@
 !> is not part of the abstract base API.
 module test_cavity_drop_lsf
    use mctc_env_accuracy, only: wp
+   use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, &
@@ -59,7 +60,7 @@ module test_cavity_drop_lsf
    character(len=*), parameter :: kind_svdw = "svdw"
    character(len=*), parameter :: kind_cfc = "cfc"
 
-   real(wp), parameter :: STEP_SIZE = 5.0e-4_wp
+   real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
 
@@ -67,6 +68,11 @@ module test_cavity_drop_lsf
    integer, parameter :: n_svdw_gammas = 2
    real(wp), parameter :: svdw_blend_k_values(n_svdw_blends) = [0.1_wp, 0.5_wp, 1.0_wp, 2.0_wp, 3.0_wp]
    real(wp), parameter :: svdw_gamma_values(n_svdw_gammas) = [0.0_wp, 0.7_wp]
+
+   ! Legacy SvdW smoothing
+   real(wp), parameter :: svdw_legacy_blend_k = 3.0_wp
+   real(wp), parameter :: svdw_legacy_blend_2b = 1.0_wp
+   real(wp), parameter :: svdw_legacy_blend_3b = 1.0_wp
 
 contains
 
@@ -79,31 +85,31 @@ contains
                   new_unittest("cfc_sign_convention", test_cfc_sign_convention), &
                   new_unittest("svdw_screening_separation", test_svdw_screening_separation), &
                   new_unittest("cfc_screening_separation", test_cfc_screening_separation), &
-                  !> LSF
+                  !> LSFs
                   new_unittest("svdw_f1_r_fd", test_svdw_f1_r_fd), &
                   new_unittest("cfc_f1_r_fd", test_cfc_f1_r_fd), &
                   new_unittest("svdw_f2_rr_fd", test_svdw_f2_rr_fd), &
                   new_unittest("cfc_f2_rr_fd", test_cfc_f2_rr_fd), &
                   new_unittest("svdw_f3_rrr_fd", test_svdw_f3_rrr_fd), &
                   new_unittest("cfc_f3_rrr_fd", test_cfc_f3_rrr_fd), &
-                  new_unittest("svdw_f1_rA_fd", test_svdw_f1_rA_fd), &
-                  new_unittest("cfc_f1_rA_fd", test_cfc_f1_rA_fd), &
-                  new_unittest("svdw_f2_r_rA_fd", test_svdw_f2_r_rA_fd), &
-                  new_unittest("cfc_f2_r_rA_fd", test_cfc_f2_r_rA_fd), &
-                  new_unittest("svdw_f3_rr_rA_fd", test_svdw_f3_rr_rA_fd), &
-                  new_unittest("cfc_f3_rr_rA_fd", test_cfc_f3_rr_rA_fd), &
+                  new_unittest("svdw_f1_ra_fd", test_svdw_f1_rA_fd), &
+                  new_unittest("cfc_f1_ra_fd", test_cfc_f1_rA_fd), &
+                  new_unittest("svdw_f2_r_ra_fd", test_svdw_f2_r_rA_fd), &
+                  new_unittest("cfc_f2_r_ra_fd", test_cfc_f2_r_rA_fd), &
+                  new_unittest("svdw_f3_rr_ra_fd", test_svdw_f3_rr_rA_fd), &
+                  new_unittest("cfc_f3_rr_ra_fd", test_cfc_f3_rr_rA_fd), &
                   new_unittest("svdw_f012_hessfree_value_grad", test_svdw_f012_hessfree), &
                   new_unittest("cfc_f012_hessfree_value_grad", test_cfc_f012_hessfree), &
                   !> SvdW-only
-                  new_unittest("svdw_f2_rArB", test_svdw_f2_rArB), &
-                  new_unittest("svdw_f3_r_rArB", test_svdw_f3_r_rArB), &
+                  new_unittest("svdw_f2_rarb", test_svdw_f2_rArB), &
+                  new_unittest("svdw_f3_r_rarb", test_svdw_f3_r_rArB), &
                   new_unittest("svdw_f4_rrrr", test_svdw_f4_rrrr), &
-                  new_unittest("svdw_f4_rrr_rA", test_svdw_f4_rrr_rA), &
-                  new_unittest("svdw_f4_rr_rArB", test_svdw_f4_rr_rArB), &
+                  new_unittest("svdw_f4_rrr_ra", test_svdw_f4_rrr_rA), &
+                  new_unittest("svdw_f4_rr_rarb", test_svdw_f4_rr_rArB), &
                   new_unittest("svdw_pou_f1_r", test_svdw_pou_f1_r), &
                   new_unittest("svdw_pou_f2_rr", test_svdw_pou_f2_rr), &
-                  new_unittest("svdw_pou_f2_r_rA", test_svdw_pou_f2_r_rA), &
-                  new_unittest("svdw_normalized_f1_rA", test_svdw_normalized_f1_rA), &
+                  new_unittest("svdw_pou_f2_r_ra", test_svdw_pou_f2_r_rA), &
+                  new_unittest("svdw_normalized_f1_ra", test_svdw_normalized_f1_rA), &
                   new_unittest("svdw_body_order_scaling", test_svdw_body_order_scaling) &
                   ]
    end subroutine collect_cavity_drop_lsf
@@ -113,8 +119,8 @@ contains
    !* ================================================================================= *!
 
    !> Allocate a fresh polymorphic LSF of the requested concrete kind and
-   !> bind it to the given molecule. Optional `blend_k` / `blend_3b`
-   !> apply only when `kind == "svdw"` (CFC has no equivalent knob).
+   !> bind it to the given molecule. Optional `blend_k` / `blend_2b` /
+   !> `blend_3b` apply only when `kind == "svdw"` (CFC has no equivalent knob).
    !> Optional `screening_threshold` sets the inherited base-type field
    !> *before* `new`/`update` so the SSD system picks it up; default is
    !> 0 (no screening), matching the rest of the suite.
@@ -125,10 +131,11 @@ contains
    !> @param[in]  max_deriv           highest spatial derivative order to enable
    !> @param[in]  kind                "svdw" or "cfc"
    !> @param[in]  blend_k             optional svdw blend sharpness override
+   !> @param[in]  blend_2b            optional svdw 2-body weight override
    !> @param[in]  blend_3b            optional svdw 3-body weight override
    !> @param[in]  screening_threshold optional screening cutoff (default 0)
-   subroutine init_lsf(lsf, mol, radii, max_deriv, kind, blend_k, blend_3b, &
-                       screening_threshold)
+   subroutine init_lsf(lsf, mol, radii, max_deriv, kind, blend_k, blend_2b, &
+                       blend_3b, screening_threshold)
       class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
       !> Molecular structure to bind to the LSF
       type(structure_type), intent(in) :: mol
@@ -140,6 +147,8 @@ contains
       character(len=*), intent(in) :: kind
       !> Optional SvdW blend_k override (ignored for CFC)
       real(wp), intent(in), optional :: blend_k
+      !> Optional SvdW blend_2b override (ignored for CFC)
+      real(wp), intent(in), optional :: blend_2b
       !> Optional SvdW blend_3b override (ignored for CFC)
       real(wp), intent(in), optional :: blend_3b
       !> Optional screening threshold (default 0, no screening)
@@ -155,7 +164,7 @@ contains
       select case (kind)
       case (kind_svdw)
          tmp_svdw%screening_threshold = thr
-         call tmp_svdw%new(blend_k=blend_k, blend_3b=blend_3b)
+         call tmp_svdw%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
          call tmp_svdw%update(mol, radii)
          call tmp_svdw%set_max_deriv(max_deriv)
          allocate (lsf, source=tmp_svdw)
@@ -225,6 +234,7 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp) :: inside_pt(ndim), outside_pt(ndim)
       real(wp) :: val_inside, val_outside
+      type(mctc_error), allocatable :: lsf_err
 
       call get_structure(mol, "MB16-43", "LiH")
       call get_test_radii(mol, radii)
@@ -232,7 +242,11 @@ contains
 
       ! Inside: lies on atom 1, well inside the cavity
       inside_pt = mol%xyz(:, 1) + [0.05_wp, 0.05_wp, 0.0_wp]
-      call lsf%prepare(inside_pt)
+      call lsf%prepare(inside_pt, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+         return
+      end if
       call lsf%f0_screened(val_inside)
       if (val_inside >= 0.0_wp) then
          call test_failed(error, "Expected lsf0 < 0 deep inside the cavity")
@@ -241,7 +255,7 @@ contains
 
       ! Outside: well beyond the molecular bounding box along +x
       outside_pt = [maxval(mol%xyz(1, :)) + 20.0_wp, 0.0_wp, 0.0_wp]
-      call lsf%prepare(outside_pt)
+      call lsf%prepare(outside_pt, lsf_err)
       call lsf%f0_screened(val_outside)
       if (val_outside <= 0.0_wp) then
          call test_failed(error, "Expected lsf0 > 0 well outside the cavity")
@@ -261,25 +275,31 @@ contains
       call run_screening_separation(error, kind_cfc)
    end subroutine test_cfc_screening_separation
 
-   !> Verify screening in the regime it is actually used: a stationary centre
+   !> Verify screening in the regime it is actually used: a stationary centers
    !> molecule with a copy of itself pulled away from it, sampling the LSF only
-   !> at points near the centre molecule (never far out in vacuum).
+   !> at points near the centers molecule (never far out in vacuum).
    !>
    !> Unlike `run_neighbor_cutoff`, which marches the evaluation point outward
    !> until conditioning degrades, here the points stay near the stationary
-   !> centre molecule (well-conditioned, val ~ 0) and screening is driven by
+   !> centers molecule (well-conditioned, val ~ 0) and screening is driven by
    !> the *separation* of the moving copy: when adjacent its atoms are within
    !> the SSD cutoff and contribute (screened == unscreened); as it recedes
    !> past the cutoff (~25-30 bohr for the production threshold) its atoms are
    !> dropped, but by then their contribution is ~threshold, so the screened
    !> LSF still tracks the unscreened reference within ~ntot^2 * X.
    !>
-   !> The centre and moving molecules are the same structure (a homo-dimer
-   !> separation), joined with [[BuildSuperStructure]] (centre first, moving
+   !> The centers and moving molecules are the same structure (a homo-dimer
+   !> separation), joined with [[BuildSuperStructure]] (centers first, moving
    !> copy appended), so the moving atoms carry user ids > `nc`; that lets the
    !> realism guard confirm the moving copy contributes when adjacent and is
    !> fully screened away when far - the contribute->screen transition that
    !> makes this a non-vacuous test of production-style screening.
+   !>
+   !> The SvdW blending weights are pinned to the legacy set
+   !> (`svdw_legacy_blend_*`) rather than the shipped defaults: the bound
+   !> `ntot**2 * thr` is derived for unit 2b/3b weights, and this test is about
+   !> the SSD screening machinery, not about whichever blending the production
+   !> cavity currently ships.
    subroutine run_screening_separation(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -296,11 +316,12 @@ contains
 
       integer, parameter :: separation_n_steps = 100
       real(wp), parameter :: separation_gap_step = 0.25_wp
+      type(mctc_error), allocatable :: lsf_err
 
-      call get_test_structures(mols, 12)
+      call get_test_structures(mols, 10)
 
       do icase = 1, size(mols)
-         ! Centre and moving molecules; the centre stays fixed, the other is translated
+         ! Center and moving molecules; the centers stays fixed, the other is translated
          center_mol = mols(icase)
          call center_at_origin(center_mol)
          nc = center_mol%nat
@@ -321,13 +342,21 @@ contains
                ntot = super_mol%nat
 
                call get_test_radii(super_mol, radii)
-               call init_lsf(lsf_ref, super_mol, radii, 0, kind, screening_threshold=0.0_wp)
-               call init_lsf(lsf_scr, super_mol, radii, 0, kind, screening_threshold=thr)
+               call init_lsf(lsf_ref, super_mol, radii, 0, kind, &
+                             blend_k=svdw_legacy_blend_k, blend_2b=svdw_legacy_blend_2b, &
+                             blend_3b=svdw_legacy_blend_3b, screening_threshold=0.0_wp)
+               call init_lsf(lsf_scr, super_mol, radii, 0, kind, &
+                             blend_k=svdw_legacy_blend_k, blend_2b=svdw_legacy_blend_2b, &
+                             blend_3b=svdw_legacy_blend_3b, screening_threshold=thr)
 
                do ip = 1, size(points, 2)
-                  call lsf_ref%prepare(points(:, ip))
+                  call lsf_ref%prepare(points(:, ip), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf_ref%f0_screened(val_ref)
-                  call lsf_scr%prepare(points(:, ip))
+                  call lsf_scr%prepare(points(:, ip), lsf_err)
                   call lsf_scr%f0_screened(val_scr)
 
                   ! The three body term introduces the largest errors prop. to thr * natoms^2
@@ -345,7 +374,7 @@ contains
    end subroutine run_screening_separation
 
    !> True if any currently-active atom belongs to the moving copy (user id
-   !> > `nc`, the centre molecule's atom count), i.e. the moving molecule
+   !> > `nc`, the centers molecule's atom count), i.e. the moving molecule
    !> still contributes after screening. Reflects the most recent `prepare`.
    logical function any_moving_active(lsf, nc) result(active)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
@@ -389,6 +418,7 @@ contains
       integer  :: icase, ipt, axis, i, iblend, igamma, nblend, ngamma
       real(wp) :: analytic(ndim), numeric(ndim), point(ndim), shifted(ndim)
       real(wp) :: f_pp, f_p, f_m, f_mm
+      type(mctc_error), allocatable :: lsf_err
 
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
@@ -404,17 +434,21 @@ contains
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f012_r_screened(lsf1_r=analytic)
                   do axis = 1, ndim
                      shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f0_screened(f_pp)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f0_screened(f_pp)
                      shifted = point; shifted(axis) = point(axis) + STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f0_screened(f_p)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f0_screened(f_p)
                      shifted = point; shifted(axis) = point(axis) - STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f0_screened(f_m)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f0_screened(f_m)
                      shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f0_screened(f_mm)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f0_screened(f_mm)
                      numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, STEP_SIZE)
                   end do
                   do i = 1, ndim
@@ -453,6 +487,7 @@ contains
       integer  :: icase, ipt, axis, i, j, iblend, igamma, nblend, ngamma
       real(wp) :: analytic(ndim, ndim), numeric(ndim, ndim), point(ndim), shifted(ndim)
       real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
+      type(mctc_error), allocatable :: lsf_err
 
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
@@ -468,17 +503,21 @@ contains
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f012_r_screened(lsf2_rr=analytic)
                   do axis = 1, ndim
                      shifted = point; shifted(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_pp)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r_screened(lsf1_r=g_pp)
                      shifted = point; shifted(axis) = point(axis) + STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_p)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r_screened(lsf1_r=g_p)
                      shifted = point; shifted(axis) = point(axis) - STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_m)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r_screened(lsf1_r=g_m)
                      shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                     call lsf%prepare(shifted); call lsf%f012_r_screened(lsf1_r=g_mm)
+                     call lsf%prepare(shifted, lsf_err); call lsf%f012_r_screened(lsf1_r=g_mm)
                      do i = 1, ndim
                         numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), STEP_SIZE)
                      end do
@@ -525,6 +564,7 @@ contains
       real(wp) :: numeric(ndim, ndim, ndim), point(ndim), shifted(ndim)
       real(wp) :: hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
@@ -541,20 +581,24 @@ contains
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f3_rrr_screened(lsf3_rrr=analytic)
                   do axis = 1, ndim
                      shifted = point; shifted(axis) = point(axis) + 2.0_wp*eps
-                     call lsf%prepare(shifted)
+                     call lsf%prepare(shifted, lsf_err)
                      call lsf%f3_rrr_screened(lsf2_rr=hess_pp, lsf3_rrr=dummy_third)
                      shifted = point; shifted(axis) = point(axis) + eps
-                     call lsf%prepare(shifted)
+                     call lsf%prepare(shifted, lsf_err)
                      call lsf%f3_rrr_screened(lsf2_rr=hess_p, lsf3_rrr=dummy_third)
                      shifted = point; shifted(axis) = point(axis) - eps
-                     call lsf%prepare(shifted)
+                     call lsf%prepare(shifted, lsf_err)
                      call lsf%f3_rrr_screened(lsf2_rr=hess_m, lsf3_rrr=dummy_third)
                      shifted = point; shifted(axis) = point(axis) - 2.0_wp*eps
-                     call lsf%prepare(shifted)
+                     call lsf%prepare(shifted, lsf_err)
                      call lsf%f3_rrr_screened(lsf2_rr=hess_mm, lsf3_rrr=dummy_third)
                      do j = 1, ndim
                         do i = 1, ndim
@@ -611,6 +655,7 @@ contains
       real(wp), allocatable :: dummy_3rd(:, :, :, :)
       real(wp) :: numeric, f_pp, f_p, f_m, f_mm
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
@@ -631,26 +676,30 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f3_rr_rA_screened(lsf1_rA=analytic, lsf3_rr_rA=dummy_3rd)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f0_screened(f_pp)
+                        call lsf%prepare(point, lsf_err); call lsf%f0_screened(f_pp)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f0_screened(f_p)
+                        call lsf%prepare(point, lsf_err); call lsf%f0_screened(f_p)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f0_screened(f_m)
+                        call lsf%prepare(point, lsf_err); call lsf%f0_screened(f_m)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f0_screened(f_mm)
+                        call lsf%prepare(point, lsf_err); call lsf%f0_screened(f_mm)
                         numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
                         call check(error, analytic(axis, atom), numeric, &
                                    thr_abs=ABS_THR, thr_rel=REL_THR)
@@ -693,6 +742,7 @@ contains
       real(wp), allocatable :: dummy_3rd(:, :, :, :)
       real(wp) :: numeric, g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
@@ -713,26 +763,30 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f3_rr_rA_screened(lsf2_r_rA=analytic, lsf3_rr_rA=dummy_3rd)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf1_r=g_pp)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf1_r=g_pp)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf1_r=g_p)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf1_r=g_p)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf1_r=g_m)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf1_r=g_m)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf1_r=g_mm)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf1_r=g_mm)
                         do i = 1, ndim
                            numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
                            call check(error, analytic(i, axis, atom), numeric, &
@@ -777,6 +831,7 @@ contains
       real(wp), allocatable :: analytic(:, :, :, :)
       real(wp) :: numeric, hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
       call svdw_sweep_sizes(kind, nblend, ngamma)
@@ -796,26 +851,30 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call refresh_ssd(lsf, centers_base, radii)
-                  call lsf%prepare(point)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call lsf%f3_rr_rA_screened(lsf3_rr_rA=analytic)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf2_rr=hess_pp)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf2_rr=hess_pp)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf2_rr=hess_p)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf2_rr=hess_p)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf2_rr=hess_m)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf2_rr=hess_m)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
-                        call lsf%prepare(point); call lsf%f012_r_screened(lsf2_rr=hess_mm)
+                        call lsf%prepare(point, lsf_err); call lsf%f012_r_screened(lsf2_rr=hess_mm)
                         do j = 1, ndim
                            do i = 1, ndim
                               numeric = fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
@@ -861,6 +920,7 @@ contains
       real(wp), allocatable :: radii(:), points(:, :)
       integer  :: icase, ipt, i, iblend, igamma, nblend, ngamma
       real(wp) :: v0, v1, g0(ndim), g1(ndim), h(ndim, ndim)
+      type(mctc_error), allocatable :: lsf_err
 
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
@@ -875,7 +935,11 @@ contains
                              blend_k=svdw_sweep_blend(kind, iblend), &
                              blend_3b=svdw_sweep_gamma(kind, igamma))
                do ipt = 1, size(points, 2)
-                  call lsf%prepare(points(:, ipt))
+                  call lsf%prepare(points(:, ipt), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   ! Hessian skipped (no lsf2_rr) vs Hessian computed.
                   call lsf%f012_r_screened(lsf0=v0, lsf1_r=g0)
                   call lsf%f012_r_screened(lsf0=v1, lsf1_r=g1, lsf2_rr=h)
@@ -962,6 +1026,7 @@ contains
       real(wp), allocatable :: rA_bwd(:, :), rA_bwd2(:, :)
       real(wp), allocatable :: dummy_rr_rA(:, :, :, :)
       real(wp) :: numeric
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -988,29 +1053,33 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%f2_rArB_screened(analytic)
                   do atomB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
                         centers_local(axisB, atomB) = centers_local(axisB, atomB) + STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_fwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, atomB) = centers_local(axisB, atomB) + 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, atomB) = centers_local(axisB, atomB) - STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_bwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, atomB) = centers_local(axisB, atomB) - 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf1_rA=rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
                         do atomA = 1, mol%nat
                            do axisA = 1, ndim
@@ -1045,6 +1114,7 @@ contains
       real(wp), allocatable :: r_rA_bwd(:, :, :), r_rA_bwd2(:, :, :)
       real(wp), allocatable :: dummy_rA(:, :), dummy_rr_rA(:, :, :, :)
       real(wp) :: numeric
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1077,29 +1147,33 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%f3_r_rArB_screened(dummy_rA, r_rA_fwd, analytic)
                   do iB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_fwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_fwd2, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_bwd, lsf3_rr_rA=dummy_rr_rA)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf2_r_rA=r_rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
                         do iA = 1, mol%nat
                            do axisA = 1, ndim
@@ -1135,6 +1209,7 @@ contains
       real(wp), allocatable :: t3_bwd(:, :, :), t3_bwd2(:, :, :)
       real(wp), allocatable :: analytic(:, :, :, :)
       real(wp) :: numeric
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1150,24 +1225,28 @@ contains
                call prim%set_max_deriv(4)
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%f4_rrrr_screened(analytic)
                   do axis = 1, ndim
                      work_point = point
                      work_point(axis) = point(axis) + STEP_SIZE
-                     call prim%prepare(work_point)
+                     call prim%prepare(work_point, lsf_err)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_fwd)
                      work_point = point
                      work_point(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                     call prim%prepare(work_point)
+                     call prim%prepare(work_point, lsf_err)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_fwd2)
                      work_point = point
                      work_point(axis) = point(axis) - STEP_SIZE
-                     call prim%prepare(work_point)
+                     call prim%prepare(work_point, lsf_err)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_bwd)
                      work_point = point
                      work_point(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                     call prim%prepare(work_point)
+                     call prim%prepare(work_point, lsf_err)
                      call prim%f3_rrr_screened(lsf3_rrr=t3_bwd2)
                      do i = 1, ndim
                         do j = 1, ndim
@@ -1204,6 +1283,7 @@ contains
       type(structure_type) :: mol_shift
       integer, allocatable :: atomic_numbers(:)
       integer :: iat
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1228,7 +1308,11 @@ contains
                   point = points(:, ipt)
                   call prim%update(mol, radii)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%f4_rrr_rA_screened(analytic)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
@@ -1237,28 +1321,28 @@ contains
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_fwd)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_fwd2)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_bwd)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rrr_screened(lsf3_rrr=t3_bwd2)
                         do i = 1, ndim
                            do j = 1, ndim
@@ -1298,6 +1382,7 @@ contains
       type(structure_type) :: mol_shift
       integer, allocatable :: atomic_numbers(:)
       integer :: iat
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1331,7 +1416,11 @@ contains
                   point = points(:, ipt)
                   call prim%update(mol, radii)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%f4_rr_rArB_screened(dummy_rA, dummy_r_rA, analytic)
                   do iB = 1, mol%nat
                      do axisB = 1, ndim
@@ -1340,28 +1429,28 @@ contains
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_fwd)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_fwd2)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_bwd)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA_screened(lsf3_rr_rA=rr_rA_bwd2)
                         do iA = 1, mol%nat
                            do axisA = 1, ndim
@@ -1399,6 +1488,7 @@ contains
       real(wp) :: weight_forward2, weight_backward2
       real(wp) :: dweight_r(ndim)
       real(wp) :: numeric
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1415,24 +1505,28 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   do i = 1, mol%nat
-                     call prim%prepare(point)
+                     call prim%prepare(point, lsf_err)
+                     if (allocated(lsf_err)) then
+                        call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                        return
+                     end if
                      call prim%pou_f012_r_screened(i, weight, dweight_r=dweight_r)
                      do axis = 1, ndim
                         work_point = point
                         work_point(axis) = point(axis) + STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight_forward)
                         work_point = point
                         work_point(axis) = point(axis) + 2.0_wp*STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight_forward2)
                         work_point = point
                         work_point(axis) = point(axis) - STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight_backward)
                         work_point = point
                         work_point(axis) = point(axis) - 2.0_wp*STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight_backward2)
                         numeric = fd4_scalar(weight_forward2, weight_forward, &
                                              weight_backward, weight_backward2, STEP_SIZE)
@@ -1460,6 +1554,7 @@ contains
       real(wp) :: grad_forward(ndim), grad_backward(ndim)
       real(wp) :: grad_forward2(ndim), grad_backward2(ndim)
       real(wp) :: numeric
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1476,24 +1571,28 @@ contains
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
                   do i = 1, mol%nat
-                     call prim%prepare(point)
+                     call prim%prepare(point, lsf_err)
+                     if (allocated(lsf_err)) then
+                        call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                        return
+                     end if
                      call prim%pou_f012_r_screened(i, weight, d2weight_rr=d2weight_rr)
                      do axisB = 1, ndim
                         work_point = point
                         work_point(axisB) = point(axisB) + STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_forward)
                         work_point = point
                         work_point(axisB) = point(axisB) + 2.0_wp*STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_forward2)
                         work_point = point
                         work_point(axisB) = point(axisB) - STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_backward)
                         work_point = point
                         work_point(axisB) = point(axisB) - 2.0_wp*STEP_SIZE
-                        call prim%prepare(work_point)
+                        call prim%prepare(work_point, lsf_err)
                         call prim%pou_f012_r_screened(i, weight, dweight_r=grad_backward2)
                         do axisA = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axisA), grad_forward(axisA), &
@@ -1529,6 +1628,7 @@ contains
       integer, allocatable :: atomic_numbers(:)
       integer :: iat
       integer, parameter :: owner_id = 1
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1555,7 +1655,11 @@ contains
                   point = points(:, ipt)
                   call prim%update(mol, radii)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%pou_f2_r_rA_screened(owner_id, d2weight_r_rA)
                   do atomA = 1, mol%nat
                      do axisA = 1, ndim
@@ -1564,28 +1668,28 @@ contains
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_forward)
                         centers_local = centers_base
                         centers_local(axisA, atomA) = centers_local(axisA, atomA) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_forward2)
                         centers_local = centers_base
                         centers_local(axisA, atomA) = centers_local(axisA, atomA) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_backward)
                         centers_local = centers_base
                         centers_local(axisA, atomA) = centers_local(axisA, atomA) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%pou_f012_r_screened(owner_id, weight_dummy, dweight_r=grad_backward2)
                         do axis = 1, ndim
                            numeric = fd4_scalar(grad_forward2(axis), grad_forward(axis), &
@@ -1619,6 +1723,7 @@ contains
       type(structure_type) :: mol_shift
       integer, allocatable :: atomic_numbers(:)
       integer :: iat
+      type(mctc_error), allocatable :: lsf_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -1643,7 +1748,11 @@ contains
                   point = points(:, ipt)
                   call prim%update(mol, radii)
                   call prim%ssd_system%update(centers_base, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%normalized_f01_rA_screened(normalized_val, deriv_rA=deriv_rA)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
@@ -1652,28 +1761,28 @@ contains
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA_screened(f_forward)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA_screened(f_forward2)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA_screened(f_backward)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
                         call prim%update(mol_shift, radii)
                         call prim%ssd_system%update(centers_local, radii)
-                        call prim%prepare(point)
+                        call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA_screened(f_backward2)
                         numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE)
                         call check(error, deriv_rA(axis, atom), numeric, &
@@ -1702,6 +1811,7 @@ contains
       real(wp) :: centers2(ndim, n2), radii2(n2), point2(ndim), d2(n2)
       real(wp) :: centers3(ndim, n3), radii3(n3), point3(ndim), d3(n3)
       real(wp) :: lsf0, expected
+      type(mctc_error), allocatable :: lsf_err
 
       atomic_numbers = 1
 
@@ -1717,7 +1827,11 @@ contains
       call prim%update(mol, radii2)
       call prim%set_max_deriv(0)
       call prim%ssd_system%update(centers2, radii2)
-      call prim%prepare(point2)
+      call prim%prepare(point2, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+         return
+      end if
       call prim%f0_screened(lsf0)
       d2(1) = ssd0(point2, centers2(:, 1), radii2(1))
       d2(2) = ssd0(point2, centers2(:, 2), radii2(2))
@@ -1738,7 +1852,7 @@ contains
       call prim%update(mol, radii3)
       call prim%set_max_deriv(0)
       call prim%ssd_system%update(centers3, radii3)
-      call prim%prepare(point3)
+      call prim%prepare(point3, lsf_err)
       call prim%f0_screened(lsf0)
       d3(1) = ssd0(point3, centers3(:, 1), radii3(1))
       d3(2) = ssd0(point3, centers3(:, 2), radii3(2))

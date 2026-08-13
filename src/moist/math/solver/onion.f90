@@ -303,7 +303,7 @@ contains
    !> @param[in]     self      Solver instance
    !> @param[in]     point     Point to evaluate [3]
    !> @param[out]    lsf_val  LSF function value
-   !> @param[out]    ierr      Error flag (0=success, nonzero=failure)
+   !> @param[out]    ierr      Error flag (0=success, 1=NaN, 2=Inf, 3=LSF failure)
    subroutine evaluate_lsf_at_point(self, point, lsf_val, ierr)
       type(moist_math_solver_onion_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
@@ -311,12 +311,18 @@ contains
       integer, intent(out) :: ierr
 
       real(wp) :: lsf0
+      type(error_type), allocatable :: lsf_error
 
       ierr = 0
       lsf_val = 0.0_wp
 
       ! Refresh per-point screening, then evaluate value-only.
-      call self%lsf%prepare(point)
+      call self%lsf%prepare(point, lsf_error)
+      if (allocated(lsf_error)) then
+         ierr = 3
+         return
+      end if
+
       call self%lsf%f012_r_screened(lsf0=lsf0)
 
       lsf_val = lsf0

@@ -3,6 +3,7 @@
 !> All implementations use screening-accelerated versions backed by SSD systems
 !> to iterate over active nodes only (n_active << ncenters)
 module moist_cavity_drop_lsf_svdw
+   use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -10,13 +11,13 @@ module moist_cavity_drop_lsf_svdw
    use moist_cavity_drop_lsf_svdw_ssd, only: moist_cavity_drop_lsf_svdw_ssd_type, ssd0
    use moist_math_linalg, only: sym3_21, outer3, outer3_linear, outer_matrix, &
                                 outer4, sym4_31, sym4_22, sym4_211
-   implicit none
+   implicit none (type, external)
 
    integer, parameter :: ndim = 3
 
    !> Smooth van der Waals LSF
    !>
-   !> Concrete level-set function: takes its blending parameters directly
+   !> Concrete level set function: takes its blending parameters directly
    !> through [[new]], owns the screening SSD system, refreshes geometry caches
    !> via [[update]], and primes per-point screening via [[prepare]]. Inherits
    !> common atom-LSF state (ncenters, mol, radii) from
@@ -173,10 +174,10 @@ contains
 !>
 !> @param[inout] self  LSF instance
 !> @param[in]    point Evaluation point (3,)
-   subroutine lsf_prepare(self, point)
+   subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
-
+      type(error_type), allocatable, intent(out) :: error
       call self%ssd_system%compute(point, self%all_indices)
    end subroutine lsf_prepare
 
@@ -186,11 +187,11 @@ contains
 !> @param[in]    point             Evaluation point (3,)
 !> @param[in]    candidate_indices Atom ids to screen, in the SSD's sorted-index
 !>                                 space (see remap_candidate_grid)
-   subroutine lsf_prepare_subset(self, point, candidate_indices)
+   subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
-
+      type(error_type), allocatable, intent(out) :: error
       call self%ssd_system%compute(point, candidate_indices)
    end subroutine lsf_prepare_subset
 
@@ -214,18 +215,21 @@ contains
 
       ! f2_rr is saved only at max_deriv >= 3
       if (n >= 3) then
-         if (.not. allocated(self%ssd_system%f2_rr_arr)) &
-            allocate (self%ssd_system%f2_rr_arr(3, 3, n_alloc))
-         if (.not. allocated(self%ssd_system%f3_rrr_arr)) &
-            allocate (self%ssd_system%f3_rrr_arr(3, 3, 3, n_alloc))
+         if (.not. allocated(self%ssd_system%f2_rr_arr)) then
+           allocate (self%ssd_system%f2_rr_arr(3, 3, n_alloc))
+         end if
+         if (.not. allocated(self%ssd_system%f3_rrr_arr)) then
+           allocate (self%ssd_system%f3_rrr_arr(3, 3, 3, n_alloc))
+         end if
       else
          if (allocated(self%ssd_system%f2_rr_arr)) deallocate (self%ssd_system%f2_rr_arr)
          if (allocated(self%ssd_system%f3_rrr_arr)) deallocate (self%ssd_system%f3_rrr_arr)
       end if
 
       if (n >= 4) then
-         if (.not. allocated(self%ssd_system%f4_rrrr_arr)) &
-            allocate (self%ssd_system%f4_rrrr_arr(3, 3, 3, 3, n_alloc))
+         if (.not. allocated(self%ssd_system%f4_rrrr_arr)) then
+           allocate (self%ssd_system%f4_rrrr_arr(3, 3, 3, 3, n_alloc))
+         end if
       else
          if (allocated(self%ssd_system%f4_rrrr_arr)) deallocate (self%ssd_system%f4_rrrr_arr)
       end if

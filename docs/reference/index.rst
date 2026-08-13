@@ -1,6 +1,6 @@
 .. _api:
 
-API documentation
+API Documentation
 =================
 
 MOIST aims to provide first class API support for Fortran, C and Python.

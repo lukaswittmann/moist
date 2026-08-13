@@ -6,9 +6,12 @@ module test_cavity_iswig
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
+   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+      & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
-
-   implicit none
+   use moist_context, only: moist_context_type, new_context
+   implicit none (type, external)
    private
 
    public :: collect_cavity_iswig
@@ -28,16 +31,17 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("Spherical cavity", test_spherical_cavity), &
-         & new_unittest("Molecular cavity", test_molecular_cavity), &
-         & new_unittest("AreaSum", test_area_summation), &
-         & new_unittest("AreaVariants", test_area_variants), &
-         & new_unittest("GradientSwitch", test_gradient_switch), &
-         & new_unittest("GradientArea", test_gradient_area), &
-         & new_unittest("GradientVolume", test_gradient_volume), &
-         & new_unittest("AmatProperties", test_amat_properties), &
-         & new_unittest("AmatGradient", test_amat_gradient), &
-         & new_unittest("AmatOrcaReference", test_amat_orca_reference) &
+         & new_unittest("spherical_cavity", test_spherical_cavity), &
+         & new_unittest("molecular_cavity", test_molecular_cavity), &
+         & new_unittest("area_sum", test_area_summation), &
+         & new_unittest("area_variants", test_area_variants), &
+         & new_unittest("gradient_switch", test_gradient_switch), &
+         & new_unittest("gradient_area", test_gradient_area), &
+         & new_unittest("gradient_volume", test_gradient_volume), &
+         & new_unittest("amat_properties", test_amat_properties), &
+         & new_unittest("amat_gradient", test_amat_gradient), &
+         & new_unittest("amat_orca_reference", test_amat_orca_reference), &
+         & new_unittest("surface_gradient", test_surface_gradient) &
          & ]
 
    end subroutine collect_cavity_iswig
@@ -55,6 +59,10 @@ contains
       real(wp) :: radii(1)
       real(wp) :: area_ref, volume_ref, swi_ref
       real(wp) :: xyz(3, 1)
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -68,12 +76,18 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, nleb=1202, &
+      call new_cavity_iswig(cav, ctx, nleb=1202, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
+
+      !> The cavity must *borrow* the caller-owned run context, not copy it
+      call check(error, associated(cav%ctx, ctx), &
+         & more="iSwiG cavity does not borrow the caller-owned run context")
+      if (allocated(error)) return
+
       call cav%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -104,6 +118,10 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp) :: volume_ref, area_ref, switch_ref
       integer :: ngrid_ref
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -116,7 +134,7 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, radius_model=radius_model, &
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -154,6 +172,10 @@ contains
       type(mctc_error), allocatable :: cavity_error
       class(radius_type), allocatable :: radius_model
       real(wp), allocatable :: radii(:)
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -166,7 +188,7 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, radius_model=radius_model, &
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -200,6 +222,10 @@ contains
       type(cavity_type_iswig), allocatable :: cav
       type(mctc_error), allocatable :: cavity_error
       class(radius_type), allocatable :: radius_model
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
       nsph = mol%nat
@@ -217,7 +243,7 @@ contains
       allocate (asph_full(nsph), asph_eff(nsph))
 
       allocate (cav)
-      call new_cavity_iswig(cav, num_leb, 0.0_wp, 0.0_wp, &
+      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -232,7 +258,7 @@ contains
       deallocate (cav)
 
       allocate (cav)
-      call new_cavity_iswig(cav, num_leb, 0.0_wp, 0.0_wp, &
+      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
          & radius_model=radius_model, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -262,6 +288,10 @@ contains
       real(wp), allocatable :: num2d(:, :), ana2d(:, :)
       real(wp) :: fwd, bwd
       integer :: i, j
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -278,7 +308,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) + STEP_SIZE
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error)
+            call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -292,7 +322,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) - 2*STEP_SIZE
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error)
+            call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -328,6 +358,10 @@ contains
       real(wp), allocatable :: num2d(:, :), ana2d(:, :)
       real(wp) :: h, fwd, bwd, ffwd, bbwd, cut_a, cut_f, s
       integer :: i, j, nleb, nlebs(5)
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       nlebs = [14, 26, 50, 110, 194]
       cut_a = 0.0_wp
@@ -356,7 +390,7 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, nleb=nlebs(nleb), &
+               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
                if (allocated(cavity_error)) then
@@ -373,7 +407,7 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, nleb=nlebs(nleb), &
+               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
                if (allocated(cavity_error)) then
@@ -390,7 +424,7 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, nleb=nlebs(nleb), &
+               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
                if (allocated(cavity_error)) then
@@ -407,7 +441,7 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, nleb=nlebs(nleb), &
+               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
                   & cut_a=cut_a, cut_f=cut_f, &
                   & radius_model=radius_model, error=cavity_error)
                if (allocated(cavity_error)) then
@@ -430,7 +464,7 @@ contains
          ! Use type-bound gradient on the cavity (3, nat)
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, nleb=nlebs(nleb), &
+         call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
             & cut_a=cut_a, cut_f=cut_f, &
             & radius_model=radius_model, error=cavity_error)
          if (allocated(cavity_error)) then
@@ -442,7 +476,11 @@ contains
             call test_failed(error, cavity_error%message)
             return
          end if
-         call cav%get_gradient()
+         call cav%get_gradient(cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
          if (allocated(cav%area_grad)) ana2d = cav%area_grad
 
          do i = 1, mol%nat
@@ -466,6 +504,10 @@ contains
       real(wp), allocatable :: num(:), ana(:)
       real(wp) :: ffwd, fwd, bwd, bbwd, h
       integer :: i, j
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       h = 1.0e-3_wp
       call get_structure(mol, "MB16-43", "03")
@@ -482,7 +524,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, &
+            call new_cavity_iswig(cav, ctx, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -498,7 +540,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) - h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, &
+            call new_cavity_iswig(cav, ctx, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -514,7 +556,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, &
+            call new_cavity_iswig(cav, ctx, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -530,7 +572,7 @@ contains
             mol%xyz(j, i) = mol%xyz(j, i) - h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
-            call new_cavity_iswig(cav, &
+            call new_cavity_iswig(cav, ctx, &
                & radius_model=radius_model, error=cavity_error)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -552,7 +594,7 @@ contains
       ! Compute analytical volume gradient
       if (allocated(cav)) deallocate (cav)
       allocate (cav)
-      call new_cavity_iswig(cav, radius_model=radius_model, &
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -563,7 +605,11 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
-      call cav%get_gradient()
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
 
       allocate (ana(3*mol%nat))
       do i = 1, mol%nat
@@ -595,6 +641,10 @@ contains
       real(wp), allocatable :: rhs(:), q(:)
       real(wp) :: zeta_ij, r_dist, diag_ref
       integer :: i, j, n
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -607,7 +657,7 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, radius_model=radius_model, &
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -621,7 +671,7 @@ contains
 
       n = cav%ngrid
       allocate (amat(n, n))
-      call cav%get_amat(amat, cavity_error)
+      call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -638,7 +688,7 @@ contains
 
       ! Test diagonal: A_ii = xi_i * sqrt(2/pi) / F_i
       do i = 1, n
-         diag_ref = cav%xi(i)*sqrt(2.0_wp/pi)/cav%f(i)
+         diag_ref = cav%xi0(i)*sqrt(2.0_wp/pi)/cav%f(i)
          call check(error, amat(i, i), diag_ref, thr=thr, &
             & more="A-matrix diagonal does not match xi*sqrt(2/pi)/F")
          if (allocated(error)) return
@@ -651,7 +701,7 @@ contains
                call test_failed(error, "A-matrix off-diagonal element is not > 0")
                return
             end if
-            zeta_ij = cav%xi(i)*cav%xi(j)/sqrt(cav%xi(i)**2 + cav%xi(j)**2)
+            zeta_ij = cav%xi0(i)*cav%xi0(j)/sqrt(cav%xi0(i)**2 + cav%xi0(j)**2)
             if (amat(i, j) > 2.0_wp*zeta_ij/sqrt(pi) + thr) then
                call test_failed(error, &
                   & "A-matrix off-diagonal exceeds Gaussian short-range bound")
@@ -1244,7 +1294,7 @@ contains
       ! Populate iSwiG cavity with ORCA equiv. inputs
       cav%ngrid = npts
       cav%xyz = ref(1:3, :)
-      cav%xi = ref(4, :)
+      cav%xi0 = ref(4, :)
       cav%f = ref(5, :)
 
       ! Scale ORCA's unscaled conductor charges
@@ -1253,7 +1303,7 @@ contains
       q_ref = ref(7, :)*feps
 
       allocate (amat(npts, npts), q(npts))
-      call cav%get_amat(amat, cavity_error)
+      call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1279,9 +1329,9 @@ contains
 
    end subroutine test_amat_orca_reference
 
-   !> Numerical vs analytical test for contracted A-matrix derivative.
-   !> Uses 5-point finite differences on q1^T A q2 to verify
-   !> contract_amat1_q1q2_rA.
+   !> Numerical vs analytical test for the contracted A-matrix derivative.
+   !> Uses 5-point finite differences on q1^T A q2 to verify the
+   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain.
    subroutine test_amat_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1293,9 +1343,14 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: amat(:, :)
       real(wp), allocatable :: q1(:), q2(:)
+      real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
       real(wp), allocatable :: ana_grad(:, :), num_grad(:, :)
-      real(wp) :: ffwd, fwd, bwd, bbwd, energy
-      integer :: i, j, n, iat, iax
+      real(wp) :: ffwd, fwd, bwd, bbwd
+      integer :: i, n, iat, iax
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
 
       call get_structure(mol, "MB16-43", "13")
       allocate (radii(mol%nat))
@@ -1309,7 +1364,7 @@ contains
 
       ! Build reference cavity to set up charge vectors
       allocate (cav)
-      call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
+      call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
          & error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -1334,9 +1389,24 @@ contains
          end if
       end do
 
-      ! Compute analytical gradient
+      ! Compute analytical gradient through the generic PCM A-matrix adjoints
+      call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      allocate (w_xi(n), w_f(n), w_xyz(3, n))
+      call pcm_amat_surface_weights(cav%xi0, cav%f, cav%xyz, q1, q2, &
+         & w_xi, w_f, w_xyz, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
       allocate (ana_grad(3, mol%nat))
-      call cav%contract_amat1_q1q2_rA(q1, q2, ana_grad, cavity_error)
+      call pcm_amat_nuclear_gradient(cav%xi1_rA, cav%f1_rA, cav%xyz1_rA, &
+         & w_xi, w_f, w_xyz, ana_grad, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1351,99 +1421,23 @@ contains
 
             ! +2h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
-            if (allocated(cav)) deallocate (cav)
-            allocate (cav)
-            call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
-               & error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call cav%update(mol, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            allocate (amat(cav%ngrid, cav%ngrid))
-            call cav%get_amat(amat, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            ffwd = dot_product(q1, matmul(amat, q2))
-            deallocate (amat)
+            call amat_energy(ffwd)
+            if (allocated(error)) return
 
             ! +h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
-            if (allocated(cav)) deallocate (cav)
-            allocate (cav)
-            call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
-               & error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call cav%update(mol, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            allocate (amat(cav%ngrid, cav%ngrid))
-            call cav%get_amat(amat, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            fwd = dot_product(q1, matmul(amat, q2))
-            deallocate (amat)
+            call amat_energy(fwd)
+            if (allocated(error)) return
 
             ! -h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) - 2.0_wp*STEP_SIZE
-            if (allocated(cav)) deallocate (cav)
-            allocate (cav)
-            call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
-               & error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call cav%update(mol, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            allocate (amat(cav%ngrid, cav%ngrid))
-            call cav%get_amat(amat, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            bwd = dot_product(q1, matmul(amat, q2))
-            deallocate (amat)
+            call amat_energy(bwd)
+            if (allocated(error)) return
 
             ! -2h
             mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
-            if (allocated(cav)) deallocate (cav)
-            allocate (cav)
-            call new_cavity_iswig(cav, cut_f=0.01_wp, radius_model=radius_model, &
-               & error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call cav%update(mol, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            allocate (amat(cav%ngrid, cav%ngrid))
-            call cav%get_amat(amat, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            bbwd = dot_product(q1, matmul(amat, q2))
-            deallocate (amat)
+            call amat_energy(bbwd)
+            if (allocated(error)) return
 
             ! Restore position
             mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
@@ -1464,6 +1458,273 @@ contains
          end do
       end do
 
+   contains
+
+      !> Rebuild the cavity at the current geometry and return q1^T A q2
+      subroutine amat_energy(value)
+         !> Contracted A-matrix energy
+         real(wp), intent(out) :: value
+
+         value = 0.0_wp
+         if (allocated(cav)) deallocate (cav)
+         allocate (cav)
+         call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
+            & error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         call cav%update(mol, error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         if (cav%ngrid /= n) then
+            call test_failed(error, "A-matrix gradient FD: grid size changed")
+            return
+         end if
+         if (allocated(amat)) deallocate (amat)
+         allocate (amat(cav%ngrid, cav%ngrid))
+         call assemble_pcm_amat(cav%xi0, cav%f, cav%xyz, amat, cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         value = dot_product(q1, matmul(amat, q2))
+         deallocate (amat)
+      end subroutine amat_energy
+
    end subroutine test_amat_gradient
+
+   !> Reverse-mode surface gradient against finite differences
+   !>
+   !> [[get_surface_gradient_iswig]] contracts an accumulated surface adjoint
+   !> straight into `dE/dR_A`. The reference is the numerical derivative of the
+   !> very quantity that adjoint defines,
+   !>
+   !>   E = sum_i [ w_xi_i xi_i + w_f_i f_i + w_a_i a_i + w_w_i wleb_i
+   !>             + w_xyz_i . r_i + w_n_i . n_i + (w_k1_i + w_k2_i)/R_owner(i) ]
+   !>
+   !> re-evaluated on a cavity rebuilt at each displaced geometry. Every channel
+   !> is driven at once, including the four the contraction drops as
+   !> geometry-independent: if any of them did move with the nuclei, the
+   !> numerical derivative would see it and the analytic one would not.
+   !>
+   !> Weights are pinned to the *raw* Lebedev index rather than the filtered
+   !> grid index, so a rebuilt grid keeps assigning the same weight to the same
+   !> point; the energy helper additionally refuses to run if the surviving set
+   !> changes at all, which would put a step into the finite difference.
+   subroutine test_surface_gradient(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_iswig), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+      type(cavity_surface_adjoint_type) :: acc
+      real(wp), allocatable :: radii(:)
+      !> Adjoint weights, indexed by raw (pre-filter) grid point
+      real(wp), allocatable :: rw_xi(:), rw_f(:), rw_a(:), rw_w(:)
+      real(wp), allocatable :: rw_xyz(:, :), rw_n(:, :), rw_k1(:), rw_k2(:)
+      !> Channel weights on the filtered grid
+      real(wp), allocatable :: w_xi(:), w_f(:), w_a(:), w_w(:)
+      real(wp), allocatable :: w_xyz(:, :), w_n(:, :), w_k1(:), w_k2(:)
+      !> Reverse-mode and numerical gradients
+      real(wp), allocatable :: ana_grad(:, :), num_grad(:, :)
+      !> Reference grid extent and point identities
+      integer, allocatable :: numbering_ref(:)
+      integer :: nraw, n
+      real(wp) :: ffwd, fwd, bwd, bbwd
+      integer :: i, iraw, iat, iax
+      !> Number of Lebedev points per sphere of the fixture
+      integer, parameter :: NLEB = 50
+      !> Switching cutoff, low enough that the dropped points carry no weight
+      real(wp), parameter :: CUT_F = 1.0E-7_wp
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+
+      call get_structure(mol, "MB16-43", "01")
+      allocate (radii(mol%nat))
+      radii = 2.0_wp
+
+      call new_radii_custom_atoms(radii, radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
+         & radius_model=radius_model, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      n = cav%ngrid
+      nraw = mol%nat*NLEB
+      numbering_ref = cav%numbering
+
+      ! Deterministic weights of comparable size in every channel, scaled so the
+      ! grid sum stays of order one
+      allocate (rw_xi(nraw), rw_f(nraw), rw_a(nraw), rw_w(nraw))
+      allocate (rw_k1(nraw), rw_k2(nraw))
+      allocate (rw_xyz(3, nraw), rw_n(3, nraw))
+      do iraw = 1, nraw
+         rw_xi(iraw) = channel_weight(iraw, 1)
+         rw_f(iraw) = channel_weight(iraw, 2)
+         rw_a(iraw) = channel_weight(iraw, 3)
+         rw_w(iraw) = channel_weight(iraw, 4)
+         rw_k1(iraw) = channel_weight(iraw, 5)
+         rw_k2(iraw) = channel_weight(iraw, 6)
+         do iax = 1, 3
+            rw_xyz(iax, iraw) = channel_weight(iraw, 6 + iax)
+            rw_n(iax, iraw) = channel_weight(iraw, 9 + iax)
+         end do
+      end do
+
+      ! Analytical gradient through the reverse-mode contraction
+      allocate (w_xi(n), w_f(n), w_a(n), w_w(n), w_k1(n), w_k2(n))
+      allocate (w_xyz(3, n), w_n(3, n))
+      do i = 1, n
+         iraw = cav%numbering(i)
+         w_xi(i) = rw_xi(iraw)
+         w_f(i) = rw_f(iraw)
+         w_a(i) = rw_a(iraw)
+         w_w(i) = rw_w(iraw)
+         w_k1(i) = rw_k1(iraw)
+         w_k2(i) = rw_k2(iraw)
+         w_xyz(:, i) = rw_xyz(:, iraw)
+         w_n(:, i) = rw_n(:, iraw)
+      end do
+
+      call acc%init(n)
+      call acc%add_surface_weights(cavity_error, w_xi=w_xi, w_f=w_f, w_a=w_a, &
+         & w_w=w_w, w_xyz=w_xyz, w_n=w_n, w_k1=w_k1, w_k2=w_k2)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      allocate (ana_grad(3, mol%nat), source=0.0_wp)
+      call cav%get_surface_gradient(acc, ana_grad, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      ! Numerical gradient via 5-point stencil
+      allocate (num_grad(3, mol%nat), source=0.0_wp)
+      do iat = 1, mol%nat
+         do iax = 1, 3
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
+            call adjoint_energy(ffwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
+            call adjoint_energy(fwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - 2.0_wp*STEP_SIZE
+            call adjoint_energy(bwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) - STEP_SIZE
+            call adjoint_energy(bbwd)
+            if (allocated(error)) return
+
+            mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
+
+            num_grad(iax, iat) = (-ffwd + 8.0_wp*fwd &
+               & - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
+         end do
+      end do
+
+      ! A vanishing reference would let any implementation pass
+      if (maxval(abs(num_grad)) <= 1.0E-6_wp) then
+         call test_failed(error, "Surface-gradient reference is vacuous")
+         return
+      end if
+
+      do iat = 1, mol%nat
+         do iax = 1, 3
+            call check(error, ana_grad(iax, iat), num_grad(iax, iat), &
+               & thr_abs=ABS_THR, thr_rel=REL_THR, &
+               & more="Reverse-mode surface gradient mismatch")
+            if (allocated(error)) return
+         end do
+      end do
+
+   contains
+
+      !> Deterministic pseudo-random weight for one raw point and channel
+      pure function channel_weight(ipoint, ichannel) result(weight)
+         !> Raw grid point index
+         integer, intent(in) :: ipoint
+         !> Channel identifier
+         integer, intent(in) :: ichannel
+         !> Weight of this point in this channel
+         real(wp) :: weight
+
+         weight = sin(0.37_wp*real(ipoint, wp) + 1.7_wp*real(ichannel, wp)) &
+            & /real(nraw, wp)
+
+      end function channel_weight
+
+      !> Rebuild the cavity at the current geometry and return the adjoint energy
+      subroutine adjoint_energy(value)
+         !> Surface energy whose adjoints `acc` holds
+         real(wp), intent(out) :: value
+
+         integer :: igrid, jraw, jat
+
+         value = 0.0_wp
+         if (allocated(cav)) deallocate (cav)
+         allocate (cav)
+         call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
+            & radius_model=radius_model, error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         call cav%update(mol, error=cavity_error)
+         if (allocated(cavity_error)) then
+            call test_failed(error, cavity_error%message)
+            return
+         end if
+         if (cav%ngrid /= n) then
+            call test_failed(error, "Surface-gradient FD: grid size changed")
+            return
+         end if
+         if (any(cav%numbering /= numbering_ref)) then
+            call test_failed(error, "Surface-gradient FD: surviving point set changed")
+            return
+         end if
+
+         do igrid = 1, cav%ngrid
+            jraw = cav%numbering(igrid)
+            jat = cav%owner(igrid)
+            value = value &
+               & + rw_xi(jraw)*cav%xi0(igrid) &
+               & + rw_f(jraw)*cav%f(igrid) &
+               & + rw_a(jraw)*cav%a(igrid) &
+               & + rw_w(jraw)*cav%wleb(igrid) &
+               & + dot_product(rw_xyz(:, jraw), cav%xyz(:, igrid)) &
+               & + dot_product(rw_n(:, jraw), cav%normal0(:, igrid)) &
+               & + (rw_k1(jraw) + rw_k2(jraw))/cav%radii(jat)
+         end do
+
+      end subroutine adjoint_energy
+
+   end subroutine test_surface_gradient
 
 end module test_cavity_iswig

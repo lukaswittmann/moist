@@ -1,5 +1,6 @@
 module test_cavity_drop_primitives
    use mctc_env_accuracy, only: wp
+   use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
    use moist_cavity_drop_lsf_svdw_ssd, only: ssd0, ssd1_r, ssd2_rr, ssd3_rrr, ssd4_rrrr, &
@@ -7,10 +8,10 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_cavity_drop_switching, only: moist_cavity_drop_smooth_step_swif, &
-                                          new_smooth_step_swif
-   use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none
+   use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
+                                          new_swif_smooth_step
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   implicit none (type, external)
    private
 
    public :: collect_cavity_drop_primitives
@@ -29,24 +30,24 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("ssd_f1_r        ", test_ssd_f1_r), &
-                  new_unittest("ssd_f2_rr       ", test_ssd_f2_rr), &
-                  new_unittest("ssd_f3_rrr      ", test_ssd_f3_rrr), &
-                  new_unittest("ssd_f4_rrrr     ", test_ssd_f4_rrrr), &
-                  new_unittest("ssd_f1_rA       ", test_ssd_f1_rA), &
-                  new_unittest("ssd_f2_rArB     ", test_ssd_f2_rArB), &
-                  new_unittest("ssd_f2_r_rA     ", test_ssd_f2_r_rA), &
-                  new_unittest("ssd_f012_r      ", test_ssd_f012_r), &
-                  new_unittest("phi_f0          ", test_phi_f0), &
-                  new_unittest("phi_f1_r        ", test_phi_f1_r), &
-                  new_unittest("phi_f2_rr       ", test_phi_f2_rr), &
-                  new_unittest("phi_f3_rrr      ", test_phi_f3_rrr), &
-                  new_unittest("phi_f4_rrrr     ", test_phi_f4_rrrr), &
-                  new_unittest("phi_f1_rA       ", test_phi_f1_rA), &
-                  new_unittest("phi_f2_rArB     ", test_phi_f2_rArB), &
-                  new_unittest("phi_f2_r_rA     ", test_phi_f2_r_rA), &
-                  new_unittest("phi_f012_r      ", test_phi_f012_r), &
-                  new_unittest("switching_f1_rA ", test_switching_f1_rA) &
+                  new_unittest("ssd_f1_r", test_ssd_f1_r), &
+                  new_unittest("ssd_f2_rr", test_ssd_f2_rr), &
+                  new_unittest("ssd_f3_rrr", test_ssd_f3_rrr), &
+                  new_unittest("ssd_f4_rrrr", test_ssd_f4_rrrr), &
+                  new_unittest("ssd_f1_ra", test_ssd_f1_rA), &
+                  new_unittest("ssd_f2_rarb", test_ssd_f2_rArB), &
+                  new_unittest("ssd_f2_r_ra", test_ssd_f2_r_rA), &
+                  new_unittest("ssd_f012_r", test_ssd_f012_r), &
+                  new_unittest("phi_f0", test_phi_f0), &
+                  new_unittest("phi_f1_r", test_phi_f1_r), &
+                  new_unittest("phi_f2_rr", test_phi_f2_rr), &
+                  new_unittest("phi_f3_rrr", test_phi_f3_rrr), &
+                  new_unittest("phi_f4_rrrr", test_phi_f4_rrrr), &
+                  new_unittest("phi_f1_ra", test_phi_f1_rA), &
+                  new_unittest("phi_f2_rarb", test_phi_f2_rArB), &
+                  new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
+                  new_unittest("phi_f012_r", test_phi_f012_r), &
+                  new_unittest("switching_f1_ra", test_switching_f1_rA) &
                   ]
    end subroutine collect_cavity_drop_primitives
 
@@ -1073,7 +1074,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: mol_base, mol_shift
       type(moist_cavity_drop_lsf_svdw_type) :: prim
-      type(moist_cavity_drop_smooth_step_swif) :: sw
+      type(moist_cavity_drop_swif_smooth_step_type) :: sw
       real(wp), allocatable :: radii(:), points(:, :)
       real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
       integer :: icase, ipt, atom, axis
@@ -1085,6 +1086,7 @@ contains
       real(wp) :: f_pp, f_p, f_m, f_mm, numeric
       real(wp) :: lsf0_tmp
       real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
 
       eps = STEP_SIZE
 
@@ -1095,7 +1097,7 @@ contains
          call get_test_points(mol_base, points)
          allocate (centers_base(ndim, mol_base%nat), centers_local(ndim, mol_base%nat))
          centers_base = mol_base%xyz
-         call new_smooth_step_swif(sw, -0.5_wp, 0.5_wp)
+         call new_swif_smooth_step(sw, -0.5_wp, 0.5_wp)
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
@@ -1109,7 +1111,11 @@ contains
             point = points(:, ipt)
             call prim%update(mol_base, radii)
             call prim%ssd_system%update(centers_base, radii)
-            call prim%prepare(point)
+            call prim%prepare(point, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
             call prim%f0_screened(lsf0)
             call prim%f3_rr_rA_screened(lsf1_rA=lsf1, &
                                         lsf3_rr_rA=dummy_rr_rA)
@@ -1123,7 +1129,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_pp = sw%f0(lsf0_tmp)
 
@@ -1133,7 +1139,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_p = sw%f0(lsf0_tmp)
 
@@ -1143,7 +1149,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_m = sw%f0(lsf0_tmp)
 
@@ -1153,7 +1159,7 @@ contains
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
                   call prim%ssd_system%update(centers_local, radii)
-                  call prim%prepare(point)
+                  call prim%prepare(point, lsf_err)
                   call prim%f0_screened(lsf0_tmp)
                   f_mm = sw%f0(lsf0_tmp)
 

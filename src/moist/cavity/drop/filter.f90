@@ -3,7 +3,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_filter
    use mctc_env_accuracy, only: wp
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   implicit none
+   implicit none (type, external)
 
 contains
 
@@ -77,10 +77,10 @@ contains
       nremoved = ncur - nvalid
       call compact_grid_arrays(self, ncur, keep, nvalid)
 
-      if (self%verbosity >= 2) then
-         pp = new_prettyprinter(unit=output_unit)
+      if (self%ctx%verbosity >= 2) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%kv(name//' removed', nremoved, 'points')
+         call pp%kv(name//" removed", nremoved, "points")
       end if
 
    end subroutine filter_arrays
@@ -166,14 +166,14 @@ contains
          pre_avg_branches = 0.0_wp
       end if
 
-      if (self%verbosity >= 2) then
-         pp = new_prettyprinter(unit=output_unit)
+      if (self%ctx%verbosity >= 2) then
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Branch weighting (initial):')
-         call pp%kv('Branched anchors', pre_n_branched_groups)
-         call pp%kv('Branched points', pre_n_branched_points)
-         call pp%kv('Branches/anchor (avg)', pre_avg_branches)
-         call pp%kv('Branches/anchor (max)', pre_nbranch_max)
+         call pp%push("Branch weighting (initial):")
+         call pp%kv("Branched anchors", pre_n_branched_groups)
+         call pp%kv("Branched points", pre_n_branched_points)
+         call pp%kv("Branches/anchor (avg)", pre_avg_branches)
+         call pp%kv("Branches/anchor (max)", pre_nbranch_max)
          call pp%pop()
       end if
 
@@ -186,10 +186,11 @@ contains
       post_nbranch_max = 0
 
       ! Per-branched-group detail table
-      if (self%verbosity >= 3 .and. pre_n_branched_groups > 0) then
+      if (self%ctx%verbosity >= 3 .and. pre_n_branched_groups > 0) then
          plp_branch = new_prettylistprinter([12, 10, 10, 16, 16, 16], &
-                                            [character(len=16) :: 'anchor_id', 'owner', 'branch', 'phi', 'distance', 'weight'], &
-                                            unit=output_unit, fmt_len=16)
+                                            [character(len=16) :: "anchor_id", "owner", "branch", &
+                                            "phi", "distance", "weight"], &
+                                            unit=self%ctx%unit, fmt_len=16)
       end if
 
       igroup_start = 1
@@ -277,7 +278,7 @@ contains
          end if
 
          ! Per-group diagnostics
-         if (self%verbosity >= 3) then
+         if (self%ctx%verbosity >= 3) then
             call plp_branch%blank()
             call plp_branch%print_header()
             call plp_branch%separator()
@@ -286,9 +287,9 @@ contains
                call plp_branch%add(self%anchor_id(igroup_start))
                call plp_branch%add(owner_idx)
                call plp_branch%add(m)
-               call plp_branch%add(phi_local(m), fmt='es12.4')
-               call plp_branch%add(self%rho(igroup_start + m - 1), fmt='f14.8')
-               call plp_branch%add(weights_new(m), fmt='es12.4')
+               call plp_branch%add(phi_local(m), fmt="es12.4")
+               call plp_branch%add(self%rho(igroup_start + m - 1), fmt="f14.8")
+               call plp_branch%add(weights_new(m), fmt="es12.4")
                call plp_branch%end_row()
             end do
 
@@ -297,22 +298,22 @@ contains
             allocate (dist_headers(group_size + 1))
             dist_widths(1) = 10
             dist_widths(2:) = 16
-            dist_headers(1) = 'i \ j'
+            dist_headers(1) = "i \ j"
             do mj = 1, group_size
-               write (dist_headers(mj + 1), '(i0)') mj
+               write (dist_headers(mj + 1), "(i0)") mj
             end do
             plp_dist = new_prettylistprinter(dist_widths, dist_headers, &
-                                             unit=output_unit, fmt_len=12, offset=25)
+                                             unit=self%ctx%unit, fmt_len=12, offset=25)
             call plp_dist%separator()
             call plp_dist%print_header()
             do mi = 1, group_size
                call plp_dist%begin_row()
-               write (row_label, '(i0)') mi
+               write (row_label, "(i0)") mi
                call plp_dist%add(trim(row_label))
                do mj = 1, group_size
                   d_ij = norm2(self%xyz(:, igroup_start + mi - 1) &
                                - self%xyz(:, igroup_start + mj - 1))
-                  call plp_dist%add(d_ij, fmt='es12.4')
+                  call plp_dist%add(d_ij, fmt="es12.4")
                end do
                call plp_dist%end_row()
             end do
@@ -332,17 +333,17 @@ contains
          post_nbranch_max = 0
       end if
 
-      if (self%verbosity >= 2) then
-         call pp%push('Branch weighting (final):')
-         call pp%kv('Branched anchors', post_n_multi_groups, '(still multi-branch)')
-         call pp%kv('Collapsed to single', post_n_collapsed_groups, '(no longer branched)')
+      if (self%ctx%verbosity >= 2) then
+         call pp%push("Branch weighting (final):")
+         call pp%kv("Branched anchors", post_n_multi_groups, "(still multi-branch)")
+         call pp%kv("Collapsed to single", post_n_collapsed_groups, "(no longer branched)")
          if (post_n_multi_groups > 0) then
-            call pp%kv('Branched points (kept)', post_n_multi_kept)
+            call pp%kv("Branched points (kept)", post_n_multi_kept)
          end if
-         call pp%kv('Branched points (dropped)', post_n_dropped_points)
+         call pp%kv("Branched points (dropped)", post_n_dropped_points)
          if (post_n_multi_groups > 0) then
-            call pp%kv('Branches/anchor (avg)', post_avg_kept)
-            call pp%kv('Branches/anchor (max)', post_nbranch_max)
+            call pp%kv("Branches/anchor (avg)", post_avg_kept)
+            call pp%kv("Branches/anchor (max)", post_nbranch_max)
          end if
          call pp%pop()
       end if

@@ -108,13 +108,13 @@ contains
    !> (r_eff comparable to the molecular diameter).
    !>
    !> @param[inout] self             Grid instance (reset on entry)
-   !> @param[in]    xyz              Atom centres, shape (3, natoms)
+   !> @param[in]    xyz              Atom centers, shape (3, natoms)
    !> @param[in]    r_eff            Effective per-atom reach (natoms)
    !> @param[in]    full_scan_below  Optional: natoms below this force full scan
    !> @param[in]    cell_fraction    Optional: fraction of maxval(r_eff) for cell side (default 1.0)
    subroutine moist_cell_grid_build(self, xyz, r_eff, full_scan_below, cell_fraction)
       class(moist_cell_grid_type), intent(inout) :: self
-      !> Atom centres
+      !> Atom centers
       real(wp), intent(in) :: xyz(:, :)
       !> Effective per-atom reach (radius + screening shell)
       real(wp), intent(in) :: r_eff(:)
@@ -160,7 +160,7 @@ contains
       self%cell_side = r_max*self%cell_fraction
       self%inv_cell = 1.0_wp/self%cell_side
 
-      ! Bounding box over atom centres
+      ! Bounding box over atom centers
       xmin = xyz(:, 1)
       xmax = xyz(:, 1)
       do j = 2, self%natoms
@@ -269,11 +269,11 @@ contains
    !> the full atom list - nx = ny = nz = 1 clamps every point to cell 1.
    !>
    !> @param[inout] self  Grid instance (natoms already set by caller)
-   !> @param[in]    xyz   Atom centres; only used to seed `origin`
+   !> @param[in]    xyz   Atom centers; only used to seed `origin`
    subroutine build_full_scan(self, xyz)
       !> Grid instance
       type(moist_cell_grid_type), intent(inout) :: self
-      !> Atom centres
+      !> Atom centers
       real(wp), intent(in) :: xyz(:, :)
 
       integer :: j
@@ -361,7 +361,7 @@ contains
 
    !> Squared distance from a point to an axis-aligned box; 0 if inside.
    pure function sphere_aabb_closest_d2(center, lo, hi) result(d2)
-      !> Sphere centre
+      !> Sphere centers
       real(wp), intent(in) :: center(3)
       !> AABB lower corner
       real(wp), intent(in) :: lo(3)

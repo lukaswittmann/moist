@@ -8,12 +8,11 @@ srcs += files(
   'gaussian.f90',
   'projector.f90',
   'projection.f90',
-  'marchingcubes.f90',
   'filter.f90',
   'setup.f90',
   'properties.f90',
-  'gradient.f90',
-  'cpcm.f90',
+  'threads.f90',
 )
 
 subdir('lsf')
+subdir('derivatives')

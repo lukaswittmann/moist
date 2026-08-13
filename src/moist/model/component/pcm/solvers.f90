@@ -3,11 +3,12 @@
 !> It wraps general moist linear algebra routines (LAPACK) and can be extended
 !> with iterative solvers in the future.
 module moist_model_component_pcm_solvers
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs
    use moist_math_blas, only: dot, gemv
-   implicit none
+   implicit none (type, external)
    private
 
    public :: solve_pcm_lu
@@ -17,88 +18,9 @@ module moist_model_component_pcm_solvers
 
 contains
 
-   !> Debug routine to check matrix properties
-   !> Validates symmetry, positive definiteness, and detects NaN/Inf values.
-   !> Not called during normal operation - use for debugging only.
-   subroutine check_amat(amat, error)
-      !> System matrix to validate
-      real(wp), intent(in) :: amat(:, :)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      integer :: n, i, j
-      real(wp) :: sym_error, diag_min, diag_max, off_diag_max
-
-      n = size(amat, 1)
-
-      ! Check for square matrix
-      if (size(amat, 2) /= n) then
-         call fatal_error(error, "[check_amat] Matrix is not square")
-         return
-      end if
-
-      ! Check for NaN or Inf values
-      do i = 1, n
-         do j = 1, n
-            if (isnan(amat(i, j))) then
-               call fatal_error(error, "[check_amat] Matrix contains NaN values")
-               return
-            end if
-            if (.not. (abs(amat(i, j)) < huge(1.0_wp))) then
-               call fatal_error(error, "[check_amat] Matrix contains Inf values")
-               return
-            end if
-         end do
-      end do
-
-      ! Check symmetry
-      sym_error = 0.0_wp
-      do i = 1, n
-         do j = i + 1, n
-            sym_error = max(sym_error, abs(amat(i, j) - amat(j, i)))
-         end do
-      end do
-
-      if (sym_error > 1.0e-10_wp) then
-         write (*, '(A,ES12.4)') &
-            "[check_amat] WARNING: Matrix not symmetric, max error = ", sym_error
-      end if
-
-      ! Check diagonal properties
-      diag_min = minval([(amat(i, i), i=1, n)])
-      diag_max = maxval([(amat(i, i), i=1, n)])
-      off_diag_max = 0.0_wp
-      do i = 1, n
-         do j = 1, n
-            if (i /= j) off_diag_max = max(off_diag_max, abs(amat(i, j)))
-         end do
-      end do
-
-      if (diag_min <= 0.0_wp) then
-         write (*, '(A,ES12.4)') "[check_amat] WARNING: Non-positive diagonal, min = ", diag_min
-      end if
-
-      ! Check for potential diagonal dominance issues
-      do i = 1, n
-         if (abs(amat(i, i)) < sum(abs(amat(i, :))) - abs(amat(i, i))) then
-            write (*, '(A,I0)') "[check_amat] WARNING: Row ", i, " not diagonally dominant"
-            exit
-         end if
-      end do
-
-      ! Print summary
-      write (*, '(A)') "[check_amat] Matrix validation summary:"
-      write (*, '(A,I0)') "  Size: ", n
-      write (*, '(A,ES12.4)') "  Symmetry error: ", sym_error
-      write (*, '(A,ES12.4)') "  Min diagonal: ", diag_min
-      write (*, '(A,ES12.4)') "  Max diagonal: ", diag_max
-      write (*, '(A,ES12.4)') "  Max off-diagonal: ", off_diag_max
-
-   end subroutine check_amat
-
    !> Solve PCM system using LU factorization
    !> Solves A*q = rhs via LAPACK's LU decomposition (DGETRF + DGETRS).
-   subroutine solve_pcm_lu(amat, rhs, q, error)
+   subroutine solve_pcm_lu(amat, rhs, q, error, unit)
       !> System matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
       !> Right-hand side vector (ngrid)
@@ -107,10 +29,16 @@ contains
       real(wp), intent(out) :: q(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Output unit for the diagnostics; defaults to standard output
+      integer, intent(in), optional :: unit
 
       integer :: n, info
       integer, allocatable :: ipiv(:)
       real(wp), allocatable :: amat_copy(:, :), q_mat(:, :)
+      integer :: iunit
+
+      iunit = output_unit
+      if (present(unit)) iunit = unit
 
       n = size(amat, 1)
       ! Copy matrix (LAPACK overwrites input)
@@ -127,8 +55,8 @@ contains
       ! LU factorization
       call getrf(amat_copy, ipiv, info)
       if (info /= 0) then
-         write (*, '(A,I0)') "[solve_pcm_lu] LAPACK getrf failed with info = ", info
-         write (*, '(A,I0)') "[solve_pcm_lu] Matrix size n = ", n
+         write (iunit, "(A,I0)") "[solve_pcm_lu] LAPACK getrf failed with info = ", info
+         write (iunit, "(A,I0)") "[solve_pcm_lu] Matrix size n = ", n
          call fatal_error(error, "[solve_pcm_lu] LAPACK getrf failed")
          return
       end if
@@ -172,7 +100,7 @@ contains
       q_mat(:, 1) = rhs
 
       ! Cholesky factorization: A = L*L^T (lower triangular)
-      call potrf(amat_copy, info, uplo='l')
+      call potrf(amat_copy, info, uplo="l")
       if (info /= 0) then
          if (info > 0) then
             call fatal_error(error, "[solve_pcm_cholesky] Matrix not positive definite")
@@ -183,7 +111,7 @@ contains
       end if
 
       ! Solve using factorization (potrs expects 2D matrix)
-      call potrs(amat_copy, q_mat, info, uplo='l')
+      call potrs(amat_copy, q_mat, info, uplo="l")
       if (info /= 0) then
          call fatal_error(error, "[solve_pcm_cholesky] LAPACK potrs failed")
          return

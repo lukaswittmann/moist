@@ -70,13 +70,13 @@ contains
                   new_unittest("sym4_211_full_symmetry", test_sym4_211_full_symmetry), &
                   new_unittest("sym4_211_scaling", test_sym4_211_scaling), &
                   ! Raw-kernel ports (vendored sparse linear solvers):
-                  new_unittest("lusol-dense-3x3", test_lusol_dense_3x3), &
-                  new_unittest("lusol-rectangular-3x4", test_lusol_rectangular_3x4), &
-                  new_unittest("lsqr-dense-3x3", test_lsqr_dense_3x3), &
-                  new_unittest("lsqr-rectangular-3x4", test_lsqr_rectangular_3x4), &
-                  new_unittest("lsmr-over-determined", test_lsmr_over_determined), &
-                  new_unittest("lsmr-square", test_lsmr_square), &
-                  new_unittest("lsmr-under-determined", test_lsmr_under_determined) &
+                  new_unittest("lusol_dense_3x3", test_lusol_dense_3x3), &
+                  new_unittest("lusol_rectangular_3x4", test_lusol_rectangular_3x4), &
+                  new_unittest("lsqr_dense_3x3", test_lsqr_dense_3x3), &
+                  new_unittest("lsqr_rectangular_3x4", test_lsqr_rectangular_3x4), &
+                  new_unittest("lsmr_over_determined", test_lsmr_over_determined), &
+                  new_unittest("lsmr_square", test_lsmr_square), &
+                  new_unittest("lsmr_under_determined", test_lsmr_under_determined) &
                   ]
    end subroutine collect_math_linalg
 

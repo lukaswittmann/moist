@@ -21,7 +21,7 @@ module moist_cavity_drop_request
    !> to `.false.` for minimal overhead.
    type :: drop_property_request
 
-      !> Compute local grid-point density (diagnostic)
+      !> Compute local grid point density (diagnostic)
       logical :: grid_point_density = .false.
 
       !> Compute principal, mean, and Gaussian curvatures (diagnostic)
@@ -30,17 +30,11 @@ module moist_cavity_drop_request
       !> Store surface normal vectors at grid points
       logical :: normal = .false.
 
-      !> Store sphere-center to grid-point distances
+      !> Store sphere-center to grid point distances
       logical :: r_iI = .false.
 
       !> Store anchor-to-projected-point displacement distances
       logical :: rho = .false.
-
-      !> Compute CPCM solvation energy
-      logical :: cpcm = .false.
-
-      !> Compute marching-cubes reference area and volume
-      logical :: mc = .false.
 
    contains
       !> Print active flags to output
@@ -50,24 +44,31 @@ module moist_cavity_drop_request
 
 contains
 
-   !> Print active property flags to standard output
+   !> Print active property flags
    !>
    !> @param[in] self  Request to display
-   subroutine print_property_request(self)
+   !> @param[in] unit  Output unit (default `output_unit`); callers holding a run
+   !>                  context pass `ctx%unit` so this honours a log file
+   subroutine print_property_request(self, unit)
       class(drop_property_request), intent(in) :: self
+      !> Output unit override
+      integer, intent(in), optional :: unit
       type(prettyprinter) :: pp
+      !> Effective output unit
+      integer :: iu
 
-      pp = new_prettyprinter(unit=output_unit)
+      iu = output_unit
+      if (present(unit)) iu = unit
+
+      pp = new_prettyprinter(unit=iu)
 
       call pp%blank()
-      call pp%push('Property Request:')
-      call pp%kv('Grid point density', self%grid_point_density)
-      call pp%kv('Curvature', self%curvature)
-      call pp%kv('CPCM', self%cpcm)
-      call pp%kv('Surface normals', self%normal)
-      call pp%kv('r_iI distances', self%r_iI)
-      call pp%kv('rho displacements', self%rho)
-      call pp%kv('Marching cubes', self%mc)
+      call pp%push("Property Request:")
+      call pp%kv("Grid point density", self%grid_point_density)
+      call pp%kv("Curvature", self%curvature)
+      call pp%kv("Surface normals", self%normal)
+      call pp%kv("r_iI distances", self%r_iI)
+      call pp%kv("rho displacements", self%rho)
       call pp%pop()
       call pp%blank()
 
@@ -92,7 +93,6 @@ contains
    end function drop_request_diagnostics
 
    !> Full request: all geometric diagnostic properties enabled
-   !> (CPCM energy and marching-cubes reference remain off; opt in separately)
    !>
    !> @return  Request with all geometric diagnostic properties enabled
    type(drop_property_request) function drop_request_fine() result(req)

@@ -1,56 +1,91 @@
-
 !> Definition of the abstract base solvation model
 module moist_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
    use mctc_io, only: structure_type
    use moist_radius_type, only: radius_type
+   use moist_context, only: moist_context_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_channels, only: coupling_type, response_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none
    private
 
    public :: cavity_type
-   public :: potential_type
-   public :: solvation_model, solvation_model_component
+   public :: cavity_surface_adjoint_type
+   public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
    public :: write_cavity_xyz_debug
    public :: write_cavity_csv_debug
    public :: write_cavity_pqr_debug
 
    !> Abstract base type containing minimal cavity/surface information
+   !>
+   !> Cavities within moist are per default discretized using Gaussians
    type, abstract :: cavity_type
-      !> Area per sphere (nsph)
-      real(wp), allocatable :: asph(:)
-      !> Total surface area, bohr**2
-      real(wp), allocatable :: total_area
-      !> Total cavity volume, bohr**3
-      real(wp), allocatable :: total_volume
+      !> Borrowed run context (verbosity/debug/timer); set at construction,
+      !> owned by the top-level caller. Never allocated/freed by the cavity.
+      type(moist_context_type), pointer :: ctx => null()
+
       !> Sphere radii, bohr (nat)
       real(wp), allocatable :: radii(:)
       !> Radii model used to update cached radii.
       class(radius_type), allocatable :: radius_model
-      !> Charge of each atom (nat)
-      real(wp), allocatable :: qat(:)
-      !> Gaussian width of each atom (nat) from eeqbceps
-      real(wp), allocatable :: aat(:)
+
+      !> Number of atomic spheres
+      integer :: nsph = 0
+
+      !> Area per sphere (nsph)
+      real(wp), allocatable :: asph(:)
+
       !> Number of cavity points
-      integer :: ngrid
+      integer :: ngrid = 0
+
+      !> Cartesian coordinates of atomic sphere centers (3, nsph)
+      real(wp), allocatable :: sphxyz(:, :)
+
+      !> Owner of each grid point (ngrid)
+      integer, allocatable :: owner(:)
+
       !> Cartesian coords of points (3,ngrid)
       real(wp), allocatable :: xyz(:, :)
       !> Point area, bohr**2 (ngrid)
       real(wp), allocatable :: a(:)
-      !> Owner of each grid point (ngrid)
-      integer, allocatable :: owner(:)
-      !> Electrostatic potential at gridpoints (ngrid)
-      real(wp), allocatable :: phi(:)
-      !> Convergence flag for each grid point (ngrid)
-      logical, allocatable :: converged(:)
-      !> Error handling
-      type(error_type), allocatable :: error
+      !> Gaussian switching factor of each surface point (ngrid)
+      real(wp), allocatable :: f(:)
+      !> Gaussian width of each surface point (ngrid)
+      real(wp), allocatable :: xi0(:)
+      !> Outward unit normal of each surface point (3, ngrid)
+      real(wp), allocatable :: normal0(:, :)
+      !> Point volume element, bohr**3 (ngrid)
+      !>
+      !> Divergence-theorem partition of the enclosed volume,
+      !> v_i = a_i (r_i . n_i)/3, so that `total_volume` is `sum(v)`.
+      real(wp), allocatable :: v(:)
+
+      !> Total surface area, bohr**2
+      real(wp), allocatable :: total_area
+      !> Total cavity volume, bohr**3
+      real(wp), allocatable :: total_volume
+
+      !> Nuclear derivatives of surface Gaussian widths (3, nsph, ngrid)
+      real(wp), allocatable :: xi1_rA(:, :, :)
+      !> Nuclear derivatives of Gaussian switching factors (3, nsph, ngrid)
+      real(wp), allocatable :: f1_rA(:, :, :)
+      !> Nuclear derivatives of surface positions (3, 3, nsph, ngrid)
+      real(wp), allocatable :: xyz1_rA(:, :, :, :)
+      !> Nuclear derivatives of surface point volumes (3, nsph, ngrid).
+      !> Contracting over the grid gives the total-volume nuclear gradient.
+      real(wp), allocatable :: v1_rA(:, :, :)
    contains
       procedure(update_cavity), deferred :: update
       procedure(get_cavity_gradient), deferred :: get_gradient
+      !> Map accumulated surface-observable adjoints to host response channels
+      procedure :: get_surface_response => get_cavity_surface_response_default
+      !> Contract accumulated surface-observable adjoints into the nuclear gradient
+      procedure :: get_surface_gradient => get_cavity_surface_gradient_default
       !> Write grid to XYZ file for visualization
       procedure :: write_xyz_debug => write_cavity_xyz_debug
       !> Write grid to CSV file for visualization
@@ -61,11 +96,6 @@ module moist_type
       procedure :: find_disconnected_cavities => find_disconnected_cavities_base
       !> Print basic cavity information
       procedure :: print => print_cavity_info
-      !> Print detailed cavity information including atomic contributions
-      procedure :: print_fine => print_cavity_fine
-      !> Assemble PCM interaction matrix A (ngrid, ngrid)
-      !> Default: collocation BEM using Coulomb kernel
-      procedure :: get_amat => cavity_get_amat_collocation
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -78,61 +108,37 @@ module moist_type
          type(error_type), allocatable, intent(out) :: error
       end subroutine update_cavity
 
-      subroutine get_cavity_gradient(self)
-         import :: cavity_type
+      subroutine get_cavity_gradient(self, error)
+         import :: cavity_type, error_type
          class(cavity_type), intent(inout) :: self
+         type(error_type), allocatable, intent(out) :: error
       end subroutine get_cavity_gradient
 
    end interface
 
-   ! TODO: These will be changed soon
-
-   !> Type for potential data (idential to tblite)
-   type :: potential_type
-      !> Atom-resolved charge-dependent potential
-      real(wp), allocatable :: vat(:, :)
-      !> Shell-resolved charge-dependent potential
-      real(wp), allocatable :: vsh(:, :)
-      !> Orbital-resolved charge-dependent potential
-      real(wp), allocatable :: vao(:, :)
-      !> Atom-resolved dipolar potential
-      real(wp), allocatable :: vdp(:, :, :)
-      !> Atom-resolved quadrupolar potential
-      real(wp), allocatable :: vqp(:, :, :)
-   end type potential_type
-
-   !> Type wavefunction data (idential to tblite)
-   type, public :: wavefunction_type
-      !> Number of electrons for each atom, shape: [nat, spin]
-      real(wp), allocatable :: qat(:, :)
-      !> Number of electrons for each shell, shape: [nsh, spin]
-      real(wp), allocatable :: qsh(:, :)
-      !> Atomic dipole moments for each atom, shape: [3, nat, spin]
-      real(wp), allocatable :: dpat(:, :, :)
-      !> Atomic quadrupole moments for each atom, shape: [5, nat, spin]
-      real(wp), allocatable :: qpat(:, :, :)
-   end type wavefunction_type
-
    !> Abstract base solvation model
-   type, abstract :: solvation_model
+   type, abstract :: solvation_model_type
+      !> Borrowed run context (verbosity/debug/timer); set at construction,
+      !> owned by the top-level caller. Never allocated/freed by the model.
+      type(moist_context_type), pointer :: ctx => null()
 
    contains
 
       procedure(update_model), deferred :: update
       procedure(get_model_energy), deferred :: get_energy
-      procedure(get_model_potential), deferred :: get_potential
+      procedure(get_model_response), deferred :: get_response
       procedure(get_model_gradient), deferred :: get_gradient
 
-   end type solvation_model
+   end type solvation_model_type
 
    abstract interface
 
       !> Update the solvation model with the current molecular structure
       !> Calculate all structure-dependent properties
       subroutine update_model(self, mol, error)
-         import solvation_model, structure_type, error_type
+         import solvation_model_type, structure_type, error_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Molecular structure data
          class(structure_type), intent(in) :: mol
          !> Error handling
@@ -140,38 +146,38 @@ module moist_type
       end subroutine update_model
 
       !> Evaluate the solvation energy
-      subroutine get_model_energy(self, wfn, energy, error)
-         import solvation_model, structure_type, wp, error_type, wavefunction_type
+      subroutine get_model_energy(self, coupling, energy, error)
+         import solvation_model_type, structure_type, wp, error_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
+         class(coupling_type), intent(in) :: coupling
          !> Solvation energy
          real(wp), intent(inout) :: energy
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_model_energy
 
-      !> Get the solvation potential (only for self-consistent models)
-      subroutine get_model_potential(self, wfn, potential, error)
-         import solvation_model, structure_type, wp, error_type, potential_type, wavefunction_type
+      !> Get the solvation response (only for self-consistent models)
+      subroutine get_model_response(self, coupling, response, error)
+         import solvation_model_type, structure_type, wp, error_type, response_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
-         !> Solvation potential for the component
-         type(potential_type), intent(inout) :: potential
+         class(coupling_type), intent(in) :: coupling
+         !> Solvation response for the component
+         type(response_type), intent(inout) :: response
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_model_potential
+      end subroutine get_model_response
 
       !> Get the solvation energy gradient
-      subroutine get_model_gradient(self, wfn, gradient, error)
-         import solvation_model, structure_type, wp, error_type, wavefunction_type
+      subroutine get_model_gradient(self, coupling, gradient, error)
+         import solvation_model_type, structure_type, wp, error_type, coupling_type
          !> Instance of the solvation model
-         class(solvation_model), intent(inout) :: self
+         class(solvation_model_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
+         class(coupling_type), intent(in) :: coupling
          !> Solvation gradient
          real(wp), intent(inout) :: gradient(:, :)
          !> Error handling
@@ -181,33 +187,48 @@ module moist_type
    end interface
 
    !> Abstract solvation model component
-   type, abstract :: solvation_model_component
+   type, abstract :: solvation_model_component_type
+      !> Borrowed run context (verbosity/debug/timer); set at construction,
+      !> owned by the top-level caller. Never allocated/freed by the component.
+      type(moist_context_type), pointer :: ctx => null()
       !> Name of the component
       character(len=:), allocatable :: name
-      !> Abstract cavity type
-      class(cavity_type), allocatable :: cavity
       !> Molecular structure data for the component
       type(structure_type) :: mol_solu
-      !> Print level for debugging
-      integer :: verbosity = 2
+      !> Linear scale factor applied to this contribution.  The component
+      !> multiplies its energy, solvation response, and surface/level set
+      !> response by this constant so the contribution stays variational: 1.0
+      !> leaves it unchanged, 0.0 disables it.
+      real(wp) :: scale = 1.0_wp
       !> Error handling
       type(error_type), allocatable :: error
    contains
 
       procedure(update_component), deferred :: update
       procedure(get_component_energy), deferred :: get_energy
-      procedure(get_component_potential), deferred :: get_potential
+      procedure(get_component_response), deferred :: get_response
       procedure(get_component_gradient), deferred :: get_gradient
+      !> Accumulate direct host-trace adjoints needed before the host can build
+      !> its charge-dependent response quantities.
+      procedure :: get_trace_response => get_component_trace_response_default
+      !> Accumulate component-specific surface adjoint weights.
+      procedure :: get_surface_weights => get_component_surface_weights_default
+      !> Accumulate the host's direct trace-geometry surface adjoint weights.
+      procedure :: get_host_surface_weights => get_component_host_surface_weights_default
+      !> Accumulate the surface adjoint weights the *nuclear gradient* needs.
+      procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
+      !> Accumulate nuclear-gradient terms that do not flow through the surface.
+      procedure :: get_direct_gradient => get_component_direct_gradient_default
 
-   end type solvation_model_component
+   end type solvation_model_component_type
 
    abstract interface
 
       !> Update the solvation model component with the current molecular structure
       subroutine update_component(self, mol, cavity, error)
-         import solvation_model_component, structure_type, cavity_type, error_type
+         import solvation_model_component_type, structure_type, cavity_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Molecular structure data
          type(structure_type), intent(in) :: mol
          !> Cavity type data
@@ -217,38 +238,44 @@ module moist_type
       end subroutine update_component
 
       !> Evaluate the solvation energy for the component
-      subroutine get_component_energy(self, wfn, energy, error)
-         import solvation_model_component, wp, wavefunction_type, error_type
+      subroutine get_component_energy(self, coupling, cavity, energy, error)
+         import solvation_model_component_type, cavity_type, wp, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
+         class(coupling_type), intent(in) :: coupling
+         !> Live cavity owned by the orchestrating model
+         class(cavity_type), intent(inout) :: cavity
          !> solvation energy for the component
-         real(wp), intent(inout) :: energy(:)
+         real(wp), intent(inout) :: energy
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_component_energy
 
-      !> Get the solvation potential for the component
-      subroutine get_component_potential(self, wfn, potential, error)
-         import solvation_model_component, potential_type, wavefunction_type, error_type
+      !> Get the solvation response for the component
+      subroutine get_component_response(self, coupling, cavity, response, error)
+         import solvation_model_component_type, cavity_type, response_type, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
-         !> Solvation potential for the component
-         type(potential_type), intent(inout) :: potential
+         class(coupling_type), intent(in) :: coupling
+         !> Live cavity owned by the orchestrating model
+         class(cavity_type), intent(inout) :: cavity
+         !> Solvation response for the component
+         type(response_type), intent(inout) :: response
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
-      end subroutine get_component_potential
+      end subroutine get_component_response
 
       !> Get the solvation energy gradient for the component
-      subroutine get_component_gradient(self, wfn, gradient, error)
-         import solvation_model_component, wp, wavefunction_type, error_type
+      subroutine get_component_gradient(self, coupling, cavity, gradient, error)
+         import solvation_model_component_type, cavity_type, wp, coupling_type, error_type
          !> Instance of the solvation model component
-         class(solvation_model_component), intent(inout) :: self
+         class(solvation_model_component_type), intent(inout) :: self
          !> Wavefunction data
-         type(wavefunction_type), intent(in) :: wfn
+         class(coupling_type), intent(in) :: coupling
+         !> Live cavity owned by the orchestrating model
+         class(cavity_type), intent(inout) :: cavity
          !> Solvation gradient for the component
          real(wp), intent(inout) :: gradient(:, :)
          !> Error handling
@@ -290,9 +317,187 @@ module moist_type
 
 contains
 
+   !> Output unit for a cavity: the borrowed run context's unit when one is
+   !> attached, otherwise the standard output unit. The base procedures below
+   !> are reachable on a cavity that never went through a constructor, so the
+   !> association has to be checked rather than assumed.
+   pure function cavity_unit(self) result(iunit)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Unit to write to
+      integer :: iunit
+
+      iunit = output_unit
+      if (associated(self%ctx)) iunit = self%ctx%unit
+
+   end function cavity_unit
+
+   !> Default surface-response hook for cavities without field-dependent geometry
+   !>
+   !> @param[inout] self      Cavity instance, unchanged
+   !> @param[in]    acc       Surface-observable adjoints, unused
+   !> @param[inout] response  Response accumulator, unchanged
+   !> @param[out]   error     Error handling
+   subroutine get_cavity_surface_response_default(self, acc, response, error)
+      !> Cavity instance
+      class(cavity_type), intent(inout) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Response accumulator
+      type(response_type), intent(inout) :: response
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_cavity_surface_response_default
+
+   !> Default reverse-mode nuclear-gradient hook
+   !>
+   !> Cavities that do not implement the surface-adjoint contraction must be
+   !> reached through the forward path instead. Returning silently here would
+   !> hand back a zero gradient, so this errors
+   !>
+   !> @param[in]    self     Cavity instance
+   !> @param[in]    acc      Surface-observable adjoints, unused
+   !> @param[inout] gradient Nuclear-gradient accumulator, unchanged
+   !> @param[out]   error    Error handling
+   subroutine get_cavity_surface_gradient_default(self, acc, gradient, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide a reverse-mode surface gradient")
+
+   end subroutine get_cavity_surface_gradient_default
+
+   !> Default no-op direct trace-response hook
+   !>
+   !> @param[inout] self      Solvation component
+   !> @param[in]    coupling  Host coupling data
+   !> @param[inout] cavity    Live model cavity
+   !> @param[inout] response  Direct trace-response accumulator
+   !> @param[out]   error     Error object
+   subroutine get_component_trace_response_default(self, coupling, cavity, response, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Host coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Live model cavity
+      class(cavity_type), intent(inout) :: cavity
+      !> Direct trace-response accumulator
+      type(response_type), intent(inout) :: response
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_trace_response_default
+
+   !> Default no-op surface-weight hook for components without cavity response.
+   !> @param[inout] self    Solvation component
+   !> @param[in]    coupling     Wavefunction data
+   !> @param[in]    cavity  Cavity data
+   !> @param[inout] acc     Cavity-specific surface-adjoint accumulator
+   !> @param[out]   error   Error object
+   subroutine get_component_surface_weights_default(self, coupling, cavity, acc, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity data
+      class(cavity_type), intent(in) :: cavity
+      !> Cavity-specific surface-adjoint accumulator
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_surface_weights_default
+
+   !> Default no-op host trace-geometry weight hook
+   !>
+   !> Surface traces built from the host's QM integrals (potential, normal
+   !> derivative, ...) carry a surface dependence moist cannot differentiate, so
+   !> the host supplies dE/d(xi, f, r, n) at fixed operator in `coupling%electrostatics%w_*`.
+   !>
+   !> Components with such a trace override this hook to add those channels to
+   !> the shared surface-adjoint accumulator; the rest inherit the no-op.
+   !>
+   !> @param[inout] self     Solvation component
+   !> @param[in]    coupling Wavefunction data carrying the host weights
+   !> @param[inout] acc      Surface-adjoint accumulator
+   !> @param[in]    ngrid    Expected grid size of the component's cavity
+   !> @param[out]   error    Error object
+   subroutine get_component_host_surface_weights_default(self, coupling, acc, ngrid, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity-specific surface-adjoint accumulator
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      !> Expected grid size of the component's cavity
+      integer, intent(in) :: ngrid
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_host_surface_weights_default
+
+   !> Default gradient-side surface weights: the same ones the response uses
+   !>
+   !> For most components the surface adjoint of the energy is one object, so
+   !> the reverse-mode nuclear gradient can reuse `get_surface_weights`
+   !> verbatim. A component whose gradient legitimately consumes a different
+   !> set of host channels overrides this (see `solvation_model_component_pcm`).
+   !>
+   !> @param[inout] self     Solvation component
+   !> @param[in]    coupling Wavefunction data
+   !> @param[in]    cavity   Cavity data
+   !> @param[inout] acc      Cavity-specific surface-adjoint accumulator
+   !> @param[out]   error    Error object
+   subroutine get_component_gradient_surface_weights_default(self, coupling, cavity, acc, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity data
+      class(cavity_type), intent(in) :: cavity
+      !> Cavity-specific surface-adjoint accumulator
+      class(cavity_surface_adjoint_type), intent(inout) :: acc
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call self%get_surface_weights(coupling, cavity, acc, error)
+
+   end subroutine get_component_gradient_surface_weights_default
+
+   !> Default no-op hook for nuclear-gradient terms outside the surface
+   !>
+   !> Used by the reverse-mode gradient path for contributions that do not
+   !> reach the energy through a cavity surface quantity -- for PCM, the
+   !> solute nuclei moving under fixed surface charges.
+   !>
+   !> @param[inout] self     Solvation component
+   !> @param[in]    coupling Wavefunction data
+   !> @param[in]    cavity   Cavity data
+   !> @param[inout] gradient Nuclear-gradient accumulator, unchanged
+   !> @param[out]   error    Error object
+   subroutine get_component_direct_gradient_default(self, coupling, cavity, gradient, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity data
+      class(cavity_type), intent(inout) :: cavity
+      !> Nuclear-gradient accumulator
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_direct_gradient_default
+
    !> Write grid points to an XYZ file as helium atoms (debug visualization)
    subroutine write_cavity_xyz_debug(self, filename, error)
-      use iso_fortran_env, only: output_unit
       use mctc_io_convert, only: autoaa
       class(cavity_type), intent(in) :: self
       character(len=*), intent(in) :: filename
@@ -301,51 +506,36 @@ contains
       integer :: unit, stat, i
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_xyz_debug: cavity grid not allocated')
+         call fatal_error(error, "write_xyz_debug: cavity grid not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_xyz_debug: no grid points to write')
+         call fatal_error(error, "write_xyz_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open XYZ file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open XYZ file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(i0)') self%ngrid
-      write (unit, '(a)') 'drop cavity grid points as He (Angstrom)'
+      write (unit, "(i0)") self%ngrid
+      write (unit, "(a)") "drop cavity grid points as He (Angstrom)"
       do i = 1, self%ngrid
-         if (allocated(self%converged)) then
-            if (i <= size(self%converged) .and. self%converged(i)) then
-               write (unit, '(a2,1x,3f16.8)') 'He', &
-                  self%xyz(1, i)*autoaa, &
-                  self%xyz(2, i)*autoaa, &
-                  self%xyz(3, i)*autoaa
-            else
-               write (unit, '(a2,1x,3f16.8)') 'Xe', &
-                  self%xyz(1, i)*autoaa, &
-                  self%xyz(2, i)*autoaa, &
-                  self%xyz(3, i)*autoaa
-            end if
-         else
-            write (unit, '(a2,1x,3f16.8)') 'He', &
-               self%xyz(1, i)*autoaa, &
-               self%xyz(2, i)*autoaa, &
-               self%xyz(3, i)*autoaa
-         end if
+         write (unit, "(a2,1x,3f16.8)") "He", &
+            self%xyz(1, i)*autoaa, &
+            self%xyz(2, i)*autoaa, &
+            self%xyz(3, i)*autoaa
       end do
       close (unit)
 
-      write (output_unit, '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_xyz_debug
 
    !> Write grid points to a CSV file (debug visualization)
    subroutine write_cavity_csv_debug(self, filename, error)
-      use iso_fortran_env, only: output_unit
       class(cavity_type), intent(in) :: self
       character(len=*), intent(in) :: filename
       type(error_type), allocatable, intent(out) :: error
@@ -353,29 +543,29 @@ contains
       integer :: stat, i, unit
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_csv_debug: cavity grid not allocated')
+         call fatal_error(error, "write_csv_debug: cavity grid not allocated")
          return
       end if
       if (.not. allocated(self%a)) then
-         call fatal_error(error, 'write_csv_debug: point areas not allocated')
+         call fatal_error(error, "write_csv_debug: point areas not allocated")
          return
       end if
       if (.not. allocated(self%owner)) then
-         call fatal_error(error, 'write_csv_debug: point owners not allocated')
+         call fatal_error(error, "write_csv_debug: point owners not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_csv_debug: no grid points to write')
+         call fatal_error(error, "write_csv_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open CSV file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open CSV file for writing: "//trim(filename))
          return
       end if
 
-      write (unit, '(a)') 'ngrid,x,y,z,owner,area'
+      write (unit, "(a)") "ngrid,x,y,z,owner,area"
 
       do i = 1, self%ngrid
          write (unit, '(i0,7('','',g0))') i, &
@@ -384,7 +574,7 @@ contains
       end do
       close (unit)
 
-      write (output_unit, '(a,1x,a)') '[Info] Wrote cavity grid to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
 
@@ -399,7 +589,6 @@ contains
    !> @param[in]  self      Cavity instance
    !> @param[in]  filename  Output PQR file path
    subroutine write_cavity_pqr_debug(self, filename, error)
-      use iso_fortran_env, only: output_unit
       use mctc_io_convert, only: autoaa
       class(cavity_type), intent(in) :: self
       character(len=*), intent(in) :: filename
@@ -408,106 +597,73 @@ contains
       integer :: unit, stat, i
 
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'write_pqr_debug: cavity grid not allocated')
+         call fatal_error(error, "write_pqr_debug: cavity grid not allocated")
          return
       end if
       if (.not. allocated(self%a)) then
-         call fatal_error(error, 'write_pqr_debug: point areas not allocated')
+         call fatal_error(error, "write_pqr_debug: point areas not allocated")
          return
       end if
       if (.not. allocated(self%owner)) then
-         call fatal_error(error, 'write_pqr_debug: point owners not allocated')
+         call fatal_error(error, "write_pqr_debug: point owners not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'write_pqr_debug: no grid points to write')
+         call fatal_error(error, "write_pqr_debug: no grid points to write")
          return
       end if
 
-      open (file=filename, newunit=unit, status='replace', action='write', iostat=stat)
+      open (file=filename, newunit=unit, status="replace", action="write", iostat=stat)
       if (stat /= 0) then
-         call fatal_error(error, 'Could not open PQR file for writing: '//trim(filename))
+         call fatal_error(error, "Could not open PQR file for writing: "//trim(filename))
          return
       end if
 
       do i = 1, self%ngrid
-         write (unit, '(a6,i5,1x,a4,a1,a3,1x,a1,i4,4x,3f8.3,f8.4,f7.4)') &
-            'HETATM', i, 'GP  ', ' ', 'GRD', 'A', self%owner(i), &
+         write (unit, "(a6,i5,1x,a4,a1,a3,1x,a1,i4,4x,3f8.3,f8.4,f7.4)") &
+            "HETATM", i, "GP  ", " ", "GRD", "A", self%owner(i), &
             self%xyz(1, i)*autoaa, &
             self%xyz(2, i)*autoaa, &
             self%xyz(3, i)*autoaa, &
             0.0_wp, &
-            (sqrt(self%a(i)/(2.0_wp*pi))*autoaa*0.66_wp + 0.0001_wp)
+            (sqrt(self%a(i)/(2.0_wp*pi))*autoaa + 0.0001_wp)
       end do
-      write (unit, '(a)') 'END'
+      write (unit, "(a)") "END"
       close (unit)
 
-      write (output_unit, '(a,1x,a)') '[Info] Wrote cavity PQR to', trim(filename)
+      write (cavity_unit(self), "(a,1x,a)") "[Info] Wrote cavity PQR to", trim(filename)
 
    end subroutine write_cavity_pqr_debug
 
    !> Print basic cavity information (grid points, total area, total volume)
    subroutine print_cavity_info(self, unit)
-      use iso_fortran_env, only: output_unit
       class(cavity_type), intent(in) :: self
       integer, intent(in), optional :: unit
       integer :: iunit
       type(prettyprinter) :: pp
 
-      iunit = output_unit
+      iunit = cavity_unit(self)
       if (present(unit)) iunit = unit
 
       if (.not. allocated(self%total_area) .or. .not. allocated(self%total_volume)) then
-         write (iunit, '(a)') '[Warning] Cavity not fully initialized'
+         write (iunit, "(a)") "[Warning] Cavity not fully initialized"
          return
       end if
 
       pp = new_prettyprinter(unit=iunit, fmt_len=20)
 
       call pp%blank()
-      call pp%push('Results:')
-      call pp%kv('Cavity points', self%ngrid)
-      call pp%kv('Total area', self%total_area, 'bohr^2')
-      call pp%kv('Total volume', self%total_volume, 'bohr^3')
+      call pp%push("Results:")
+      call pp%kv("Cavity points", self%ngrid)
+      call pp%kv("Total area", self%total_area, "bohr^2")
+      call pp%kv("Total volume", self%total_volume, "bohr^3")
       call pp%pop()
       call pp%blank()
 
    end subroutine print_cavity_info
 
-   !> Print detailed cavity information including atomic surface areas
-   subroutine print_cavity_fine(self, unit)
-      use iso_fortran_env, only: output_unit
-      class(cavity_type), intent(in) :: self
-      integer, intent(in), optional :: unit
-      integer :: iunit, i
-      character(32) :: atom_label
-      type(prettyprinter) :: pp
-
-      iunit = output_unit
-      if (present(unit)) iunit = unit
-
-      pp = new_prettyprinter(unit=iunit, col_value=42, indent_step=2, fmt_len=16)
-
-      ! Print atomic contributions if available
-      if (allocated(self%asph)) then
-         call pp%push('Atomic surface areas:')
-         do i = 1, size(self%asph)
-            write (atom_label, '("Atom ",i0)') i
-            call pp%kv(trim(atom_label)//' area', self%asph(i), 'bohr^2')
-            call pp%kv(trim(atom_label)//' share', 100.0_wp*self%asph(i)/self%total_area, '%')
-         end do
-         call pp%pop()
-      else
-         call pp%blank()
-         write (iunit, '(a)') '[Info] Atomic surface areas not available'
-      end if
-      call pp%blank()
-
-   end subroutine print_cavity_fine
-
    !> Find disconnected grid points / cavities / islands
    subroutine find_disconnected_cavities_base(self, disconnection_thrs, verbose_inp, error)
-      use iso_fortran_env, only: output_unit
       class(cavity_type), intent(inout) :: self
       real(wp), intent(in), optional :: disconnection_thrs
       integer, intent(in), optional :: verbose_inp
@@ -527,6 +683,7 @@ contains
       logical, allocatable :: visited(:)
       real(wp) :: thrs
       integer :: verbose
+      integer :: iunit
 
       ! Set threshold (default 4.0 if not provided)
       if (present(disconnection_thrs)) then
@@ -535,15 +692,21 @@ contains
          thrs = 4.0_wp
       end if
 
+      !> Silent unless the caller asks for output. This deliberately does not
+      !> follow the context verbosity: the only caller passes no verbose_inp,
+      !> and defaulting from the context would start printing island tables on
+      !> every verbosity-2 run.
       verbose = 0
       if (present(verbose_inp)) verbose = verbose_inp
 
+      iunit = cavity_unit(self)
+
       if (.not. allocated(self%xyz)) then
-         call fatal_error(error, 'find_disconnected_cavities: grid not allocated')
+         call fatal_error(error, "find_disconnected_cavities: grid not allocated")
          return
       end if
       if (self%ngrid <= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: no grid points')
+         call fatal_error(error, "find_disconnected_cavities: no grid points")
          return
       end if
 
@@ -562,27 +725,27 @@ contains
 
       allocate (head(ncell), source=0, stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for head')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for head")
          return
       end if
       allocate (next(self%ngrid), source=0, stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for next')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for next")
          return
       end if
       allocate (cell_ix(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_ix')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_ix")
          return
       end if
       allocate (cell_iy(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_iy')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_iy")
          return
       end if
       allocate (cell_iz(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for cell_iz')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for cell_iz")
          return
       end if
 
@@ -634,14 +797,14 @@ contains
       end do
 
       if (nspacing_count == 0 .or. spacing_est <= 0.0_wp) then
-         call fatal_error(error, 'find_disconnected_cavities: could not estimate grid spacing')
+         call fatal_error(error, "find_disconnected_cavities: could not estimate grid spacing")
          deallocate (head, next, cell_ix, cell_iy, cell_iz)
          return
       end if
 
       if (verbose > 1) then
-         write (output_unit, '(a,i0,a,1x,f7.4,1x,a)') '[Info] Estimated average grid spacing: ', &
-            nspacing_count, ' points, ', spacing_est/real(nspacing_count, wp), 'bohr'
+         write (iunit, "(a,i0,a,1x,f7.4,1x,a)") "[Info] Estimated average grid spacing: ", &
+            nspacing_count, " points, ", spacing_est/real(nspacing_count, wp), "bohr"
       end if
 
       spacing_est = spacing_est/real(nspacing_count, wp)
@@ -650,8 +813,8 @@ contains
       cell_size2 = cell_size*cell_size
 
       if (verbose > 1) then
-         write (output_unit, '(a,1x,f7.4,1x,a)') '[Info] Using cell size for connectivity search:', &
-            cell_size, 'bohr'
+         write (iunit, "(a,1x,f7.4,1x,a)") "[Info] Using cell size for connectivity search:", &
+            cell_size, "bohr"
       end if
 
       ! Rebuild grid for connectivity search with final cell size.
@@ -664,7 +827,7 @@ contains
          deallocate (head)
          allocate (head(ncell), source=0, stat=alloc_stat)
          if (alloc_stat /= 0) then
-            call fatal_error(error, 'find_disconnected_cavities: allocation failed for head resize')
+            call fatal_error(error, "find_disconnected_cavities: allocation failed for head resize")
             return
          end if
       else
@@ -689,17 +852,17 @@ contains
       if (allocated(visited)) deallocate (visited)
       allocate (queue(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for queue')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for queue")
          return
       end if
       allocate (comp_sizes(self%ngrid), stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for comp_sizes')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for comp_sizes")
          return
       end if
       allocate (visited(self%ngrid), source=.false., stat=alloc_stat)
       if (alloc_stat /= 0) then
-         call fatal_error(error, 'find_disconnected_cavities: allocation failed for visited')
+         call fatal_error(error, "find_disconnected_cavities: allocation failed for visited")
          return
       end if
 
@@ -754,63 +917,19 @@ contains
 
       if (verbose > 1) then
          if (comp == 1) then
-            write (output_unit, '(a)') '[Info] No disconnected cavities found.'
+            write (iunit, "(a)") "[Info] No disconnected cavities found."
             return
          else
-            write (output_unit, '(a,i3)') '[Info] Disconnected cavities found:', comp
-            write (output_unit, '(1x,a10,a10,a10)') 'id', 'npoints', '%'
-            write (output_unit, '(1x,a10,a10,a10)') '---------', '---------', '---------'
+            write (iunit, "(a,i3)") "[Info] Disconnected cavities found:", comp
+            write (iunit, "(1x,a10,a10,a10)") "id", "npoints", "%"
+            write (iunit, "(1x,a10,a10,a10)") "---------", "---------", "---------"
             do i = 1, comp
-               write (output_unit, '(1x,i10,i10,f10.2)') i, comp_sizes(i), &
+               write (iunit, "(1x,i10,i10,f10.2)") i, comp_sizes(i), &
                   real(comp_sizes(i), wp)/real(self%ngrid, wp)*100.0_wp
             end do
          end if
       end if
 
    end subroutine find_disconnected_cavities_base
-
-   !> Assemble PCM interaction matrix using collocation BEM (default).
-   !> Builds the Coulomb interaction matrix between cavity grid points:
-   !>   Diagonal:     Aii = 2pi / a_i   (self-potential correction)
-   !>   Off-diagonal: Aij = -a_j / (4pi |r_i - r_j|)
-   !> @param[out] amat  Interaction matrix (ngrid, ngrid)
-   !> @param[out] error Error handling
-   subroutine cavity_get_amat_collocation(self, amat, error)
-      !> Cavity instance
-      class(cavity_type), intent(in) :: self
-      !> Output: assembled matrix (ngrid, ngrid)
-      real(wp), intent(out) :: amat(:, :)
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      integer :: i, j, ngrid
-      real(wp) :: r_vec(3), r_dist
-      real(wp), parameter :: fourpi = 4.0_wp*pi
-
-      ngrid = self%ngrid
-
-      ! Check dimensions
-      if (size(amat, 1) /= ngrid .or. size(amat, 2) /= ngrid) then
-         call fatal_error(error, &
-            & "[cavity_get_amat_collocation] Matrix dimension mismatch")
-         return
-      end if
-
-      ! Standard collocation BEM interaction matrix
-      ! Off-diagonal: Coulomb interaction weighted by area element
-      ! Diagonal: self-potential correction for point charges on surface
-      do i = 1, ngrid
-         do j = 1, ngrid
-            if (i == j) then
-               amat(i, j) = (2.0_wp*pi)/self%a(i)
-            else
-               r_vec(:) = self%xyz(:, i) - self%xyz(:, j)
-               r_dist = sqrt(sum(r_vec**2))
-               amat(i, j) = -self%a(j)/(fourpi*r_dist)
-            end if
-         end do
-      end do
-
-   end subroutine cavity_get_amat_collocation
 
 end module moist_type

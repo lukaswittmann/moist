@@ -1,8 +1,8 @@
 !> DROP geometric property routines.
 submodule(moist_cavity_drop) moist_cavity_drop_properties
-   use omp_lib, only: omp_get_max_threads, omp_get_thread_num
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_utils_histogram, only: histogram_type
+   !$ use omp_lib, only: omp_get_thread_num
+   use mctc_io_constants, only: pi
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter_quicksort, only: qsort
@@ -35,7 +35,7 @@ contains
       real(wp) :: d, d2, h, mean_wleb, four_h2
       real(wp) :: xi, yi, zi, xj, yj, zj, dx, dy, dz
       real(wp) :: kval
-      type(wendland_kernel_type) :: kernel
+      type(smoothing_kernel_wendland_type) :: kernel
 
       ! Allocate output arrays
       if (allocated(self%rho_grid)) deallocate (self%rho_grid)
@@ -50,7 +50,10 @@ contains
 
       ! Set kernel parameters from cavity parameters
       h = self%param%rho_grid_h
-      call kernel%init(order=2, dimension=2, h=h)
+      ! `rho_grid_h` is a user-tunable cavity parameter, so a non-positive value
+      ! reaches the kernel as an ordinary bad input rather than a bug.
+      call kernel%init(order=2, dimension=2, h=h, error=error)
+      if (allocated(error)) return
       four_h2 = self%param%adj_list_grid_cutoff*self%param%rho_grid_h
 
       !> Soft cavity density (adjacency-list-accelerated)
@@ -147,11 +150,11 @@ contains
             self%rho_grid = self%rho_grid_anchor
          end where
 
-         if ((n_small_density > 0) .and. (self%verbosity >= 1)) then
-            write (output_unit, '(A, I0, A)') &
-               'Warning: ', n_small_density, &
-               ' grid points have very small soft densities. '// &
-               'Using hard sphere density for these points. Results may be unreliable.'
+         if ((n_small_density > 0) .and. (self%ctx%verbosity >= 1)) then
+            write (self%ctx%unit, "(A, I0, A)") &
+               "Warning: ", n_small_density, &
+               " grid points have very small soft densities. "// &
+               "Using hard sphere density for these points. Results may be unreliable."
          end if
 
       end block
@@ -251,13 +254,16 @@ contains
    module subroutine compute_curvature(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      type(lsf_thread_slot), allocatable :: lsf_threads(:)
-      integer :: igrid, nthreads, thread_slot
+      type(drop_worker_slots_type) :: slots
+      integer :: igrid, thread_slot
       real(wp) :: lsf0_loc, lsf1_r_loc(3), lsf2_rr_loc(3, 3)
       real(wp) :: g_vec(3), H_mat(3, 3)
       real(wp) :: g_norm, g_norm_sq, inv_g_norm
       real(wp) :: n_vec(3), t1(3), t2(3), Ht1(3), Ht2(3)
       real(wp) :: S11, S12, S22, half_trace, half_diff, disc
+      !> Loop-wide abort latch and the LSF evaluation failure handed to it
+      type(drop_abort_latch_type) :: abort
+      type(error_type), allocatable :: lsf_error
 
       ! Initialize curvature arrays
       if (allocated(self%k1)) deallocate (self%k1)
@@ -269,25 +275,34 @@ contains
       if (allocated(self%KG)) deallocate (self%KG)
       allocate (self%KG(self%ngrid), source=0.0_wp)
 
-      ! Set up thread-local LSF evaluators and SSD systems
-      nthreads = max(1, omp_get_max_threads())
-      allocate (lsf_threads(nthreads))
-      do thread_slot = 1, nthreads
-         allocate (lsf_threads(thread_slot)%lsf, source=self%lsf_model)
-      end do
+      ! Set up thread-local LSF evaluators and SSD systems.
+      ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the cached
+      ! callback LSF must be told to compute up to second order.
+      call slots%init(self%ctx, self%lsf_model, 2)
 
-      !$omp parallel do default(shared) &
+      call abort%reset()
+
+      ! num_threads pins the team to the size the slots were built for; without
+      ! it a larger live team indexes slots%lsf out of bounds.
+      !$omp parallel do num_threads(slots%nthreads) default(shared) &
       !$omp& private(igrid, thread_slot, lsf0_loc, lsf1_r_loc, lsf2_rr_loc, &
       !$omp&   g_vec, H_mat, g_norm, g_norm_sq, inv_g_norm, &
       !$omp&   n_vec, t1, t2, Ht1, Ht2, &
-      !$omp&   S11, S12, S22, half_trace, half_diff, disc) &
+      !$omp&   S11, S12, S22, half_trace, half_diff, disc, lsf_error) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
-         thread_slot = omp_get_thread_num() + 1
+         if (abort%requested) cycle
+         thread_slot = 1
+         !$ thread_slot = omp_get_thread_num() + 1
 
          ! Compute SSD on-the-fly and evaluate LSF gradient (g) and Hessian (H)
-         call lsf_threads(thread_slot)%lsf%prepare(self%xyz(:, igrid))
-         call lsf_threads(thread_slot)%lsf%f012_r_screened( &
+         call slots%lsf(thread_slot)%lsf%prepare(self%xyz(:, igrid), lsf_error)
+         if (allocated(lsf_error)) then
+            call abort%latch_error(lsf_error, igrid)
+            cycle
+         end if
+
+         call slots%lsf(thread_slot)%lsf%f012_r_screened( &
             lsf0_loc, lsf1_r_loc, lsf2_rr_loc)
 
          g_vec = lsf1_r_loc
@@ -352,6 +367,11 @@ contains
       end do
       !$omp end parallel do
 
+      if (abort%requested) then
+         call move_alloc(abort%error, error)
+         return
+      end if
+
    end subroutine compute_curvature
 
    !* ================================================================================= *!
@@ -360,8 +380,7 @@ contains
 
    !> Run diagnostic checks on the computed cavity grid
    !>
-   !> Checks for suspicious values that may indicate numerical issues and
-   !> prints ASCII histograms showing the distribution of each quantity:
+   !> Checks for suspicious values that may indicate numerical issues
    !>  - |KG|: Gaussian curvature magnitude
    !>  - |S|: projection residual (should be near zero on the surface)
    !>  - ||grad_S||: LSF gradient norm (low values indicate blending ambiguity)
@@ -374,7 +393,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      type(histogram_type) :: hist
       type(prettyprinter) :: pp
       real(wp) :: S_val, grad_S(3)
       real(wp), allocatable :: s_vals(:), grad_s_norms(:)
@@ -413,7 +431,10 @@ contains
       allocate (lsf, source=self%lsf_model)
 
       do i = 1, ngrid
-         call lsf%prepare(self%xyz(:, i))
+         ! Serial loop, so an evaluation failure can be returned immediately
+         ! (see the parallel loops for the general contract).
+         call lsf%prepare(self%xyz(:, i), error)
+         if (allocated(error)) return
          call lsf%f012_r_screened(lsf0=S_val, lsf1_r=grad_S)
          s_vals(i) = abs(S_val)
          grad_s_norms(i) = sqrt(dot_product(grad_S, grad_S))
@@ -461,7 +482,7 @@ contains
                n_pit = n_pit + 1
                area_pit = area_pit + self%a(i)
             else
-               call fatal_error(error, 'Invalid curvature regime')
+               call fatal_error(error, "Invalid curvature regime")
                return
             end if
 
@@ -506,37 +527,37 @@ contains
             pct_convex = 0.0_wp; pct_saddle = 0.0_wp; pct_pit = 0.0_wp
          end if
 
-         pp = new_prettyprinter(unit=output_unit)
+         pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
-         call pp%push('Effective probe sphere diagnostics')
-         call pp%push('Curvature spread')
-         call pp%kvvv('k1 [min/mean/max]', k1_lo, k1_mean, k1_hi, unit='Bohr^-1')
-         call pp%kvvv('k2 [min/mean/max]', k2_lo, k2_mean, k2_hi, unit='Bohr^-1')
+         call pp%push("Effective probe sphere diagnostics")
+         call pp%push("Curvature spread")
+         call pp%kvvv("k1 [min/mean/max]", k1_lo, k1_mean, k1_hi, unit="Bohr^-1")
+         call pp%kvvv("k2 [min/mean/max]", k2_lo, k2_mean, k2_hi, unit="Bohr^-1")
          call pp%pop()
 
-         call pp%push('Surface area by curvature regime')
-         call pp%kv2('Convex  (k1>0, k2>0)', area_convex, 'Bohr^2', pct_convex, '%')
-         call pp%kv2('Saddle  (k1>0, k2<0)', area_saddle, 'Bohr^2', pct_saddle, '%')
-         call pp%kv2('Pit     (k1<0, k2<0)', area_pit, 'Bohr^2', pct_pit, '%')
+         call pp%push("Surface area by curvature regime")
+         call pp%kv2("Convex  (k1>0, k2>0)", area_convex, "Bohr^2", pct_convex, "%")
+         call pp%kv2("Saddle  (k1>0, k2<0)", area_saddle, "Bohr^2", pct_saddle, "%")
+         call pp%kv2("Pit     (k1<0, k2<0)", area_pit, "Bohr^2", pct_pit, "%")
          call pp%pop()
 
-         call pp%push('Probe-region filter  k2 < -1/r_A_max')
-         call pp%kv2('r_A (min, max)', r_A_min, 'Bohr', r_A_max, 'Bohr')
+         call pp%push("Probe-region filter  k2 < -1/r_A_max")
+         call pp%kv2("r_A (min, max)", r_A_min, "Bohr", r_A_max, "Bohr")
          if (n_k2_any_neg == 0) then
-            call pp%kv('Status', &
-                       'cavity is fully convex -- no probe-rolling regions detected')
+            call pp%kv("Status", &
+                       "cavity is fully convex -- no probe-rolling regions detected")
          else
             if (n_probe > 0 .and. w_sum > 0.0_wp) then
-               call pp%kv2('Probe-region', sum_area, 'Bohr^2', &
-                           100.0_wp*sum_area/area_total, '%')
-               call pp%kv('r_probe (min)', &
-                          r_probe_min, unit='Bohr')
-               call pp%kv('r_probe (mean)', &
-                          r_probe_mean, unit='Bohr')
-               call pp%kv('r_probe (-1/<k2>)', &
-                          r_probe_harmonic, unit='Bohr')
-               call pp%kv('r_probe (stdev)', &
-                          r_probe_stdev, unit='Bohr')
+               call pp%kv2("Probe-region", sum_area, "Bohr^2", &
+                           100.0_wp*sum_area/area_total, "%")
+               call pp%kv("r_probe (min)", &
+                          r_probe_min, unit="Bohr")
+               call pp%kv("r_probe (mean)", &
+                          r_probe_mean, unit="Bohr")
+               call pp%kv("r_probe (-1/<k2>)", &
+                          r_probe_harmonic, unit="Bohr")
+               call pp%kv("r_probe (stdev)", &
+                          r_probe_stdev, unit="Bohr")
             end if
          end if
          call pp%pop()
@@ -622,9 +643,9 @@ contains
 
             patch_area_total = sum(patch_area(1:npatch))
 
-            call pp%push('Watershed patch analysis (basins of k2)')
-            call pp%kv('Ridge points (excluded)', n_ridge)
-            call pp%kv('Patch count', npatch)
+            call pp%push("Watershed patch analysis (basins of k2)")
+            call pp%kv("Ridge points (excluded)", n_ridge)
+            call pp%kv("Patch count", npatch)
             if (npatch > 0 .and. patch_area_total > 0.0_wp) then
                ip_largest = maxloc(patch_area(1:npatch), dim=1)
                rp_min = minval(patch_r(1:npatch))
@@ -637,32 +658,30 @@ contains
                                           *patch_area(1:npatch))/patch_area_total)
 
                if (area_total > 0.0_wp) then
-                  call pp%kv2('Patch area total', patch_area_total, 'Bohr^2', &
-                              100.0_wp*patch_area_total/area_total, '%')
+                  call pp%kv2("Patch area total", patch_area_total, "Bohr^2", &
+                              100.0_wp*patch_area_total/area_total, "%")
                else
-                  call pp%kv('Patch area total', patch_area_total, unit='Bohr^2')
+                  call pp%kv("Patch area total", patch_area_total, unit="Bohr^2")
                end if
                ! r_probe (mean): area-weighted harmonic mean of the per-patch
                ! min-curvature probe radius r_p = -1/k2_min(p)
-               call pp%kv('r_probe (mean)', rp_harmonic, unit='Bohr')
-               call pp%kv('r_probe (sharpest)', rp_min, unit='Bohr')
-               call pp%kv('r_probe (broadest)', rp_max, unit='Bohr')
-               call pp%kv('Largest patch', patch_area(ip_largest), unit='Bohr^2')
-               call pp%kv('Effective probe radius', rp_amean, unit='Bohr')
+               call pp%kv("r_probe (mean)", rp_harmonic, unit="Bohr")
+               call pp%kv("r_probe (sharpest)", rp_min, unit="Bohr")
+               call pp%kv("r_probe (broadest)", rp_max, unit="Bohr")
+               call pp%kv("Largest patch", patch_area(ip_largest), unit="Bohr^2")
+               call pp%kv("Effective probe radius", rp_amean, unit="Bohr")
             end if
             call pp%pop()
 
-            ! Per-patch breakdown table
-            if (self%verbosity >= 3) then
+            if (self%ctx%verbosity >= 3) then
                if (npatch > 0) then
                   call pp%blank()
+                  call pp%push("Per-patch curvatures")
                   plp = new_prettylistprinter( &
                         [8, 16, 18, 18, 16], &
-                        [character(len=18) :: 'Patch', 'Area/Bohr^2', &
-                         'k2_mean/Bohr^-1', 'k2_min/Bohr^-1', 'r_probe/Bohr'], &
-                        unit=output_unit, offset=2, column_gap=2)
-                  call plp%header('Per-patch curvature breakdown')
-                  call plp%blank()
+                        [character(len=18) :: "Patch", "Area/Bohr^2", &
+                         "k2_mean/Bohr^-1", "k2_min/Bohr^-1", "r_probe/Bohr"], &
+                        unit=self%ctx%unit, offset=2, column_gap=2)
                   call plp%print_header()
                   call plp%separator()
                   do ip = 1, npatch
@@ -674,6 +693,7 @@ contains
                      call plp%add(patch_r(ip))
                      call plp%end_row()
                   end do
+                  call pp%pop()
                end if
             end if
          end if

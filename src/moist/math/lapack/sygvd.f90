@@ -4,7 +4,7 @@
 module moist_math_lapack_sygvd
    use mctc_env, only: sp, dp, error_type, fatal_error
    use moist_output_format, only: format_string
-   use moist_math_lapack_type, only: solver_type, context_solver
+   use moist_math_lapack_type, only: eigen_solver_type, context_solver
    implicit none
    private
 
@@ -50,7 +50,7 @@ module moist_math_lapack_sygvd
    end interface lapack_sygvd
 
    !> Wrapper class for solving symmetric general eigenvalue problems
-   type, public, extends(solver_type) :: sygvd_solver
+   type, public, extends(eigen_solver_type) :: sygvd_solver
       private
       integer :: n = 0
       integer, allocatable :: iwork(:)

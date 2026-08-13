@@ -14,6 +14,7 @@ module test_cavity_drop_deflation_comparison
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
+   use moist_context, only: moist_context_type, new_context
    implicit none
    private
 
@@ -59,8 +60,9 @@ contains
 
    subroutine collect_cavity_drop_deflation_comparison(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
-      ! TODO: re-enable dimer_branching and branching_xyz_cross registrations once those cases are stable
       testsuite = [ &
+                  new_unittest("dimer_branching", test_dimer_branching), &
+                  new_unittest("branching_xyz_cross", test_branching_xyz_cross), &
                   new_unittest("octahedral_6C", test_octahedral), &
                   new_unittest("cube_8C", test_cube), &
                   new_unittest("pentagonal_5C", test_pentagonal), &
@@ -82,7 +84,7 @@ contains
                                   mol, 50, 0.8_wp)
    end subroutine test_dimer_branching
 
-   !> Five-carbon planar cross with an off-centre hub.
+   !> Five-carbon planar cross with an off-centers hub.
    subroutine test_branching_xyz_cross(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -225,14 +227,18 @@ contains
 
       type(mctc_error), allocatable :: cavity_error
       character(len=64) :: msg
+      !> Run context borrowed by the cavity returned to the caller
+      type(moist_context_type), target, save :: ctx
+
+      call new_context(ctx, verbosity=0)
 
       allocate (cav)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(blend_k=blend_k, blend_3b=1.0_wp)
-         call new_cavity_drop(cav, nleb=nleb, &
+         call new_cavity_drop(cav, ctx, nleb=nleb, &
                              do_fine=.true., tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                             proj_level=proj_level, debug=.false., verbose=0, &
+                             proj_level=proj_level, &
                              radius_model=default_cpcm_radii(), &
                              lsf_model=svdw_template, error=cavity_error)
       end block
@@ -338,7 +344,7 @@ contains
       end do
    end subroutine extract_branched_points
 
-   !> Compute and print one reference-centred branched-point overlap row.
+   !> Compute and print one reference-centersd branched-point overlap row.
    subroutine print_branch_overlap_row(label, points_ref, points_method)
       character(len=*), intent(in) :: label
       real(wp), intent(in) :: points_ref(:, :), points_method(:, :)

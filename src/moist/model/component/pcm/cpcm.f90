@@ -1,31 +1,36 @@
 !> CPCM (Conductor-like Polarizable Continuum Model) implementation
 !> This module provides the CPCM variant of PCM with its specific dielectric
-!> scaling (f epsilon = ( epsilon -1)/ epsilon ). Matrix assembly is delegated to the cavity type.
+!> scaling (f epsilon = ( epsilon -1)/ epsilon )
 module moist_model_component_pcm_cpcm
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: cavity_type, wavefunction_type
-   use moist_model_component_pcm_type, only: pcm_base, solver_type, &
+   use moist_context, only: moist_context_type
+   use moist_type, only: cavity_type
+   use moist_channels, only: coupling_type
+   use moist_model_component_pcm_type, only: solvation_model_component_pcm, solver_type, &
       & potential_source
-   implicit none
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+   implicit none (type, external)
    private
 
-   public :: cpcm
-   public :: new_cpcm
+   public :: solvation_model_component_cpcm
+   public :: new_component_cpcm
 
    !> CPCM (Conductor-like Polarizable Continuum Model) variant
-   !> Uses f epsilon = ( epsilon -1)/ epsilon scaling. Matrix assembly is delegated to the cavity type.
-   type, extends(pcm_base) :: cpcm
-   end type cpcm
+   !> Uses f epsilon = ( epsilon -1)/ epsilon scaling
+   type, extends(solvation_model_component_pcm) :: solvation_model_component_cpcm
+   end type solvation_model_component_cpcm
 
 contains
 
    !> Constructor for CPCM variant
    !> Sets f epsilon = ( epsilon -1)/ epsilon and configures solver and potential source.
-   subroutine new_cpcm(self, epsilon, solver, phi_source, external_matrix, error)
+   subroutine new_component_cpcm(self, ctx, epsilon, solver, phi_source, external_matrix, error)
       !> CPCM instance to initialize
-      type(cpcm), intent(out) :: self
+      type(solvation_model_component_cpcm), intent(out) :: self
+      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
       real(wp), intent(in) :: epsilon
       !> Optional: linear solver type
@@ -37,9 +42,23 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      ! Set dielectric properties
+      !> Borrow the shared run context (owns verbosity/debug/timer)
+      self%ctx => ctx
+
+      ! Set dielectric properties. Below eps = 1 the scaling factor turns
+      ! negative (and diverges at eps = 0), so the model is undefined there.
+      ! The `epsilon /= epsilon` test rejects a NaN input.
+      if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
+         call fatal_error(error, &
+            & "[new_component_cpcm] Dielectric constant must be >= 1")
+         return
+      end if
       self%epsilon = epsilon
-      self%feps = (epsilon - 1.0_wp)/epsilon  ! CPCM formula
+      if (ieee_is_finite(epsilon)) then
+         self%feps = (epsilon - 1.0_wp)/epsilon  ! CPCM formula
+      else
+         self%feps = 1.0_wp  ! Conductor limit
+      end if
 
       ! Set solver type
       if (present(solver)) then
@@ -63,6 +82,6 @@ contains
       ! Set component name
       self%name = "CPCM"
 
-   end subroutine new_cpcm
+   end subroutine new_component_cpcm
 
 end module moist_model_component_pcm_cpcm

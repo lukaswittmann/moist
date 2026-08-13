@@ -25,7 +25,7 @@ module moist_math_solver
       & new_lbfgsb_solver
 
    use moist_math_lapack_solver, only: &
-      & solver_type, &
+      & eigen_solver_type, &
       & lapack_algorithm, &
       & lapack_solver
 
@@ -51,7 +51,7 @@ module moist_math_solver
    public :: new_lbfgsb_solver
 
    ! Re-export LAPACK solver
-   public :: solver_type
+   public :: eigen_solver_type
    public :: lapack_algorithm
    public :: lapack_solver
 
