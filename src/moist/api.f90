@@ -1991,7 +1991,7 @@ contains
 
 !> Create a CFC-DROP cavity handle with default CPCM radii.
    function new_cfc_drop_cavity_api(verror, nleb, c_debug, c_verbose, &
-         c_a1, c_a2, c_c, c_m, c_screen_k, c_do_fine, c_tolerance, &
+         c_a1, c_a2, c_c, c_m, c_do_fine, c_tolerance, &
          c_proj_maxiter, c_proj_level, c_branch_weight_s, c_rho_grid_h, &
          c_wleb_prune_level) result(vcav) &
          & bind(C, name=namespace//"new_cfc_drop_cavity")
@@ -2003,7 +2003,6 @@ contains
       type(c_ptr), value :: c_a2
       type(c_ptr), value :: c_c
       type(c_ptr), value :: c_m
-      type(c_ptr), value :: c_screen_k
       type(c_ptr), value :: c_do_fine
       type(c_ptr), value :: c_tolerance
       type(c_ptr), value :: c_proj_maxiter
@@ -2015,10 +2014,10 @@ contains
       type(vp_error), pointer :: error
       logical(c_bool), pointer :: p_debug, p_do_fine
       integer(c_int), pointer :: p_verbose, p_m
-      real(c_double), pointer :: p_a1, p_a2, p_c, p_screen_k
+      real(c_double), pointer :: p_a1, p_a2, p_c
       logical :: use_debug, use_do_fine
       integer :: use_verbose, use_m
-      real(wp) :: use_a1, use_a2, use_c, use_screen_k, use_tolerance
+      real(wp) :: use_a1, use_a2, use_c, use_tolerance
       integer :: use_proj_maxiter, use_proj_level, use_wleb_prune_level
       real(wp) :: use_branch_weight_s, use_rho_grid_h
       type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
@@ -2063,11 +2062,6 @@ contains
          call c_f_pointer(c_m, p_m)
          use_m = p_m
       end if
-      use_screen_k = cfc_template%screen_k
-      if (c_associated(c_screen_k)) then
-         call c_f_pointer(c_screen_k, p_screen_k)
-         use_screen_k = p_screen_k
-      end if
       if (.not. decode_drop_tolerance(c_tolerance, use_tolerance)) then
          call api_error(error%ptr, "new_cfc_drop_cavity_api", &
                         "DROP tolerance must be positive")
@@ -2078,8 +2072,7 @@ contains
                                 use_proj_maxiter, use_proj_level, use_branch_weight_s, &
                                 use_rho_grid_h, use_wleb_prune_level)
 
-      call cfc_template%new(a1=use_a1, a2=use_a2, c=use_c, m=use_m, &
-                            screen_k=use_screen_k)
+      call cfc_template%new(a1=use_a1, a2=use_a2, c=use_c, m=use_m)
       call new_drop_cavity_from_lsf(error, c_null_ptr, nleb, use_debug, use_verbose, &
                                     use_do_fine, use_tolerance, use_proj_maxiter, &
                                     use_proj_level, use_branch_weight_s, use_rho_grid_h, &
