@@ -30,6 +30,7 @@ module moist_cavity_drop_projector
    private
 
    public :: drop_projector_type
+
    !> Projector type for efficient grid point projection onto LSF surface
 
    !> Context type for thread-safe projection callbacks
@@ -47,6 +48,30 @@ module moist_cavity_drop_projector
       !*------------------------ Solver configuration------------------------ *!
 
       integer :: proj_level = 3
+
+      !> Screening threshold used while *seeding*, i.e. during the SLSQP solves
+      !> that only have to land each seed in the right basin. Newton then
+      !> re-polishes against the production threshold, so the seed stage does
+      !> not need the accuracy the production gate provides -- and the active
+      !> set, which dominates `prepare`, shrinks with a looser gate.
+      !>
+      !> Must be *looser* (larger) than the production threshold: the cell grid
+      !> is built for the production reach and stays a valid superset only when
+      !> the gate asks for less. A value <= 0 disables the swap entirely.
+      real(wp) :: seed_screening_threshold = 0.0_wp
+      !> Production screening threshold, captured at init so it can be restored
+      real(wp) :: prod_screening_threshold = -1.0_wp
+      !> Multiple of `seed_screening_threshold` below which a seed-stage solver
+      !> tolerance must not go. A looser gate makes `S` jump by a few times the
+      !> threshold as atoms cross it, so a solver asked for more precision than
+      !> that cannot converge and burns its whole iteration budget -- which is
+      !> what a loose gate with production tolerances actually costs.
+      real(wp) :: seed_tol_factor = 30.0_wp
+      !> Absolute floor on every seed-stage solver tolerance, independent of the
+      !> gate. Unlike the threshold swap this does not change the level-set
+      !> function at all -- basin boundaries are untouched -- it only stops
+      !> SLSQP polishing a seed that Newton is about to re-polish anyway.
+      real(wp) :: seed_tol_abs = 1.0e-6_wp
 
       !> Tolerances
       real(wp) :: multistart_tol = 1.0e-9_wp
@@ -186,6 +211,10 @@ module moist_cavity_drop_projector
       procedure :: init => projector_init
       procedure :: init_primitives => projector_init_primitives
       procedure :: compute_ssd => projector_compute_ssd
+      !> Swap the LSF gate to/from the loose seed-stage threshold
+      procedure, private :: seed_screening => projector_seed_screening
+      !> Solver tolerance matched to the seed-stage gate
+      procedure, private :: seed_tol => projector_seed_tol
       procedure :: project_point => projector_project_point
       procedure, private :: run_multistart_solver => projector_run_multistart_solver
       procedure, private :: run_single_solver => projector_run_single_solver
@@ -244,7 +273,7 @@ contains
 
       ! Compute screened LSF value, gradient, AND Hessian.
       ! The Hessian is cached for the subsequent Jacobian call at the same point.
-      call ctx%lsf%f012_r_screened( &
+      call ctx%lsf%f012_r( &
          lsf0=ctx%projector%cached_lsf0, &
          lsf1_r=ctx%projector%cached_lsf1_r, &
          lsf2_rr=ctx%projector%cached_lsf2_rr)
@@ -458,6 +487,11 @@ contains
       call self%phi%set_input(mol, radii)
       call self%lsf%update(mol, radii)
 
+      ! The gate the cell grid was built for; the seed stage may loosen it
+      ! temporarily, and this is what it gets restored to.
+      self%prod_screening_threshold = self%lsf%screening_threshold
+
+
       ! Invalidate SSD point cache (geometry changed)
       self%ssd_cache_valid = .false.
 
@@ -480,6 +514,59 @@ contains
    !>
    !> @param[inout] self  Projector instance (cell grid must be built)
    !> @param[in]    point Evaluation point (3)
+   !> Switch the LSF screening gate between the seed and production thresholds
+   !>
+   !> The seed stage only has to put each seed in the correct basin; Newton
+   !> re-polishes it against the production gate afterwards. A looser gate
+   !> there shrinks the active set, which is what `prepare` spends its time on.
+   !> Swapping costs one O(ncenters) pass over the cached reach column -- no
+   !> allocation and no re-sort -- so it is affordable once per solve.
+   !>
+   !> Any swap invalidates the SSD cache: the same point screened at two
+   !> thresholds gives two different active sets.
+   !>
+   !> @param[inout] self LSF projector instance
+   !> @param[in]    on   `.true.` for the seed threshold, `.false.` to restore
+   !> Solver tolerance to use during the seed stage
+   !>
+   !> Raises `base_tol` to the noise floor the loose gate imposes, so a seed
+   !> solver is never asked for precision the screened `S` cannot deliver.
+   !> Returns `base_tol` unchanged when the seed swap is inactive.
+   !>
+   !> @param[in] self     Projector instance
+   !> @param[in] base_tol Production tolerance
+   !> @returns   tol      Tolerance for the seed stage
+   pure function projector_seed_tol(self, base_tol) result(tol)
+      class(drop_projector_type), intent(in) :: self
+      real(wp), intent(in) :: base_tol
+      real(wp) :: tol
+
+      tol = max(base_tol, self%seed_tol_abs)
+
+      ! A loose gate additionally imposes its own noise floor
+      if (self%seed_screening_threshold <= 0.0_wp) return
+      if (self%prod_screening_threshold <= 0.0_wp) return
+      if (self%seed_screening_threshold <= self%prod_screening_threshold) return
+
+      tol = max(tol, self%seed_tol_factor*self%seed_screening_threshold)
+   end function projector_seed_tol
+
+   subroutine projector_seed_screening(self, on)
+      class(drop_projector_type), intent(inout) :: self
+      logical, intent(in) :: on
+
+      if (self%seed_screening_threshold <= 0.0_wp) return
+      if (self%prod_screening_threshold <= 0.0_wp) return
+      if (self%seed_screening_threshold <= self%prod_screening_threshold) return
+
+      if (on) then
+         call self%lsf%set_screening_threshold(self%seed_screening_threshold)
+      else
+         call self%lsf%set_screening_threshold(self%prod_screening_threshold)
+      end if
+      self%ssd_cache_valid = .false.
+   end subroutine projector_seed_screening
+
    subroutine projector_compute_ssd(self, point)
       class(drop_projector_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
@@ -759,7 +846,7 @@ contains
       ! Using ctx%lsf which comes from the projector context
       call ctx%projector%compute_ssd(x)
 
-      call ctx%lsf%f012_r_screened( &
+      call ctx%lsf%f012_r( &
          lsf0=ctx%projector%cached_lsf0, &
          lsf1_r=ctx%projector%cached_lsf1_r)
 
@@ -829,7 +916,7 @@ contains
       if (.not. associated(ctx%projector)) return
 
       call ctx%projector%compute_ssd(x)
-      call ctx%lsf%f0_screened(lsf0)
+      call ctx%lsf%f0(lsf0)
       radius = ctx%lsf%exclusion_radius(lsf0)
    end subroutine octree_probe
 
@@ -988,9 +1075,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=fine_radii, &
             n_points=fine_n_points, &
             normal=anchor - self%lsf%mol%xyz(:, owner), &
@@ -1011,9 +1098,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=self%multistart_radius, &
             n_points=self%multistart_leb_num, &
             normal=anchor - self%lsf%mol%xyz(:, owner), &
@@ -1062,9 +1149,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             tol_relax_factor=self%deflation_tol_relax, &
             max_roots=self%deflation_max_roots, &
             p_power=self%deflation_p_power, &
@@ -1091,9 +1178,9 @@ contains
             xu=xu, &
             owner_pos=self%lsf%mol%xyz(:, owner), &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=self%multistart_radius, &
             n_points=self%multistart_leb_num, &
             error=error &
@@ -1116,6 +1203,11 @@ contains
       call self%lsf%set_max_deriv(req_max_deriv)
       self%ssd_cache_valid = .false.
 
+      ! Seeds only have to land in the right basin, so screen loosely here.
+      ! Newton-deflation is a *refinement* solver, not a seeder, so it keeps
+      ! the production gate.
+      if (level /= 6) call self%seed_screening(.true.)
+
       ! Solve and extract candidates. Newton-deflation operates on z=(x,lambda),
       ! so it gets its own 4-D seed; SLSQP variants share x_slsqp.
       if (level == 6) then
@@ -1135,7 +1227,8 @@ contains
          call solver%solve(x_slsqp, error)
       end if
 
-      ! Restore second-order for subsequent Newton refinement
+      ! Restore the production gate and second-order for Newton refinement
+      if (level /= 6) call self%seed_screening(.false.)
       call self%lsf%set_max_deriv(2)
       self%ssd_cache_valid = .false.
 
@@ -1226,9 +1319,9 @@ contains
          con_grad_ctx=slsqp_constraint_grad, &
          context=proj_context, &
          max_iter=self%slsqp_max_iter, &
-         tol=self%slsqp_tol, &
-         toldx=self%slsqp_tol, &
-         toldf=self%slsqp_tol, &
+         tol=self%seed_tol(self%slsqp_tol), &
+         toldx=self%seed_tol(self%slsqp_tol), &
+         toldf=self%seed_tol(self%slsqp_tol), &
          xl=xl, &
          xu=xu &
          )
@@ -1241,10 +1334,12 @@ contains
       ! SLSQP only needs value + gradient (max_deriv=1 skips per-atom Hessians)
       call self%lsf%set_max_deriv(1)
       self%ssd_cache_valid = .false.
+      call self%seed_screening(.true.)
 
       call solver%solve(x_slsqp, error)
 
-      ! Restore second-order for subsequent Newton refinement
+      ! Restore the production gate and second-order for Newton refinement
+      call self%seed_screening(.false.)
       call self%lsf%set_max_deriv(2)
       self%ssd_cache_valid = .false.
 
@@ -1635,7 +1730,7 @@ contains
             grad_phi_seed = self%phi%f1_r( &
                             x_seeds(:, i_seed), anchor, owner)
 
-            call self%lsf%f012_r_screened( &
+            call self%lsf%f012_r( &
                lsf0=self%cached_lsf0, &
                lsf1_r=self%cached_lsf1_r)
             norm_grad2 = dot_product(self%cached_lsf1_r, self%cached_lsf1_r)
@@ -2421,7 +2516,7 @@ contains
       real(wp) :: mu_min, mu_max
       real(wp) :: v_min(2), v_max(2)  ! Eigenvectors (unused, but needed for interface)
       real(wp) :: eig_tol, HL_norm
-      real(wp), allocatable :: lsf3_S(:, :, :)  ! Third derivative of LSF (3,3,3)
+      real(wp) :: lsf3_S(3, 3, 3)  ! Third derivative of LSF (3,3,3)
       real(wp) :: d_degen(3)    ! Degenerate direction lifted to 3D
       real(wp) :: D3_ddd        ! Third-order directional derivative D^3 L[d,d,d]
       integer :: i, j, k, i_retract
@@ -2448,7 +2543,7 @@ contains
       ! Step 0: Verify KKT conditions
       ! Compute LSF constraint and derivatives at solution
       call self%compute_ssd(r_star)
-      call self%lsf%f012_r_screened( &
+      call self%lsf%f012_r( &
          lsf0=S_val, lsf1_r=grad_S, lsf2_rr=hess_S)
 
       ! Check feasibility: |S(r*)| < tol_feas
@@ -2570,7 +2665,7 @@ contains
          self%ssd_cache_valid = .false.
          call self%compute_ssd(r_star)
 
-         call self%lsf%f3_rrr_screened(lsf3_rrr=lsf3_S)
+         call self%lsf%f3_rrr(lsf3_rrr=lsf3_S)
 
          ! Restore to second-order
          call self%lsf%set_max_deriv(2)
@@ -2585,7 +2680,6 @@ contains
             end do
          end do
          D3_ddd = -lambda*D3_ddd
-         deallocate (lsf3_S)
 
          if (self%debug) then
             write (output_unit, "(3x,a)") "=> Second-order test degenerate; checking third-order condition"
@@ -2710,7 +2804,7 @@ contains
 
          ! Step 1: Compute derivatives at current point
          call self%compute_ssd(r_curr)
-         call self%lsf%f012_r_screened( &
+         call self%lsf%f012_r( &
             lsf0=S_val, lsf1_r=grad_S, lsf2_rr=hess_S)
          call self%phi%f012_r(r_curr, anchor, owner, phi_val, grad_phi, hess_phi)
 
@@ -2919,7 +3013,7 @@ contains
       do iter = 1, self%retract_max_iter
          ! Evaluate constraint
          call self%compute_ssd(r_curr)
-         call self%lsf%f012_r_screened(lsf0=S_val, lsf1_r=grad_S)
+         call self%lsf%f012_r(lsf0=S_val, lsf1_r=grad_S)
 
          ! Check convergence
          if (abs(S_val) < tol_S) then

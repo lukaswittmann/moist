@@ -124,7 +124,9 @@ contains
          & new_unittest("octree_single_sphere_one_branch", test_octree_single_sphere), &
          & new_unittest("octree_certifies_empty_ball", test_octree_empty_ball), &
          & new_unittest("octree_seed_modes_agree", test_octree_seed_modes), &
-         & new_unittest("octree_budget_is_an_error", test_octree_budget, should_fail=.true.) &
+         & new_unittest("octree_budget_is_an_error", test_octree_budget, should_fail=.true.), &
+         & new_unittest("octree_depth_cap_is_an_error", test_octree_depth_cap), &
+         & new_unittest("octree_negative_slack_is_an_error", test_octree_negative_slack) &
          & ]
    end subroutine collect_math_solvers
 
@@ -2277,5 +2279,72 @@ contains
          return
       end if
    end subroutine test_octree_budget
+
+   !> A depth cap that stops short of the requested seed size must be reported.
+   !> Continuing with coarser leaves would merge minima the configured
+   !> resolution separates, while still claiming a completed enumeration.
+   subroutine test_octree_depth_cap(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      ! A 5 Bohr ball needs depth 7 to reach 0.1 Bohr leaves; three is not enough.
+      call octree%init(seed_size=0.1_wp, max_depth=3, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+
+      call check(error, allocated(solver_error), &
+                 message="a depth cap short of seed_size was accepted silently")
+      if (allocated(error)) return
+      call check(error, octree%n_seeds, 0, &
+                 message="a failed run must not hand back seeds")
+   end subroutine test_octree_depth_cap
+
+   !> A negative squared-distance slack would poison the radius cap with a NaN,
+   !> after which every comparison against it is false and nothing is bounded.
+   subroutine test_octree_negative_slack(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=-0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+
+      call check(error, allocated(solver_error), &
+                 message="a negative rho2_slack was accepted")
+   end subroutine test_octree_negative_slack
 
 end module test_math_solvers

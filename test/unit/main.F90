@@ -23,6 +23,7 @@ program tester
    use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
+   use test_cavity_drop_lsf_golden, only: collect_cavity_drop_lsf_golden
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
@@ -74,6 +75,7 @@ program tester
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
+      & new_testsuite("cavity_drop_lsf_golden", collect_cavity_drop_lsf_golden), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &

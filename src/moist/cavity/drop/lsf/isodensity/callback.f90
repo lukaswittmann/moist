@@ -2,13 +2,23 @@
 !>
 !> This experimental LSF delegates value, spatial gradient, spatial Hessian,
 !> and third spatial derivative evaluation to a C callback
+!>
+!> Third order is where the published C ABI stops. [[isodensity_lsf_callback]]
+!> reaches `include/moist.h`, `python/moist/`, and `test/api/example.c`, so a
+!> fourth output argument would break every host already compiled against it.
+!> This backend therefore leaves `f4_rrrr` on the base type's erroring default:
+!> the internal backend
+!> [[moist_cavity_drop_lsf_isodensity_internal_type]] owns the fourth spatial
+!> derivative, and `prepare` here never reports a `prepared_deriv` above 3 --
+!> even when the cavity asks for more
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
+                                         lsf_base_update, lsf_candidate_space_user
    use moist_output_format, only: format_string
    implicit none (type, external)
    private
@@ -76,11 +86,11 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: set_max_deriv => lsf_set_max_deriv
       procedure, public :: active_count => lsf_active_count
       procedure, public :: active_atom => lsf_active_atom
-      procedure, public :: f0_screened => lsf_f0_screened
-      procedure, public :: f012_r_screened => lsf_f012_r_screened
-      procedure, public :: f3_rrr_screened => lsf_f3_rrr_screened
-      procedure, public :: f3_rr_rA_screened => lsf_f3_rr_rA_screened
-      procedure, public :: neighbor_cutoff => lsf_neighbor_cutoff
+      procedure, public :: f0 => lsf_f0
+      procedure, public :: f012_r => lsf_f012_r
+      procedure, public :: f3_rrr => lsf_f3_rrr
+      procedure, public :: f3_rr_rA => lsf_f3_rr_rA
+      procedure, public :: screening_offset => lsf_screening_offset
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
 contains
@@ -97,6 +107,10 @@ contains
       type(c_ptr), intent(in) :: context
       real(wp), intent(in), optional :: scale
 
+      !> The callback is globally evaluable and holds no per-atom data, so
+      !> candidate ids are never translated.
+      self%candidate_space = lsf_candidate_space_user
+
       self%callback_ptr = callback_ptr
       self%context = context
       if (present(scale)) self%scale = scale
@@ -112,10 +126,7 @@ contains
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
 
-      self%mol = mol
-      self%ncenters = mol%nat
-      if (allocated(self%radii)) deallocate (self%radii)
-      self%radii = radii
+      call lsf_base_update(self, mol, radii)
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point.
@@ -244,12 +255,12 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[out] val  LSF value
-   subroutine lsf_f0_screened(self, val)
+   subroutine lsf_f0(self, val)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out) :: val
 
       val = self%value
-   end subroutine lsf_f0_screened
+   end subroutine lsf_f0
 
    !> Return cached LSF value, gradient, and Hessian.
    !>
@@ -257,7 +268,7 @@ contains
    !> @param[out] lsf0    Optional LSF value
    !> @param[out] lsf1_r  Optional spatial gradient
    !> @param[out] lsf2_rr Optional spatial Hessian
-   subroutine lsf_f012_r_screened(self, lsf0, lsf1_r, lsf2_rr)
+   subroutine lsf_f012_r(self, lsf0, lsf1_r, lsf2_rr)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
@@ -266,10 +277,10 @@ contains
       if (present(lsf0)) lsf0 = self%value
       if (present(lsf1_r)) lsf1_r(:) = self%grad(:)
       if (present(lsf2_rr)) then
-         call self%require_deriv(2, "f012_r_screened(lsf2_rr)")
+         call self%require_deriv(2, "f012_r(lsf2_rr)")
          lsf2_rr(:, :) = self%hess(:, :)
       end if
-   end subroutine lsf_f012_r_screened
+   end subroutine lsf_f012_r
 
    !> Return cached lower derivatives and third spatial derivative
    !>
@@ -278,17 +289,17 @@ contains
    !> @param[out] lsf1_r    Optional spatial gradient
    !> @param[out] lsf2_rr   Optional spatial Hessian
    !> @param[out] lsf3_rrr  Spatial third derivative
-   subroutine lsf_f3_rrr_screened(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+   subroutine lsf_f3_rrr(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
       real(wp), intent(out), optional :: lsf2_rr(:, :)
-      real(wp), allocatable, intent(out) :: lsf3_rrr(:, :, :)
+      real(wp), intent(out) :: lsf3_rrr(:, :, :)
 
-      call self%require_deriv(3, "f3_rrr_screened")
-      call self%f012_r_screened(lsf0, lsf1_r, lsf2_rr)
-      allocate (lsf3_rrr(ndim, ndim, ndim), source=self%third)
-   end subroutine lsf_f3_rrr_screened
+      call self%require_deriv(3, "f3_rrr")
+      call self%f012_r(lsf0, lsf1_r, lsf2_rr)
+      lsf3_rrr(:, :, :) = self%third
+   end subroutine lsf_f3_rrr
 
    !> Return zero nuclear derivative placeholders
    !>
@@ -296,24 +307,31 @@ contains
    !> @param[out] lsf1_rA     Optional nuclear gradient placeholder
    !> @param[out] lsf2_r_rA   Optional mixed second derivative placeholder
    !> @param[out] lsf3_rr_rA  Mixed third derivative placeholder
-   subroutine lsf_f3_rr_rA_screened(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+   subroutine lsf_f3_rr_rA(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf1_rA(:, :)
       real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
-      real(wp), allocatable, intent(out) :: lsf3_rr_rA(:, :, :, :)
+      real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
 
       if (present(lsf1_rA)) lsf1_rA(:, :) = 0.0_wp
       if (present(lsf2_r_rA)) lsf2_r_rA(:, :, :) = 0.0_wp
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, self%ncenters), source=0.0_wp)
-   end subroutine lsf_f3_rr_rA_screened
+      lsf3_rr_rA(:, :, :, :) = 0.0_wp
+   end subroutine lsf_f3_rr_rA
 
    !> Density callback is globally evaluable; no atom-specific reach is needed
    !>
+   !> Nothing about the callback decays with distance from an atom, so the offset
+   !> is zero: the cavity cell grid gets no extra shell and the candidate lists
+   !> this LSF is handed are ignored anyway.
+   !>
    !> @param[in] self   LSF instance
-   !> @param[in] radius Atom radius
-   pure function lsf_neighbor_cutoff(self, radius) result(d)
+   !> @param[in] radius Atom radius (Bohr)
+   !> @returns          Radial offset from the atom surface (Bohr), always zero
+   pure function lsf_screening_offset(self, radius) result(d)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      !> Atom radius (Bohr)
       real(wp), intent(in) :: radius
+      !> Radial offset from the atom surface (Bohr)
       real(wp) :: d
 
       if (self%ncenters < 0) then
@@ -321,6 +339,6 @@ contains
       else
          d = 0.0_wp*radius
       end if
-   end function lsf_neighbor_cutoff
+   end function lsf_screening_offset
 
 end module moist_cavity_drop_lsf_isodensity_callback

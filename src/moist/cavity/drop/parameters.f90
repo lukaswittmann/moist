@@ -323,9 +323,28 @@ contains
       !> quadrature cutoff unless the user pinned it explicitly. The user field
       !> is left alone so it keeps meaning "follow wleb_cut" across a later
       !> tolerance change.
+      !>
+      !> The admissible radius is `sqrt(rho_min^2 + 2*branch_dphi_max/phi_alpha)`,
+      !> so a floor at or above one -- or a non-positive alpha -- makes every
+      !> consumer of that formula take the square root of a negative number.
+      !> Rejecting both here covers `rho_max_from_rho_min`, `filter_candidates`
+      !> and the two deflation ball caps at once.
       weight_floor = self%branch_weight_floor
       if (weight_floor <= 0.0_wp) weight_floor = self%wleb_cut
+      if (weight_floor >= 1.0_wp) then
+         call fatal_error(error, "Branch weight floor must be below one; a floor "// &
+                          "at or above unity admits no branch at all")
+         return
+      end if
+      if (self%phi_alpha <= 0.0_wp) then
+         call fatal_error(error, "Objective alpha must be positive")
+         return
+      end if
       self%branch_dphi_max = self%branch_weight_s*log(1.0_wp/weight_floor)
+      if (self%branch_dphi_max < 0.0_wp) then
+         call fatal_error(error, "Branch softmax scale must not be negative")
+         return
+      end if
 
       !> Grid point adjacency list cutoff from density kernel length
       self%adj_list_grid_cutoff = 4.0_wp*self%rho_grid_h

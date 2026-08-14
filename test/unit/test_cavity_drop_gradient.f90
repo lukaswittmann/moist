@@ -1255,7 +1255,7 @@ contains
 
       real(wp) :: fd_coeff(4), fd_delta(4)
       real(wp) :: d_normal(ndim), d_k1, d_k2, rhs
-      integer :: iat, idir, igrid, jgrid, ich, istep, ax, a, b
+      integer :: iat, idir, igrid, jgrid, ich, istep, ax, a, b, islot
       integer :: ngrid_set, nsph, num_idn, idx_map
       integer :: ncompared(NCHAN)
 
@@ -1379,7 +1379,10 @@ contains
       allocate (en_adj(ndim, nsph, ngrid_set, NCHAN), source=0.0_wp)
       allocate (lsf, source=cavity%lsf_model)
       call lsf%set_max_deriv(3)
+      !> The LSF nuclear outputs are active-indexed; sizing the buffers to the
+      !> atom count bounds `active_count()` from above for every point
       allocate (lsf1_rA(ndim, nsph), lsf2_r_rA(ndim, ndim, nsph))
+      allocate (lsf3_rr_rA(ndim, ndim, ndim, nsph))
       do igrid = 1, ngrid_set
          if (.not. ref_conv(igrid)) cycle
          call lsf%prepare(cavity%xyz(:, igrid), lsf_err)
@@ -1387,15 +1390,18 @@ contains
             call test_failed(error, "LSF prepare failed: "//lsf_err%message)
             return
          end if
-         call lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         !> Slot `islot` belongs to atom `active_atom(islot)`; an atom screening
+         !> dropped keeps the zero `en_adj` it was initialised with
          do ich = 1, NCHAN
-            do iat = 1, nsph
+            do islot = 1, lsf%active_count()
+               iat = lsf%active_atom(islot)
                do ax = 1, ndim
-                  rhs = w_lsf0(igrid, ich)*lsf1_rA(ax, iat)
+                  rhs = w_lsf0(igrid, ich)*lsf1_rA(ax, islot)
                   do a = 1, ndim
-                     rhs = rhs + w_lsf1(a, igrid, ich)*lsf2_r_rA(a, ax, iat)
+                     rhs = rhs + w_lsf1(a, igrid, ich)*lsf2_r_rA(a, ax, islot)
                      do b = 1, ndim
-                        rhs = rhs + w_lsf2(a, b, igrid, ich)*lsf3_rr_rA(a, b, ax, iat)
+                        rhs = rhs + w_lsf2(a, b, igrid, ich)*lsf3_rr_rA(a, b, ax, islot)
                      end do
                   end do
                   en_adj(ax, iat, igrid, ich) = rhs

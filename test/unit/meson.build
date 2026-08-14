@@ -24,6 +24,7 @@ tests = [
   'cavity_drop_primitives',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
+  'cavity_drop_lsf_golden',
   'cavity_drop_isodensity',
   'cavity_drop_gradient',
   'cavity_drop_nuclear_adjoint',

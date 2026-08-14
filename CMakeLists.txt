@@ -365,7 +365,7 @@ if(MOIST_TESTS)
     math_solvers math_sorters math_trig math_grid
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_cpcm
+    cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
     cavity_iswig cavity_numsa cavity_marchingcubes
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint

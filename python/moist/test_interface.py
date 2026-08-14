@@ -196,7 +196,6 @@ def test_cavity_specific_options_reach_the_native_implementations(
             a2=-8.0,
             c=4.0,
             m=4,
-            screen_k=2.5,
         )
     )
     assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)

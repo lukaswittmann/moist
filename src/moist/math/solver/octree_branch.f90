@@ -35,6 +35,14 @@
 !> -- an upper bound that costs nothing beyond the value already computed, and
 !> that shrinks the ball the search still has to certify.
 !>
+!> What the certificate covers is the *coverage of the search ball*: every box
+!> is either examined or proven to hold no surface, so no branch escapes the
+!> surviving leaves. Turning those leaves into seeds is a separate step, and in
+!> `octree_seed_cluster` mode it is a heuristic -- one seed per discrete local
+!> minimum of an estimated surface distance, which can merge two basins that
+!> share a survivor patch. `octree_seed_per_leaf` performs no such reduction and
+!> is the mode to fall back on when that matters.
+!>
 !> This is deliberately not a [[solver_base_type]]: it does not refine a single
 !> iterate towards a solution, it partitions a region and returns seeds. The
 !> caller runs its own local solver on those seeds afterwards.
@@ -390,6 +398,26 @@ contains
       half = self%root_half/real(2**depth, wp)
    end function box_half
 
+   !> Depth at which a root of half-width `rho_max` first reaches `seed_size`
+   !>
+   !> Only used to tell the caller what to set `max_depth` to; the search itself
+   !> walks the depth down rather than computing it in floating point.
+   !>
+   !> @param[in] self    Search instance
+   !> @param[in] rho_max Root half-width (Bohr)
+   !> @returns   depth   Smallest depth with edge length at or below `seed_size`
+   pure function required_depth(self, rho_max) result(depth)
+      class(moist_math_octree_branch_type), intent(in) :: self
+      real(wp), intent(in) :: rho_max
+      integer :: depth
+
+      depth = 0
+      do while (2.0_wp*rho_max/real(2**depth, wp) > self%seed_size)
+         depth = depth + 1
+         if (depth >= max_addressable_depth) exit
+      end do
+   end function required_depth
+
    !> Offset of a box centre from the anchor
    !>
    !> The root is centred on the anchor, so at depth `d` with half-width `h`
@@ -566,6 +594,8 @@ contains
       !> Trace text for the box currently being examined. Sized to the trace's
       !> action column; an internal write past it is a runtime "End of record".
       character(len=trace_action_width) :: action
+      !> Scratch for composing error messages
+      character(len=256) :: buffer
 
       if (.not. allocated(self%heap_key)) then
          call fatal_error(error, "Octree branch search: run before init")
@@ -573,6 +603,13 @@ contains
       end if
       if (rho_max <= 0.0_wp) then
          call fatal_error(error, "Octree branch search: rho_max must be positive")
+         return
+      end if
+      ! A negative slack would put a NaN into the radius cap, after which every
+      ! comparison against it is false and the search silently stops bounding
+      ! anything. Callers derive it from a weight floor, so a bad floor lands here.
+      if (rho2_slack < 0.0_wp) then
+         call fatal_error(error, "Octree branch search: rho2_slack must not be negative")
          return
       end if
 
@@ -597,11 +634,26 @@ contains
       ! Depth at which the edge length first drops to the seed size. Every
       ! survivor stops there, so they all share one lattice -- which is what
       ! lets face adjacency be an integer test further down.
+      !
+      ! Stopping early because `max_depth` ran out would hand back leaves
+      ! coarser than asked for, merging minima that the configured resolution
+      ! separates -- and still report a completed search. The other caps are
+      ! errors for the same reason.
       leaf_depth = 0
       do while (2.0_wp*box_half(self, leaf_depth) > self%seed_size)
          leaf_depth = leaf_depth + 1
          if (leaf_depth >= self%max_depth) exit
       end do
+      if (2.0_wp*box_half(self, leaf_depth) > self%seed_size) then
+         write (buffer, "(a,i0,a,f0.4,a,f0.4,a,i0,a)") &
+            "Octree branch search: max_depth (", self%max_depth, &
+            ") bottoms out at a leaf edge of ", 2.0_wp*box_half(self, leaf_depth), &
+            " Bohr, coarser than the requested seed_size of ", self%seed_size, &
+            " Bohr. Raise max_depth to at least ", required_depth(self, rho_max), &
+            " or loosen seed_size."
+         call fatal_error(error, trim(buffer))
+         return
+      end if
       self%lattice_base = 2_int64**leaf_depth
       self%dbg_leaf_depth = leaf_depth
 
@@ -704,11 +756,17 @@ contains
                write (action, "(a,i0)") "leaf: survivor ", self%n_surv
                call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
             end if
+            ! Estimated distance from the anchor to the surface *through* this
+            ! box. The offset is the certified radius, not `abs(lsf0)`: the
+            ! probe contract gives units only to the radius, whereas the level
+            ! set value is a value whose sign alone is meaningful. The two
+            ! coincide for a 1-Lipschitz LSF, but an LSF that must divide by a
+            ! gradient bound (or works in density units) would rank nonsense.
             self%surv_rho_est(self%n_surv) = norm2(centre - anchor)
             if (lsf0*lsf0_anchor >= 0.0_wp) then
-               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) + abs(lsf0)
+               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) + excl_radius
             else
-               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) - abs(lsf0)
+               self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) - excl_radius
             end if
             cycle
          end if

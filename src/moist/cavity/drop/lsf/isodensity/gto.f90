@@ -31,11 +31,13 @@ module moist_cavity_drop_lsf_isodensity_gto
 
    public :: moist_iso_gto_type
    public :: moist_iso_gto_ncart
+   public :: moist_iso_gto_nslot
 
    !> Highest supported angular momentum (s=0 .. l=8).  The parameter and the
    !> [[moist_iso_gto_poly1d]] routine below are emitted by
-   !> config/gen_isodensity_gto.py into the marked regions -- DO NOT EDIT THEM BY
-   !> HAND; regenerate with `python3 config/gen_isodensity_gto.py`.
+   !> `moist_dev/tools/gen_isodensity_gto.py` into the marked regions -- DO NOT
+   !> EDIT THEM BY HAND; regenerate with
+   !> `python3 moist_dev/tools/gen_isodensity_gto.py`.
    ! >>> GENERATED lmax >>>
    integer, parameter :: moist_iso_gto_lmax = 8
    ! <<< GENERATED lmax <<<
@@ -60,7 +62,7 @@ module moist_cavity_drop_lsf_isodensity_gto
                                                        12, 14, 15, 14, 17, 18, 15, 18, 19], [3, 3, 3])
 
    !> Cumulative number of packed derivative slots through each order, 0..4.
-   integer, parameter :: nslot_by_order(0:4) = [1, 4, 10, 20, 35]
+   integer, parameter :: moist_iso_gto_nslot(0:4) = [1, 4, 10, 20, 35]
 
    !> Number of x derivatives represented by each packed slot, 0..34.
    integer, parameter :: deriv_x(0:34) = [ &
@@ -597,7 +599,7 @@ contains
          ndloc = 4
          if (.not. present(tmm)) error stop "gto_eval: d4rho requires the tmm scratch"
       end if
-      nslot = nslot_by_order(ndloc)
+      nslot = moist_iso_gto_nslot(ndloc)
       if (size(phi, 2) < nslot) error stop "gto_eval: phi scratch has too few derivative slots"
       rho = 0.0_wp
       drho = 0.0_wp
