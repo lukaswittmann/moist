@@ -784,7 +784,7 @@ contains
          end if
 
          ! Compute lsf derivatives
-         call slots%lsf(thread_slot)%lsf%f012_r_screened(lsf0, &
+         call slots%lsf(thread_slot)%lsf%f012_r(lsf0, &
                                                            lsf1_r_threads(:, thread_slot), lsf2_rr_threads(:, :, thread_slot))
 
          g_vec = lsf1_r_threads(:, thread_slot)

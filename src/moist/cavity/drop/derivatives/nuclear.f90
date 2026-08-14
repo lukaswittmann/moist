@@ -122,14 +122,14 @@ contains
                                        cat_gradient)
       call self%ctx%timer%start(h_sgrad)
 
-      !* ------------------------- Effective surface weights ------------------------- *!
+      !* -------------------------- Effective surface weights ------------------------- *!
       ! fold_switching = .true.: a nuclear displacement moves the switching
       ! factor f, so the area channel's da/df term must be carried. The
       ! electronic path passes .false. because df/dp vanishes there.
       call prepare_surface_weights(self, acc, .true., eff)
 
-      !* ------------------------------- Thread setup ------------------------------- *!
-      ! The field contraction needs f3_rr_rA_screened, so the SSD cache has to be
+      !* -------------------------------- Thread setup -------------------------------- *!
+      ! The field contraction needs f3_rr_rA, so the per-point cache has to be
       ! sized for third derivatives before the first %prepare.
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
       allocate (grad_threads(3, self%nsph, slots%nthreads), source=0.0_wp)
@@ -149,6 +149,7 @@ contains
       allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
       allocate (lsf1_rA(3, self%nsph), source=0.0_wp)
       allocate (lsf2_r_rA(3, 3, self%nsph), source=0.0_wp)
+      allocate (lsf3_rr_rA(3, 3, 3, self%nsph), source=0.0_wp)
       allocate (active_idx(self%nsph))
       allocate (f1_rA_pt(3, self%nsph), source=0.0_wp)
       allocate (anchor_xi_zero(3, self%nsph), source=0.0_wp)
@@ -173,8 +174,8 @@ contains
             cycle
          end if
 
-         call slots%lsf(thread_slot)%lsf%f3_rrr_screened(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call slots%lsf(thread_slot)%lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+         call slots%lsf(thread_slot)%lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
          call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
 
          state%lsf1_r = lsf1_r
@@ -198,7 +199,7 @@ contains
          w_lsf2_pt = 0.0_wp
          call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
 
-         !* ------------------------- Bordered KKT sensitivities ------------------------- *!
+         !* ------------------------ Bordered KKT sensitivities ----------------------- *!
          ! Columns 1-4 are the level-set value and gradient seeds; the nine
          ! Hessian seeds have a zero right-hand side. Columns 5-7 are the
          ! anchor seeds: moving the owner rigidly leaves the field untouched
@@ -218,11 +219,11 @@ contains
             cycle
          end if
 
-         !* ---------------------- Field seeds -> level-set adjoints ---------------------- *!
+         !* -------------------- Field seeds -> level-set adjoints -------------------- *!
          call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
 
-         !* ------------------ Field channel: contract with nuclear partials ------------------ *!
+         !* -------------- Field channel: contract with nuclear partials -------------- *!
          n_active = slots%lsf(thread_slot)%lsf%active_count()
          do i = 1, n_active
             active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
@@ -230,19 +231,19 @@ contains
          do i = 1, n_active
             iatom = active_idx(i)
             do iaxis = 1, 3
-               g_val = w_lsf0_pt*lsf1_rA(iaxis, iatom) &
-                       + dot_product(w_lsf1_pt, lsf2_r_rA(:, iaxis, iatom)) &
-                       + sum(w_lsf2_pt*lsf3_rr_rA(:, :, iaxis, iatom))
+               g_val = w_lsf0_pt*lsf1_rA(iaxis, i) &
+                       + dot_product(w_lsf1_pt, lsf2_r_rA(:, iaxis, i)) &
+                       + sum(w_lsf2_pt*lsf3_rr_rA(:, :, iaxis, i))
                grad_threads(iaxis, iatom, thread_slot) = &
                   grad_threads(iaxis, iatom, thread_slot) + g_val
             end do
          end do
 
-         !* ---------------------------- Anchor channel (owner) ---------------------------- *!
+         !* ------------------------- Anchor channel (owner) -------------------------- *!
          call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
                           grad_threads(:, owner_idx, thread_slot))
 
-         !* --------------------------- iSwig switching channel --------------------------- *!
+         !* ------------------------- iSwig switching channel ------------------------- *!
          ! f_i depends on the nuclear geometry alone; swi1_rA already returns
          ! the full (3, nsph) gradient, so this channel costs the same in both
          ! modes. anchor_xi has no nuclear dependence, matching forward.f90.
@@ -256,8 +257,7 @@ contains
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, lsf1_rA, lsf2_r_rA, active_idx, f1_rA_pt, anchor_xi_zero)
-      if (allocated(lsf3_rr_rA)) deallocate (lsf3_rr_rA)
+      deallocate (lsf3_rrr, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, active_idx, f1_rA_pt, anchor_xi_zero)
       !$omp end parallel
 
       if (abort%requested) then

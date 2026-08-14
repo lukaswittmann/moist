@@ -161,7 +161,7 @@ contains
          ! (see the parallel loops for the general contract).
          call lsf_slot%lsf%prepare(point, error)
          if (allocated(error)) return
-         call lsf_slot%lsf%f3_rrr_screened(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+         call lsf_slot%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
          call phi%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
 
          state%lsf1_r = lsf1_r
