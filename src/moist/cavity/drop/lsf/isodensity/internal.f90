@@ -50,11 +50,6 @@ module moist_cavity_drop_lsf_isodensity_internal
       !> Cached third spatial derivative
       real(wp) :: third(ndim, ndim, ndim) = 0.0_wp
       !> Cached fourth spatial derivative
-      !>
-      !> Unlike the lower orders this is *not* re-zeroed by every `prepare`: the
-      !> 81-word store would be paid on the value+gradient projection path, which
-      !> never looks at it. `prepared_deriv` is the guard that keeps a stale or
-      !> default-initialized value from ever being read -- see [[lsf_f4_rrrr]].
       real(wp) :: fourth(ndim, ndim, ndim, ndim) = 0.0_wp
       !> Highest requested derivative order
       integer :: max_deriv = 0
@@ -66,9 +61,6 @@ module moist_cavity_drop_lsf_isodensity_internal
       !> Per-instance scratch density-weighted gradient vectors (ncart, 3)
       real(wp), allocatable :: tm(:, :)
       !> Per-instance scratch density-weighted Hessian vectors (ncart, 6)
-      !>
-      !> Only the fourth derivative needs it, so it stays unallocated until the
-      !> first `prepare` that actually runs at order 4
       real(wp), allocatable :: tmm(:, :)
       !> Per-instance scratch active-component index list (ncart)
       integer, allocatable :: act(:)
@@ -113,8 +105,7 @@ contains
       real(wp), intent(in), optional :: scale
       type(error_type), allocatable, intent(out) :: error
 
-      !> Candidate ids index this LSF's per-atom GTO shells, so they must stay
-      !> in the caller's own atom numbering.
+      !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
 
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
@@ -198,10 +189,6 @@ contains
          allocate (self%tm(self%gto%ncart, 3))
          allocate (self%act(self%gto%ncart))
       else if (size(self%phi, 2) < nslot) then
-         !> ``set_max_deriv`` may raise the order after the scratch was first
-         !> sized (the projection runs at 1, a later Hessian pass at 4). Grow the
-         !> table here -- ``gto_eval`` would otherwise abort on it. It only ever
-         !> grows, so a later drop back to a low order costs nothing
          deallocate (self%phi)
          allocate (self%phi(self%gto%ncart, 0:nslot - 1))
       end if
@@ -243,9 +230,6 @@ contains
       else
          self%third = 0.0_wp
       end if
-      !> Deliberately no ``else`` branch: `prepared_deriv` above already makes
-      !> [[lsf_f4_rrrr]] abort below order 4, so zeroing the 81-word cache on the
-      !> hot low-order path would buy nothing
       if (nderiv >= 4) self%fourth = -self%scale*d4rho
    end subroutine lsf_prepare_impl
 
@@ -357,10 +341,6 @@ contains
    end subroutine lsf_f3_rrr
 
    !> Return the cached fourth spatial derivative
-   !>
-   !> Reached only when `set_max_deriv(4)` ran before `prepare`; otherwise the
-   !> cache holds no fourth derivative and `require_deriv` aborts rather than
-   !> handing back a stale or default-initialized tensor
    !>
    !> @param[in]  self      LSF instance
    !> @param[out] lsf4_rrrr Fourth spatial derivative [3, 3, 3, 3]

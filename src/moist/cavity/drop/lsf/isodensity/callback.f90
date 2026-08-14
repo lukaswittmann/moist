@@ -2,15 +2,6 @@
 !>
 !> This experimental LSF delegates value, spatial gradient, spatial Hessian,
 !> and third spatial derivative evaluation to a C callback
-!>
-!> Third order is where the published C ABI stops. [[isodensity_lsf_callback]]
-!> reaches `include/moist.h`, `python/moist/`, and `test/api/example.c`, so a
-!> fourth output argument would break every host already compiled against it.
-!> This backend therefore leaves `f4_rrrr` on the base type's erroring default:
-!> the internal backend
-!> [[moist_cavity_drop_lsf_isodensity_internal_type]] owns the fourth spatial
-!> derivative, and `prepare` here never reports a `prepared_deriv` above 3 --
-!> even when the cavity asks for more
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
