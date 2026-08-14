@@ -518,7 +518,7 @@ moist_new_drop_cavity_with_radii(moist_error /* error */,
                                 const int* /* wleb_prune_level */) moist_API_SUFFIX__V_0_6;
 
 /// Create a CFC-DROP cavity with default CPCM radii.
-/// Optional: nleb, debug, verbose, CFC a1/a2/c/m/screen_k parameters,
+/// Optional: nleb, debug, verbose, CFC a1/a2/c/m parameters,
 ///          do_fine, and the shared DROP tolerance/projection/branching,
 ///          grid-density, and weight-pruning controls.
 /// Pass NULL for any optional parameter to use the compiled default.
@@ -531,7 +531,6 @@ moist_new_cfc_drop_cavity(moist_error /* error */,
                           const double* /* a2 */,
                           const double* /* c */,
                           const int* /* m */,
-                          const double* /* screen_k */,
                           const bool* /* do_fine */,
                           const double* /* tolerance */,
                           const int* /* proj_maxiter */,
