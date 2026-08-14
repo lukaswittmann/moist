@@ -183,7 +183,6 @@ def new_cfc_drop_cavity(
     a2: Optional[float] = None,
     c: Optional[float] = None,
     m: Optional[int] = None,
-    screen_k: Optional[float] = None,
     do_fine: bool = False,
     tolerance: Optional[float] = None,
     proj_maxiter: Optional[int] = None,
@@ -203,7 +202,6 @@ def new_cfc_drop_cavity(
             _ref("double", a2),
             _ref("double", c),
             _ref("int", m),
-            _ref("double", screen_k),
             _ref("bool", do_fine),
             _ref("double", tolerance),
             _ref("int", proj_maxiter),
@@ -799,6 +797,32 @@ def get_drop_specific(cavity: CavityHandle, ngrid: Optional[int] = None) -> dict
         "f": switch_f,
         "rho": rho,
     }
+
+
+def get_drop_numbering(cavity: CavityHandle, ngrid: Optional[int] = None) -> np.ndarray:
+    """Return the stable per-grid-point numbering of a DROP cavity.
+
+    The numbering packs the anchor and the branch index into one integer as
+    ``anchor_id + nmax*(branch - 1)``, so it identifies the same physical
+    surface point across rebuilds and lets callers recover which points are
+    branches of a common anchor.
+
+    ``ngrid`` sizes the buffer and is passed on as the array capacity; pass
+    ``None`` to read the size from the cavity.
+    """
+
+    if ngrid is None:
+        ngrid, _ = get_cavity_sizes(cavity)
+
+    numbering = np.zeros(ngrid, dtype=np.int32)
+
+    error_check(lib.moist_get_drop_numbering)(
+        cavity.handle,
+        ngrid,
+        _cast("int*", numbering),
+    )
+
+    return numbering
 
 
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:

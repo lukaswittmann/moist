@@ -93,6 +93,15 @@ class CavitySnapshotDROP(CavitySnapshot):
         ``(ngrid,)`` switching-function values.
     ``rho``
         ``(ngrid,)`` level-set (density) values at the projected points.
+    ``numbering``
+        ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
+        with ``base = nsph * num_leb``.  The same physical point keeps its id
+        across rebuilds, and the packing lets callers recover both the anchor
+        and the branch index -- points sharing an ``anchor_id`` are branches of
+        one anchor.  Note the base is *not* ``nmax``: ``nmax`` is reset to the
+        anchor count surviving the pre-filter, whereas the base is the full
+        pre-filter grid size, so decode with the Lebedev order the cavity was
+        built with.
     """
 
     nmax: int
@@ -101,6 +110,31 @@ class CavitySnapshotDROP(CavitySnapshot):
     r_iI0: np.ndarray
     f: np.ndarray
     rho: np.ndarray
+    numbering: np.ndarray
+
+    def branching(self, num_leb: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Unpack ``numbering`` into anchor ids, branch indices and counts.
+
+        ``num_leb`` is the Lebedev order the cavity was built with; it cannot
+        be read back from the cavity, which is why it has to be passed in.
+
+        Returns ``(anchor_id, branch, branch_count)``, each ``(ngrid,)``.
+        ``branch`` is one-based, matching moist's own numbering, and
+        ``branch_count`` gives, for every point, how many points share its
+        anchor -- so ``branch_count > 1`` marks the branched points.
+
+        The counts are over *surviving* points, i.e. after the cavity's own
+        weight filter, which is what actually carries area.  A point whose
+        siblings were all filtered away therefore reports a count of one.
+        """
+
+        base = self.nsph * int(num_leb)
+        anchor_id = self.numbering % base
+        branch = self.numbering // base + 1
+        _, inverse, counts = np.unique(
+            anchor_id, return_inverse=True, return_counts=True
+        )
+        return anchor_id, branch, counts[inverse]
 
 
 @dataclass(frozen=True)
@@ -558,7 +592,8 @@ class _CavityDROPBase(Cavity):
     def _read_snapshot(self) -> CavitySnapshotDROP:
         generic = library.get_cavity_results(self._handle)
         drop = library.get_drop_specific(self._handle, ngrid=generic["ngrid"])
-        return CavitySnapshotDROP(**generic, **drop)
+        numbering = library.get_drop_numbering(self._handle, ngrid=generic["ngrid"])
+        return CavitySnapshotDROP(**generic, **drop, numbering=numbering)
 
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         return _CavityDROPBorrowed(handle, self)
@@ -691,7 +726,6 @@ class CavityDROPCFC(_CavityDROPBase):
         a2: Optional[float] = None,
         c: Optional[float] = None,
         m: Optional[int] = None,
-        screen_k: Optional[float] = None,
         debug: bool = False,
         verbosity: int = 0,
         do_fine: bool = False,
@@ -709,7 +743,6 @@ class CavityDROPCFC(_CavityDROPBase):
                 a2=a2,
                 c=c,
                 m=m,
-                screen_k=screen_k,
                 debug=debug,
                 verbosity=verbosity,
                 do_fine=do_fine,
