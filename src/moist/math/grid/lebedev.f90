@@ -19,6 +19,7 @@ module moist_math_grid_lebedev
    public :: grid_size
    public :: get_angular_grid
    public :: lebedev_order_from_num
+   public :: lebedev_locality_order
 
    !> Available Lebedev-Laikov grids
    integer, parameter :: grid_size(32) = [ &
@@ -134,6 +135,47 @@ contains
       end if
 
    end subroutine get_angular_grid
+
+   !> Order unit-sphere grid points so that indices are spatially close
+   !>
+   !> @param[in]  grid Grid points (3, n); `perm` must be at least of size n
+   !> @param[out] perm Visit order, `perm(j)` is the original index of the j-th point
+   pure subroutine lebedev_locality_order(grid, perm)
+      real(wp), intent(in) :: grid(:, :)
+      integer, intent(out) :: perm(:)
+
+      logical, allocatable :: used(:)
+      integer :: n, i, j, prev, best
+      real(wp) :: dx, dy, dz, d2, best_d2
+
+      n = min(size(grid, dim=2), size(perm))
+      if (n <= 0) return
+
+      allocate (used(n), source=.false.)
+
+      perm(1) = 1
+      used(1) = .true.
+
+      do j = 2, n
+         prev = perm(j - 1)
+         best = 0
+         best_d2 = huge(1.0_wp)
+         do i = 1, n
+            if (used(i)) cycle
+            dx = grid(1, i) - grid(1, prev)
+            dy = grid(2, i) - grid(2, prev)
+            dz = grid(3, i) - grid(3, prev)
+            d2 = dx*dx + dy*dy + dz*dz
+            if (d2 < best_d2) then
+               best_d2 = d2
+               best = i
+            end if
+         end do
+         perm(j) = best
+         used(best) = .true.
+      end do
+
+   end subroutine lebedev_locality_order
 
 !> Rotate Lebedev grid using extrinsic XYZ Euler angles
 !>
