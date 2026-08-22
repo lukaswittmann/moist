@@ -65,10 +65,33 @@
 !> accessor therefore asks [[require_deriv]] for the highest *total* order of the
 !> accumulator it reads, not for the order of the tensor it returns: `f3_rr_rA`
 !> returns a rank-3 object but reads `qn2_rr`, which is a total order 3, so it
-!> requires 3. Anything an accessor builds itself (`tg*`, `hvp*`, `qq*`) does not
-!> enter that count. An accessor asked for an order `prepare` did not provision
-!> aborts; none of them returns zeros, which a caller could not tell from a real
-!> answer.
+!> requires 3. Anything an accessor builds itself (`tg*`, `hvp*`, `qq*`, `rd*`,
+!> `rh*`) does not enter that count. An accessor asked for an order `prepare`
+!> did not provision aborts; none of them returns zeros, which a caller could
+!> not tell from a real answer.
+!>
+!> Cavity radii
+!> ------------
+!> The radii are parameters of the level set, so a model that ties them to the
+!> geometry differentiates through them as well. `f3_rr_rad` is that channel's
+!> gradient ladder and `hvp_*_rad` its Hessian row, the radius counterparts of
+!> `f3_rr_rA` and `hvp_*_rA`. Because a radius is a scalar parameter and not a
+!> coordinate, the `_rad` results carry no trailing derivative index -- their
+!> rank *is* the spatial order -- and the channel consumes no derivative order,
+!> so a `_rad` accessor requires one order less than its `_rA` twin.
+!>
+!> The direction of the `hvp_*` accessors correspondingly becomes a pair
+!> `(v, vrad)`: passing `vrad` to `hvp_*_rA` promotes its contraction from
+!> `sum_B v_B . d/dR_B` to `sum_B (v_B . d/dR_B + vr_B d/dRad_B)`, and
+!> `hvp_*_rad` is the row that retains a radius instead of a position. Between
+!> them the two cover all four blocks of the joint Hessian. A fixed-radius
+!> caller omits `vrad` and is unaffected, down to the bit -- the radius terms
+!> live in their own kernel routines and its sweeps are untouched.
+!>
+!> `rd*` is deliberately not cached by `prepare` even though it depends on
+!> nothing but the geometry: caching it would charge every fixed-radius caller
+!> an extra O(n_active**2) pair sweep at every grid point for a family it never
+!> reads.
 !>
 module moist_cavity_drop_lsf_cfc
    use mctc_env, only: error_type
@@ -76,25 +99,25 @@ module moist_cavity_drop_lsf_cfc
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_sorted
+   use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use moist_cavity_drop_lsf_cfc_kernel, only: &
       cfc_atomic_term_eval, cfc_pair_spatial_eval, &
       cfc_atomic_nuclear_eval, cfc_pair_nuclear_eval, &
       cfc_atomic_hessian_eval, cfc_pair_hessian_eval, &
       cfc_atomic_tangent_eval, cfc_pair_tangent_eval, &
       cfc_atomic_hvp_eval, cfc_pair_hvp_eval, &
+      cfc_atomic_radius_eval, cfc_pair_radius_eval, &
+      cfc_atomic_radius2_eval, cfc_pair_radius2_eval, &
+      cfc_atomic_nucrad_eval, cfc_pair_nucrad_eval, &
+      cfc_atomic_radius_hvp_eval, cfc_pair_radius_hvp_eval, &
       cfc_spatial_eval, cfc_nuclear_eval, cfc_hessian_eval, &
-      cfc_tangent_eval, cfc_hvp_eval
+      cfc_tangent_eval, cfc_hvp_eval, &
+      cfc_radius_eval, cfc_radius2_eval, cfc_nucrad_eval, cfc_radius_hvp_eval
    implicit none (type, external)
    private
 
    !> Spatial dimension
    integer, parameter :: ndim = 3
-
-   !> Diedenhofen-Klamt 2018 defaults for the four CFC shape parameters
-   real(wp), parameter :: a1_default = -15.0_wp
-   real(wp), parameter :: a2_default = -9.0_wp
-   real(wp), parameter :: c_default = 5.0_wp
-   integer, parameter :: m_default = 4
 
    !> Smallest spatial-gradient norm [[lsf_normalized_f01_rA]] treats as
    !> non-degenerate. Below it the normalized level set has no defined value and
@@ -109,18 +132,8 @@ module moist_cavity_drop_lsf_cfc
    !> from the generated kernel. Inherits the common atom-LSF state (ncenters,
    !> mol, radii, screening caches) from [[moist_cavity_drop_lsf_type]].
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_cfc_type
-      !> Atomic-term exponent (Diedenhofen-Klamt 2018: -15)
-      real(wp) :: a1 = a1_default
-      !> Pair-term exponent (Diedenhofen-Klamt 2018: -9)
-      real(wp) :: a2 = a2_default
-      !> Pair-term coupling constant (Diedenhofen-Klamt 2018: 5)
-      real(wp) :: c = c_default
-      !> Pair-term polynomial power (Diedenhofen-Klamt 2018: 4)
-      !>
-      !> The kernel bakes `m = 4` into its symbolic differentiation, so this
-      !> field only feeds [[lsf_screening_offset]]; a value other than 4 is
-      !> inconsistent with the derivatives and is not supported
-      integer :: m = m_default
+      !> CFC shape parameters (a1, a2, c, m)
+      type(moist_cavity_drop_lsf_cfc_param_type) :: param
 
       !> Highest total derivative order `prepare` provisions (0..4)
       integer :: max_deriv = 2
@@ -195,6 +208,20 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: f4_rrrr => lsf_f4_rrrr
       !> Mixed fourth derivative d^4S / dr^3 dR_A
       procedure, public :: f4_rrr_rA => lsf_f4_rrr_rA
+      !> Radius derivative d^3S / (dr^2 dR_a) and its lower orders
+      procedure, public :: f3_rr_rad => lsf_f3_rr_rad
+      !> Pure radius Hessian d^2S / dR_a dR_b
+      procedure, public :: f2_radrad => lsf_f2_radrad
+      !> Mixed third derivative d^3S / dr dR_a dR_b
+      procedure, public :: f3_r_radrad => lsf_f3_r_radrad
+      !> Mixed fourth derivative d^4S / dr^2 dR_a dR_b
+      procedure, public :: f4_rr_radrad => lsf_f4_rr_radrad
+      !> Mixed nuclear-radius Hessian d^2S / dR_A dR_b
+      procedure, public :: f2_rA_rad => lsf_f2_rA_rad
+      !> Mixed third derivative d^3S / dr dR_A dR_b
+      procedure, public :: f3_r_rA_rad => lsf_f3_r_rA_rad
+      !> Mixed fourth derivative d^4S / dr^2 dR_A dR_b
+      procedure, public :: f4_rr_rA_rad => lsf_f4_rr_rA_rad
       !> Pure nuclear Hessian d^2S / dR_A dR_B
       procedure, public :: f2_rArB => lsf_f2_rArB
       !> Mixed third derivative d^3S / dr dR_A dR_B
@@ -217,6 +244,12 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: hvp_f2_r_rA => lsf_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure, public :: hvp_f3_rr_rA => lsf_hvp_f3_rr_rA
+      !> Radius row of the joint Hessian-vector product
+      procedure, public :: hvp_f1_rad => lsf_hvp_f1_rad
+      !> Joint directional derivative of `f2_r_rad`
+      procedure, public :: hvp_f2_r_rad => lsf_hvp_f2_r_rad
+      !> Joint directional derivative of `f3_rr_rad`
+      procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
       !> Exact radial offset where the CFC contribution equals the threshold
       procedure, public :: screening_offset => lsf_screening_offset
       !> Finalizer
@@ -256,10 +289,7 @@ contains
       ! directly, so candidate ids must arrive spatially sorted.
       self%candidate_space = lsf_candidate_space_sorted
 
-      if (present(a1)) self%a1 = a1
-      if (present(a2)) self%a2 = a2
-      if (present(c)) self%c = c
-      if (present(m)) self%m = m
+      call self%param%new(a1=a1, a2=a2, c=c, m=m)
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
@@ -424,11 +454,13 @@ contains
       end do
 
       do i = 1, n
-         call cfc_atomic_term_eval(self%act_d(:, i), self%act_radius(i), self%a1, md, &
+         call cfc_atomic_term_eval(self%act_d(:, i), self%act_radius(i), &
+                                   self%param%a1, md, &
                                    self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                                    self%pd4_rrrr)
          if (nd < 0) cycle
-         call cfc_atomic_nuclear_eval(self%act_d(:, i), self%act_radius(i), self%a1, nd, &
+         call cfc_atomic_nuclear_eval(self%act_d(:, i), self%act_radius(i), &
+                                      self%param%a1, nd, &
                                       self%qn0(:, i), self%qn1_r(:, :, i), &
                                       self%qn2_rr(:, :, :, i), self%qn3_rrr(:, :, :, :, i))
       end do
@@ -437,13 +469,13 @@ contains
          do j = i + 1, n
             call cfc_pair_spatial_eval(self%act_d(:, i), self%act_d(:, j), &
                                        self%act_radius(i), self%act_radius(j), &
-                                       self%a2, self%c, md, &
+                                       self%param%a2, self%param%c, md, &
                                        self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
                                        self%pd4_rrrr)
             if (nd < 0) cycle
             call cfc_pair_nuclear_eval(self%act_d(:, i), self%act_d(:, j), &
                                        self%act_radius(i), self%act_radius(j), &
-                                       self%a2, self%c, nd, &
+                                       self%param%a2, self%param%c, nd, &
                                        self%qn0(:, i), self%qn0(:, j), &
                                        self%qn1_r(:, :, i), self%qn1_r(:, :, j), &
                                        self%qn2_rr(:, :, :, i), self%qn2_rr(:, :, :, j), &
@@ -675,6 +707,174 @@ contains
       end do
    end subroutine lsf_f4_rrr_rA
 
+   !* ================================================================================= *!
+   !*                               Radius derivatives                                  *!
+   !* ================================================================================= *!
+   !
+   ! The radii are parameters of the level set, so a model that ties them to the
+   ! geometry differentiates through them as well. Three things separate this
+   ! channel from the `_rA` one, all of them because `R_a` is a scalar parameter
+   ! and not a coordinate: no sign flip, no trailing derivative index (the rank
+   ! equals the spatial order), and no derivative order consumed.
+   !
+   ! Unlike `qn*`, the `rd*` family is *not* cached by `prepare`. It could be --
+   ! it depends on nothing but the geometry -- but that would charge every
+   ! fixed-radius caller an extra O(n_active**2) pair sweep at every grid point
+   ! for a family it never reads. It is accumulated on demand instead, the same
+   ! way `tg*` is.
+
+   !> Accumulate the per-atom radius-derivative pseudo-density tensors
+   !>
+   !> The radius counterpart of the `qn*` sweep in [[lsf_cfc_screen]], run on
+   !> demand. Slot `i` of each output belongs to `active_atom(i)`.
+   !>
+   !> `rd3_rrr` is optional because [[cfc_radius_hvp]] needs the family only up
+   !> to order two and would otherwise have to materialize an unread
+   !> `27 * n_active` buffer to satisfy the kernel signature. Omitting it sinks
+   !> the order-3 accumulation into two stack rows instead. The loops are spelled
+   !> out twice rather than once behind a pointer: the kernel arguments are
+   !> `intent(inout)` accumulators taken one atom at a time, so the only
+   !> single-body alternative is an aliasing-opaque pointer with `merge`-computed
+   !> slot indices in the pair loop.
+   !>
+   !> @param[in]  self    LSF instance
+   !> @param[in]  level   Highest spatial-derivative order to accumulate (0..3)
+   !> @param[out] rd0     Order-0 radius tensor [n_active]
+   !> @param[out] rd1_r   Order-1 radius tensor [ndim, n_active]
+   !> @param[out] rd2_rr  Order-2 radius tensor [ndim, ndim, n_active]
+   !> @param[out] rd3_rrr Order-3 radius tensor [ndim, ndim, ndim, n_active]
+   !>                     (optional; discarded into stack scratch when absent)
+   subroutine radius_tensors(self, level, rd0, rd1_r, rd2_rr, rd3_rrr)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Highest spatial-derivative order to accumulate
+      integer, intent(in) :: level
+      !> Order-0 radius tensor
+      real(wp), intent(out) :: rd0(:)
+      !> Order-1 radius tensor
+      real(wp), intent(out) :: rd1_r(:, :)
+      !> Order-2 radius tensor
+      real(wp), intent(out) :: rd2_rr(:, :, :)
+      !> Order-3 radius tensor
+      real(wp), intent(out), optional :: rd3_rrr(:, :, :, :)
+
+      !> Order-3 sink, one row per kernel slot so the pair call has no aliasing
+      real(wp) :: sk3_a(ndim, ndim, ndim), sk3_b(ndim, ndim, ndim)
+      !> Active-list indices
+      integer :: ia, ib
+
+      rd0 = 0.0_wp
+      rd1_r = 0.0_wp
+      rd2_rr = 0.0_wp
+
+      if (present(rd3_rrr)) then
+         rd3_rrr = 0.0_wp
+
+         do ia = 1, self%n_active
+            call cfc_atomic_radius_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                        self%param%a1, &
+                                        level, rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                        rd3_rrr(:, :, :, ia))
+         end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_radius_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                         self%act_radius(ia), self%act_radius(ib), &
+                                         self%param%a2, self%param%c, level, &
+                                         rd0(ia), rd0(ib), &
+                                         rd1_r(:, ia), rd1_r(:, ib), &
+                                         rd2_rr(:, :, ia), rd2_rr(:, :, ib), &
+                                         rd3_rrr(:, :, :, ia), rd3_rrr(:, :, :, ib))
+            end do
+         end do
+      else
+         ! Zeroed once, not per atom: the sinks are `intent(inout)` accumulators
+         ! and reading them undefined would trap under the debug FP settings.
+         sk3_a = 0.0_wp
+         sk3_b = 0.0_wp
+
+         do ia = 1, self%n_active
+            call cfc_atomic_radius_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                        self%param%a1, &
+                                        level, rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                        sk3_a)
+         end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_radius_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                         self%act_radius(ia), self%act_radius(ib), &
+                                         self%param%a2, self%param%c, level, &
+                                         rd0(ia), rd0(ib), &
+                                         rd1_r(:, ia), rd1_r(:, ib), &
+                                         rd2_rr(:, :, ia), rd2_rr(:, :, ib), &
+                                         sk3_a, sk3_b)
+            end do
+         end do
+      end if
+   end subroutine radius_tensors
+
+   !> Radius derivative d^3S / (dr^2 dR_a) and its lower orders
+   !>
+   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`.
+   !> `R_a` is the *radius* of that atom, so the results carry no trailing
+   !> derivative index and the rank equals the spatial order.
+   !>
+   !> The order requirement is 2, not 3: `d/dR_a` consumes no derivative order,
+   !> so the deepest input is `rd2_rr`, whose total order is two -- one less than
+   !> `lsf_f3_rr_rA` needs for the same spatial order.
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf1_rad    dS/dR_a [>= active_count()] (optional)
+   !> @param[out] lsf2_r_rad  d^2S/(dr dR_a) [3, >= active_count()] (optional)
+   !> @param[out] lsf3_rr_rad d^3S/(dr^2 dR_a) [3, 3, >= active_count()]
+   subroutine lsf_f3_rr_rad(self, lsf1_rad, lsf2_r_rad, lsf3_rr_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Radius gradient
+      real(wp), intent(out), optional :: lsf1_rad(:)
+      !> Mixed second derivative
+      real(wp), intent(out), optional :: lsf2_r_rad(:, :)
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_rr_rad(:, :, :)
+
+      !> Per-atom radius tensors
+      real(wp), allocatable :: rd0(:), rd1_r(:, :), rd2_rr(:, :, :)
+      real(wp), allocatable :: rd3_rrr(:, :, :, :)
+      !> Kernel outputs of one atom
+      real(wp) :: f1_rad, f2_r_rad(ndim), f3_rr_rad(ndim, ndim)
+      real(wp) :: d4(ndim, ndim, ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) then
+         ! Nothing active means no owned slot, so "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather than
+         ! return bare: the outputs are `intent(out)`, and a bare return would
+         ! hand the caller a buffer it is not allowed to read.
+         if (present(lsf1_rad)) lsf1_rad = 0.0_wp
+         if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
+         lsf3_rr_rad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(2, "f3_rr_rad")
+
+      allocate (rd0(self%n_active))
+      allocate (rd1_r(ndim, self%n_active))
+      allocate (rd2_rr(ndim, ndim, self%n_active))
+      allocate (rd3_rrr(ndim, ndim, ndim, self%n_active))
+      call radius_tensors(self, 2, rd0, rd1_r, rd2_rr, rd3_rrr)
+
+      do ia = 1, self%n_active
+         call cfc_radius_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+                              rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                              rd3_rrr(:, :, :, ia), 2, &
+                              f1_rad, f2_r_rad, f3_rr_rad, d4)
+         if (present(lsf1_rad)) lsf1_rad(ia) = f1_rad
+         if (present(lsf2_r_rad)) lsf2_r_rad(:, ia) = f2_r_rad
+         lsf3_rr_rad(:, :, ia) = f3_rr_rad
+      end do
+   end subroutine lsf_f3_rr_rad
+
    !> Normalized level set S/||grad S|| and its nuclear gradient
    !>
    !> The normalization itself is level-set agnostic -- it only combines outputs
@@ -794,7 +994,8 @@ contains
       allocate (qd2(ndim, ndim, ndim, ndim, n), source=0.0_wp)
 
       do ia = 1, n
-         call cfc_atomic_hessian_eval(self%act_d(:, ia), self%act_radius(ia), self%a1, &
+         call cfc_atomic_hessian_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                      self%param%a1, &
                                       level, qd0(:, :, ia), qd1(:, :, :, ia), &
                                       qd2(:, :, :, :, ia))
       end do
@@ -805,7 +1006,7 @@ contains
             x2 = 0.0_wp
             call cfc_pair_hessian_eval(self%act_d(:, ia), self%act_d(:, ib), &
                                        self%act_radius(ia), self%act_radius(ib), &
-                                       self%a2, self%c, level, &
+                                       self%param%a2, self%param%c, level, &
                                        qd0(:, :, ia), x0, qd0(:, :, ib), &
                                        qd1(:, :, :, ia), x1, qd1(:, :, :, ib), &
                                        qd2(:, :, :, :, ia), x2, qd2(:, :, :, :, ib))
@@ -830,7 +1031,7 @@ contains
                w2b = 0.0_wp
                call cfc_pair_hessian_eval(self%act_d(:, ia), self%act_d(:, ib), &
                                           self%act_radius(ia), self%act_radius(ib), &
-                                          self%a2, self%c, level, &
+                                          self%param%a2, self%param%c, level, &
                                           w0a, x0, w0b, w1a, x1, w1b, w2a, x2, w2b)
             end if
 
@@ -913,6 +1114,463 @@ contains
    end subroutine lsf_f4_rr_rArB
 
    !* ================================================================================= *!
+   !*                     Two-radius and nuclear-radius derivatives                     *!
+   !* ================================================================================= *!
+   !
+   ! The uncontracted second order of the joint position/radius derivative,
+   ! completing the four blocks whose contractions `hvp_*_rA` and `hvp_*_rad`
+   ! already supply. Structurally these are [[hessian_family]] with one or both
+   ! retained nuclear slots replaced by a retained radius, and cheaper for it: a
+   ! radius adds no Cartesian index and consumes no derivative order.
+   !
+   ! One difference in the loop shape. `hessian_family` visits every *ordered*
+   ! pair and re-evaluates the cross block each time, because the `ab` block
+   ! transposed is the `ba` one. That holds for the radius-radius family too, but
+   ! not for the nuclear-radius one -- its two slots carry different kinds of derivative --
+   ! so the kernel emits `ba` alongside `ab` and both families visit each
+   ! *unordered* pair once, filling the two ordered slots from a single call.
+   !
+   ! The six accessors below zero their result before the empty-active return,
+   ! matching the `tangent_*` family. Elsewhere they write only the first
+   ! `active_count()` slots and leave the rest alone, but with nothing active
+   ! there is no owned slot at all, and the results are `intent(out)`: a bare
+   ! return would hand the caller a buffer it is not allowed to read.
+
+   !> Fill the uncontracted two-radius family at one spatial order
+   !>
+   !> Shared body of the three `f*_radrad` accessors; see the section note above.
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[in]  level          Spatial order to lift (0, 1 or 2)
+   !> @param[out] lsf2_radrad    d^2S/(dR_a dR_b) (optional)
+   !> @param[out] lsf3_r_radrad  d^3S/(dr dR_a dR_b) (optional)
+   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b) (optional)
+   subroutine radius2_family(self, level, lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Spatial order to lift
+      integer, intent(in) :: level
+      !> Radius Hessian
+      real(wp), intent(out), optional :: lsf2_radrad(:, :)
+      !> Mixed third derivative
+      real(wp), intent(out), optional :: lsf3_r_radrad(:, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(out), optional :: lsf4_rr_radrad(:, :, :, :)
+
+      !> Per-atom radius tensors, in both the A and the B slot of the lift
+      real(wp), allocatable :: rd0(:), rd1_r(:, :), rd2_rr(:, :, :)
+      real(wp), allocatable :: rd3_rrr(:, :, :, :)
+      !> Diagonal two-radius accumulators, one block per active atom
+      real(wp), allocatable :: dd0(:), dd1(:, :), dd2(:, :, :)
+      !> Cross block of every unordered pair, cached by the single sweep below.
+      !> Only the orders `level` will actually lift are allocated.
+      real(wp), allocatable :: cx0(:), cx1(:, :), cx2(:, :, :)
+      !> Cross block of one pair
+      real(wp) :: x0, x1(ndim), x2(ndim, ndim)
+      !> Lift outputs of one pair
+      real(wp) :: b2, b3(ndim), b4(ndim, ndim)
+      !> Active-list indices, active-atom count, pair counter and pair count
+      integer :: ia, ib, n, ip, np
+
+      n = self%n_active
+      np = n*(n - 1)/2
+
+      allocate (rd0(n), rd1_r(ndim, n), rd2_rr(ndim, ndim, n))
+      allocate (rd3_rrr(ndim, ndim, ndim, n))
+      call radius_tensors(self, level, rd0, rd1_r, rd2_rr, rd3_rrr)
+
+      allocate (dd0(n), source=0.0_wp)
+      allocate (dd1(ndim, n), source=0.0_wp)
+      allocate (dd2(ndim, ndim, n), source=0.0_wp)
+
+      allocate (cx0(np))
+      allocate (cx1(ndim, merge(np, 0, level >= 1)))
+      allocate (cx2(ndim, ndim, merge(np, 0, level >= 2)))
+
+      do ia = 1, n
+         call cfc_atomic_radius2_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                      self%param%a1, &
+                                      level, dd0(ia), dd1(:, ia), dd2(:, :, ia))
+      end do
+      ! One `cfc_pair_radius2_eval` call yields both the diagonal contributions
+      ! and the cross block, so cache the cross here rather than repeating the
+      ! whole O(n^2) sweep in the output loop below.
+      ip = 0
+      do ia = 1, n
+         do ib = ia + 1, n
+            ip = ip + 1
+            x0 = 0.0_wp
+            x1 = 0.0_wp
+            x2 = 0.0_wp
+            call cfc_pair_radius2_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                       self%act_radius(ia), self%act_radius(ib), &
+                                       self%param%a2, self%param%c, level, &
+                                       dd0(ia), x0, dd0(ib), &
+                                       dd1(:, ia), x1, dd1(:, ib), &
+                                       dd2(:, :, ia), x2, dd2(:, :, ib))
+            cx0(ip) = x0
+            if (level >= 1) cx1(:, ip) = x1
+            if (level >= 2) cx2(:, :, ip) = x2
+         end do
+      end do
+
+      ip = 0
+      do ia = 1, n
+         call cfc_radius2_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                               rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                               rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                               dd0(ia), dd1(:, ia), dd2(:, :, ia), level, b2, b3, b4)
+         call radius2_store(ia, ia, b2, b3, b4, &
+                            lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
+
+         do ib = ia + 1, n
+            ip = ip + 1
+            x0 = cx0(ip)
+            x1 = 0.0_wp
+            x2 = 0.0_wp
+            if (level >= 1) x1 = cx1(:, ip)
+            if (level >= 2) x2 = cx2(:, :, ip)
+            call cfc_radius2_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                                  rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                  rd0(ib), rd1_r(:, ib), rd2_rr(:, :, ib), &
+                                  x0, x1, x2, level, b2, b3, b4)
+            ! Symmetric in its two radii, so one lift fills both ordered slots.
+            call radius2_store(ia, ib, b2, b3, b4, &
+                               lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
+            call radius2_store(ib, ia, b2, b3, b4, &
+                               lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
+         end do
+      end do
+   end subroutine radius2_family
+
+   !> Store one lifted two-radius block into whichever outputs are present
+   !>
+   !> @param[in]    ia             Active-list index of the first radius
+   !> @param[in]    ib             Active-list index of the second radius
+   !> @param[in]    b2             Order-0 block
+   !> @param[in]    b3             Order-1 block
+   !> @param[in]    b4             Order-2 block
+   !> @param[inout] lsf2_radrad    Radius Hessian (optional)
+   !> @param[inout] lsf3_r_radrad  Mixed third derivative (optional)
+   !> @param[inout] lsf4_rr_radrad Mixed fourth derivative (optional)
+   pure subroutine radius2_store(ia, ib, b2, b3, b4, &
+                                 lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
+      !> Active-list index of the first radius
+      integer, intent(in) :: ia
+      !> Active-list index of the second radius
+      integer, intent(in) :: ib
+      !> Order-0 block
+      real(wp), intent(in) :: b2
+      !> Order-1 block
+      real(wp), intent(in) :: b3(ndim)
+      !> Order-2 block
+      real(wp), intent(in) :: b4(ndim, ndim)
+      !> Radius Hessian
+      real(wp), intent(inout), optional :: lsf2_radrad(:, :)
+      !> Mixed third derivative
+      real(wp), intent(inout), optional :: lsf3_r_radrad(:, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(inout), optional :: lsf4_rr_radrad(:, :, :, :)
+
+      if (present(lsf2_radrad)) lsf2_radrad(ia, ib) = b2
+      if (present(lsf3_r_radrad)) lsf3_r_radrad(:, ia, ib) = b3
+      if (present(lsf4_rr_radrad)) lsf4_rr_radrad(:, :, ia, ib) = b4
+   end subroutine radius2_store
+
+   !> Fill the uncontracted nuclear-radius family at one spatial order
+   !>
+   !> Shared body of the three `f*_rA_rad` accessors. The first atom index
+   !> carries the position derivative and the second the radius one, so the
+   !> result is *not* symmetric under exchanging them; each unordered pair is
+   !> visited once and its `ab` and `ba` kernel blocks fill the two ordered slots.
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[in]  level          Spatial order to lift (0, 1 or 2)
+   !> @param[out] lsf2_rA_rad    d^2S/(dR_A dR_b) (optional)
+   !> @param[out] lsf3_r_rA_rad  d^3S/(dr dR_A dR_b) (optional)
+   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b) (optional)
+   subroutine nucrad_family(self, level, lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Spatial order to lift
+      integer, intent(in) :: level
+      !> Nuclear-radius Hessian
+      real(wp), intent(out), optional :: lsf2_rA_rad(:, :, :)
+      !> Mixed third derivative
+      real(wp), intent(out), optional :: lsf3_r_rA_rad(:, :, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(out), optional :: lsf4_rr_rA_rad(:, :, :, :, :)
+
+      !> Per-atom radius tensors, filling the lift's B slot
+      real(wp), allocatable :: rd0(:), rd1_r(:, :), rd2_rr(:, :, :)
+      real(wp), allocatable :: rd3_rrr(:, :, :, :)
+      !> Diagonal nuclear-radius accumulators, one block per active atom
+      real(wp), allocatable :: dd0(:, :), dd1(:, :, :), dd2(:, :, :, :)
+      !> Both cross blocks of every unordered pair, cached by the single sweep
+      !> below. Only the orders `level` will actually lift are allocated.
+      real(wp), allocatable :: cx0(:, :), cx1(:, :, :), cx2(:, :, :, :)
+      real(wp), allocatable :: cy0(:, :), cy1(:, :, :), cy2(:, :, :, :)
+      !> The two cross blocks of one pair
+      real(wp) :: x0(ndim), x1(ndim, ndim), x2(ndim, ndim, ndim)
+      real(wp) :: y0(ndim), y1(ndim, ndim), y2(ndim, ndim, ndim)
+      !> Lift outputs of one ordered pair
+      real(wp) :: b2(ndim), b3(ndim, ndim), b4(ndim, ndim, ndim)
+      !> Active-list indices, active-atom count, pair counter and pair count
+      integer :: ia, ib, n, ip, np
+
+      n = self%n_active
+      np = n*(n - 1)/2
+
+      allocate (rd0(n), rd1_r(ndim, n), rd2_rr(ndim, ndim, n))
+      allocate (rd3_rrr(ndim, ndim, ndim, n))
+      call radius_tensors(self, level, rd0, rd1_r, rd2_rr, rd3_rrr)
+
+      allocate (dd0(ndim, n), source=0.0_wp)
+      allocate (dd1(ndim, ndim, n), source=0.0_wp)
+      allocate (dd2(ndim, ndim, ndim, n), source=0.0_wp)
+
+      allocate (cx0(ndim, np), cy0(ndim, np))
+      allocate (cx1(ndim, ndim, merge(np, 0, level >= 1)))
+      allocate (cy1(ndim, ndim, merge(np, 0, level >= 1)))
+      allocate (cx2(ndim, ndim, ndim, merge(np, 0, level >= 2)))
+      allocate (cy2(ndim, ndim, ndim, merge(np, 0, level >= 2)))
+
+      do ia = 1, n
+         call cfc_atomic_nucrad_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                     self%param%a1, &
+                                     level, dd0(:, ia), dd1(:, :, ia), dd2(:, :, :, ia))
+      end do
+      ! `cfc_pair_nucrad_eval` is the most expensive routine in this family, and
+      ! one call yields *both* the two diagonal contributions and the two cross
+      ! blocks. Cache the cross blocks here so the output loop below can lift
+      ! them without a second, identical O(n^2) sweep.
+      ip = 0
+      do ia = 1, n
+         do ib = ia + 1, n
+            ip = ip + 1
+            x0 = 0.0_wp
+            x1 = 0.0_wp
+            x2 = 0.0_wp
+            y0 = 0.0_wp
+            y1 = 0.0_wp
+            y2 = 0.0_wp
+            call cfc_pair_nucrad_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                      self%act_radius(ia), self%act_radius(ib), &
+                                      self%param%a2, self%param%c, level, &
+                                      dd0(:, ia), x0, y0, dd0(:, ib), &
+                                      dd1(:, :, ia), x1, y1, dd1(:, :, ib), &
+                                      dd2(:, :, :, ia), x2, y2, dd2(:, :, :, ib))
+            cx0(:, ip) = x0
+            cy0(:, ip) = y0
+            if (level >= 1) then
+               cx1(:, :, ip) = x1
+               cy1(:, :, ip) = y1
+            end if
+            if (level >= 2) then
+               cx2(:, :, :, ip) = x2
+               cy2(:, :, :, ip) = y2
+            end if
+         end do
+      end do
+
+      ip = 0
+      do ia = 1, n
+         call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                              self%qn0(:, ia), self%qn1_r(:, :, ia), &
+                              self%qn2_rr(:, :, :, ia), &
+                              rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                              dd0(:, ia), dd1(:, :, ia), dd2(:, :, :, ia), &
+                              level, b2, b3, b4)
+         call nucrad_store(ia, ia, b2, b3, b4, &
+                           lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
+
+         do ib = ia + 1, n
+            ip = ip + 1
+            x0 = cx0(:, ip)
+            y0 = cy0(:, ip)
+            x1 = 0.0_wp
+            x2 = 0.0_wp
+            y1 = 0.0_wp
+            y2 = 0.0_wp
+            if (level >= 1) then
+               x1 = cx1(:, :, ip)
+               y1 = cy1(:, :, ip)
+            end if
+            if (level >= 2) then
+               x2 = cx2(:, :, :, ip)
+               y2 = cy2(:, :, :, ip)
+            end if
+            ! `ab` is position on ia and radius on ib; `ba` is the other way.
+            call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                                 self%qn0(:, ia), self%qn1_r(:, :, ia), &
+                                 self%qn2_rr(:, :, :, ia), &
+                                 rd0(ib), rd1_r(:, ib), rd2_rr(:, :, ib), &
+                                 x0, x1, x2, level, b2, b3, b4)
+            call nucrad_store(ia, ib, b2, b3, b4, &
+                              lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
+            call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                                 self%qn0(:, ib), self%qn1_r(:, :, ib), &
+                                 self%qn2_rr(:, :, :, ib), &
+                                 rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                 y0, y1, y2, level, b2, b3, b4)
+            call nucrad_store(ib, ia, b2, b3, b4, &
+                              lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
+         end do
+      end do
+   end subroutine nucrad_family
+
+   !> Store one lifted nuclear-radius block into whichever outputs are present
+   !>
+   !> @param[in]    ia             Active-list index of the position derivative
+   !> @param[in]    ib             Active-list index of the radius derivative
+   !> @param[in]    b2             Order-0 block
+   !> @param[in]    b3             Order-1 block
+   !> @param[in]    b4             Order-2 block
+   !> @param[inout] lsf2_rA_rad    Nuclear-radius Hessian (optional)
+   !> @param[inout] lsf3_r_rA_rad  Mixed third derivative (optional)
+   !> @param[inout] lsf4_rr_rA_rad Mixed fourth derivative (optional)
+   pure subroutine nucrad_store(ia, ib, b2, b3, b4, &
+                                lsf2_rA_rad, lsf3_r_rA_rad, lsf4_rr_rA_rad)
+      !> Active-list index of the position derivative
+      integer, intent(in) :: ia
+      !> Active-list index of the radius derivative
+      integer, intent(in) :: ib
+      !> Order-0 block
+      real(wp), intent(in) :: b2(ndim)
+      !> Order-1 block
+      real(wp), intent(in) :: b3(ndim, ndim)
+      !> Order-2 block
+      real(wp), intent(in) :: b4(ndim, ndim, ndim)
+      !> Nuclear-radius Hessian
+      real(wp), intent(inout), optional :: lsf2_rA_rad(:, :, :)
+      !> Mixed third derivative
+      real(wp), intent(inout), optional :: lsf3_r_rA_rad(:, :, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(inout), optional :: lsf4_rr_rA_rad(:, :, :, :, :)
+
+      if (present(lsf2_rA_rad)) lsf2_rA_rad(:, ia, ib) = b2
+      if (present(lsf3_r_rA_rad)) lsf3_r_rA_rad(:, :, ia, ib) = b3
+      if (present(lsf4_rr_rA_rad)) lsf4_rr_rA_rad(:, :, :, ia, ib) = b4
+   end subroutine nucrad_store
+
+   !> Pure radius Hessian d^2S / (dR_a dR_b), active-indexed in both atoms
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_radrad d^2S/(dR_a dR_b) [>= n_act, >= n_act]
+   subroutine lsf_f2_radrad(self, lsf2_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Radius Hessian
+      real(wp), intent(out) :: lsf2_radrad(:, :)
+
+      if (self%n_active == 0) then
+         lsf2_radrad = 0.0_wp
+         return
+      end if
+      ! One order below `f2_rArB`: neither retained radius consumes one.
+      call self%require_deriv(0, "f2_radrad")
+
+      call radius2_family(self, 0, lsf2_radrad=lsf2_radrad)
+   end subroutine lsf_f2_radrad
+
+   !> Mixed third derivative d^3S / (dr dR_a dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_radrad d^3S/(dr dR_a dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_f3_r_radrad(self, lsf3_r_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_r_radrad(:, :, :)
+
+      if (self%n_active == 0) then
+         lsf3_r_radrad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(1, "f3_r_radrad")
+
+      call radius2_family(self, 1, lsf3_r_radrad=lsf3_r_radrad)
+   end subroutine lsf_f3_r_radrad
+
+   !> Mixed fourth derivative d^4S / (dr^2 dR_a dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_f4_rr_radrad(self, lsf4_rr_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Mixed fourth derivative
+      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :, :)
+
+      if (self%n_active == 0) then
+         lsf4_rr_radrad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(2, "f4_rr_radrad")
+
+      call radius2_family(self, 2, lsf4_rr_radrad=lsf4_rr_radrad)
+   end subroutine lsf_f4_rr_radrad
+
+   !> Mixed nuclear-radius Hessian d^2S / (dR_A dR_b)
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_rA_rad d^2S/(dR_A dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_f2_rA_rad(self, lsf2_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear-radius Hessian
+      real(wp), intent(out) :: lsf2_rA_rad(:, :, :)
+
+      if (self%n_active == 0) then
+         lsf2_rA_rad = 0.0_wp
+         return
+      end if
+      ! The retained *position* still costs an order; the radius does not, so
+      ! this matches `f2_rArB` rather than sitting one above it.
+      call self%require_deriv(1, "f2_rA_rad")
+
+      call nucrad_family(self, 0, lsf2_rA_rad=lsf2_rA_rad)
+   end subroutine lsf_f2_rA_rad
+
+   !> Mixed third derivative d^3S / (dr dR_A dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_rA_rad d^3S/(dr dR_A dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_f3_r_rA_rad(self, lsf3_r_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_r_rA_rad(:, :, :, :)
+
+      if (self%n_active == 0) then
+         lsf3_r_rA_rad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(2, "f3_r_rA_rad")
+
+      call nucrad_family(self, 1, lsf3_r_rA_rad=lsf3_r_rA_rad)
+   end subroutine lsf_f3_r_rA_rad
+
+   !> Mixed fourth derivative d^4S / (dr^2 dR_A dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b) [3, 3, 3, >= n_act, >= n_act]
+   subroutine lsf_f4_rr_rA_rad(self, lsf4_rr_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Mixed fourth derivative
+      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :, :)
+
+      if (self%n_active == 0) then
+         lsf4_rr_rA_rad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(3, "f4_rr_rA_rad")
+
+      call nucrad_family(self, 2, lsf4_rr_rA_rad=lsf4_rr_rA_rad)
+   end subroutine lsf_f4_rr_rA_rad
+
+   !* ================================================================================= *!
    !*                     Direction-contracted nuclear derivatives                      *!
    !* ================================================================================= *!
 
@@ -956,7 +1614,8 @@ contains
       tg3_rrr = 0.0_wp
 
       do ia = 1, self%n_active
-         call cfc_atomic_tangent_eval(self%act_d(:, ia), self%act_radius(ia), self%a1, &
+         call cfc_atomic_tangent_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                      self%param%a1, &
                                       v(:, self%act_atom(ia)), level, &
                                       tg0, tg1_r, tg2_rr, tg3_rrr)
       end do
@@ -964,7 +1623,7 @@ contains
          do ib = ia + 1, self%n_active
             call cfc_pair_tangent_eval(self%act_d(:, ia), self%act_d(:, ib), &
                                        self%act_radius(ia), self%act_radius(ib), &
-                                       self%a2, self%c, &
+                                       self%param%a2, self%param%c, &
                                        v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
                                        level, tg0, tg1_r, tg2_rr, tg3_rrr)
          end do
@@ -1085,6 +1744,23 @@ contains
    !> tangent ladder comes out of the same derivative structure, so it is free
    !> here -- and is exactly why [[tangent_tensors]] must not also run.
    !>
+   !> Supplying `vrad` promotes the contraction from `sum_B v_B . d/dR_B` to
+   !> `sum_B (v_B . d/dR_B + vr_B d/dRad_B)`: a second kernel sweep adds the
+   !> radius half to `tg*` and `hvp*` and fills `rh*` in the same pass. `vrad`
+   !> is the switch: the three `rh*` buffers must be present whenever it is, and
+   !> supplying them without it is harmless (they come back zeroed). Without
+   !> `vrad` nothing changes, down to the bit -- the position-only sweep is
+   !> untouched.
+   !>
+   !> The `hv*` family is optional for the mirror-image reason: [[cfc_radius_hvp]]
+   !> wants the joint `tg*` and `rh*` but not the position row, and materializing
+   !> `39 * n_active` doubles to throw away is the one part of that trade worth
+   !> avoiding. Absent, the row accumulates into stack scratch instead. That is
+   !> what doubles the sweeps below into `present`-guarded pairs; a single body
+   !> would need an aliasing-opaque pointer with `merge`-computed slot indices,
+   !> which is a worse thing to put in the `O(n_active**2)` pair loop than a
+   !> duplicated call statement. `hv0`, `hv1` and `hv2` are all-or-none.
+   !>
    !> @param[in]  self    LSF instance
    !> @param[in]  v       Nuclear displacement directions [ndim, ncenters]
    !> @param[in]  level   Highest spatial-derivative order to accumulate (0..2)
@@ -1092,10 +1768,17 @@ contains
    !> @param[out] tg1_r   Order-1 contracted tensor
    !> @param[out] tg2_rr  Order-2 contracted tensor
    !> @param[out] tg3_rrr Order-3 contracted tensor (unused above level 2)
-   !> @param[out] hv0     Order-0 per-atom HVP tensor [ndim, n_active]
-   !> @param[out] hv1     Order-1 per-atom HVP tensor [ndim, ndim, n_active]
+   !> @param[out] hv0     Order-0 per-atom HVP tensor [ndim, n_active] (optional)
+   !> @param[out] hv1     Order-1 per-atom HVP tensor [ndim, ndim, n_active] (optional)
    !> @param[out] hv2     Order-2 per-atom HVP tensor [ndim, ndim, ndim, n_active]
-   subroutine hvp_tensors(self, v, level, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+   !>                     (optional)
+   !> @param[in]  vrad    Radius directions [ncenters] (optional; see above)
+   !> @param[out] rh0     Order-0 per-atom radius-row tensor [n_active] (optional)
+   !> @param[out] rh1_r   Order-1 per-atom radius-row tensor [ndim, n_active] (optional)
+   !> @param[out] rh2_rr  Order-2 per-atom radius-row tensor [ndim, ndim, n_active]
+   !>                     (optional)
+   subroutine hvp_tensors(self, v, level, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2, &
+                          vrad, rh0, rh1_r, rh2_rr)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
       !> Nuclear displacement directions
@@ -1111,72 +1794,207 @@ contains
       !> Order-3 contracted tensor
       real(wp), intent(out) :: tg3_rrr(ndim, ndim, ndim)
       !> Order-0 per-atom HVP tensor
-      real(wp), intent(out) :: hv0(:, :)
+      real(wp), intent(out), optional :: hv0(:, :)
       !> Order-1 per-atom HVP tensor
-      real(wp), intent(out) :: hv1(:, :, :)
+      real(wp), intent(out), optional :: hv1(:, :, :)
       !> Order-2 per-atom HVP tensor
-      real(wp), intent(out) :: hv2(:, :, :, :)
+      real(wp), intent(out), optional :: hv2(:, :, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
+      !> Order-0 per-atom radius-row tensor
+      real(wp), intent(out), optional :: rh0(:)
+      !> Order-1 per-atom radius-row tensor
+      real(wp), intent(out), optional :: rh1_r(:, :)
+      !> Order-2 per-atom radius-row tensor
+      real(wp), intent(out), optional :: rh2_rr(:, :, :)
 
+      !> Position-row sinks, one set per kernel slot so the pair calls do not alias
+      real(wp) :: sk_a0(ndim), sk_a1(ndim, ndim), sk_a2(ndim, ndim, ndim)
+      real(wp) :: sk_b0(ndim), sk_b1(ndim, ndim), sk_b2(ndim, ndim, ndim)
+      !> Whether the caller wants the position row at all
+      logical :: want_hv
       !> Active-list indices
       integer :: ia, ib
+
+      want_hv = present(hv0)
+      if (want_hv .neqv. (present(hv1) .and. present(hv2))) then
+         error stop "moist DROP CFC LSF: hvp_tensors takes hv0, hv1 and hv2 "// &
+            "together or not at all"
+      end if
 
       tg0 = 0.0_wp
       tg1_r = 0.0_wp
       tg2_rr = 0.0_wp
       tg3_rrr = 0.0_wp
-      hv0 = 0.0_wp
-      hv1 = 0.0_wp
-      hv2 = 0.0_wp
+      if (want_hv) then
+         hv0 = 0.0_wp
+         hv1 = 0.0_wp
+         hv2 = 0.0_wp
+      else
+         ! Zeroed once, not per atom: the kernel slots are `intent(inout)`
+         ! accumulators, so leaving the sinks undefined would have the kernel
+         ! read uninitialized stack and trap under the debug FP settings.
+         sk_a0 = 0.0_wp
+         sk_a1 = 0.0_wp
+         sk_a2 = 0.0_wp
+         sk_b0 = 0.0_wp
+         sk_b1 = 0.0_wp
+         sk_b2 = 0.0_wp
+      end if
+      ! Zeroed before the `vrad` gate, not after it: a caller may hand over the
+      ! buffers without asking for the radius channel, and an untouched
+      ! `intent(out)` array is the one thing it could not inspect safely.
+      if (present(rh0)) rh0 = 0.0_wp
+      if (present(rh1_r)) rh1_r = 0.0_wp
+      if (present(rh2_rr)) rh2_rr = 0.0_wp
 
-      do ia = 1, self%n_active
-         call cfc_atomic_hvp_eval(self%act_d(:, ia), self%act_radius(ia), self%a1, &
-                                  v(:, self%act_atom(ia)), level, &
-                                  tg0, tg1_r, tg2_rr, tg3_rrr, &
-                                  hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia))
-      end do
-      do ia = 1, self%n_active
-         do ib = ia + 1, self%n_active
-            call cfc_pair_hvp_eval(self%act_d(:, ia), self%act_d(:, ib), &
-                                   self%act_radius(ia), self%act_radius(ib), &
-                                   self%a2, self%c, &
-                                   v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
-                                   level, tg0, tg1_r, tg2_rr, tg3_rrr, &
-                                   hv0(:, ia), hv0(:, ib), &
-                                   hv1(:, :, ia), hv1(:, :, ib), &
-                                   hv2(:, :, :, ia), hv2(:, :, :, ib))
+      if (want_hv) then
+         do ia = 1, self%n_active
+            call cfc_atomic_hvp_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                     self%param%a1, &
+                                     v(:, self%act_atom(ia)), level, &
+                                     tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                     hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia))
          end do
-      end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_hvp_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                      self%act_radius(ia), self%act_radius(ib), &
+                                      self%param%a2, self%param%c, &
+                                      v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
+                                      level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                      hv0(:, ia), hv0(:, ib), &
+                                      hv1(:, :, ia), hv1(:, :, ib), &
+                                      hv2(:, :, :, ia), hv2(:, :, :, ib))
+            end do
+         end do
+      else
+         do ia = 1, self%n_active
+            call cfc_atomic_hvp_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                     self%param%a1, &
+                                     v(:, self%act_atom(ia)), level, &
+                                     tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                     sk_a0, sk_a1, sk_a2)
+         end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_hvp_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                      self%act_radius(ia), self%act_radius(ib), &
+                                      self%param%a2, self%param%c, &
+                                      v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
+                                      level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                      sk_a0, sk_b0, &
+                                      sk_a1, sk_b1, &
+                                      sk_a2, sk_b2)
+            end do
+         end do
+      end if
+
+      if (.not. present(vrad)) return
+      ! `vrad` is the switch, but the loops below write `rh*` unconditionally, so
+      ! a caller that turns the radius pass on without handing over all three
+      ! buffers would write through an absent dummy. Refuse instead.
+      if (.not. (present(rh0) .and. present(rh1_r) .and. present(rh2_rr))) then
+         error stop "moist DROP CFC LSF: hvp_tensors needs rh0, rh1_r and "// &
+            "rh2_rr whenever vrad is supplied"
+      end if
+
+      if (want_hv) then
+         do ia = 1, self%n_active
+            call cfc_atomic_radius_hvp_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                            self%param%a1, &
+                                            v(:, self%act_atom(ia)), vrad(self%act_atom(ia)), &
+                                            level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                            hv0(:, ia), hv1(:, :, ia), hv2(:, :, :, ia), &
+                                            rh0(ia), rh1_r(:, ia), rh2_rr(:, :, ia))
+         end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_radius_hvp_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                             self%act_radius(ia), self%act_radius(ib), &
+                                             self%param%a2, self%param%c, &
+                                             v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
+                                             vrad(self%act_atom(ia)), vrad(self%act_atom(ib)), &
+                                             level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                             hv0(:, ia), hv0(:, ib), &
+                                             hv1(:, :, ia), hv1(:, :, ib), &
+                                             hv2(:, :, :, ia), hv2(:, :, :, ib), &
+                                             rh0(ia), rh0(ib), &
+                                             rh1_r(:, ia), rh1_r(:, ib), &
+                                             rh2_rr(:, :, ia), rh2_rr(:, :, ib))
+            end do
+         end do
+      else
+         do ia = 1, self%n_active
+            call cfc_atomic_radius_hvp_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                            self%param%a1, &
+                                            v(:, self%act_atom(ia)), vrad(self%act_atom(ia)), &
+                                            level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                            sk_a0, sk_a1, sk_a2, &
+                                            rh0(ia), rh1_r(:, ia), rh2_rr(:, :, ia))
+         end do
+         do ia = 1, self%n_active
+            do ib = ia + 1, self%n_active
+               call cfc_pair_radius_hvp_eval(self%act_d(:, ia), self%act_d(:, ib), &
+                                             self%act_radius(ia), self%act_radius(ib), &
+                                             self%param%a2, self%param%c, &
+                                             v(:, self%act_atom(ia)), v(:, self%act_atom(ib)), &
+                                             vrad(self%act_atom(ia)), vrad(self%act_atom(ib)), &
+                                             level, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                             sk_a0, sk_b0, &
+                                             sk_a1, sk_b1, &
+                                             sk_a2, sk_b2, &
+                                             rh0(ia), rh0(ib), &
+                                             rh1_r(:, ia), rh1_r(:, ib), &
+                                             rh2_rr(:, :, ia), rh2_rr(:, :, ib))
+            end do
+         end do
+      end if
    end subroutine hvp_tensors
 
    !> Nuclear Hessian-vector product, active-indexed
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters] (optional); supplying it
+   !>                  promotes the contraction to the joint position/radius one
    !> @param[out] res  sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
-   subroutine lsf_hvp_f1_rA(self, v, res)
+   subroutine lsf_hvp_f1_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted nuclear Hessian
       real(wp), intent(out) :: res(:, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Contracted pseudo-density tensors
       real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
-      !> Per-atom HVP tensors
+      !> Per-atom HVP tensors and the radius-row by-product
       real(wp), allocatable :: hv0(:, :), hv1(:, :, :), hv2(:, :, :, :)
+      real(wp), allocatable :: rh0(:), rh1_r(:, :), rh2_rr(:, :, :)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), d2(ndim, ndim), d3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(1, "hvp_f1_rA")
 
       allocate (hv0(ndim, self%n_active))
       allocate (hv1(ndim, ndim, self%n_active))
       allocate (hv2(ndim, ndim, ndim, self%n_active))
-      call hvp_tensors(self, v, 0, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      if (present(vrad)) then
+         call alloc_radius_row(self%n_active, rh0, rh1_r, rh2_rr)
+         call hvp_tensors(self, v, 0, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2, &
+                          vrad, rh0, rh1_r, rh2_rr)
+      else
+         call hvp_tensors(self, v, 0, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      end if
 
       do ia = 1, self%n_active
          call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
@@ -1190,31 +2008,44 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
    !> @param[out] res  sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
-   subroutine lsf_hvp_f2_r_rA(self, v, res)
+   subroutine lsf_hvp_f2_r_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted mixed third derivative
       real(wp), intent(out) :: res(:, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Contracted pseudo-density tensors
       real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
-      !> Per-atom HVP tensors
+      !> Per-atom HVP tensors and the radius-row by-product
       real(wp), allocatable :: hv0(:, :), hv1(:, :, :), hv2(:, :, :, :)
+      real(wp), allocatable :: rh0(:), rh1_r(:, :), rh2_rr(:, :, :)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), h2(ndim, ndim), d3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(2, "hvp_f2_r_rA")
 
       allocate (hv0(ndim, self%n_active))
       allocate (hv1(ndim, ndim, self%n_active))
       allocate (hv2(ndim, ndim, ndim, self%n_active))
-      call hvp_tensors(self, v, 1, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      if (present(vrad)) then
+         call alloc_radius_row(self%n_active, rh0, rh1_r, rh2_rr)
+         call hvp_tensors(self, v, 1, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2, &
+                          vrad, rh0, rh1_r, rh2_rr)
+      else
+         call hvp_tensors(self, v, 1, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      end if
 
       do ia = 1, self%n_active
          call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
@@ -1228,31 +2059,44 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
    !> @param[out] res  sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
-   subroutine lsf_hvp_f3_rr_rA(self, v, res)
+   subroutine lsf_hvp_f3_rr_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted mixed fourth derivative
       real(wp), intent(out) :: res(:, :, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Contracted pseudo-density tensors
       real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
-      !> Per-atom HVP tensors
+      !> Per-atom HVP tensors and the radius-row by-product
       real(wp), allocatable :: hv0(:, :), hv1(:, :, :), hv2(:, :, :, :)
+      real(wp), allocatable :: rh0(:), rh1_r(:, :), rh2_rr(:, :, :)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(3, "hvp_f3_rr_rA")
 
       allocate (hv0(ndim, self%n_active))
       allocate (hv1(ndim, ndim, self%n_active))
       allocate (hv2(ndim, ndim, ndim, self%n_active))
-      call hvp_tensors(self, v, 2, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      if (present(vrad)) then
+         call alloc_radius_row(self%n_active, rh0, rh1_r, rh2_rr)
+         call hvp_tensors(self, v, 2, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2, &
+                          vrad, rh0, rh1_r, rh2_rr)
+      else
+         call hvp_tensors(self, v, 2, tg0, tg1_r, tg2_rr, tg3_rrr, hv0, hv1, hv2)
+      end if
 
       do ia = 1, self%n_active
          call cfc_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, tg0, tg1_r, tg2_rr, &
@@ -1263,6 +2107,198 @@ contains
    end subroutine lsf_hvp_f3_rr_rA
 
    !* ================================================================================= *!
+   !*                     Radius row of the joint Hessian-vector product                *!
+   !* ================================================================================= *!
+   !
+   ! The `hvp_*_rA` procedures above retain a nuclear index; these three retain a
+   ! *radius* index, so between them they cover all four blocks of the joint
+   ! position/radius Hessian-vector product. Both rows read the same `tg*`
+   ! aggregate, because the joint direction lands in a single family: nothing in
+   ! the generated lift distinguishes its two halves.
+   !
+   ! The radius-radius coupling between *different* atoms is nonzero and is not
+   ! recoverable from per-atom data: `rd*` carries no dependence on another
+   ! atom's radius, so all of it arrives through the pair term and through the
+   ! log, exactly as for `f2_rArB`.
+
+   !> Allocate the per-atom radius-row buffers
+   !>
+   !> Only ever called on a path that supplies a radius direction, because the
+   !> rows exist only for a joint `(v, vrad)` contraction: live output for
+   !> [[cfc_radius_hvp]], write-only scratch for the three `hvp_*_rA` entry
+   !> points, which need `hvp_tensors` to have somewhere to put the row it fills
+   !> alongside the `tg*` they do read. A pure-nuclear contraction never runs the
+   !> radius sweep at all, so it must not pay for these -- hence the `present`
+   !> guard at those three call sites rather than an unconditional allocation.
+   !>
+   !> @param[in]  n      Active-atom count
+   !> @param[out] rh0    Order-0 radius-row buffer [n]
+   !> @param[out] rh1_r  Order-1 radius-row buffer [ndim, n]
+   !> @param[out] rh2_rr Order-2 radius-row buffer [ndim, ndim, n]
+   subroutine alloc_radius_row(n, rh0, rh1_r, rh2_rr)
+      !> Active-atom count
+      integer, intent(in) :: n
+      !> Order-0 radius-row buffer
+      real(wp), allocatable, intent(out) :: rh0(:)
+      !> Order-1 radius-row buffer
+      real(wp), allocatable, intent(out) :: rh1_r(:, :)
+      !> Order-2 radius-row buffer
+      real(wp), allocatable, intent(out) :: rh2_rr(:, :, :)
+
+      allocate (rh0(n))
+      allocate (rh1_r(ndim, n))
+      allocate (rh2_rr(ndim, ndim, n))
+   end subroutine alloc_radius_row
+
+   !> Radius row of the joint Hessian-vector product, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  sum_B (v_B . d/dR_B + vr_B d/dR_b) dS/dR_a
+   !>                  [>= active_count()]
+   subroutine lsf_hvp_f1_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted radius Hessian row
+      real(wp), intent(out) :: res(:)
+
+      call cfc_radius_hvp(self, v, vrad, 0, "hvp_f1_rad", res1=res)
+   end subroutine lsf_hvp_f1_rad
+
+   !> Joint directional derivative of `f2_r_rad`, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed third derivative [3, >= active_count()]
+   subroutine lsf_hvp_f2_r_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: res(:, :)
+
+      call cfc_radius_hvp(self, v, vrad, 1, "hvp_f2_r_rad", res2=res)
+   end subroutine lsf_hvp_f2_r_rad
+
+   !> Joint directional derivative of `f3_rr_rad`, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed fourth derivative [3, 3, >= active_count()]
+   subroutine lsf_hvp_f3_rr_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: res(:, :, :)
+
+      call cfc_radius_hvp(self, v, vrad, 2, "hvp_f3_rr_rad", res3=res)
+   end subroutine lsf_hvp_f3_rr_rad
+
+   !> Shared driver of the three radius-row Hessian-vector products
+   !>
+   !> The three public entry points differ only in `max_deriv` and in which
+   !> output they keep, and unlike the `_rA` ladder there is no reason to spell
+   !> the loop out three times: the radius channel has one code path. Exactly one
+   !> of `res1`/`res2`/`res3` must be present, matching `max_deriv`.
+   !>
+   !> Two layer-1 sweeps feed it. `hvp_tensors` with a radius direction gives the
+   !> joint `tg*` and the `rh*` family; `radius_tensors` gives `rd*` up to order
+   !> two. Both also produce a row this driver has no use for -- `hvp*`, which
+   !> belongs to the *position* row, and `rd3_rrr` -- and both are asked to sink
+   !> it into stack scratch by omitting the buffer. The work itself is not
+   !> avoidable and not worth avoiding: the generated kernel produces the two
+   !> rows' radius terms from one shared CSE block, cheaper than computing them
+   !> apart even counting the waste (6111 temporaries against 4427 + 2230). Only
+   !> the `66 * n_active` doubles of throwaway storage were.
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  v         Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad      Radius directions [ncenters]
+   !> @param[in]  max_deriv Highest spatial-derivative order (0..2)
+   !> @param[in]  caller    Name used by `require_deriv` on failure
+   !> @param[out] res1      Order-0 result [>= active_count()] (optional)
+   !> @param[out] res2      Order-1 result [3, >= active_count()] (optional)
+   !> @param[out] res3      Order-2 result [3, 3, >= active_count()] (optional)
+   subroutine cfc_radius_hvp(self, v, vrad, max_deriv, caller, res1, res2, res3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Highest spatial-derivative order
+      integer, intent(in) :: max_deriv
+      !> Caller name for the derivative-order check
+      character(len=*), intent(in) :: caller
+      !> Order-0 result
+      real(wp), intent(out), optional :: res1(:)
+      !> Order-1 result
+      real(wp), intent(out), optional :: res2(:, :)
+      !> Order-2 result
+      real(wp), intent(out), optional :: res3(:, :, :)
+
+      !> Contracted pseudo-density tensors
+      real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
+      !> Per-atom radius and radius-row tensors
+      real(wp), allocatable :: rd0(:), rd1_r(:, :), rd2_rr(:, :, :)
+      real(wp), allocatable :: rh0(:), rh1_r(:, :), rh2_rr(:, :, :)
+      !> Kernel outputs of one atom
+      real(wp) :: h1, h2(ndim), h3(ndim, ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) then
+         ! Nothing is active, so no slot is owned and "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather than
+         ! return bare: the results are `intent(out)`, so a bare return hands the
+         ! caller an undefined buffer.
+         if (present(res1)) res1 = 0.0_wp
+         if (present(res2)) res2 = 0.0_wp
+         if (present(res3)) res3 = 0.0_wp
+         return
+      end if
+      ! One order less than the `hvp_*_rA` entry point of the same spatial
+      ! order, for two independent reasons: `d/dRad_a` consumes no derivative
+      ! order, and the radius row reads no cached `qn*` (whose spatial ladder
+      ! `prepare` fills one short of `max_deriv`).
+      call self%require_deriv(max_deriv, caller)
+
+      allocate (rd0(self%n_active))
+      allocate (rd1_r(ndim, self%n_active))
+      allocate (rd2_rr(ndim, ndim, self%n_active))
+      call alloc_radius_row(self%n_active, rh0, rh1_r, rh2_rr)
+
+      call hvp_tensors(self, v, max_deriv, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                       vrad=vrad, rh0=rh0, rh1_r=rh1_r, rh2_rr=rh2_rr)
+      call radius_tensors(self, max_deriv, rd0, rd1_r, rd2_rr)
+
+      do ia = 1, self%n_active
+         call cfc_radius_hvp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                                  tg0, tg1_r, tg2_rr, &
+                                  rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                  rh0(ia), rh1_r(:, ia), rh2_rr(:, :, ia), &
+                                  max_deriv, h1, h2, h3)
+         if (present(res1)) res1(ia) = h1
+         if (present(res2)) res2(:, ia) = h2
+         if (present(res3)) res3(:, :, ia) = h3
+      end do
+   end subroutine cfc_radius_hvp
+
+   !* ================================================================================= *!
    !*                                 Screening offset                                  *!
    !* ================================================================================= *!
 
@@ -1270,45 +2306,6 @@ contains
    !>
    !> The pseudo-density gets two contributions from atom `a`, both decaying in the
    !> reduced distance `s_a = 1 + delta/R_a`, so the offset scales with the radius.
-   !>
-   !> **Atomic term** -- exact:
-   !>     `exp(a1 (s_a - 1)) = thr`   with `a1 < 0`
-   !>     => `delta_atomic = -log(thr) / |a1| * R`
-   !>
-   !> **Pair term** -- the pair contribution of `a` with a partner `b` is
-   !>     `c (1 - vec(s_a).vec(s_b))^m exp(a2 (s_a + s_b - 2))`.
-   !>     `vec(s_a)` has length `s_a`, *not* one, so
-   !>     `(1 - vec(s_a).vec(s_b))^m <= (1 + s_a s_b)^m` -- a polynomial in `s_a`
-   !>     that grows without bound. Fixing the partner at its own surface
-   !>     (`s_b = 1`, the dominant configuration for a point near the cavity) leaves
-   !>     `c (1 + s_a)^m exp(a2 (s_a - 1))`, which has no closed-form inverse.
-   !>     It does have a clean closed-form envelope: for `m <= |a2|` and `s >= 1`,
-   !>     `(1 + s)^m exp(a2 (s-1)/2) <= 2^m` (the log-derivative
-   !>     `m/(1+s) + a2/2` is <= 0 there), hence
-   !>         `c (1 + s)^m exp(a2 (s-1)) <= c 2^m exp((a2/2)(s-1))`
-   !>     and setting the right-hand side to `thr` gives
-   !>         `delta_pair = 2 R (log(thr) - log(c 2^m)) / a2`
-   !>     -- exactly twice the offset this routine's ancestor used. That ancestor
-   !>     bounded `(1 - vec(s_a).vec(s_b))^m` by `2^m`, which is only valid while
-   !>     `s_a <= 1`, i.e. never in the screening regime; measured against an
-   !>     unscreened reference it under-bounded the dropped pseudo-density mass by
-   !>     two to three orders of magnitude. When `m > |a2|` the envelope argument
-   !>     fails and the routine disables screening rather than guess.
-   !>
-   !> The larger of the two branches is the offset. It is the single source of
-   !> truth for both the per-point gate and the cell-grid reach; the per-point gate
-   !> used to borrow SvdW's radius-independent `exp(-(k/3)(x-R)) >= thr` criterion
-   !> with `k = 3`, which is unrelated to CFC's own decay and was the second half of
-   !> the screening defect fixed here.
-   !>
-   !> Caveat, deliberately left standing: the `s_b = 1` choice is an assumption, not
-   !> a bound. A partner whose interior contains the evaluation point has `s_b < 1`
-   !> and enhances the pair term by up to `exp(|a2|)`. Covering that case rigorously
-   !> costs another `2R` of reach for no accuracy where it matters (deep inside the
-   !> cavity the pseudo-density is large, so the relative error is negligible).
-   !>
-   !> If `threshold <= 0` or any exponent is non-negative the routine
-   !> returns `huge(0.0_wp)`, i.e. screening is disabled.
    !>
    !> @param[in] self    LSF instance
    !> @param[in] radius  Atom radius (Bohr)
@@ -1327,22 +2324,22 @@ contains
       real(wp) :: two_pow_m
 
       thr = self%screening_threshold
-      if (thr <= 0.0_wp .or. self%a1 >= 0.0_wp .or. self%a2 >= 0.0_wp) then
+      if (thr <= 0.0_wp .or. self%param%a1 >= 0.0_wp .or. self%param%a2 >= 0.0_wp) then
          offset = huge(0.0_wp)
          return
       end if
       ! The pair envelope needs m <= |a2|; without it no closed form is available
-      if (real(self%m, wp) > abs(self%a2)) then
+      if (real(self%param%m, wp) > abs(self%param%a2)) then
          offset = huge(0.0_wp)
          return
       end if
 
       log_thr = log(thr)
-      delta_atomic = -log_thr/abs(self%a1)*radius
+      delta_atomic = -log_thr/abs(self%param%a1)*radius
 
-      two_pow_m = 2.0_wp**self%m
-      cap = self%c*two_pow_m
-      delta_pair = 2.0_wp*radius*(log_thr - log(cap))/self%a2
+      two_pow_m = 2.0_wp**self%param%m
+      cap = self%param%c*two_pow_m
+      delta_pair = 2.0_wp*radius*(log_thr - log(cap))/self%param%a2
 
       offset = max(0.0_wp, delta_atomic, delta_pair)
    end function lsf_screening_offset

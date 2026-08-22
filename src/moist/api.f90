@@ -2042,22 +2042,22 @@ contains
          use_do_fine = p_do_fine
       end if
 
-      use_a1 = cfc_template%a1
+      use_a1 = cfc_template%param%a1
       if (c_associated(c_a1)) then
          call c_f_pointer(c_a1, p_a1)
          use_a1 = p_a1
       end if
-      use_a2 = cfc_template%a2
+      use_a2 = cfc_template%param%a2
       if (c_associated(c_a2)) then
          call c_f_pointer(c_a2, p_a2)
          use_a2 = p_a2
       end if
-      use_c = cfc_template%c
+      use_c = cfc_template%param%c
       if (c_associated(c_c)) then
          call c_f_pointer(c_c, p_c)
          use_c = p_c
       end if
-      use_m = cfc_template%m
+      use_m = cfc_template%param%m
       if (c_associated(c_m)) then
          call c_f_pointer(c_m, p_m)
          use_m = p_m
