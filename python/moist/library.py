@@ -293,6 +293,7 @@ def _callback_takes_order(callback) -> bool:
 
 def new_drop_cavity_isodensity_callback(
     callback,
+    rho_iso: float,
     nleb: Optional[int] = None,
     scale: float = 1000.0,
     debug: bool = False,
@@ -302,7 +303,7 @@ def new_drop_cavity_isodensity_callback(
     tolerance: Optional[float] = None,
     pass_order: Optional[bool] = None,
 ) -> tuple[CavityHandle, object]:
-    """Create a DROP cavity backed by a Python isodensity LSF callback.
+    """Create a DROP cavity backed by a Python isodensity density callback.
 
     Two callback forms are accepted:
 
@@ -318,8 +319,8 @@ def new_drop_cavity_isodensity_callback(
     explicitly to override that when introspection cannot decide (builtins,
     ``*args``, :func:`functools.partial` over a C callable).
 
-    Either form must return ``(value, grad[, hess[, third]])`` or an object with
-    ``value``, ``grad`` and optional ``hess``/``third`` attributes. The returned
+    Either form must return ``(rho, drho[, d2rho[, d3rho]])`` or an object with
+    ``rho``, ``drho`` and optional ``d2rho``/``d3rho`` attributes. The returned
     CFFI callback must be kept alive by the caller for at least as long as the
     cavity handle.
 
@@ -340,9 +341,9 @@ def new_drop_cavity_isodensity_callback(
     state = CallbackState()
 
     @ffi.callback("moist_isodensity_lsf_callback")
-    def c_callback(context, point_ptr, value_ptr, grad_ptr, hess_ptr, third_ptr):
-        want_hess = hess_ptr != ffi.NULL
-        want_third = third_ptr != ffi.NULL
+    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr):
+        want_hess = d2rho_ptr != ffi.NULL
+        want_third = d3rho_ptr != ffi.NULL
         try:
             point = np.frombuffer(ffi.buffer(point_ptr, 24), dtype=np.float64)
             if pass_order:
@@ -351,40 +352,42 @@ def new_drop_cavity_isodensity_callback(
             else:
                 result = callback(point)
 
-            if hasattr(result, "value"):
-                value = result.value
-                grad = result.grad
-                hess = getattr(result, "hess", None)
-                third = getattr(result, "third", None)
+            if hasattr(result, "rho"):
+                rho = result.rho
+                drho = result.drho
+                d2rho = getattr(result, "d2rho", None)
+                d3rho = getattr(result, "d3rho", None)
             else:
-                value, grad = result[0], result[1]
-                hess = result[2] if len(result) > 2 else None
-                third = result[3] if len(result) > 3 else None
+                rho, drho = result[0], result[1]
+                d2rho = result[2] if len(result) > 2 else None
+                d3rho = result[3] if len(result) > 3 else None
 
-            grad = np.asarray(grad, dtype=np.float64)
-            if grad.shape != (3,):
-                raise ValueError("Isodensity callback gradient must have shape (3,)")
+            drho = np.asarray(drho, dtype=np.float64)
+            if drho.shape != (3,):
+                raise ValueError("Isodensity callback density gradient must have shape (3,)")
 
-            value_ptr[0] = float(value)
-            np.frombuffer(ffi.buffer(grad_ptr, 24), dtype=np.float64)[:] = grad
+            rho_ptr[0] = float(rho)
+            np.frombuffer(ffi.buffer(drho_ptr, 24), dtype=np.float64)[:] = drho
             if want_hess:
-                if hess is None:
+                if d2rho is None:
                     raise ValueError("Isodensity callback did not return the requested Hessian")
-                hess = np.asarray(hess, dtype=np.float64)
-                if hess.shape != (3, 3):
-                    raise ValueError("Isodensity callback Hessian must have shape (3, 3)")
-                np.frombuffer(ffi.buffer(hess_ptr, 72), dtype=np.float64)[:] = hess.ravel(order="F")
+                d2rho = np.asarray(d2rho, dtype=np.float64)
+                if d2rho.shape != (3, 3):
+                    raise ValueError("Isodensity callback density Hessian must have shape (3, 3)")
+                np.frombuffer(ffi.buffer(d2rho_ptr, 72), dtype=np.float64)[:] = d2rho.ravel(
+                    order="F"
+                )
             if want_third:
-                if third is None:
+                if d3rho is None:
                     raise ValueError(
                         "Isodensity callback did not return the requested third derivative"
                     )
-                third = np.asarray(third, dtype=np.float64)
-                if third.shape != (3, 3, 3):
+                d3rho = np.asarray(d3rho, dtype=np.float64)
+                if d3rho.shape != (3, 3, 3):
                     raise ValueError(
                         "Isodensity callback third derivative must have shape (3, 3, 3)"
                     )
-                np.frombuffer(ffi.buffer(third_ptr, 216), dtype=np.float64)[:] = third.ravel(
+                np.frombuffer(ffi.buffer(d3rho_ptr, 216), dtype=np.float64)[:] = d3rho.ravel(
                     order="F"
                 )
         except BaseException as exc:
@@ -401,6 +404,7 @@ def new_drop_cavity_isodensity_callback(
         error_check(lib.moist_new_drop_cavity_isodensity_callback)(
             c_callback,
             ffi.NULL,
+            float(rho_iso),
             _ref("double", scale),
             _ref("int", nleb),
             _ref("bool", debug),

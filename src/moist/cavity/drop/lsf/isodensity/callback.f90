@@ -1,7 +1,19 @@
 !> Callback-backed isodensity level set function for DROP
 !>
-!> This experimental LSF delegates value, spatial gradient, spatial Hessian,
-!> and third spatial derivative evaluation to a C callback
+!> Callback twin of [[moist_cavity_drop_lsf_isodensity_internal_type]]: the host
+!> owns the density, moist owns the level set built from it. The C callback
+!> returns the electron density and its spatial derivatives at a point,
+!>
+!>    rho(r), d rho/dr, d^2 rho/dr^2, d^3 rho/dr^3
+!>
+!> and this module forms
+!>
+!>    S(r) = scale * (rho_iso - rho(r))
+!>
+!> exactly as the internal variant does, from the same
+!> [[moist_cavity_drop_lsf_isodensity_param_type]]. The host therefore never
+!> sees `rho_iso`, never applies the DROP sign convention, and cannot
+!> accidentally apply `scale` twice.
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc
@@ -10,6 +22,8 @@ module moist_cavity_drop_lsf_isodensity_callback
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
+   use moist_cavity_drop_lsf_isodensity_param, only: &
+      moist_cavity_drop_lsf_isodensity_param_type
    use moist_output_format, only: format_string
    implicit none (type, external)
    private
@@ -20,10 +34,10 @@ module moist_cavity_drop_lsf_isodensity_callback
    public :: isodensity_lsf_callback
 
    abstract interface
-      !> C callback for LSF value, gradient, and optional higher derivatives
+      !> C callback for the electron density and its spatial derivatives
       !>
-      !> Value and gradient are always requested.  ``hess`` and ``third`` are
-      !> passed as raw pointers that are NULL when that order is not required
+      !> Density and its gradient are always requested.  ``d2rho`` and ``d3rho``
+      !> are passed as raw pointers that are NULL when that order is not required
       !> (driven by the cavity's ``set_max_deriv``): a NULL pointer signals the
       !> callee to skip computing -- not just writing -- that derivative, so the
       !> expensive density Hessian/third derivative is never evaluated during the
@@ -31,20 +45,20 @@ module moist_cavity_drop_lsf_isodensity_callback
       !>
       !> @param[in]  context  User-owned callback context
       !> @param[in]  point    Evaluation point in Bohr
-      !> @param[out] value    LSF value
-      !> @param[out] grad     Spatial gradient dS/dr
-      !> @param[out] hess     Spatial Hessian d2S/drdr   (double[3][3] or NULL)
-      !> @param[out] third    Spatial third deriv         (double[3][3][3] or NULL)
+      !> @param[out] rho      Electron density at `point`, in Bohr^-3
+      !> @param[out] drho     Density gradient d rho/dr
+      !> @param[out] d2rho    Density Hessian d2 rho/drdr  (double[3][3] or NULL)
+      !> @param[out] d3rho    Density third deriv          (double[3][3][3] or NULL)
       !> @returns             0 on success, nonzero host status on failure
-      function isodensity_lsf_callback(context, point, value, grad, hess, third) result(status) bind(C)
+      function isodensity_lsf_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
          import :: c_double, c_int, c_ptr
          implicit none (type, external)
          type(c_ptr), value :: context
          real(c_double), intent(in) :: point(3)
-         real(c_double), intent(out) :: value
-         real(c_double), intent(out) :: grad(3)
-         type(c_ptr), value :: hess
-         type(c_ptr), value :: third
+         real(c_double), intent(out) :: rho
+         real(c_double), intent(out) :: drho(3)
+         type(c_ptr), value :: d2rho
+         type(c_ptr), value :: d3rho
          integer(c_int) :: status
       end function isodensity_lsf_callback
    end interface
@@ -55,8 +69,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       type(c_funptr) :: callback_ptr = c_null_funptr
       !> User context passed through to the callback
       type(c_ptr) :: context = c_null_ptr
-      !> Constant multiplier applied to value and spatial derivatives
-      real(wp) :: scale = 100.0_wp
+      !> Level set parameters (isovalue and constant multiplier)
+      type(moist_cavity_drop_lsf_isodensity_param_type) :: param
       !> Cached evaluation point in Bohr
       real(wp) :: point(ndim) = 0.0_wp
       !> Cached LSF value
@@ -86,16 +100,18 @@ module moist_cavity_drop_lsf_isodensity_callback
 
 contains
 
-   !> Configure the callback pointer and context
+   !> Configure the callback pointer, context and level set parameters
    !>
    !> @param[inout] self         LSF instance
-   !> @param[in]    callback_ptr C function pointer for density LSF evaluation
+   !> @param[in]    callback_ptr C function pointer for density evaluation
    !> @param[in]    context      User callback context
+   !> @param[in]    rho_iso      Density isovalue defining the surface
    !> @param[in]    scale        Constant LSF multiplier
-   subroutine lsf_new(self, callback_ptr, context, scale)
+   subroutine lsf_new(self, callback_ptr, context, rho_iso, scale)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       type(c_funptr), intent(in) :: callback_ptr
       type(c_ptr), intent(in) :: context
+      real(wp), intent(in) :: rho_iso
       real(wp), intent(in), optional :: scale
 
       !> The callback is globally evaluable and holds no per-atom data, so
@@ -106,7 +122,7 @@ contains
 
       self%callback_ptr = callback_ptr
       self%context = context
-      if (present(scale)) self%scale = scale
+      call self%param%new(rho_iso=rho_iso, scale=scale)
    end subroutine lsf_new
 
    !> Bind molecular geometry for the inherited base state
@@ -133,8 +149,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       procedure(isodensity_lsf_callback), pointer :: callback
-      real(c_double) :: c_point(3), c_value, c_grad(3)
-      real(c_double), target :: c_hess(3, 3), c_third(3, 3, 3)
+      real(c_double) :: c_point(3), c_rho, c_drho(3)
+      real(c_double), target :: c_d2rho(3, 3), c_d3rho(3, 3, 3)
       type(c_ptr) :: p_hess, p_third
       logical :: want_hess, want_third
       integer(c_int) :: status
@@ -147,19 +163,19 @@ contains
       want_third = self%max_deriv >= 3
       p_hess = c_null_ptr
       p_third = c_null_ptr
-      if (want_hess) p_hess = c_loc(c_hess)
-      if (want_third) p_third = c_loc(c_third)
+      if (want_hess) p_hess = c_loc(c_d2rho)
+      if (want_third) p_third = c_loc(c_d3rho)
 
       call c_f_procpointer(self%callback_ptr, callback)
       self%point = point
-      !> Value and gradient are mandatory in the callback ABI; the higher orders
-      !> are exactly those whose pointer was non-NULL.  Recorded so an accessor
+      !> Density and its gradient are mandatory in the callback ABI; the higher
+      !> orders are exactly those whose pointer was non-NULL.  Recorded so an accessor
       !> asked for more aborts instead of returning the zeros below.
       self%prepared_deriv = 1
       if (want_hess) self%prepared_deriv = 2
       if (want_third) self%prepared_deriv = 3
       c_point = real(point, c_double)
-      status = callback(self%context, c_point, c_value, c_grad, p_hess, p_third)
+      status = callback(self%context, c_point, c_rho, c_drho, p_hess, p_third)
       if (status /= 0_c_int) then
          ! Substitute state; numbers are not a result; the caller aborts on `error`
          self%value = 1.0_wp
@@ -178,15 +194,18 @@ contains
                           " ) Bohr. The cavity build was aborted; no cavity data are valid.")
          return
       end if
-      self%value = self%scale*real(c_value, wp)
-      self%grad = self%scale*real(c_grad, wp)
+      ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
+      ! derivative inherits the sign flip. Identical to the lift in
+      ! [[moist_cavity_drop_lsf_isodensity_internal]], by construction.
+      self%value = self%param%scale*(self%param%rho_iso - real(c_rho, wp))
+      self%grad = -self%param%scale*real(c_drho, wp)
       if (want_hess) then
-         self%hess = self%scale*real(c_hess, wp)
+         self%hess = -self%param%scale*real(c_d2rho, wp)
       else
          self%hess = 0.0_wp
       end if
       if (want_third) then
-         self%third = self%scale*real(c_third, wp)
+         self%third = -self%param%scale*real(c_d3rho, wp)
       else
          self%third = 0.0_wp
       end if

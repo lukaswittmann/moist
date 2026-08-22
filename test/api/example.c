@@ -1214,7 +1214,10 @@ cleanup:
  *
  * The level set mirrors the diagonal-density case built by
  * test_isodensity_internal_cavity() exactly, so the two backends must agree:
- *   rho(r) = sum_A c exp(-a |r - R_A|^2),  S(r) = rho_iso - rho(r)
+ *   rho(r) = sum_A c exp(-a |r - R_A|^2)
+ *
+ * The callback returns that density and its spatial derivatives; moist forms
+ * S(r) = scale * (rho_iso - rho(r)) from the rho_iso passed to the factory.
  * with c = 2 coeff^2 and a = 2 alpha.
  * ------------------------------------------------------------------------- */
 
@@ -1268,12 +1271,12 @@ struct iso_callback_ctx {
 };
 
 static int iso_gaussian_callback(void* context, const double* point,
-                                 double* value, double* grad,
-                                 double* hess, double* third)
+                                 double* rho_out, double* drho_out,
+                                 double* d2rho_out, double* d3rho_out)
 {
     struct iso_callback_ctx* ctx = (struct iso_callback_ctx*)context;
-    const int want_hess = (hess != NULL);
-    const int want_third = (third != NULL);
+    const int want_hess = (d2rho_out != NULL);
+    const int want_third = (d3rho_out != NULL);
 
     atomic_fetch_add(&ctx->calls, 1);
     if (want_hess) atomic_fetch_add(&ctx->calls_with_hess, 1);
@@ -1323,11 +1326,12 @@ static int iso_gaussian_callback(void* context, const double* point,
         }
     }
 
-    /* DROP sign convention: interior negative, exterior positive */
-    *value = ctx->rho_iso - rho;
-    for (int i = 0; i < 3; i++) grad[i] = -drho[i];
-    if (want_hess) for (int i = 0; i < 9; i++) hess[i] = -d2rho[i];
-    if (want_third) for (int i = 0; i < 27; i++) third[i] = -d3rho[i];
+    /* The bare density: moist subtracts ctx->rho_iso (which it was handed at
+     * construction) and applies the DROP sign convention itself. */
+    *rho_out = rho;
+    for (int i = 0; i < 3; i++) drho_out[i] = drho[i];
+    if (want_hess) for (int i = 0; i < 9; i++) d2rho_out[i] = d2rho[i];
+    if (want_third) for (int i = 0; i < 27; i++) d3rho_out[i] = d3rho[i];
 
     return 0;   /* success; any nonzero value would abort the cavity build */
 }
@@ -1370,7 +1374,8 @@ int test_isodensity_callback_cavity(void)
     }
 
     cav = moist_new_drop_cavity_isodensity_callback(
-        error, iso_gaussian_callback, &ctx, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        error, iso_gaussian_callback, &ctx, ctx.rho_iso,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1547,7 +1552,8 @@ int test_isodensity_callback_third_derivative(void)
     }
 
     cav = moist_new_drop_cavity_isodensity_callback(
-        error, iso_gaussian_callback, &ctx, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        error, iso_gaussian_callback, &ctx, ctx.rho_iso,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1682,15 +1688,16 @@ struct iso_fail_ctx {
 };
 
 static int iso_failing_callback(void* context, const double* point,
-                                double* value, double* grad,
-                                double* hess, double* third)
+                                double* rho_out, double* drho_out,
+                                double* d2rho_out, double* d3rho_out)
 {
     struct iso_fail_ctx* ctx = (struct iso_fail_ctx*)context;
 
     const int n = atomic_fetch_add(&ctx->calls, 1) + 1;
     if (n > ctx->fail_after) return ctx->status;
 
-    return iso_gaussian_callback(&ctx->base, point, value, grad, hess, third);
+    return iso_gaussian_callback(&ctx->base, point, rho_out, drho_out,
+                                 d2rho_out, d3rho_out);
 }
 
 int test_isodensity_callback_failure(void)
@@ -1728,7 +1735,8 @@ int test_isodensity_callback_failure(void)
     }
 
     cav = moist_new_drop_cavity_isodensity_callback(
-        error, iso_failing_callback, &ctx, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        error, iso_failing_callback, &ctx, ctx.base.rho_iso,
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;

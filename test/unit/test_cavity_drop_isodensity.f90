@@ -1049,58 +1049,56 @@ contains
       end if
    end function binomial_small
 
-   !> C-interoperable isodensity level set callback
+   !> C-interoperable isodensity density callback
    !>
-   !> Returns the *unscaled* level set S = rho_iso - rho and its spatial
-   !> derivatives
+   !> Returns the bare density rho and its spatial derivatives; the LSF applies
+   !> the isovalue, the sign convention and its multiplier
    !>
-   !> The LSF applies its own multiplier
-   !>
-   !> hess/third are NULL when the cavity did not request that order
+   !> d2rho/d3rho are NULL when the cavity did not request that order
    !>
    !> @param[in]  context Unused callback context
    !> @param[in]  point   Evaluation point in Bohr
-   !> @param[out] value   Level set value
-   !> @param[out] grad    Level set spatial gradient
-   !> @param[out] hess    Level set spatial Hessian (Fortran (3,3), or NULL)
-   !> @param[out] third   Level set third spatial derivative (Fortran (3,3,3), or NULL)
+   !> @param[out] rho     Electron density
+   !> @param[out] drho    Density spatial gradient
+   !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL)
+   !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL)
    !> @returns            0 (this reference implementation never fails)
-   function iso_reference_callback(context, point, value, grad, hess, third) result(status) bind(C)
+   function iso_reference_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
       !> Unused callback context (the test keeps its data in module state)
       type(c_ptr), value :: context
       !> Evaluation point in Bohr
       real(c_double), intent(in) :: point(3)
-      !> Level set value
-      real(c_double), intent(out) :: value
-      !> Level set spatial gradient
-      real(c_double), intent(out) :: grad(3)
-      !> Level set spatial Hessian (Fortran (3,3), or NULL)
-      type(c_ptr), value :: hess
-      !> Level set third spatial derivative (Fortran (3,3,3), or NULL)
-      type(c_ptr), value :: third
+      !> Electron density
+      real(c_double), intent(out) :: rho
+      !> Density spatial gradient
+      real(c_double), intent(out) :: drho(3)
+      !> Density spatial Hessian (Fortran (3,3), or NULL)
+      type(c_ptr), value :: d2rho
+      !> Density third spatial derivative (Fortran (3,3,3), or NULL)
+      type(c_ptr), value :: d3rho
       !> Zero on success
       integer(c_int) :: status
 
       real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
-      real(wp) :: rho, drho(3), d2rho(3, 3), d3rho(3, 3, 3)
+      real(wp) :: rho_w, drho_w(3), d2rho_w(3, 3), d3rho_w(3, 3, 3)
       logical :: want_hess, want_third
 
       status = 0_c_int
       if (c_associated(context)) return
-      want_hess = c_associated(hess)
-      want_third = c_associated(third)
+      want_hess = c_associated(d2rho)
+      want_third = c_associated(d3rho)
 
-      call rho_product_rule(real(point, wp), rho, drho, d2rho, d3rho)
+      call rho_product_rule(real(point, wp), rho_w, drho_w, d2rho_w, d3rho_w)
 
-      value = real(rho_iso_ref - rho, c_double)
-      grad = real(-drho, c_double)
+      rho = real(rho_w, c_double)
+      drho = real(drho_w, c_double)
       if (want_hess) then
-         call c_f_pointer(hess, hptr, [3, 3])
-         hptr = real(-d2rho, c_double)
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = real(d2rho_w, c_double)
       end if
       if (want_third) then
-         call c_f_pointer(third, tptr, [3, 3, 3])
-         tptr = real(-d3rho, c_double)
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = real(d3rho_w, c_double)
       end if
    end function iso_reference_callback
 
@@ -1188,7 +1186,7 @@ contains
       real(wp), allocatable :: radii(:)
 
       allocate (radii(mol%nat), source=2.0_wp)
-      call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, lsf_scale)
+      call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, rho_iso_ref, lsf_scale)
       call lsf%update(mol, radii)
    end subroutine build_callback_lsf
 

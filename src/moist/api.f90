@@ -2166,12 +2166,14 @@ contains
 !> `update_cavity` as an ordinary API error naming that status; no cavity data
 !> are produced.
    function new_drop_cavity_isodensity_callback_api(verror, callback, context, &
-         c_scale, nleb, c_debug, c_verbose, c_do_fine, c_wleb_prune_level, &
+         rho_iso, c_scale, nleb, c_debug, c_verbose, c_do_fine, c_wleb_prune_level, &
          c_tolerance) result(vcav) &
          & bind(C, name=namespace//"new_drop_cavity_isodensity_callback")
       type(c_ptr), value :: verror
       type(c_funptr), value :: callback
       type(c_ptr), value :: context
+      !> Density isovalue defining the surface
+      real(c_double), value :: rho_iso
       type(c_ptr), value :: c_scale
       type(c_ptr), value :: nleb
       type(c_ptr), value :: c_debug
@@ -2275,7 +2277,7 @@ contains
          block
             type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_template
 
-            call lsf_template%new(callback, context, scale=use_scale)
+            call lsf_template%new(callback, context, real(rho_iso, wp), scale=use_scale)
 
             if (associated(pnleb)) then
                call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &

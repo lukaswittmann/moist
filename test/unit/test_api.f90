@@ -168,13 +168,14 @@ module test_api
       end subroutine moist_assemble_amat
 
       function moist_new_drop_cavity_isodensity_callback(verror, callback, context, &
-            & scale, nleb, debug, verbose, do_fine, wleb_prune_level, tolerance) &
+            & rho_iso, scale, nleb, debug, verbose, do_fine, wleb_prune_level, tolerance) &
             & result(vcav) &
             & bind(C, name="moist_new_drop_cavity_isodensity_callback")
-         import :: c_ptr, c_funptr
+         import :: c_ptr, c_funptr, c_double
          type(c_ptr), value :: verror
          type(c_funptr), value :: callback
          type(c_ptr), value :: context
+         real(c_double), value :: rho_iso
          type(c_ptr), value :: scale
          type(c_ptr), value :: nleb
          type(c_ptr), value :: debug
@@ -602,24 +603,24 @@ contains
    !>
    !> @param[in]  context Callback context, an `iso_cb_ctx`
    !> @param[in]  point   Evaluation point in Bohr
-   !> @param[out] value   Level set value S = rho_iso - rho
-   !> @param[out] grad    Spatial gradient of S
-   !> @param[out] hess    Spatial Hessian of S (Fortran (3,3), or NULL)
-   !> @param[out] third   Third spatial derivative of S (Fortran (3,3,3), or NULL)
+   !> @param[out] rho     Electron density
+   !> @param[out] drho    Density spatial gradient
+   !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL)
+   !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL)
    !> @returns            0 while healthy, `ctx%fail_status` once failing
-   function iso_switchable_callback(context, point, value, grad, hess, third) &
+   function iso_switchable_callback(context, point, rho, drho, d2rho, d3rho) &
       result(status) bind(C)
       type(c_ptr), value :: context
       real(c_double), intent(in) :: point(3)
-      real(c_double), intent(out) :: value
-      real(c_double), intent(out) :: grad(3)
-      type(c_ptr), value :: hess
-      type(c_ptr), value :: third
+      real(c_double), intent(out) :: rho
+      real(c_double), intent(out) :: drho(3)
+      type(c_ptr), value :: d2rho
+      type(c_ptr), value :: d3rho
       integer(c_int) :: status
 
       type(iso_cb_ctx), pointer :: ctx
       real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
-      real(c_double) :: rho, drho(3), d2rho(3, 3), d3rho(3, 3, 3)
+      real(c_double) :: d2rho_l(3, 3), d3rho_l(3, 3, 3)
       real(c_double) :: d(3), g
       integer :: iatom, i, j, k, ncalls
       logical :: want_hess, want_third
@@ -641,13 +642,13 @@ contains
       end if
 
       status = 0_c_int
-      want_hess = c_associated(hess)
-      want_third = c_associated(third)
+      want_hess = c_associated(d2rho)
+      want_third = c_associated(d3rho)
 
       rho = 0.0_c_double
       drho = 0.0_c_double
-      d2rho = 0.0_c_double
-      d3rho = 0.0_c_double
+      d2rho_l = 0.0_c_double
+      d3rho_l = 0.0_c_double
 
       do iatom = 1, 3
          d = point - cb_centers(:, iatom)
@@ -657,8 +658,8 @@ contains
          if (want_hess) then
             do j = 1, 3
                do i = 1, 3
-                  d2rho(i, j) = d2rho(i, j) + (4.0_c_double*cb_a*cb_a*d(i)*d(j) &
-                                               - 2.0_c_double*cb_a*delta(i, j))*g
+                  d2rho_l(i, j) = d2rho_l(i, j) + (4.0_c_double*cb_a*cb_a*d(i)*d(j) &
+                                                   - 2.0_c_double*cb_a*delta(i, j))*g
                end do
             end do
          end if
@@ -666,27 +667,25 @@ contains
             do k = 1, 3
                do j = 1, 3
                   do i = 1, 3
-                     d3rho(i, j, k) = d3rho(i, j, k) &
-                                      + (-8.0_c_double*cb_a**3*d(i)*d(j)*d(k) &
-                                         + 4.0_c_double*cb_a*cb_a*(d(i)*delta(j, k) &
-                                                                   + d(j)*delta(i, k) &
-                                                                   + d(k)*delta(i, j)))*g
+                     d3rho_l(i, j, k) = d3rho_l(i, j, k) &
+                                        + (-8.0_c_double*cb_a**3*d(i)*d(j)*d(k) &
+                                           + 4.0_c_double*cb_a*cb_a*(d(i)*delta(j, k) &
+                                                                     + d(j)*delta(i, k) &
+                                                                     + d(k)*delta(i, j)))*g
                   end do
                end do
             end do
          end if
       end do
 
-      ! DROP sign convention: interior negative, exterior positive
-      value = cb_rho_iso - rho
-      grad = -drho
+      ! The bare density: moist applies the isovalue and the DROP sign convention
       if (want_hess) then
-         call c_f_pointer(hess, hptr, [3, 3])
-         hptr = -d2rho
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = d2rho_l
       end if
       if (want_third) then
-         call c_f_pointer(third, tptr, [3, 3, 3])
-         tptr = -d3rho
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = d3rho_l
       end if
 
    end function iso_switchable_callback
@@ -727,7 +726,8 @@ contains
       vmol = moist_new_structure(verror, 3_c_int, numbers, cb_centers)
       vcav = moist_new_drop_cavity_isodensity_callback(verror, &
                                                        c_funloc(iso_switchable_callback), &
-                                                       c_loc(ctx), c_null_ptr, c_loc(nleb), &
+                                                       c_loc(ctx), cb_rho_iso, c_null_ptr, &
+                                                       c_loc(nleb), &
                                                        c_null_ptr, c_null_ptr, c_null_ptr, &
                                                        c_null_ptr, c_null_ptr)
       call moist_update_cavity(verror, vcav, vmol)

@@ -420,7 +420,7 @@ def test_l0_gradient_requires_qefield():
 
 @pytest.mark.host
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
-def test_l1_lsf_callback_derivatives(system, basis):
+def test_l1_density_callback_derivatives(system, basis):
     """The callback's own derivative orders are mutually consistent.
 
     Validates the Leibniz expansion and the PySCF derivative-component ordering
@@ -430,7 +430,7 @@ def test_l1_lsf_callback_derivatives(system, basis):
     host = make_host(mol, dm=dm)
     point = mol.atom_coords()[0] + np.array([0.9, 0.4, 1.3])
     step = 1e-4
-    _, grad_, hess, third = host.lsf(point, 3)
+    _, drho, d2rho, d3rho = host.density(point, 3)
 
     def stencil(func, axis):
         samples = []
@@ -440,19 +440,19 @@ def test_l1_lsf_callback_derivatives(system, basis):
             samples.append(func(shifted))
         return fd4(samples, step)
 
-    numerical_grad = np.array([stencil(lambda p: host.lsf(p, 1)[0], k) for k in range(3)])
-    numerical_hess = np.array([stencil(lambda p: host.lsf(p, 1)[1], k) for k in range(3)])
-    numerical_third = np.array([stencil(lambda p: host.lsf(p, 2)[2], k) for k in range(3)])
+    numerical_grad = np.array([stencil(lambda p: host.density(p, 1)[0], k) for k in range(3)])
+    numerical_hess = np.array([stencil(lambda p: host.density(p, 1)[1], k) for k in range(3)])
+    numerical_third = np.array([stencil(lambda p: host.density(p, 2)[2], k) for k in range(3)])
 
-    assert np.abs(numerical_grad - grad_).max() < 1e-9
-    assert np.abs(numerical_hess.T - hess).max() < 1e-9
-    assert np.abs(np.moveaxis(numerical_third, 0, -1) - third).max() < 1e-8
-    assert np.abs(hess - hess.T).max() < 1e-14
+    assert np.abs(numerical_grad - drho).max() < 1e-9
+    assert np.abs(numerical_hess.T - d2rho).max() < 1e-9
+    assert np.abs(np.moveaxis(numerical_third, 0, -1) - d3rho).max() < 1e-8
+    assert np.abs(d2rho - d2rho.T).max() < 1e-14
 
 
 @pytest.mark.host
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
-def test_lsf_callback_is_finite(system, basis):
+def test_density_callback_is_finite(system, basis):
     """Pins the suppressed BLAS status flags in the callback as false positives.
 
     The products there raise spurious divide-by-zero and overflow, so the flags
@@ -465,9 +465,9 @@ def test_lsf_callback_is_finite(system, basis):
     center = mol.atom_coords()[0]
     for offset in ([0.9, 0.4, 1.3], [40.0, 0.0, 0.0], [0.0, -60.0, 25.0]):
         point = center + np.array(offset)
-        value, grad_, hess, third = host.lsf(point, 3)
-        assert np.isfinite(value)
-        for tensor in (grad_, hess, third):
+        rho, drho, d2rho, d3rho = host.density(point, 3)
+        assert np.isfinite(rho)
+        for tensor in (drho, d2rho, d3rho):
             assert np.isfinite(tensor).all()
 
         ao = host._ao(point.reshape(1, 3), 3)[:, 0, :]

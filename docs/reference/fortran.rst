@@ -201,10 +201,10 @@ Alternatively, a callback-backed LSF calls a supplied function with the
    type(moist_cavity_drop_lsf_isodensity_callback_type) :: callback_lsf
    type(c_ptr) :: context = c_null_ptr
 
-   call callback_lsf%new(c_funloc(callback), context)
+   call callback_lsf%new(c_funloc(callback), context, rho_iso)
 
-MOIST applies ``scale``, so the callback must return the unscaled level set and
-its requested spatial derivatives.
+The callback returns the electron density and its requested spatial derivatives.
+MOIST builds the level set ``S = scale * (rho_iso - rho)`` from it, so the callback must not subtract its own isovalue or flip its own sign.
 See :doc:`/cavities/isodensity` for more details.
 
 Model components

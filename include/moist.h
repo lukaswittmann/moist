@@ -101,14 +101,18 @@ typedef struct _moist_cavity* moist_cavity;
 typedef struct _moist_radii* moist_radii;
 
 /// Callback ABI for external isodensity DROP level set functions.
-/// The callback receives a point in Bohr and must write an LSF value and
-/// spatial gradient using the DROP sign convention (interior negative, exterior
-/// positive).  The `hess` and `third` pointers are optional: they are NULL when
+/// The callback receives a point in Bohr and must write the ELECTRON DENSITY
+/// rho(r) there and its spatial gradient -- the bare density, not a level set:
+/// do not subtract an isovalue and do not flip the sign.  moist forms the level
+/// set itself as S = scale * (rho_iso - rho), with rho_iso and scale supplied to
+/// moist_new_drop_cavity_isodensity_callback(), which is what puts S in the DROP
+/// sign convention (interior negative, exterior positive).
+/// The `d2rho` and `d3rho` pointers are optional: they are NULL when
 /// the cavity does not need that derivative order (e.g. the value+gradient-only
 /// projection phase), and a NULL pointer means the callback should skip
 /// computing that derivative, not merely skip writing it.  Dereferencing a NULL
-/// `hess`/`third` is a host bug, so branch on them before writing.
-/// `hess` and `third` follow the Fortran layout convention above; both are
+/// `d2rho`/`d3rho` is a host bug, so branch on them before writing.
+/// `d2rho` and `d3rho` follow the Fortran layout convention above; both are
 /// symmetric under any index permutation, so the storage order is immaterial
 /// in practice.
 ///
@@ -124,22 +128,34 @@ typedef struct _moist_radii* moist_radii;
 /// The status value itself is opaque to moist and is echoed verbatim in the
 /// error message, so hosts may use it to carry their own error codes.
 ///
-/// V_0_6 CONTRACT.  Two things changed relative to V_0_5: `hess`/`third` became
-/// nullable (see above), and the return type became `int`.  The `void` -> `int`
-/// change is deliberately compiler-visible: a callback still written against the
-/// V_0_5 signature no longer type-checks against this typedef, so every stale
-/// implementation is a compile error at the point where it is registered rather
-/// than a silent misbehaviour at run time.  Fixing that compile error is the
-/// prompt to also audit the nullable `hess`/`third` handling.
+/// V_0_6 CONTRACT.  Three things changed relative to V_0_5: `d2rho`/`d3rho`
+/// (V_0_5 `hess`/`third`) became nullable (see above), the return type became
+/// `int`, and -- the one to read twice -- what the callback returns changed
+/// meaning.  V_0_5 asked for the finished level set, with the host applying its
+/// own isovalue and the DROP sign; V_0_6 asks for the raw density and moist
+/// applies rho_iso and the sign.  Porting a V_0_5 callback is deleting that
+/// arithmetic: write `rho` where you wrote `rho_iso - rho`, drop the negation on
+/// every derivative, and pass your isovalue to the factory instead.
+///
+/// Two of the three breaks are compiler-visible.  The `void` -> `int` change
+/// means a callback still written against the V_0_5 signature no longer
+/// type-checks against this typedef, and the new required `rho_iso` argument of
+/// moist_new_drop_cavity_isodensity_callback() means no V_0_5 registration
+/// compiles either.  The density-vs-level-set change is not: the C signature is
+/// identical, so fixing those two compile errors is the prompt to port the
+/// callback body and to audit the nullable `d2rho`/`d3rho` handling.  A callback
+/// ported at the registration but not in its body reports a surface at the wrong
+/// isovalue with an inside-out gradient -- a plausible-looking cavity, not a
+/// crash.
 ///
 /// See test_isodensity_callback_cavity() in test/api/example.c for a callback
 /// written against this contract.
 typedef int (*moist_isodensity_lsf_callback)(void* /* context */,
                                              const double* /* point[3] */,
-                                             double* /* value */,
-                                             double* /* grad[3] */,
-                                             double* /* hess: Fortran (3,3), or NULL */,
-                                             double* /* third: Fortran (3,3,3), or NULL */);
+                                             double* /* rho */,
+                                             double* /* drho[3] */,
+                                             double* /* d2rho: Fortran (3,3), or NULL */,
+                                             double* /* d3rho: Fortran (3,3,3), or NULL */);
 
 /*
  * Type generic macro for convenience
@@ -553,10 +569,14 @@ moist_new_iswig_cavity(moist_error /* error */,
 /// Create DROP cavity handle backed by an external isodensity LSF callback.
 /// The callback must remain valid until the cavity is deleted. The context
 /// pointer is passed back unchanged on every callback invocation.
+/// `rho_iso` is the density contour the surface follows and is required -- the
+/// callback returns the bare density, so moist owns the isovalue. `scale`
+/// rescales the level set without moving its zero surface (NULL -> default).
 moist_API_ENTRY moist_cavity moist_API_CALL
 moist_new_drop_cavity_isodensity_callback(moist_error /* error */,
                                          moist_isodensity_lsf_callback /* callback */,
                                          void* /* context */,
+                                         const double /* rho_iso */,
                                          const double* /* scale */,
                                          const int* /* nleb */,
                                          const bool* /* debug */,

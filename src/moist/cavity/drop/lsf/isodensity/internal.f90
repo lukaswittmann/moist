@@ -24,6 +24,8 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
+   use moist_cavity_drop_lsf_isodensity_param, only: &
+      moist_cavity_drop_lsf_isodensity_param_type
    implicit none (type, external)
    private
 
@@ -35,10 +37,8 @@ module moist_cavity_drop_lsf_isodensity_internal
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_internal_type
       !> Cartesian-monomial Gaussian basis and density matrix
       type(moist_iso_gto_type) :: gto
-      !> Constant multiplier applied to the level set value and derivatives
-      real(wp) :: scale = 1.0_wp
-      !> Density isovalue defining the surface
-      real(wp) :: rho_iso = 0.0_wp
+      !> Level set parameters (isovalue and constant multiplier)
+      type(moist_cavity_drop_lsf_isodensity_param_type) :: param
       !> Cached evaluation point in Bohr
       real(wp) :: point(ndim) = 0.0_wp
       !> Cached LSF value
@@ -120,8 +120,7 @@ contains
       if (allocated(self%tm)) deallocate (self%tm)
       if (allocated(self%tmm)) deallocate (self%tmm)
       if (allocated(self%act)) deallocate (self%act)
-      self%rho_iso = rho_iso
-      if (present(scale)) self%scale = scale
+      call self%param%new(rho_iso=rho_iso, scale=scale)
    end subroutine lsf_new
 
    !> Install the cartesian-monomial density matrix for the current SCF step
@@ -220,19 +219,19 @@ contains
       ! Record what this point's cache actually holds, so an accessor asked for
       ! a higher order aborts instead of returning the zeros below
       self%prepared_deriv = nderiv
-      self%value = self%scale*(self%rho_iso - rho)
-      self%grad = -self%scale*drho
+      self%value = self%param%scale*(self%param%rho_iso - rho)
+      self%grad = -self%param%scale*drho
       if (nderiv >= 2) then
-         self%hess = -self%scale*d2rho
+         self%hess = -self%param%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (nderiv >= 3) then
-         self%third = -self%scale*d3rho
+         self%third = -self%param%scale*d3rho
       else
          self%third = 0.0_wp
       end if
-      if (nderiv >= 4) self%fourth = -self%scale*d4rho
+      if (nderiv >= 4) self%fourth = -self%param%scale*d4rho
    end subroutine lsf_prepare_impl
 
    !> Evaluate cached data; candidate lists are ignored for true density LSFs

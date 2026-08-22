@@ -10,11 +10,11 @@ Interface
 The PySCF interface separates four roles:
 
 ``PySCFHost``
-   Adapts a PySCF molecule and density to the level set, electrostatic, Fock, and nuclear-gradient operations MOIST needs.
+   Adapts a PySCF molecule and density to the density, electrostatic, Fock, and nuclear-gradient operations MOIST needs.
 
 ``CavityDROPIsodensity(host, ...)``
-   Constructs the cavity from the host's level set.
-   The cavity owns its native state and configuration while retaining the host that supplies ``lsf(point, order)`` and the matching scale.
+   Constructs the cavity from the host's density.
+   The cavity owns its native state and configuration while retaining the host that supplies ``density(point, order)`` and the matching ``rho_iso`` and ``scale``.
 
 ``host.coupling(dm)``
    Captures one density matrix and returns a :class:`~moist.pyscf.PySCFCoupling`.
@@ -265,8 +265,8 @@ These are easy to get wrong and are verified against finite differences in ``moi
    When the density changes the  grid points move and ``phi(r_i)`` moves with them.
    That route dominates the cavity response and moist cannot see it, so it must be supplied before the potential is read.  :class:`~moist.pyscf.PySCFCoupling` handles the ordering inside :meth:`~moist.interface.SolvationModel.evaluate`.
 
-The callback returns the *unscaled* level set moist applies ``scale`` itself.
-Scaling in the callback as well leaves the surface unchanged -- the zero level set is scale-invariant -- while making every adjoint wrong by a factor of ``scale``.
+The callback returns the bare density; moist forms ``S = scale * (rho_iso - rho)`` itself.
+Subtracting the isovalue in the callback as well moves the surface, and scaling there as well leaves the surface unchanged -- the zero level set is scale-invariant -- while making every adjoint wrong by a factor of ``scale``.
 
 API
 ---

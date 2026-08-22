@@ -761,39 +761,37 @@ class CavityDROPCFC(_CavityDROPBase):
 CavityDROP = CavityDROPSvdW
 
 
-#: ``(value, grad)``, ``(value, grad, hess)`` or ``(value, grad, hess, third)``:
+#: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:
 #: the tuple grows with the requested order so a caller never pays for a
 #: derivative it did not ask for.
-LevelSetDerivatives = tuple[Union[float, np.ndarray], ...]
+DensityDerivatives = tuple[Union[float, np.ndarray], ...]
 
-#: A raw level-set callback.  It takes ``(point, order)``, or just ``(point)``
-#: when the cavity was built with ``pass_order=False``.
-IsodensityCallback = Callable[..., LevelSetDerivatives]
+#: A raw density callback.  It takes ``(point, order)``, or just ``(point)``
+#: when the cavity was built with ``pass_order=False``.  It returns the bare
+#: electron density: moist builds ``S = scale * (rho_iso - rho)`` from it.
+IsodensityCallback = Callable[..., DensityDerivatives]
 
 
 class IsodensitySource(Protocol):
-    """Provider of an unscaled isodensity level set and its MOIST scale."""
+    """Provider of an electron density and the level set MOIST builds from it."""
 
+    rho_iso: float
     scale: float
 
-    def lsf(self, point: np.ndarray, order: int) -> LevelSetDerivatives:
-        """Return the level-set value and spatial derivatives through ``order``."""
+    def density(self, point: np.ndarray, order: int) -> DensityDerivatives:
+        """Return the density and its spatial derivatives through ``order``."""
         ...
 
 
 class CavityDROPIsodensity(_CavityDROPBase):
-    """DROP cavity driven by an isodensity source or a raw Python callback.
-
-    A source exposes ``lsf(point, order)`` and ``scale``.  Passing a source is
-    the canonical interface because it keeps the callback and its scaling
-    invariant together.  Raw callbacks remain supported for non-host callers.
-    """
+    """DROP cavity driven by an isodensity source or a raw Python callback."""
 
     density_dependent = True
 
     def __init__(
         self,
         source: Optional[Union[IsodensitySource, IsodensityCallback]] = None,
+        rho_iso: Optional[float] = None,
         nleb: Optional[int] = None,
         scale: Optional[float] = None,
         debug: bool = False,
@@ -814,27 +812,40 @@ class CavityDROPIsodensity(_CavityDROPBase):
             )
             source = callback
         if source is None:
-            raise TypeError("CavityDROPIsodensity requires a level-set source")
+            raise TypeError("CavityDROPIsodensity requires a density source")
 
-        provider_callback = getattr(source, "lsf", None)
+        provider_callback = getattr(source, "density", None)
         if callable(provider_callback):
             if not hasattr(source, "scale"):
                 raise TypeError("An isodensity source must expose a scale")
+            if not hasattr(source, "rho_iso"):
+                raise TypeError("An isodensity source must expose a rho_iso")
             source_scale = float(source.scale)
             if scale is not None and float(scale) != source_scale:
                 raise ValueError("cavity scale must match the isodensity source scale")
+            source_rho_iso = float(source.rho_iso)
+            if rho_iso is not None and float(rho_iso) != source_rho_iso:
+                raise ValueError("cavity rho_iso must match the isodensity source rho_iso")
             resolved_callback = provider_callback
             resolved_scale = source_scale
+            resolved_rho_iso = source_rho_iso
         elif callable(source):
+            if rho_iso is None:
+                raise TypeError(
+                    "The isodensity callback has to return the density, so rho_iso "
+                    "must be given explicitly"
+                )
             resolved_callback = source
             resolved_scale = 1000.0 if scale is None else float(scale)
+            resolved_rho_iso = float(rho_iso)
         else:
             raise TypeError(
-                "source must be callable or expose callable lsf(point, order)"
+                "source must be callable or expose callable density(point, order)"
             )
 
         handle, callback_ref = library.new_drop_cavity_isodensity_callback(
             callback=resolved_callback,
+            rho_iso=resolved_rho_iso,
             nleb=nleb,
             scale=resolved_scale,
             debug=debug,
