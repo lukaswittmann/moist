@@ -18,6 +18,32 @@
 !>   * `f2_r_rA_fd`          mixed deriv vs FD of grad
 !>   * `f3_rr_rA_fd`         mixed third deriv vs FD of Hessian
 !>
+!> Radius-derivative checks, both concretes. Their radius channels rest on
+!> opposite structures -- SvdW's `d/dR_a` is a diagonal rescaling of an atom's
+!> own tensors, CFC's a genuine extra derivative of a two-center kernel -- so
+!> the same FD says two different things:
+!>   * `f1_rad_fd`           radius grad vs FD of f0
+!>   * `f2_r_rad_fd`         mixed spatial-radius deriv vs FD of grad
+!>   * `f3_rr_rad_fd`        mixed third radius deriv vs FD of Hessian
+!>   * `radrad_fd`           `f{2,3,4}_*_radrad` vs a one-radius FD of the
+!>                           `f*_rad` ladder, element by element
+!>   * `ra_rad_fd`           `f{2,3,4}_*_rA_rad` vs a one-radius FD of the
+!>                           `f*_rA` ladder. Also pins the *order* of the two
+!>                           atom slots, which that block is not symmetric in
+!>   * `hvp_rad_fd`          radius row of the joint position/radius HVP vs
+!>                           FD of the `f*_rad` ladder along `(v, vr)`
+!>   * `hvp_ra_joint_fd`     nuclear row of the same HVP, `vrad` supplied, vs
+!>                           FD of the `f*_rA` ladder along `(v, vr)`
+!>   * `radius_pairwise`     both HVP rows against the *uncontracted* blocks
+!>                           `f*_radrad` and `f*_rA_rad`. No finite differences:
+!>                           an exact contraction identity, so it pins the two
+!>                           uncontracted families at roundoff where every other
+!>                           radius test only reaches FD accuracy.
+!>   * `empty_active`        every accessor above at a point where screening
+!>                           rejects all atoms. The one check that inspects a
+!>                           whole result buffer instead of its active prefix.
+!> All the FD ones above take CFC's looser thresholds; see [[radius_fd_thr]].
+!>
 !> High-order extensions, registered once per concrete because the SvdW
 !> dispatch sweeps a blend_k x gamma parameter grid that CFC has no analogue of
 !> (its four shape parameters are compiled-in constants):
@@ -70,6 +96,9 @@ module test_cavity_drop_lsf
    real(wp), parameter :: HESSFREE_ABS = 1.0e-14_wp
    real(wp), parameter :: HESSFREE_REL = 1.0e-12_wp
 
+   !> Poison written into every result buffer by the empty-active-list check.
+   real(wp), parameter :: EMPTY_POISON = -1.0e30_wp
+
    real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
@@ -89,6 +118,22 @@ module test_cavity_drop_lsf
    !> quotient.
    real(wp), parameter :: CFC_ABS_THR = 1.0e-8_wp
    real(wp), parameter :: CFC_REL_THR = 1.0e-7_wp
+
+   !> Sampling points per structure in the finite-difference drivers.
+   !>
+   !> CFC gets fewer than SvdW purely because of cost: one CFC evaluation runs an
+   !> `O(n_active^2)` pair kernel where SvdW runs `O(n_active)` power sums, which
+   !> makes a CFC point roughly 300x a SvdW one. The two counts buy different
+   !> amounts of the *same* thing -- the points are independent samples of one
+   !> pointwise identity, so the fourth through seventh add far less than the
+   !> first three. The diversity that actually matters (five chemistries, five
+   !> sizes, and for SvdW the 5x2 blend/gamma sweep) is untouched.
+   !>
+   !> Safe to tune: `get_test_points` seeds its sampler from `mol%nat` alone, so a
+   !> smaller count returns a strict *prefix* of the same sequence rather than a
+   !> different draw. Shrinking it can only remove points, never move them.
+   integer, parameter :: n_points_svdw = 7
+   integer, parameter :: n_points_cfc = 1
 
    integer, parameter :: n_svdw_blends = 5
    integer, parameter :: n_svdw_gammas = 2
@@ -124,6 +169,26 @@ contains
                   new_unittest("cfc_f2_r_ra_fd", test_cfc_f2_r_rA_fd), &
                   new_unittest("svdw_f3_rr_ra_fd", test_svdw_f3_rr_rA_fd), &
                   new_unittest("cfc_f3_rr_ra_fd", test_cfc_f3_rr_rA_fd), &
+                  !> Radius derivatives
+                  new_unittest("svdw_f1_rad_fd", test_svdw_f1_rad_fd), &
+                  new_unittest("cfc_f1_rad_fd", test_cfc_f1_rad_fd), &
+                  new_unittest("svdw_f2_r_rad_fd", test_svdw_f2_r_rad_fd), &
+                  new_unittest("cfc_f2_r_rad_fd", test_cfc_f2_r_rad_fd), &
+                  new_unittest("svdw_f3_rr_rad_fd", test_svdw_f3_rr_rad_fd), &
+                  new_unittest("cfc_f3_rr_rad_fd", test_cfc_f3_rr_rad_fd), &
+                  new_unittest("svdw_radrad_fd", test_svdw_radrad_fd), &
+                  new_unittest("cfc_radrad_fd", test_cfc_radrad_fd), &
+                  new_unittest("svdw_ra_rad_fd", test_svdw_rA_rad_fd), &
+                  new_unittest("cfc_ra_rad_fd", test_cfc_rA_rad_fd), &
+                  new_unittest("svdw_hvp_rad_fd", test_svdw_hvp_rad_fd), &
+                  new_unittest("cfc_hvp_rad_fd", test_cfc_hvp_rad_fd), &
+                  new_unittest("svdw_hvp_ra_joint_fd", test_svdw_hvp_rA_joint_fd), &
+                  new_unittest("cfc_hvp_ra_joint_fd", test_cfc_hvp_rA_joint_fd), &
+                  new_unittest("svdw_radius_pairwise", test_svdw_radius_pairwise), &
+                  new_unittest("cfc_radius_pairwise", test_cfc_radius_pairwise), &
+                  new_unittest("svdw_empty_active", test_svdw_empty_active), &
+                  new_unittest("cfc_empty_active", test_cfc_empty_active), &
+                  !> Consistency checks (with+without Hessian)
                   new_unittest("svdw_f012_hessfree_value_grad", test_svdw_f012_hessfree), &
                   new_unittest("cfc_f012_hessfree_value_grad", test_cfc_f012_hessfree), &
                   !> SvdW-only
@@ -242,6 +307,36 @@ contains
       end if
       call lsf%set_centers(centers)
    end subroutine refresh_ssd
+
+   !> Prepare the LSF at a displaced geometry, failing the test if it cannot.
+   !>
+   !> The prepare at the *base* geometry is checked inline in every driver,
+   !> because it sits next to the active-list identity check that follows it.
+   !> The displaced prepares inside the FD loops have no such context, and an
+   !> unreported failure there is the worst kind: `f0` and friends would return
+   !> the values of the previous point, and the difference quotient built from
+   !> them looks like an ordinary numerical disagreement rather than a broken
+   !> setup. A `.true.` return is the caller's signal to return at once.
+   !>
+   !> @param[inout] lsf   Polymorphic LSF, prepared in place
+   !> @param[in]    point Sampling point
+   !> @param[out]   error Test error, allocated iff `prepare` failed
+   logical function prepare_failed(lsf, point, error)
+      !> Polymorphic LSF to prepare at `point`
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Sampling point
+      real(wp), intent(in) :: point(:)
+      !> Test error, allocated iff `prepare` failed
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: lsf_err
+
+      call lsf%prepare(point, lsf_err)
+      prepare_failed = allocated(lsf_err)
+      if (prepare_failed) then
+         call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+      end if
+   end function prepare_failed
 
    !* ================================================================================= *!
    !*                              Sign + cutoff checks                                 *!
@@ -427,6 +522,39 @@ contains
       end do
    end function any_moving_active
 
+   !> Assert that the active list is the unscreened identity
+   !>
+   !> Every nuclear- and radius-derivative accessor returns *active*-indexed
+   !> results: slot `i` belongs to `active_atom(i)`, and slots above
+   !> `active_count()` are never written. The FD drivers below allocate their
+   !> analytic buffers at `nat` and index them with user-space atom ids, which is
+   !> only correct while `init_lsf` leaves screening off. Assert that rather than
+   !> assume it -- a screened fixture would otherwise compare uninitialized
+   !> memory against a finite difference instead of failing.
+   !>
+   !> Call once after the first `prepare` of each geometry; the active list does
+   !> not change under the FD displacements used here.
+   !>
+   !> @param[out] error Set if the active list is screened or reordered
+   !> @param[in]  lsf   LSF instance, after `prepare`
+   !> @param[in]  nat   User-space atom count the caller indexes with
+   subroutine check_identity_active(error, lsf, nat)
+      type(error_type), allocatable, intent(out) :: error
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      integer, intent(in) :: nat
+
+      integer :: i
+
+      call check(error, lsf%active_count(), nat, &
+                 more="active list must be unscreened for user-space indexing")
+      if (allocated(error)) return
+      do i = 1, nat
+         call check(error, lsf%active_atom(i), i, &
+                    more="unscreened active list must be the identity")
+         if (allocated(error)) return
+      end do
+   end subroutine check_identity_active
+
    !* ================================================================================= *!
    !*                           Spatial-derivative FD tests                             *!
    !* ================================================================================= *!
@@ -463,7 +591,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 1, kind, &
@@ -532,7 +660,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 2, kind, &
@@ -610,7 +738,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 3, kind, &
@@ -701,7 +829,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          allocate (dummy_3rd(ndim, ndim, ndim, mol%nat))
          centers_base = mol%xyz
@@ -719,6 +847,8 @@ contains
                      call test_failed(error, "LSF prepare failed: "//lsf_err%message)
                      return
                   end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
                   call lsf%f3_rr_rA(lsf1_rA=analytic, lsf3_rr_rA=dummy_3rd)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
@@ -789,7 +919,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          allocate (dummy_3rd(ndim, ndim, ndim, mol%nat))
          centers_base = mol%xyz
@@ -807,6 +937,8 @@ contains
                      call test_failed(error, "LSF prepare failed: "//lsf_err%message)
                      return
                   end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
                   call lsf%f3_rr_rA(lsf2_r_rA=analytic, lsf3_rr_rA=dummy_3rd)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
@@ -879,7 +1011,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          allocate (analytic(ndim, ndim, ndim, mol%nat))
          centers_base = mol%xyz
@@ -896,6 +1028,8 @@ contains
                      call test_failed(error, "LSF prepare failed: "//lsf_err%message)
                      return
                   end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
                   call lsf%f3_rr_rA(lsf3_rr_rA=analytic)
                   do atom = 1, mol%nat
                      do axis = 1, ndim
@@ -934,6 +1068,1223 @@ contains
    end subroutine run_f3_rr_rA_fd
 
    !* ================================================================================= *!
+   !*                          Radius-derivative FD tests                               *!
+   !* ================================================================================= *!
+   !
+   ! `R_a` is the *radius* of an active atom, not its position, so `f3_rr_rad`
+   ! and its lower orders carry no trailing derivative index: the rank equals the
+   ! spatial order. These three checks differ from the `_rA` block above in one
+   ! further respect. A nuclear FD can move atoms with `set_centers`, which only
+   ! rebuilds the spatial sort; a radius FD cannot, because the radii are baked
+   ! into every concrete's per-atom cache. `refresh_radii` therefore goes through
+   ! the full `update` and restores `max_deriv` afterwards.
+   !
+   ! Both concretes are registered. Their radius channels are built on opposite
+   ! structures -- SvdW's `d/dR_a` is a diagonal rescaling of the atom's own
+   ! tensors, CFC's is a genuine extra derivative of a two-center kernel -- so
+   ! running the same FD against both is worth more than running it twice.
+
+   !> SvdW dispatch for the radius gradient FD check.
+   subroutine test_svdw_f1_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f1_rad_fd(error, kind_svdw)
+   end subroutine test_svdw_f1_rad_fd
+
+   !> CFC dispatch for the radius gradient FD check.
+   subroutine test_cfc_f1_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f1_rad_fd(error, kind_cfc)
+   end subroutine test_cfc_f1_rad_fd
+
+   !> Radius gradient dS/dR_a vs FD of f0.
+   subroutine run_f1_rad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      integer  :: icase, ipt, atom, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim)
+      real(wp), allocatable :: analytic(:)
+      real(wp), allocatable :: dummy_2nd(:, :, :)
+      real(wp) :: numeric, f_pp, f_p, f_m, f_mm
+      real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (radii_local(mol%nat))
+         allocate (dummy_2nd(ndim, ndim, mol%nat))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               allocate (analytic(mol%nat))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_radii(lsf, mol, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%f3_rr_rad(lsf1_rad=analytic, lsf3_rr_rad=dummy_2nd)
+                  do atom = 1, mol%nat
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f0(f_pp)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f0(f_p)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f0(f_m)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f0(f_mm)
+                     numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
+                     call check(error, analytic(atom), numeric, &
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                     if (allocated(error)) return
+                  end do
+               end do
+               deallocate (analytic, lsf)
+            end do
+         end do
+         deallocate (radii_local, dummy_2nd)
+      end do
+   end subroutine run_f1_rad_fd
+
+   !> SvdW dispatch for the mixed spatial-radius FD check.
+   subroutine test_svdw_f2_r_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f2_r_rad_fd(error, kind_svdw)
+   end subroutine test_svdw_f2_r_rad_fd
+
+   !> CFC dispatch for the mixed spatial-radius FD check.
+   subroutine test_cfc_f2_r_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f2_r_rad_fd(error, kind_cfc)
+   end subroutine test_cfc_f2_r_rad_fd
+
+   !> Mixed spatial-radius second derivative vs FD of the spatial gradient.
+   subroutine run_f2_r_rad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      integer  :: icase, ipt, atom, i, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim)
+      real(wp), allocatable :: analytic(:, :)
+      real(wp), allocatable :: dummy_2nd(:, :, :)
+      real(wp) :: numeric, g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
+      real(wp) :: eps
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (radii_local(mol%nat))
+         allocate (dummy_2nd(ndim, ndim, mol%nat))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               allocate (analytic(ndim, mol%nat))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_radii(lsf, mol, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%f3_rr_rad(lsf2_r_rad=analytic, lsf3_rr_rad=dummy_2nd)
+                  do atom = 1, mol%nat
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf1_r=g_pp)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf1_r=g_p)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf1_r=g_m)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf1_r=g_mm)
+                     do i = 1, ndim
+                        numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
+                        call check(error, analytic(i, atom), numeric, &
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                        if (allocated(error)) return
+                     end do
+                  end do
+               end do
+               deallocate (analytic, lsf)
+            end do
+         end do
+         deallocate (radii_local, dummy_2nd)
+      end do
+   end subroutine run_f2_r_rad_fd
+
+   !> SvdW dispatch for the mixed third radius FD check.
+   subroutine test_svdw_f3_rr_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f3_rr_rad_fd(error, kind_svdw)
+   end subroutine test_svdw_f3_rr_rad_fd
+
+   !> CFC dispatch for the mixed third radius FD check.
+   subroutine test_cfc_f3_rr_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f3_rr_rad_fd(error, kind_cfc)
+   end subroutine test_cfc_f3_rr_rad_fd
+
+   !> FD thresholds of the deep radius checks: CFC gets the same headroom the
+   !> CFC high-order block gets, and for the same reason.
+   !>
+   !> CFC's radius derivatives grow faster than its nuclear ones. Both bring
+   !> down a factor `|a1| s_a / R_a ~ 7.5`, but `R_a` sits in a *denominator*, so
+   !> each further `d/dR_a` also differentiates `1/R_a` and picks up the extra
+   !> quotient terms; the nuclear derivative has no such chain. That is why
+   !> `f3_rr_rA` clears the tight thresholds for CFC at this step size and
+   !> `f3_rr_rad` does not.
+   !>
+   !> Measured, not guessed: at `STEP_SIZE` the three deep radius checks miss the
+   !> tight thresholds by 2-3x, and at half the step all three clear them, which
+   !> is the h**4 the stencil promises and not a defect. `f1_rad` and `f2_r_rad`
+   !> stay on the tight thresholds -- they pass there, and a check that can be
+   !> strict should be.
+   !>
+   !> @param[in]  kind    LSF kind
+   !> @param[out] thr_abs Absolute threshold
+   !> @param[out] thr_rel Relative threshold
+   subroutine radius_fd_thr(kind, thr_abs, thr_rel)
+      !> LSF kind
+      character(len=*), intent(in) :: kind
+      !> Absolute threshold
+      real(wp), intent(out) :: thr_abs
+      !> Relative threshold
+      real(wp), intent(out) :: thr_rel
+
+      select case (kind)
+      case (kind_cfc)
+         thr_abs = CFC_ABS_THR
+         thr_rel = CFC_REL_THR
+      case default
+         thr_abs = ABS_THR
+         thr_rel = REL_THR
+      end select
+   end subroutine radius_fd_thr
+
+   !> Mixed third derivative d^3S/(dr^2 dR_a) vs FD of the spatial Hessian.
+   subroutine run_f3_rr_rad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      integer  :: icase, ipt, atom, i, j, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim)
+      real(wp), allocatable :: analytic(:, :, :)
+      real(wp) :: numeric
+      real(wp) :: h_pp(ndim, ndim), h_p(ndim, ndim), h_m(ndim, ndim), h_mm(ndim, ndim)
+      real(wp) :: eps, thr_abs, thr_rel
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call radius_fd_thr(kind, thr_abs, thr_rel)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (radii_local(mol%nat))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               allocate (analytic(ndim, ndim, mol%nat))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_radii(lsf, mol, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%f3_rr_rad(lsf3_rr_rad=analytic)
+                  do atom = 1, mol%nat
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf2_rr=h_pp)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) + eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf2_rr=h_p)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf2_rr=h_m)
+                     radii_local = radii
+                     radii_local(atom) = radii_local(atom) - 2.0_wp*eps
+                     call refresh_radii(lsf, mol, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f012_r(lsf2_rr=h_mm)
+                     do i = 1, ndim
+                        do j = 1, ndim
+                           numeric = fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), &
+                                                h_mm(i, j), eps)
+                           call check(error, analytic(i, j, atom), numeric, &
+                                      thr_abs=thr_abs, thr_rel=thr_rel)
+                           if (allocated(error)) return
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (analytic, lsf)
+            end do
+         end do
+         deallocate (radii_local)
+      end do
+   end subroutine run_f3_rr_rad_fd
+
+   !* ================================================================================= *!
+   !*                Uncontracted two-radius and nuclear-radius FD tests                *!
+   !* ================================================================================= *!
+   !
+   ! [[run_radius_contracted_vs_pairwise]] ties `f*_radrad` and `f*_rA_rad` to the
+   ! two `hvp_*` rows exactly, but only through one fixed direction pair, and the
+   ! `hvp_*` FD checks differentiate along that same pair. An error shared between
+   ! the two families that cancels in that one contraction survives all three. The
+   ! two drivers below close the hole by differencing element by element: a single
+   ! radius is perturbed on its own, and the entire first-derivative ladder of the
+   ! other slot is differenced against it.
+   !
+   ! Perturbing the radius of atom `b` and differencing
+   !   * the `f*_rad` ladder gives the `f*_radrad` column `(.., :, b)`
+   !   * the `f*_rA`  ladder gives the `f*_rA_rad` column `(.., :, b)`
+   ! The second is what pins the *order* of the two atom slots. That family is not
+   ! symmetric in them -- the first index carries a position derivative, the second
+   ! a radius one -- so a transposed implementation can still satisfy the
+   ! contraction identity and fails only here.
+
+   !> SvdW dispatch for the two-radius block FD check.
+   subroutine test_svdw_radrad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_radrad_fd(error, kind_svdw)
+   end subroutine test_svdw_radrad_fd
+
+   !> CFC dispatch for the two-radius block FD check.
+   subroutine test_cfc_radrad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_radrad_fd(error, kind_cfc)
+   end subroutine test_cfc_radrad_fd
+
+   !> `f{2,3,4}_*_radrad` vs a one-radius FD of the whole `f*_rad` ladder.
+   subroutine run_radrad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      real(wp), allocatable :: rr2(:, :), rr3(:, :, :), rr4(:, :, :, :)
+      real(wp), allocatable :: l1(:, :), l2(:, :, :), l3(:, :, :, :)
+      integer  :: icase, ipt, atom, other, i, j, istep, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
+      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call radius_fd_thr(kind, thr_abs, thr_rel)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (radii_local(mol%nat))
+         allocate (rr2(mol%nat, mol%nat), rr3(ndim, mol%nat, mol%nat), &
+                   rr4(ndim, ndim, mol%nat, mol%nat))
+         allocate (l1(mol%nat, 4), l2(ndim, mol%nat, 4), l3(ndim, ndim, mol%nat, 4))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_radii(lsf, mol, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%f2_radrad(rr2)
+                  call lsf%f3_r_radrad(rr3)
+                  call lsf%f4_rr_radrad(rr4)
+                  do atom = 1, mol%nat
+                     do istep = 1, 4
+                        radii_local = radii
+                        radii_local(atom) = radii_local(atom) + steps(istep)*eps
+                        call refresh_radii(lsf, mol, radii_local)
+                        if (prepare_failed(lsf, point, error)) return
+                        call lsf%f3_rr_rad(lsf1_rad=l1(:, istep), &
+                                           lsf2_r_rad=l2(:, :, istep), &
+                                           lsf3_rr_rad=l3(:, :, :, istep))
+                     end do
+                     do other = 1, mol%nat
+                        numeric = fd4_scalar(l1(other, 1), l1(other, 2), &
+                                             l1(other, 3), l1(other, 4), eps)
+                        call check(error, rr2(other, atom), numeric, &
+                                   thr_abs=thr_abs, thr_rel=thr_rel)
+                        if (allocated(error)) return
+                        do i = 1, ndim
+                           numeric = fd4_scalar(l2(i, other, 1), l2(i, other, 2), &
+                                                l2(i, other, 3), l2(i, other, 4), eps)
+                           call check(error, rr3(i, other, atom), numeric, &
+                                      thr_abs=thr_abs, thr_rel=thr_rel)
+                           if (allocated(error)) return
+                           do j = 1, ndim
+                              numeric = fd4_scalar(l3(i, j, other, 1), l3(i, j, other, 2), &
+                                                   l3(i, j, other, 3), l3(i, j, other, 4), eps)
+                              call check(error, rr4(i, j, other, atom), numeric, &
+                                         thr_abs=thr_abs, thr_rel=thr_rel)
+                              if (allocated(error)) return
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (radii_local, rr2, rr3, rr4, l1, l2, l3)
+      end do
+   end subroutine run_radrad_fd
+
+   !> SvdW dispatch for the nuclear-radius block FD check.
+   subroutine test_svdw_rA_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_rA_rad_fd(error, kind_svdw)
+   end subroutine test_svdw_rA_rad_fd
+
+   !> CFC dispatch for the nuclear-radius block FD check.
+   subroutine test_cfc_rA_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_rA_rad_fd(error, kind_cfc)
+   end subroutine test_cfc_rA_rad_fd
+
+   !> `f{2,3,4}_*_rA_rad` vs a one-radius FD of the whole `f*_rA` ladder.
+   subroutine run_rA_rad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      real(wp), allocatable :: mx2(:, :, :), mx3(:, :, :, :), mx4(:, :, :, :, :)
+      real(wp), allocatable :: n1(:, :, :), n2(:, :, :, :), n3(:, :, :, :, :)
+      integer  :: icase, ipt, atom, other, s_ax, i, j, istep
+      integer  :: iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
+      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call radius_fd_thr(kind, thr_abs, thr_rel)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (radii_local(mol%nat))
+         allocate (mx2(ndim, mol%nat, mol%nat), mx3(ndim, ndim, mol%nat, mol%nat), &
+                   mx4(ndim, ndim, ndim, mol%nat, mol%nat))
+         allocate (n1(ndim, mol%nat, 4), n2(ndim, ndim, mol%nat, 4), &
+                   n3(ndim, ndim, ndim, mol%nat, 4))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_radii(lsf, mol, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%f2_rA_rad(mx2)
+                  call lsf%f3_r_rA_rad(mx3)
+                  call lsf%f4_rr_rA_rad(mx4)
+                  do atom = 1, mol%nat
+                     do istep = 1, 4
+                        radii_local = radii
+                        radii_local(atom) = radii_local(atom) + steps(istep)*eps
+                        call refresh_radii(lsf, mol, radii_local)
+                        if (prepare_failed(lsf, point, error)) return
+                        call lsf%f3_rr_rA(lsf1_rA=n1(:, :, istep), &
+                                          lsf2_r_rA=n2(:, :, :, istep), &
+                                          lsf3_rr_rA=n3(:, :, :, :, istep))
+                     end do
+                     do other = 1, mol%nat
+                        do s_ax = 1, ndim
+                           numeric = fd4_scalar(n1(s_ax, other, 1), n1(s_ax, other, 2), &
+                                                n1(s_ax, other, 3), n1(s_ax, other, 4), eps)
+                           call check(error, mx2(s_ax, other, atom), numeric, &
+                                      thr_abs=thr_abs, thr_rel=thr_rel)
+                           if (allocated(error)) return
+                           do i = 1, ndim
+                              numeric = fd4_scalar(n2(i, s_ax, other, 1), &
+                                                   n2(i, s_ax, other, 2), &
+                                                   n2(i, s_ax, other, 3), &
+                                                   n2(i, s_ax, other, 4), eps)
+                              call check(error, mx3(i, s_ax, other, atom), numeric, &
+                                         thr_abs=thr_abs, thr_rel=thr_rel)
+                              if (allocated(error)) return
+                              do j = 1, ndim
+                                 numeric = fd4_scalar(n3(i, j, s_ax, other, 1), &
+                                                      n3(i, j, s_ax, other, 2), &
+                                                      n3(i, j, s_ax, other, 3), &
+                                                      n3(i, j, s_ax, other, 4), eps)
+                                 call check(error, mx4(i, j, s_ax, other, atom), numeric, &
+                                            thr_abs=thr_abs, thr_rel=thr_rel)
+                                 if (allocated(error)) return
+                              end do
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (radii_local, mx2, mx3, mx4, n1, n2, n3)
+      end do
+   end subroutine run_rA_rad_fd
+
+   !* ================================================================================= *!
+   !*                    Joint position/radius Hessian-vector products                  *!
+   !* ================================================================================= *!
+   !
+   ! With `R = R(X)` the contraction direction of the level-set HVP is the joint
+   ! pair `(v_B, vr_B)`. The two checks below step the whole molecule along that
+   ! joint direction at once -- centers by `eps*v`, radii by `eps*vr` -- and
+   ! difference the corresponding first-derivative ladder. That is a genuine
+   ! end-to-end test of the composition: it fails if either half of the
+   ! contraction is missing, and it fails if the two halves are mixed up, because
+   ! `v` and `vr` are chosen unrelated to each other.
+   !
+   ! Two rows are covered:
+   !   * `hvp_f*_rad`  radius row, `d/dR_a` retained  -- FD of `f*_rad`
+   !   * `hvp_f*_rA`   nuclear row with `vrad` passed -- FD of `f*_rA`
+   ! Between them they exercise all four blocks of the joint Hessian, including
+   ! the radius-radius coupling between different atoms, which no per-atom
+   ! quantity can produce.
+
+   !> Deterministic, non-symmetric joint direction field, normalized to max 1.
+   !>
+   !> The normalization is what makes the FD checks that use this field hold at
+   !> the shared `ABS_THR`/`REL_THR`. The direction sets the *effective* step:
+   !> stepping by `eps*v` with `max|v| = m` gives a four-point central difference
+   !> a truncation error scaling like `(m*eps)**4`, so an unnormalized field whose
+   !> entries grow with the atom index (m ~ 4 at nat = 16) costs two orders of
+   !> magnitude of accuracy for nothing. Scaling to `max|v| = 1` is measured, not
+   !> guessed: without it these checks land at ~1e-9 relative, just above
+   !> `REL_THR`, and the miss grows with molecule size.
+   !>
+   !> @param[in]  nat  Number of atoms
+   !> @param[out] v    Nuclear displacement directions [3, nat]
+   !> @param[out] vrad Radius directions [nat]
+   subroutine joint_direction(nat, v, vrad)
+      !> Number of atoms
+      integer, intent(in) :: nat
+      !> Nuclear displacement directions [3, nat]
+      real(wp), intent(out) :: v(:, :)
+      !> Radius directions [nat]
+      real(wp), intent(out) :: vrad(:)
+
+      integer :: ia
+      real(wp) :: scal
+
+      do ia = 1, nat
+         v(1, ia) = 0.31_wp*real(mod(ia, 7) + 1, wp) - 0.7_wp
+         v(2, ia) = -0.17_wp*real(mod(ia, 5) + 1, wp) + 0.4_wp
+         v(3, ia) = 0.23_wp*real(mod(ia, 3) + 1, wp)
+         ! Deliberately unrelated to `v`: a real radius model ties the two, and a
+         ! fixture that respected that tie could hide a term mixing them.
+         vrad(ia) = 0.19_wp*real(mod(ia, 4) + 1, wp) - 0.43_wp
+      end do
+
+      scal = max(maxval(abs(v)), maxval(abs(vrad)))
+      if (scal > 0.0_wp) then
+         v = v/scal
+         vrad = vrad/scal
+      end if
+   end subroutine joint_direction
+
+   !> SvdW dispatch for the uncontracted radius-block cross-check.
+   subroutine test_svdw_radius_pairwise(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_radius_contracted_vs_pairwise(error, kind_svdw)
+   end subroutine test_svdw_radius_pairwise
+
+   !> CFC dispatch for the uncontracted radius-block cross-check.
+   subroutine test_cfc_radius_pairwise(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_radius_contracted_vs_pairwise(error, kind_cfc)
+   end subroutine test_cfc_radius_pairwise
+
+   !> Contract the uncontracted radius blocks and recover both `hvp_*` rows.
+   !>
+   !> No finite differences anywhere: with `R = R(X)` the joint Hessian-vector
+   !> product is an exact contraction of the four uncontracted blocks, so this
+   !> holds to roundoff and is a far sharper gate than the FD tests above. It is
+   !> the only check that pins `f*_radrad` and `f*_rA_rad` at `REL_THR` rather
+   !> than at the loosened radius-FD thresholds (see [[radius_fd_thr]]).
+   !>
+   !> Both rows are verified, which matters because the nuclear-radius block is *not*
+   !> symmetric in its two atom indices:
+   !>
+   !>    hvp_f{n}_rad(A)  = sum_B [ v_B . f_rA_rad(:, B, A) + vr_B f_radrad(A, B) ]
+   !>    hvp_f{n}_rA(A,s) = sum_B [ v_B . f_rArB(s, A, :, B) + vr_B f_rA_rad(s, A, B) ]
+   !>
+   !> The first reads the nuclear-radius block with the position index on B, the second
+   !> with it on A. A transposed implementation passes neither.
+   subroutine run_radius_contracted_vs_pairwise(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :), v(:, :), vrad(:)
+      real(wp), allocatable :: rr2(:, :), rr3(:, :, :), rr4(:, :, :, :)
+      real(wp), allocatable :: mx2(:, :, :), mx3(:, :, :, :), mx4(:, :, :, :, :)
+      real(wp), allocatable :: q2(:, :, :, :), q3(:, :, :, :, :), q4(:, :, :, :, :, :)
+      real(wp), allocatable :: r1(:), r2(:, :), r3(:, :, :)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      integer  :: icase, ipt, iA, iB, s_ax, t_ax, j, k, nat
+      real(wp) :: point(ndim), acc
+      type(mctc_error), allocatable :: lsf_err
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         nat = mol%nat
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+
+         allocate (v(ndim, nat), vrad(nat))
+         call joint_direction(nat, v, vrad)
+
+         allocate (rr2(nat, nat), rr3(ndim, nat, nat), rr4(ndim, ndim, nat, nat))
+         allocate (mx2(ndim, nat, nat), mx3(ndim, ndim, nat, nat))
+         allocate (mx4(ndim, ndim, ndim, nat, nat))
+         allocate (q2(ndim, nat, ndim, nat), q3(ndim, ndim, nat, ndim, nat))
+         allocate (q4(ndim, ndim, ndim, nat, ndim, nat))
+         allocate (r1(nat), r2(ndim, nat), r3(ndim, ndim, nat))
+         allocate (h1(ndim, nat), h2(ndim, ndim, nat), h3(ndim, ndim, ndim, nat))
+
+         call init_lsf(lsf, mol, radii, 4, kind)
+
+         do ipt = 1, size(points, 2)
+            point = points(:, ipt)
+            call lsf%prepare(point, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+
+            call lsf%f2_radrad(rr2)
+            call lsf%f3_r_radrad(rr3)
+            call lsf%f4_rr_radrad(rr4)
+            call lsf%f2_rA_rad(mx2)
+            call lsf%f3_r_rA_rad(mx3)
+            call lsf%f4_rr_rA_rad(mx4)
+            call lsf%f2_rArB(q2)
+            call lsf%f3_r_rArB(q3)
+            call lsf%f4_rr_rArB(q4)
+
+            call lsf%hvp_f1_rad(v, vrad, r1)
+            call lsf%hvp_f2_r_rad(v, vrad, r2)
+            call lsf%hvp_f3_rr_rad(v, vrad, r3)
+            call lsf%hvp_f1_rA(v, h1, vrad)
+            call lsf%hvp_f2_r_rA(v, h2, vrad)
+            call lsf%hvp_f3_rr_rA(v, h3, vrad)
+
+            !* ------------------------- the radius row -------------------------- *!
+            do iA = 1, lsf%active_count()
+               acc = 0.0_wp
+               do iB = 1, lsf%active_count()
+                  acc = acc + vrad(lsf%active_atom(iB))*rr2(iA, iB)
+                  do t_ax = 1, ndim
+                     acc = acc + v(t_ax, lsf%active_atom(iB))*mx2(t_ax, iB, iA)
+                  end do
+               end do
+               call check(error, r1(iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+               if (allocated(error)) return
+
+               do j = 1, ndim
+                  acc = 0.0_wp
+                  do iB = 1, lsf%active_count()
+                     acc = acc + vrad(lsf%active_atom(iB))*rr3(j, iA, iB)
+                     do t_ax = 1, ndim
+                        acc = acc + v(t_ax, lsf%active_atom(iB))*mx3(j, t_ax, iB, iA)
+                     end do
+                  end do
+                  call check(error, r2(j, iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+                  if (allocated(error)) return
+
+                  do k = 1, ndim
+                     acc = 0.0_wp
+                     do iB = 1, lsf%active_count()
+                        acc = acc + vrad(lsf%active_atom(iB))*rr4(j, k, iA, iB)
+                        do t_ax = 1, ndim
+                           acc = acc + v(t_ax, lsf%active_atom(iB)) &
+                                 *mx4(j, k, t_ax, iB, iA)
+                        end do
+                     end do
+                     call check(error, r3(j, k, iA), acc, &
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                     if (allocated(error)) return
+                  end do
+               end do
+            end do
+
+            !* --- the position row, whose radius half is the nuclear-radius block again --- *!
+            do iA = 1, lsf%active_count()
+               do s_ax = 1, ndim
+                  acc = 0.0_wp
+                  do iB = 1, lsf%active_count()
+                     acc = acc + vrad(lsf%active_atom(iB))*mx2(s_ax, iA, iB)
+                     do t_ax = 1, ndim
+                        acc = acc + q2(s_ax, iA, t_ax, iB) &
+                              *v(t_ax, lsf%active_atom(iB))
+                     end do
+                  end do
+                  call check(error, h1(s_ax, iA), acc, &
+                             thr_abs=ABS_THR, thr_rel=REL_THR)
+                  if (allocated(error)) return
+
+                  do j = 1, ndim
+                     acc = 0.0_wp
+                     do iB = 1, lsf%active_count()
+                        acc = acc + vrad(lsf%active_atom(iB))*mx3(j, s_ax, iA, iB)
+                        do t_ax = 1, ndim
+                           acc = acc + q3(j, s_ax, iA, t_ax, iB) &
+                                 *v(t_ax, lsf%active_atom(iB))
+                        end do
+                     end do
+                     call check(error, h2(j, s_ax, iA), acc, &
+                                thr_abs=ABS_THR, thr_rel=REL_THR)
+                     if (allocated(error)) return
+
+                     do k = 1, ndim
+                        acc = 0.0_wp
+                        do iB = 1, lsf%active_count()
+                           acc = acc + vrad(lsf%active_atom(iB)) &
+                                 *mx4(j, k, s_ax, iA, iB)
+                           do t_ax = 1, ndim
+                              acc = acc + q4(j, k, s_ax, iA, t_ax, iB) &
+                                    *v(t_ax, lsf%active_atom(iB))
+                           end do
+                        end do
+                        call check(error, h3(j, k, s_ax, iA), acc, &
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                        if (allocated(error)) return
+                     end do
+                  end do
+               end do
+            end do
+         end do
+
+         deallocate (lsf, v, vrad, rr2, rr3, rr4, mx2, mx3, mx4, q2, q3, q4, &
+                     r1, r2, r3, h1, h2, h3)
+      end do
+   end subroutine run_radius_contracted_vs_pairwise
+
+   !> SvdW dispatch for the radius-row HVP FD check.
+   subroutine test_svdw_hvp_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_rad_fd(error, kind_svdw)
+   end subroutine test_svdw_hvp_rad_fd
+
+   !> CFC dispatch for the radius-row HVP FD check.
+   subroutine test_cfc_hvp_rad_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_rad_fd(error, kind_cfc)
+   end subroutine test_cfc_hvp_rad_fd
+
+   !> Radius row `hvp_f*_rad` vs joint-direction FD of the `f*_rad` ladder.
+   subroutine run_hvp_rad_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
+      real(wp), allocatable :: v(:, :), vrad(:)
+      real(wp), allocatable :: a1(:), a2(:, :), a3(:, :, :)
+      real(wp), allocatable :: l1(:, :), l2(:, :, :), l3(:, :, :, :)
+      integer  :: icase, ipt, atom, i, j, istep, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
+      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call radius_fd_thr(kind, thr_abs, thr_rel)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (radii_local(mol%nat), v(ndim, mol%nat), vrad(mol%nat))
+         allocate (a1(mol%nat), a2(ndim, mol%nat), a3(ndim, ndim, mol%nat))
+         allocate (l1(mol%nat, 4), l2(ndim, mol%nat, 4), l3(ndim, ndim, mol%nat, 4))
+         centers_base = mol%xyz
+         call joint_direction(mol%nat, v, vrad)
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_joint(lsf, mol, centers_base, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%hvp_f1_rad(v, vrad, a1)
+                  call lsf%hvp_f2_r_rad(v, vrad, a2)
+                  call lsf%hvp_f3_rr_rad(v, vrad, a3)
+                  do istep = 1, 4
+                     centers_local = centers_base + steps(istep)*eps*v
+                     radii_local = radii + steps(istep)*eps*vrad
+                     call refresh_joint(lsf, mol, centers_local, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f3_rr_rad(lsf1_rad=l1(:, istep), &
+                                        lsf2_r_rad=l2(:, :, istep), &
+                                        lsf3_rr_rad=l3(:, :, :, istep))
+                  end do
+                  do atom = 1, mol%nat
+                     numeric = fd4_scalar(l1(atom, 1), l1(atom, 2), l1(atom, 3), &
+                                          l1(atom, 4), eps)
+                     call check(error, a1(atom), numeric, &
+                                thr_abs=thr_abs, thr_rel=thr_rel)
+                     if (allocated(error)) return
+                     do i = 1, ndim
+                        numeric = fd4_scalar(l2(i, atom, 1), l2(i, atom, 2), &
+                                             l2(i, atom, 3), l2(i, atom, 4), eps)
+                        call check(error, a2(i, atom), numeric, &
+                                   thr_abs=thr_abs, thr_rel=thr_rel)
+                        if (allocated(error)) return
+                        do j = 1, ndim
+                           numeric = fd4_scalar(l3(i, j, atom, 1), l3(i, j, atom, 2), &
+                                                l3(i, j, atom, 3), l3(i, j, atom, 4), eps)
+                           call check(error, a3(i, j, atom), numeric, &
+                                      thr_abs=thr_abs, thr_rel=thr_rel)
+                           if (allocated(error)) return
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (centers_base, centers_local, radii_local, v, vrad, &
+                     a1, a2, a3, l1, l2, l3)
+      end do
+   end subroutine run_hvp_rad_fd
+
+   !> SvdW dispatch for the joint nuclear-row HVP FD check.
+   subroutine test_svdw_hvp_rA_joint_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_rA_joint_fd(error, kind_svdw)
+   end subroutine test_svdw_hvp_rA_joint_fd
+
+   !> CFC dispatch for the joint nuclear-row HVP FD check.
+   subroutine test_cfc_hvp_rA_joint_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_rA_joint_fd(error, kind_cfc)
+   end subroutine test_cfc_hvp_rA_joint_fd
+
+   !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`.
+   subroutine run_hvp_rA_joint_fd(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), radii_local(:), points(:, :)
+      real(wp), allocatable :: centers_base(:, :), centers_local(:, :)
+      real(wp), allocatable :: v(:, :), vrad(:)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp), allocatable :: n1(:, :, :), n2(:, :, :, :), n3(:, :, :, :, :)
+      integer  :: icase, ipt, atom, s_ax, i, j, istep, iblend, igamma, nblend, ngamma
+      real(wp) :: point(ndim), numeric, eps, thr_abs, thr_rel
+      real(wp), parameter :: steps(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+      type(mctc_error), allocatable :: lsf_err
+
+      eps = STEP_SIZE
+      call radius_fd_thr(kind, thr_abs, thr_rel)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
+         allocate (radii_local(mol%nat), v(ndim, mol%nat), vrad(mol%nat))
+         allocate (h1(ndim, mol%nat), h2(ndim, ndim, mol%nat), &
+                   h3(ndim, ndim, ndim, mol%nat))
+         allocate (n1(ndim, mol%nat, 4), n2(ndim, ndim, mol%nat, 4), &
+                   n3(ndim, ndim, ndim, mol%nat, 4))
+         centers_base = mol%xyz
+         call joint_direction(mol%nat, v, vrad)
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call refresh_joint(lsf, mol, centers_base, radii)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call check_identity_active(error, lsf, mol%nat)
+                  if (allocated(error)) return
+                  call lsf%hvp_f1_rA(v, h1, vrad)
+                  call lsf%hvp_f2_r_rA(v, h2, vrad)
+                  call lsf%hvp_f3_rr_rA(v, h3, vrad)
+                  do istep = 1, 4
+                     centers_local = centers_base + steps(istep)*eps*v
+                     radii_local = radii + steps(istep)*eps*vrad
+                     call refresh_joint(lsf, mol, centers_local, radii_local)
+                     if (prepare_failed(lsf, point, error)) return
+                     call lsf%f3_rr_rA(lsf1_rA=n1(:, :, istep), &
+                                       lsf2_r_rA=n2(:, :, :, istep), &
+                                       lsf3_rr_rA=n3(:, :, :, :, istep))
+                  end do
+                  do atom = 1, mol%nat
+                     do s_ax = 1, ndim
+                        numeric = fd4_scalar(n1(s_ax, atom, 1), n1(s_ax, atom, 2), &
+                                             n1(s_ax, atom, 3), n1(s_ax, atom, 4), eps)
+                        call check(error, h1(s_ax, atom), numeric, &
+                                   thr_abs=thr_abs, thr_rel=thr_rel)
+                        if (allocated(error)) return
+                        do i = 1, ndim
+                           numeric = fd4_scalar(n2(i, s_ax, atom, 1), n2(i, s_ax, atom, 2), &
+                                                n2(i, s_ax, atom, 3), n2(i, s_ax, atom, 4), eps)
+                           call check(error, h2(i, s_ax, atom), numeric, &
+                                      thr_abs=thr_abs, thr_rel=thr_rel)
+                           if (allocated(error)) return
+                           do j = 1, ndim
+                              numeric = fd4_scalar(n3(i, j, s_ax, atom, 1), &
+                                                   n3(i, j, s_ax, atom, 2), &
+                                                   n3(i, j, s_ax, atom, 3), &
+                                                   n3(i, j, s_ax, atom, 4), eps)
+                              call check(error, h3(i, j, s_ax, atom), numeric, &
+                                         thr_abs=thr_abs, thr_rel=thr_rel)
+                              if (allocated(error)) return
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (centers_base, centers_local, radii_local, v, vrad, &
+                     h1, h2, h3, n1, n2, n3)
+      end do
+   end subroutine run_hvp_rA_joint_fd
+
+   !* ================================================================================= *!
+   !*                        Accessors at an empty active list                          *!
+   !* ================================================================================= *!
+   !
+   ! Screening is allowed to reject every atom -- a point far enough outside the
+   ! molecule contributes nothing -- and that leaves the accessors with no owned
+   ! slot to write. Their normal contract, "writes the first `active_count()`
+   ! slots and leaves the rest alone", degenerates there, and since every result
+   ! is `intent(out)` a bare early return would hand back a buffer the caller is
+   ! not allowed to read. The check below is the only one in this file that
+   ! inspects a *whole* result buffer rather than its active prefix, so it is
+   ! also the only one that can see that difference.
+   !
+   ! Every buffer is poisoned first. Poison surviving the call is exactly the
+   ! symptom: it means the accessor returned without defining its result.
+
+   !> SvdW dispatch for the empty-active-list check.
+   subroutine test_svdw_empty_active(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_empty_active(error, kind_svdw)
+   end subroutine test_svdw_empty_active
+
+   !> CFC dispatch for the empty-active-list check.
+   subroutine test_cfc_empty_active(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_empty_active(error, kind_cfc)
+   end subroutine test_cfc_empty_active
+
+   !> Every radius-channel accessor must define its result when nothing is active.
+   subroutine run_empty_active(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), v(:, :), vrad(:)
+      real(wp), allocatable :: g1(:), g2(:, :), g3(:, :, :)
+      real(wp), allocatable :: rr2(:, :), rr3(:, :, :), rr4(:, :, :, :)
+      real(wp), allocatable :: mx2(:, :, :), mx3(:, :, :, :), mx4(:, :, :, :, :)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp) :: point(ndim)
+      integer  :: nat
+
+      call get_structure(mol, "MB16-43", "LiH")
+      call get_test_radii(mol, radii)
+      nat = mol%nat
+
+      !* A nonzero threshold is what lets screening reject everything; at the
+      !* default 0 every atom stays a candidate however far away the point is.
+      call init_lsf(lsf, mol, radii, 3, kind, screening_threshold=1.0e-10_wp)
+      point = [5.0e2_wp, 5.0e2_wp, 5.0e2_wp]
+      if (prepare_failed(lsf, point, error)) return
+
+      call check(error, lsf%active_count(), 0, &
+                 message="fixture must leave no active atom; the rest of this "// &
+                 "test says nothing otherwise")
+      if (allocated(error)) return
+
+      allocate (v(ndim, nat), vrad(nat))
+      call joint_direction(nat, v, vrad)
+
+      allocate (g1(nat), g2(ndim, nat), g3(ndim, ndim, nat))
+      allocate (rr2(nat, nat), rr3(ndim, nat, nat), rr4(ndim, ndim, nat, nat))
+      allocate (mx2(ndim, nat, nat), mx3(ndim, ndim, nat, nat))
+      allocate (mx4(ndim, ndim, ndim, nat, nat))
+      allocate (h1(ndim, nat), h2(ndim, ndim, nat), h3(ndim, ndim, ndim, nat))
+
+      !* Uncontracted radius ladder
+      g1 = EMPTY_POISON; g2 = EMPTY_POISON; g3 = EMPTY_POISON
+      call lsf%f3_rr_rad(g1, g2, g3)
+      call check_all_zero(error, reshape(g1, [size(g1)]), "f1_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(g2, [size(g2)]), "f2_r_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(g3, [size(g3)]), "f3_rr_rad")
+      if (allocated(error)) return
+
+      !* Uncontracted two-radius and nuclear-radius blocks
+      rr2 = EMPTY_POISON; rr3 = EMPTY_POISON; rr4 = EMPTY_POISON
+      mx2 = EMPTY_POISON; mx3 = EMPTY_POISON; mx4 = EMPTY_POISON
+      call lsf%f2_radrad(rr2)
+      call lsf%f3_r_radrad(rr3)
+      call lsf%f4_rr_radrad(rr4)
+      call lsf%f2_rA_rad(mx2)
+      call lsf%f3_r_rA_rad(mx3)
+      call lsf%f4_rr_rA_rad(mx4)
+      call check_all_zero(error, reshape(rr2, [size(rr2)]), "f2_radrad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(rr3, [size(rr3)]), "f3_r_radrad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(rr4, [size(rr4)]), "f4_rr_radrad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(mx2, [size(mx2)]), "f2_rA_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(mx3, [size(mx3)]), "f3_r_rA_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(mx4, [size(mx4)]), "f4_rr_rA_rad")
+      if (allocated(error)) return
+
+      !* Radius row of the joint HVP
+      g1 = EMPTY_POISON; g2 = EMPTY_POISON; g3 = EMPTY_POISON
+      call lsf%hvp_f1_rad(v, vrad, g1)
+      call lsf%hvp_f2_r_rad(v, vrad, g2)
+      call lsf%hvp_f3_rr_rad(v, vrad, g3)
+      call check_all_zero(error, reshape(g1, [size(g1)]), "hvp_f1_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(g2, [size(g2)]), "hvp_f2_r_rad")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(g3, [size(g3)]), "hvp_f3_rr_rad")
+      if (allocated(error)) return
+
+      !* Nuclear row, both with and without a radius direction: the two take
+      !* different branches inside CFC, and only one of them allocates.
+      h1 = EMPTY_POISON; h2 = EMPTY_POISON; h3 = EMPTY_POISON
+      call lsf%hvp_f1_rA(v, h1)
+      call lsf%hvp_f2_r_rA(v, h2)
+      call lsf%hvp_f3_rr_rA(v, h3)
+      call check_all_zero(error, reshape(h1, [size(h1)]), "hvp_f1_rA")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(h2, [size(h2)]), "hvp_f2_r_rA")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(h3, [size(h3)]), "hvp_f3_rr_rA")
+      if (allocated(error)) return
+
+      h1 = EMPTY_POISON; h2 = EMPTY_POISON; h3 = EMPTY_POISON
+      call lsf%hvp_f1_rA(v, h1, vrad)
+      call lsf%hvp_f2_r_rA(v, h2, vrad)
+      call lsf%hvp_f3_rr_rA(v, h3, vrad)
+      call check_all_zero(error, reshape(h1, [size(h1)]), "hvp_f1_rA (joint)")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(h2, [size(h2)]), "hvp_f2_r_rA (joint)")
+      if (allocated(error)) return
+      call check_all_zero(error, reshape(h3, [size(h3)]), "hvp_f3_rr_rA (joint)")
+   end subroutine run_empty_active
+
+   !> Fail unless every element of `a` is exactly zero.
+   !>
+   !> @param[out] error Set when a poisoned (or any nonzero) element survives
+   !> @param[in]  a     Flattened result buffer
+   !> @param[in]  name  Accessor name, for the failure message
+   subroutine check_all_zero(error, a, name)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      !> Flattened result buffer
+      real(wp), intent(in) :: a(:)
+      !> Accessor name
+      character(len=*), intent(in) :: name
+
+      call check(error, maxval(abs(a)), 0.0_wp, thr=0.0_wp, &
+                 message=name//" left its result undefined at an empty active list")
+   end subroutine check_all_zero
+
+   !> Rebind the LSF to a jointly perturbed geometry and radius vector.
+   !>
+   !> `set_centers` alone will not do: the radii move too, and every concrete
+   !> bakes those into its per-atom cache at `update` time.
+   !>
+   !> @param[inout] lsf     Polymorphic LSF, rebound in place
+   !> @param[in]    mol     Molecular structure supplying everything but xyz
+   !> @param[in]    centers Perturbed atom positions (3, mol%nat)
+   !> @param[in]    radii   Perturbed per-atom radii (size mol%nat)
+   subroutine refresh_joint(lsf, mol, centers, radii)
+      !> Polymorphic LSF whose geometry and radii are refreshed in place
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Molecular structure to rebind to
+      type(structure_type), intent(in) :: mol
+      !> Perturbed atom positions
+      real(wp), intent(in) :: centers(:, :)
+      !> Perturbed per-atom radii
+      real(wp), intent(in) :: radii(:)
+
+      type(structure_type) :: mol_local
+
+      if (size(radii) /= mol%nat .or. size(centers, 2) /= mol%nat) then
+         error stop "refresh_joint: radii/centers/structure size mismatch"
+      end if
+      mol_local = mol
+      mol_local%xyz = centers
+      call lsf%update(mol_local, radii)
+      call lsf%set_max_deriv(3)
+   end subroutine refresh_joint
+
+   !> Rebind the LSF to a perturbed radius vector.
+   !>
+   !> The nuclear FDs get away with `set_centers`, which only moves atoms and
+   !> rebuilds the spatial sort. Radii cannot be perturbed that way: every
+   !> concrete bakes them into its per-atom cache at `update` time, so a radius
+   !> FD has to re-run the full `update`. That resets `max_deriv`, hence the
+   !> explicit restore -- without it the first `f012_r` after a perturbation
+   !> would abort in `require_deriv` rather than return a wrong number.
+   !>
+   !> @param[inout] lsf   Polymorphic LSF, rebound in place
+   !> @param[in]    mol   Molecular structure (unchanged)
+   !> @param[in]    radii Perturbed per-atom radii (size mol%nat)
+   subroutine refresh_radii(lsf, mol, radii)
+      !> Polymorphic LSF whose radii are refreshed in place
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Molecular structure to rebind to
+      type(structure_type), intent(in) :: mol
+      !> Perturbed per-atom radii
+      real(wp), intent(in) :: radii(:)
+
+      if (size(radii) /= mol%nat) then
+         error stop "refresh_radii: radii/structure size mismatch"
+      end if
+      call lsf%update(mol, radii)
+      call lsf%set_max_deriv(3)
+   end subroutine refresh_radii
+
+   !* ================================================================================= *!
    !*                       Hessian-free value+gradient path                            *!
    !* ================================================================================= *!
 
@@ -968,7 +2319,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, fd_points(kind))
          do iblend = 1, nblend
             do igamma = 1, ngamma
                call init_lsf(lsf, mol, radii, 2, kind, &
@@ -1013,6 +2364,21 @@ contains
 
    !> Pick the (blend, gamma) sweep dimensions for the requested kind.
    !> SvdW iterates over the parameter grid; CFC runs a single configuration.
+   !> Sampling points per structure for a kind-dispatched driver
+   !>
+   !> See the [[n_points_cfc]] note above for why the two kinds differ.
+   pure function fd_points(kind) result(npts)
+      !> Concrete kind selector
+      character(len=*), intent(in) :: kind
+      !> Number of sampling points to request from `get_test_points`
+      integer :: npts
+      if (kind == kind_cfc) then
+         npts = n_points_cfc
+      else
+         npts = n_points_svdw
+      end if
+   end function fd_points
+
    pure subroutine svdw_sweep_sizes(kind, nblend, ngamma)
       !> Concrete kind selector
       character(len=*), intent(in) :: kind
@@ -1120,18 +2486,13 @@ contains
                      return
                   end if
                   call prim%f2_rArB(analytic)
-                  !* Active-indexed result: assert the shape and that the active
-                  !* list is the identity here, so the atom loops below may index
-                  !* `analytic` with user-space ids.
+                  !* Active-indexed result, so assert the shape and defer the
+                  !* identity check to the shared helper before the atom loops
+                  !* below index `analytic` with user-space ids.
                   call check(error, size(analytic, 2), prim%active_count())
                   if (allocated(error)) return
-                  call check(error, prim%active_count(), mol%nat)
+                  call check_identity_active(error, prim, mol%nat)
                   if (allocated(error)) return
-                  do atomA = 1, mol%nat
-                     call check(error, prim%active_atom(atomA), atomA, &
-                                more="unscreened active list must be the identity")
-                     if (allocated(error)) return
-                  end do
                   do atomB = 1, mol%nat
                      do axisB = 1, ndim
                         centers_local = centers_base
@@ -1854,7 +3215,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          if (allocated(rA_fwd)) deallocate (rA_fwd, rA_fwd2, rA_bwd, rA_bwd2)
@@ -1949,7 +3310,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          if (allocated(r_rA_fwd)) deallocate (r_rA_fwd, r_rA_fwd2, r_rA_bwd, r_rA_bwd2)
@@ -2033,7 +3394,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          prim%screening_threshold = 0.0_wp
          call prim%new()
          call prim%update(mol, radii)
@@ -2099,7 +3460,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          if (allocated(analytic)) deallocate (analytic)
@@ -2178,7 +3539,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          if (allocated(analytic)) deallocate (analytic)
@@ -2262,7 +3623,7 @@ contains
       do icase = 1, size(mols)
          mol = mols(icase)
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
          if (allocated(deriv_rA)) deallocate (deriv_rA)
@@ -2346,7 +3707,7 @@ contains
          mol = mols(icase)
          nat = mol%nat
          call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
+         call get_test_points(mol, points, n_points_cfc)
 
          !* A deterministic, non-symmetric direction field
          if (allocated(v)) deallocate (v)

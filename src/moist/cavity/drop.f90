@@ -24,6 +24,10 @@ module moist_cavity_drop
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
+   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop_lsf_isodensity, only: &
+      moist_cavity_drop_lsf_isodensity_internal_type, &
+      moist_cavity_drop_lsf_isodensity_callback_type
    use moist_utils_mem, only: grow_array, filter_array
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
@@ -623,6 +627,12 @@ contains
          call self%param%print(unit=self%ctx%unit)
          select type (m => self%lsf_model)
          type is (moist_cavity_drop_lsf_svdw_type)
+            call m%param%print(unit=self%ctx%unit)
+         type is (moist_cavity_drop_lsf_cfc_type)
+            call m%param%print(unit=self%ctx%unit)
+         type is (moist_cavity_drop_lsf_isodensity_internal_type)
+            call m%param%print(unit=self%ctx%unit)
+         type is (moist_cavity_drop_lsf_isodensity_callback_type)
             call m%param%print(unit=self%ctx%unit)
          end select
          call self%request%print(unit=self%ctx%unit)

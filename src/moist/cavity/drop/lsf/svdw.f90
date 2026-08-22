@@ -71,7 +71,11 @@ module moist_cavity_drop_lsf_svdw
    use moist_cavity_drop_lsf_svdw_kernel, only: nkind, &
                                                 svdw_atom_eval, svdw_atom_tangent_eval, &
                                                 svdw_spatial_eval, svdw_nuclear_eval, &
+                                                svdw_radius_eval, svdw_radius_hvp_eval, &
+                                                svdw_atom_radius_tangent_eval, &
                                                 svdw_pair_eval, svdw_pair_diag_eval, &
+                                                svdw_radpair_eval, svdw_radpair_diag_eval, &
+                                                svdw_nucrad_eval, svdw_nucrad_diag_eval, &
                                                 svdw_tangent_eval, svdw_hvp_eval, &
                                                 svdw_normalized_eval, svdw_powersums
    implicit none (type, external)
@@ -163,12 +167,26 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: f4_rrrr => lsf_f4_rrrr
       !> Mixed fourth derivative d^4S / dr^3 dR_A
       procedure, public :: f4_rrr_rA => lsf_f4_rrr_rA
+      !> Radius derivative d^3S / dr^2 dR_a
+      procedure, public :: f3_rr_rad => lsf_f3_rr_rad
       !> Pure nuclear Hessian d^2S / dR_A dR_B
       procedure, public :: f2_rArB => lsf_f2_rArB
       !> Mixed third derivative d^3S / dr dR_A dR_B
       procedure, public :: f3_r_rArB => lsf_f3_r_rArB
       !> Mixed fourth derivative d^4S / dr^2 dR_A dR_B
       procedure, public :: f4_rr_rArB => lsf_f4_rr_rArB
+      !> Pure radius Hessian d^2S / dR_a dR_b
+      procedure, public :: f2_radrad => lsf_f2_radrad
+      !> Mixed third derivative d^3S / dr dR_a dR_b
+      procedure, public :: f3_r_radrad => lsf_f3_r_radrad
+      !> Mixed fourth derivative d^4S / dr^2 dR_a dR_b
+      procedure, public :: f4_rr_radrad => lsf_f4_rr_radrad
+      !> Mixed nuclear-radius Hessian d^2S / dR_A dR_b
+      procedure, public :: f2_rA_rad => lsf_f2_rA_rad
+      !> Mixed third derivative d^3S / dr dR_A dR_b
+      procedure, public :: f3_r_rA_rad => lsf_f3_r_rA_rad
+      !> Mixed fourth derivative d^4S / dr^2 dR_A dR_b
+      procedure, public :: f4_rr_rA_rad => lsf_f4_rr_rA_rad
       !> Normalized level set f0 / ||f1_r|| and its nuclear derivative
       procedure, public :: normalized_f01_rA => lsf_normalized_f01_rA
       !> Directional nuclear derivative of the value
@@ -185,6 +203,12 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: hvp_f2_r_rA => lsf_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure, public :: hvp_f3_rr_rA => lsf_hvp_f3_rr_rA
+      !> Radius row of the joint Hessian-vector product
+      procedure, public :: hvp_f1_rad => lsf_hvp_f1_rad
+      !> Joint directional derivative of `f2_r_rad`
+      procedure, public :: hvp_f2_r_rad => lsf_hvp_f2_r_rad
+      !> Joint directional derivative of `f3_rr_rad`
+      procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
       !> Exact radial offset where the SvdW weight equals `screening_threshold`
       procedure, public :: screening_offset => lsf_screening_offset
       !> Exact surface-free radius from the 1-Lipschitz property
@@ -576,6 +600,56 @@ contains
       if (max_deriv >= 3) aw3 = 0.0_wp
    end subroutine atom_tangent_tensors
 
+   !> Radius-contracted per-atom kind tensors of active slot `ia`
+   !>
+   !> The radius half of the joint `(v, vr)` contraction:
+   !> `awr{n} = (blend_k m_kind / 3) vr_a at{n}`. It lands in the same family as
+   !> [[atom_tangent_tensors]], so the caller accumulates both into one `ws*` and
+   !> every aggregate kernel routine picks the radius term up unchanged.
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  ia        Active-list index
+   !> @param[in]  vr_a      Radius direction of this atom
+   !> @param[in]  max_deriv Highest spatial-derivative order to set (0..3)
+   !> @param[out] awr0      Order-0 radius-contracted kind tensor
+   !> @param[out] awr1      Order-1 radius-contracted kind tensor
+   !> @param[out] awr2      Order-2 radius-contracted kind tensor
+   !> @param[out] awr3      Order-3 radius-contracted kind tensor
+   pure subroutine atom_radius_tangent_tensors(self, ia, vr_a, max_deriv, &
+                                               awr0, awr1, awr2, awr3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Active-list index
+      integer, intent(in) :: ia
+      !> Radius direction of this atom
+      real(wp), intent(in) :: vr_a
+      !> Highest spatial-derivative order to set
+      integer, intent(in) :: max_deriv
+      !> Order-0 radius-contracted kind tensor
+      real(wp), intent(out) :: awr0(nkind)
+      !> Order-1 radius-contracted kind tensor
+      real(wp), intent(out) :: awr1(ndim, nkind)
+      !> Order-2 radius-contracted kind tensor
+      real(wp), intent(out) :: awr2(ndim, ndim, nkind)
+      !> Order-3 radius-contracted kind tensor
+      real(wp), intent(out) :: awr3(ndim, ndim, ndim, nkind)
+
+      if (self%act_x(ia) > 0.0_wp) then
+         call svdw_atom_radius_tangent_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                            self%param%blend_k, vr_a, max_deriv, &
+                                            awr0, awr1, awr2, awr3)
+         return
+      end if
+
+      ! On the nucleus: order 0 is the kernel's own scaled u_A, the rest is zero
+      call svdw_atom_radius_tangent_eval(self%act_d(:, ia), self%act_radius(ia), &
+                                         self%param%blend_k, vr_a, 0, &
+                                         awr0, awr1, awr2, awr3)
+      if (max_deriv >= 1) awr1 = 0.0_wp
+      if (max_deriv >= 2) awr2 = 0.0_wp
+      if (max_deriv >= 3) awr3 = 0.0_wp
+   end subroutine atom_radius_tangent_tensors
+
    !> Accumulate the direction-contracted power sums for a nuclear direction field
    !>
    !> @param[in]  self      LSF instance
@@ -585,7 +659,8 @@ contains
    !> @param[out] ws1       Order-1 contracted power sums
    !> @param[out] ws2       Order-2 contracted power sums
    !> @param[out] ws3       Order-3 contracted power sums
-   pure subroutine tangent_powersums(self, v, max_deriv, ws0, ws1, ws2, ws3)
+   !> @param[in]  vrad      Radius directions [ncenters] (optional)
+   pure subroutine tangent_powersums(self, v, max_deriv, ws0, ws1, ws2, ws3, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
       !> Nuclear displacement directions
@@ -600,10 +675,16 @@ contains
       real(wp), intent(out) :: ws2(ndim, ndim, nkind)
       !> Order-3 contracted power sums
       real(wp), intent(out) :: ws3(ndim, ndim, ndim, nkind)
+      !> Radius half of the joint direction. Absent leaves every operation below
+      !> untouched, so a geometry-independent radius model stays bit-for-bit
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Per-atom contracted kind tensors
       real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
       real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      !> Per-atom radius-contracted kind tensors
+      real(wp) :: awr0(nkind), awr1(ndim, nkind), awr2(ndim, ndim, nkind)
+      real(wp) :: awr3(ndim, ndim, ndim, nkind)
       !> Active-list index
       integer :: ia
 
@@ -619,6 +700,14 @@ contains
          if (max_deriv >= 1) ws1 = ws1 + aw1
          if (max_deriv >= 2) ws2 = ws2 + aw2
          if (max_deriv >= 3) ws3 = ws3 + aw3
+         if (present(vrad)) then
+            call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), &
+                                             max_deriv, awr0, awr1, awr2, awr3)
+            ws0 = ws0 + awr0
+            if (max_deriv >= 1) ws1 = ws1 + awr1
+            if (max_deriv >= 2) ws2 = ws2 + awr2
+            if (max_deriv >= 3) ws3 = ws3 + awr3
+         end if
       end do
    end subroutine tangent_powersums
 
@@ -857,6 +946,69 @@ contains
          lsf3_rr_rA(:, :, :, ia) = f3_rr_rA
       end do
    end subroutine lsf_f3_rr_rA
+
+   !* ================================================================================= *!
+   !*                              Radius derivatives                                   *!
+   !* ================================================================================= *!
+
+   !> Radius derivative d^3S / (dr^2 dR_a) and its lower orders
+   !>
+   !> @param[in]  self         LSF instance
+   !> @param[out] lsf1_rad     dS/dR_a [>= active_count()] (optional)
+   !> @param[out] lsf2_r_rad   d^2S/(dr dR_a) [3, >= active_count()] (optional)
+   !> @param[out] lsf3_rr_rad  d^3S/(dr^2 dR_a) [3, 3, >= active_count()]
+   subroutine lsf_f3_rr_rad(self, lsf1_rad, lsf2_r_rad, lsf3_rr_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Radius gradient
+      real(wp), intent(out), optional :: lsf1_rad(:)
+      !> Mixed second derivative
+      real(wp), intent(out), optional :: lsf2_r_rad(:, :)
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_rr_rad(:, :, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Per-atom kind tensors
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Kernel outputs of one atom
+      real(wp) :: f1_rad, f2_r_rad(ndim), f3_rr_rad(ndim, ndim)
+      real(wp) :: d4(ndim, ndim, ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) then
+         ! Nothing is active, so no slot is owned and "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather
+         ! than return bare: the results are `intent(out)`, so a bare return
+         ! hands the caller a buffer it is not allowed to read.
+         if (present(lsf1_rad)) lsf1_rad = 0.0_wp
+         if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
+         lsf3_rr_rad = 0.0_wp
+         return
+      end if
+      call self%require_deriv(2, "f3_rr_rad")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      do ia = 1, self%n_active
+         ! `d/dR_a` consumes no derivative order, so order 2 is all that is
+         ! needed here -- one order less than `f3_rr_rA`. `atom_tensors` declares
+         ! `at3` `intent(out)` and then leaves it unset at `max_deriv = 2`;
+         ! `svdw_radius_eval` never reads it, but it is still passed by
+         ! reference, so define it rather than hand an `intent(in)` dummy
+         ! undefined memory.
+         call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
+         at3 = 0.0_wp
+         call svdw_radius_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, self%ps3, &
+                               at0, at1, at2, at3, 2, &
+                               f1_rad, f2_r_rad, f3_rr_rad, d4)
+         if (present(lsf1_rad)) lsf1_rad(ia) = f1_rad
+         if (present(lsf2_r_rad)) lsf2_r_rad(:, ia) = f2_r_rad
+         lsf3_rr_rad(:, :, ia) = f3_rr_rad
+      end do
+   end subroutine lsf_f3_rr_rad
 
    !> Mixed fourth derivative d^4S / (dr^3 dR_A), active-indexed
    !>
@@ -1110,6 +1262,231 @@ contains
    end subroutine lsf_f4_rr_rArB
 
    !* ================================================================================= *!
+   !*                     Two-radius and nuclear-radius derivatives                     *!
+   !* ================================================================================= *!
+   
+   !> Shared pair loop of the two-radius block
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  max_deriv Spatial-derivative order of the requested output
+   !> @param[in]  caller    Name reported by `require_deriv` on an under-request
+   !> @param[out] res2      d^2S/(dR_a dR_b) (optional)
+   !> @param[out] res3      d^3S/(dr dR_a dR_b) (optional)
+   !> @param[out] res4      d^4S/(dr^2 dR_a dR_b) (optional)
+   subroutine svdw_radpair_block(self, max_deriv, caller, res2, res3, res4)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Spatial-derivative order of the requested output
+      integer, intent(in) :: max_deriv
+      !> Name reported on an under-request
+      character(len=*), intent(in) :: caller
+      !> Radius Hessian
+      real(wp), intent(out), optional :: res2(:, :)
+      !> Mixed third derivative
+      real(wp), intent(out), optional :: res3(:, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(out), optional :: res4(:, :, :, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Cached per-atom kind tensors, orders 0..4
+      real(wp), allocatable :: ca0(:, :), ca1(:, :, :), ca2(:, :, :, :)
+      real(wp), allocatable :: ca3(:, :, :, :, :), ca4(:, :, :, :, :, :)
+      !> Result blocks of one pair; a radius slot adds no Cartesian index
+      real(wp) :: b2, b3(ndim), b4(ndim, ndim)
+      !> Active-list indices and active-atom count
+      integer :: ia, ib, n
+
+      if (self%n_active == 0) then
+         ! Nothing is active, so no slot is owned and "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather
+         ! than return bare: the results are `intent(out)`, so a bare return
+         ! hands the caller a buffer it is not allowed to read.
+         if (present(res2)) res2 = 0.0_wp
+         if (present(res3)) res3 = 0.0_wp
+         if (present(res4)) res4 = 0.0_wp
+         return
+      end if
+      call self%require_deriv(max_deriv, caller)
+
+      n = self%n_active
+      call svdw_weights(self, s_1, s_2, s_3)
+      call pair_atom_cache(self, max_deriv, ca0, ca1, ca2, ca3, ca4)
+
+      do ib = 1, n
+         do ia = 1, n
+            if (ia == ib) then
+               call svdw_radpair_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                           self%ps0, self%ps1, self%ps2, &
+                                           ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
+                                           max_deriv, b2, b3, b4)
+            else
+               call svdw_radpair_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                      self%ps0, self%ps1, self%ps2, &
+                                      ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
+                                      ca0(:, ib), ca1(:, :, ib), ca2(:, :, :, ib), &
+                                      max_deriv, b2, b3, b4)
+            end if
+            if (present(res2)) res2(ia, ib) = b2
+            if (present(res3)) res3(:, ia, ib) = b3
+            if (present(res4)) res4(:, :, ia, ib) = b4
+         end do
+      end do
+   end subroutine svdw_radpair_block
+
+   !> Shared pair loop of the nuclear-radius block
+   !>
+   !> The first atom index carries the *position* derivative and the second the
+   !> *radius* one, so unlike [[svdw_radpair_block]] the result is not symmetric
+   !> under exchanging them; the loop therefore visits every ordered pair.
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  max_deriv Spatial-derivative order of the requested output
+   !> @param[in]  caller    Name reported by `require_deriv` on an under-request
+   !> @param[out] res2      d^2S/(dR_A dR_b) (optional)
+   !> @param[out] res3      d^3S/(dr dR_A dR_b) (optional)
+   !> @param[out] res4      d^4S/(dr^2 dR_A dR_b) (optional)
+   subroutine svdw_nucrad_block(self, max_deriv, caller, res2, res3, res4)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Spatial-derivative order of the requested output
+      integer, intent(in) :: max_deriv
+      !> Name reported on an under-request
+      character(len=*), intent(in) :: caller
+      !> Nuclear-radius Hessian
+      real(wp), intent(out), optional :: res2(:, :, :)
+      !> Mixed third derivative
+      real(wp), intent(out), optional :: res3(:, :, :, :)
+      !> Mixed fourth derivative
+      real(wp), intent(out), optional :: res4(:, :, :, :, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Cached per-atom kind tensors, orders 0..4
+      real(wp), allocatable :: ca0(:, :), ca1(:, :, :), ca2(:, :, :, :)
+      real(wp), allocatable :: ca3(:, :, :, :, :), ca4(:, :, :, :, :, :)
+      !> Result blocks of one pair; only the position slot adds an index
+      real(wp) :: b2(ndim), b3(ndim, ndim), b4(ndim, ndim, ndim)
+      !> Active-list indices and active-atom count
+      integer :: ia, ib, n
+
+      if (self%n_active == 0) then
+         ! Nothing is active, so no slot is owned and "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather
+         ! than return bare: the results are `intent(out)`, so a bare return
+         ! hands the caller a buffer it is not allowed to read.
+         if (present(res2)) res2 = 0.0_wp
+         if (present(res3)) res3 = 0.0_wp
+         if (present(res4)) res4 = 0.0_wp
+         return
+      end if
+      call self%require_deriv(max_deriv, caller)
+
+      n = self%n_active
+      call svdw_weights(self, s_1, s_2, s_3)
+      call pair_atom_cache(self, max_deriv + 1, ca0, ca1, ca2, ca3, ca4)
+
+      do ib = 1, n
+         do ia = 1, n
+            if (ia == ib) then
+               call svdw_nucrad_diag_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                          self%ps0, self%ps1, self%ps2, &
+                                          ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
+                                          ca3(:, :, :, :, ia), max_deriv, b2, b3, b4)
+            else
+               call svdw_nucrad_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                     self%ps0, self%ps1, self%ps2, &
+                                     ca0(:, ia), ca1(:, :, ia), ca2(:, :, :, ia), &
+                                     ca3(:, :, :, :, ia), &
+                                     ca0(:, ib), ca1(:, :, ib), ca2(:, :, :, ib), &
+                                     max_deriv, b2, b3, b4)
+            end if
+            if (present(res2)) res2(:, ia, ib) = b2
+            if (present(res3)) res3(:, :, ia, ib) = b3
+            if (present(res4)) res4(:, :, :, ia, ib) = b4
+         end do
+      end do
+   end subroutine svdw_nucrad_block
+
+   !> Pure radius Hessian d^2S / (dR_a dR_b), active-indexed in both atoms
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_radrad d^2S/(dR_a dR_b) [>= n_act, >= n_act]
+   subroutine lsf_f2_radrad(self, lsf2_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Radius Hessian
+      real(wp), intent(out) :: lsf2_radrad(:, :)
+
+      call svdw_radpair_block(self, 0, "f2_radrad", res2=lsf2_radrad)
+   end subroutine lsf_f2_radrad
+
+   !> Mixed third derivative d^3S / (dr dR_a dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_radrad d^3S/(dr dR_a dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_f3_r_radrad(self, lsf3_r_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_r_radrad(:, :, :)
+
+      call svdw_radpair_block(self, 1, "f3_r_radrad", res3=lsf3_r_radrad)
+   end subroutine lsf_f3_r_radrad
+
+   !> Mixed fourth derivative d^4S / (dr^2 dR_a dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_f4_rr_radrad(self, lsf4_rr_radrad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Mixed fourth derivative
+      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :, :)
+
+      call svdw_radpair_block(self, 2, "f4_rr_radrad", res4=lsf4_rr_radrad)
+   end subroutine lsf_f4_rr_radrad
+
+   !> Mixed nuclear-radius Hessian d^2S / (dR_A dR_b)
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_rA_rad d^2S/(dR_A dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_f2_rA_rad(self, lsf2_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear-radius Hessian
+      real(wp), intent(out) :: lsf2_rA_rad(:, :, :)
+
+      call svdw_nucrad_block(self, 0, "f2_rA_rad", res2=lsf2_rA_rad)
+   end subroutine lsf_f2_rA_rad
+
+   !> Mixed third derivative d^3S / (dr dR_A dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_rA_rad d^3S/(dr dR_A dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_f3_r_rA_rad(self, lsf3_r_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Mixed third derivative
+      real(wp), intent(out) :: lsf3_r_rA_rad(:, :, :, :)
+
+      call svdw_nucrad_block(self, 1, "f3_r_rA_rad", res3=lsf3_r_rA_rad)
+   end subroutine lsf_f3_r_rA_rad
+
+   !> Mixed fourth derivative d^4S / (dr^2 dR_A dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b) [3, 3, 3, >= n_act, >= n_act]
+   subroutine lsf_f4_rr_rA_rad(self, lsf4_rr_rA_rad)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Mixed fourth derivative
+      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :, :)
+
+      call svdw_nucrad_block(self, 2, "f4_rr_rA_rad", res4=lsf4_rr_rA_rad)
+   end subroutine lsf_f4_rr_rA_rad
+
+   !* ================================================================================= *!
    !*                     Direction-contracted nuclear derivatives                      *!
    !* ================================================================================= *!
 
@@ -1241,13 +1618,19 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
-   subroutine lsf_hvp_f1_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !>                  promotes the contraction to the joint direction
+   !>                  `(v_B, vr_B)`, turning `res` from the nuclear-nuclear
+   !>                  block into the nuclear row of the joint Hessian
+   subroutine lsf_hvp_f1_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted nuclear Hessian
       real(wp), intent(out) :: res(:, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Blending weights and contracted power sums
       real(wp) :: s_1, s_2, s_3
@@ -1258,19 +1641,30 @@ contains
       real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
       real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
       real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      real(wp) :: awr0(nkind), awr1(ndim, nkind), awr2(ndim, ndim, nkind)
+      real(wp) :: awr3(ndim, ndim, ndim, nkind)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), d2(ndim, ndim), d3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(0, "hvp_f1_rA")
 
       call svdw_weights(self, s_1, s_2, s_3)
-      call tangent_powersums(self, v, 0, ws0, ws1, ws2, ws3)
+      call tangent_powersums(self, v, 0, ws0, ws1, ws2, ws3, vrad)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 1, at0, at1, at2, at3, at4)
          call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), 1, aw0, aw1, aw2, aw3)
+         if (present(vrad)) then
+            call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), 1, &
+                                             awr0, awr1, awr2, awr3)
+            aw0 = aw0 + awr0
+            aw1 = aw1 + awr1
+         end if
          call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 0, h1, d2, d3)
@@ -1283,13 +1677,18 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
-   subroutine lsf_hvp_f2_r_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !>                  promotes the contraction to the joint direction
+   !>                  `(v_B, vr_B)`, exactly as for [[lsf_hvp_f1_rA]]
+   subroutine lsf_hvp_f2_r_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted mixed third derivative
       real(wp), intent(out) :: res(:, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Blending weights and contracted power sums
       real(wp) :: s_1, s_2, s_3
@@ -1300,19 +1699,31 @@ contains
       real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
       real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
       real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      real(wp) :: awr0(nkind), awr1(ndim, nkind), awr2(ndim, ndim, nkind)
+      real(wp) :: awr3(ndim, ndim, ndim, nkind)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), h2(ndim, ndim), d3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(1, "hvp_f2_r_rA")
 
       call svdw_weights(self, s_1, s_2, s_3)
-      call tangent_powersums(self, v, 1, ws0, ws1, ws2, ws3)
+      call tangent_powersums(self, v, 1, ws0, ws1, ws2, ws3, vrad)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
          call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), 2, aw0, aw1, aw2, aw3)
+         if (present(vrad)) then
+            call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), 2, &
+                                             awr0, awr1, awr2, awr3)
+            aw0 = aw0 + awr0
+            aw1 = aw1 + awr1
+            aw2 = aw2 + awr2
+         end if
          call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 1, h1, h2, d3)
@@ -1325,13 +1736,18 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
-   subroutine lsf_hvp_f3_rr_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !>                  promotes the contraction to the joint direction
+   !>                  `(v_B, vr_B)`, exactly as for [[lsf_hvp_f1_rA]]
+   subroutine lsf_hvp_f3_rr_rA(self, v, res, vrad)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
       !> Contracted mixed fourth derivative
       real(wp), intent(out) :: res(:, :, :, :)
+      !> Radius directions
+      real(wp), intent(in), optional :: vrad(:)
 
       !> Blending weights and contracted power sums
       real(wp) :: s_1, s_2, s_3
@@ -1342,25 +1758,187 @@ contains
       real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
       real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
       real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      real(wp) :: awr0(nkind), awr1(ndim, nkind), awr2(ndim, ndim, nkind)
+      real(wp) :: awr3(ndim, ndim, ndim, nkind)
       !> Kernel outputs of one atom
       real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
       !> Active-list index
       integer :: ia
 
-      if (self%n_active == 0) return
+      if (self%n_active == 0) then
+         res = 0.0_wp
+         return
+      end if
       call self%require_deriv(2, "hvp_f3_rr_rA")
 
       call svdw_weights(self, s_1, s_2, s_3)
-      call tangent_powersums(self, v, 2, ws0, ws1, ws2, ws3)
+      call tangent_powersums(self, v, 2, ws0, ws1, ws2, ws3, vrad)
       do ia = 1, self%n_active
          call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
          call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), 3, aw0, aw1, aw2, aw3)
+         if (present(vrad)) then
+            call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), 3, &
+                                             awr0, awr1, awr2, awr3)
+            aw0 = aw0 + awr0
+            aw1 = aw1 + awr1
+            aw2 = aw2 + awr2
+            aw3 = aw3 + awr3
+         end if
          call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
                             self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                             at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
          res(:, :, :, ia) = h3
       end do
    end subroutine lsf_hvp_f3_rr_rA
+
+   !* ================================================================================= *!
+   !*                    Radius row of the joint Hessian-vector product                 *!
+   !* ================================================================================= *!
+
+   !> Radius row of the joint Hessian-vector product, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  sum_B (v_B . d/dR_B + vr_B d/dR_b) dS/dR_a
+   !>                  [>= active_count()]
+   subroutine lsf_hvp_f1_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted radius Hessian row
+      real(wp), intent(out) :: res(:)
+
+      call svdw_radius_hvp(self, v, vrad, 0, "hvp_f1_rad", res1=res)
+   end subroutine lsf_hvp_f1_rad
+
+   !> Joint directional derivative of `f2_r_rad`, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed third derivative [3, >= active_count()]
+   subroutine lsf_hvp_f2_r_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: res(:, :)
+
+      call svdw_radius_hvp(self, v, vrad, 1, "hvp_f2_r_rad", res2=res)
+   end subroutine lsf_hvp_f2_r_rad
+
+   !> Joint directional derivative of `f3_rr_rad`, active-indexed
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed fourth derivative [3, 3, >= active_count()]
+   subroutine lsf_hvp_f3_rr_rad(self, v, vrad, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: res(:, :, :)
+
+      call svdw_radius_hvp(self, v, vrad, 2, "hvp_f3_rr_rad", res3=res)
+   end subroutine lsf_hvp_f3_rr_rad
+
+   !> Shared driver of the three radius-row Hessian-vector products
+   !>
+   !> The three public entry points differ only in `max_deriv` and in which
+   !> output they keep, and unlike the `_rA` ladder there is no reason to spell
+   !> the loop out three times: the radius channel has one code path. Exactly one
+   !> of `res1`/`res2`/`res3` must be present, matching `max_deriv`.
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[in]  v         Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad      Radius directions [ncenters]
+   !> @param[in]  max_deriv Highest spatial-derivative order (0..2)
+   !> @param[in]  caller    Name used by `require_deriv` on failure
+   !> @param[out] res1      Order-0 result [>= active_count()] (optional)
+   !> @param[out] res2      Order-1 result [3, >= active_count()] (optional)
+   !> @param[out] res3      Order-2 result [3, 3, >= active_count()] (optional)
+   subroutine svdw_radius_hvp(self, v, vrad, max_deriv, caller, res1, res2, res3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Radius directions
+      real(wp), intent(in) :: vrad(:)
+      !> Highest spatial-derivative order
+      integer, intent(in) :: max_deriv
+      !> Caller name for the derivative-order check
+      character(len=*), intent(in) :: caller
+      !> Order-0 result
+      real(wp), intent(out), optional :: res1(:)
+      !> Order-1 result
+      real(wp), intent(out), optional :: res2(:, :)
+      !> Order-2 result
+      real(wp), intent(out), optional :: res3(:, :, :)
+
+      !> Blending weights and contracted power sums
+      real(wp) :: s_1, s_2, s_3
+      real(wp) :: ws0(nkind), ws1(ndim, nkind), ws2(ndim, ndim, nkind)
+      real(wp) :: ws3(ndim, ndim, ndim, nkind)
+      !> Per-atom kind tensors and their contracted counterparts
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
+      real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      real(wp) :: awr0(nkind), awr1(ndim, nkind), awr2(ndim, ndim, nkind)
+      real(wp) :: awr3(ndim, ndim, ndim, nkind)
+      !> Kernel outputs of one atom
+      real(wp) :: h1, h2(ndim), h3(ndim, ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) then
+         ! Nothing is active, so no slot is owned and "writes the first
+         ! `active_count()` slots" degenerates to writing none. Zero rather
+         ! than return bare: the results are `intent(out)`, so a bare return
+         ! hands the caller a buffer it is not allowed to read.
+         if (present(res1)) res1 = 0.0_wp
+         if (present(res2)) res2 = 0.0_wp
+         if (present(res3)) res3 = 0.0_wp
+         return
+      end if
+      call self%require_deriv(max_deriv, caller)
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      call tangent_powersums(self, v, max_deriv, ws0, ws1, ws2, ws3, vrad)
+      do ia = 1, self%n_active
+         ! `d/dR_a` adds no index, so unlike the `_rA` ladder the per-atom
+         ! tensors are needed only to `max_deriv`, not `max_deriv + 1`.
+         call atom_tensors(self, ia, max_deriv, at0, at1, at2, at3, at4)
+         call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), max_deriv, &
+                                   aw0, aw1, aw2, aw3)
+         call atom_radius_tangent_tensors(self, ia, vrad(self%act_atom(ia)), &
+                                          max_deriv, awr0, awr1, awr2, awr3)
+         aw0 = aw0 + awr0
+         if (max_deriv >= 1) aw1 = aw1 + awr1
+         if (max_deriv >= 2) aw2 = aw2 + awr2
+         ! `at3`/`at4`/`aw3`/`awr3` exist only because the three tensor
+         ! builders take them as non-optional `intent(out)` dummies; the eval
+         ! below never sees them, so they are left undefined on purpose.
+         call svdw_radius_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
+                                   at0, at1, at2, aw0, aw1, aw2, max_deriv, &
+                                   h1, h2, h3)
+         if (present(res1)) res1(ia) = h1
+         if (present(res2)) res2(:, ia) = h2
+         if (present(res3)) res3(:, :, ia) = h3
+      end do
+   end subroutine svdw_radius_hvp
 
    !* ================================================================================= *!
    !*                                Screening offset                                   *!

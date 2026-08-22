@@ -9,10 +9,11 @@
 !>   - implementations of the deferred procedures below
 !>   - optionally, overrides for the higher-order and direction-contracted
 !>     derivatives the base declares with erroring defaults (`f4_*`, `f2_rArB`,
-!>     `f3_r_rArB`, `f4_rr_rArB`, `normalized_f01_rA`, `tangent_*`, `hvp_*`).
-!>     SvdW implements all of them; CFC and the isodensity LSFs implement none,
-!>     so asking one of those for a fourth derivative aborts rather than
-!>     returning a zero the caller cannot distinguish from a real answer
+!>     `f3_r_rArB`, `f4_rr_rArB`, `f*_radrad`, `f*_rA_rad`, `normalized_f01_rA`,
+!>     `tangent_*`, `hvp_*`). SvdW and CFC implement all of them; the isodensity
+!>     LSFs implement none, so asking one of those for a fourth derivative aborts
+!>     rather than returning a zero the caller cannot distinguish from a real
+!>     answer
 !>
 !> Two geometric-bound queries
 !> ---------------------------
@@ -149,6 +150,9 @@ module moist_cavity_drop_lsf_base
       !> [[lsf_candidate_space_sorted]]; `update` aborts while undeclared.
       integer :: candidate_space = lsf_candidate_space_undeclared
 
+      !> LSF dependency on atomic radii
+      logical :: radius_dependent = .true.
+
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
       !> Permutation mapping a user-space atom index i to its spatially-sorted
@@ -233,23 +237,31 @@ module moist_cavity_drop_lsf_base
       procedure(lsf_screening_offset_iface), deferred :: screening_offset
 
       !* ------------------ Higher-order and contracted derivatives ---------------- *!
-      !> Every binding below is part of the LSF vocabulary but is not something
-      !> every concrete LSF can answer, so the base supplies an *erroring* default
-      !> rather than a deferred slot: a concrete either overrides it or the call
-      !> aborts naming the missing procedure. The one thing none of them may do is
-      !> return zeros, which is indistinguishable from a real answer (see the
-      !> `require_deriv` note above).
 
       !> Pure spatial fourth derivative d^4S / dr^4
       procedure :: f4_rrrr => lsf_base_f4_rrrr
       !> Mixed fourth derivative d^4S / (dr^3 dR_A)
       procedure :: f4_rrr_rA => lsf_base_f4_rrr_rA
+      !> Radius derivative d^3S / (dr^2 dR_a) and its lower orders
+      procedure :: f3_rr_rad => lsf_base_f3_rr_rad
       !> Pure nuclear Hessian d^2S / (dR_A dR_B)
       procedure :: f2_rArB => lsf_base_f2_rArB
       !> Mixed third derivative d^3S / (dr dR_A dR_B)
       procedure :: f3_r_rArB => lsf_base_f3_r_rArB
       !> Mixed fourth derivative d^4S / (dr^2 dR_A dR_B)
       procedure :: f4_rr_rArB => lsf_base_f4_rr_rArB
+      !> Pure radius Hessian d^2S / (dR_a dR_b)
+      procedure :: f2_radrad => lsf_base_f2_radrad
+      !> Mixed third derivative d^3S / (dr dR_a dR_b)
+      procedure :: f3_r_radrad => lsf_base_f3_r_radrad
+      !> Mixed fourth derivative d^4S / (dr^2 dR_a dR_b)
+      procedure :: f4_rr_radrad => lsf_base_f4_rr_radrad
+      !> Mixed nuclear-radius Hessian d^2S / (dR_A dR_b)
+      procedure :: f2_rA_rad => lsf_base_f2_rA_rad
+      !> Mixed third derivative d^3S / (dr dR_A dR_b)
+      procedure :: f3_r_rA_rad => lsf_base_f3_r_rA_rad
+      !> Mixed fourth derivative d^4S / (dr^2 dR_A dR_b)
+      procedure :: f4_rr_rA_rad => lsf_base_f4_rr_rA_rad
       !> Normalized level set S/||grad S|| and its nuclear gradient
       procedure :: normalized_f01_rA => lsf_base_normalized_f01_rA
       !> Directional nuclear derivative of the value
@@ -266,6 +278,12 @@ module moist_cavity_drop_lsf_base
       procedure :: hvp_f2_r_rA => lsf_base_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure :: hvp_f3_rr_rA => lsf_base_hvp_f3_rr_rA
+      !> Radius row of the joint Hessian-vector product
+      procedure :: hvp_f1_rad => lsf_base_hvp_f1_rad
+      !> Joint directional derivative of `f2_r_rad`
+      procedure :: hvp_f2_r_rad => lsf_base_hvp_f2_r_rad
+      !> Joint directional derivative of `f3_rr_rad`
+      procedure :: hvp_f3_rr_rad => lsf_base_hvp_f3_rr_rad
    end type moist_cavity_drop_lsf_type
 
    !> Wrapper struct for arrays of polymorphic-allocatable LSF clones.
@@ -678,25 +696,12 @@ contains
    !
    ! Returning zeros here would be a silent wrong answer -- the caller cannot tell
    ! a genuine vanishing tensor from a missing implementation. Each default
-   ! therefore aborts naming the procedure and the concrete type that lacks it.
-   ! Each result is still zeroed on the line before the abort: the store is never
-   ! observable (the next statement terminates the program) and exists only so
-   ! that `-Wunused-dummy-argument` does not have to be switched off here.
-
-   !> Abort naming a derivative a concrete LSF does not implement
-   !>
-   !> @param[in] self   LSF instance
-   !> @param[in] caller Accessor name, for the diagnostic
-   subroutine lsf_base_unsupported(self, caller)
-      class(moist_cavity_drop_lsf_type), intent(in) :: self
-      character(len=*), intent(in) :: caller
-
-      character(len=16) :: nat
-
-      write (nat, "(i0)") self%ncenters
-      error stop "moist DROP LSF: "//caller//" is not implemented by this level "// &
-         "set function (molecule has "//trim(nat)//" centers)"
-   end subroutine lsf_base_unsupported
+   ! therefore aborts with its own `error stop`, spelled out in full so the
+   ! diagnostic naming the missing derivative sits at the line that raises it.
+   ! Each result is still zeroed on the line before the abort, with the dummy
+   ! arguments folded into that store: neither is ever observable (the next
+   ! statement terminates the program) and both exist only so that
+   ! `-Wunused-dummy-argument` does not have to be switched off here.
 
    !> Erroring default of the pure spatial fourth derivative
    !>
@@ -706,8 +711,9 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out) :: lsf4_rrrr(:, :, :, :)
 
-      lsf4_rrrr = 0.0_wp
-      call lsf_base_unsupported(self, "f4_rrrr")
+      lsf4_rrrr = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f4_rrrr derivative"
    end subroutine lsf_base_f4_rrrr
 
    !> Erroring default of the mixed fourth derivative d^4S / (dr^3 dR_A)
@@ -718,9 +724,29 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out) :: lsf4_rrr_rA(:, :, :, :, :)
 
-      lsf4_rrr_rA = 0.0_wp
-      call lsf_base_unsupported(self, "f4_rrr_rA")
+      lsf4_rrr_rA = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f4_rrr_rA derivative"
    end subroutine lsf_base_f4_rrr_rA
+
+   !> Erroring default of the radius derivative d^3S / (dr^2 dR_a)
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf1_rad    dS/dR_a [>= n_active] (optional)
+   !> @param[out] lsf2_r_rad  d^2S/(dr dR_a) [3, >= n_active] (optional)
+   !> @param[out] lsf3_rr_rad d^3S/(dr^2 dR_a) [3, 3, >= n_active]
+   subroutine lsf_base_f3_rr_rad(self, lsf1_rad, lsf2_r_rad, lsf3_rr_rad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out), optional :: lsf1_rad(:)
+      real(wp), intent(out), optional :: lsf2_r_rad(:, :)
+      real(wp), intent(out) :: lsf3_rr_rad(:, :, :)
+
+      if (present(lsf1_rad)) lsf1_rad = 0.0_wp
+      if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
+      lsf3_rr_rad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f3_rr_rad derivative"
+   end subroutine lsf_base_f3_rr_rad
 
    !> Erroring default of the pure nuclear Hessian
    !>
@@ -730,8 +756,9 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out) :: lsf2_rArB(:, :, :, :)
 
-      lsf2_rArB = 0.0_wp
-      call lsf_base_unsupported(self, "f2_rArB")
+      lsf2_rArB = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f2_rArB derivative"
    end subroutine lsf_base_f2_rArB
 
    !> Erroring default of the mixed third derivative d^3S / (dr dR_A dR_B)
@@ -742,8 +769,9 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out) :: lsf3_r_rArB(:, :, :, :, :)
 
-      lsf3_r_rArB = 0.0_wp
-      call lsf_base_unsupported(self, "f3_r_rArB")
+      lsf3_r_rArB = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f3_r_rArB derivative"
    end subroutine lsf_base_f3_r_rArB
 
    !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_A dR_B)
@@ -754,9 +782,92 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(out) :: lsf4_rr_rArB(:, :, :, :, :, :)
 
-      lsf4_rr_rArB = 0.0_wp
-      call lsf_base_unsupported(self, "f4_rr_rArB")
+      lsf4_rr_rArB = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f4_rr_rArB derivative"
    end subroutine lsf_base_f4_rr_rArB
+
+   !* ================================================================================= *!
+   !*                     Two-radius and nuclear-radius derivatives                     *!
+   !* ================================================================================= *!
+
+   !> Erroring default of the pure radius Hessian
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_radrad d^2S/(dR_a dR_b) [>= n_act, >= n_act]
+   subroutine lsf_base_f2_radrad(self, lsf2_radrad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf2_radrad(:, :)
+
+      lsf2_radrad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f2_radrad derivative"
+   end subroutine lsf_base_f2_radrad
+
+   !> Erroring default of the mixed third derivative d^3S / (dr dR_a dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_radrad d^3S/(dr dR_a dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_base_f3_r_radrad(self, lsf3_r_radrad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf3_r_radrad(:, :, :)
+
+      lsf3_r_radrad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f3_r_radrad derivative"
+   end subroutine lsf_base_f3_r_radrad
+
+   !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_a dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_radrad d^4S/(dr^2 dR_a dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_base_f4_rr_radrad(self, lsf4_rr_radrad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf4_rr_radrad(:, :, :, :)
+
+      lsf4_rr_radrad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f4_rr_radrad derivative"
+   end subroutine lsf_base_f4_rr_radrad
+
+   !> Erroring default of the mixed nuclear-radius Hessian
+   !>
+   !> @param[in]  self        LSF instance
+   !> @param[out] lsf2_rA_rad d^2S/(dR_A dR_b) [3, >= n_act, >= n_act]
+   subroutine lsf_base_f2_rA_rad(self, lsf2_rA_rad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf2_rA_rad(:, :, :)
+
+      lsf2_rA_rad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f2_rA_rad derivative"
+   end subroutine lsf_base_f2_rA_rad
+
+   !> Erroring default of the mixed third derivative d^3S / (dr dR_A dR_b)
+   !>
+   !> @param[in]  self          LSF instance
+   !> @param[out] lsf3_r_rA_rad d^3S/(dr dR_A dR_b) [3, 3, >= n_act, >= n_act]
+   subroutine lsf_base_f3_r_rA_rad(self, lsf3_r_rA_rad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf3_r_rA_rad(:, :, :, :)
+
+      lsf3_r_rA_rad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f3_r_rA_rad derivative"
+   end subroutine lsf_base_f3_r_rA_rad
+
+   !> Erroring default of the mixed fourth derivative d^4S / (dr^2 dR_A dR_b)
+   !>
+   !> @param[in]  self           LSF instance
+   !> @param[out] lsf4_rr_rA_rad d^4S/(dr^2 dR_A dR_b) [3, 3, 3, >= n_act, >= n_act]
+   subroutine lsf_base_f4_rr_rA_rad(self, lsf4_rr_rA_rad)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: lsf4_rr_rA_rad(:, :, :, :, :)
+
+      lsf4_rr_rA_rad = 0.0_wp*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "f4_rr_rA_rad derivative"
+   end subroutine lsf_base_f4_rr_rA_rad
 
    !> Erroring default of the normalized level set and its nuclear gradient
    !>
@@ -768,9 +879,10 @@ contains
       real(wp), intent(out) :: val
       real(wp), intent(out), optional :: deriv_rA(:, :)
 
-      val = 0.0_wp
+      val = 0.0_wp*self%ncenters
       if (present(deriv_rA)) deriv_rA = 0.0_wp
-      call lsf_base_unsupported(self, "normalized_f01_rA")
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "normalized_f01_rA derivative"
    end subroutine lsf_base_normalized_f01_rA
 
    !> Erroring default of the contracted value derivative
@@ -783,8 +895,9 @@ contains
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "tangent_f0")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "tangent_f0 derivative"
    end subroutine lsf_base_tangent_f0
 
    !> Erroring default of the contracted gradient derivative
@@ -797,8 +910,9 @@ contains
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "tangent_f1_r")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "tangent_f1_r derivative"
    end subroutine lsf_base_tangent_f1_r
 
    !> Erroring default of the contracted Hessian derivative
@@ -811,8 +925,9 @@ contains
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:, :)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "tangent_f2_rr")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "tangent_f2_rr derivative"
    end subroutine lsf_base_tangent_f2_rr
 
    !> Erroring default of the contracted third-derivative derivative
@@ -825,8 +940,9 @@ contains
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:, :, :)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "tangent_f3_rrr")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "tangent_f3_rrr derivative"
    end subroutine lsf_base_tangent_f3_rrr
 
    !> Erroring default of the nuclear Hessian-vector product
@@ -834,13 +950,17 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  Contracted nuclear Hessian [3, n_active]
-   subroutine lsf_base_hvp_f1_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
+   subroutine lsf_base_hvp_f1_rA(self, v, res, vrad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:, :)
+      real(wp), intent(in), optional :: vrad(:)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "hvp_f1_rA")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      if (present(vrad)) res = res*size(vrad)
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f1_rA derivative"
    end subroutine lsf_base_hvp_f1_rA
 
    !> Erroring default of the contracted mixed third derivative
@@ -848,13 +968,17 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  Contracted mixed third derivative [3, 3, n_active]
-   subroutine lsf_base_hvp_f2_r_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
+   subroutine lsf_base_hvp_f2_r_rA(self, v, res, vrad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:, :, :)
+      real(wp), intent(in), optional :: vrad(:)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "hvp_f2_r_rA")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      if (present(vrad)) res = res*size(vrad)
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f2_r_rA derivative"
    end subroutine lsf_base_hvp_f2_r_rA
 
    !> Erroring default of the contracted mixed fourth derivative
@@ -862,14 +986,73 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  Contracted mixed fourth derivative [3, 3, 3, n_active]
-   subroutine lsf_base_hvp_f3_rr_rA(self, v, res)
+   !> @param[in]  vrad Radius directions [ncenters] (optional)
+   subroutine lsf_base_hvp_f3_rr_rA(self, v, res, vrad)
       class(moist_cavity_drop_lsf_type), intent(in) :: self
       real(wp), intent(in) :: v(:, :)
       real(wp), intent(out) :: res(:, :, :, :)
+      real(wp), intent(in), optional :: vrad(:)
 
-      res = 0.0_wp*size(v, 2)
-      call lsf_base_unsupported(self, "hvp_f3_rr_rA")
+      res = 0.0_wp*size(v, 2)*self%ncenters
+      if (present(vrad)) res = res*size(vrad)
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f3_rr_rA derivative"
    end subroutine lsf_base_hvp_f3_rr_rA
+
+   !* ================================================================================= *!
+   !*                      Radius row of the joint Hessian-vector product               *!
+   !* ================================================================================= *!
+
+   !> Erroring default of the radius Hessian-vector product
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted radius Hessian row [n_active]
+   subroutine lsf_base_hvp_f1_rad(self, v, vrad, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(in) :: vrad(:)
+      real(wp), intent(out) :: res(:)
+
+      res = 0.0_wp*size(v, 2)*size(vrad)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f1_rad derivative"
+   end subroutine lsf_base_hvp_f1_rad
+
+   !> Erroring default of the contracted mixed spatial-radius third derivative
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed third derivative [3, n_active]
+   subroutine lsf_base_hvp_f2_r_rad(self, v, vrad, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(in) :: vrad(:)
+      real(wp), intent(out) :: res(:, :)
+
+      res = 0.0_wp*size(v, 2)*size(vrad)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f2_r_rad derivative"
+   end subroutine lsf_base_hvp_f2_r_rad
+
+   !> Erroring default of the contracted mixed spatial-radius fourth derivative
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[in]  vrad Radius directions [ncenters]
+   !> @param[out] res  Contracted mixed fourth derivative [3, 3, n_active]
+   subroutine lsf_base_hvp_f3_rr_rad(self, v, vrad, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(in) :: vrad(:)
+      real(wp), intent(out) :: res(:, :, :)
+
+      res = 0.0_wp*size(v, 2)*size(vrad)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_f3_rr_rad derivative"
+   end subroutine lsf_base_hvp_f3_rr_rad
 
    !* ================================================================================= *!
    !*                            Geometric bound queries                                *!
