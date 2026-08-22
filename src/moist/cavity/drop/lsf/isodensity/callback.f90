@@ -102,6 +102,8 @@ contains
       !> candidate ids are never translated.
       self%candidate_space = lsf_candidate_space_user
 
+      self%radius_dependent = .false.
+
       self%callback_ptr = callback_ptr
       self%context = context
       if (present(scale)) self%scale = scale

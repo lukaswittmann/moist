@@ -108,6 +108,8 @@ contains
       !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
 
+      self%radius_dependent = .false.
+
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
       if (allocated(error)) return
       !> The per-instance scratch is sized from ``gto%ncart``, so a re-configured
