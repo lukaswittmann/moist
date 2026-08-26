@@ -77,6 +77,7 @@ module moist_cavity_drop_lsf_svdw
                                                 svdw_radpair_eval, svdw_radpair_diag_eval, &
                                                 svdw_nucrad_eval, svdw_nucrad_diag_eval, &
                                                 svdw_tangent_eval, svdw_hvp_eval, &
+                                                svdw_vjp_eval, svdw_radius_vjp_eval, &
                                                 svdw_normalized_eval, svdw_powersums
    implicit none (type, external)
    private
@@ -209,6 +210,10 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: hvp_f2_r_rad => lsf_hvp_f2_r_rad
       !> Joint directional derivative of `f3_rr_rad`
       procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
+      !> Jet-contracted nuclear gradient (reverse mode)
+      procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      !> Jet-contracted radius gradient (reverse mode)
+      procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the SvdW weight equals `screening_threshold`
       procedure, public :: screening_offset => lsf_screening_offset
       !> Exact surface-free radius from the 1-Lipschitz property
@@ -1939,6 +1944,136 @@ contains
          if (present(res3)) res3(:, :, ia) = h3
       end do
    end subroutine svdw_radius_hvp
+
+   !* ================================================================================= *!
+   !*                        Jet-contracted nuclear derivative                          *!
+   !* ================================================================================= *!
+
+   !> Adjoint-weighted nuclear gradient, active-indexed
+   !>
+   !> Contracts one evaluation point's adjoint weights against the nuclear
+   !> ladder and keeps only the nuclear index:
+   !>
+   !>    res(s, i) = w0*lsf1_rA(s, i) + sum_a w1(a)*lsf2_r_rA(a, s, i)
+   !>                + sum_a sum_b w2(a, b)*lsf3_rr_rA(a, b, s, i) .
+   !>
+   !> This is the `f1_rA` rung with the jet indices contracted away, exactly as
+   !> [[lsf_hvp_f1_rA]] is that same rung contracted with a nuclear direction --
+   !> the reverse-mode mirror of the `tangent_*` family, which contracts the
+   !> nuclear index and keeps the spatial ones.
+   !>
+   !> `w2` is a general 3x3: all nine entries are contracted, no symmetry is
+   !> assumed and no factor of two is folded into the off-diagonals.
+   !>
+   !> The contraction happens inside the kernel, on the weighted jet rather than
+   !> on its 3 + 9 + 27 components, so an adjoint pass never has to materialize
+   !> the `(3, 3, 3, >= active_count())` tensor [[lsf_f3_rr_rA]] would hand it.
+   !> The prepared order is the same as for [[lsf_f3_rr_rA]], since the same
+   !> `lsf3_rr_rA` rung enters the contraction.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Jet-contracted nuclear gradient [3, >= active_count()]
+   subroutine lsf_vjp_f1_rA(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Adjoint weight of the level-set value
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+      !> Jet-contracted nuclear gradient
+      real(wp), intent(out) :: res(:, :)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Per-atom kind tensors
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Kernel output of one atom
+      real(wp) :: vjp_f1_rA(ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f1_rA")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      do ia = 1, self%n_active
+         call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
+         call svdw_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                            self%ps0, self%ps1, self%ps2, &
+                            at0, at1, at2, at3, w0, w1, w2, vjp_f1_rA)
+         res(:, ia) = vjp_f1_rA
+      end do
+   end subroutine lsf_vjp_f1_rA
+
+   !> Adjoint-weighted radius gradient, active-indexed
+   !>
+   !> The radius twin of [[lsf_vjp_f1_rA]]: the same evaluation point's adjoint
+   !> weights, contracted against the radius ladder instead of the nuclear one,
+   !>
+   !>    res(i) = w0*lsf1_rad(i) + sum_a w1(a)*lsf2_r_rad(a, i)
+   !>             + sum_a sum_b w2(a, b)*lsf3_rr_rad(a, b, i) .
+   !>
+   !> A radius is a scalar, so -- exactly as [[lsf_f3_rr_rad]] carries one rank
+   !> less than [[lsf_f3_rr_rA]] -- there is no index left once the jet indices
+   !> are contracted away: one number per active atom, against the three of
+   !> [[lsf_vjp_f1_rA]] and the 1 + 3 + 9 of [[lsf_f3_rr_rad]].
+   !>
+   !> `w2` is a general 3x3: all nine entries are contracted, no symmetry is
+   !> assumed and no factor of two is folded into the off-diagonals.
+   !>
+   !> The contraction happens inside the kernel, on the weighted jet rather than
+   !> on its components. The prepared order is the same as for [[lsf_f3_rr_rad]]:
+   !> `d/dR_a` consumes no derivative order, so the kernel reads the power sums
+   !> and per-atom tensors only up to order 2.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Jet-contracted radius gradient [>= active_count()]
+   subroutine lsf_vjp_f1_rad(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Adjoint weight of the level-set value
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+      !> Jet-contracted radius gradient
+      real(wp), intent(out) :: res(:)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Per-atom kind tensors
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Kernel output of one atom
+      real(wp) :: vjp_f1_rad
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f1_rad")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      do ia = 1, self%n_active
+         ! Order 2 is enough: the radius derivative bumps no index, so the kernel
+         ! never reaches `at3`/`at4` and does not take them as arguments -- unlike
+         ! `svdw_radius_eval`, which does and therefore needs `at3` defined.
+         call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
+         call svdw_radius_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                   self%ps0, self%ps1, self%ps2, &
+                                   at0, at1, at2, w0, w1, w2, vjp_f1_rad)
+         res(ia) = vjp_f1_rad
+      end do
+   end subroutine lsf_vjp_f1_rad
 
    !* ================================================================================= *!
    !*                                Screening offset                                   *!

@@ -72,6 +72,17 @@
 !>                        hvp_f1_rA .. hvp_f3_rr_rA)
 !>   end do
 !>
+!> A reverse-mode caller -- one that already holds a per-point adjoint jet
+!> (w0, w1, w2) and only wants it contracted onto the nuclear gradient -- calls
+!>
+!>      call cfc_vjp_eval(pd*, qn*(.., A), w0, w1, w2, vjp_f1_rA)
+!>
+!> in place of `cfc_nuclear_eval`.  It reads the same two families to the same
+!> order, and returns the same rung with the jet indices summed away, three
+!> numbers per atom instead of 3 + 9 + 27.  The contraction happening inside
+!> the kernel is what makes it cheap: it is folded in before the common
+!> subexpressions are taken, so nothing of the rank-3 tensor is ever built.
+!>
 !> The uncontracted two-nucleus derivatives are one level out again: zero a
 !> per-pair `qq*` buffer, fill it with `*_hessian_eval` (one call for an
 !> off-diagonal pair, a sweep over the partners for a diagonal one), then
@@ -117,6 +128,16 @@
 !>   do A = 1, n_active
 !>      call cfc_radius_eval(pd*, rd*(.., A), n-1, f1_rad .. f4_rrr_rad)
 !>   end do
+!>
+!> A reverse-mode caller has the same shortcut here as it has for the nuclear
+!> gradient.  Holding a per-point adjoint jet (w0, w1, w2), it calls
+!>
+!>      call cfc_radius_vjp_eval(pd*, rd*(.., A), w0, w1, w2, vjp_f1_rad)
+!>
+!> in place of `cfc_radius_eval`, reads the same two families to the same order,
+!> and gets back the same rung with the jet indices summed away -- one number
+!> per atom instead of 1 + 3 + 9, contracted before the common subexpressions
+!> are taken, so nothing of the rank-2 tensor is ever built.
 !>
 !> For the joint position/radius Hessian the direction gains a radius component
 !> vr, and the contracted index of `tg*` and `hvp*` runs over radii as well as
@@ -189,10 +210,12 @@ module moist_cavity_drop_lsf_cfc_kernel
    public :: cfc_hessian_eval
    public :: cfc_tangent_eval
    public :: cfc_hvp_eval
+   public :: cfc_vjp_eval
    public :: cfc_radius_eval
    public :: cfc_radius2_eval
    public :: cfc_nucrad_eval
    public :: cfc_radius_hvp_eval
+   public :: cfc_radius_vjp_eval
 
 contains
 
@@ -71877,6 +71900,137 @@ contains
 
    end subroutine cfc_hvp_eval
 
+   !> Lift the accumulated tensors to the adjoint-contracted nuclear gradient.
+   !>
+   !> The reverse-mode mirror of `cfc_hvp_eval`.  With ``S = -log PD``, one
+   !> retained nucleus A and a per-point adjoint jet ``(w0, w1, w2)``,
+   !>
+   !>    vjp_f1_rA(beta) = w0 f1_rA(beta)
+   !>                    + sum_a w1(a) f2_r_rA(a, beta)
+   !>                    + sum_a sum_b w2(a, b) f3_rr_rA(a, b, beta)
+   !>
+   !> i.e. the `f1_rA` rung with the jet indices contracted away, exactly as
+   !> `hvp_f1_rA` is that same rung contracted with a nuclear direction.
+   !>
+   !> Same two accumulated families as `cfc_nuclear_eval` and the same orders:
+   !> `pd*` (`*_term_eval` / `cfc_pair_spatial_eval`, an aggregate) and `qn*`
+   !> (`*_nuclear_eval`, atom A's own share), both up to order 2.  A caller that
+   !> has prepared enough for `f3_rr_rA` has prepared enough for this.
+   !>
+   !> The contraction happens here rather than at the call site, and that is the
+   !> point: the weights enter before the common-subexpression pass, so this
+   !> routine evaluates the tree that produces three numbers instead of the one
+   !> that produces 3 + 9 + 27, and no caller ever forms the rank-3 nuclear
+   !> tensor.  `w2` is a general 3x3 -- every one of the nine entries is read,
+   !> no symmetry is assumed and no factor of two is folded in.
+   !>
+   !> There is no `max_deriv` argument: the jet spans a closed set of orders, so
+   !> there is no lower-order subset to dispatch on.
+   !>
+   !> Call once per atom A per evaluation point, i.e. O(n_active) in total.
+   !>
+   !> @param[in]    pd0        Accumulated order-0 spatial derivative of PD
+   !> @param[in]    pd1_r      Accumulated order-1 spatial derivative of PD
+   !> @param[in]    pd2_rr     Accumulated order-2 spatial derivative of PD
+   !> @param[in]    qn0        Atom-A d/dR_A of the order-0 spatial derivative of PD; trailing index
+   !>                          is the nuclear component
+   !> @param[in]    qn1_r      Atom-A d/dR_A of the order-1 spatial derivative of PD; trailing index
+   !>                          is the nuclear component
+   !> @param[in]    qn2_rr     Atom-A d/dR_A of the order-2 spatial derivative of PD; trailing index
+   !>                          is the nuclear component
+   !> @param[in]    w0         Adjoint weight of the value rung `f1_rA`
+   !> @param[in]    w1         Adjoint weights of the gradient rung `f2_r_rA`
+   !> @param[in]    w2         Adjoint weights of the Hessian rung `f3_rr_rA`; a general 3x3, read
+   !>                          entry by entry
+   !> @param[out]   vjp_f1_rA  Adjoint jet contracted onto the nuclear gradient of the level set;
+   !>                          the only index is the retained nuclear component
+   pure subroutine cfc_vjp_eval(pd0, pd1_r, pd2_rr, qn0, qn1_r, qn2_rr, w0, w1, w2, vjp_f1_rA)
+      !> Accumulated order-0 spatial derivative of PD
+      real(wp), intent(in) :: pd0
+      !> Accumulated order-1 spatial derivative of PD
+      real(wp), intent(in) :: pd1_r(3)
+      !> Accumulated order-2 spatial derivative of PD
+      real(wp), intent(in) :: pd2_rr(3, 3)
+      !> Atom-A d/dR_A of the order-0 spatial derivative of PD; trailing index is the nuclear
+      !> component
+      real(wp), intent(in) :: qn0(3)
+      !> Atom-A d/dR_A of the order-1 spatial derivative of PD; trailing index is the nuclear
+      !> component
+      real(wp), intent(in) :: qn1_r(3, 3)
+      !> Atom-A d/dR_A of the order-2 spatial derivative of PD; trailing index is the nuclear
+      !> component
+      real(wp), intent(in) :: qn2_rr(3, 3, 3)
+      !> Adjoint weight of the value rung `f1_rA`
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the gradient rung `f2_r_rA`
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the Hessian rung `f3_rr_rA`; a general 3x3, read entry by entry
+      real(wp), intent(in) :: w2(3, 3)
+      !> Adjoint jet contracted onto the nuclear gradient of the level set; the only index is the
+      !> retained nuclear component
+      real(wp), intent(out) :: vjp_f1_rA(3)
+
+      !> Reciprocal of the total pseudo-density
+      real(wp) :: inv_pd
+      !> Common subexpressions and symmetry orbits
+      real(wp) :: x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10, x11, x12, x13, x14, x15, x16, x17
+      real(wp) :: x18, x19, x20, x21, x22, x23, x24, x25, x26
+
+      ! Unconditional: a screened-out point returns early below, and the
+      ! result must be defined on that path too.
+      vjp_f1_rA = 0.0_wp
+
+      if (pd0 <= 0.0_wp) return
+      inv_pd = 1.0_wp/pd0
+
+      x0 = inv_pd*w0
+      x1 = (inv_pd*inv_pd)
+      x2 = qn0(1)*x1
+      x3 = pd1_r(1)*x1
+      x4 = 2.0_wp*x3
+      x5 = 2.0_wp*(inv_pd*inv_pd*inv_pd)
+      x6 = -(pd1_r(1)*pd1_r(1))*x5 + pd2_rr(1, 1)*x1
+      x7 = pd1_r(2)*x1
+      x8 = 2.0_wp*x7
+      x9 = -(pd1_r(2)*pd1_r(2))*x5 + pd2_rr(2, 2)*x1
+      x10 = pd1_r(3)*x1
+      x11 = 2.0_wp*x10
+      x12 = -(pd1_r(3)*pd1_r(3))*x5 + pd2_rr(3, 3)*x1
+      x13 = qn1_r(1, 1)*x1
+      x14 = pd1_r(1)*x5
+      x15 = -pd1_r(2)*x14 + pd2_rr(1, 2)*x1
+      x16 = -inv_pd*qn2_rr(1, 2, 1) + pd1_r(2)*x13 + qn0(1)*x15 + qn1_r(2, 1)*x3
+      x17 = -pd1_r(3)*x14 + pd2_rr(1, 3)*x1
+      x18 = -inv_pd*qn2_rr(1, 3, 1) + pd1_r(3)*x13 + qn0(1)*x17 + qn1_r(3, 1)*x3
+      x19 = -pd1_r(2)*pd1_r(3)*x5 + pd2_rr(2, 3)*x1
+      x20 = -inv_pd*qn2_rr(2, 3, 1) + qn0(1)*x19 + qn1_r(2, 1)*x10 + qn1_r(3, 1)*x7
+      x21 = -inv_pd*qn2_rr(1, 2, 2) + qn0(2)*x15 + qn1_r(1, 2)*x7 + qn1_r(2, 2)*x3
+      x22 = -inv_pd*qn2_rr(1, 3, 2) + qn0(2)*x17 + qn1_r(1, 2)*x10 + qn1_r(3, 2)*x3
+      x23 = -inv_pd*qn2_rr(2, 3, 2) + qn0(2)*x19 + qn1_r(2, 2)*x10 + qn1_r(3, 2)*x7
+      x24 = -inv_pd*qn2_rr(1, 2, 3) + qn0(3)*x15 + qn1_r(1, 3)*x7 + qn1_r(2, 3)*x3
+      x25 = -inv_pd*qn2_rr(1, 3, 3) + qn0(3)*x17 + qn1_r(1, 3)*x10 + qn1_r(3, 3)*x3
+      x26 = -inv_pd*qn2_rr(2, 3, 3) + qn0(3)*x19 + qn1_r(2, 3)*x10 + qn1_r(3, 3)*x7
+      vjp_f1_rA(1) = &
+         -qn0(1)*x0 + w1(1)*(-inv_pd*qn1_r(1, 1) + pd1_r(1)*x2) + w1(2)*(-inv_pd*qn1_r(2, 1) + &
+         pd1_r(2)*x2) + w1(3)*(-inv_pd*qn1_r(3, 1) + pd1_r(3)*x2) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, &
+         1) + qn0(1)*x6 + qn1_r(1, 1)*x4) + w2(1, 2)*x16 + w2(1, 3)*x18 + w2(2, 1)*x16 + w2(2, &
+         2)*(-inv_pd*qn2_rr(2, 2, 1) + qn0(1)*x9 + qn1_r(2, 1)*x8) + w2(2, 3)*x20 + w2(3, 1)*x18 + &
+         w2(3, 2)*x20 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 1) + qn0(1)*x12 + qn1_r(3, 1)*x11)
+      vjp_f1_rA(2) = &
+         -qn0(2)*x0 + w1(1)*(-inv_pd*qn1_r(1, 2) + qn0(2)*x3) + w1(2)*(-inv_pd*qn1_r(2, 2) + &
+         qn0(2)*x7) + w1(3)*(-inv_pd*qn1_r(3, 2) + qn0(2)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, 2) &
+         + qn0(2)*x6 + qn1_r(1, 2)*x4) + w2(1, 2)*x21 + w2(1, 3)*x22 + w2(2, 1)*x21 + w2(2, &
+         2)*(-inv_pd*qn2_rr(2, 2, 2) + qn0(2)*x9 + qn1_r(2, 2)*x8) + w2(2, 3)*x23 + w2(3, 1)*x22 + &
+         w2(3, 2)*x23 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 2) + qn0(2)*x12 + qn1_r(3, 2)*x11)
+      vjp_f1_rA(3) = &
+         -qn0(3)*x0 + w1(1)*(-inv_pd*qn1_r(1, 3) + qn0(3)*x3) + w1(2)*(-inv_pd*qn1_r(2, 3) + &
+         qn0(3)*x7) + w1(3)*(-inv_pd*qn1_r(3, 3) + qn0(3)*x10) + w2(1, 1)*(-inv_pd*qn2_rr(1, 1, 3) &
+         + qn0(3)*x6 + qn1_r(1, 3)*x4) + w2(1, 2)*x24 + w2(1, 3)*x25 + w2(2, 1)*x24 + w2(2, &
+         2)*(-inv_pd*qn2_rr(2, 2, 3) + qn0(3)*x9 + qn1_r(2, 3)*x8) + w2(2, 3)*x26 + w2(3, 1)*x25 + &
+         w2(3, 2)*x26 + w2(3, 3)*(-inv_pd*qn2_rr(3, 3, 3) + qn0(3)*x12 + qn1_r(3, 3)*x11)
+
+   end subroutine cfc_vjp_eval
+
    !> Lift the accumulated tensors to the level-set radius gradient.
    !>
    !> With ``S = -log PD`` and one retained atom A,
@@ -72861,5 +73015,115 @@ contains
       end select
 
    end subroutine cfc_radius_hvp_eval
+
+   !> Lift the accumulated tensors to the adjoint-contracted radius gradient.
+   !>
+   !> The radius twin of `cfc_vjp_eval`.  With ``S = -log PD``, one retained
+   !> atom A and a per-point adjoint jet ``(w0, w1, w2)``,
+   !>
+   !>    vjp_f1_rad = w0 f1_rad
+   !>               + sum_a w1(a) f2_r_rad(a)
+   !>               + sum_a sum_b w2(a, b) f3_rr_rad(a, b)
+   !>
+   !> i.e. the `f1_rad` rung with the jet indices contracted away.  A radius is
+   !> a scalar parameter, so the result is a single number per atom, where the
+   !> nuclear twin returns one Cartesian component -- the same difference
+   !> `cfc_radius_eval` has from `cfc_nuclear_eval`.
+   !>
+   !> Same two accumulated families as `cfc_radius_eval` and the same orders:
+   !> `pd*` (`*_term_eval` / `cfc_pair_spatial_eval`, an aggregate) and `rd*`
+   !> (`*_radius_eval`, atom A's own share), both up to order 2.  A caller that
+   !> has prepared enough for `f3_rr_rad` has prepared enough for this; no
+   !> direction vector is involved.
+   !>
+   !> The contraction happens here rather than at the call site, and that is the
+   !> point: the weights enter before the common-subexpression pass, so this
+   !> routine evaluates the tree that produces one number instead of the one
+   !> that produces 1 + 3 + 9, and no caller ever forms the rank-2 radius
+   !> tensor.  `w2` is a general 3x3 -- every one of the nine entries is read,
+   !> no symmetry is assumed and no factor of two is folded in.
+   !>
+   !> There is no `max_deriv` argument: the jet spans a closed set of orders, so
+   !> there is no lower-order subset to dispatch on.
+   !>
+   !> Call once per atom A per evaluation point, i.e. O(n_active) in total.
+   !>
+   !> @param[in]    pd0        Accumulated order-0 spatial derivative of PD
+   !> @param[in]    pd1_r      Accumulated order-1 spatial derivative of PD
+   !> @param[in]    pd2_rr     Accumulated order-2 spatial derivative of PD
+   !> @param[in]    rd0        Atom-A d/dRad_A of the order-0 spatial derivative of PD (no trailing
+   !>                          index: a radius is a scalar parameter)
+   !> @param[in]    rd1_r      Atom-A d/dRad_A of the order-1 spatial derivative of PD (no trailing
+   !>                          index: a radius is a scalar parameter)
+   !> @param[in]    rd2_rr     Atom-A d/dRad_A of the order-2 spatial derivative of PD (no trailing
+   !>                          index: a radius is a scalar parameter)
+   !> @param[in]    w0         Adjoint weight of the value rung `f1_rad`
+   !> @param[in]    w1         Adjoint weights of the gradient rung `f2_r_rad`
+   !> @param[in]    w2         Adjoint weights of the Hessian rung `f3_rr_rad`; a general 3x3, read
+   !>                          entry by entry
+   !> @param[out]   vjp_f1_rad Adjoint jet contracted onto the radius gradient of the level set; a
+   !>                          scalar, because a radius carries no index
+   pure subroutine cfc_radius_vjp_eval(pd0, pd1_r, pd2_rr, rd0, rd1_r, rd2_rr, w0, w1, w2, &
+                                       vjp_f1_rad)
+      !> Accumulated order-0 spatial derivative of PD
+      real(wp), intent(in) :: pd0
+      !> Accumulated order-1 spatial derivative of PD
+      real(wp), intent(in) :: pd1_r(3)
+      !> Accumulated order-2 spatial derivative of PD
+      real(wp), intent(in) :: pd2_rr(3, 3)
+      !> Atom-A d/dRad_A of the order-0 spatial derivative of PD (no trailing index: a radius is a
+      !> scalar parameter)
+      real(wp), intent(in) :: rd0
+      !> Atom-A d/dRad_A of the order-1 spatial derivative of PD (no trailing index: a radius is a
+      !> scalar parameter)
+      real(wp), intent(in) :: rd1_r(3)
+      !> Atom-A d/dRad_A of the order-2 spatial derivative of PD (no trailing index: a radius is a
+      !> scalar parameter)
+      real(wp), intent(in) :: rd2_rr(3, 3)
+      !> Adjoint weight of the value rung `f1_rad`
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the gradient rung `f2_r_rad`
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the Hessian rung `f3_rr_rad`; a general 3x3, read entry by entry
+      real(wp), intent(in) :: w2(3, 3)
+      !> Adjoint jet contracted onto the radius gradient of the level set; a scalar, because a
+      !> radius carries no index
+      real(wp), intent(out) :: vjp_f1_rad
+
+      !> Reciprocal of the total pseudo-density
+      real(wp) :: inv_pd
+      !> Common subexpressions and symmetry orbits
+      real(wp) :: x0, x1, x2, x3, x4, x5, x6, x7, x8, x9, x10
+
+      ! Unconditional: a screened-out point returns early below, and the
+      ! result must be defined on that path too.
+      vjp_f1_rad = 0.0_wp
+
+      if (pd0 <= 0.0_wp) return
+      inv_pd = 1.0_wp/pd0
+
+      x0 = (inv_pd*inv_pd)
+      x1 = rd0*x0
+      x2 = pd1_r(1)*x0
+      x3 = 2.0_wp*(inv_pd*inv_pd*inv_pd)
+      x4 = pd1_r(2)*x0
+      x5 = pd1_r(3)*x0
+      x6 = rd1_r(1)*x0
+      x7 = pd1_r(1)*x3
+      x8 = -inv_pd*rd2_rr(1, 2) + pd1_r(2)*x6 + rd0*(-pd1_r(2)*x7 + pd2_rr(1, 2)*x0) + rd1_r(2)*x2
+      x9 = -inv_pd*rd2_rr(1, 3) + pd1_r(3)*x6 + rd0*(-pd1_r(3)*x7 + pd2_rr(1, 3)*x0) + rd1_r(3)*x2
+      x10 = &
+         -inv_pd*rd2_rr(2, 3) + rd0*(-pd1_r(2)*pd1_r(3)*x3 + pd2_rr(2, 3)*x0) + rd1_r(2)*x5 + &
+         rd1_r(3)*x4
+      vjp_f1_rad = &
+         -inv_pd*rd0*w0 + w1(1)*(-inv_pd*rd1_r(1) + pd1_r(1)*x1) + w1(2)*(-inv_pd*rd1_r(2) + &
+         pd1_r(2)*x1) + w1(3)*(-inv_pd*rd1_r(3) + pd1_r(3)*x1) + w2(1, 1)*(-inv_pd*rd2_rr(1, 1) + &
+         rd0*(-(pd1_r(1)*pd1_r(1))*x3 + pd2_rr(1, 1)*x0) + 2.0_wp*rd1_r(1)*x2) + w2(1, 2)*x8 + &
+         w2(1, 3)*x9 + w2(2, 1)*x8 + w2(2, 2)*(-inv_pd*rd2_rr(2, 2) + rd0*(-(pd1_r(2)*pd1_r(2))*x3 &
+         + pd2_rr(2, 2)*x0) + 2.0_wp*rd1_r(2)*x4) + w2(2, 3)*x10 + w2(3, 1)*x9 + w2(3, 2)*x10 + &
+         w2(3, 3)*(-inv_pd*rd2_rr(3, 3) + rd0*(-(pd1_r(3)*pd1_r(3))*x3 + pd2_rr(3, 3)*x0) + &
+         2.0_wp*rd1_r(3)*x5)
+
+   end subroutine cfc_radius_vjp_eval
 
 end module moist_cavity_drop_lsf_cfc_kernel

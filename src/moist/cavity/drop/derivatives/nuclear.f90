@@ -75,8 +75,8 @@ contains
       !> Degeneracy status
       integer :: status
 
-      !> Grid, seed, atom and Cartesian indices
-      integer :: igrid, iaxis, iatom, i, n_active
+      !> Grid, atom and active-slot indices
+      integer :: igrid, iatom, i, n_active
       integer, allocatable :: active_idx(:)
 
       !> Projected point, anchor and owner sphere
@@ -85,8 +85,8 @@ contains
       !> Level-set jet at the projected point
       real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
       real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> Explicit nuclear partials of the level-set jet
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :, :)
+      !> Jet-contracted nuclear partials of the level set, one column per active atom
+      real(wp), allocatable :: vjp_pt(:, :)
       !> Objective jet at the projected point
       real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
       !> Lagrange multiplier of the projection
@@ -98,8 +98,6 @@ contains
 
       !> Point-local level-set adjoint weights built from the 13 field seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
-      !> Accumulated field-channel contribution
-      real(wp) :: g_val
       !> Effective position adjoint seen by every seed
       real(wp) :: w_xyz_local(3)
       !> iSwig switching-gradient scratch
@@ -123,33 +121,26 @@ contains
       call self%ctx%timer%start(h_sgrad)
 
       !* -------------------------- Effective surface weights ------------------------- *!
-      ! fold_switching = .true.: a nuclear displacement moves the switching
-      ! factor f, so the area channel's da/df term must be carried. The
-      ! electronic path passes .false. because df/dp vanishes there.
       call prepare_surface_weights(self, acc, .true., eff)
 
       !* -------------------------------- Thread setup -------------------------------- *!
-      ! The field contraction needs f3_rr_rA, so the per-point cache has to be
-      ! sized for third derivatives before the first %prepare.
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
       allocate (grad_threads(3, self%nsph, slots%nthreads), source=0.0_wp)
 
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& iaxis, iatom, i, n_active, active_idx, state, status, &
+      !$omp& iatom, i, n_active, active_idx, state, status, &
       !$omp& point, anchor, owner_idx, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& lsf1_rA, lsf2_r_rA, lsf3_rr_rA, phi0, phi1_r, phi2_rr, lambda_val, &
+      !$omp& vjp_pt, phi0, phi1_r, phi2_rr, lambda_val, &
       !$omp& kkt_rhs, kkt_info, &
-      !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, g_val, &
+      !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
       !$omp& w_xyz_local, f1_rA_pt, anchor_xi_zero, lsf_error)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
 
       allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
-      allocate (lsf1_rA(3, self%nsph), source=0.0_wp)
-      allocate (lsf2_r_rA(3, 3, self%nsph), source=0.0_wp)
-      allocate (lsf3_rr_rA(3, 3, 3, self%nsph), source=0.0_wp)
+      allocate (vjp_pt(3, self%nsph), source=0.0_wp)
       allocate (active_idx(self%nsph))
       allocate (f1_rA_pt(3, self%nsph), source=0.0_wp)
       allocate (anchor_xi_zero(3, self%nsph), source=0.0_wp)
@@ -175,7 +166,6 @@ contains
          end if
 
          call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call slots%lsf(thread_slot)%lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
          call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
 
          state%lsf1_r = lsf1_r
@@ -224,19 +214,19 @@ contains
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
 
          !* -------------- Field channel: contract with nuclear partials -------------- *!
+         ! The level set contracts the jet indices itself: `vjp_f1_rA` returns the
+         ! nuclear-gradient row already weighted by (w_lsf0, w_lsf1, w_lsf2), so
+         ! the (3, 3, 3, n_active) mixed third derivative the weights used to be
+         ! folded against is never materialized -- neither here nor in the kernel.
          n_active = slots%lsf(thread_slot)%lsf%active_count()
          do i = 1, n_active
             active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
          end do
+         call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, vjp_pt)
          do i = 1, n_active
             iatom = active_idx(i)
-            do iaxis = 1, 3
-               g_val = w_lsf0_pt*lsf1_rA(iaxis, i) &
-                       + dot_product(w_lsf1_pt, lsf2_r_rA(:, iaxis, i)) &
-                       + sum(w_lsf2_pt*lsf3_rr_rA(:, :, iaxis, i))
-               grad_threads(iaxis, iatom, thread_slot) = &
-                  grad_threads(iaxis, iatom, thread_slot) + g_val
-            end do
+            grad_threads(:, iatom, thread_slot) = &
+               grad_threads(:, iatom, thread_slot) + vjp_pt(:, i)
          end do
 
          !* ------------------------- Anchor channel (owner) -------------------------- *!
@@ -257,7 +247,7 @@ contains
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, active_idx, f1_rA_pt, anchor_xi_zero)
+      deallocate (lsf3_rrr, vjp_pt, active_idx, f1_rA_pt, anchor_xi_zero)
       !$omp end parallel
 
       if (abort%requested) then

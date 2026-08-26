@@ -88,6 +88,24 @@
 !> caller omits `vrad` and is unaffected, down to the bit -- the radius terms
 !> live in their own kernel routines and its sweeps are untouched.
 !>
+!> Reverse mode
+!> ------------
+!> `vjp_f1_rA` is the adjoint of the `f3_rr_rA` ladder: instead of returning the
+!> three mixed tensors it contracts their spatial indices against per-point
+!> adjoint weights `(w0, w1, w2)` and returns the nuclear gradient row alone,
+!> three numbers per atom instead of 3 + 9 + 27. It is a pure accessor like
+!> `f3_rr_rA` -- same cached `pd*` and `qn*`, same prepared order, no sweep of
+!> its own -- and the saving is entirely inside the generated kernel, where the
+!> weights are folded in before the common subexpressions are taken.
+!>
+!> `vjp_f1_rad` is the same adjoint on the radius channel, the twin of
+!> `vjp_f1_rA` exactly as `f3_rr_rad` is the twin of `f3_rr_rA`: one adjoint jet
+!> in, and the `f1_rad` / `f2_r_rad` / `f3_rr_rad` ladder collapsed to a single
+!> number per atom rather than 1 + 3 + 9. It carries the radius channel's two
+!> deviations with it -- no trailing derivative index, and one prepared order
+!> less than its `_rA` twin -- and, like `f3_rr_rad`, runs the `rd*` sweep
+!> itself.
+!>
 !> `rd*` is deliberately not cached by `prepare` even though it depends on
 !> nothing but the geometry: caching it would charge every fixed-radius caller
 !> an extra O(n_active**2) pair sweep at every grid point for a family it never
@@ -111,8 +129,9 @@ module moist_cavity_drop_lsf_cfc
       cfc_atomic_nucrad_eval, cfc_pair_nucrad_eval, &
       cfc_atomic_radius_hvp_eval, cfc_pair_radius_hvp_eval, &
       cfc_spatial_eval, cfc_nuclear_eval, cfc_hessian_eval, &
-      cfc_tangent_eval, cfc_hvp_eval, &
-      cfc_radius_eval, cfc_radius2_eval, cfc_nucrad_eval, cfc_radius_hvp_eval
+      cfc_tangent_eval, cfc_hvp_eval, cfc_vjp_eval, &
+      cfc_radius_eval, cfc_radius2_eval, cfc_nucrad_eval, cfc_radius_hvp_eval, &
+      cfc_radius_vjp_eval
    implicit none (type, external)
    private
 
@@ -250,6 +269,10 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: hvp_f2_r_rad => lsf_hvp_f2_r_rad
       !> Joint directional derivative of `f3_rr_rad`
       procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
+      !> Adjoint jet contracted onto the nuclear gradient
+      procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      !> Adjoint jet contracted onto the radius gradient
+      procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the CFC contribution equals the threshold
       procedure, public :: screening_offset => lsf_screening_offset
       !> Finalizer
@@ -2297,6 +2320,140 @@ contains
          if (present(res3)) res3(:, :, ia) = h3
       end do
    end subroutine cfc_radius_hvp
+
+   !* ================================================================================= *!
+   !*                  Jet-contracted nuclear vector-Jacobian product                   *!
+   !* ================================================================================= *!
+   !
+   ! The reverse-mode mirror of the `hvp_*_rA` block above. Those contract the
+   ! *nuclear* index of the nuclear Hessian against a displacement field and keep
+   ! the spatial ones; this one contracts the *spatial* (jet) indices of the
+   ! `f1_rA` / `f2_r_rA` / `f3_rr_rA` ladder against per-point adjoint weights
+   ! and keeps the nuclear one.
+   !
+   ! It reads exactly what `f3_rr_rA` reads -- the `pd*` aggregate and the `qn*`
+   ! per-atom family, both cached by `prepare` -- so it needs no sweep of its own
+   ! and requires the same prepared order. What it saves is in the kernel, not
+   ! here: `cfc_vjp_eval` folds the weights in before the generated code takes
+   ! its common subexpressions, so three numbers per atom come out where the
+   ! uncontracted accessor produces 3 + 9 + 27, and the caller's
+   ! `[3, 3, 3, n_active]` buffer disappears.
+
+   !> Adjoint jet contracted onto the nuclear gradient, active-indexed
+   !>
+   !> Returns, for every active atom `i`,
+   !>
+   !>    res(beta, i) = w0 f1_rA(beta, i)
+   !>                 + sum_a w1(a) f2_r_rA(a, beta, i)
+   !>                 + sum_a sum_b w2(a, b) f3_rr_rA(a, b, beta, i)
+   !>
+   !> i.e. the `f1_rA` rung with the jet indices summed away, just as
+   !> `hvp_f1_rA` is that same rung contracted with a nuclear direction instead.
+   !> `w2` is a general 3x3: all nine entries are contracted, with no symmetry
+   !> assumption and no folded factor of two.
+   !>
+   !> Slot `i` belongs to `active_atom(i)`; columns past `active_count()` are
+   !> left untouched and nothing is written at all when no atom is active. The
+   !> order requirement is 3, not 2, for the same reason as `f3_rr_rA`: the
+   !> kernel reads `qn2_rr`, whose total derivative order is three, and `prepare`
+   !> fills that family only one spatial order below `max_deriv`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of `f1_rA`
+   !> @param[in]  w1   Adjoint weights of `f2_r_rA` [3]
+   !> @param[in]  w2   Adjoint weights of `f3_rr_rA` [3, 3]
+   !> @param[out] res  Contracted nuclear gradient [3, >= active_count()]
+   subroutine lsf_vjp_f1_rA(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Adjoint weight of `f1_rA`
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of `f2_r_rA`
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of `f3_rr_rA`
+      real(wp), intent(in) :: w2(3, 3)
+      !> Contracted nuclear gradient
+      real(wp), intent(out) :: res(:, :)
+
+      !> Kernel output of one atom
+      real(wp) :: vjp1(ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(3, "vjp_f1_rA")
+
+      do ia = 1, self%n_active
+         call cfc_vjp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                           self%qn0(:, ia), self%qn1_r(:, :, ia), &
+                           self%qn2_rr(:, :, :, ia), w0, w1, w2, vjp1)
+         res(:, ia) = vjp1
+      end do
+   end subroutine lsf_vjp_f1_rA
+
+   !* ================================================================================= *!
+   !*                   Jet-contracted radius vector-Jacobian product                   *!
+   !* ================================================================================= *!
+
+   !> Adjoint jet contracted onto the radius gradient, active-indexed
+   !>
+   !> Returns, for every active atom `i`,
+   !>
+   !>    res(i) = w0 f1_rad(i)
+   !>           + sum_a w1(a) f2_r_rad(a, i)
+   !>           + sum_a sum_b w2(a, b) f3_rr_rad(a, b, i)
+   !>
+   !> i.e. the `f1_rad` rung with the jet indices summed away, the radius twin of
+   !> `vjp_f1_rA`. The result is a scalar per atom and not a Cartesian row,
+   !> because `R_a` is a radius; the jet itself is unchanged. `w2` is a general
+   !> 3x3: all nine entries are contracted, with no symmetry assumption and no
+   !> folded factor of two.
+   !>
+   !> Slot `i` belongs to `active_atom(i)`; entries past `active_count()` are
+   !> left untouched and nothing is written at all when no atom is active. The
+   !> order requirement is 2, one less than `vjp_f1_rA` needs, for the same
+   !> reason `f3_rr_rad` needs one less than `f3_rr_rA`: `d/dR_a` consumes no
+   !> derivative order, so the deepest input is `rd2_rr` at total order two.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of `f1_rad`
+   !> @param[in]  w1   Adjoint weights of `f2_r_rad` [3]
+   !> @param[in]  w2   Adjoint weights of `f3_rr_rad` [3, 3]
+   !> @param[out] res  Contracted radius gradient [>= active_count()]
+   subroutine lsf_vjp_f1_rad(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Adjoint weight of `f1_rad`
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of `f2_r_rad`
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of `f3_rr_rad`
+      real(wp), intent(in) :: w2(3, 3)
+      !> Contracted radius gradient
+      real(wp), intent(out) :: res(:)
+
+      !> Per-atom radius tensors
+      real(wp), allocatable :: rd0(:), rd1_r(:, :), rd2_rr(:, :, :)
+      !> Kernel output of one atom
+      real(wp) :: vjp1
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f1_rad")
+
+      allocate (rd0(self%n_active))
+      allocate (rd1_r(ndim, self%n_active))
+      allocate (rd2_rr(ndim, ndim, self%n_active))
+      call radius_tensors(self, 2, rd0, rd1_r, rd2_rr)
+
+      do ia = 1, self%n_active
+         call cfc_radius_vjp_eval(self%pd0, self%pd1_r, self%pd2_rr, &
+                                  rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
+                                  w0, w1, w2, vjp1)
+         res(ia) = vjp1
+      end do
+   end subroutine lsf_vjp_f1_rad
 
    !* ================================================================================= *!
    !*                                 Screening offset                                  *!

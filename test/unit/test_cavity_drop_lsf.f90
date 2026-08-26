@@ -3021,9 +3021,9 @@ contains
    !*                    Direction-contracted nuclear derivatives                       *!
    !* ================================================================================= *!
 
-   !> The `tangent_*` / `hvp_*` accessors must equal the explicit contraction
+   !> The `tangent_*` / `hvp_*` / `vjp_*` accessors must equal the explicit contraction
    !>
-   !> Both families exist only so a caller never has to form the O(n**2) nuclear
+   !> All three families exist only so a caller never has to form the full nuclear
    !> tensors; that is worth nothing unless they agree with them. This contracts
    !> the full tensors by hand against the same direction field and compares.
    !> Cheap and total: it exercises every contracted binding against an
@@ -3039,6 +3039,9 @@ contains
       real(wp), allocatable :: f2_rArB(:, :, :, :), f3_r_rArB(:, :, :, :, :)
       real(wp), allocatable :: f4_rr_rArB(:, :, :, :, :, :)
       real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp), allocatable :: vjp(:, :), vjp_rad(:)
+      real(wp), allocatable :: rad1(:), rad2(:, :), rad3(:, :, :)
+      real(wp) :: w0_adj, w1_adj(ndim), w2_adj(ndim, ndim)
       real(wp) :: t0, t1(ndim), t2(ndim, ndim), t3(ndim, ndim, ndim)
       real(wp) :: ref0, ref1(ndim), ref2(ndim, ndim), ref3(ndim, ndim, ndim)
       real(wp) :: acc, point(ndim)
@@ -3062,7 +3065,8 @@ contains
          end do
 
          if (allocated(f1_rA)) deallocate (f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA, &
-                                           f2_rArB, f3_r_rArB, f4_rr_rArB, h1, h2, h3)
+                                           f2_rArB, f3_r_rArB, f4_rr_rArB, h1, h2, h3, &
+                                           vjp, vjp_rad, rad1, rad2, rad3)
          allocate (f1_rA(ndim, nat), f2_r_rA(ndim, ndim, nat))
          allocate (f3_rr_rA(ndim, ndim, ndim, nat))
          allocate (f4_rrr_rA(ndim, ndim, ndim, ndim, nat))
@@ -3070,6 +3074,8 @@ contains
          allocate (f3_r_rArB(ndim, ndim, nat, ndim, nat))
          allocate (f4_rr_rArB(ndim, ndim, ndim, nat, ndim, nat))
          allocate (h1(ndim, nat), h2(ndim, ndim, nat), h3(ndim, ndim, ndim, nat))
+         allocate (vjp(ndim, nat), vjp_rad(nat))
+         allocate (rad1(nat), rad2(ndim, nat), rad3(ndim, ndim, nat))
 
          prim%screening_threshold = 0.0_wp
          call prim%new(blend_k=svdw_legacy_blend_k, blend_2b=svdw_legacy_blend_2b, &
@@ -3171,6 +3177,37 @@ contains
                      end do
                   end do
                end do
+            end do
+
+            !* ---------------------------- vjp_f1_rA --------------------------- *!
+            w0_adj = 0.37_wp
+            w1_adj = [0.19_wp, -0.53_wp, 0.71_wp]
+            do k = 1, ndim
+               do j = 1, ndim
+                  w2_adj(j, k) = 0.11_wp*real(j, wp) - 0.29_wp*real(k, wp) &
+                                 + 0.07_wp*real(j*k, wp)
+               end do
+            end do
+
+            call prim%vjp_f1_rA(w0_adj, w1_adj, w2_adj, vjp)
+            do iA = 1, prim%active_count()
+               do s_ax = 1, ndim
+                  acc = w0_adj*f1_rA(s_ax, iA) &
+                        + dot_product(w1_adj, f2_r_rA(:, s_ax, iA)) &
+                        + sum(w2_adj*f3_rr_rA(:, :, s_ax, iA))
+                  call check(error, vjp(s_ax, iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+                  if (allocated(error)) return
+               end do
+            end do
+
+            !* --------------------------- vjp_f1_rad --------------------------- *!
+            call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
+            do iA = 1, prim%active_count()
+               acc = w0_adj*rad1(iA) &
+                     + dot_product(w1_adj, rad2(:, iA)) &
+                     + sum(w2_adj*rad3(:, :, iA))
+               call check(error, vjp_rad(iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+               if (allocated(error)) return
             end do
          end do
       end do
@@ -3696,6 +3733,9 @@ contains
       real(wp), allocatable :: f2_rArB(:, :, :, :), f3_r_rArB(:, :, :, :, :)
       real(wp), allocatable :: f4_rr_rArB(:, :, :, :, :, :)
       real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp), allocatable :: vjp(:, :), vjp_rad(:)
+      real(wp), allocatable :: rad1(:), rad2(:, :), rad3(:, :, :)
+      real(wp) :: w0_adj, w1_adj(ndim), w2_adj(ndim, ndim)
       real(wp) :: t0, t1(ndim), t2(ndim, ndim), t3(ndim, ndim, ndim)
       real(wp) :: ref0, ref1(ndim), ref2(ndim, ndim), ref3(ndim, ndim, ndim)
       real(wp) :: acc, point(ndim)
@@ -3719,7 +3759,8 @@ contains
          end do
 
          if (allocated(f1_rA)) deallocate (f1_rA, f2_r_rA, f3_rr_rA, f4_rrr_rA, &
-                                           f2_rArB, f3_r_rArB, f4_rr_rArB, h1, h2, h3)
+                                           f2_rArB, f3_r_rArB, f4_rr_rArB, h1, h2, h3, &
+                                           vjp, vjp_rad, rad1, rad2, rad3)
          allocate (f1_rA(ndim, nat), f2_r_rA(ndim, ndim, nat))
          allocate (f3_rr_rA(ndim, ndim, ndim, nat))
          allocate (f4_rrr_rA(ndim, ndim, ndim, ndim, nat))
@@ -3727,6 +3768,8 @@ contains
          allocate (f3_r_rArB(ndim, ndim, nat, ndim, nat))
          allocate (f4_rr_rArB(ndim, ndim, ndim, nat, ndim, nat))
          allocate (h1(ndim, nat), h2(ndim, ndim, nat), h3(ndim, ndim, ndim, nat))
+         allocate (vjp(ndim, nat), vjp_rad(nat))
+         allocate (rad1(nat), rad2(ndim, nat), rad3(ndim, ndim, nat))
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
@@ -3827,6 +3870,45 @@ contains
                      end do
                   end do
                end do
+            end do
+
+            !* ---------------------------- vjp_f1_rA --------------------------- *!
+            !* The reverse mirror of `tangent_*`: the jet indices are contracted
+            !* away, the nuclear index survives. The weights are deliberately
+            !* non-symmetric in `w2` -- a kernel that folded the Hessian slot
+            !* into a symmetric half would pass a symmetric probe and fail here.
+            w0_adj = 0.37_wp
+            w1_adj = [0.19_wp, -0.53_wp, 0.71_wp]
+            do k = 1, ndim
+               do j = 1, ndim
+                  w2_adj(j, k) = 0.11_wp*real(j, wp) - 0.29_wp*real(k, wp) &
+                                 + 0.07_wp*real(j*k, wp)
+               end do
+            end do
+
+            call prim%vjp_f1_rA(w0_adj, w1_adj, w2_adj, vjp)
+            do iA = 1, prim%active_count()
+               do s_ax = 1, ndim
+                  acc = w0_adj*f1_rA(s_ax, iA) &
+                        + dot_product(w1_adj, f2_r_rA(:, s_ax, iA)) &
+                        + sum(w2_adj*f3_rr_rA(:, :, s_ax, iA))
+                  call check(error, vjp(s_ax, iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+                  if (allocated(error)) return
+               end do
+            end do
+
+            !* --------------------------- vjp_f1_rad --------------------------- *!
+            !* The same contraction against the radius ladder. A radius is a
+            !* scalar parameter, so the surviving index is the atom alone and
+            !* the result is one number per active slot.
+            call prim%f3_rr_rad(rad1, rad2, rad3)
+            call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
+            do iA = 1, prim%active_count()
+               acc = w0_adj*rad1(iA) &
+                     + dot_product(w1_adj, rad2(:, iA)) &
+                     + sum(w2_adj*rad3(:, :, iA))
+               call check(error, vjp_rad(iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
+               if (allocated(error)) return
             end do
 
             !* ---------------- nuclear Hessian exchange symmetry ---------------- *!

@@ -95,6 +95,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: f012_r => lsf_f012_r
       procedure, public :: f3_rrr => lsf_f3_rrr
       procedure, public :: f3_rr_rA => lsf_f3_rr_rA
+      procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
@@ -329,6 +330,23 @@ contains
       if (present(lsf2_r_rA)) lsf2_r_rA(:, :, :) = 0.0_wp
       lsf3_rr_rA(:, :, :, :) = 0.0_wp
    end subroutine lsf_f3_rr_rA
+
+   !> Return a zero jet-contracted nuclear vector-Jacobian product
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Contracted nuclear gradient placeholder [3, >= n_active]
+   subroutine lsf_vjp_f1_rA(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:, :)
+
+      res(:, 1:self%active_count()) = 0.0_wp*(w0 + sum(w1) + sum(w2))
+   end subroutine lsf_vjp_f1_rA
 
    !> Density callback is globally evaluable; no atom-specific reach is needed
    !>

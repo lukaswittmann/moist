@@ -10,10 +10,12 @@
 !>   - optionally, overrides for the higher-order and direction-contracted
 !>     derivatives the base declares with erroring defaults (`f4_*`, `f2_rArB`,
 !>     `f3_r_rArB`, `f4_rr_rArB`, `f*_radrad`, `f*_rA_rad`, `normalized_f01_rA`,
-!>     `tangent_*`, `hvp_*`). SvdW and CFC implement all of them; the isodensity
-!>     LSFs implement none, so asking one of those for a fourth derivative aborts
-!>     rather than returning a zero the caller cannot distinguish from a real
-!>     answer
+!>     `tangent_*`, `hvp_*`, `vjp_f1_rA`, `vjp_f1_rad`). SvdW and CFC implement all
+!>     of them; the isodensity LSFs implement only the identically zero
+!>     `vjp_f1_rA` and clear `radius_dependent` instead of implementing the radius
+!>     family at all, so asking one of those for a fourth derivative -- or for
+!>     anything radius-dependent, `vjp_f1_rad` included -- aborts rather than
+!>     returning a zero the caller cannot distinguish from a real answer
 !>
 !> Two geometric-bound queries
 !> ---------------------------
@@ -284,6 +286,13 @@ module moist_cavity_drop_lsf_base
       procedure :: hvp_f2_r_rad => lsf_base_hvp_f2_r_rad
       !> Joint directional derivative of `f3_rr_rad`
       procedure :: hvp_f3_rr_rad => lsf_base_hvp_f3_rr_rad
+      !> Jet-contracted nuclear vector-Jacobian product: the nuclear gradient of
+      !> the value/gradient/Hessian jet contracted against per-point adjoint
+      !> weights over the spatial indices
+      procedure :: vjp_f1_rA => lsf_base_vjp_f1_rA
+      !> Jet-contracted radius vector-Jacobian product: the radius gradient of
+      !> that same jet contracted against the same per-point adjoint weights
+      procedure :: vjp_f1_rad => lsf_base_vjp_f1_rad
    end type moist_cavity_drop_lsf_type
 
    !> Wrapper struct for arrays of polymorphic-allocatable LSF clones.
@@ -1053,6 +1062,102 @@ contains
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "hvp_f3_rr_rad derivative"
    end subroutine lsf_base_hvp_f3_rr_rad
+
+   !* ================================================================================= *!
+   !*                      Jet-contracted vector-Jacobian products                      *!
+   !* ================================================================================= *!
+
+   !> Erroring default of the jet-contracted nuclear vector-Jacobian product
+   !>
+   !> Reverse-mode mirror of the `tangent_*` family: where those contract the
+   !> *nuclear* index against a displacement direction, this one contracts the
+   !> *spatial* (jet) indices against per-point adjoint weights and keeps the
+   !> nuclear index, so no implementation ever has to materialize the full
+   !> `[3, 3, 3, n_active]` tensor `f3_rr_rA` returns.
+   !>
+   !> The name follows the family convention: this is the `f1_rA` rung, the
+   !> nuclear-gradient row, just as `hvp_f1_rA` is that same rung contracted
+   !> with a nuclear direction instead.
+   !>
+   !> The result an implementation must produce is
+   !>
+   !>     res(beta, i) = w0 * lsf1_rA(beta, i)
+   !>                  + sum_a w1(a) * lsf2_r_rA(a, beta, i)
+   !>                  + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, beta, i)
+   !>
+   !> for `i = 1 .. active_count()`, with the same compact active-index
+   !> convention as `f3_rr_rA`: slot `i` belongs to atom `active_atom(i)`.
+   !> Columns beyond `active_count()` are left untouched, and nothing is written
+   !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
+   !> entries are contracted, with no symmetry assumption and no folded factor
+   !> of two. An implementation needs whatever prepared order its own `f3_rr_rA`
+   !> needs -- 2 for SvdW, 3 for CFC, which asks for the highest *total* order --
+   !> and must say so via `require_deriv(<that order>, "vjp_f1_rA")`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Contracted nuclear gradient [3, >= n_active]
+   subroutine lsf_base_vjp_f1_rA(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:, :)
+
+      res = 0.0_wp*w0*size(w1)*size(w2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "vjp_f1_rA derivative"
+   end subroutine lsf_base_vjp_f1_rA
+
+   !> Erroring default of the jet-contracted radius vector-Jacobian product
+   !>
+   !> The radius twin of [[lsf_base_vjp_f1_rA]]: the same per-point adjoint
+   !> weights contract the same spatial (jet) indices, but the surviving
+   !> derivative is taken with respect to the atomic radii. A radius is a scalar
+   !> parameter, so the surviving index is just the atom -- there is no Cartesian
+   !> slot and the result is one rank lower than the nuclear one.
+   !>
+   !> The result an implementation must produce is
+   !>
+   !>     res(i) = w0 * lsf1_rad(i)
+   !>            + sum_a w1(a) * lsf2_r_rad(a, i)
+   !>            + sum_{a,b} w2(a, b) * lsf3_rr_rad(a, b, i)
+   !>
+   !> for `i = 1 .. active_count()`, with the same compact active-index
+   !> convention as `f3_rr_rad`: slot `i` belongs to atom `active_atom(i)`.
+   !> Entries beyond `active_count()` are left untouched, and nothing is written
+   !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
+   !> entries are contracted, with no symmetry assumption and no folded factor
+   !> of two. An implementation needs whatever prepared order its own
+   !> `f3_rr_rad` needs -- 2 for both SvdW and CFC today -- and must say so via
+   !> `require_deriv(<that order>, "vjp_f1_rad")`.
+   !>
+   !> Unlike `vjp_f1_rA`, which the isodensity LSFs override with an identically
+   !> zero row, this default is *not* overridden there: those LSFs do not see the
+   !> radii at all, clear `radius_dependent`, and leave the whole radius family
+   !> erroring. A consumer gates on `radius_dependent`; one that reaches here
+   !> anyway has asked an LSF for a derivative it structurally does not have, and
+   !> must abort rather than receive a zero it cannot distinguish from a real
+   !> answer.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Contracted radius gradient [>= n_active]
+   subroutine lsf_base_vjp_f1_rad(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:)
+
+      res = 0.0_wp*w0*size(w1)*size(w2)*self%ncenters
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "vjp_f1_rad derivative"
+   end subroutine lsf_base_vjp_f1_rad
 
    !* ================================================================================= *!
    !*                            Geometric bound queries                                *!
