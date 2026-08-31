@@ -11,12 +11,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from enum import Enum, IntEnum
-from typing import Callable, Iterator, Optional, Protocol, Union
+from typing import Callable, Iterable, Iterator, Optional, Protocol, Union
 import warnings
 
 import numpy as np
 
 from . import library
+from .library import CavityField
 
 
 # -----------------------------------------------------------------------------
@@ -88,20 +89,28 @@ class CavitySnapshotDROP(CavitySnapshot):
     ``wleb``
         ``(ngrid,)`` Lebedev quadrature weights.
     ``r_iI0``
-        ``(3, ngrid)`` displacement of each grid point from its anchor atom.
+        ``(ngrid,)`` distance from each grid point to its owner sphere centre.
     ``f``
         ``(ngrid,)`` switching-function values.
     ``rho``
-        ``(ngrid,)`` level-set (density) values at the projected points.
+        ``(ngrid,)`` distance each point was projected from its anchor.
     ``numbering``
         ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
         with ``base = nsph * num_leb``.  The same physical point keeps its id
-        across rebuilds, and the packing lets callers recover both the anchor
-        and the branch index -- points sharing an ``anchor_id`` are branches of
-        one anchor.  Note the base is *not* ``nmax``: ``nmax`` is reset to the
-        anchor count surviving the pre-filter, whereas the base is the full
-        pre-filter grid size, so decode with the Lebedev order the cavity was
-        built with.
+        across rebuilds, which is what makes a surface comparable between
+        geometry steps.
+    ``anchor_id``, ``branch``, ``branch_count``
+        ``(ngrid,)`` the same information unpacked, as moist itself tracks it.
+        Points sharing an ``anchor_id`` are branches of one anchor, ``branch``
+        is one-based, and ``branch_count`` counts the *surviving* branches in
+        the point's anchor group -- so ``branch_count > 1`` marks the branched
+        points and a point whose siblings were filtered away reports one.
+    ``wbranch``
+        ``(ngrid,)`` branch weights, one for an unbranched point.
+
+    Everything the cavity holds beyond these -- curvatures, grid densities,
+    projection diagnostics -- is reachable by name through
+    :meth:`Cavity.results` and :meth:`Cavity.get`.
     """
 
     nmax: int
@@ -111,30 +120,15 @@ class CavitySnapshotDROP(CavitySnapshot):
     f: np.ndarray
     rho: np.ndarray
     numbering: np.ndarray
+    anchor_id: np.ndarray
+    branch: np.ndarray
+    branch_count: np.ndarray
+    wbranch: np.ndarray
 
-    def branching(self, num_leb: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Unpack ``numbering`` into anchor ids, branch indices and counts.
-
-        ``num_leb`` is the Lebedev order the cavity was built with; it cannot
-        be read back from the cavity, which is why it has to be passed in.
-
-        Returns ``(anchor_id, branch, branch_count)``, each ``(ngrid,)``.
-        ``branch`` is one-based, matching moist's own numbering, and
-        ``branch_count`` gives, for every point, how many points share its
-        anchor -- so ``branch_count > 1`` marks the branched points.
-
-        The counts are over *surviving* points, i.e. after the cavity's own
-        weight filter, which is what actually carries area.  A point whose
-        siblings were all filtered away therefore reports a count of one.
-        """
-
-        base = self.nsph * int(num_leb)
-        anchor_id = self.numbering % base
-        branch = self.numbering // base + 1
-        _, inverse, counts = np.unique(
-            anchor_id, return_inverse=True, return_counts=True
-        )
-        return anchor_id, branch, counts[inverse]
+    @property
+    def branched(self) -> np.ndarray:
+        """``(ngrid,)`` mask of points sharing an anchor with another point."""
+        return self.branch_count > 1
 
 
 @dataclass(frozen=True)
@@ -490,6 +484,45 @@ class Cavity(ABC):
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         """Wrap the model-owned native copy without taking update ownership."""
 
+    def fields(self) -> tuple[library.CavityField, ...]:
+        """Describe every result this cavity currently holds.
+
+        The list is the cavity's own declaration, so it covers whichever type
+        this is and omits optional properties that were never computed.  Read
+        it again after an update; a rebuild changes the extents.
+        """
+        self._require_updated()
+        return library.list_cavity_fields(self._handle)
+
+    def get(self, name: str) -> np.ndarray:
+        """Return one named cavity result, using moist's own name for it.
+
+        Names not carried by :meth:`snapshot` are reachable here -- ``k1``,
+        ``KM``, ``rho_grid``, ``phi0`` and the rest.  A field the cavity does
+        not currently hold raises; an optional property that was not requested
+        is absent rather than zero.
+
+        Each call copies afresh out of the native arrays, so the result is
+        writable -- unlike the snapshot's, which back a cached value.
+        """
+        self._require_updated()
+        return library.get_cavity_field(self._handle, name)
+
+    def describe(self, name: str) -> str:
+        """Return moist's one-line description of a named result."""
+        self._require_updated()
+        return library.get_cavity_field_about(self._handle, name)
+
+    def results(self, names: Optional[Iterable[str]] = None) -> dict:
+        """Return the cavity's named results as a ``{name: value}`` mapping.
+
+        With ``names`` omitted this reads everything the cavity holds, which is
+        the general form of :meth:`snapshot`: the snapshot is a typed value for
+        the fields most callers want, this is the whole declared set.
+        """
+        self._require_updated()
+        return library.get_cavity_fields(self._handle, names)
+
     @property
     def cavity(self) -> CavitySnapshot:
         """Compatibility alias for :meth:`snapshot`."""
@@ -584,6 +617,24 @@ class CavityISwiG(_CavityGenericBase):
         )
 
 
+#: DROP fields the typed snapshot carries on top of the generic results.
+#: Everything else the cavity declares stays reachable through
+#: :meth:`Cavity.results`.
+_DROP_SNAPSHOT_FIELDS = (
+    "nmax",
+    "normal0",
+    "wleb",
+    "r_iI0",
+    "f",
+    "rho",
+    "numbering",
+    "anchor_id",
+    "branch",
+    "branch_count",
+    "wbranch",
+)
+
+
 class _CavityDROPBase(Cavity):
     """Shared behaviour for standalone and model-owned DROP cavities."""
 
@@ -591,9 +642,9 @@ class _CavityDROPBase(Cavity):
 
     def _read_snapshot(self) -> CavitySnapshotDROP:
         generic = library.get_cavity_results(self._handle)
-        drop = library.get_drop_specific(self._handle, ngrid=generic["ngrid"])
-        numbering = library.get_drop_numbering(self._handle, ngrid=generic["ngrid"])
-        return CavitySnapshotDROP(**generic, **drop, numbering=numbering)
+        drop = library.get_cavity_fields(self._handle, _DROP_SNAPSHOT_FIELDS)
+        drop["nmax"] = int(drop["nmax"])
+        return CavitySnapshotDROP(**generic, **drop)
 
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         return _CavityDROPBorrowed(handle, self)

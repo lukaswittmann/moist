@@ -54,6 +54,49 @@ static inline double gto_s_norm(double alpha)
     return pow(2.0 * alpha / acos(-1.0), 0.75);
 }
 
+/* Read one named cavity field, reporting rather than aborting on failure.
+ *
+ * The field API is self-describing: moist_get_cavity_field_info hands out the
+ * element count, which is what the accessor wants as its capacity. These
+ * wrappers take the count the caller already knows, so a mismatch with the
+ * cavity is caught by the capacity check on the moist side. */
+static int read_field_real(moist_error error, moist_cavity cav, const char* name,
+                           int cap, double* values)
+{
+    moist_get_cavity_field_real(error, cav, name, cap, values);
+    if (moist_check_error(error)) {
+        printf("  Error: cannot read field '%s'\n", name);
+        show_error(error);
+        return 1;
+    }
+    return 0;
+}
+
+static int read_field_int(moist_error error, moist_cavity cav, const char* name,
+                          int cap, int* values)
+{
+    moist_get_cavity_field_int(error, cav, name, cap, values);
+    if (moist_check_error(error)) {
+        printf("  Error: cannot read field '%s'\n", name);
+        show_error(error);
+        return 1;
+    }
+    return 0;
+}
+
+/* The DROP fields a caller most often wants, read in one go by name. */
+static int read_drop_fields(moist_error error, moist_cavity cav, int ngrid,
+                            int* nmax, double* normal, double* wleb,
+                            double* r_iI0, double* f, double* rho)
+{
+    return read_field_int(error, cav, "nmax", 1, nmax)
+        || read_field_real(error, cav, "normal0", 3 * ngrid, normal)
+        || read_field_real(error, cav, "wleb", ngrid, wleb)
+        || read_field_real(error, cav, "r_iI0", ngrid, r_iI0)
+        || read_field_real(error, cav, "f", ngrid, f)
+        || read_field_real(error, cav, "rho", ngrid, rho);
+}
+
 /* Agreement between two independently summed results, measured relative to the
  * magnitude involved.*/
 static int agrees_to(double a, double b, double rel_tol)
@@ -241,12 +284,8 @@ int test_drop_cavity(void)
         goto cleanup;
     }
 
-    // Get DROP-specific data (Tier 2 - only works for DROP cavities)
-    moist_get_drop_specific(error, cav, ngrid, &nmax,
-                            normal, wleb, r_iI0,
-                            f, rho);
-    if (moist_check_error(error)) {
-        show_error(error);
+    // Get DROP results by name (Tier 2 - works for whatever the cavity holds)
+    if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;
     }
 
@@ -539,10 +578,7 @@ int test_h2o_cavity(void)
     printf("  Cavity surface area: %.4f Bohr²\n", area);
     printf("  Cavity volume: %.4f Bohr³\n", volume);
 
-    moist_get_drop_specific(error, cav, ngrid, &nmax, normal, wleb, r_iI0,
-                            f, rho);
-    if (moist_check_error(error)) {
-        show_error(error);
+    if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;
     }
 
@@ -1130,9 +1166,7 @@ int test_isodensity_internal_cavity(void)
         result = 1;
         goto cleanup;
     }
-    moist_get_drop_numbering(error, cav, ngrid, numbering);
-    if (moist_check_error(error)) {
-        show_error(error);
+    if (read_field_int(error, cav, "numbering", ngrid, numbering)) {
         result = 1;
     } else {
         int numbering_ok = 1;
@@ -1922,6 +1956,200 @@ cleanup:
  * zero double, nor a valid bool. */
 #define CAPACITY_SENTINEL 0xA5
 
+/* The named result field API.
+ *
+ * This is the general way to read a cavity: enumerate what it holds, then pull
+ * fields by name. It replaces the per-field entry points, and it is what lets a
+ * caller identify branched points without re-deriving anything -- anchor_id,
+ * branch and branch_count come straight from the cavity, which is where they
+ * are maintained. */
+int test_cavity_fields(void)
+{
+    printf("\n=== Test: named cavity result fields ===\n");
+
+    moist_error error = moist_new_error();
+    moist_structure mol = NULL;
+    moist_cavity cav = NULL;
+    int result = 1;
+    int* numbering = NULL;
+    int* anchor_id = NULL;
+    int* branch = NULL;
+    int* branch_count = NULL;
+    bool* converged = NULL;
+    bool* converged2 = NULL;
+
+    mol = make_h2o(error);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    cav = moist_new_drop_cavity(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                NULL, NULL, NULL, NULL, NULL, NULL);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    moist_update_cavity(error, cav, mol);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    int ngrid = 0, nsph = 0;
+    moist_get_cavity_sizes(error, cav, &ngrid, &nsph);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    int nfield = 0;
+    moist_get_cavity_field_count(error, cav, &nfield);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+    printf("  Cavity declares %d fields\n", nfield);
+    if (nfield <= 0) {
+        printf("  FAIL: a built cavity declares no fields\n");
+        goto cleanup;
+    }
+
+    /* Every declared field has to describe itself consistently: the reported
+     * count is what an accessor writes, so it must equal the product of dims. */
+    int saw_numbering = 0, saw_xyz = 0;
+    for (int i = 0; i < nfield; i++) {
+        char name[64] = {0};
+        int dtype = 0, rank = 0, count = 0;
+        int dims[MOIST_FIELD_MAX_RANK] = {0};
+
+        moist_get_cavity_field_info(error, cav, i, (int)sizeof(name), name,
+                                    &dtype, &rank, dims, &count);
+        if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+        int expect = 1;
+        for (int d = 0; d < rank; d++) expect *= dims[d];
+        if (count != expect) {
+            printf("  FAIL: field '%s' reports count %d for shape product %d\n",
+                   name, count, expect);
+            goto cleanup;
+        }
+        if (dtype != MOIST_FIELD_REAL && dtype != MOIST_FIELD_INT &&
+            dtype != MOIST_FIELD_BOOL) {
+            printf("  FAIL: field '%s' reports unknown type tag %d\n", name, dtype);
+            goto cleanup;
+        }
+        if (strcmp(name, "numbering") == 0) saw_numbering = 1;
+        if (strcmp(name, "xyz") == 0) {
+            saw_xyz = 1;
+            if (rank != 2 || dims[0] != 3 || dims[1] != ngrid) {
+                printf("  FAIL: xyz declared as rank %d (%d, %d)\n",
+                       rank, dims[0], dims[1]);
+                goto cleanup;
+            }
+        }
+    }
+    if (!saw_xyz || !saw_numbering) {
+        printf("  FAIL: cavity does not declare xyz and numbering\n");
+        goto cleanup;
+    }
+
+    char about[256] = {0};
+    moist_get_cavity_field_about(error, cav, "branch_count", (int)sizeof(about), about);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+    printf("  branch_count: %s\n", about);
+
+    /* The branching data the cavity maintains, read directly. */
+    numbering = (int*)malloc((size_t)ngrid * sizeof(int));
+    anchor_id = (int*)malloc((size_t)ngrid * sizeof(int));
+    branch = (int*)malloc((size_t)ngrid * sizeof(int));
+    branch_count = (int*)malloc((size_t)ngrid * sizeof(int));
+    if (!numbering || !anchor_id || !branch || !branch_count) {
+        printf("  Error: memory allocation failed\n");
+        goto cleanup;
+    }
+
+    int num_leb = 0;
+    if (read_field_int(error, cav, "num_leb", 1, &num_leb) ||
+        read_field_int(error, cav, "numbering", ngrid, numbering) ||
+        read_field_int(error, cav, "anchor_id", ngrid, anchor_id) ||
+        read_field_int(error, cav, "branch", ngrid, branch) ||
+        read_field_int(error, cav, "branch_count", ngrid, branch_count)) {
+        goto cleanup;
+    }
+
+    /* numbering is the packing of the other two, so the cavity's own arrays
+     * and the packed id have to agree point for point. */
+    int nbranched = 0;
+    for (int i = 0; i < ngrid; i++) {
+        const int base = nsph * num_leb;
+        if (numbering[i] != anchor_id[i] + base * (branch[i] - 1)) {
+            printf("  FAIL: numbering[%d] = %d disagrees with anchor %d branch %d\n",
+                   i, numbering[i], anchor_id[i], branch[i]);
+            goto cleanup;
+        }
+        if (branch[i] < 1 || branch_count[i] < 1) {
+            printf("  FAIL: point %d has branch %d of %d\n",
+                   i, branch[i], branch_count[i]);
+            goto cleanup;
+        }
+        if (branch_count[i] > 1) nbranched++;
+    }
+    printf("  %d of %d points are branched\n", nbranched, ngrid);
+
+    /* The logical accessor, the third of the three. Every value it can return
+     * is also a legal seed, so a buffer it never touched would pass unnoticed;
+     * reading into two oppositely seeded buffers proves it wrote every entry. */
+    converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
+    converged2 = (bool*)malloc((size_t)ngrid * sizeof(bool));
+    if (!converged || !converged2) {
+        printf("  Error: memory allocation failed\n");
+        goto cleanup;
+    }
+    memset(converged, 0, (size_t)ngrid * sizeof(bool));
+    memset(converged2, 1, (size_t)ngrid * sizeof(bool));
+
+    moist_get_cavity_field_bool(error, cav, "converged", ngrid, converged);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+    moist_get_cavity_field_bool(error, cav, "converged", ngrid, converged2);
+    if (moist_check_error(error)) { show_error(error); goto cleanup; }
+
+    int nconverged = 0;
+    for (int i = 0; i < ngrid; i++) {
+        if (converged[i] != converged2[i]) {
+            printf("  FAIL: converged[%d] depends on the seed of the buffer\n", i);
+            goto cleanup;
+        }
+        if (converged[i]) nconverged++;
+    }
+    printf("  %d of %d points converged\n", nconverged, ngrid);
+
+    /* A name the cavity does not hold is an error, never a buffer of zeros. */
+    double probe = 12345.0;
+    moist_get_cavity_field_real(error, cav, "not_a_field", 1, &probe);
+    if (!moist_check_error(error)) {
+        printf("  FAIL: an unknown field name was accepted\n");
+        goto cleanup;
+    }
+    if (probe != 12345.0) {
+        printf("  FAIL: a rejected field read wrote into the buffer\n");
+        goto cleanup;
+    }
+    moist_delete_error(&error);
+    error = moist_new_error();
+
+    /* Same for a field whose optional property was never requested: the
+     * default cavity computes no curvature, so k1 is absent rather than zero. */
+    moist_get_cavity_field_real(error, cav, "k1", 1, &probe);
+    if (!moist_check_error(error)) {
+        printf("  FAIL: a field that was never computed was handed out\n");
+        goto cleanup;
+    }
+    if (probe != 12345.0) {
+        printf("  FAIL: an uncomputed field read wrote into the buffer\n");
+        goto cleanup;
+    }
+    moist_delete_error(&error);
+    error = moist_new_error();
+
+    result = 0;
+    printf("  Named field API behaved as declared\n");
+
+cleanup:
+    free(numbering); free(anchor_id); free(branch); free(branch_count);
+    free(converged); free(converged2);
+    moist_delete_cavity(&cav);
+    moist_delete_structure(&mol);
+    moist_delete_error(&error);
+    return result;
+}
+
 static void fill_sentinel(void* p, size_t nbytes)
 {
     memset(p, CAPACITY_SENTINEL, nbytes);
@@ -2077,19 +2305,15 @@ int test_capacity_validation(void)
     }
 
     if (result == 0) {
-        fill_sentinel(normal, n_xyz); fill_sentinel(wleb, n_a);
-        fill_sentinel(r_iI0, n_a); fill_sentinel(f, n_a); fill_sentinel(rho, n_a);
+        fill_sentinel(normal, n_xyz);
 
-        moist_get_drop_specific(error, cav, short_ngrid, &nmax,
-                                normal, wleb, r_iI0, f, rho);
+        moist_get_cavity_field_real(error, cav, "normal0", 3 * short_ngrid, normal);
         if (!moist_check_error(error)) {
-            printf("  FAIL: get_drop_specific accepted a short capacity\n");
+            printf("  FAIL: get_cavity_field_real accepted a short capacity\n");
             result = 1;
         } else {
-            if (!sentinel_intact(normal, n_xyz) || !sentinel_intact(wleb, n_a) ||
-                !sentinel_intact(r_iI0, n_a) || !sentinel_intact(f, n_a) ||
-                !sentinel_intact(rho, n_a)) {
-                printf("  FAIL: get_drop_specific wrote into a rejected buffer\n");
+            if (!sentinel_intact(normal, n_xyz)) {
+                printf("  FAIL: get_cavity_field_real wrote into a rejected buffer\n");
                 result = 1;
             }
             moist_delete_error(&error);
@@ -2100,13 +2324,70 @@ int test_capacity_validation(void)
     if (result == 0) {
         fill_sentinel(numbering, n_owner);
 
-        moist_get_drop_numbering(error, cav, short_ngrid, numbering);
+        moist_get_cavity_field_int(error, cav, "numbering", short_ngrid, numbering);
         if (!moist_check_error(error)) {
-            printf("  FAIL: get_drop_numbering accepted a short capacity\n");
+            printf("  FAIL: get_cavity_field_int accepted a short capacity\n");
             result = 1;
         } else {
             if (!sentinel_intact(numbering, n_owner)) {
-                printf("  FAIL: get_drop_numbering wrote into a rejected buffer\n");
+                printf("  FAIL: get_cavity_field_int wrote into a rejected buffer\n");
+                result = 1;
+            }
+            moist_delete_error(&error);
+            error = moist_new_error();
+        }
+    }
+
+    if (result == 0) {
+        fill_sentinel(converged, n_conv);
+
+        moist_get_cavity_field_bool(error, cav, "converged", short_ngrid, converged);
+        if (!moist_check_error(error)) {
+            printf("  FAIL: get_cavity_field_bool accepted a short capacity\n");
+            result = 1;
+        } else {
+            if (!sentinel_intact(converged, n_conv)) {
+                printf("  FAIL: get_cavity_field_bool wrote into a rejected buffer\n");
+                result = 1;
+            }
+            moist_delete_error(&error);
+            error = moist_new_error();
+        }
+    }
+
+    /* Reading a real field through the logical accessor must be refused too.
+     * The tag check is not just contract hygiene here: the payload the accessor
+     * would copy out is the unallocated one, so this guard is what keeps a
+     * mistyped read from being a memory error. */
+    if (result == 0) {
+        fill_sentinel(converged, n_conv);
+
+        moist_get_cavity_field_bool(error, cav, "wleb", ngrid, converged);
+        if (!moist_check_error(error)) {
+            printf("  FAIL: get_cavity_field_bool accepted a real-valued field\n");
+            result = 1;
+        } else {
+            if (!sentinel_intact(converged, n_conv)) {
+                printf("  FAIL: get_cavity_field_bool wrote into a rejected buffer\n");
+                result = 1;
+            }
+            moist_delete_error(&error);
+            error = moist_new_error();
+        }
+    }
+
+    /* Reading a real field through the integer accessor must be refused too:
+     * the type tag is part of the contract, not a hint. */
+    if (result == 0) {
+        fill_sentinel(numbering, n_owner);
+
+        moist_get_cavity_field_int(error, cav, "wleb", ngrid, numbering);
+        if (!moist_check_error(error)) {
+            printf("  FAIL: get_cavity_field_int accepted a real-valued field\n");
+            result = 1;
+        } else {
+            if (!sentinel_intact(numbering, n_owner)) {
+                printf("  FAIL: get_cavity_field_int wrote into a rejected buffer\n");
                 result = 1;
             }
             moist_delete_error(&error);
@@ -2221,6 +2502,7 @@ static const struct {
     {"isodensity_callback_third_derivative", test_isodensity_callback_third_derivative},
     {"isodensity_callback_failure",        test_isodensity_callback_failure},
     {"update_drop_cavity_keeps_params",    test_update_drop_cavity_keeps_params},
+    {"cavity_fields",                      test_cavity_fields},
     {"capacity_validation",                test_capacity_validation},
 };
 

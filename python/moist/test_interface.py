@@ -162,6 +162,137 @@ def test_public_cavity_types_accept_their_optional_arguments(
     assert np.isfinite(result.volume)
 
 
+@pytest.fixture
+def branching_cross() -> Structure:
+    """Five-carbon cross whose concave seams branch at ``proj_level=7``.
+
+    The same fixture the Fortran suite uses (``get_test_cross``); the default
+    projection level finds no second solution on it, which is why the branching
+    tests below raise the level rather than the geometry.
+    """
+
+    aatoau = 1.8897261246257702
+    return Structure(
+        np.array([6, 6, 6, 6, 6]),
+        np.array(
+            [
+                [0.00, 4.21, 0.00],
+                [0.00, 0.00, 4.22],
+                [0.00, -4.18, 0.00],
+                [0.00, 0.00, -4.15],
+                [0.02, 0.10, -0.20],
+            ]
+        )
+        * aatoau,
+    )
+
+
+def test_cavity_declares_its_own_results(
+    numbers: np.ndarray, positions: np.ndarray
+) -> None:
+    """Every declared field describes itself well enough to be read blind."""
+    cavity = CavityDROPSvdW()
+    cavity.update(Structure(numbers, positions))
+
+    fields = cavity.fields()
+    assert fields
+
+    results = cavity.results()
+    assert set(results) == {field.name for field in fields}
+
+    for field in fields:
+        value = results[field.name]
+        assert np.shape(value) == field.shape
+        assert np.asarray(value).dtype == field.dtype
+        assert cavity.describe(field.name)
+
+
+def test_named_results_agree_with_the_snapshot(
+    numbers: np.ndarray, positions: np.ndarray
+) -> None:
+    """The typed snapshot is a view of the same declarations, not a second read."""
+    cavity = CavityDROPSvdW()
+    cavity.update(Structure(numbers, positions))
+
+    snapshot = cavity.snapshot()
+    results = cavity.results()
+
+    assert results["ngrid"] == snapshot.ngrid
+    assert results["nsph"] == snapshot.nsph
+    assert results["area"] == approx(snapshot.area)
+    assert np.array_equal(results["owner"], snapshot.owner)
+    assert np.array_equal(results["xyz"], snapshot.xyz)
+    assert results["xyz"].shape == (3, snapshot.ngrid)
+    assert np.array_equal(results["numbering"], snapshot.numbering)
+    assert np.array_equal(results["branch_count"], snapshot.branch_count)
+
+
+def test_uncomputed_results_are_absent_rather_than_zero(
+    numbers: np.ndarray, positions: np.ndarray
+) -> None:
+    """A property that was never requested must not read back as zeros."""
+    structure = Structure(numbers, positions)
+
+    plain = CavityDROPSvdW()
+    plain.update(structure)
+    assert "k1" not in {field.name for field in plain.fields()}
+    with raises(KeyError, match="k1"):
+        plain.get("k1")
+
+    fine = CavityDROPSvdW(do_fine=True)
+    fine.update(structure)
+    curvature = fine.get("k1")
+    assert curvature.shape == (fine.ngrid,)
+    assert np.isfinite(curvature).all()
+
+    with raises(KeyError, match="not_a_field"):
+        fine.get("not_a_field")
+
+
+def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
+    """Branch data comes from moist's own arrays, not from unpacking an id."""
+    cavity = CavityDROPSvdW(proj_level=7)
+    cavity.update(branching_cross)
+    snapshot = cavity.snapshot()
+
+    assert snapshot.branch.min() == 1
+    assert snapshot.branch.max() > 1, "fixture stopped producing branches"
+    assert snapshot.branched.sum() > 0
+    assert np.array_equal(snapshot.branched, snapshot.branch_count > 1)
+
+    # numbering is the packing of the two, so the arrays and the id agree.
+    base = snapshot.nsph * cavity.get("num_leb")
+    assert np.array_equal(
+        snapshot.numbering, snapshot.anchor_id + base * (snapshot.branch - 1)
+    )
+
+    # Every point in a branched group reports the same group size.
+    for anchor in np.unique(snapshot.anchor_id[snapshot.branched]):
+        group = snapshot.anchor_id == anchor
+        assert snapshot.branch_count[group].min() == group.sum()
+        assert np.array_equal(np.unique(snapshot.branch[group]), snapshot.branch[group])
+
+
+def test_named_results_reach_every_cavity_type(
+    numbers: np.ndarray, positions: np.ndarray
+) -> None:
+    """The field API is a cavity feature, not a DROP one."""
+    cavity = CavityISwiG()
+    cavity.update(Structure(numbers, positions))
+
+    names = {field.name for field in cavity.fields()}
+    assert {"xyz", "a", "owner", "numbering"} <= names
+    assert np.array_equal(cavity.get("owner"), cavity.snapshot().owner)
+
+
+def test_named_results_need_a_built_cavity() -> None:
+    cavity = CavityDROPSvdW()
+    with raises(RuntimeError, match="not been successfully updated"):
+        cavity.fields()
+    with raises(RuntimeError, match="not been successfully updated"):
+        cavity.get("xyz")
+
+
 def test_cavity_drop_is_the_svdw_surface() -> None:
     """The unqualified DROP name is the SvdW cavity, not a distinct surface."""
     assert CavityDROP is CavityDROPSvdW

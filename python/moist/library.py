@@ -2,7 +2,8 @@
 
 import functools
 import inspect
-from typing import Optional
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -764,69 +765,183 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
     }
 
 
-def get_drop_specific(cavity: CavityHandle, ngrid: Optional[int] = None) -> dict:
-    """Return the DROP-specific cavity fields.
+# Element type tags from moist.h; a field is read with the accessor matching its
+# tag. Preprocessing strips the macros before cffi sees them, so the values are
+# mirrored here.
+FIELD_REAL = 1
+FIELD_INT = 2
+FIELD_BOOL = 3
 
-    ``ngrid`` sizes the buffers and is passed on as the array capacity; it has
-    to be at least the cavity's own ngrid, otherwise the C entry point reports
-    an error and writes nothing. Pass ``None`` to read the size from the cavity.
+_FIELD_READER = {
+    FIELD_REAL: ("moist_get_cavity_field_real", np.float64, "double*"),
+    FIELD_INT: ("moist_get_cavity_field_int", np.int32, "int*"),
+    FIELD_BOOL: ("moist_get_cavity_field_bool", np.bool_, "bool*"),
+}
+
+# Matches MOIST_FIELD_MAX_RANK
+_FIELD_MAX_RANK = 2
+
+_FIELD_NAME_CAP = 64
+_FIELD_ABOUT_CAP = 256
+
+
+@dataclass(frozen=True)
+class CavityField:
+    """Shape and type of one readable cavity field.
+
+    ``shape`` is empty for a scalar and otherwise carries the extents in
+    moist's own order, fastest-varying first -- so a ``(3, ngrid)`` array is
+    reported as ``(3, ngrid)`` and read back Fortran-ordered.
     """
 
-    if ngrid is None:
-        ngrid, _ = get_cavity_sizes(cavity)
+    name: str
+    dtype: np.dtype
+    shape: tuple[int, ...]
+    count: int
 
-    nmax = ffi.new("int *")
-    normal0 = np.zeros((3, ngrid), dtype=np.float64, order="F")
-    wleb = np.zeros(ngrid, dtype=np.float64)
-    r_iI0 = np.zeros(ngrid, dtype=np.float64)
-    switch_f = np.zeros(ngrid, dtype=np.float64)
-    rho = np.zeros(ngrid, dtype=np.float64)
 
-    error_check(lib.moist_get_drop_specific)(
+def get_cavity_field_count(cavity: CavityHandle) -> int:
+    """Return how many named result fields the cavity currently holds."""
+
+    nfield = ffi.new("int *")
+    error_check(lib.moist_get_cavity_field_count)(cavity.handle, nfield)
+    return int(nfield[0])
+
+
+def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
+    """Describe the field at ``index``, counting from zero."""
+
+    name = ffi.new(f"char[{_FIELD_NAME_CAP}]")
+    dtype = ffi.new("int *")
+    rank = ffi.new("int *")
+    dims = ffi.new(f"int[{_FIELD_MAX_RANK}]")
+    count = ffi.new("int *")
+
+    error_check(lib.moist_get_cavity_field_info)(
         cavity.handle,
-        ngrid,
-        nmax,
-        _cast("double*", normal0),
-        _cast("double*", wleb),
-        _cast("double*", r_iI0),
-        _cast("double*", switch_f),
-        _cast("double*", rho),
+        int(index),
+        _FIELD_NAME_CAP,
+        name,
+        dtype,
+        rank,
+        dims,
+        count,
     )
 
+    tag = int(dtype[0])
+    if tag not in _FIELD_READER:
+        raise ValueError(f"moist reported an unknown field type tag {tag}")
+
+    return CavityField(
+        name=ffi.string(name).decode(),
+        dtype=np.dtype(_FIELD_READER[tag][1]),
+        shape=tuple(int(dims[i]) for i in range(int(rank[0]))),
+        count=int(count[0]),
+    )
+
+
+def list_cavity_fields(cavity: CavityHandle) -> tuple[CavityField, ...]:
+    """Describe every result the cavity currently holds.
+
+    The list is what the cavity itself declares, so it grows with the cavity
+    type and omits optional properties that were never computed. Read it again
+    after an update: a rebuild changes the extents.
+    """
+
+    return tuple(
+        get_cavity_field_info(cavity, index)
+        for index in range(get_cavity_field_count(cavity))
+    )
+
+
+def get_cavity_field_about(cavity: CavityHandle, name: str) -> str:
+    """Return the one-line description moist attaches to a field."""
+
+    about = ffi.new(f"char[{_FIELD_ABOUT_CAP}]")
+    error_check(lib.moist_get_cavity_field_about)(
+        cavity.handle,
+        _char(name),
+        _FIELD_ABOUT_CAP,
+        about,
+    )
+    return ffi.string(about).decode()
+
+
+def get_cavity_field(
+    cavity: CavityHandle,
+    name: str,
+    info: Optional[CavityField] = None,
+) -> np.ndarray:
+    """Return one named cavity result.
+
+    Rank-2 fields come back Fortran-ordered with moist's own shape. A name the
+    cavity does not currently hold -- unknown, or an optional property that was
+    not requested -- raises rather than returning zeros.
+
+    ``info`` skips the shape lookup when the caller already has a descriptor
+    from :func:`list_cavity_fields`; it has to describe the same cavity state.
+    """
+
+    if info is None:
+        info = _find_cavity_field(cavity, name)
+
+    reader, dtype, ctype = _FIELD_READER[_tag_of(info.dtype)]
+    values = np.zeros(info.count, dtype=dtype)
+    error_check(getattr(lib, reader))(
+        cavity.handle,
+        _char(name),
+        info.count,
+        _cast(ctype, values),
+    )
+
+    if not info.shape:
+        return values[0]
+    return values.reshape(info.shape, order="F")
+
+
+def get_cavity_fields(
+    cavity: CavityHandle,
+    names: Optional[Iterable[str]] = None,
+) -> dict:
+    """Return the named cavity results as a ``{name: value}`` mapping.
+
+    With ``names`` omitted this reads everything the cavity holds; the fields
+    are enumerated once and the descriptors reused, so the mapping is
+    consistent with a single cavity state.
+    """
+
+    fields = list_cavity_fields(cavity)
+    if names is not None:
+        wanted = list(names)
+        known = {field.name: field for field in fields}
+        missing = [name for name in wanted if name not in known]
+        if missing:
+            raise KeyError(
+                "cavity does not hold the field(s) "
+                + ", ".join(repr(name) for name in missing)
+                + "; available: "
+                + ", ".join(field.name for field in fields)
+            )
+        fields = [known[name] for name in wanted]
+
     return {
-        "nmax": int(nmax[0]),
-        "normal0": normal0,
-        "wleb": wleb,
-        "r_iI0": r_iI0,
-        "f": switch_f,
-        "rho": rho,
+        field.name: get_cavity_field(cavity, field.name, info=field)
+        for field in fields
     }
 
 
-def get_drop_numbering(cavity: CavityHandle, ngrid: Optional[int] = None) -> np.ndarray:
-    """Return the stable per-grid-point numbering of a DROP cavity.
+def _find_cavity_field(cavity: CavityHandle, name: str) -> CavityField:
+    for field in list_cavity_fields(cavity):
+        if field.name == name:
+            return field
+    raise KeyError(f"cavity does not hold a field named {name!r}")
 
-    The numbering packs the anchor and the branch index into one integer as
-    ``anchor_id + nmax*(branch - 1)``, so it identifies the same physical
-    surface point across rebuilds and lets callers recover which points are
-    branches of a common anchor.
 
-    ``ngrid`` sizes the buffer and is passed on as the array capacity; pass
-    ``None`` to read the size from the cavity.
-    """
-
-    if ngrid is None:
-        ngrid, _ = get_cavity_sizes(cavity)
-
-    numbering = np.zeros(ngrid, dtype=np.int32)
-
-    error_check(lib.moist_get_drop_numbering)(
-        cavity.handle,
-        ngrid,
-        _cast("int*", numbering),
-    )
-
-    return numbering
+def _tag_of(dtype: np.dtype) -> int:
+    for tag, (_, candidate, _) in _FIELD_READER.items():
+        if dtype == np.dtype(candidate):
+            return tag
+    raise ValueError(f"no moist field accessor for dtype {dtype}")
 
 
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:

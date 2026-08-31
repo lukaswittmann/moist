@@ -7,10 +7,11 @@ module moist_cavity_iswig
    use iso_fortran_env, only: error_unit, output_unit
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type
+   use moist_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
+   use moist_cavity_fields, only: cavity_field_query_type
 
    implicit none
    private
@@ -48,9 +49,31 @@ module moist_cavity_iswig
       !> Contract surface-observable adjoints into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
+      !> Declare the readable results an iSwiG cavity holds
+      procedure :: list_fields => list_cavity_fields_iswig
    end type cavity_type_iswig
 
 contains
+
+   !> Declare the results an iSwiG cavity holds, on top of the generic ones
+   !>
+   !> @param[in]    self   iSwiG cavity instance
+   !> @param[inout] query  Walker collecting or fetching the declarations
+   subroutine list_cavity_fields_iswig(self, query)
+      !> iSwiG cavity instance
+      class(cavity_type_iswig), intent(in) :: self
+      !> Walker collecting or fetching the declarations
+      type(cavity_field_query_type), intent(inout) :: query
+
+      call list_cavity_fields_base(self, query)
+
+      call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
+         & self%num_leb)
+      call query%add_int("numbering", "Stable point id, kept when points are removed (ngrid)", &
+         & self%numbering)
+      call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
+
+   end subroutine list_cavity_fields_iswig
 
    !> Constructor for iSwiG cavity
    !> Initialize an already-declared object; no allocation of the object itself.

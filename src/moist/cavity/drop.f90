@@ -9,9 +9,10 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type
+   use moist_type, only: cavity_type, list_cavity_fields_base
    use moist_channels, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_fields, only: cavity_field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -272,6 +273,8 @@ module moist_cavity_drop
       procedure :: analyze_cavity
       !> Write grid to CSV file for analysis
       procedure :: write_csv_debug => write_cavity_csv_debug
+      !> Declare the readable results a DROP cavity holds
+      procedure :: list_fields => list_cavity_fields_drop
 
       !> Finalizer
       final :: finalize_cavity_drop
@@ -569,10 +572,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Preserve the established DROP-constructor default, which intentionally
-      !> differs from the bare parameter-container initialization.
-      real(wp) :: use_branch_weight_s
-
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
@@ -582,13 +581,10 @@ contains
       end if
 
       !> Parameter setup
-      ! FIXME: This is a poor (temporary) solution for now
-      use_branch_weight_s = 0.0025_wp
-      if (present(branch_weight_s)) use_branch_weight_s = branch_weight_s
       call self%param%new( &
          nleb=nleb, &
          tolerance=tolerance, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-         branch_weight_s=use_branch_weight_s, rho_grid_h=rho_grid_h, &
+         branch_weight_s=branch_weight_s, rho_grid_h=rho_grid_h, &
          wleb_prune_level=wleb_prune_level, &
          error=error)
       if (allocated(error)) return
@@ -1053,6 +1049,76 @@ contains
       write (self%ctx%unit, "(a,1x,a)") "[Info] Wrote cavity grid to", trim(filename)
 
    end subroutine write_cavity_csv_debug
+
+   !* ================================================================================= *!
+   !*                                  Readable results                                 *!
+   !* ================================================================================= *!
+
+   !> Declare the results a DROP cavity holds, on top of the generic ones
+   !>
+   !> Arrays gated by `drop_property_request` are simply not allocated when they
+   !> were not asked for, so they are not declared and a caller asking for one
+   !> gets an error rather than zeros.
+   !>
+   !> @param[in]    self   DROP cavity instance
+   !> @param[inout] query  Walker collecting or fetching the declarations
+   subroutine list_cavity_fields_drop(self, query)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Walker collecting or fetching the declarations
+      type(cavity_field_query_type), intent(inout) :: query
+
+      call list_cavity_fields_base(self, query)
+
+      !> Grid layout and provenance
+      call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
+         & self%param%num_leb)
+      call query%add_int_scalar("nmax", "Anchor points surviving the pre-filter", self%nmax)
+      call query%add_int_scalar("oleb", "Index of the cached Lebedev grid order", self%oleb)
+
+      !> Point identity. `numbering` is the stable id across rebuilds
+      call query%add_int("numbering", "Stable point id, anchor_id + nsph*num_leb*(branch - 1) (ngrid)", &
+         & self%numbering)
+      call query%add_int("anchor_id", "Anchor group id shared by the branches of one point (ngrid)", &
+         & self%anchor_id)
+      call query%add_int("branch", "Branch index within the anchor group, 1 when unbranched (ngrid)", &
+         & self%branch)
+      call query%add_int("branch_count", "Surviving branches in the point's anchor group (ngrid)", &
+         & self%branch_count)
+      call query%add_real("wbranch", "Branch weight, 1 when unbranched (ngrid)", self%wbranch)
+      call query%add_bool("converged", "Whether the projection converged at the point (ngrid)", &
+         & self%converged)
+
+      !> Quadrature and projection geometry
+      call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
+      call query%add_real("anchor_wleb0", "Lebedev quadrature weight of the anchor point (ngrid)", &
+         & self%anchor_wleb0)
+      call query%add_real2("anchorxyz", "Unprojected anchor coordinates, bohr (3, ngrid)", self%anchorxyz)
+      call query%add_real("rho", "Anchor-to-projected-point distance, bohr (ngrid)", self%rho)
+      call query%add_real("r_iI0", "Owner sphere centre to grid point distance, bohr (ngrid)", self%r_iI0)
+      call query%add_real("phi0", "Projection objective value at the point (ngrid)", self%phi0)
+      call query%add_real("lambda0", "Projection Lagrange multiplier at the point (ngrid)", self%lambda0)
+      call query%add_real("cpjac_scal0", "Closest-point Jacobian scaling (ngrid)", self%cpjac_scal0)
+      call query%add_real("rho_scal0", "Grid point density scaling (ngrid)", self%rho_scal0)
+
+      !> Switching functions
+      call query%add_real("w_f0", "Weight switching value per point (ngrid)", self%w_f0)
+      call query%add_real("iswig_f0", "iSwiG switching value per point (ngrid)", self%iswig_f0)
+      call query%add_real("anchor_xi0", "Gaussian width at the anchor point (ngrid)", self%anchor_xi0)
+
+      !> Diagnostics, present only when the matching property was requested
+      call query%add_real("k1", "First principal curvature (ngrid)", self%k1)
+      call query%add_real("k2", "Second principal curvature (ngrid)", self%k2)
+      call query%add_real("KM", "Mean curvature (ngrid)", self%KM)
+      call query%add_real("KG", "Gaussian curvature (ngrid)", self%KG)
+      call query%add_real("rho_grid", "Local grid point density (ngrid)", self%rho_grid)
+      call query%add_real("rho_grid_anchor", "Local grid point density, hard sphere limit (ngrid)", &
+         & self%rho_grid_anchor)
+
+      !> Per-sphere results
+      call query%add_real("vsph", "Volume per sphere, bohr**3 (nsph)", self%vsph)
+
+   end subroutine list_cavity_fields_drop
 
    !* ================================================================================= *!
    !*                                     Finalizer                                     *!

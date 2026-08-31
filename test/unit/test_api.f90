@@ -1,7 +1,8 @@
 !> Defensive-preamble tests for the C API entry points
 module test_api
    use iso_c_binding, only: c_ptr, c_loc, c_null_ptr, c_int, c_double, c_bool, &
-                            c_funptr, c_funloc, c_associated, c_f_pointer
+                            c_funptr, c_funloc, c_associated, c_f_pointer, &
+                            c_char, c_null_char
    use mctc_env_error, only: moist_error_type => error_type
    use moist_api, only: vp_cavity, vp_error
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -133,29 +134,68 @@ module test_api
          real(c_double), intent(out) :: asph(nsph_cap)
       end subroutine moist_get_cavity_results
 
-      subroutine moist_get_drop_specific(verror, vcav, ngrid_cap, nmax, &
-            & normal0, wleb, r_iI0, f, rho) &
-            & bind(C, name="moist_get_drop_specific")
-         import :: c_ptr, c_int, c_double
-         type(c_ptr), value :: verror
-         type(c_ptr), value :: vcav
-         integer(c_int), value :: ngrid_cap
-         integer(c_int), intent(out) :: nmax
-         real(c_double), intent(out) :: normal0(3, ngrid_cap)
-         real(c_double), intent(out) :: wleb(ngrid_cap)
-         real(c_double), intent(out) :: r_iI0(ngrid_cap)
-         real(c_double), intent(out) :: f(ngrid_cap)
-         real(c_double), intent(out) :: rho(ngrid_cap)
-      end subroutine moist_get_drop_specific
-
-      subroutine moist_get_drop_numbering(verror, vcav, ngrid_cap, numbering) &
-            & bind(C, name="moist_get_drop_numbering")
+      subroutine moist_get_cavity_field_count(verror, vcav, nfield) &
+            & bind(C, name="moist_get_cavity_field_count")
          import :: c_ptr, c_int
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
-         integer(c_int), value :: ngrid_cap
-         integer(c_int), intent(out) :: numbering(ngrid_cap)
-      end subroutine moist_get_drop_numbering
+         integer(c_int), intent(out) :: nfield
+      end subroutine moist_get_cavity_field_count
+
+      subroutine moist_get_cavity_field_info(verror, vcav, ifield, name_cap, name, &
+            & dtype, rank, dims, count) &
+            & bind(C, name="moist_get_cavity_field_info")
+         import :: c_ptr, c_int, c_char
+         type(c_ptr), value :: verror
+         type(c_ptr), value :: vcav
+         integer(c_int), value :: ifield
+         integer(c_int), value :: name_cap
+         character(kind=c_char), intent(inout) :: name(*)
+         integer(c_int), intent(out) :: dtype
+         integer(c_int), intent(out) :: rank
+         integer(c_int), intent(out) :: dims(2)
+         integer(c_int), intent(out) :: count
+      end subroutine moist_get_cavity_field_info
+
+      subroutine moist_get_cavity_field_real(verror, vcav, cname, cap, values) &
+            & bind(C, name="moist_get_cavity_field_real")
+         import :: c_ptr, c_int, c_double
+         type(c_ptr), value :: verror
+         type(c_ptr), value :: vcav
+         type(c_ptr), value :: cname
+         integer(c_int), value :: cap
+         real(c_double), intent(out) :: values(cap)
+      end subroutine moist_get_cavity_field_real
+
+      subroutine moist_get_cavity_field_int(verror, vcav, cname, cap, values) &
+            & bind(C, name="moist_get_cavity_field_int")
+         import :: c_ptr, c_int
+         type(c_ptr), value :: verror
+         type(c_ptr), value :: vcav
+         type(c_ptr), value :: cname
+         integer(c_int), value :: cap
+         integer(c_int), intent(out) :: values(cap)
+      end subroutine moist_get_cavity_field_int
+
+      subroutine moist_get_cavity_field_bool(verror, vcav, cname, cap, values) &
+            & bind(C, name="moist_get_cavity_field_bool")
+         import :: c_ptr, c_int, c_bool
+         type(c_ptr), value :: verror
+         type(c_ptr), value :: vcav
+         type(c_ptr), value :: cname
+         integer(c_int), value :: cap
+         logical(c_bool), intent(out) :: values(cap)
+      end subroutine moist_get_cavity_field_bool
+
+      subroutine moist_get_cavity_field_about(verror, vcav, cname, about_cap, about) &
+            & bind(C, name="moist_get_cavity_field_about")
+         import :: c_ptr, c_int, c_char
+         type(c_ptr), value :: verror
+         type(c_ptr), value :: vcav
+         type(c_ptr), value :: cname
+         integer(c_int), value :: about_cap
+         character(kind=c_char), intent(inout) :: about(*)
+      end subroutine moist_get_cavity_field_about
 
       subroutine moist_assemble_amat(verror, vcav, ngrid_cap, amat0, xi) &
             & bind(C, name="moist_assemble_amat")
@@ -231,6 +271,14 @@ contains
                   new_unittest("get_drop_results_null_inner", test_drop_results_null_inner), &
                   new_unittest("get_cavity_sizes_null_handle", test_cavity_sizes_null_handle), &
                   new_unittest("get_cavity_sizes_null_inner", test_cavity_sizes_null_inner), &
+                  new_unittest("cavity_field_null_name", test_cavity_field_null_name), &
+                  new_unittest("cavity_field_null_handle", test_cavity_field_null_handle), &
+                  new_unittest("cavity_field_null_inner", test_cavity_field_null_inner), &
+                  new_unittest("cavity_field_empty_name", test_cavity_field_empty_name), &
+                  new_unittest("cavity_field_index_out_of_range", test_cavity_field_index_range), &
+                  new_unittest("cavity_field_name_buffer_too_small", test_cavity_field_name_buffer), &
+                  new_unittest("cavity_field_about_buffer_too_small", test_cavity_field_about_buffer), &
+                  new_unittest("cavity_field_bool_accessor", test_cavity_field_bool), &
                   new_unittest("array_capacity_too_small", test_capacity_too_small), &
                   new_unittest("array_capacity_oversized", test_capacity_oversized), &
                   new_unittest("isodensity_callback_fails_first_call", test_iso_callback_fails_first), &
@@ -427,6 +475,460 @@ contains
 
    end subroutine drop_water_cavity
 
+   !> Null-terminate a Fortran string into a buffer c_loc can be taken of.
+   function c_string(text) result(buffer)
+      !> Text to hand to a C entry point
+      character(len=*), intent(in) :: text
+      !> Null-terminated copy
+      character(kind=c_char), allocatable :: buffer(:)
+      integer :: ichar
+
+      allocate (buffer(len(text) + 1))
+      do ichar = 1, len(text)
+         buffer(ichar) = text(ichar:ichar)
+      end do
+      buffer(len(text) + 1) = c_null_char
+
+   end function c_string
+
+   !> A null field name is reported rather than dereferenced.
+   !>
+   !> The name crosses as a bare `const char*`, so it is the one argument of the
+   !> field API with no capacity to validate it -- the entry point has to scan
+   !> it, and a caller that passes NULL must get an error instead of a walk off
+   !> address zero.
+   subroutine test_cavity_field_null_name(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      real(c_double) :: values(1)
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      values = -12345.0_c_double
+      call moist_get_cavity_field_real(verror, vcav, c_null_ptr, 1_c_int, values)
+      call check_api_error(error, err, "Field name is missing")
+
+      if (.not. allocated(error)) then
+         if (any(values /= -12345.0_c_double)) &
+            call test_failed(error, "get_cavity_field_real wrote for a null name")
+      end if
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_null_name
+
+   !* ================================================================================= *!
+   !*                          Named field API defensive guards                         *!
+   !* ================================================================================= *!
+
+   !> Position of the null terminator in a C string buffer, i.e. its length.
+   pure integer function c_string_len(buffer) result(nchar)
+      !> Null-terminated buffer written by a C entry point
+      character(kind=c_char), intent(in) :: buffer(:)
+      integer :: ichar
+
+      nchar = size(buffer)
+      do ichar = 1, size(buffer)
+         if (buffer(ichar) == c_null_char) then
+            nchar = ichar - 1
+            return
+         end if
+      end do
+
+   end function c_string_len
+
+   !> A missing cavity handle is reported by the field API, not dereferenced.
+   !>
+   !> `resolve_field_cavity` is the shared preamble of all six field entry
+   !> points, so this single guard is what stands between every named read and a
+   !> walk off a null handle.  Both an enumerating and a fetching entry point
+   !> are exercised because they reach the guard by different routes.
+   subroutine test_cavity_field_null_handle(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      character(kind=c_char), allocatable, target :: name_wleb(:)
+      integer(c_int) :: nfield
+      real(c_double) :: values(1)
+
+      allocate (err)
+      name_wleb = c_string("wleb")
+
+      nfield = -1_c_int
+      call moist_get_cavity_field_count(c_loc(err), c_null_ptr, nfield)
+      call check_api_error(error, err, "Cavity handle is missing")
+      if (.not. allocated(error)) then
+         if (nfield /= 0_c_int) &
+            call test_failed(error, "get_cavity_field_count left nfield undefined")
+      end if
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+      if (.not. allocated(error)) then
+         values = -12345.0_c_double
+         call moist_get_cavity_field_real(c_loc(err), c_null_ptr, c_loc(name_wleb), &
+                                          1_c_int, values)
+         call check_api_error(error, err, "Cavity handle is missing")
+      end if
+      if (.not. allocated(error)) then
+         if (any(values /= -12345.0_c_double)) &
+            call test_failed(error, "get_cavity_field_real wrote for a missing handle")
+      end if
+
+      deallocate (err)
+
+   end subroutine test_cavity_field_null_handle
+
+   !> A cavity handle with a null inner pointer is reported, not dereferenced.
+   !>
+   !> This is the state a host holds between `moist_new_*_cavity` and the first
+   !> `moist_update_cavity`: the handle is real, the cavity behind it is not.
+   subroutine test_cavity_field_null_inner(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
+      character(kind=c_char), allocatable, target :: name_wleb(:)
+      integer(c_int) :: nfield
+      real(c_double) :: values(1)
+
+      allocate (err)
+      allocate (cav)
+      name_wleb = c_string("wleb")
+
+      nfield = -1_c_int
+      call moist_get_cavity_field_count(c_loc(err), c_loc(cav), nfield)
+      call check_api_error(error, err, "Cavity is not initialized")
+      if (.not. allocated(error)) then
+         if (nfield /= 0_c_int) &
+            call test_failed(error, "get_cavity_field_count left nfield undefined")
+      end if
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+      if (.not. allocated(error)) then
+         values = -12345.0_c_double
+         call moist_get_cavity_field_real(c_loc(err), c_loc(cav), c_loc(name_wleb), &
+                                          1_c_int, values)
+         call check_api_error(error, err, "Cavity is not initialized")
+      end if
+      if (.not. allocated(error)) then
+         if (any(values /= -12345.0_c_double)) &
+            call test_failed(error, "get_cavity_field_real wrote for an empty cavity")
+      end if
+
+      deallocate (cav)
+      deallocate (err)
+
+   end subroutine test_cavity_field_null_inner
+
+   !> An empty field name is rejected rather than matched against a declaration.
+   !>
+   !> A bare `""` survives the null-pointer guard and reaches the name scan, so
+   !> without its own check it would be compared against every declared name --
+   !> harmless today, but only because no cavity declares an empty name.
+   subroutine test_cavity_field_empty_name(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      character(kind=c_char), allocatable, target :: name_empty(:)
+      real(c_double) :: values(1)
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      name_empty = c_string("")
+      values = -12345.0_c_double
+      call moist_get_cavity_field_real(verror, vcav, c_loc(name_empty), 1_c_int, values)
+      call check_api_error(error, err, "Field name is empty")
+
+      if (.not. allocated(error)) then
+         if (any(values /= -12345.0_c_double)) &
+            call test_failed(error, "get_cavity_field_real wrote for an empty name")
+      end if
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_empty_name
+
+   !> A field index outside the reported count is refused, and the descriptor
+   !> outputs come back cleared.
+   !>
+   !> The index is the one field-API argument the caller derives from an earlier
+   !> call, so a stale count is the realistic way to get here.  Unchecked it
+   !> would index `query%info` at 0 or past `nfield`; the cleared outputs matter
+   !> because a caller that ignores the error must not read a plausible-looking
+   !> descriptor out of the buffers.
+   subroutine test_cavity_field_index_range(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph, nfield
+      integer(c_int) :: dtype, rank, dims(2), count
+      character(kind=c_char), target :: name(64)
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      call moist_get_cavity_field_count(verror, vcav, nfield)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "get_cavity_field_count failed: "//err%ptr%message)
+      else if (nfield <= 0_c_int) then
+         call test_failed(error, "A built cavity declares no fields")
+      end if
+
+      if (.not. allocated(error)) then
+         call probe_field_info(verror, vcav, -1_c_int, name, dtype, rank, dims, count)
+         call check_api_error(error, err, "Field index out of range")
+      end if
+      if (.not. allocated(error)) &
+         call check_cleared_info(error, "negative index", name, dtype, rank, dims, count)
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+      if (.not. allocated(error)) then
+         call probe_field_info(verror, vcav, nfield, name, dtype, rank, dims, count)
+         call check_api_error(error, err, "Field index out of range")
+      end if
+      if (.not. allocated(error)) &
+         call check_cleared_info(error, "one past the end", name, dtype, rank, dims, count)
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_index_range
+
+   !> Seed the descriptor buffers with detectable values, then describe a field.
+   subroutine probe_field_info(verror, vcav, ifield, name, dtype, rank, dims, count, name_cap)
+      !> Opaque error and cavity handles
+      type(c_ptr), intent(in) :: verror, vcav
+      !> Field position to describe
+      integer(c_int), intent(in) :: ifield
+      !> Name buffer, seeded so any write is visible
+      character(kind=c_char), intent(inout) :: name(:)
+      !> Descriptor outputs, seeded so a cleared value is distinguishable
+      integer(c_int), intent(out) :: dtype, rank, dims(2), count
+      !> Capacity to declare, defaulting to the whole buffer
+      integer(c_int), intent(in), optional :: name_cap
+
+      integer(c_int) :: cap
+
+      cap = int(size(name), c_int)
+      if (present(name_cap)) cap = name_cap
+
+      name = "Z"
+      dtype = -1_c_int
+      rank = -1_c_int
+      dims = -1_c_int
+      count = -1_c_int
+      call moist_get_cavity_field_info(verror, vcav, ifield, cap, &
+                                       name, dtype, rank, dims, count)
+
+   end subroutine probe_field_info
+
+   !> Assert a rejected describe left the descriptor cleared and the name unwritten.
+   subroutine check_cleared_info(error, what, name, dtype, rank, dims, count)
+      type(error_type), allocatable, intent(out) :: error
+      !> Case being checked, used in the failure message
+      character(len=*), intent(in) :: what
+      !> Name buffer that must still carry its seed
+      character(kind=c_char), intent(in) :: name(:)
+      !> Descriptor outputs that must have been cleared before the guard
+      integer(c_int), intent(in) :: dtype, rank, dims(2), count
+
+      if (dtype /= 0_c_int .or. rank /= 0_c_int .or. count /= 0_c_int) then
+         call test_failed(error, "get_cavity_field_info left a descriptor for "//what)
+         return
+      end if
+      if (any(dims /= 1_c_int)) then
+         call test_failed(error, "get_cavity_field_info left extents for "//what)
+         return
+      end if
+      if (any(name /= "Z")) &
+         call test_failed(error, "get_cavity_field_info wrote a name for "//what)
+
+   end subroutine check_cleared_info
+
+   !> A name buffer one byte short is refused, not filled with a truncated name.
+   !>
+   !> moist.h promises the oversized name is "rejected rather than truncated",
+   !> which is the difference between a caller noticing and a caller silently
+   !> looking up a field whose name lost its last character.  The boundary is
+   !> the whole point, so both sides of it are exercised.
+   subroutine test_cavity_field_name_buffer(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      integer(c_int) :: dtype, rank, dims(2), count
+      character(kind=c_char), target :: name(64)
+      integer :: nchar
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      !> Learn the first field's name length from a call that has room for it
+      call probe_field_info(verror, vcav, 0_c_int, name, dtype, rank, dims, count)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "get_cavity_field_info failed: "//err%ptr%message)
+      end if
+      nchar = 0
+      if (.not. allocated(error)) then
+         nchar = c_string_len(name)
+         if (nchar <= 0) call test_failed(error, "First field reported an empty name")
+      end if
+
+      !> A capacity with no room for the terminator has to be refused outright
+      if (.not. allocated(error)) then
+         call probe_field_info(verror, vcav, 0_c_int, name, dtype, rank, dims, count, &
+                               name_cap=int(nchar, c_int))
+         call check_api_error(error, err, "Name buffer too small")
+      end if
+      if (.not. allocated(error)) &
+         call check_cleared_info(error, "a short name buffer", name, dtype, rank, dims, count)
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+      !> One more byte is exactly enough, so the guard is off by nothing
+      if (.not. allocated(error)) then
+         call probe_field_info(verror, vcav, 0_c_int, name, dtype, rank, dims, count, &
+                               name_cap=int(nchar + 1, c_int))
+         if (allocated(err%ptr)) then
+            call test_failed(error, "A name buffer of len+1 was rejected: "//err%ptr%message)
+         else if (c_string_len(name) /= nchar) then
+            call test_failed(error, "get_cavity_field_info truncated a name that fit")
+         end if
+      end if
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_name_buffer
+
+   !> A description buffer one byte short is refused, not truncated.
+   !>
+   !> Same contract as the name buffer, on the one entry point whose payload is
+   !> prose: a silently clipped description is indistinguishable from a short one.
+   subroutine test_cavity_field_about_buffer(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      character(kind=c_char), allocatable, target :: name_ngrid(:)
+      character(kind=c_char), target :: about(256)
+      integer :: nchar
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      !> `ngrid` is declared by every cavity, so its description always exists
+      name_ngrid = c_string("ngrid")
+      about = "Z"
+      call moist_get_cavity_field_about(verror, vcav, c_loc(name_ngrid), &
+                                        int(size(about), c_int), about)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "get_cavity_field_about failed: "//err%ptr%message)
+      end if
+      nchar = 0
+      if (.not. allocated(error)) then
+         nchar = c_string_len(about)
+         if (nchar <= 0) call test_failed(error, "Field 'ngrid' reported an empty description")
+      end if
+
+      if (.not. allocated(error)) then
+         about = "Z"
+         call moist_get_cavity_field_about(verror, vcav, c_loc(name_ngrid), &
+                                           int(nchar, c_int), about)
+         call check_api_error(error, err, "Description buffer too small")
+      end if
+      if (.not. allocated(error)) then
+         if (any(about /= "Z")) &
+            call test_failed(error, "get_cavity_field_about wrote into a rejected buffer")
+      end if
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+      if (.not. allocated(error)) then
+         about = "Z"
+         call moist_get_cavity_field_about(verror, vcav, c_loc(name_ngrid), &
+                                           int(nchar + 1, c_int), about)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "A description buffer of len+1 was rejected: "// &
+                             err%ptr%message)
+         else if (c_string_len(about) /= nchar) then
+            call test_failed(error, "get_cavity_field_about truncated a description that fit")
+         end if
+      end if
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_about_buffer
+
+   !> The logical accessor honours the same contract as the other two.
+   !>
+   !> `converged` is the only boolean a cavity declares, so the bool accessor is
+   !> the one branch of `check_field_payload` a C host reaches without a Python
+   !> layer in between.  Its payload is cross-checked against the independent
+   !> `get_cavity_results` path, since every value it can return is also a legal
+   !> seed and a buffer left untouched would otherwise pass unnoticed.
+   subroutine test_cavity_field_bool(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph, out_ngrid, out_nsph
+      real(c_double) :: area, volume
+      real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
+      integer(c_int), allocatable :: owner(:)
+      logical(c_bool), allocatable :: reference(:), values(:)
+      character(kind=c_char), allocatable, target :: name_conv(:), name_wleb(:)
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) return
+
+      name_conv = c_string("converged")
+      name_wleb = c_string("wleb")
+      allocate (xyz(3, ngrid), a(ngrid), owner(ngrid), reference(ngrid))
+      allocate (radii(nsph), asph(nsph), values(ngrid))
+
+      call moist_get_cavity_results(verror, vcav, ngrid, nsph, area, volume, &
+                                    out_ngrid, out_nsph, xyz, a, owner, reference, &
+                                    radii, asph)
+      if (allocated(err%ptr)) &
+         call test_failed(error, "get_cavity_results failed: "//err%ptr%message)
+
+      !> The declared field has to agree with the fixed getter, point for point
+      if (.not. allocated(error)) then
+         values = .not. reference
+         call moist_get_cavity_field_bool(verror, vcav, c_loc(name_conv), ngrid, values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "get_cavity_field_bool failed: "//err%ptr%message)
+         else if (.not. all(values .eqv. reference)) then
+            call test_failed(error, "get_cavity_field_bool disagrees with get_cavity_results")
+         end if
+      end if
+
+      !> A short capacity is refused before a single element is written
+      if (.not. allocated(error)) then
+         values = .false._c_bool
+         call moist_get_cavity_field_bool(verror, vcav, c_loc(name_conv), &
+                                          ngrid - 1_c_int, values)
+         call expect_capacity_error(error, err, "get_cavity_field_bool")
+      end if
+      if (.not. allocated(error)) then
+         if (any(values)) &
+            call test_failed(error, "get_cavity_field_bool wrote into a rejected buffer")
+      end if
+
+      !> Reading a real field through the logical accessor is refused too
+      if (.not. allocated(error)) then
+         values = .false._c_bool
+         call moist_get_cavity_field_bool(verror, vcav, c_loc(name_wleb), ngrid, values)
+         call check_api_error(error, err, "has a different element type")
+      end if
+      if (.not. allocated(error)) then
+         if (any(values)) &
+            call test_failed(error, "get_cavity_field_bool wrote for a real-valued field")
+      end if
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_cavity_field_bool
+
    !> Assert that an entry point rejected an undersized capacity, then clear the
    !> error so the handle can be reused.
    subroutine expect_capacity_error(error, err, routine)
@@ -455,11 +957,12 @@ contains
       type(vp_error), pointer :: err
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph, cap
-      integer(c_int) :: out_ngrid, out_nsph, nmax
+      integer(c_int) :: out_ngrid, out_nsph
       real(c_double) :: area, volume
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
-      real(c_double), allocatable :: normal0(:, :), wleb(:), r_iI0(:), f(:), rho(:)
+      real(c_double), allocatable :: wleb(:)
       real(c_double), allocatable :: amat0(:, :), xi(:)
+      character(kind=c_char), allocatable, target :: name_wleb(:), name_numbering(:)
       integer(c_int), allocatable :: owner(:), numbering(:)
       logical(c_bool), allocatable :: converged(:)
       real(c_double), parameter :: sentinel = -12345.0_c_double
@@ -468,19 +971,16 @@ contains
       if (allocated(error)) return
 
       cap = ngrid - 1_c_int
+      name_wleb = c_string("wleb")
+      name_numbering = c_string("numbering")
       allocate (xyz(3, cap), a(cap), owner(cap), converged(cap))
-      allocate (normal0(3, cap), wleb(cap), r_iI0(cap), f(cap), rho(cap))
-      allocate (numbering(cap), amat0(cap, cap), xi(cap))
+      allocate (wleb(cap), numbering(cap), amat0(cap, cap), xi(cap))
       allocate (radii(nsph), asph(nsph))
       xyz = sentinel
       a = sentinel
       owner = -1_c_int
       converged = .false._c_bool
-      normal0 = sentinel
       wleb = sentinel
-      r_iI0 = sentinel
-      f = sentinel
-      rho = sentinel
       numbering = -1_c_int
       amat0 = sentinel
       xi = sentinel
@@ -497,22 +997,21 @@ contains
       end if
 
       if (.not. allocated(error)) then
-         call moist_get_drop_specific(verror, vcav, cap, nmax, normal0, wleb, &
-                                      r_iI0, f, rho)
-         call expect_capacity_error(error, err, "get_drop_specific")
+         call moist_get_cavity_field_real(verror, vcav, c_loc(name_wleb), cap, wleb)
+         call expect_capacity_error(error, err, "get_cavity_field_real")
       end if
       if (.not. allocated(error)) then
-         if (any(wleb /= sentinel) .or. any(normal0 /= sentinel)) &
-            call test_failed(error, "get_drop_specific wrote into a rejected buffer")
+         if (any(wleb /= sentinel)) &
+            call test_failed(error, "get_cavity_field_real wrote into a rejected buffer")
       end if
 
       if (.not. allocated(error)) then
-         call moist_get_drop_numbering(verror, vcav, cap, numbering)
-         call expect_capacity_error(error, err, "get_drop_numbering")
+         call moist_get_cavity_field_int(verror, vcav, c_loc(name_numbering), cap, numbering)
+         call expect_capacity_error(error, err, "get_cavity_field_int")
       end if
       if (.not. allocated(error)) then
          if (any(numbering /= -1_c_int)) &
-            call test_failed(error, "get_drop_numbering wrote into a rejected buffer")
+            call test_failed(error, "get_cavity_field_int wrote into a rejected buffer")
       end if
 
       if (.not. allocated(error)) then

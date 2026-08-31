@@ -8,12 +8,14 @@ module moist_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels, only: coupling_type, response_type
+   use moist_cavity_fields, only: cavity_field_query_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none
    private
 
    public :: cavity_type
+   public :: list_cavity_fields_base
    public :: cavity_surface_adjoint_type
    public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
@@ -82,6 +84,8 @@ module moist_type
    contains
       procedure(update_cavity), deferred :: update
       procedure(get_cavity_gradient), deferred :: get_gradient
+      !> Declare the readable results this cavity currently holds
+      procedure :: list_fields => list_cavity_fields_base
       !> Map accumulated surface-observable adjoints to host response channels
       procedure :: get_surface_response => get_cavity_surface_response_default
       !> Contract accumulated surface-observable adjoints into the nuclear gradient
@@ -331,6 +335,40 @@ contains
       if (associated(self%ctx)) iunit = self%ctx%unit
 
    end function cavity_unit
+
+   !* ================================================================================= *!
+   !*                                  Readable results                                 *!
+   !* ================================================================================= *!
+
+   !> Declare the results every discretized cavity carries
+   !>
+   !> @param[in]    self   Cavity instance
+   !> @param[inout] query  Walker collecting or fetching the declarations
+   subroutine list_cavity_fields_base(self, query)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Walker collecting or fetching the declarations
+      type(cavity_field_query_type), intent(inout) :: query
+
+      call query%add_int_value("ngrid", "Number of surface grid points", self%ngrid)
+      call query%add_int_value("nsph", "Number of atomic spheres", self%nsph)
+      call query%add_real_scalar("area", "Total surface area, bohr**2", self%total_area)
+      call query%add_real_scalar("volume", "Total enclosed volume, bohr**3", self%total_volume)
+
+      call query%add_real2("xyz", "Grid point coordinates, bohr (3, ngrid)", self%xyz)
+      call query%add_real("a", "Grid point area, bohr**2 (ngrid)", self%a)
+      call query%add_real("f", "Gaussian switching factor per grid point (ngrid)", self%f)
+      call query%add_real("xi0", "Gaussian width per grid point (ngrid)", self%xi0)
+      call query%add_real2("normal0", "Outward unit normal per grid point (3, ngrid)", self%normal0)
+      call query%add_real("v", "Grid point volume element, bohr**3 (ngrid)", self%v)
+      call query%add_int("owner", "Sphere each grid point belongs to, 0-based (ngrid)", &
+         & self%owner, zero_based=.true.)
+
+      call query%add_real("radii", "Sphere radii, bohr (nsph)", self%radii)
+      call query%add_real("asph", "Surface area per sphere, bohr**2 (nsph)", self%asph)
+      call query%add_real2("sphxyz", "Sphere centre coordinates, bohr (3, nsph)", self%sphxyz)
+
+   end subroutine list_cavity_fields_base
 
    !> Default surface-response hook for cavities without field-dependent geometry
    !>
