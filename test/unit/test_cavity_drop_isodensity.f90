@@ -25,7 +25,7 @@
 !> files in `test/unit/data` (generated using PySCF)
 module test_cavity_drop_isodensity
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_ptr, c_null_ptr, c_funloc, &
-                                          c_associated, c_f_pointer
+                                          c_associated, c_f_pointer, c_null_funptr
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -141,7 +141,9 @@ contains
                   new_unittest("max_deriv_gating_callback", test_max_deriv_callback), &
                   new_unittest("internal_fourth_fd", test_internal_fourth_fd), &
                   new_unittest("internal_fourth_gating", test_internal_fourth_gating), &
-                  new_unittest("internal_screening_equivalence", test_internal_screening_equivalence) &
+                  new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
+                  new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
+                  new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1101,6 +1103,145 @@ contains
          tptr = real(d3rho_w, c_double)
       end if
    end function iso_reference_callback
+
+   !> The log-ratio exclusion radius must never over-claim
+   subroutine test_exclusion_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Fraction of the claimed radius actually probed
+      real(wp), parameter :: probe_frac = 0.999_wp
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      real(wp), allocatable :: points(:, :)
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: centre(ndim), probe(ndim), lsf_centre, lsf_probe, r
+      integer :: icase, ipoint, idir, ithr, n_certified
+
+      ! Unscreened, and at the cavity's production screening threshold. Screening
+      ! only ever drops density, so the exterior branch -- the one that divides by
+      ! a *smaller* rho -- is the one that could be pushed into over-claiming.
+      real(wp), parameter :: thresholds(2) = [0.0_wp, 1.0e-11_wp]
+
+      ! A deterministic spread of probe directions; no RNG, so a failure here
+      ! reproduces exactly.
+      integer, parameter :: ndir = 14
+      real(wp), parameter :: dirs(ndim, ndir) = reshape([ &
+                             1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
+                             0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, &
+                             0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, &
+                             1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, &
+                             1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, 1.0_wp], &
+                             [ndim, ndir])
+
+      n_certified = 0
+      do icase = 1, ntests
+      do ithr = 1, size(thresholds)
+         call build_molecular_internal_lsf(lsf, icase, thresholds(ithr), mol, error)
+         if (allocated(error)) return
+         call get_test_points(mol, points)
+
+         do ipoint = 1, size(points, 2)
+            centre = points(:, ipoint)
+
+            call lsf%prepare(centre, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+            call lsf%f0(lsf_centre)
+
+            r = lsf%exclusion_radius(lsf_centre)
+            if (r <= 0.0_wp) cycle
+            n_certified = n_certified + 1
+
+            do idir = 1, ndir
+               probe = centre + probe_frac*r*dirs(:, idir)/norm2(dirs(:, idir))
+
+               call lsf%prepare(probe, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                  return
+               end if
+               call lsf%f0(lsf_probe)
+
+               if (lsf_probe*lsf_centre <= 0.0_wp) then
+                  call test_failed(error, "exclusion radius over-claims on "// &
+                                   test_label(icase)//": S changes sign inside "// &
+                                   "the ball it certifies as surface-free")
+                  return
+               end if
+            end do
+         end do
+      end do
+      end do
+
+      if (n_certified == 0) then
+         call test_failed(error, "the isodensity LSF certified no ball at all: "// &
+                          "the probe loop never ran")
+      end if
+   end subroutine test_exclusion_radius
+
+   !> `log_grad_out = 0` is the off switch for a certificate that is a model
+   subroutine test_exclusion_radius_gate(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
+      type(structure_type) :: mol
+      real(wp), allocatable :: radii(:)
+      real(wp) :: r_out, r_in, unit_s
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+
+      ! Exterior (S > 0) and interior (S < 0) values of equal density contrast:
+      ! rho = rho_iso/e outside, rho = e*rho_iso inside. Built from the LSF's own
+      ! scale, since `S = scale (rho_iso - rho)` and the certificate divides that
+      ! scale back out.
+      allocate (radii(mol%nat), source=2.0_wp)
+      unit_s = lsf%param%scale*lsf%param%rho_iso
+      r_out = lsf%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp)))
+      r_in = lsf%exclusion_radius(unit_s*(1.0_wp - exp(1.0_wp)))
+
+      if (.not. (r_out > 0.0_wp .and. r_in > 0.0_wp)) then
+         call test_failed(error, "the default parameters must certify something")
+         return
+      end if
+      if (r_in >= r_out) then
+         call test_failed(error, "the interior branch must be the more "// &
+                          "conservative one: its ball can reach a nuclear cusp")
+         return
+      end if
+
+      ! Same contrast, so the same |ln(rho/rho_iso)| = 1: the radii are the
+      ! reciprocals of the two bounds in force.
+      call check(error, r_out, 1.0_wp/lsf%param%log_grad_out, thr=1.0e-12_wp, &
+                 more="exterior radius is 1/log_grad_out at unit log contrast")
+      if (allocated(error)) return
+
+      ! The callback variant shares the certificate, so on the same geometry and
+      ! the same parameters it must return the same radius -- it differs only in
+      ! where `rho` comes from, and the certificate never asks for `rho` itself.
+      ! No `prepare` here, so the shared reference density is not touched and
+      ! this stays independent of the `cb_gto` lock.
+      call lsf_cb%new(c_null_funptr, c_null_ptr, lsf%param%rho_iso, lsf%param%scale)
+      call lsf_cb%update(mol, radii)
+      call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp))), &
+                 r_out, thr=0.0_wp, &
+                 more="both isodensity variants must certify the same radius")
+      if (allocated(error)) return
+      call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(1.0_wp))), &
+                 r_in, thr=0.0_wp, &
+                 more="both isodensity variants must certify the same radius")
+      if (allocated(error)) return
+
+      call lsf%param%new(log_grad_out=0.0_wp)
+      call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 more="log_grad_out = 0 must certify nothing")
+   end subroutine test_exclusion_radius_gate
 
    !> Build the internal isodensity LSF over the module reference density
    !>

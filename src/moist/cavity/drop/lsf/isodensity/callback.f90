@@ -23,7 +23,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
    use moist_output_format, only: format_string
    implicit none (type, external)
    private
@@ -83,6 +83,8 @@ module moist_cavity_drop_lsf_isodensity_callback
       real(wp) :: third(ndim, ndim, ndim) = 0.0_wp
       !> Highest requested derivative order
       integer :: max_deriv = 0
+      !> Largest nuclear charge in the bound structure
+      real(wp) :: zmax = 0.0_wp
    contains
       procedure, public :: new => lsf_new
       procedure, public :: update => lsf_update
@@ -97,6 +99,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: f3_rr_rA => lsf_f3_rr_rA
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
+      procedure, public :: exclusion_radius => lsf_exclusion_radius
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
 contains
@@ -137,6 +140,10 @@ contains
       real(wp), intent(in) :: radii(:)
 
       call lsf_base_update(self, mol, radii)
+      self%zmax = 0.0_wp
+      if (allocated(mol%num)) then
+         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
+      end if
    end subroutine lsf_update
 
    !> Evaluate and cache callback data at one point.
@@ -369,5 +376,20 @@ contains
          d = 0.0_wp*radius
       end if
    end function lsf_screening_offset
+
+   !> Radius of a ball around the evaluation point free of surface
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] lsf0  LSF value at the evaluation point
+   !> @returns   r     Surface-free radius (zero when uncertified)
+   pure function lsf_exclusion_radius(self, lsf0) result(r)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      !> LSF value at the evaluation point
+      real(wp), intent(in) :: lsf0
+      !> Surface-free radius
+      real(wp) :: r
+
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+   end function lsf_exclusion_radius
 
 end module moist_cavity_drop_lsf_isodensity_callback

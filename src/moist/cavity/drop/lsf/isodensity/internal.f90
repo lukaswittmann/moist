@@ -25,7 +25,7 @@ module moist_cavity_drop_lsf_isodensity_internal
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_param, only: &
-      moist_cavity_drop_lsf_isodensity_param_type
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
    implicit none (type, external)
    private
 
@@ -53,6 +53,8 @@ module moist_cavity_drop_lsf_isodensity_internal
       real(wp) :: fourth(ndim, ndim, ndim, ndim) = 0.0_wp
       !> Highest requested derivative order
       integer :: max_deriv = 0
+      !> Largest nuclear charge in the bound structure
+      real(wp) :: zmax = 0.0_wp
       !> Per-instance scratch AO-derivative table (ncart, 0:nslot-1), sized to the
       !> highest order this instance has been asked for so far
       real(wp), allocatable :: phi(:, :)
@@ -80,6 +82,7 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: f3_rr_rA => lsf_f3_rr_rA
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
+      procedure, public :: exclusion_radius => lsf_exclusion_radius
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
@@ -151,6 +154,10 @@ contains
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
+      self%zmax = 0.0_wp
+      if (allocated(mol%num)) then
+         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
+      end if
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
@@ -412,5 +419,24 @@ contains
 
       d = max(0.0_wp, self%gto%reach(self%screening_threshold) - radius)
    end function lsf_screening_offset
+
+   !> Radius of a ball around the evaluation point free of surface
+   !>
+   !> Delegates to [[isodensity_exclusion_radius]], which carries the derivation
+   !> and the caveats; the two isodensity variants share it because they share
+   !> the level set, differing only in where `rho` comes from.
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] lsf0  LSF value at the evaluation point
+   !> @returns   r     Surface-free radius (zero when uncertified)
+   pure function lsf_exclusion_radius(self, lsf0) result(r)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> LSF value at the evaluation point
+      real(wp), intent(in) :: lsf0
+      !> Surface-free radius
+      real(wp) :: r
+
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+   end function lsf_exclusion_radius
 
 end module moist_cavity_drop_lsf_isodensity_internal
