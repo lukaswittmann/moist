@@ -37,9 +37,9 @@ files in-tree (unmodified upstream). Listed here for completeness.
 | toml-f | `subprojects/toml-f/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
 | jonquil | `subprojects/jonquil/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
 | test-drive | `subprojects/test-drive/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
-| mctc-lib | `subprojects/mctc-lib/LICENSE` | see file |
-| mstore | `subprojects/mstore/LICENSE` | see file |
-| fclap | `subprojects/fclap/LICENSE.md` | see file |
+| mctc-lib | `subprojects/mctc-lib/LICENSE` | Apache-2.0 |
+| mstore | `subprojects/mstore/LICENSE` | Apache-2.0 |
+| fclap | `subprojects/fclap/LICENSE.md` | MIT (Christian Selzer) |
 
 ## Notes
 
