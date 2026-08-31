@@ -215,33 +215,6 @@ mctc_dep = dependency(
 )
 lib_deps += mctc_dep
 
-# Create the test-drive library as subproject
-testdrive_dep = dependency(
-  'test-drive',
-  version: '>=0.5.0',
-  fallback: ['test-drive', 'testdrive_dep'],
-  default_options: ['default_library=static'],
-)
-lib_deps += testdrive_dep
-
-# Create dftd4 as subproject
-dftd4_dep = dependency(
-  'dftd4',
-  version: '>=4.0.0',
-  fallback: ['dftd4', 'dftd4_dep'],
-  default_options: ['default_library=static'],
-)
-lib_deps += dftd4_dep
-
-# Create the electrostatic library as subproject
-multicharge_dep = dependency(
-  'multicharge',
-  version: '>=0.4.0',
-  fallback: ['multicharge', 'multicharge_dep'],
-  default_options: ['default_library=static'],
-)
-lib_deps += multicharge_dep
-
 # fclap dependency for CLI (*not* added to lib_deps)
 fclap_dep = dependency(
   'fclap',
