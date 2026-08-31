@@ -1,132 +1,4 @@
 !> Golden numerical fixture for the DROP level set functions (SvdW and CFC)
-!>
-!> The rest of the LSF unit suite ([[test_cavity_drop_lsf]],
-!> [[test_cavity_drop_cfc]]) is finite-difference / self-consistency based:
-!> it pins *derivative consistency*, not the values themselves. A rewrite of
-!> the blending math that got a weight or a body-order term subtly wrong could
-!> stay perfectly FD-consistent while describing a different surface. This
-!> module closes that hole by comparing the current implementation against a
-!> checked-in table of reference numbers.
-!>
-!> Fixtures live in
-!>   * `test/unit/data/lsf_golden_svdw.txt`
-!>   * `test/unit/data/lsf_golden_cfc.txt`
-!>
-!> and are produced by *this same module*: the traversal that evaluates the
-!> LSFs feeds a sink which either writes a record or compares it. Writer and
-!> checker therefore cannot drift apart in ordering or labelling.
-!>
-!> Regenerating the fixtures (deliberate act; do it only when the math is
-!> *meant* to change):
-!>
-!> ```
-!> MOIST_LSF_GOLDEN_REGENERATE=1 \
-!> MOIST_GIT_COMMIT=$(git rev-parse HEAD) \
-!> MOIST_SOURCE_ROOT=$PWD \
-!>   ./<builddir>/test/unit/tester cavity_drop_lsf_golden
-!> ```
-!>
-!> In regeneration mode the two suite entries rewrite their file and pass.
-!>
-!> Every quantity is recorded **twice** per evaluation point:
-!>   * `S` - screened, exactly as production runs it
-!>     (`screening_threshold = 1.0e-11`, the DROP default, via `prepare`)
-!>   * `U` - unscreened reference (`screening_threshold = 0.0`, `prepare`)
-!>
-!> Setting the inherited `screening_threshold` to zero *before* `update` is what
-!> disables screening. `update` runs `lsf_base_rebuild_screening`, which asks the
-!> concrete for `screening_offset(radius)`; both concretes return
-!> `huge(0.0_wp)` as soon as the threshold is non-positive, so the per-atom
-!> reach `radius + offset` saturates and the cached gate
-!> `cand_screen(lsf_cand_bound_sq, :)` is set to `huge(0.0_wp)`. The per-point
-!> gate is a single squared-distance compare against that bound, which no atom
-!> can fail. The dumper asserts `active_count() == ncenters` at every unscreened
-!> point, so a future change to that mechanism cannot silently degrade the
-!> reference.
-!>
-!> A third record group per point carries flag `D`: `f0_delta`, the screened
-!> minus unscreened LSF value. It lets a reader see directly whether the
-!> screening error stays inside the band the threshold justifies.
-!>
-!> Record layout (one record per line, blanks separate the fields):
-!>
-!> ```
-!> kind  case  ip  flag  quantity  i1 i2 i3 i4 i5 i6  value
-!> ```
-!>
-!>   * `kind`     `svdw` or `cfc`
-!>   * `case`     case tag; see the `# case` legend in the file header
-!>   * `ip`       evaluation-point index, 1-based (see `# point` legend)
-!>   * `flag`     `S` screened, `U` unscreened, `D` screened-minus-unscreened
-!>   * `quantity` accessor / output name
-!>   * `i1..i6`   index tuple, unused slots are 0; `j,k,l,m` are spatial axes,
-!>                `s,t` nuclear axes, `A,B` **user-space atom indices**
-!>   * `value`    `es24.16` (17 significant digits: exact IEEE-754 round trip)
-!>
-!> Index tuples per quantity:
-!>
-!> | quantity            | tuple             |
-!> |---------------------|-------------------|
-!> | `n_active`          | -                 |
-!> | `f0`                | -                 |
-!> | `f012_lsf0`         | -                 |
-!> | `f012_lsf1_r`       | `j`               |
-!> | `f012_lsf2_rr`      | `j k`             |
-!> | `f3_rrr`            | `j k l`           |
-!> | `f4_rrrr`           | `j k l m`         |
-!> | `f3rrA_lsf1_rA`     | `s A`             |
-!> | `f3rrA_lsf2_r_rA`   | `j s A`           |
-!> | `f3_rr_rA`          | `j k s A`         |
-!> | `f4_rrr_rA`         | `j k l s A`       |
-!> | `f2_rArB`           | `s A t B`         |
-!> | `f3_r_rArB`         | `j s A t B`       |
-!> | `f4_rr_rArB`        | `j k s A t B`     |
-!> | `normalized_f0`     | -                 |
-!> | `normalized_f1_rA`  | `s A`             |
-!> | `f0_delta`          | -                 |
-!>
-!> Slots that are symmetric by construction are dumped once only
-!> (`j <= k <= l <= m` for the pure spatial orders, `j <= k` for the leading
-!> pair of `f3_rr_rA` / `f4_rr_rArB`, `j <= k <= l` for `f4_rrr_rA`). The
-!> discarded components are not left unchecked: `*_tensor_symmetry` verifies
-!> the full tensors really are symmetric in those slots, so the reduced dump
-!> plus the symmetry check together pin the whole tensor.
-!>
-!> Records are always keyed by **user-space** atom id, whatever index space the
-!> routine happens to return. Some outputs (`f2_rArB`, `f3_r_rArB`,
-!> `f4_rr_rArB`) are active-indexed; the harness never assumes which, it derives
-!> the space from the extent of the array it was handed and resolves the slot
-!> through [[nuc_slot]]. A selected atom that screening dropped has no slot and
-!> contributes an all-zero block, which is the correct value for it, not a
-!> placeholder. Keying on user-space ids is what lets the fixture survive an
-!> index-space change in `src/` unchanged - `f2_rArB` moving from
-!> `(3, ncenters, 3, ncenters)` to `(3, n_active, 3, n_active)` shifts values,
-!> not record labels.
-!>
-!> Scope knobs (all `parameter`s below, change them and regenerate):
-!> `n_points`, `n_sel_atoms`, `n_pair_atoms` and the case tables set the file
-!> size; the shipped settings give 34620 SvdW and 5325 CFC records
-!> (3.0 MB and 465 kB).
-!>
-!> Index spaces move: `f2_rArB` was user-indexed when this harness was
-!> first written and is active-indexed now. Nothing here hard-codes that. Every
-!> nuclear read goes through [[nuc_slot]], which derives the space from the
-!> extent of the array the routine actually returned and reports anything it
-!> does not recognise, so a further change shifts values, never labels, and can
-!> never become an out-of-bounds read. [[test_stream_reproducible]] is the
-!> standing check that it has not become one anyway. When auditing this by hand,
-!> a bounds-checked build is the fastest confirmation:
-!>
-!> ```
-!> meson setup build-bounds -Dfortran_args="-fcheck=bounds,pointer,mem \
-!>       -finit-real=snan -finit-integer=-99999999"
-!> ```
-!>
-!> Tolerance: relative `1.0e-12` with an absolute floor of `1.0e-12`, i.e. a
-!> record passes when `|now - ref| <= max(1e-12, 1e-12 * |ref|)`. The floor
-!> keeps entries that are exactly (or nearly) zero from demanding bit
-!> equality of a cancelling sum. Regenerated on the same toolchain the
-!> agreement is bit-for-bit; the tolerance is headroom for other platforms.
 module test_cavity_drop_lsf_golden
    use, intrinsic :: iso_fortran_env, only: error_unit
    use mctc_env, only: wp
@@ -313,39 +185,14 @@ contains
       character(len=64) :: tail
 
       path = golden_path(kind)
-      regen = get_env("MOIST_LSF_GOLDEN_REGENERATE", default="")
 
       call reset_sink()
 
-      if (len_trim(regen) > 0) then
-         open (newunit=unit, file=path, action="write", status="replace", iostat=stat)
-         if (stat /= 0) then
-            call test_failed(error, "cannot open '"//path//"' for writing")
-            return
-         end if
-         sink_writing = .true.
-         sink_unit = unit
-         call write_header(unit, kind)
-      else
-         call load_fixture(path, error)
-         if (allocated(error)) return
-         sink_writing = .false.
-      end if
+      call load_fixture(path, error)
+      if (allocated(error)) return
+      sink_writing = .false.
 
       call traverse(kind, error)
-
-      if (sink_writing) then
-         close (sink_unit)
-         sink_unit = -1
-         sink_writing = .false.
-         if (sink_nfail > 0) then
-            call test_failed(error, "regeneration hit a structural problem, the file "// &
-                             "is not trustworthy: "//sink_message)
-            return
-         end if
-         write (error_unit, '(a,i0,a)') "# regenerated "//path//" (", sink_count, " records)"
-         return
-      end if
 
       if (allocated(error)) return
 
