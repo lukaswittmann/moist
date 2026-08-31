@@ -129,11 +129,7 @@ module moist_cavity_drop_projector
       real(wp) :: deflation_alpha = 1.0_wp
       !> L2 tolerance for considering two enumerated roots identical (Bohr)
       real(wp) :: deflation_root_tol = 1.0e-6_wp
-      !> Multiplier on inner-solver tolerances (tol/toldx/toldf for SLSQP,
-      !> tol/tolx for Newton). Deflation only needs to identify the basin
-      !> of each root; tight convergence is left to the downstream Newton
-      !> refinement step. 100 = two orders of magnitude looser than the
-      !> regular multistart tolerance.
+      !> Multiplier on inner-solver tolerances (tol/toldx/toldf for SLSQP, tol/tolx for Newton)
       real(wp) :: deflation_tol_relax = 100.0_wp
 
       !*--------------------- Riemannian escape settings--------------------- *!
@@ -335,90 +331,6 @@ contains
       jac(4, 4) = 0.0_wp
 
    end subroutine projection_jacobian
-
-   !> Build a warm-started seed z = (x_init, lambda_init) for the
-   !> Newton-deflation 4-D KKT system by taking one tangent-plane Newton
-   !> step toward the level set surface from the anchor.
-   !>
-   !> At z = (anchor, 0) the residual reduces to F = (0, 0, 0, -L(anchor)),
-   !> so the inner solver's first Newton step has magnitude
-   !> ||dx|| = |L(anchor)| / ||grad L(anchor)||, which becomes huge near
-   !> branched anchors that sit close to triple-junctions of L (where
-   !> ||grad L|| -> 0). Pre-computing the same step here lets us *cap*
-   !> its magnitude and pass a moderate, well-conditioned seed to the
-   !> inner Newton, so deflation iterations start in a regime where each
-   !> step is small.
-   !>
-   !> Formula (assuming x_in = anchor):
-   !>   step = -L * grad_L / ||grad_L||^2
-   !>   x_init = anchor + step                     (tangent-plane projection)
-   !>   lambda_init = -phi_alpha * L / ||grad_L||^2 (KKT condition at x_init)
-   !>
-   !> The step is capped at `step_cap` so the warm-started seed stays in a
-   !> regime where the inner Newton's own steps are small. This is a
-   !> conditioning guard, not a branch criterion: it bounds how far the
-   !> *seed* may travel, and says nothing about which branches are
-   !> admissible. If ||grad_L||^2 is below an absolute floor we fall back to
-   !> (x_in, 0) and let the inner Newton try its own first step.
-   !>
-   !> @param[in]  x_in      Caller's spatial seed (typically the anchor)
-   !> @param[in]  anchor    Anchor point (defines the phi objective)
-   !> @param[in]  phi_alpha Coefficient in phi(x) = phi_alpha/2 * ||x - anchor||^2
-   !> @param[in]  step_cap  Largest warm-start step magnitude allowed (Bohr)
-   !> @param[in]  context   Projection context (carries projector pointer)
-   !> @param[out] z_seed    Warm-started 4-D seed (x_init, lambda_init)
-   subroutine newton_warm_start_seed(x_in, anchor, phi_alpha, step_cap, &
-                                     context, z_seed)
-      !> Spatial seed (3 components)
-      real(wp), intent(in) :: x_in(3)
-      !> Anchor point (3 components)
-      real(wp), intent(in) :: anchor(3)
-      !> phi objective coefficient
-      real(wp), intent(in) :: phi_alpha
-      !> Largest warm-start step magnitude allowed (Bohr)
-      real(wp), intent(in) :: step_cap
-      !> Projection context (forwarded to projection_residual / _jacobian)
-      class(*), intent(in) :: context
-      !> Warm-started seed for the 4-D KKT solve
-      real(wp), intent(out) :: z_seed(4)
-
-      real(wp) :: z0(4), f0(4), jac0(4, 4)
-      real(wp) :: lsf_val, grad_lsf(3), grad_norm_sq, step(3), step_norm, scale
-      real(wp), parameter :: grad_floor_sq = 1.0e-12_wp
-
-      ! Default fallback: zero-lambda seed at the caller's spatial point.
-      z_seed(1:3) = x_in
-      z_seed(4) = 0.0_wp
-
-      ! Probe (anchor, lambda=0): residual gives -L(anchor), Jacobian gives
-      ! -grad L(anchor) in column 4 (or row 4 - they're symmetric).
-      z0(1:3) = anchor
-      z0(4) = 0.0_wp
-      call projection_residual(z0, f0, context)
-      call projection_jacobian(z0, jac0, context)
-
-      lsf_val = -f0(4)
-      grad_lsf = -jac0(1:3, 4)
-      grad_norm_sq = dot_product(grad_lsf, grad_lsf)
-
-      ! If ||grad L|| is essentially zero we cannot form the tangent-plane
-      ! projection. Hand the un-warmed seed to Newton and let line search
-      ! do what it can.
-      if (grad_norm_sq < grad_floor_sq) return
-
-      step = -lsf_val*grad_lsf/grad_norm_sq
-      step_norm = norm2(step)
-
-      ! Cap the step magnitude to keep the seed well-conditioned.
-      scale = 1.0_wp
-      if (step_norm > step_cap .and. step_norm > 0.0_wp) then
-         scale = step_cap/step_norm
-         step = scale*step
-      end if
-
-      z_seed(1:3) = anchor + step
-      z_seed(4) = scale*(-phi_alpha*lsf_val/grad_norm_sq)
-   end subroutine newton_warm_start_seed
 
    !* ================================================================================= *!
    !*                          Initialization and SSD screening                         *!
@@ -1203,24 +1115,11 @@ contains
       call self%lsf%set_max_deriv(req_max_deriv)
       self%ssd_cache_valid = .false.
 
-      ! Seeds only have to land in the right basin, so screen loosely here.
-      ! Newton-deflation is a *refinement* solver, not a seeder, so it keeps
-      ! the production gate.
+      ! Seeds only have to land in the right basin, so screen loosely here
       if (level /= 6) call self%seed_screening(.true.)
 
-      ! Solve and extract candidates. Newton-deflation operates on z=(x,lambda),
-      ! so it gets its own 4-D seed; SLSQP variants share x_slsqp.
+      ! Solve and extract candidates
       if (level == 6) then
-         ! Warm-start the Newton seed with one tangent-plane step toward
-         ! LSF=0 (and the corresponding lambda). Seeding at (anchor, 0)
-         ! makes the first deflated Newton step's amplitude scale like
-         ! L(anchor)/||grad L(anchor)||, which blows up at branched
-         ! anchors near triple-junctions of LSF where the gradient is
-         ! nearly stationary. A bounded warm-start sidesteps this.
-         call newton_warm_start_seed(x_slsqp, anchor, &
-                                     self%phi%param%phi_alpha, &
-                                     self%warm_start_step_cap, &
-                                     proj_context, z_seed)
          call solver%solve(z_seed, error)
          x_slsqp = z_seed(1:3)
       else
