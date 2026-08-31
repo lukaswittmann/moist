@@ -495,6 +495,7 @@ contains
    !> @param[in]  sigma_phi       Softmax temperature
    !> @param[in]  w_xi            Effective Gaussian-width adjoint (ngrid)
    !> @param[out] branch_phi_adj  Adjoint of the branch objective Phi (ngrid)
+   ! TODO: This is serial; it sh/could be parallelized
    pure subroutine compute_branch_phi_adj(branch_count, anchor_id, wbranch, wleb, xi0, &
                                           sigma_phi, w_xi, branch_phi_adj)
       !> Branch bookkeeping per grid point
