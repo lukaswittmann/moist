@@ -11,9 +11,7 @@
 !>    S(r) = scale * (rho_iso - rho(r))
 !>
 !> exactly as the internal variant does, from the same
-!> [[moist_cavity_drop_lsf_isodensity_param_type]]. The host therefore never
-!> sees `rho_iso`, never applies the DROP sign convention, and cannot
-!> accidentally apply `scale` twice.
+!> [[moist_cavity_drop_lsf_isodensity_param_type]]
 module moist_cavity_drop_lsf_isodensity_callback
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_funptr, c_null_funptr, c_ptr, c_null_ptr, &
                             c_associated, c_f_procpointer, c_loc

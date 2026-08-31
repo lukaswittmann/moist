@@ -123,12 +123,9 @@ contains
       real(wp) :: cross_vec(3), J_val, inv_J
       real(wp), allocatable :: lsf3_rr_rA(:, :, :, :)
       real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> LSF active slot of entry `i` of `active_idx`, zero when that atom is
-      !> screened away (only reachable in the anchor-only sweep, which walks
-      !> every atom rather than the LSF's own active list)
+      !> LSF active slot of entry `i` of `active_idx`
       integer, allocatable :: lsf_slot(:)
-      !> Nuclear partials of the atom entry currently being processed, gathered
-      !> once from the active-indexed LSF outputs
+      !> Nuclear partials of the atom entry currently being processed
       real(wp) :: s1_rA(3), s2_r_rA(3, 3), s3_rr_rA(3, 3, 3)
       real(wp) :: dA_dR(3, 3)
       real(wp) :: dg_dR(3)
@@ -1120,11 +1117,6 @@ contains
    end subroutine compute_anchor_gradient
 
    !> Gather one atom's LSF nuclear partials out of the active-indexed outputs
-   !>
-   !> The LSF hands its nuclear tensors back indexed by active slot, so an atom
-   !> that screening dropped has no slot at all. A missing slot is not an error:
-   !> its partials are exactly zero, which is what the sweep over *all* atoms
-   !> (`anchor_only`) needs and what the sweep over the active list never asks for.
    !>
    !> @param[in]  islot      LSF active slot, or zero when the atom is inactive
    !> @param[in]  lsf1_rA    Active-indexed dS/dR_A

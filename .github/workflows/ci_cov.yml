@@ -12,13 +12,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Two legs, one upload each; Codecov merges them into a single report.
         leg:
-          # The library driven by the Fortran unit tests and the C-API examples
           - name: fortran
             setup: -Dpython=false
             tests: --suite moist
-          #  C-API,Python bindings and the PySCF coupling
           - name: coupling
             setup: -Dpython=true -Dpython_version=python3
             tests: --suite moist:python
@@ -67,9 +64,7 @@ jobs:
 
       - name: Run tests
         env:
-          # Serial runs are faster due to -fprofile-update=atomic
           OMP_NUM_THREADS: 1
-        # Increase time for tests
         run: |
           meson test -C build ${{ matrix.leg.tests }} \
             --timeout-multiplier 4 --print-errorlogs

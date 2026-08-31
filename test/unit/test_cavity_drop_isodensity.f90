@@ -1805,8 +1805,8 @@ contains
          call lsf%f4_rrrr(f4)
          scale_ref = max(scale_ref, maxval(abs(f4)))
 
-         !* A fourth derivative of a smooth field is symmetric under every index
-         !* permutation; the packed slot table must reproduce that exactly
+         ! A fourth derivative of a smooth field is symmetric under every index
+         ! permutation; the packed slot table must reproduce that exactly
          dev = 0.0_wp
          do ax = 1, ndim
             do ix = 1, ndim
@@ -1823,8 +1823,8 @@ contains
                     more="internal f4_rrrr permutation symmetry")
          if (allocated(error)) return
 
-         !* Dropping back to order 3 for the FD stencil also exercises the cache
-         !* being refilled at a lower order between two order-4 evaluations
+         ! Dropping back to order 3 for the FD stencil also exercises the cache
+         ! being refilled at a lower order between two order-4 evaluations
          call lsf%set_max_deriv(3)
          do ax = 1, ndim
             pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
@@ -1891,7 +1891,7 @@ contains
       if (allocated(error)) return
       call get_test_points(mol, pts, 6)
 
-      !* The value+gradient projection phase sizes the scratch first ...
+      ! The value+gradient projection phase sizes the scratch first ...
       call lsf%set_max_deriv(1)
       call prepare_internal(lsf, pts(:, 1), error)
       if (allocated(error)) return
@@ -1912,7 +1912,7 @@ contains
          if (allocated(error)) return
          call lsf%f3_rrr(v3, g3, h3, t3)
 
-         !* ... and only then is order 4 asked for, on an already-sized instance
+         ! ... and only then is order 4 asked for, on an already-sized instance
          call lsf%set_max_deriv(4)
          call prepare_internal(lsf, pts(:, ip), error)
          if (allocated(error)) return
@@ -1947,7 +1947,7 @@ contains
                  "internal isodensity LSF returned a zero f4_rrrr at max_deriv=4")
       if (allocated(error)) return
 
-      !* The callback ABI stops at the third derivative and must say so
+      ! The callback ABI stops at the third derivative and must say so
       !$omp critical(iso_reference_density)
       call run_callback_fourth_cap(error)
       !$omp end critical(iso_reference_density)

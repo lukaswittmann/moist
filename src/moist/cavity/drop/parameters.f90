@@ -86,21 +86,17 @@ module moist_cavity_drop_parameters
 
       !> ========== Certified octree branch search (level 9) ==========
 
-      !> Edge length at which a surviving box stops splitting and becomes a
-      !> seed candidate (Bohr). This is the resolution at which two distinct
-      !> minima are still told apart.
+      !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr)
       real(wp) :: octree_seed_size = 0.2_wp
-      !> Box budget per anchor. Exhausting it aborts the build rather than
-      !> truncating the search: a partial search carries no certificate, and a
-      !> surface quietly missing points is worse than no surface. Scratch grows
-      !> on demand, so a generous budget costs nothing on an easy anchor.
+      !> Box budget per anchor
       integer :: octree_max_boxes = 200000
       !> Surviving-leaf budget per anchor
       integer :: octree_max_survivors = 200000
       !> Octree depth limit
       integer :: octree_max_depth = 12
-      !> Seed extraction: 1 = one seed per discrete local minimum of the
-      !> survivor set, 2 = one seed per surviving leaf (slower reference)
+      !> Seed extraction: 
+      !>   1 = one seed per discrete local minimum of the survivor set
+      !>   2 = one seed per surviving leaf (slower reference)
       integer :: octree_seed_mode = 1
 
       !> ========== Screening ==========

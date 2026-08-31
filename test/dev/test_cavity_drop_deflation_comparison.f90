@@ -47,14 +47,9 @@ module test_cavity_drop_deflation_comparison
    logical, parameter :: METHOD_CHECKED(N_METHODS) = &
                          [.false., .true., .true., .false., .true.]
 
-   !> Per-cavity branching statistics. Plain data type so we can compare
-   !> cavities without re-walking each one twice. Populated by collect_stats
-   !> and consumed by print_comparison_table and check_*.
+   !> Per-cavity branching statistics
    type :: branch_stats_type
-      !> Wall time of this method's projection, seconds. Read it as an order of
-      !> magnitude, not a benchmark: test-drive runs the suite's tests under an
-      !> OpenMP parallel do, so the builds of different fixtures contend. The
-      !> differences worth noticing here span factors of ten and survive that.
+      !> Wall time of this method's projection, seconds
       real(wp) :: wall_s = 0.0_wp
       integer  :: ngrid = 0
       real(wp) :: total_a = 0.0_wp
@@ -205,10 +200,7 @@ contains
       type(branch_stats_type), allocatable :: stats(:)
       integer :: imethod
       real(wp) :: wall_s
-      !> One context borrowed by all the cavities built here. Deliberately not
-      !> `save`d: test-drive runs the tests of a suite under an OpenMP parallel
-      !> do, so a saved context would be shared by concurrently running tests
-      !> and they would race re-initializing the timer it owns.
+      !> One context borrowed by all the cavities built here
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, verbosity=0)
@@ -241,8 +233,7 @@ contains
       deallocate (cavs)
    end subroutine compare_projection_strategies
 
-   !> Build a single DROP cavity with the given proj_level. Wraps the
-   !> error plumbing so the caller stays compact.
+   !> Build a single DROP cavity with the given proj_level
    subroutine build_cavity(error, cav, ctx, mol, nleb, blend_k, proj_level, wall_s)
       type(error_type), allocatable, intent(inout) :: error
       type(cavity_type_drop), intent(out) :: cav
@@ -439,10 +430,7 @@ contains
       overlap%unique_b = size(points_b, 2) - overlap%common
    end subroutine match_branch_points
 
-   !> Print a side-by-side table of the cavity summaries via prettylistprinter,
-   !> one column per projection strategy. The library's `header()` letter-spaces
-   !> and may truncate long titles, so we print our own banner with a plain
-   !> Fortran write.
+   !> Print a side-by-side table of the cavity summaries via prettylistprinter
    subroutine print_comparison_table(title, blend_k, stats)
       character(len=*), intent(in) :: title
       real(wp), intent(in) :: blend_k

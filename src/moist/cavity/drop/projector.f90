@@ -49,28 +49,13 @@ module moist_cavity_drop_projector
 
       integer :: proj_level = 3
 
-      !> Screening threshold used while *seeding*, i.e. during the SLSQP solves
-      !> that only have to land each seed in the right basin. Newton then
-      !> re-polishes against the production threshold, so the seed stage does
-      !> not need the accuracy the production gate provides -- and the active
-      !> set, which dominates `prepare`, shrinks with a looser gate.
-      !>
-      !> Must be *looser* (larger) than the production threshold: the cell grid
-      !> is built for the production reach and stays a valid superset only when
-      !> the gate asks for less. A value <= 0 disables the swap entirely.
+      !> Screening threshold used while seeding
       real(wp) :: seed_screening_threshold = 0.0_wp
       !> Production screening threshold, captured at init so it can be restored
       real(wp) :: prod_screening_threshold = -1.0_wp
-      !> Multiple of `seed_screening_threshold` below which a seed-stage solver
-      !> tolerance must not go. A looser gate makes `S` jump by a few times the
-      !> threshold as atoms cross it, so a solver asked for more precision than
-      !> that cannot converge and burns its whole iteration budget -- which is
-      !> what a loose gate with production tolerances actually costs.
+      !> Multiple of `seed_screening_threshold` below which a seed-stage solver tolerance must not go
       real(wp) :: seed_tol_factor = 30.0_wp
-      !> Absolute floor on every seed-stage solver tolerance, independent of the
-      !> gate. Unlike the threshold swap this does not change the level-set
-      !> function at all -- basin boundaries are untouched -- it only stops
-      !> SLSQP polishing a seed that Newton is about to re-polish anyway.
+      !> Absolute floor on every seed-stage solver tolerance
       real(wp) :: seed_tol_abs = 1.0e-6_wp
 
       !> Tolerances
