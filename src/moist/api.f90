@@ -1669,8 +1669,7 @@ contains
          call c_f_pointer(c_proj_level, p_proj_level)
          use_proj_level = p_proj_level
       end if
-      ! new_cavity_drop has historically used 0.05 as its public default.
-      use_branch_weight_s = 0.05_wp
+      use_branch_weight_s = defaults%branch_weight_s
       if (c_associated(c_branch_weight_s)) then
          call c_f_pointer(c_branch_weight_s, p_branch_weight_s)
          use_branch_weight_s = p_branch_weight_s
