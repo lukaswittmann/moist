@@ -150,6 +150,10 @@ module moist_api
    public :: get_cavity_field_real_api
    public :: get_cavity_field_int_api
    public :: get_cavity_field_bool_api
+   ! Legacy DROP API (deprecated - use the generic cavity operations above)
+   public :: update_drop_cavity_api
+   public :: get_drop_sizes_api, get_drop_grid_size_api, get_drop_results_api
+   public :: delete_drop_cavity_api
    ! Type-specific getters
    public :: get_drop_cavity_tolerance_api
    public :: get_isodensity_cart_layout_api
