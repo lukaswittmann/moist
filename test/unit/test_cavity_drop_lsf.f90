@@ -3201,6 +3201,7 @@ contains
             end do
 
             !* --------------------------- vjp_f1_rad --------------------------- *!
+            call prim%f3_rr_rad(rad1, rad2, rad3)
             call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
             do iA = 1, prim%active_count()
                acc = w0_adj*rad1(iA) &
@@ -3208,6 +3209,20 @@ contains
                      + sum(w2_adj*rad3(:, :, iA))
                call check(error, vjp_rad(iA), acc, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
+            end do
+
+            !* ---------------- nuclear Hessian exchange symmetry ---------------- *!
+            do iB = 1, prim%active_count()
+               do iA = 1, prim%active_count()
+                  do t_ax = 1, ndim
+                     do s_ax = 1, ndim
+                        call check(error, f2_rArB(s_ax, iA, t_ax, iB), &
+                                   f2_rArB(t_ax, iB, s_ax, iA), &
+                                   thr_abs=ABS_THR, thr_rel=REL_THR)
+                        if (allocated(error)) return
+                     end do
+                  end do
+               end do
             end do
          end do
       end do
