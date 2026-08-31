@@ -182,8 +182,8 @@ contains
       !> Degeneracy status
       integer, intent(out) :: status
 
-      !> 2x2 eigen-decomposition scratch
-      real(wp) :: tr_B, disc, sqrt_disc, beta1, beta2, lambda_switch
+      !> Scratch
+      real(wp) :: lambda_switch, beta_max
       real(wp) :: vmin_B(2), vmax_B(2)
       !> Lebedev pruning scratch
       real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds
@@ -216,20 +216,14 @@ contains
       state%B11 = dot_product(state%q1, state%Aq1)
       state%B12 = dot_product(state%q1, state%Aq2)
       state%B22 = dot_product(state%q2, state%Aq2)
-      tr_B = state%B11 + state%B22
       state%det_B = state%B11*state%B22 - state%B12*state%B12
       if (abs(state%det_B) <= seed_det_b_guard) then
          status = seed_state_singular_bmat
          return
       end if
-      disc = max(0.25_wp*tr_B*tr_B - state%det_B, 0.0_wp)
-      sqrt_disc = sqrt(disc)
-      beta1 = 0.5_wp*tr_B + sqrt_disc
-      beta2 = 0.5_wp*tr_B - sqrt_disc
-      call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta1, &
+      call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
       state%u_switch = vmin_B(1)*state%q1 + vmin_B(2)*state%q2
-      lambda_switch = beta2
       call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS)
 
       state%Binv11 = state%B22/state%det_B
