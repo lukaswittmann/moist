@@ -499,8 +499,6 @@ contains
 
       !> Loop indices and atom count
       integer :: i, j, n
-      !> Screening reach of one atom and the largest bound whose square is finite
-      real(wp) :: bound, bound_sq_max
 
       if (self%candidate_space /= lsf_candidate_space_user .and. &
           self%candidate_space /= lsf_candidate_space_sorted) then

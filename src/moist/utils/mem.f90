@@ -30,7 +30,7 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   !> @param[out]   error      Refused resize; terminates instead when absent
+   !> @param[out]   error      Refused resize, left unallocated on success
    subroutine grow_array_real_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:)
@@ -72,7 +72,7 @@ contains
    !> @param[in]    dim1       First dimension size (must match existing if allocated)
    !> @param[in]    dim2       Second dimension size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0.0)
-   !> @param[out]   error      Refused resize; terminates instead when absent
+   !> @param[out]   error      Refused resize, left unallocated on success
    subroutine grow_array_real_2d(array, dim1, dim2, fill_value, error)
       !> Array to reallocate
       real(wp), allocatable, intent(inout) :: array(:, :)
@@ -127,7 +127,7 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default 0)
-   !> @param[out]   error      Refused resize; terminates instead when absent
+   !> @param[out]   error      Refused resize, left unallocated on success
    subroutine grow_array_int_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       integer, allocatable, intent(inout) :: array(:)
@@ -168,7 +168,7 @@ contains
    !> @param[inout] array      Array to reallocate
    !> @param[in]    new_size   New array size (must be >= current size)
    !> @param[in]    fill_value Value for new elements (default .false.)
-   !> @param[out]   error      Refused resize; terminates instead when absent
+   !> @param[out]   error      Refused resize, left unallocated on success
    subroutine grow_array_logical_1d(array, new_size, fill_value, error)
       !> Array to reallocate
       logical, allocatable, intent(inout) :: array(:)
