@@ -689,7 +689,10 @@ contains
 
       character(len=16) :: got, want
 
-      if (self%prepared_deriv < 0) return
+      if (self%prepared_deriv < 0) then
+         error stop "moist DROP LSF: "//caller//" read the per-point cache before "// &
+            "any successful prepare -- the level-set jet is not a result"
+      end if
       if (order <= self%prepared_deriv) return
 
       write (want, "(i0)") order
