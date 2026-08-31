@@ -101,18 +101,8 @@ module moist_cavity_drop_projector
 
       !> Minimum point-to-point separation for deduplicating projected candidates (Bohr)
       real(wp) :: branch_sep_cut = 1.0E-10_wp
-      !> Squared-distance slack a branch may have over the closest one and still
-      !> carry weight: rho_max^2 = rho_min^2 + branch_rho2_slack. Mirrors
-      !> `2*branch_dphi_max/phi_alpha` from the cavity parameters; see
-      !> [[rho_max_from_rho_min]] for the derivation.
+      !> Squared-distance difference a branch may have over the closest one and still carry weight
       real(wp) :: branch_rho2_slack = 0.5_wp
-      !> Same slack widened by [[branch_search_margin]], for the deflation ball
-      !> caps. Those caps bound where the *optimizer may travel*, not which
-      !> branches are admissible: an SLSQP path to a perfectly admissible root
-      !> can leave the admissible ball on the way, and clamping it to the exact
-      !> criterion makes the inner solve fail rather than converge. The exact
-      !> criterion is still applied to the result, by `filter_candidates`.
-      real(wp) :: branch_rho2_slack_search = 1.5_wp
       !> Headroom (Bohr) added in quadrature to the search cap
       real(wp) :: branch_search_margin = 1.0_wp
       !> Cap on the Newton-deflation warm-start step (Bohr). A conditioning
@@ -211,6 +201,8 @@ module moist_cavity_drop_projector
       procedure, private :: seed_screening => projector_seed_screening
       !> Solver tolerance matched to the seed-stage gate
       procedure, private :: seed_tol => projector_seed_tol
+      !> Ball-cap slack for the deflation solvers, widened by the search margin
+      procedure, private :: search_rho2_slack => projector_search_rho2_slack
       procedure :: project_point => projector_project_point
       procedure, private :: run_multistart_solver => projector_run_multistart_solver
       procedure, private :: run_single_solver => projector_run_single_solver
@@ -354,9 +346,7 @@ contains
       ! criterion shared by the filter, the deflation ball caps and the
       ! certified octree search.
       self%branch_sep_cut = branch_sep_cut
-      self%branch_rho2_slack = 2.0_wp*param%branch_dphi_max/param%phi_alpha
-      self%branch_rho2_slack_search = self%branch_rho2_slack &
-                                      + self%branch_search_margin**2
+      self%branch_rho2_slack = param%branch_rho2_slack()
 
       ! Octree search configuration (level 9); the scratch itself is sized on
       ! first use, since this routine has no channel to report a bad budget.
@@ -417,28 +407,6 @@ contains
 
    end subroutine projector_init_primitives
 
-   !> Compute SSD data for an evaluation point using per-cell screening.
-   !>
-   !> Queries the molecular cell grid for the candidate atom list of the cell
-   !> containing `point` (strict clamp for points outside the atom bounding
-   !> box) and passes it to the SSD subset routine. Zero allocation on the
-   !> hot path - `cell_nlat(start+1:start+n)` is a contiguous slice.
-   !>
-   !> @param[inout] self  Projector instance (cell grid must be built)
-   !> @param[in]    point Evaluation point (3)
-   !> Switch the LSF screening gate between the seed and production thresholds
-   !>
-   !> The seed stage only has to put each seed in the correct basin; Newton
-   !> re-polishes it against the production gate afterwards. A looser gate
-   !> there shrinks the active set, which is what `prepare` spends its time on.
-   !> Swapping costs one O(ncenters) pass over the cached reach column -- no
-   !> allocation and no re-sort -- so it is affordable once per solve.
-   !>
-   !> Any swap invalidates the SSD cache: the same point screened at two
-   !> thresholds gives two different active sets.
-   !>
-   !> @param[inout] self LSF projector instance
-   !> @param[in]    on   `.true.` for the seed threshold, `.false.` to restore
    !> Solver tolerance to use during the seed stage
    !>
    !> Raises `base_tol` to the noise floor the loose gate imposes, so a seed
@@ -463,6 +431,33 @@ contains
       tol = max(tol, self%seed_tol_factor*self%seed_screening_threshold)
    end function projector_seed_tol
 
+   !> Ball-cap slack for the deflation solvers
+   !>
+   !> Derived on every call rather than cached at `init`, so widening the
+   !> margin afterwards actually reaches the solvers.
+   !>
+   !> @param[in] self  Projector instance
+   !> @return    slack Squared cap slack (Bohr^2)
+   pure function projector_search_rho2_slack(self) result(slack)
+      class(drop_projector_type), intent(in) :: self
+      real(wp) :: slack
+
+      slack = self%branch_rho2_slack + self%branch_search_margin**2
+   end function projector_search_rho2_slack
+
+   !> Switch the LSF screening gate between the seed and production thresholds
+   !>
+   !> The seed stage only has to put each seed in the correct basin; Newton
+   !> re-polishes it against the production gate afterwards. A looser gate
+   !> there shrinks the active set, which is what `prepare` spends its time on.
+   !> Swapping costs one O(ncenters) pass over the cached reach column -- no
+   !> allocation and no re-sort -- so it is affordable once per solve.
+   !>
+   !> Any swap invalidates the SSD cache: the same point screened at two
+   !> thresholds gives two different active sets.
+   !>
+   !> @param[inout] self LSF projector instance
+   !> @param[in]    on   `.true.` for the seed threshold, `.false.` to restore
    subroutine projector_seed_screening(self, on)
       class(drop_projector_type), intent(inout) :: self
       logical, intent(in) :: on
@@ -479,6 +474,15 @@ contains
       self%ssd_cache_valid = .false.
    end subroutine projector_seed_screening
 
+   !> Compute SSD data for an evaluation point using per-cell screening.
+   !>
+   !> Queries the molecular cell grid for the candidate atom list of the cell
+   !> containing `point` (strict clamp for points outside the atom bounding
+   !> box) and passes it to the SSD subset routine. Zero allocation on the
+   !> hot path - `cell_nlat(start+1:start+n)` is a contiguous slice.
+   !>
+   !> @param[inout] self  Projector instance (cell grid must be built)
+   !> @param[in]    point Evaluation point (3)
    subroutine projector_compute_ssd(self, point)
       class(drop_projector_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
@@ -1044,7 +1048,7 @@ contains
             bounds_mode=3, &
             xlow=lxl, xupp=lxu, &
             anchor=anchor, &
-            branch_rho2_slack=self%branch_rho2_slack_search, &
+            branch_rho2_slack=self%search_rho2_slack(), &
             error=error &
             )
       else if (level >= 4) then
@@ -1071,7 +1075,7 @@ contains
             dedup_tol=self%deflation_root_tol, &
             retry_radius=retry_radius, &
             anchor=anchor, &
-            branch_rho2_slack=self%branch_rho2_slack_search, &
+            branch_rho2_slack=self%search_rho2_slack(), &
             error=error &
             )
       else
@@ -1589,11 +1593,9 @@ contains
       !> workspace may still be unallocated on its first use, so skip the
       !> allocation sanity check.
       if (n_seeds > 0) then
+         ! `reserve` reports which buffer it refused and why; keep that.
          call work%reserve(n_seeds, error)
-         if (allocated(error)) then
-            call fatal_error(error, "Projection workspace allocation failure")
-            return
-         end if
+         if (allocated(error)) return
          if (.not. allocated(work%points) .or. .not. allocated(work%normals) .or. &
              .not. allocated(work%rho) .or. .not. allocated(work%lambda) .or. &
              .not. allocated(work%phi) .or. .not. allocated(work%converged) .or. &
@@ -1614,10 +1616,7 @@ contains
             n_points = n_points + 1
             if (n_points > work%capacity) then
                call work%reserve(n_points, error)
-               if (allocated(error)) then
-                  call fatal_error(error, "Projection workspace allocation failure")
-                  return
-               end if
+               if (allocated(error)) return
             end if
             work%points(:, n_points) = x_seeds(:, i_seed)
             work%rho(n_points) = sqrt(dot_product( &
@@ -1687,10 +1686,7 @@ contains
             n_points = n_points + 1
             if (n_points > work%capacity) then
                call work%reserve(n_points, error)
-               if (allocated(error)) then
-                  call fatal_error(error, "Projection workspace allocation failure")
-                  return
-               end if
+               if (allocated(error)) return
             end if
             work%points(:, n_points) = x_refined(:)
             work%lambda(n_points) = lambda_refined

@@ -63,7 +63,7 @@ module moist_cavity_drop_parameters
 
       !> ========== Objective Function Weights ==========
 
-      !> Weight w_a for anchor term (keeps points near initial position)
+      !> Weight w_a for anchor term
       real(wp) :: phi_alpha = 0.5_wp
 
       !> ========== Projection Optimization ==========
@@ -201,6 +201,8 @@ module moist_cavity_drop_parameters
       procedure :: print => print_parameters
       !> Return a human-readable description for the current projection level
       procedure :: proj_level_label => get_proj_level_label
+      !> Squared-distance difference a branch may have over the closest one
+      procedure :: branch_rho2_slack => branch_rho2_slack_value
       !> Largest projection distance a branch may have and still carry weight
       procedure :: rho_max_from => rho_max_from_rho_min
 
@@ -528,8 +530,19 @@ contains
       real(wp), intent(in) :: rho_min
       real(wp) :: rho_max
 
-      rho_max = sqrt(rho_min*rho_min + 2.0_wp*self%branch_dphi_max/self%phi_alpha)
+      rho_max = sqrt(rho_min*rho_min + self%branch_rho2_slack())
    end function rho_max_from_rho_min
+
+   !> Squared-distance difference a branch may have over the closest one
+   !>
+   !> @param[in] self  Parameter container
+   !> @return    slack `rho_max^2 - rho_min^2`, in Bohr^2
+   pure function branch_rho2_slack_value(self) result(slack)
+      class(moist_cavity_drop_parameters_type), intent(in) :: self
+      real(wp) :: slack
+
+      slack = 2.0_wp*self%branch_dphi_max/self%phi_alpha
+   end function branch_rho2_slack_value
 
    !> Print current parameter values
    !> @param[in] self Parameter container to display
