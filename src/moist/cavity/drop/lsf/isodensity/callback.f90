@@ -184,9 +184,8 @@ contains
          self%grad(1) = 1.0_wp
          self%hess = 0.0_wp
          self%third = 0.0_wp
-         ! The substitute state is not a derivative jet of anything
-         self%prepared_deriv = -1
-         ! Carry the point in the diagnostic
+         self%prepared_deriv = 3
+
          call fatal_error(error, "External LSF evaluation failed with status "// &
                           format_string(int(status), "(i0)")//" at point ("// &
                           trim(adjustl(format_string(point(1), "(es13.6)")))//" "// &
