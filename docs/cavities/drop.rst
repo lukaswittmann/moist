@@ -218,7 +218,7 @@ Additionally, it can be used in cases where small weights could cause numerical 
 Branching
 ---------
 
-``branching.softmax_scale`` (real, default ``0.05``)
+``branching.softmax_scale`` (real, default ``0.0025``)
   Softmax scale of the branch-weight model in concave regions; smaller values   make the branch-weight distribution sharper.
   Branch fractions are computed from the objective values of all competing projections with a softmax over ``-\\Phi`` divided by this scale, so equal objective values receive equal weights and a lower objective value smoothly dominates.
   The branch ``rho`` cutoff is derived from this and the weight cutoff, and the resulting branch fraction is  multiplied into the integration weight for each projected point.
@@ -242,3 +242,39 @@ Disconnected Points
 
 ``disconnection.threshold`` (real, default ``4.0``)
    Distance threshold (in units of the average grid spacing) above which a projected point is treated as disconnected from the surface.
+
+
+Reading Results
+---------------
+
+A built cavity declares the results it holds, each under the name the
+implementation uses for it, and any of them can be read back by that name.
+The declared set is what the cavity actually computed, so it grows with the
+cavity type and omits optional properties that were never requested -- asking
+for one of those is an error rather than a buffer of zeros.
+
+From Python:
+
+.. code-block:: python
+
+   cavity = CavityDROPSvdW()
+   cavity.update(structure)
+
+   for field in cavity.fields():
+       print(field.name, field.shape, cavity.describe(field.name))
+
+   branched = cavity.get("branch_count") > 1
+   everything = cavity.results()
+
+:meth:`~moist.interface.Cavity.snapshot` remains the typed view of the fields
+most callers want; :meth:`~moist.interface.Cavity.results` is the same data
+without a fixed schema.
+
+From C the same three steps are ``moist_get_cavity_field_count``,
+``moist_get_cavity_field_info`` -- which reports the element type tag, the rank
+and the extents -- and one of ``moist_get_cavity_field_real``,
+``moist_get_cavity_field_int`` or ``moist_get_cavity_field_bool``.
+
+The diagnostic fields (``k1``, ``k2``, ``KM``, ``KG``, ``rho_grid``,
+``rho_grid_anchor``) appear only when the matching property was requested, for
+instance by building the cavity with ``do_fine=True``.
