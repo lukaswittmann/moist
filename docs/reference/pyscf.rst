@@ -87,7 +87,7 @@ For example, the following are three alternative CPCM models; keep the construct
        tolerance=1.0e-10,
        proj_maxiter=150,
        proj_level=3,
-       branch_weight_s=0.05,
+       branch_weight_s=0.0025,
        rho_grid_h=1.0,
        wleb_prune_level=0,
    )
@@ -106,7 +106,7 @@ For example, the following are three alternative CPCM models; keep the construct
        tolerance=1.0e-10,
        proj_maxiter=150,
        proj_level=3,
-       branch_weight_s=0.05,
+       branch_weight_s=0.0025,
        rho_grid_h=1.0,
        wleb_prune_level=0,
    )
