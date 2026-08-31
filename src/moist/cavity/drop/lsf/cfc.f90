@@ -157,6 +157,9 @@ module moist_cavity_drop_lsf_cfc
       !> Highest total derivative order `prepare` provisions (0..4)
       integer :: max_deriv = 2
 
+      !> Reciprocal Lipschitz bound of `S`
+      real(wp) :: excl_inv_lip = 0.0_wp
+
       !* --------------------------- Per-point active list -------------------------- *!
 
       !> Number of atoms that survived screening at the cached point
@@ -275,6 +278,8 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the CFC contribution equals the threshold
       procedure, public :: screening_offset => lsf_screening_offset
+      !> Surface-free radius from the cached Lipschitz bound
+      procedure, public :: exclusion_radius => lsf_exclusion_radius
       !> Finalizer
       final :: finalize_lsf_cfc
    end type moist_cavity_drop_lsf_cfc_type
@@ -362,6 +367,8 @@ contains
 
       self%n_active = 0
       self%prepared_deriv = -1
+
+      call cfc_set_exclusion_bound(self)
    end subroutine lsf_update
 
    !> Configure the highest total derivative order `prepare` provisions
@@ -2500,6 +2507,116 @@ contains
 
       offset = max(0.0_wp, delta_atomic, delta_pair)
    end function lsf_screening_offset
+
+   !* ================================================================================= *!
+   !*                        Surface-free exclusion certificate                         *!
+   !* ================================================================================= *!
+
+   !> Cache the global Lipschitz bound of the CFC level set for the bound geometry
+   !>
+   !> @param[inout] self LSF instance (reads `param`, `ncenters`, `radii`)
+   subroutine cfc_set_exclusion_bound(self)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
+
+      !> Bracket of the `log eps` bisection. The crossing sits near `log eps = 0`
+      !> for any sane parameterization; this span reaches it even for absurd ones.
+      real(wp), parameter :: eps_log_span = 40.0_wp
+      !> Bisection steps. Closes the bracket to far below roundoff, and the whole
+      !> search runs once per `update`.
+      integer, parameter :: eps_steps = 80
+
+      !> Exponent magnitudes and the tail-domination margin `beta - alpha/2`
+      real(wp) :: alpha, beta, gam
+      !> The two smallest radii in the structure
+      real(wp) :: rmin, rmin2
+      !> Pair power as a real, its Young conjugate `m/(m-1)`, and `log B`
+      real(wp) :: mreal, conj, log_b
+      !> The atomic and pair brackets, and the bound itself
+      real(wp) :: lip_atom, lip_pair, lip
+      !> Bisection bracket and midpoint, in `log eps`
+      real(wp) :: lo, hi, mid
+      !> Atom index and bisection counter
+      integer :: i, it
+
+      self%excl_inv_lip = 0.0_wp
+      if (self%ncenters < 1) return
+      if (.not. allocated(self%radii)) return
+      if (size(self%radii) < self%ncenters) return
+
+      alpha = -self%param%a1
+      beta = -self%param%a2
+      mreal = real(self%param%m, wp)
+
+      if (alpha <= 0.0_wp .or. beta <= 0.0_wp) return
+      if (self%param%c < 0.0_wp) return
+      if (self%param%m < 2 .or. modulo(self%param%m, 2) /= 0) return
+
+      rmin = huge(0.0_wp)
+      rmin2 = huge(0.0_wp)
+      do i = 1, self%ncenters
+         if (.not. (self%radii(i) > 0.0_wp)) return
+         if (self%radii(i) < rmin) then
+            rmin2 = rmin
+            rmin = self%radii(i)
+         else if (self%radii(i) < rmin2) then
+            rmin2 = self%radii(i)
+         end if
+      end do
+
+      lip_atom = alpha/rmin
+      lip = lip_atom
+
+      if (self%ncenters >= 2 .and. self%param%c > 0.0_wp) then
+         lip_pair = beta*(1.0_wp/rmin + 1.0_wp/rmin2)
+         gam = beta - 0.5_wp*alpha
+         if (gam <= 0.0_wp) return
+
+         log_b = log(self%param%c) + (2.0_wp*beta - alpha) &
+                 + mreal*(log(mreal/gam) - 1.0_wp) &
+                 + log(0.5_wp*real(self%ncenters - 1, wp)) &
+                 - mreal*log(rmin)
+         conj = mreal/(mreal - 1.0_wp)
+
+         lo = -eps_log_span
+         hi = eps_log_span
+         do it = 1, eps_steps
+            mid = 0.5_wp*(lo + hi)
+            if (lip_atom + exp(log_b + mreal*mid) < &
+                lip_pair + (mreal - 1.0_wp)*exp(-conj*mid)) then
+               lo = mid
+            else
+               hi = mid
+            end if
+         end do
+
+         mid = 0.5_wp*(lo + hi)
+         lip = max(lip_atom + exp(log_b + mreal*mid), &
+                   lip_pair + (mreal - 1.0_wp)*exp(-conj*mid))
+      end if
+
+      ! Catches NaN as well as a bound that overflowed on its way here.
+      if (.not. (lip > 0.0_wp)) return
+      if (lip > sqrt(huge(0.0_wp))) return
+
+      self%excl_inv_lip = 1.0_wp/lip
+   end subroutine cfc_set_exclusion_bound
+
+   !> Radius of a ball around the evaluation point free of surface
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] lsf0  LSF value at the evaluation point
+   !> @returns   r     Surface-free radius (zero when uncertified)
+   pure function lsf_exclusion_radius(self, lsf0) result(r)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> LSF value at the evaluation point
+      real(wp), intent(in) :: lsf0
+      !> Surface-free radius
+      real(wp) :: r
+
+      r = abs(lsf0)*self%excl_inv_lip
+   end function lsf_exclusion_radius
 
    !* ================================================================================= *!
    !*                                    Finalizer                                      *!
