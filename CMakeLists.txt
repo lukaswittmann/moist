@@ -363,7 +363,7 @@ if(MOIST_TESTS)
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
     cavity_iswig cavity_numsa cavity_marchingcubes
