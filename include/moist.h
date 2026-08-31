@@ -979,6 +979,7 @@ moist_contract_amat1_q1q2_surface_weights(moist_error /* error */,
 ///   w_lsf0[ngrid]                      - LSF value adjoint weights
 ///   w_lsf1    Fortran (3,ngrid)        - LSF gradient adjoint weights
 ///   w_lsf2    Fortran (3,3,ngrid)      - LSF Hessian adjoint weights
+/// Note: w_lsf2 is NOT symmetric
 /// This entry point covers the xi/f/xyz channels only; it is a thin wrapper
 /// that forwards NULL for the extended channels below.
 moist_API_ENTRY void moist_API_CALL
@@ -1045,6 +1046,14 @@ moist_get_drop_sizes(moist_error /* error */,
                     int* /* ngrid */,
                     int* /* nmax */,
                     int* /* nsph */) moist_API_SUFFIX__V_0_5;
+
+/// Get DROP grid sizes only (legacy - use moist_get_cavity_sizes and the named
+/// field API instead). Same as moist_get_drop_sizes without nsph.
+moist_API_ENTRY void moist_API_CALL
+moist_get_drop_grid_size(moist_error /* error */,
+                    moist_cavity /* cavity */,
+                    int* /* ngrid */,
+                    int* /* nmax */) moist_API_SUFFIX__V_0_5;
 
 /// Get DROP results (legacy - use moist_get_cavity_results and the named field API instead)
 /// Call moist_get_cavity_sizes first and pass the capacities you allocated the
