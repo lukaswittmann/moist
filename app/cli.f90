@@ -92,7 +92,7 @@ module moist_cli
       integer :: cfc_m = 4
 
       !> Enable all optional cavity properties (curvature, normals, etc.)
-      logical :: cavity_fine = .true.
+      logical :: cavity_fine = .false.
       !> Finest marching-cubes grid spacing in bohr (cavity mode "mc")
       real(wp) :: cavity_mc_spacing = 0.2_wp
       !> Write cavity files to disk (grid types: xyz/csv/pqr, marching cubes: obj/pqr)
