@@ -52,11 +52,13 @@
 !>   * `normalized_f1_rA`                      normalized LSF nuclear grad
 !>   * `contracted_vs_pairwise`                every `tangent_*` / `hvp_*`
 !>                                             against the uncontracted tensors
+!>   * `exclusion_radius_never_overclaims`     the certified ball really is
+!>                                             free of surface, at every
+!>                                             sampling point of the fixture
 !>
 !> SvdW-only:
 !>   * `body_order_scaling`                    1b/2b/3b weight reduction
 !>   * `point_on_nucleus_is_finite`            CFC has no on-nucleus singularity
-!>   * `exclusion_radius_*`                    CFC certifies nothing
 !>
 !> Test fixtures come from the shared MB16-43/Heavy28/Amino20x4/But14diol/UPU23
 !> palette in `test_helpers::get_test_structures`. Per-atom radii come from
@@ -213,8 +215,10 @@ contains
                                test_svdw_exclusion_radius), &
                   new_unittest("svdw_exclusion_radius_gated_on_blends", &
                                test_svdw_exclusion_radius_gate), &
-                  new_unittest("cfc_supplies_no_exclusion_radius", &
-                               test_cfc_exclusion_radius) &
+                  new_unittest("cfc_exclusion_radius_never_overclaims", &
+                               test_cfc_exclusion_radius), &
+                  new_unittest("cfc_exclusion_radius_gated_on_exponents", &
+                               test_cfc_exclusion_radius_gate) &
                   ]
    end subroutine collect_cavity_drop_lsf
 
@@ -4226,29 +4230,42 @@ contains
    !*                        Surface-free exclusion certificate                          *!
    !* ================================================================================= *!
 
-   !> The exclusion radius must never over-claim.
+   !> Probe the boundary of every ball the LSF certifies as surface-free
    !>
    !> `exclusion_radius(S(x))` promises that `S` has no zero inside `B(x, r)`.
    !> The certified branch search rests entirely on that promise -- a radius one
-   !> per cent too large silently hides branches -- so this samples the ball
-   !> around a spread of points and insists `S` keeps its sign throughout.
+   !> per cent too large silently hides branches -- so this walks a spread of
+   !> points, takes the radius the LSF claims and insists `S` keeps its sign on
+   !> the boundary of the ball it claims.
    !>
-   !> The SvdW claim is `r = |S(x)|` from the 1-Lipschitz property, which is
-   !> tight: points at distance exactly `r` may sit on the surface. Sampling
-   !> stops just inside at `0.999 r`.
-   subroutine test_svdw_exclusion_radius(error)
+   !> Sampling stops just inside at `0.999 r`, because a claim can be tight:
+   !> SvdW's `r = |S|` puts points at exactly `r` on the surface.
+   !>
+   !> `n_certified` counts the points that produced a positive radius. A caller
+   !> has to check it: an LSF certifying nothing everywhere would pass every
+   !> probe below without ever being tested.
+   !>
+   !> @param[inout] lsf          LSF bound to the structure the points came from
+   !> @param[in]    points       Sampling points (3, npoint)
+   !> @param[out]   n_certified  Points that claimed a positive radius
+   !> @param[out]   error        Test failure
+   subroutine probe_exclusion_balls(lsf, points, n_certified, error)
+      !> LSF bound to the structure the points came from
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
+      !> Sampling points
+      real(wp), intent(in) :: points(:, :)
+      !> Points that claimed a positive radius
+      integer, intent(out) :: n_certified
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       !> Fraction of the claimed radius actually probed
       real(wp), parameter :: probe_frac = 0.999_wp
 
-      type(structure_type) :: mol
-      class(moist_cavity_drop_lsf_type), allocatable :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
       type(mctc_error), allocatable :: lsf_err
       real(wp) :: centre(ndim), probe(ndim), dir(ndim)
-      real(wp) :: lsf_centre, lsf_probe, r, dir_norm
-      integer :: ipoint, idir, iblend
+      real(wp) :: lsf_centre, lsf_probe, r
+      integer :: ipoint, idir
 
       ! A deterministic spread of probe directions; no RNG, so a failure here
       ! reproduces exactly.
@@ -4263,6 +4280,56 @@ contains
                              1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, 1.0_wp], &
                              [ndim, ndir])
 
+      n_certified = 0
+
+      do ipoint = 1, size(points, 2)
+         centre = points(:, ipoint)
+
+         call lsf%prepare(centre, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+            return
+         end if
+         call lsf%f0(lsf_centre)
+
+         r = lsf%exclusion_radius(lsf_centre)
+         if (r <= 0.0_wp) cycle
+         n_certified = n_certified + 1
+
+         do idir = 1, ndir
+            dir = dirs(:, idir)
+            probe = centre + probe_frac*r*dir/norm2(dir)
+
+            call lsf%prepare(probe, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+            call lsf%f0(lsf_probe)
+
+            if (lsf_probe*lsf_centre <= 0.0_wp) then
+               call test_failed(error, &
+                                "exclusion radius over-claims: S changes sign inside "// &
+                                "the ball it certifies as surface-free")
+               return
+            end if
+         end do
+      end do
+   end subroutine probe_exclusion_balls
+
+   !> The SvdW exclusion radius must never over-claim, at any blend sharpness
+   !>
+   !> The claim is `r = |S(x)|` from the 1-Lipschitz property, and it is tight,
+   !> so this is the one certificate whose probes can legitimately sit arbitrarily
+   !> close to the surface.
+   subroutine test_svdw_exclusion_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      integer :: iblend, n_certified
+
       call get_structure(mol, "MB16-43", "01")
       call get_test_radii(mol, radii)
       call get_test_points(mol, points)
@@ -4271,39 +4338,14 @@ contains
          call init_lsf(lsf, mol, radii, 0, kind_svdw, &
                        blend_k=svdw_blend_k_values(iblend))
 
-         do ipoint = 1, size(points, 2)
-            centre = points(:, ipoint)
+         call probe_exclusion_balls(lsf, points, n_certified, error)
+         if (allocated(error)) return
 
-            call lsf%prepare(centre, lsf_err)
-            if (allocated(lsf_err)) then
-               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-               return
-            end if
-            call lsf%f0(lsf_centre)
-
-            r = lsf%exclusion_radius(lsf_centre)
-            if (r <= 0.0_wp) cycle
-
-            do idir = 1, ndir
-               dir = dirs(:, idir)
-               dir_norm = norm2(dir)
-               probe = centre + probe_frac*r*dir/dir_norm
-
-               call lsf%prepare(probe, lsf_err)
-               if (allocated(lsf_err)) then
-                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
-                  return
-               end if
-               call lsf%f0(lsf_probe)
-
-               if (lsf_probe*lsf_centre <= 0.0_wp) then
-                  call test_failed(error, &
-                                   "exclusion radius over-claims: S changes sign inside "// &
-                                   "the ball it certifies as surface-free")
-                  return
-               end if
-            end do
-         end do
+         if (n_certified == 0) then
+            call test_failed(error, "SvdW certified no ball at all: the probe "// &
+                             "loop never ran")
+            return
+         end if
       end do
    end subroutine test_svdw_exclusion_radius
 
@@ -4331,22 +4373,111 @@ contains
                  message="a negative blend coefficient must certify nothing")
    end subroutine test_svdw_exclusion_radius_gate
 
-   !> CFC has no derived gradient bound yet, so it inherits the base "no
-   !> certificate" answer. Level 9 then runs out of budget instead of
-   !> reporting a completeness it cannot back up.
+   !> The CFC exclusion radius must never over-claim
+   !>
+   !> CFC's `S = -log PD` is not a distance, so its claim is `r = |S| / L` with
+   !> `L` the cached Lipschitz bound of the log pseudo-density. `L` is a proven
+   !> over-estimate of `sup ||grad S||` rather than the exact supremum, so unlike
+   !> SvdW's the balls are typically a factor of a few smaller than they could
+   !> be -- the direction that makes the certificate safe. This checks the
+   !> promise itself, not its sharpness.
    subroutine test_cfc_exclusion_radius(error)
       type(error_type), allocatable, intent(out) :: error
 
-      type(structure_type) :: mol
+      type(structure_type), allocatable :: mols(:)
       class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      integer :: icase, n_certified, n_total
+
+      ! The bound carries an `(n - 1)**(1/m)` term and picks its length scale
+      ! from the two smallest radii in the structure, so it is swept over the
+      ! whole fixture palette rather than one molecule: the failure mode being
+      ! guarded against is a bound that is fine for one size and radius mix and
+      ! too large for another.
+      call get_test_structures(mols, 10)
+
+      n_total = 0
+      do icase = 1, size(mols)
+         call get_test_radii(mols(icase), radii)
+         call get_test_points(mols(icase), points)
+
+         call init_lsf(lsf, mols(icase), radii, 0, kind_cfc)
+
+         call probe_exclusion_balls(lsf, points, n_certified, error)
+         if (allocated(error)) return
+         n_total = n_total + n_certified
+      end do
+
+      if (n_total == 0) then
+         call test_failed(error, "CFC certified no ball at all: the probe loop "// &
+                          "never ran")
+      end if
+   end subroutine test_cfc_exclusion_radius
+
+   !> The CFC certificate covers one family of parameterizations, not all of them
+   !>
+   !> The closed form rests on three properties of the shape parameters: both
+   !> exponents decay (`a1, a2 < 0`), the pair term is non-negative (`c >= 0` and
+   !> `m` even, which is also what keeps `PD` positive and `log PD` defined), and
+   !> the pair term decays faster than the atomic one (`2|a2| > |a1|`), which is
+   !> what lets a pair gradient be charged against the atoms it sits between.
+   !> Break any of them and the answer has to be "no certificate".
+   subroutine test_cfc_exclusion_radius_gate(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
+      type(moist_cavity_drop_lsf_cfc_type) :: cfc
+      real(wp) :: r
 
       call get_structure(mol, "MB16-43", "LiH")
       call get_test_radii(mol, radii)
-      call init_lsf(lsf, mol, radii, 0, kind_cfc)
 
-      call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
-                 message="CFC must not claim an exclusion radius")
-   end subroutine test_cfc_exclusion_radius
+      ! Diedenhofen-Klamt defaults on LiH: the two CPCM radii are 2.46 and 3.87
+      ! Bohr, giving L = 8.4 / Bohr and a certified radius of 0.119 Bohr per unit
+      ! of |S|. The band only has to catch a formula that lost a radius, an
+      ! exponent or a unit.
+      call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=4)
+      call cfc%update(mol, radii)
+      r = cfc%exclusion_radius(-1.0_wp)
+      if (r < 0.05_wp .or. r > 0.2_wp) then
+         call test_failed(error, "default CFC parameters must certify a radius "// &
+                          "near 0.1 Bohr per unit of |S|")
+         return
+      end if
+
+      ! The certificate is linear in the value it is given.
+      call check(error, cfc%exclusion_radius(-3.0_wp), 3.0_wp*r, thr=0.0_wp, &
+                 message="the certified radius must scale with |S|")
+      if (allocated(error)) return
+
+      ! 2|a2| < |a1|: the pair term outlives the atomic terms that pay for it.
+      call cfc%new(a1=-15.0_wp, a2=-7.0_wp, c=5.0_wp, m=4)
+      call cfc%update(mol, radii)
+      call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="a pair term decaying slower than the atomic one "// &
+                 "must certify nothing")
+      if (allocated(error)) return
+
+      ! Odd pair power: `u**m` is not `|u|**m` and `PD` can go negative.
+      call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=3)
+      call cfc%update(mol, radii)
+      call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="an odd pair power must certify nothing")
+      if (allocated(error)) return
+
+      ! Negative coupling: same loss of positivity from the other direction.
+      call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=-5.0_wp, m=4)
+      call cfc%update(mol, radii)
+      call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="a negative pair coupling must certify nothing")
+      if (allocated(error)) return
+
+      ! A growing atomic term is not a level set this bound covers either.
+      call cfc%new(a1=1.0_wp, a2=-9.0_wp, c=5.0_wp, m=4)
+      call cfc%update(mol, radii)
+      call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 message="a non-decaying atomic term must certify nothing")
+   end subroutine test_cfc_exclusion_radius_gate
 
 end module test_cavity_drop_lsf
