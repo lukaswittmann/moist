@@ -368,7 +368,12 @@ contains
       !$omp end parallel do
 
       if (abort%requested) then
-         call move_alloc(abort%error, error)
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Curvature computation aborted. (unreachable in normal execution)")
+         end if
          return
       end if
 
