@@ -145,6 +145,7 @@ contains
       real(wp) :: B11, B12, B22, tr_B, det_B, disc, sqrt_disc
       real(wp) :: beta1, beta2, lambda_switch
       real(wp), parameter :: det_B_guard = 1.0e-30_wp
+      real(wp), parameter :: weight_tol = 1.0e-30_wp
       real(wp) :: Binv11, Binv12, Binv22
       real(wp) :: tau1(2), tau2(2), w1(2), w2(2)
       real(wp) :: vmin_B(2), vmax_B(2), u_switch(3)
@@ -365,6 +366,12 @@ contains
          ! Get LSF gradient magnitude
          g_norm_sq = dot_product(lsf1_r, lsf1_r)
          g_norm = sqrt(g_norm_sq)
+
+         if (g_norm <= weight_tol) then
+            call abort%latch_message("[Error] Level set gradient vanishes", igrid)
+            !$omp cancel do
+            cycle
+         end if
 
          ! Compute Lagrangian gradient and hessian
          G_lagrangian = phi1_r - lambda_val*lsf1_r
@@ -627,6 +634,11 @@ contains
          cross_vec(2) = y1(3)*y2(1) - y1(1)*y2(3)
          cross_vec(3) = y1(1)*y2(2) - y1(2)*y2(1)
          J_val = sqrt(dot_product(cross_vec, cross_vec))
+         if (J_val <= weight_tol) then
+            call abort%latch_message("[Error] Closest-point Jacobian vanishes", igrid)
+            !$omp cancel do
+            cycle
+         end if
          inv_J = 1.0_wp/J_val
 
          ! Precompute Gram-Schmidt data for Q derivative

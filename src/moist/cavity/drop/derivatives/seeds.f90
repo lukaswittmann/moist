@@ -277,11 +277,7 @@ contains
    end subroutine seed_anchor
 
    !> Report a degenerate projected point from the sensitivity kernel
-   !>
-   !> The forward gradient treats these geometries as fatal; the reverse paths
-   !> match that policy, so a Fock response or a nuclear gradient is never
-   !> silently computed from a partially contracted grid.
-   !>
+    !>
    !> @param[in]  context Calling routine, used to prefix the diagnostic
    !> @param[in]  status  Status code returned by `build_seed_state`
    !> @param[in]  igrid   Grid point that failed

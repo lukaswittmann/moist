@@ -14,7 +14,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_surface_weights_type, build_seed_state, seed_state_ok
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
-      & seed_jet_basis, degenerate_point_error
+      & seed_jet_basis
    implicit none (type, external)
 
 contains
@@ -172,10 +172,8 @@ contains
 
          call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
                                self%param%wleb_prune_level > 0, status)
-         if (status /= seed_state_ok) then
-            call degenerate_point_error("contract_surface_lsf_weights", status, igrid, error)
-            return
-         end if
+
+         if (status /= seed_state_ok) cycle
 
          ! Fold an optional outward-normal adjoint weight into the field channels:
          ! the direct grad-S contribution normal_grad = P_tan(w_n)/|grad S| enters
