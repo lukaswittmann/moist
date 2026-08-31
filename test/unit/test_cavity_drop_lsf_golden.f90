@@ -1,12 +1,40 @@
 !> Golden numerical fixture for the DROP level set functions (SvdW and CFC)
+!>
+!> One traversal walks a fixed set of structures, evaluation points and
+!> screening thresholds, and turns every quantity the LSF API exposes into a
+!> stream of labelled records. That stream is then either compared against the
+!> committed fixture (`test/unit/data/lsf_golden_*.txt`) or against a second
+!> traversal in the same process.
+!>
+!> Record layout, one per line of the fixture:
+!>
+!>     kind case ip flag quantity i1 i2 i3 i4 i5 i6 value
+!>
+!>   * `kind`     `svdw` or `cfc`
+!>   * `case`     tag of a [[golden_cases]] entry
+!>   * `ip`       evaluation-point index, see [[build_points]]
+!>   * `flag`     `S` screened as production runs it, `U` unscreened
+!>                reference, `D` screened minus unscreened
+!>   * `i1..i6`   index tuple, unused slots 0; `A`/`B` are *user-space* atom
+!>                indices, so the fixture survives an index-space change in
+!>                `src/` (see [[nuc_slot]])
+!>   * `value`    `es24.16`, an exact IEEE-754 double round trip
+!>
+!> Slots that are symmetric by construction are dumped once (j <= k <= l <= m);
+!> the discarded components are covered by the `*_tensor_symmetry` tests.
+!>
+!> The fixture is committed data and this module deliberately cannot write it:
+!> a golden reference the test can rewrite is one keystroke away from being
+!> "fixed" instead of investigated. If the LSF definition legitimately changes,
+!> regenerate deliberately - dump [[golden_stream_type]] from a throwaway patch
+!> - and review the numerical diff before committing it.
 module test_cavity_drop_lsf_golden
-   use, intrinsic :: iso_fortran_env, only: error_unit
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use mstore, only: get_structure
    use moist_utils_env, only: get_env
-   use test_helpers, only: get_test_radii
+   use test_helpers, only: get_test_radii, check_moist_error, rel_deviation
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
@@ -18,16 +46,25 @@ module test_cavity_drop_lsf_golden
 
    integer, parameter :: ndim = 3
 
+   !> Concrete selectors
+   character(len=*), parameter :: kind_svdw = "svdw"
+   character(len=*), parameter :: kind_cfc = "cfc"
+
+   !> Highest derivative order each concrete is driven at
+   integer, parameter :: max_deriv_svdw = 4
+   integer, parameter :: max_deriv_cfc = 3
+
    !> Screening threshold production uses (DROP `parameters.f90` default)
    real(wp), parameter :: production_threshold = 1.0e-11_wp
 
-   !> Relative tolerance of the golden comparison
-   real(wp), parameter :: golden_rel_tol = 1.0e-12_wp
-   !> Absolute floor of the golden comparison
-   real(wp), parameter :: golden_abs_tol = 1.0e-12_wp
-   !> Tolerance of the companion symmetry checks (gross-asymmetry guard, not
-   !> a roundoff assertion), relative to the largest element of the tensor
+   !> Tolerance of the golden comparison, measured as `rel_deviation`,
+   !> `|a - b| / (1 + |b|)`: relative for large values, absolute near zero
+   real(wp), parameter :: golden_tol = 1.0e-12_wp
+
+   !> Tolerances of the companion symmetry checks (gross-asymmetry guard, not
+   !> a roundoff assertion); relative to the largest element of the tensor
    real(wp), parameter :: symmetry_rel_tol = 1.0e-8_wp
+   real(wp), parameter :: symmetry_abs_tol = 1.0e-12_wp
 
    !> Number of evaluation points per case
    integer, parameter :: n_points = 5
@@ -93,11 +130,13 @@ module test_cavity_drop_lsf_golden
       golden_case_type("ch4_legacy", "MB16-43", "CH4", 3.0_wp, 1.0_wp, 1.0_wp, 1.0_wp)]
 
    !* ================================================================================= *!
-   !*                                  Record sink                                      *!
+   !*                                  Record stream                                    *!
    !* ================================================================================= *!
 
-   !> One parsed fixture line
-   type :: golden_record_type
+   !> What a record is about: the concrete, the case, the evaluation point and
+   !> the screening flag. Every record of one block shares one of these, so it
+   !> travels through the emission routines as a single argument.
+   type :: record_id_type
       !> `svdw` or `cfc`
       character(len=8) :: kind
       !> Case tag
@@ -106,37 +145,41 @@ module test_cavity_drop_lsf_golden
       integer :: ip
       !> `S`, `U` or `D`
       character(len=1) :: flag
+   end type record_id_type
+
+   !> One record: what identifies a number, plus the number
+   type :: golden_record_type
+      !> Concrete, case, evaluation point and screening flag
+      type(record_id_type) :: id
       !> Quantity name
       character(len=20) :: quantity
       !> Index tuple, unused slots 0
       integer :: idx(6)
-      !> Reference value
+      !> Value
       real(wp) :: val
    end type golden_record_type
 
-   !> Write format of a record line; the reader is list-directed
-   character(len=*), parameter :: record_fmt = &
-                                  '(a4,1x,a10,1x,i2,1x,a1,1x,a18,6(1x,i3),1x,es24.16)'
-
-   !> `.true.` while regenerating the fixture, `.false.` while checking it
-   logical :: sink_writing = .false.
-   !> `.true.` while capturing the value stream for the reproducibility check;
-   !> `emit` then neither writes nor compares, it only records
-   logical :: sink_capture = .false.
-   !> Captured value stream, valid entries `1:sink_count`
-   real(wp), allocatable :: sink_vals(:)
-   !> Output unit in regeneration mode
-   integer :: sink_unit = -1
-   !> Records emitted so far (also the cursor into `sink_ref`)
-   integer :: sink_count = 0
-   !> Parsed fixture, checking mode only
-   type(golden_record_type), allocatable :: sink_ref(:)
-   !> Number of valid entries in `sink_ref`
-   integer :: sink_nref = 0
-   !> Number of mismatching records seen
-   integer :: sink_nfail = 0
-   !> Description of the first mismatch, for the failure message
-   character(len=:), allocatable :: sink_message
+   !> The record stream one traversal produces
+   !>
+   !> Structural problems - a shape, an index space or an invariant that no
+   !> longer matches what this harness understands - are collected here rather
+   !> than raised on the spot, so the traversal always runs to completion and
+   !> the caller reports them through the same channel as a numerical mismatch.
+   type :: golden_stream_type
+      !> Emitted records, valid entries `1:n`
+      type(golden_record_type), allocatable :: rec(:)
+      !> Number of emitted records
+      integer :: n = 0
+      !> Number of structural problems seen
+      integer :: nproblem = 0
+      !> Description of the first structural problem
+      character(len=:), allocatable :: problem
+   contains
+      !> Append one record
+      procedure :: emit => stream_emit
+      !> Record a structural problem
+      procedure :: flag_problem => stream_flag_problem
+   end type golden_stream_type
 
 contains
 
@@ -157,56 +200,43 @@ contains
    !*                              Suite entry points                                   *!
    !* ================================================================================= *!
 
-   !> Compare the SvdW LSF against `lsf_golden_svdw.txt`, or rewrite it
+   !> Compare the SvdW LSF against `lsf_golden_svdw.txt`
    subroutine test_svdw_golden(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_golden(error, "svdw")
+      call run_golden(error, kind_svdw)
    end subroutine test_svdw_golden
 
-   !> Compare the CFC LSF against `lsf_golden_cfc.txt`, or rewrite it
+   !> Compare the CFC LSF against `lsf_golden_cfc.txt`
    subroutine test_cfc_golden(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_golden(error, "cfc")
+      call run_golden(error, kind_cfc)
    end subroutine test_cfc_golden
 
-   !> Drive one concrete over the fixture, in whichever mode the environment
-   !> selects. `MOIST_LSF_GOLDEN_REGENERATE` non-empty writes, anything else
-   !> checks.
+   !> Traverse one concrete and hold the resulting stream against its fixture
    !>
    !> @param[out] error  testdrive failure
    !> @param[in]  kind   `svdw` or `cfc`
    subroutine run_golden(error, kind)
+      !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
       !> Concrete selector
       character(len=*), intent(in) :: kind
 
-      character(len=:), allocatable :: path, regen
-      integer :: unit, stat
-      character(len=64) :: tail
+      type(golden_stream_type) :: got
+      type(golden_record_type), allocatable :: ref(:)
+      character(len=:), allocatable :: path
 
       path = golden_path(kind)
 
-      call reset_sink()
-
-      call load_fixture(path, error)
+      call traverse(kind, got, error)
       if (allocated(error)) return
-      sink_writing = .false.
-
-      call traverse(kind, error)
-
+      call check_problems(got, error)
       if (allocated(error)) return
 
-      if (sink_count /= sink_nref) then
-         write (tail, '(i0,a,i0)') sink_count, " records, fixture has ", sink_nref
-         call test_failed(error, "golden fixture length mismatch: evaluated "//trim(tail)// &
-                          " - regenerate "//path)
-         return
-      end if
+      call load_fixture(path, ref, error)
+      if (allocated(error)) return
 
-      if (sink_nfail > 0) then
-         write (tail, '(i0)') sink_nfail
-         call test_failed(error, trim(tail)//" golden record(s) deviate; first: "//sink_message)
-      end if
+      call compare_stream(got, ref, path, error)
    end subroutine run_golden
 
    !> Path of a fixture file. meson exports `MOIST_SOURCE_ROOT`; fpm runs the
@@ -230,43 +260,52 @@ contains
    !> Walk every case / point / screening flag of one concrete, emitting the
    !> full record set in a fixed order.
    !>
-   !> @param[in]  kind   `svdw` or `cfc`
-   !> @param[out] error  testdrive failure (setup problems only)
-   subroutine traverse(kind, error)
+   !> @param[in]  kind    `svdw` or `cfc`
+   !> @param[out] stream  Emitted records
+   !> @param[out] error   testdrive failure (setup problems only)
+   subroutine traverse(kind, stream, error)
       !> Concrete selector
       character(len=*), intent(in) :: kind
+      !> Emitted records
+      type(golden_stream_type), intent(out) :: stream
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:), points(:, :)
       integer, allocatable :: sel(:)
-      integer :: icase, ncase, ip
+      integer :: icase, ip
 
-      if (kind == "svdw") then
-         ncase = n_svdw_cases
-      else
-         ncase = n_cfc_cases
-      end if
-
-      do icase = 1, ncase
+      do icase = 1, n_cases(kind)
          call load_case(golden_cases(icase), mol, radii)
          call build_points(mol, radii, points, error)
          if (allocated(error)) return
          call select_atoms(mol%nat, sel)
 
          do ip = 1, n_points
-            if (kind == "svdw") then
-               call svdw_point(golden_cases(icase), mol, radii, points(:, ip), ip, sel, error)
-            else
-               call cfc_point(golden_cases(icase), mol, radii, points(:, ip), ip, sel, error)
-            end if
+            call emit_point(kind, golden_cases(icase), mol, radii, points(:, ip), ip, &
+                            sel, stream, error)
             if (allocated(error)) return
          end do
 
          deallocate (radii, points, sel)
       end do
    end subroutine traverse
+
+   !> Number of fixture cases one concrete is driven over
+   !>
+   !> @param[in] kind  `svdw` or `cfc`
+   !> @returns         Case count
+   pure integer function n_cases(kind)
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
+
+      if (kind == kind_svdw) then
+         n_cases = n_svdw_cases
+      else
+         n_cases = n_cfc_cases
+      end if
+   end function n_cases
 
    !> Fetch an mstore structure and its CPCM-table radii
    !>
@@ -370,66 +409,27 @@ contains
    end subroutine select_atoms
 
    !* ================================================================================= *!
-   !*                              SvdW record emission                                 *!
+   !*                                LSF construction                                   *!
    !* ================================================================================= *!
 
-   !> Emit (or check) every SvdW record of one case at one evaluation point,
-   !> screened block first, unscreened block second, difference block last.
+   !> Allocate a fresh LSF of the requested concrete kind, bind it to `mol` and
+   !> drive it to that kind's derivative cap.
    !>
-   !> @param[in]  gcase  Case descriptor
-   !> @param[in]  mol    Structure
-   !> @param[in]  radii  Per-atom radii
-   !> @param[in]  point  Evaluation point
-   !> @param[in]  ip     Evaluation-point index
-   !> @param[in]  sel    Selected atom indices
-   !> @param[out] error  testdrive failure
-   subroutine svdw_point(gcase, mol, radii, point, ip, sel, error)
-      !> Case descriptor
-      type(golden_case_type), intent(in) :: gcase
-      !> Structure
-      type(structure_type), intent(in) :: mol
-      !> Per-atom radii
-      real(wp), intent(in) :: radii(:)
-      !> Evaluation point
-      real(wp), intent(in) :: point(ndim)
-      !> Evaluation-point index
-      integer, intent(in) :: ip
-      !> Selected atom indices
-      integer, intent(in) :: sel(:)
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf_scr, lsf_ref
-      real(wp) :: f0_scr, f0_ref
-
-      call new_svdw(lsf_scr, gcase, mol, radii, production_threshold)
-      call new_svdw(lsf_ref, gcase, mol, radii, 0.0_wp)
-
-      call prepare_svdw(lsf_scr, point, error)
-      if (allocated(error)) return
-      call prepare_svdw(lsf_ref, point, error)
-      if (allocated(error)) return
-
-      call assert_unscreened(lsf_ref%active_count(), mol%nat, gcase%tag, ip, error)
-      if (allocated(error)) return
-
-      call svdw_block(lsf_scr, gcase, ip, "S", sel, f0_scr)
-      call svdw_block(lsf_ref, gcase, ip, "U", sel, f0_ref)
-      call emit("svdw", gcase%tag, ip, "D", "f0_delta", [0, 0, 0, 0, 0, 0], f0_scr - f0_ref)
-   end subroutine svdw_point
-
-   !> Construct and bind one SvdW LSF at a given screening threshold.
-   !> The threshold must be set before `update`, which is what pushes it into
-   !> the SSD system.
+   !> The screening threshold has to be set before `update`, which is what
+   !> pushes it into the SSD system. Only the constructor differs between the
+   !> concretes; everything after it is base-class API.
    !>
-   !> @param[out] lsf    Fresh SvdW LSF
-   !> @param[in]  gcase  Case descriptor (supplies the blending weights)
+   !> @param[out] lsf    Fresh LSF
+   !> @param[in]  kind   `svdw` or `cfc`
+   !> @param[in]  gcase  Case descriptor (supplies the SvdW blending weights)
    !> @param[in]  mol    Structure
    !> @param[in]  radii  Per-atom radii
    !> @param[in]  thr    Screening threshold
-   subroutine new_svdw(lsf, gcase, mol, radii, thr)
-      !> Fresh SvdW LSF
-      type(moist_cavity_drop_lsf_svdw_type), intent(out) :: lsf
+   subroutine new_lsf(lsf, kind, gcase, mol, radii, thr)
+      !> Fresh LSF
+      class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
       !> Case descriptor
       type(golden_case_type), intent(in) :: gcase
       !> Structure
@@ -439,92 +439,179 @@ contains
       !> Screening threshold
       real(wp), intent(in) :: thr
 
-      lsf%screening_threshold = thr
-      call lsf%new(blend_k=gcase%blend_k, blend_1b=gcase%blend_1b, &
-                   blend_2b=gcase%blend_2b, blend_3b=gcase%blend_3b)
-      call lsf%update(mol, radii)
-      call lsf%set_max_deriv(4)
-   end subroutine new_svdw
+      integer :: max_deriv
 
-   !> `prepare` an SvdW LSF, translating an LSF error into a testdrive failure
+      select case (kind)
+      case (kind_svdw)
+         allocate (moist_cavity_drop_lsf_svdw_type :: lsf)
+         select type (lsf)
+         type is (moist_cavity_drop_lsf_svdw_type)
+            lsf%screening_threshold = thr
+            call lsf%new(blend_k=gcase%blend_k, blend_1b=gcase%blend_1b, &
+                         blend_2b=gcase%blend_2b, blend_3b=gcase%blend_3b)
+         end select
+         max_deriv = max_deriv_svdw
+      case (kind_cfc)
+         allocate (moist_cavity_drop_lsf_cfc_type :: lsf)
+         select type (lsf)
+         type is (moist_cavity_drop_lsf_cfc_type)
+            lsf%screening_threshold = thr
+            call lsf%new()
+         end select
+         max_deriv = max_deriv_cfc
+      case default
+         error stop "new_lsf: unknown kind '"//kind//"'"
+      end select
+
+      call lsf%update(mol, radii)
+      call lsf%set_max_deriv(max_deriv)
+   end subroutine new_lsf
+
+   !> `prepare` an LSF, translating an LSF error into a testdrive failure
    !>
-   !> @param[inout] lsf    SvdW LSF
+   !> @param[inout] lsf    LSF to prepare
    !> @param[in]    point  Evaluation point
    !> @param[out]   error  testdrive failure
-   subroutine prepare_svdw(lsf, point, error)
-      !> SvdW LSF
-      type(moist_cavity_drop_lsf_svdw_type), intent(inout) :: lsf
+   subroutine prepare_lsf(lsf, point, error)
+      !> LSF to prepare
+      class(moist_cavity_drop_lsf_type), intent(inout) :: lsf
       !> Evaluation point
       real(wp), intent(in) :: point(ndim)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
-      type(mctc_error), allocatable :: lsf_err
+      type(mctc_error), allocatable :: err
 
-      call lsf%prepare(point, lsf_err)
-      if (allocated(lsf_err)) call test_failed(error, "SvdW prepare failed: "//lsf_err%message)
-   end subroutine prepare_svdw
+      call lsf%prepare(point, err)
+      call check_moist_error(error, err, "LSF prepare failed")
+   end subroutine prepare_lsf
 
-   !> Emit every SvdW quantity of one prepared LSF under one screening flag
+   !* ================================================================================= *!
+   !*                                Record emission                                    *!
+   !* ================================================================================= *!
+
+   !> Emit every record of one case at one evaluation point: screened block
+   !> first, unscreened block second, difference record last.
    !>
-   !> @param[in]  lsf    Prepared SvdW LSF
-   !> @param[in]  gcase  Case descriptor
-   !> @param[in]  ip     Evaluation-point index
-   !> @param[in]  flag   `S` or `U`
-   !> @param[in]  sel    Selected atom indices
-   !> @param[out] f0     Value returned by `f0`, for the delta record
-   subroutine svdw_block(lsf, gcase, ip, flag, sel, f0)
-      !> Prepared SvdW LSF
-      type(moist_cavity_drop_lsf_svdw_type), intent(in) :: lsf
+   !> @param[in]    kind    `svdw` or `cfc`
+   !> @param[in]    gcase   Case descriptor
+   !> @param[in]    mol     Structure
+   !> @param[in]    radii   Per-atom radii
+   !> @param[in]    point   Evaluation point
+   !> @param[in]    ip      Evaluation-point index
+   !> @param[in]    sel     Selected atom indices
+   !> @param[inout] stream  Record sink
+   !> @param[out]   error   testdrive failure
+   subroutine emit_point(kind, gcase, mol, radii, point, ip, sel, stream, error)
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
       !> Case descriptor
       type(golden_case_type), intent(in) :: gcase
+      !> Structure
+      type(structure_type), intent(in) :: mol
+      !> Per-atom radii
+      real(wp), intent(in) :: radii(:)
+      !> Evaluation point
+      real(wp), intent(in) :: point(ndim)
       !> Evaluation-point index
       integer, intent(in) :: ip
-      !> Screening flag
-      character(len=*), intent(in) :: flag
       !> Selected atom indices
       integer, intent(in) :: sel(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf_scr, lsf_ref
+      real(wp) :: f0_scr, f0_ref
+
+      call new_lsf(lsf_scr, kind, gcase, mol, radii, production_threshold)
+      call new_lsf(lsf_ref, kind, gcase, mol, radii, 0.0_wp)
+
+      call prepare_lsf(lsf_scr, point, error)
+      if (allocated(error)) return
+      call prepare_lsf(lsf_ref, point, error)
+      if (allocated(error)) return
+
+      call assert_unscreened(lsf_ref%active_count(), mol%nat, gcase%tag, ip, error)
+      if (allocated(error)) return
+
+      call emit_block(lsf_scr, record_id_type(kind, gcase%tag, ip, "S"), sel, stream, f0_scr)
+      call emit_block(lsf_ref, record_id_type(kind, gcase%tag, ip, "U"), sel, stream, f0_ref)
+      call stream%emit(record_id_type(kind, gcase%tag, ip, "D"), "f0_delta", idx6(), &
+                       f0_scr - f0_ref)
+   end subroutine emit_point
+
+   !> Emit every quantity of one prepared LSF under one screening flag
+   !>
+   !> The two concretes share the spatial and single-nucleus blocks; the pair
+   !> and normalisation blocks, and everything of derivative order 4, are SvdW
+   !> only, because CFC is capped at order 3 today and an accessor asked for an
+   !> order it was not prepared for is a hard failure by design.
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[inout] stream  Record sink
+   !> @param[out]   f0      Value returned by `f0`, for the delta record
+   subroutine emit_block(lsf, id, sel, stream, f0)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
       !> Value of `f0`
       real(wp), intent(out) :: f0
 
-      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim), norm0
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim), lsf4_rrrr(ndim, ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :), lsf4_rrr_rA(:, :, :, :, :)
-      real(wp), allocatable :: lsf2_rArB(:, :, :, :), lsf3_r_rArB(:, :, :, :, :)
-      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :, :)
-      real(wp), allocatable :: norm1_rA(:, :)
+      !> Atom -> active index map (0 = screened away)
       integer, allocatable :: act(:)
-      integer :: nat, nac, j, k, l, m, s, t, ia, ib, atomA, atomB, slotA, slotB
 
-      nat = lsf%ncenters
-      ! Every nuclear output is active-indexed and caller-sized; the harness
-      ! resolves the index space from the extent it gets back (see `nuc_slot`)
-      nac = lsf%active_count()
-      allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
-      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
-      allocate (lsf2_rArB(ndim, nac, ndim, nac))
-      allocate (lsf3_r_rArB(ndim, ndim, nac, ndim, nac))
-      allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
-      allocate (norm1_rA(ndim, nac))
-      call active_map(lsf, nat, act)
+      call active_map(lsf, act, stream)
 
-      call emit("svdw", gcase%tag, ip, flag, "n_active", [0, 0, 0, 0, 0, 0], &
-                real(lsf%active_count(), wp))
+      call emit_spatial_block(lsf, id, stream, f0)
+      call emit_nuclear_block(lsf, id, sel, act, stream)
+      if (id%kind /= kind_svdw) return
+      call emit_pair_block(lsf, id, sel, act, stream)
+      call emit_normalized_block(lsf, id, sel, act, stream)
+   end subroutine emit_block
+
+   !> Emit the quantities that differentiate with respect to the evaluation
+   !> point only, plus the active count that scopes every nuclear record
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[inout] stream  Record sink
+   !> @param[out]   f0      Value returned by `f0`
+   subroutine emit_spatial_block(lsf, id, stream, f0)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
+      !> Value of `f0`
+      real(wp), intent(out) :: f0
+
+      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim)
+      real(wp) :: lsf3_rrr(ndim, ndim, ndim), lsf4_rrrr(ndim, ndim, ndim, ndim)
+      integer :: j, k, l, m
+
+      call stream%emit(id, "n_active", idx6(), real(lsf%active_count(), wp))
 
       call lsf%f0(f0)
-      call emit("svdw", gcase%tag, ip, flag, "f0", [0, 0, 0, 0, 0, 0], f0)
+      call stream%emit(id, "f0", idx6(), f0)
 
       call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
-      call emit("svdw", gcase%tag, ip, flag, "f012_lsf0", [0, 0, 0, 0, 0, 0], lsf0)
+      call stream%emit(id, "f012_lsf0", idx6(), lsf0)
       do j = 1, ndim
-         call emit("svdw", gcase%tag, ip, flag, "f012_lsf1_r", [j, 0, 0, 0, 0, 0], lsf1_r(j))
+         call stream%emit(id, "f012_lsf1_r", idx6(j), lsf1_r(j))
       end do
       do j = 1, ndim
          do k = j, ndim
-            call emit("svdw", gcase%tag, ip, flag, "f012_lsf2_rr", [j, k, 0, 0, 0, 0], &
-                      lsf2_rr(j, k))
+            call stream%emit(id, "f012_lsf2_rr", idx6(j, k), lsf2_rr(j, k))
          end do
       end do
 
@@ -532,104 +619,164 @@ contains
       do j = 1, ndim
          do k = j, ndim
             do l = k, ndim
-               call emit("svdw", gcase%tag, ip, flag, "f3_rrr", [j, k, l, 0, 0, 0], &
-                         lsf3_rrr(j, k, l))
+               call stream%emit(id, "f3_rrr", idx6(j, k, l), lsf3_rrr(j, k, l))
             end do
          end do
       end do
+
+      if (id%kind /= kind_svdw) return
 
       call lsf%f4_rrrr(lsf4_rrrr)
       do j = 1, ndim
          do k = j, ndim
             do l = k, ndim
                do m = l, ndim
-                  call emit("svdw", gcase%tag, ip, flag, "f4_rrrr", [j, k, l, m, 0, 0], &
-                            lsf4_rrrr(j, k, l, m))
+                  call stream%emit(id, "f4_rrrr", idx6(j, k, l, m), lsf4_rrrr(j, k, l, m))
                end do
             end do
          end do
       end do
+   end subroutine emit_spatial_block
+
+   !> Emit the derivatives that carry exactly one nuclear index
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[in]    act     Atom -> active index map
+   !> @param[inout] stream  Record sink
+   subroutine emit_nuclear_block(lsf, id, sel, act, stream)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Atom -> active index map
+      integer, intent(in) :: act(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
+
+      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
+      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :), lsf4_rrr_rA(:, :, :, :, :)
+      integer :: nac, j, k, l, s, ia, atomA, slotA
+
+      ! Every nuclear output is active-indexed and caller-sized; the harness
+      ! resolves the index space from the extent it gets back (see `nuc_slot`)
+      nac = lsf%active_count()
+      allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
+      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
 
       call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-      call check_user_space(lsf1_rA, act, "f3rrA_lsf1_rA")
+      call check_user_space(lsf1_rA, act, "f3rrA_lsf1_rA", stream)
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf1_rA, 2), atomA, act, "f3rrA_lsf1_rA")
+         slotA = nuc_slot(size(lsf1_rA, 2), atomA, act, "f3rrA_lsf1_rA", stream)
          do s = 1, ndim
-            call emit("svdw", gcase%tag, ip, flag, "f3rrA_lsf1_rA", [s, atomA, 0, 0, 0, 0], &
-                      nuc_read2(lsf1_rA, s, slotA))
+            call stream%emit(id, "f3rrA_lsf1_rA", idx6(s, atomA), &
+                             slot_read(lsf1_rA(s, :), slotA))
          end do
       end do
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf2_r_rA, 3), atomA, act, "f3rrA_lsf2_r_rA")
+         slotA = nuc_slot(size(lsf2_r_rA, 3), atomA, act, "f3rrA_lsf2_r_rA", stream)
          do s = 1, ndim
             do j = 1, ndim
-               call emit("svdw", gcase%tag, ip, flag, "f3rrA_lsf2_r_rA", &
-                         [j, s, atomA, 0, 0, 0], nuc_read3(lsf2_r_rA, j, s, slotA))
+               call stream%emit(id, "f3rrA_lsf2_r_rA", idx6(j, s, atomA), &
+                                slot_read(lsf2_r_rA(j, s, :), slotA))
             end do
          end do
       end do
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf3_rr_rA, 4), atomA, act, "f3_rr_rA")
+         slotA = nuc_slot(size(lsf3_rr_rA, 4), atomA, act, "f3_rr_rA", stream)
          do s = 1, ndim
             do j = 1, ndim
                do k = j, ndim
-                  call emit("svdw", gcase%tag, ip, flag, "f3_rr_rA", &
-                            [j, k, s, atomA, 0, 0], nuc_read4(lsf3_rr_rA, j, k, s, slotA))
+                  call stream%emit(id, "f3_rr_rA", idx6(j, k, s, atomA), &
+                                   slot_read(lsf3_rr_rA(j, k, s, :), slotA))
                end do
             end do
          end do
       end do
 
+      if (id%kind /= kind_svdw) return
+
+      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
       call lsf%f4_rrr_rA(lsf4_rrr_rA)
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf4_rrr_rA, 5), atomA, act, "f4_rrr_rA")
+         slotA = nuc_slot(size(lsf4_rrr_rA, 5), atomA, act, "f4_rrr_rA", stream)
          do s = 1, ndim
             do j = 1, ndim
                do k = j, ndim
                   do l = k, ndim
-                     call emit("svdw", gcase%tag, ip, flag, "f4_rrr_rA", &
-                               [j, k, l, s, atomA, 0], &
-                               nuc_read5(lsf4_rrr_rA, j, k, l, s, slotA))
+                     call stream%emit(id, "f4_rrr_rA", idx6(j, k, l, s, atomA), &
+                                      slot_read(lsf4_rrr_rA(j, k, l, s, :), slotA))
                   end do
                end do
             end do
          end do
       end do
+   end subroutine emit_nuclear_block
+
+   !> Emit the derivatives that carry two nuclear indices
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[in]    act     Atom -> active index map
+   !> @param[inout] stream  Record sink
+   subroutine emit_pair_block(lsf, id, sel, act, stream)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Atom -> active index map
+      integer, intent(in) :: act(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
+
+      real(wp), allocatable :: lsf2_rArB(:, :, :, :), lsf3_r_rArB(:, :, :, :, :)
+      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :, :)
+      integer :: nac, npair, j, k, s, t, ia, ib, atomA, atomB, slotA, slotB
+
+      nac = lsf%active_count()
+      npair = min(n_pair_atoms, size(sel))
+      allocate (lsf2_rArB(ndim, nac, ndim, nac))
+      allocate (lsf3_r_rArB(ndim, ndim, nac, ndim, nac))
+      allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
 
       call lsf%f2_rArB(lsf2_rArB)
-      do ia = 1, min(n_pair_atoms, size(sel))
+      do ia = 1, npair
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf2_rArB, 2), atomA, act, "f2_rArB")
-         do ib = 1, min(n_pair_atoms, size(sel))
+         slotA = nuc_slot(size(lsf2_rArB, 2), atomA, act, "f2_rArB", stream)
+         do ib = 1, npair
             atomB = sel(ib)
-            slotB = nuc_slot(size(lsf2_rArB, 4), atomB, act, "f2_rArB")
+            slotB = nuc_slot(size(lsf2_rArB, 4), atomB, act, "f2_rArB", stream)
             do s = 1, ndim
                do t = 1, ndim
-                  call emit("svdw", gcase%tag, ip, flag, "f2_rArB", &
-                            [s, atomA, t, atomB, 0, 0], &
-                            pair_read4(lsf2_rArB, s, slotA, t, slotB))
+                  call stream%emit(id, "f2_rArB", idx6(s, atomA, t, atomB), &
+                                   slot_read2(lsf2_rArB(s, :, t, :), slotA, slotB))
                end do
             end do
          end do
       end do
 
       call lsf%f3_r_rArB(lsf3_r_rArB)
-      do ia = 1, min(n_pair_atoms, size(sel))
+      do ia = 1, npair
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf3_r_rArB, 3), atomA, act, "f3_r_rArB")
-         do ib = 1, min(n_pair_atoms, size(sel))
+         slotA = nuc_slot(size(lsf3_r_rArB, 3), atomA, act, "f3_r_rArB", stream)
+         do ib = 1, npair
             atomB = sel(ib)
-            slotB = nuc_slot(size(lsf3_r_rArB, 5), atomB, act, "f3_r_rArB")
+            slotB = nuc_slot(size(lsf3_r_rArB, 5), atomB, act, "f3_r_rArB", stream)
             do s = 1, ndim
                do t = 1, ndim
                   do j = 1, ndim
-                     call emit("svdw", gcase%tag, ip, flag, "f3_r_rArB", &
-                               [j, s, atomA, t, atomB, 0], &
-                               pair_read5(lsf3_r_rArB, j, s, slotA, t, slotB))
+                     call stream%emit(id, "f3_r_rArB", idx6(j, s, atomA, t, atomB), &
+                                      slot_read2(lsf3_r_rArB(j, s, :, t, :), slotA, slotB))
                   end do
                end do
             end do
@@ -637,40 +784,93 @@ contains
       end do
 
       call lsf%f4_rr_rArB(lsf4_rr_rArB)
-      do ia = 1, min(n_pair_atoms, size(sel))
+      do ia = 1, npair
          atomA = sel(ia)
-         slotA = nuc_slot(size(lsf4_rr_rArB, 4), atomA, act, "f4_rr_rArB")
-         do ib = 1, min(n_pair_atoms, size(sel))
+         slotA = nuc_slot(size(lsf4_rr_rArB, 4), atomA, act, "f4_rr_rArB", stream)
+         do ib = 1, npair
             atomB = sel(ib)
-            slotB = nuc_slot(size(lsf4_rr_rArB, 6), atomB, act, "f4_rr_rArB")
+            slotB = nuc_slot(size(lsf4_rr_rArB, 6), atomB, act, "f4_rr_rArB", stream)
             do s = 1, ndim
                do t = 1, ndim
                   do j = 1, ndim
                      do k = j, ndim
-                        call emit("svdw", gcase%tag, ip, flag, "f4_rr_rArB", &
-                                  [j, k, s, atomA, t, atomB], &
-                                  pair_read6(lsf4_rr_rArB, j, k, s, slotA, t, slotB))
+                        call stream%emit(id, "f4_rr_rArB", &
+                                         idx6(j, k, s, atomA, t, atomB), &
+                                         slot_read2(lsf4_rr_rArB(j, k, s, :, t, :), &
+                                                    slotA, slotB))
                      end do
                   end do
                end do
             end do
          end do
       end do
+   end subroutine emit_pair_block
+
+   !> Emit the surface-normalised value and its nuclear gradient
+   !>
+   !> @param[in]    lsf     Prepared LSF
+   !> @param[in]    id      Concrete, case, point and screening flag
+   !> @param[in]    sel     Selected atom indices
+   !> @param[in]    act     Atom -> active index map
+   !> @param[inout] stream  Record sink
+   subroutine emit_normalized_block(lsf, id, sel, act, stream)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Record identity
+      type(record_id_type), intent(in) :: id
+      !> Selected atom indices
+      integer, intent(in) :: sel(:)
+      !> Atom -> active index map
+      integer, intent(in) :: act(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
+
+      real(wp), allocatable :: norm1_rA(:, :)
+      real(wp) :: norm0
+      integer :: s, ia, atomA, slotA
+
+      allocate (norm1_rA(ndim, lsf%active_count()))
 
       call lsf%normalized_f01_rA(norm0, norm1_rA)
-      call check_user_space(norm1_rA, act, "normalized_f1_rA")
-      call emit("svdw", gcase%tag, ip, flag, "normalized_f0", [0, 0, 0, 0, 0, 0], norm0)
+      call check_user_space(norm1_rA, act, "normalized_f1_rA", stream)
+      call stream%emit(id, "normalized_f0", idx6(), norm0)
       do ia = 1, size(sel)
          atomA = sel(ia)
-         slotA = nuc_slot(size(norm1_rA, 2), atomA, act, "normalized_f1_rA")
+         slotA = nuc_slot(size(norm1_rA, 2), atomA, act, "normalized_f1_rA", stream)
          do s = 1, ndim
-            call emit("svdw", gcase%tag, ip, flag, "normalized_f1_rA", &
-                      [s, atomA, 0, 0, 0, 0], nuc_read2(norm1_rA, s, slotA))
+            call stream%emit(id, "normalized_f1_rA", idx6(s, atomA), &
+                             slot_read(norm1_rA(s, :), slotA))
          end do
       end do
-   end subroutine svdw_block
+   end subroutine emit_normalized_block
 
-   !* --------------------------- Index-space-safe reads --------------------------- *!
+   !> Pack up to six indices into the fixture's index tuple, zero-filling the
+   !> slots a quantity does not use
+   !>
+   !> @param[in] i1  First index
+   !> @param[in] i2  Second index
+   !> @param[in] i3  Third index
+   !> @param[in] i4  Fourth index
+   !> @param[in] i5  Fifth index
+   !> @param[in] i6  Sixth index
+   !> @returns       Index tuple
+   pure function idx6(i1, i2, i3, i4, i5, i6) result(tuple)
+      !> Indices to pack, in order
+      integer, intent(in), optional :: i1, i2, i3, i4, i5, i6
+      integer :: tuple(6)
+
+      tuple = 0
+      if (present(i1)) tuple(1) = i1
+      if (present(i2)) tuple(2) = i2
+      if (present(i3)) tuple(3) = i3
+      if (present(i4)) tuple(4) = i4
+      if (present(i5)) tuple(5) = i5
+      if (present(i6)) tuple(6) = i6
+   end function idx6
+
+   !* ================================================================================= *!
+   !*                            Index-space-safe reads                                 *!
+   !* ================================================================================= *!
    !>
    !> Every nuclear array the LSF hands back is read through this family, never
    !> by indexing it directly. The rule the harness follows is: records are keyed
@@ -692,12 +892,13 @@ contains
    !> When every atom is active the two spaces coincide, because [[active_map]]
    !> asserts the active list is then in ascending user-space order.
    !>
-   !> @param[in] extent  Length of the nuclear dimension as returned
-   !> @param[in] atom    User-space atom id
-   !> @param[in] act     Atom -> active index map (0 = dropped), size ncenters
-   !> @param[in] label   Quantity name, for the failure message
-   !> @returns           Slot to read, or 0 if the atom has none
-   integer function nuc_slot(extent, atom, act, label)
+   !> @param[in]    extent  Length of the nuclear dimension as returned
+   !> @param[in]    atom    User-space atom id
+   !> @param[in]    act     Atom -> active index map (0 = dropped), size ncenters
+   !> @param[in]    label   Quantity name, for the failure message
+   !> @param[inout] stream  Record sink, to report a structural change
+   !> @returns              Slot to read, or 0 if the atom has none
+   integer function nuc_slot(extent, atom, act, label, stream)
       !> Length of the nuclear dimension as returned
       integer, intent(in) :: extent
       !> User-space atom id
@@ -706,414 +907,95 @@ contains
       integer, intent(in) :: act(:)
       !> Quantity name, for the failure message
       character(len=*), intent(in) :: label
-
-      character(len=64) :: tail
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
 
       if (extent == size(act)) then
          nuc_slot = atom
       else if (extent == count(act > 0)) then
          nuc_slot = act(atom)
       else
-         write (tail, '(a,i0,a,i0,a,i0)') " extent ", extent, " is neither ncenters ", &
-            size(act), " nor active_count ", count(act > 0)
-         call flag_problem(label//":"//trim(tail)//" - index space changed in src/")
+         call stream%flag_problem(label//": extent "//itoa(extent)// &
+                                  " is neither ncenters "//itoa(size(act))// &
+                                  " nor active_count "//itoa(count(act > 0))// &
+                                  " - index space changed in src/")
          nuc_slot = 0
          return
       end if
       if (nuc_slot < 1 .or. nuc_slot > extent) nuc_slot = 0
    end function nuc_slot
 
-   !> Read `t(i1, slotA)`, or 0 when the atom has no slot
-   !> @param[in] t      Nuclear array `(axis, A)`
-   !> @param[in] i1     Leading index
-   !> @param[in] slotA  Slot from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function nuc_read2(t, i1, slotA) result(val)
-      !> Nuclear array
-      real(wp), intent(in) :: t(:, :)
-      !> Leading index
-      integer, intent(in) :: i1
-      !> Slot of A
-      integer, intent(in) :: slotA
-      real(wp) :: val
+   !> Read the nuclear slot of a rank-reduced slice, or 0 when the atom has none
+   !>
+   !> Call sites slice every fixed index away first - `t(j, k, s, :)` - so one
+   !> routine serves nuclear arrays of any rank.
+   !>
+   !> @param[in] v     Nuclear slice, one element per slot
+   !> @param[in] slot  Slot from [[nuc_slot]]
+   !> @returns         Element or 0
+   pure real(wp) function slot_read(v, slot) result(val)
+      !> Nuclear slice
+      real(wp), intent(in) :: v(:)
+      !> Slot to read
+      integer, intent(in) :: slot
 
       val = 0.0_wp
-      if (slotA > 0) val = t(i1, slotA)
-   end function nuc_read2
+      if (slot > 0) val = v(slot)
+   end function slot_read
 
-   !> Read `t(i1, i2, slotA)`, or 0 when the atom has no slot
-   !> @param[in] t      Nuclear array `(axis, axis, A)`
-   !> @param[in] i1     First index
-   !> @param[in] i2     Second index
-   !> @param[in] slotA  Slot from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function nuc_read3(t, i1, i2, slotA) result(val)
-      !> Nuclear array
-      real(wp), intent(in) :: t(:, :, :)
-      !> First index
-      integer, intent(in) :: i1
-      !> Second index
-      integer, intent(in) :: i2
-      !> Slot of A
-      integer, intent(in) :: slotA
-      real(wp) :: val
-
-      val = 0.0_wp
-      if (slotA > 0) val = t(i1, i2, slotA)
-   end function nuc_read3
-
-   !> Read `t(i1, i2, i3, slotA)`, or 0 when the atom has no slot
-   !> @param[in] t      Nuclear array `(axis, axis, axis, A)`
-   !> @param[in] i1     First index
-   !> @param[in] i2     Second index
-   !> @param[in] i3     Third index
-   !> @param[in] slotA  Slot from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function nuc_read4(t, i1, i2, i3, slotA) result(val)
-      !> Nuclear array
-      real(wp), intent(in) :: t(:, :, :, :)
-      !> First index
-      integer, intent(in) :: i1
-      !> Second index
-      integer, intent(in) :: i2
-      !> Third index
-      integer, intent(in) :: i3
-      !> Slot of A
-      integer, intent(in) :: slotA
-      real(wp) :: val
-
-      val = 0.0_wp
-      if (slotA > 0) val = t(i1, i2, i3, slotA)
-   end function nuc_read4
-
-   !> Read `t(i1, i2, i3, i4, slotA)`, or 0 when the atom has no slot
-   !> @param[in] t      Nuclear array `(axis, axis, axis, axis, A)`
-   !> @param[in] i1     First index
-   !> @param[in] i2     Second index
-   !> @param[in] i3     Third index
-   !> @param[in] i4     Fourth index
-   !> @param[in] slotA  Slot from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function nuc_read5(t, i1, i2, i3, i4, slotA) result(val)
-      !> Nuclear array
-      real(wp), intent(in) :: t(:, :, :, :, :)
-      !> First index
-      integer, intent(in) :: i1
-      !> Second index
-      integer, intent(in) :: i2
-      !> Third index
-      integer, intent(in) :: i3
-      !> Fourth index
-      integer, intent(in) :: i4
-      !> Slot of A
-      integer, intent(in) :: slotA
-      real(wp) :: val
-
-      val = 0.0_wp
-      if (slotA > 0) val = t(i1, i2, i3, i4, slotA)
-   end function nuc_read5
-
-   !> Read `t(i1, slotA, i2, slotB)`, or 0 when either atom has no slot
-   !> @param[in] t      Pair array `(axis, A, axis, B)`
-   !> @param[in] i1     Nuclear axis of A
+   !> Two-nucleus counterpart of [[slot_read]]; 0 when either atom has no slot
+   !>
+   !> @param[in] m      Nuclear slice `(A, B)`
    !> @param[in] slotA  Slot of A from [[nuc_slot]]
-   !> @param[in] i2     Nuclear axis of B
    !> @param[in] slotB  Slot of B from [[nuc_slot]]
    !> @returns          Element or 0
-   pure function pair_read4(t, i1, slotA, i2, slotB) result(val)
-      !> Pair array
-      real(wp), intent(in) :: t(:, :, :, :)
-      !> Nuclear axis of A
-      integer, intent(in) :: i1
+   pure real(wp) function slot_read2(m, slotA, slotB) result(val)
+      !> Nuclear slice
+      real(wp), intent(in) :: m(:, :)
       !> Slot of A
       integer, intent(in) :: slotA
-      !> Nuclear axis of B
-      integer, intent(in) :: i2
       !> Slot of B
       integer, intent(in) :: slotB
-      real(wp) :: val
 
       val = 0.0_wp
-      if (slotA > 0 .and. slotB > 0) val = t(i1, slotA, i2, slotB)
-   end function pair_read4
-
-   !> Read `t(i1, i2, slotA, i3, slotB)`, or 0 when either atom has no slot
-   !> @param[in] t      Pair array `(axis, axis, A, axis, B)`
-   !> @param[in] i1     Spatial axis
-   !> @param[in] i2     Nuclear axis of A
-   !> @param[in] slotA  Slot of A from [[nuc_slot]]
-   !> @param[in] i3     Nuclear axis of B
-   !> @param[in] slotB  Slot of B from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function pair_read5(t, i1, i2, slotA, i3, slotB) result(val)
-      !> Pair array
-      real(wp), intent(in) :: t(:, :, :, :, :)
-      !> Spatial axis
-      integer, intent(in) :: i1
-      !> Nuclear axis of A
-      integer, intent(in) :: i2
-      !> Slot of A
-      integer, intent(in) :: slotA
-      !> Nuclear axis of B
-      integer, intent(in) :: i3
-      !> Slot of B
-      integer, intent(in) :: slotB
-      real(wp) :: val
-
-      val = 0.0_wp
-      if (slotA > 0 .and. slotB > 0) val = t(i1, i2, slotA, i3, slotB)
-   end function pair_read5
-
-   !> Read `t(i1, i2, i3, slotA, i4, slotB)`, or 0 when either atom has no slot
-   !> @param[in] t      Pair array `(axis, axis, axis, A, axis, B)`
-   !> @param[in] i1     First spatial axis
-   !> @param[in] i2     Second spatial axis
-   !> @param[in] i3     Nuclear axis of A
-   !> @param[in] slotA  Slot of A from [[nuc_slot]]
-   !> @param[in] i4     Nuclear axis of B
-   !> @param[in] slotB  Slot of B from [[nuc_slot]]
-   !> @returns          Element or 0
-   pure function pair_read6(t, i1, i2, i3, slotA, i4, slotB) result(val)
-      !> Pair array
-      real(wp), intent(in) :: t(:, :, :, :, :, :)
-      !> First spatial axis
-      integer, intent(in) :: i1
-      !> Second spatial axis
-      integer, intent(in) :: i2
-      !> Nuclear axis of A
-      integer, intent(in) :: i3
-      !> Slot of A
-      integer, intent(in) :: slotA
-      !> Nuclear axis of B
-      integer, intent(in) :: i4
-      !> Slot of B
-      integer, intent(in) :: slotB
-      real(wp) :: val
-
-      val = 0.0_wp
-      if (slotA > 0 .and. slotB > 0) val = t(i1, i2, i3, slotA, i4, slotB)
-   end function pair_read6
+      if (slotA > 0 .and. slotB > 0) val = m(slotA, slotB)
+   end function slot_read2
 
    !> Guard a *caller-sized* nuclear output, whose extent cannot reveal its index
    !> space because the harness chose it.
    !>
-   !> `f3_rr_rA`'s optional `lsf1_rA` (and the CFC twin) are passed in as
-   !> `(3, ncenters)` buffers and scattered into by user-space atom id. If a
-   !> future refactor made them active-indexed instead, the extent check in
-   !> [[nuc_slot]] could not see it - but the columns of screened-away atoms would
-   !> stop being zero. That is what this asserts.
+   !> `f3_rr_rA`'s optional `lsf1_rA` (and `normalized_f01_rA`'s gradient) are
+   !> passed in as `(3, ncenters)` buffers and scattered into by user-space atom
+   !> id. If a future refactor made them active-indexed instead, the extent check
+   !> in [[nuc_slot]] could not see it - but the columns of screened-away atoms
+   !> would stop being zero. That is what this asserts.
    !>
-   !> @param[in] t      Caller-sized `(axis, A)` output
-   !> @param[in] act    Atom -> active index map (0 = dropped)
-   !> @param[in] label  Quantity name, for the failure message
-   subroutine check_user_space(t, act, label)
+   !> @param[in]    t       Caller-sized `(axis, A)` output
+   !> @param[in]    act     Atom -> active index map (0 = dropped)
+   !> @param[in]    label   Quantity name, for the failure message
+   !> @param[inout] stream  Record sink, to report a structural change
+   subroutine check_user_space(t, act, label, stream)
       !> Caller-sized nuclear output
       real(wp), intent(in) :: t(:, :)
       !> Atom -> active index map
       integer, intent(in) :: act(:)
       !> Quantity name
       character(len=*), intent(in) :: label
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
 
       integer :: atom
-      character(len=32) :: tail
 
       if (size(t, 2) /= size(act)) return
       do atom = 1, size(act)
          if (act(atom) > 0) cycle
          if (maxval(abs(t(:, atom))) == 0.0_wp) cycle
-         write (tail, '(a,i0,a)') " atom ", atom, " is screened away"
-         call flag_problem(label//":"//trim(tail)//" yet its user-space column is "// &
-                           "non-zero - the output is no longer user-indexed")
+         call stream%flag_problem(label//": atom "//itoa(atom)//" is screened away yet "// &
+                                  "its user-space column is non-zero - the output is no "// &
+                                  "longer user-indexed")
          return
       end do
    end subroutine check_user_space
-
-   !* ================================================================================= *!
-   !*                              CFC record emission                                  *!
-   !* ================================================================================= *!
-
-   !> Emit (or check) every CFC record of one case at one evaluation point
-   !>
-   !> @param[in]  gcase  Case descriptor (blending weights unused)
-   !> @param[in]  mol    Structure
-   !> @param[in]  radii  Per-atom radii
-   !> @param[in]  point  Evaluation point
-   !> @param[in]  ip     Evaluation-point index
-   !> @param[in]  sel    Selected atom indices
-   !> @param[out] error  testdrive failure
-   subroutine cfc_point(gcase, mol, radii, point, ip, sel, error)
-      !> Case descriptor
-      type(golden_case_type), intent(in) :: gcase
-      !> Structure
-      type(structure_type), intent(in) :: mol
-      !> Per-atom radii
-      real(wp), intent(in) :: radii(:)
-      !> Evaluation point
-      real(wp), intent(in) :: point(ndim)
-      !> Evaluation-point index
-      integer, intent(in) :: ip
-      !> Selected atom indices
-      integer, intent(in) :: sel(:)
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_cavity_drop_lsf_cfc_type) :: lsf_scr, lsf_ref
-      real(wp) :: f0_scr, f0_ref
-
-      call new_cfc(lsf_scr, mol, radii, production_threshold)
-      call new_cfc(lsf_ref, mol, radii, 0.0_wp)
-
-      call prepare_cfc(lsf_scr, point, error)
-      if (allocated(error)) return
-      call prepare_cfc(lsf_ref, point, error)
-      if (allocated(error)) return
-
-      call assert_unscreened(lsf_ref%active_count(), mol%nat, gcase%tag, ip, error)
-      if (allocated(error)) return
-
-      call cfc_block(lsf_scr, gcase, ip, "S", sel, f0_scr)
-      call cfc_block(lsf_ref, gcase, ip, "U", sel, f0_ref)
-      call emit("cfc", gcase%tag, ip, "D", "f0_delta", [0, 0, 0, 0, 0, 0], f0_scr - f0_ref)
-   end subroutine cfc_point
-
-   !> Construct and bind one CFC LSF at a given screening threshold
-   !>
-   !> @param[out] lsf    Fresh CFC LSF
-   !> @param[in]  mol    Structure
-   !> @param[in]  radii  Per-atom radii
-   !> @param[in]  thr    Screening threshold
-   subroutine new_cfc(lsf, mol, radii, thr)
-      !> Fresh CFC LSF
-      type(moist_cavity_drop_lsf_cfc_type), intent(out) :: lsf
-      !> Structure
-      type(structure_type), intent(in) :: mol
-      !> Per-atom radii
-      real(wp), intent(in) :: radii(:)
-      !> Screening threshold
-      real(wp), intent(in) :: thr
-
-      lsf%screening_threshold = thr
-      call lsf%new()
-      call lsf%update(mol, radii)
-      call lsf%set_max_deriv(3)
-   end subroutine new_cfc
-
-   !> `prepare` a CFC LSF, translating an LSF error into a testdrive failure
-   !>
-   !> @param[inout] lsf    CFC LSF
-   !> @param[in]    point  Evaluation point
-   !> @param[out]   error  testdrive failure
-   subroutine prepare_cfc(lsf, point, error)
-      !> CFC LSF
-      type(moist_cavity_drop_lsf_cfc_type), intent(inout) :: lsf
-      !> Evaluation point
-      real(wp), intent(in) :: point(ndim)
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      type(mctc_error), allocatable :: lsf_err
-
-      call lsf%prepare(point, lsf_err)
-      if (allocated(lsf_err)) call test_failed(error, "CFC prepare failed: "//lsf_err%message)
-   end subroutine prepare_cfc
-
-   !> Emit every CFC quantity of one prepared LSF under one screening flag.
-   !> CFC is capped at derivative order 3 today, so there is no f4 block.
-   !>
-   !> @param[in]  lsf    Prepared CFC LSF
-   !> @param[in]  gcase  Case descriptor
-   !> @param[in]  ip     Evaluation-point index
-   !> @param[in]  flag   `S` or `U`
-   !> @param[in]  sel    Selected atom indices
-   !> @param[out] f0     Value returned by `f0`, for the delta record
-   subroutine cfc_block(lsf, gcase, ip, flag, sel, f0)
-      !> Prepared CFC LSF
-      type(moist_cavity_drop_lsf_cfc_type), intent(in) :: lsf
-      !> Case descriptor
-      type(golden_case_type), intent(in) :: gcase
-      !> Evaluation-point index
-      integer, intent(in) :: ip
-      !> Screening flag
-      character(len=*), intent(in) :: flag
-      !> Selected atom indices
-      integer, intent(in) :: sel(:)
-      !> Value of `f0`
-      real(wp), intent(out) :: f0
-
-      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim)
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :)
-      integer, allocatable :: act(:)
-      integer :: nat, nac, j, k, l, s, ia, atomA, slotA
-
-      nat = lsf%ncenters
-      nac = lsf%active_count()
-      allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
-      call active_map(lsf, nat, act)
-
-      call emit("cfc", gcase%tag, ip, flag, "n_active", [0, 0, 0, 0, 0, 0], &
-                real(lsf%active_count(), wp))
-
-      call lsf%f0(f0)
-      call emit("cfc", gcase%tag, ip, flag, "f0", [0, 0, 0, 0, 0, 0], f0)
-
-      call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
-      call emit("cfc", gcase%tag, ip, flag, "f012_lsf0", [0, 0, 0, 0, 0, 0], lsf0)
-      do j = 1, ndim
-         call emit("cfc", gcase%tag, ip, flag, "f012_lsf1_r", [j, 0, 0, 0, 0, 0], lsf1_r(j))
-      end do
-      do j = 1, ndim
-         do k = j, ndim
-            call emit("cfc", gcase%tag, ip, flag, "f012_lsf2_rr", [j, k, 0, 0, 0, 0], &
-                      lsf2_rr(j, k))
-         end do
-      end do
-
-      call lsf%f3_rrr(lsf3_rrr=lsf3_rrr)
-      do j = 1, ndim
-         do k = j, ndim
-            do l = k, ndim
-               call emit("cfc", gcase%tag, ip, flag, "f3_rrr", [j, k, l, 0, 0, 0], &
-                         lsf3_rrr(j, k, l))
-            end do
-         end do
-      end do
-
-      call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-      call check_user_space(lsf1_rA, act, "cfc f3rrA_lsf1_rA")
-      do ia = 1, size(sel)
-         atomA = sel(ia)
-         slotA = nuc_slot(size(lsf1_rA, 2), atomA, act, "cfc f3rrA_lsf1_rA")
-         do s = 1, ndim
-            call emit("cfc", gcase%tag, ip, flag, "f3rrA_lsf1_rA", [s, atomA, 0, 0, 0, 0], &
-                      nuc_read2(lsf1_rA, s, slotA))
-         end do
-      end do
-      do ia = 1, size(sel)
-         atomA = sel(ia)
-         slotA = nuc_slot(size(lsf2_r_rA, 3), atomA, act, "cfc f3rrA_lsf2_r_rA")
-         do s = 1, ndim
-            do j = 1, ndim
-               call emit("cfc", gcase%tag, ip, flag, "f3rrA_lsf2_r_rA", &
-                         [j, s, atomA, 0, 0, 0], nuc_read3(lsf2_r_rA, j, s, slotA))
-            end do
-         end do
-      end do
-      do ia = 1, size(sel)
-         atomA = sel(ia)
-         slotA = nuc_slot(size(lsf3_rr_rA, 4), atomA, act, "cfc f3_rr_rA")
-         do s = 1, ndim
-            do j = 1, ndim
-               do k = j, ndim
-                  call emit("cfc", gcase%tag, ip, flag, "f3_rr_rA", &
-                            [j, k, s, atomA, 0, 0], nuc_read4(lsf3_rr_rA, j, k, s, slotA))
-               end do
-            end do
-         end do
-      end do
-   end subroutine cfc_block
 
    !* ================================================================================= *!
    !*                          Screening bookkeeping helpers                            *!
@@ -1140,12 +1022,9 @@ contains
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
-      character(len=64) :: tail
-
       if (nact == nat) return
-      write (tail, '(a,i0,a,i0,a,i0)') " point ", ip, ": active ", nact, " of ", nat
-      call test_failed(error, "threshold 0 no longer disables screening for "// &
-                       trim(tag)//trim(tail))
+      call test_failed(error, "threshold 0 no longer disables screening for "//trim(tag)// &
+                       " point "//itoa(ip)//": active "//itoa(nact)//" of "//itoa(nat))
    end subroutine assert_unscreened
 
    !> Build the atom -> active-index map of a prepared LSF (0 = dropped)
@@ -1157,20 +1036,20 @@ contains
    !> by walking the full scan through `orig_to_sorted`; if that ever changes,
    !> this fires instead of the harness silently reading the wrong slot.
    !>
-   !> @param[in]  lsf   Prepared LSF (either concrete)
-   !> @param[in]  nat   Number of centres
-   !> @param[out] act   `act(atom)` = active index or 0
-   subroutine active_map(lsf, nat, act)
+   !> @param[in]    lsf     Prepared LSF (either concrete)
+   !> @param[out]   act     `act(atom)` = active index or 0
+   !> @param[inout] stream  Record sink, to report a broken invariant
+   subroutine active_map(lsf, act, stream)
       !> Prepared LSF
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
-      !> Number of centres
-      integer, intent(in) :: nat
       !> Atom -> active index
       integer, allocatable, intent(out) :: act(:)
+      !> Record sink
+      type(golden_stream_type), intent(inout) :: stream
 
-      integer :: i, nact
-      character(len=64) :: tail
+      integer :: i, nat, nact
 
+      nat = lsf%ncenters
       nact = lsf%active_count()
       allocate (act(nat), source=0)
       do i = 1, nact
@@ -1180,65 +1059,29 @@ contains
       if (nact /= nat) return
       do i = 1, nat
          if (act(i) == i) cycle
-         write (tail, '(a,i0,a,i0)') " atom ", i, " sits at active slot ", act(i)
-         call flag_problem("fully active list is no longer ascending:"//trim(tail))
+         call stream%flag_problem("fully active list is no longer ascending: atom "// &
+                                  itoa(i)//" sits at active slot "//itoa(act(i)))
          return
       end do
    end subroutine active_map
 
    !* ================================================================================= *!
-   !*                                 Sink plumbing                                     *!
+   !*                                 Stream plumbing                                   *!
    !* ================================================================================= *!
 
-   !> Report a *structural* problem - a shape, an index space or an invariant
-   !> that no longer matches what this harness understands - through the same
-   !> failure channel as a numerical mismatch.
+   !> Append one record. The traversal calls this and nothing else, so the
+   !> fixture's order is the traversal's order by construction.
    !>
-   !> Routed here rather than to `test_failed` on purpose: [[run_golden]] checks
-   !> `sink_nfail` in regeneration mode too, so a regeneration that trips one of
-   !> these fails instead of writing questionable numbers to disk.
-   !>
-   !> @param[in] text  Message describing the problem
-   subroutine flag_problem(text)
-      !> Message describing the problem
-      character(len=*), intent(in) :: text
-
-      sink_nfail = sink_nfail + 1
-      if (sink_nfail == 1) sink_message = text
-   end subroutine flag_problem
-
-   !> Clear the module-level sink state between suite entries
-   subroutine reset_sink()
-      sink_writing = .false.
-      sink_capture = .false.
-      if (allocated(sink_vals)) deallocate (sink_vals)
-      sink_unit = -1
-      sink_count = 0
-      sink_nfail = 0
-      sink_nref = 0
-      if (allocated(sink_ref)) deallocate (sink_ref)
-      sink_message = ""
-   end subroutine reset_sink
-
-   !> Write or check one record. The traversal calls this and nothing else,
-   !> so the fixture's order is the traversal's order by construction.
-   !>
-   !> @param[in] kind      `svdw` or `cfc`
-   !> @param[in] case_tag  Case tag
-   !> @param[in] ip        Evaluation-point index
-   !> @param[in] flag      `S`, `U` or `D`
-   !> @param[in] quantity  Quantity name
-   !> @param[in] idx       Index tuple, unused slots 0
-   !> @param[in] val       Value
-   subroutine emit(kind, case_tag, ip, flag, quantity, idx, val)
-      !> Concrete selector
-      character(len=*), intent(in) :: kind
-      !> Case tag
-      character(len=*), intent(in) :: case_tag
-      !> Evaluation-point index
-      integer, intent(in) :: ip
-      !> Screening flag
-      character(len=*), intent(in) :: flag
+   !> @param[inout] self      Record sink
+   !> @param[in]    id        Concrete, case, point and screening flag
+   !> @param[in]    quantity  Quantity name
+   !> @param[in]    idx       Index tuple, unused slots 0
+   !> @param[in]    val       Value
+   subroutine stream_emit(self, id, quantity, idx, val)
+      !> Record sink
+      class(golden_stream_type), intent(inout) :: self
+      !> Record identity
+      type(record_id_type), intent(in) :: id
       !> Quantity name
       character(len=*), intent(in) :: quantity
       !> Index tuple
@@ -1246,71 +1089,172 @@ contains
       !> Value
       real(wp), intent(in) :: val
 
-      type(golden_record_type) :: ref
-      real(wp) :: tol
-      character(len=256) :: tail
+      type(golden_record_type), allocatable :: bigger(:)
 
-      sink_count = sink_count + 1
-
-      if (sink_capture) then
-         call push_val(val)
-         return
+      if (.not. allocated(self%rec)) allocate (self%rec(4096))
+      if (self%n == size(self%rec)) then
+         allocate (bigger(2*size(self%rec)))
+         bigger(1:size(self%rec)) = self%rec
+         call move_alloc(bigger, self%rec)
       end if
 
-      if (sink_writing) then
-         write (sink_unit, record_fmt) kind, case_tag, ip, flag, quantity, idx, val
-         return
-      end if
+      self%n = self%n + 1
+      self%rec(self%n) = golden_record_type(id, quantity, idx, val)
+   end subroutine stream_emit
 
-      if (sink_count > sink_nref) return
-
-      ref = sink_ref(sink_count)
-      if (trim(ref%kind) /= kind .or. trim(ref%case_tag) /= case_tag &
-          .or. ref%ip /= ip .or. trim(ref%flag) /= flag &
-          .or. trim(ref%quantity) /= quantity .or. any(ref%idx /= idx)) then
-         sink_nfail = sink_nfail + 1
-         if (sink_nfail == 1) then
-            write (tail, '(a,i0,a)') "record ", sink_count, " is labelled '"// &
-               trim(ref%kind)//" "//trim(ref%case_tag)//" "//trim(ref%quantity)// &
-               "' in the fixture but '"//kind//" "//case_tag//" "//quantity// &
-               "' now - regenerate"
-            sink_message = trim(tail)
-         end if
-         return
-      end if
-
-      tol = max(golden_abs_tol, golden_rel_tol*abs(ref%val))
-      if (abs(val - ref%val) > tol) then
-         sink_nfail = sink_nfail + 1
-         if (sink_nfail == 1) then
-            write (tail, '(a,i0,a,6(1x,i0),a,es24.16,a,es24.16)') &
-               "record ", sink_count, " "//trim(ref%kind)//" "//trim(ref%case_tag)// &
-               " point "//char(ichar('0') + ip)//" "//trim(ref%flag)//" "// &
-               trim(ref%quantity)//" [", ref%idx, " ] golden ", ref%val, " now ", val
-            sink_message = trim(tail)
-         end if
-      end if
-   end subroutine emit
-
-   !> Parse a fixture file into `sink_ref`. `#` comments and blank lines are
-   !> skipped; everything else must parse as a record.
+   !> Record a *structural* problem - a shape, an index space or an invariant
+   !> that no longer matches what this harness understands.
    !>
-   !> @param[in]  path   Fixture path
+   !> Collected rather than raised so that the traversal always runs to
+   !> completion; every caller of [[traverse]] reports a non-zero count as a
+   !> test failure before it looks at any number.
+   !>
+   !> @param[inout] self  Record sink
+   !> @param[in]    text  Message describing the problem
+   subroutine stream_flag_problem(self, text)
+      !> Record sink
+      class(golden_stream_type), intent(inout) :: self
+      !> Message describing the problem
+      character(len=*), intent(in) :: text
+
+      self%nproblem = self%nproblem + 1
+      if (self%nproblem == 1) self%problem = text
+   end subroutine stream_flag_problem
+
+   !> Turn a collected structural problem into a testdrive failure
+   !>
+   !> @param[in]  stream  Traversed stream
+   !> @param[out] error   testdrive failure, allocated only if a problem was seen
+   subroutine check_problems(stream, error)
+      !> Traversed stream
+      type(golden_stream_type), intent(in) :: stream
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      if (stream%nproblem == 0) return
+      call test_failed(error, itoa(stream%nproblem)//" structural problem(s); first: "// &
+                       stream%problem)
+   end subroutine check_problems
+
+   !> Hold an emitted stream against the parsed fixture, record by record
+   !>
+   !> @param[in]  got    Emitted stream
+   !> @param[in]  ref    Parsed fixture
+   !> @param[in]  path   Fixture path, for the failure message
    !> @param[out] error  testdrive failure
-   subroutine load_fixture(path, error)
+   subroutine compare_stream(got, ref, path, error)
+      !> Emitted stream
+      type(golden_stream_type), intent(in) :: got
+      !> Parsed fixture
+      type(golden_record_type), intent(in) :: ref(:)
       !> Fixture path
       character(len=*), intent(in) :: path
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
+      integer :: i, nfail
+      character(len=:), allocatable :: first
+      character(len=64) :: values
+
+      if (got%n /= size(ref)) then
+         call test_failed(error, "golden fixture length mismatch: evaluated "// &
+                          itoa(got%n)//" records, fixture has "//itoa(size(ref))//" - "// &
+                          path//" no longer describes this traversal")
+         return
+      end if
+
+      nfail = 0
+      first = ""
+      do i = 1, got%n
+         if (.not. same_label(got%rec(i), ref(i))) then
+            nfail = nfail + 1
+            if (nfail == 1) first = "record "//itoa(i)//" is labelled '"// &
+                                    record_label(ref(i))//"' in the fixture but '"// &
+                                    record_label(got%rec(i))//"' now"
+            cycle
+         end if
+         if (rel_deviation(got%rec(i)%val, ref(i)%val) <= golden_tol) cycle
+         nfail = nfail + 1
+         if (nfail == 1) then
+            write (values, '(a,es24.16,a,es24.16)') " golden ", ref(i)%val, " now ", &
+               got%rec(i)%val
+            first = "record "//itoa(i)//" "//record_label(ref(i))//values
+         end if
+      end do
+
+      if (nfail == 0) return
+      call test_failed(error, itoa(nfail)//" golden record(s) deviate; first: "//first)
+   end subroutine compare_stream
+
+   !> `.true.` when two records name the same number
+   !>
+   !> @param[in] a  First record
+   !> @param[in] b  Second record
+   !> @returns      Whether the labels agree
+   pure logical function same_label(a, b)
+      !> First record
+      type(golden_record_type), intent(in) :: a
+      !> Second record
+      type(golden_record_type), intent(in) :: b
+
+      same_label = a%id%kind == b%id%kind .and. a%id%case_tag == b%id%case_tag &
+                   .and. a%id%ip == b%id%ip .and. a%id%flag == b%id%flag &
+                   .and. a%quantity == b%quantity .and. all(a%idx == b%idx)
+   end function same_label
+
+   !> Left-justified decimal form of `n`, for building failure messages
+   !>
+   !> @param[in] n  Number to render
+   !> @returns      Decimal digits, no padding
+   function itoa(n) result(text)
+      !> Number to render
+      integer, intent(in) :: n
+      character(len=:), allocatable :: text
+      character(len=32) :: buf
+
+      write (buf, '(i0)') n
+      text = trim(buf)
+   end function itoa
+
+   !> Human-readable identity of one record, e.g. `svdw ch4 point 3 S f3_rrr [ 1 1 2 0 0 0 ]`
+   !>
+   !> @param[in] rec  Record to describe
+   !> @returns        One-line description
+   function record_label(rec) result(text)
+      !> Record to describe
+      type(golden_record_type), intent(in) :: rec
+      character(len=:), allocatable :: text
+      integer :: i
+
+      text = trim(rec%id%kind)//" "//trim(rec%id%case_tag)//" point "//itoa(rec%id%ip)// &
+             " "//rec%id%flag//" "//trim(rec%quantity)//" ["
+      do i = 1, size(rec%idx)
+         text = text//" "//itoa(rec%idx(i))
+      end do
+      text = text//" ]"
+   end function record_label
+
+   !> Parse a fixture file into an array of records. `#` comments and blank
+   !> lines are skipped; everything else must parse as a record.
+   !>
+   !> @param[in]  path   Fixture path
+   !> @param[out] ref    Parsed records
+   !> @param[out] error  testdrive failure
+   subroutine load_fixture(path, ref, error)
+      !> Fixture path
+      character(len=*), intent(in) :: path
+      !> Parsed records
+      type(golden_record_type), allocatable, intent(out) :: ref(:)
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
       integer :: unit, stat, n
       character(len=256) :: line
-      character(len=32) :: tail
 
       open (newunit=unit, file=path, action="read", status="old", iostat=stat)
       if (stat /= 0) then
          call test_failed(error, "missing golden fixture '"//path// &
-                          "' - regenerate with MOIST_LSF_GOLDEN_REGENERATE=1")
+                          "' - it is committed data, restore it from git")
          return
       end if
 
@@ -1321,8 +1265,7 @@ contains
          if (is_record_line(line)) n = n + 1
       end do
 
-      allocate (sink_ref(max(n, 1)))
-      sink_nref = n
+      allocate (ref(n))
       rewind (unit)
 
       n = 0
@@ -1331,13 +1274,11 @@ contains
          if (stat /= 0) exit
          if (.not. is_record_line(line)) cycle
          n = n + 1
-         read (line, *, iostat=stat) sink_ref(n)%kind, sink_ref(n)%case_tag, &
-            sink_ref(n)%ip, sink_ref(n)%flag, sink_ref(n)%quantity, &
-            sink_ref(n)%idx, sink_ref(n)%val
+         read (line, *, iostat=stat) ref(n)%id%kind, ref(n)%id%case_tag, ref(n)%id%ip, &
+            ref(n)%id%flag, ref(n)%quantity, ref(n)%idx, ref(n)%val
          if (stat /= 0) then
             close (unit)
-            write (tail, '(i0)') n
-            call test_failed(error, "malformed record "//trim(tail)//" in "//path)
+            call test_failed(error, "malformed record "//itoa(n)//" in "//path)
             return
          end if
       end do
@@ -1360,97 +1301,6 @@ contains
       is_record_line = .true.
    end function is_record_line
 
-   !> Write the self-describing fixture header
-   !>
-   !> @param[in] unit  Open output unit
-   !> @param[in] kind  `svdw` or `cfc`
-   subroutine write_header(unit, kind)
-      !> Open output unit
-      integer, intent(in) :: unit
-      !> Concrete selector
-      character(len=*), intent(in) :: kind
-
-      character(len=8)  :: cdate
-      character(len=10) :: ctime
-      integer :: i, ncase
-
-      call date_and_time(date=cdate, time=ctime)
-      if (kind == "svdw") then
-         ncase = n_svdw_cases
-      else
-         ncase = n_cfc_cases
-      end if
-
-      write (unit, '(a)') "# moist - DROP level set function golden fixture ("//kind//")"
-      write (unit, '(a)') "#"
-      write (unit, '(a)') "# Generated by test/unit/test_cavity_drop_lsf_golden.f90."
-      write (unit, '(a)') "# Regenerate deliberately, never to make a failing test pass:"
-      write (unit, '(a)') "#   env MOIST_LSF_GOLDEN_REGENERATE=1 MOIST_SOURCE_ROOT=$PWD"
-      write (unit, '(a)') "#       MOIST_GIT_COMMIT=$(git rev-parse HEAD)"
-      write (unit, '(a)') "#       ./<build>/test/unit/tester cavity_drop_lsf_golden"
-      write (unit, '(a)') "#"
-      write (unit, '(a)') "# git commit : "//get_env("MOIST_GIT_COMMIT", default="(unrecorded)")
-      write (unit, '(a)') "# generated  : "//cdate(1:4)//"-"//cdate(5:6)//"-"//cdate(7:8)// &
-         " "//ctime(1:2)//":"//ctime(3:4)//":"//ctime(5:6)
-      write (unit, '(a)') "#"
-      write (unit, '(a)') "# Layout: kind case ip flag quantity i1 i2 i3 i4 i5 i6 value"
-      write (unit, '(a)') "#   flag  S = screened as production runs it, U = unscreened"
-      write (unit, '(a)') "#         reference, D = screened minus unscreened"
-      write (unit, '(a)') "#   i1..i6  unused slots are 0; A/B are user-space atom indices"
-      write (unit, '(a)') "#   value   es24.16, exact IEEE-754 double round trip"
-      write (unit, '(a)') "# Symmetric slots are dumped once (j<=k<=l<=m etc.); the"
-      write (unit, '(a)') "# discarded components are covered by the *_tensor_symmetry tests."
-      write (unit, '(a)') "# Full record-layout documentation lives in the module header of"
-      write (unit, '(a)') "# test/unit/test_cavity_drop_lsf_golden.f90."
-      write (unit, '(a)') "#"
-      write (unit, '(a,es12.4)') "# screening_threshold (flag S) : ", production_threshold
-      write (unit, '(a,es12.4)') "# screening_threshold (flag U) : ", 0.0_wp
-      if (kind == "svdw") then
-         write (unit, '(a)') "# max_deriv                    : 4"
-      else
-         write (unit, '(a)') "# max_deriv                    : 3"
-      end if
-      write (unit, '(a)') "# radii                        : default_cpcm_radii()"
-      write (unit, '(a)') "#"
-      write (unit, '(a)') "# case tag      collection   record       blend_k  blend_1b  blend_2b  blend_3b"
-      do i = 1, ncase
-         if (kind == "svdw") then
-            write (unit, '(a,a12,1x,a12,1x,a12,4(1x,f9.4))') "# ", golden_cases(i)%tag, &
-               golden_cases(i)%collection, golden_cases(i)%record, golden_cases(i)%blend_k, &
-               golden_cases(i)%blend_1b, golden_cases(i)%blend_2b, golden_cases(i)%blend_3b
-         else
-            write (unit, '(a,a12,1x,a12,1x,a12,a)') "# ", golden_cases(i)%tag, &
-               golden_cases(i)%collection, golden_cases(i)%record, "  (CFC compiled defaults)"
-         end if
-      end do
-      write (unit, '(a)') "#"
-      write (unit, '(a)') "# point ip  anchor                                offset (bohr)"
-      write (unit, '(a)') "#   1 far_out   atom 1 surface, off-axis direction        +13.00"
-      write (unit, '(a)') "#   2 near_out  atom 1 surface, off-axis direction         +1.25"
-      write (unit, '(a)') "#   3 surface   atom 1 surface, off-axis direction         +0.10"
-      write (unit, '(a)') "#   4 deep_in   nucleus 1, off-axis direction        0.40 * R(1)"
-      write (unit, '(a)') "#   5 near_nuc  last nucleus, off-axis direction            +0.05"
-      write (unit, '(a)') "#"
-   end subroutine write_header
-
-   !> Append one value to the captured stream, growing the buffer by doubling
-   !>
-   !> @param[in] val  Value to append at slot `sink_count`
-   subroutine push_val(val)
-      !> Value to append
-      real(wp), intent(in) :: val
-
-      real(wp), allocatable :: bigger(:)
-
-      if (.not. allocated(sink_vals)) allocate (sink_vals(4096))
-      if (sink_count > size(sink_vals)) then
-         allocate (bigger(2*size(sink_vals)))
-         bigger(1:size(sink_vals)) = sink_vals
-         call move_alloc(bigger, sink_vals)
-      end if
-      sink_vals(sink_count) = val
-   end subroutine push_val
-
    !* ================================================================================= *!
    !*                            Stream reproducibility                                 *!
    !* ================================================================================= *!
@@ -1472,12 +1322,12 @@ contains
    subroutine test_stream_reproducible(error)
       type(error_type), allocatable, intent(out) :: error
 
-      call compare_two_passes(error, "svdw")
+      call compare_two_passes(error, kind_svdw)
       if (allocated(error)) return
-      call compare_two_passes(error, "cfc")
+      call compare_two_passes(error, kind_cfc)
    end subroutine test_stream_reproducible
 
-   !> Run one concrete's traversal twice and diff the captured streams
+   !> Run one concrete's traversal twice and diff the two streams
    !>
    !> @param[out] error  testdrive failure
    !> @param[in]  kind   `svdw` or `cfc`
@@ -1487,270 +1337,230 @@ contains
       !> Concrete selector
       character(len=*), intent(in) :: kind
 
-      real(wp), allocatable :: first(:)
-      integer :: n_first, i
+      type(golden_stream_type) :: first, second
+      integer :: i
       character(len=128) :: tail
 
-      call capture_stream(kind, error)
+      call traverse(kind, first, error)
       if (allocated(error)) return
-      n_first = sink_count
-      allocate (first(n_first), source=sink_vals(1:n_first))
-
-      call capture_stream(kind, error)
+      call traverse(kind, second, error)
       if (allocated(error)) return
 
-      if (sink_count /= n_first) then
-         write (tail, '(a,i0,a,i0)') "record count is not reproducible: ", n_first, &
-            " then ", sink_count
-         call test_failed(error, kind//" "//trim(tail))
+      call check_problems(first, error)
+      if (allocated(error)) return
+      call check_problems(second, error)
+      if (allocated(error)) return
+
+      if (first%n /= second%n) then
+         call test_failed(error, kind//" record count is not reproducible: "// &
+                          itoa(first%n)//" then "//itoa(second%n))
          return
       end if
 
-      do i = 1, n_first
-         if (first(i) == sink_vals(i)) cycle
-         write (tail, '(a,i0,a,es24.16,a,es24.16)') "record ", i, &
-            " differs between two passes in one process: ", first(i), " then ", sink_vals(i)
-         call test_failed(error, kind//" "//trim(tail))
+      do i = 1, first%n
+         if (first%rec(i)%val == second%rec(i)%val) cycle
+         write (tail, '(a,es24.16,a,es24.16)') &
+            " differs between two passes in one process: ", first%rec(i)%val, " then ", &
+            second%rec(i)%val
+         call test_failed(error, kind//" record "//itoa(i)//trim(tail))
          return
       end do
    end subroutine compare_two_passes
-
-   !> Traverse one concrete in capture mode, leaving the stream in `sink_vals`
-   !>
-   !> @param[in]  kind   `svdw` or `cfc`
-   !> @param[out] error  testdrive failure
-   subroutine capture_stream(kind, error)
-      !> Concrete selector
-      character(len=*), intent(in) :: kind
-      !> testdrive failure
-      type(error_type), allocatable, intent(out) :: error
-
-      call reset_sink()
-      sink_capture = .true.
-      call traverse(kind, error)
-      if (allocated(error)) return
-      if (sink_nfail > 0) call test_failed(error, "structural problem: "//sink_message)
-   end subroutine capture_stream
 
    !* ================================================================================= *!
    !*                              Tensor symmetry checks                               *!
    !* ================================================================================= *!
 
-   !> The golden dump keeps only the unique components of the slots that are
-   !> symmetric by construction. This check is the other half of that deal:
-   !> it asserts the full tensors really are symmetric in exactly those slots,
-   !> so nothing is left unpinned. Tolerance is loose on purpose - the target
-   !> is a wrong permutation, not accumulated roundoff.
+   !> The golden fixture keeps only the unique components of the slots that are
+   !> symmetric by construction. These checks are the other half of that deal:
+   !> they assert the full tensors really are symmetric in exactly those slots,
+   !> so nothing is left unpinned. Tolerance is loose on purpose - the target is
+   !> a wrong permutation, not accumulated roundoff.
    subroutine test_svdw_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
-
-      type(structure_type) :: mol
-      type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      real(wp), allocatable :: radii(:), points(:, :)
-      real(wp) :: lsf2_rr(ndim, ndim), lsf1_r(ndim), lsf0
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim), lsf4_rrrr(ndim, ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :), lsf4_rrr_rA(:, :, :, :, :)
-      real(wp), allocatable :: lsf4_rr_rArB(:, :, :, :, :, :)
-      integer :: icase, ip, j, k, l, m, s, iA, nac
-
-      do icase = 1, n_svdw_cases
-         call load_case(golden_cases(icase), mol, radii)
-         call build_points(mol, radii, points, error)
-         if (allocated(error)) return
-
-         do ip = 1, n_points
-            call new_svdw(lsf, golden_cases(icase), mol, radii, production_threshold)
-            call prepare_svdw(lsf, points(:, ip), error)
-            if (allocated(error)) return
-            nac = lsf%active_count()
-            if (allocated(lsf1_rA)) deallocate (lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
-                                               lsf4_rrr_rA, lsf4_rr_rArB)
-            allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-            allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
-            allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
-            allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
-
-            call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
-            do j = 1, ndim
-               do k = 1, ndim
-                  call check_sym(error, lsf2_rr(j, k), lsf2_rr(k, j), &
-                                 maxval(abs(lsf2_rr)), "f012_lsf2_rr")
-                  if (allocated(error)) return
-               end do
-            end do
-
-            call lsf%f3_rrr(lsf3_rrr=lsf3_rrr)
-            do j = 1, ndim
-               do k = 1, ndim
-                  do l = 1, ndim
-                     call check_sym(error, lsf3_rrr(j, k, l), lsf3_rrr(k, j, l), &
-                                    maxval(abs(lsf3_rrr)), "f3_rrr(jk)")
-                     if (allocated(error)) return
-                     call check_sym(error, lsf3_rrr(j, k, l), lsf3_rrr(j, l, k), &
-                                    maxval(abs(lsf3_rrr)), "f3_rrr(kl)")
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-
-            call lsf%f4_rrrr(lsf4_rrrr)
-            do j = 1, ndim
-               do k = 1, ndim
-                  do l = 1, ndim
-                     do m = 1, ndim
-                        call check_sym(error, lsf4_rrrr(j, k, l, m), lsf4_rrrr(k, j, l, m), &
-                                       maxval(abs(lsf4_rrrr)), "f4_rrrr(jk)")
-                        if (allocated(error)) return
-                        call check_sym(error, lsf4_rrrr(j, k, l, m), lsf4_rrrr(j, l, k, m), &
-                                       maxval(abs(lsf4_rrrr)), "f4_rrrr(kl)")
-                        if (allocated(error)) return
-                        call check_sym(error, lsf4_rrrr(j, k, l, m), lsf4_rrrr(j, k, m, l), &
-                                       maxval(abs(lsf4_rrrr)), "f4_rrrr(lm)")
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-            end do
-
-            call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-            do iA = 1, size(lsf3_rr_rA, 4)
-               do s = 1, ndim
-                  do j = 1, ndim
-                     do k = 1, ndim
-                        call check_sym(error, lsf3_rr_rA(j, k, s, iA), lsf3_rr_rA(k, j, s, iA), &
-                                       maxval(abs(lsf3_rr_rA)), "f3_rr_rA(jk)")
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-            end do
-
-            call lsf%f4_rrr_rA(lsf4_rrr_rA)
-            do iA = 1, size(lsf4_rrr_rA, 5)
-               do s = 1, ndim
-                  do j = 1, ndim
-                     do k = 1, ndim
-                        do l = 1, ndim
-                           call check_sym(error, lsf4_rrr_rA(j, k, l, s, iA), &
-                                          lsf4_rrr_rA(k, j, l, s, iA), &
-                                          maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(jk)")
-                           if (allocated(error)) return
-                           call check_sym(error, lsf4_rrr_rA(j, k, l, s, iA), &
-                                          lsf4_rrr_rA(j, l, k, s, iA), &
-                                          maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(kl)")
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-
-            call lsf%f4_rr_rArB(lsf4_rr_rArB)
-            do j = 1, ndim
-               do k = 1, ndim
-                  call check_sym(error, &
-                                 maxval(abs(lsf4_rr_rArB(j, k, :, :, :, :) &
-                                            - lsf4_rr_rArB(k, j, :, :, :, :))), &
-                                 0.0_wp, maxval(abs(lsf4_rr_rArB)), "f4_rr_rArB(jk)")
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-
-         deallocate (radii, points)
-      end do
+      call run_symmetry(error, kind_svdw)
    end subroutine test_svdw_symmetry
 
    !> CFC counterpart of [[test_svdw_symmetry]] (orders 2 and 3 only)
    subroutine test_cfc_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
+      call run_symmetry(error, kind_cfc)
+   end subroutine test_cfc_symmetry
+
+   !> Walk every case and point of one concrete, asserting every symmetric slot
+   !>
+   !> @param[out] error  testdrive failure
+   !> @param[in]  kind   `svdw` or `cfc`
+   subroutine run_symmetry(error, kind)
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Concrete selector
+      character(len=*), intent(in) :: kind
 
       type(structure_type) :: mol
-      type(moist_cavity_drop_lsf_cfc_type) :: lsf
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
       real(wp), allocatable :: radii(:), points(:, :)
-      real(wp) :: lsf2_rr(ndim, ndim), lsf1_r(ndim), lsf0
-      real(wp) :: lsf3_rrr(ndim, ndim, ndim)
-      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :)
-      real(wp), allocatable :: lsf3_rr_rA(:, :, :, :)
-      integer :: icase, ip, j, k, l, s, iA, nac
+      integer :: icase, ip
 
-      do icase = 1, n_cfc_cases
+      do icase = 1, n_cases(kind)
          call load_case(golden_cases(icase), mol, radii)
          call build_points(mol, radii, points, error)
          if (allocated(error)) return
 
          do ip = 1, n_points
-            call new_cfc(lsf, mol, radii, production_threshold)
-            call prepare_cfc(lsf, points(:, ip), error)
+            call new_lsf(lsf, kind, golden_cases(icase), mol, radii, production_threshold)
+            call prepare_lsf(lsf, points(:, ip), error)
             if (allocated(error)) return
-            nac = lsf%active_count()
-            if (allocated(lsf1_rA)) deallocate (lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-            allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
-            allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
 
-            call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
-            do j = 1, ndim
-               do k = 1, ndim
-                  call check_sym(error, lsf2_rr(j, k), lsf2_rr(k, j), &
-                                 maxval(abs(lsf2_rr)), "cfc f012_lsf2_rr")
-                  if (allocated(error)) return
-               end do
-            end do
-
-            call lsf%f3_rrr(lsf3_rrr=lsf3_rrr)
-            do j = 1, ndim
-               do k = 1, ndim
-                  do l = 1, ndim
-                     call check_sym(error, lsf3_rrr(j, k, l), lsf3_rrr(k, j, l), &
-                                    maxval(abs(lsf3_rrr)), "cfc f3_rrr(jk)")
-                     if (allocated(error)) return
-                     call check_sym(error, lsf3_rrr(j, k, l), lsf3_rrr(j, l, k), &
-                                    maxval(abs(lsf3_rrr)), "cfc f3_rrr(kl)")
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-
-            call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-            do iA = 1, size(lsf3_rr_rA, 4)
-               do s = 1, ndim
-                  do j = 1, ndim
-                     do k = 1, ndim
-                        call check_sym(error, lsf3_rr_rA(j, k, s, iA), lsf3_rr_rA(k, j, s, iA), &
-                                       maxval(abs(lsf3_rr_rA)), "cfc f3_rr_rA(jk)")
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-            end do
+            call check_symmetry_low(lsf, error)
+            if (allocated(error)) return
+            if (kind /= kind_svdw) cycle
+            call check_symmetry_high(lsf, error)
+            if (allocated(error)) return
          end do
 
          deallocate (radii, points)
       end do
-   end subroutine test_cfc_symmetry
+   end subroutine run_symmetry
 
-   !> Fail unless two tensor elements agree to `symmetry_rel_tol` of the
-   !> tensor's largest element
+   !> Symmetric slots of the derivative orders both concretes provide
    !>
+   !> @param[in]  lsf    Prepared LSF
    !> @param[out] error  testdrive failure
-   !> @param[in]  a      First element
-   !> @param[in]  b      Second element
-   !> @param[in]  scale  Largest absolute element of the tensor
-   !> @param[in]  label  Name reported on failure
-   subroutine check_sym(error, a, b, scale, label)
+   subroutine check_symmetry_low(lsf, error)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
-      !> First element
-      real(wp), intent(in) :: a
-      !> Second element
-      real(wp), intent(in) :: b
+
+      real(wp) :: lsf0, lsf1_r(ndim), lsf2_rr(ndim, ndim), lsf3_rrr(ndim, ndim, ndim)
+      real(wp), allocatable :: lsf1_rA(:, :), lsf2_r_rA(:, :, :), lsf3_rr_rA(:, :, :, :)
+      real(wp) :: dev_jk, dev_kl
+      integer :: nac, j, s, iA
+
+      nac = lsf%active_count()
+      allocate (lsf1_rA(ndim, nac), lsf2_r_rA(ndim, ndim, nac))
+      allocate (lsf3_rr_rA(ndim, ndim, ndim, nac))
+
+      call lsf%f012_r(lsf0, lsf1_r, lsf2_rr)
+      call check_sym(error, asym(lsf2_rr), maxval(abs(lsf2_rr)), "f012_lsf2_rr")
+      if (allocated(error)) return
+
+      call lsf%f3_rrr(lsf3_rrr=lsf3_rrr)
+      dev_jk = 0.0_wp
+      dev_kl = 0.0_wp
+      do j = 1, ndim
+         dev_jk = max(dev_jk, asym(lsf3_rrr(:, :, j)))
+         dev_kl = max(dev_kl, asym(lsf3_rrr(j, :, :)))
+      end do
+      call check_sym(error, dev_jk, maxval(abs(lsf3_rrr)), "f3_rrr(jk)")
+      if (allocated(error)) return
+      call check_sym(error, dev_kl, maxval(abs(lsf3_rrr)), "f3_rrr(kl)")
+      if (allocated(error)) return
+
+      call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+      dev_jk = 0.0_wp
+      do iA = 1, nac
+         do s = 1, ndim
+            dev_jk = max(dev_jk, asym(lsf3_rr_rA(:, :, s, iA)))
+         end do
+      end do
+      call check_sym(error, dev_jk, maxval(abs(lsf3_rr_rA)), "f3_rr_rA(jk)")
+   end subroutine check_symmetry_low
+
+   !> Symmetric slots of the order-4 tensors, which only SvdW provides
+   !>
+   !> @param[in]  lsf    Prepared LSF
+   !> @param[out] error  testdrive failure
+   subroutine check_symmetry_high(lsf, error)
+      !> Prepared LSF
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp) :: lsf4_rrrr(ndim, ndim, ndim, ndim)
+      real(wp), allocatable :: lsf4_rrr_rA(:, :, :, :, :), lsf4_rr_rArB(:, :, :, :, :, :)
+      real(wp) :: dev_jk, dev_kl, dev_lm
+      integer :: nac, j, k, l, s, iA
+
+      nac = lsf%active_count()
+      allocate (lsf4_rrr_rA(ndim, ndim, ndim, ndim, nac))
+      allocate (lsf4_rr_rArB(ndim, ndim, ndim, nac, ndim, nac))
+
+      call lsf%f4_rrrr(lsf4_rrrr)
+      dev_jk = 0.0_wp
+      dev_kl = 0.0_wp
+      dev_lm = 0.0_wp
+      do j = 1, ndim
+         do k = 1, ndim
+            dev_jk = max(dev_jk, asym(lsf4_rrrr(:, :, j, k)))
+            dev_kl = max(dev_kl, asym(lsf4_rrrr(j, :, :, k)))
+            dev_lm = max(dev_lm, asym(lsf4_rrrr(j, k, :, :)))
+         end do
+      end do
+      call check_sym(error, dev_jk, maxval(abs(lsf4_rrrr)), "f4_rrrr(jk)")
+      if (allocated(error)) return
+      call check_sym(error, dev_kl, maxval(abs(lsf4_rrrr)), "f4_rrrr(kl)")
+      if (allocated(error)) return
+      call check_sym(error, dev_lm, maxval(abs(lsf4_rrrr)), "f4_rrrr(lm)")
+      if (allocated(error)) return
+
+      call lsf%f4_rrr_rA(lsf4_rrr_rA)
+      dev_jk = 0.0_wp
+      dev_kl = 0.0_wp
+      do iA = 1, nac
+         do s = 1, ndim
+            do l = 1, ndim
+               dev_jk = max(dev_jk, asym(lsf4_rrr_rA(:, :, l, s, iA)))
+               dev_kl = max(dev_kl, asym(lsf4_rrr_rA(l, :, :, s, iA)))
+            end do
+         end do
+      end do
+      call check_sym(error, dev_jk, maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(jk)")
+      if (allocated(error)) return
+      call check_sym(error, dev_kl, maxval(abs(lsf4_rrr_rA)), "f4_rrr_rA(kl)")
+      if (allocated(error)) return
+
+      call lsf%f4_rr_rArB(lsf4_rr_rArB)
+      dev_jk = 0.0_wp
+      do j = 1, ndim
+         do k = 1, ndim
+            dev_jk = max(dev_jk, maxval(abs(lsf4_rr_rArB(j, k, :, :, :, :) &
+                                            - lsf4_rr_rArB(k, j, :, :, :, :))))
+         end do
+      end do
+      call check_sym(error, dev_jk, maxval(abs(lsf4_rr_rArB)), "f4_rr_rArB(jk)")
+   end subroutine check_symmetry_high
+
+   !> Largest asymmetry of a square matrix, `max |m - m^T|`
+   !>
+   !> @param[in] m  Matrix, or a rank-reduced slice of a higher-rank tensor
+   !> @returns      Largest absolute deviation from symmetry
+   pure real(wp) function asym(m) result(dev)
+      !> Matrix to test
+      real(wp), intent(in) :: m(:, :)
+
+      dev = maxval(abs(m - transpose(m)))
+   end function asym
+
+   !> Fail unless a tensor's asymmetry stays within `symmetry_rel_tol` of its
+   !> largest element
+   !>
+   !> @param[out] error  testdrive failure
+   !> @param[in]  dev    Largest absolute deviation from symmetry
+   !> @param[in]  scale  Largest absolute element of the tensor
+   !> @param[in]  label  Name reported on failure
+   subroutine check_sym(error, dev, scale, label)
+      !> testdrive failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Largest absolute deviation from symmetry
+      real(wp), intent(in) :: dev
       !> Largest absolute element of the tensor
       real(wp), intent(in) :: scale
       !> Name reported on failure
       character(len=*), intent(in) :: label
 
-      if (abs(a - b) <= max(golden_abs_tol, symmetry_rel_tol*scale)) return
+      if (dev <= max(symmetry_abs_tol, symmetry_rel_tol*scale)) return
       call test_failed(error, "tensor slot not symmetric: "//label)
    end subroutine check_sym
 
