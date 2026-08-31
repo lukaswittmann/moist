@@ -35,18 +35,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev
-
-      # Ubuntu 24.04 ships gcovr 7.0, whose gcov text parser demands a space
-      # after the line-number colon on "-block" lines. gcov prints the line
-      # number in a fixed %5u field, so past line 9999 no space is left and the
-      # report aborts with UnknownLineType. The generated LSF kernels are well
-      # past that, so this hits every run. Made optional in gcovr 7.2; pin 8.6.
-      # Installed via pipx (into /opt/pipx_bin, already on PATH) rather than
-      # apt, so no stale /usr/bin/gcovr can shadow the pinned version.
       - name: Install gcovr
         run: |
           pipx install --force gcovr==8.6
-          gcovr --version | head -n1
 
       - uses: actions/setup-python@v5
         if: matrix.leg.name == 'coupling'
