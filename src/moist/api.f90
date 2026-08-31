@@ -103,8 +103,8 @@ module moist_api
 
    type :: vp_component
       !> Run context owned by this handle until the component is copied into a
-      !> model; `general_model_add_component` re-points the copy at the model
-      !> context so the copy stays valid after this handle is deleted.
+      !> model; `solvation_model_general%add_component` re-points the copy at the
+      !> model context so the copy stays valid after this handle is deleted.
       type(moist_context_type) :: ctx
       !> Concrete component owned by this opaque handle
       class(solvation_model_component_type), allocatable :: ptr
@@ -1041,12 +1041,7 @@ contains
 
       select type (general => model%ptr)
       type is (solvation_model_general)
-         ! The model stores a copy, so hand it the model-owned context first:
-         ! the copy keeps whatever pointer the source carried, and this handle's
-         ! own context dies with `moist_delete_solvation_component`.
-         component%ptr%ctx => model%ctx
          call general%add_component(component%ptr, model_error)
-         component%ptr%ctx => component%ctx
          if (allocated(model_error)) then
             call api_error(error%ptr, "general_model_add_component", model_error%message)
          end if
