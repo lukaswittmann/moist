@@ -388,7 +388,7 @@ contains
       real(wp), intent(in) :: w2(3, 3)
       real(wp), intent(out) :: res(:, :)
 
-      res(:, 1:self%active_count()) = 0.0_wp*(w0 + sum(w1) + sum(w2))
+      res(:, 1:self%active_count()) = 0.0_wp
    end subroutine lsf_vjp_f1_rA
 
    !> Radial offset (from the atom surface) beyond which no shell of this atom
