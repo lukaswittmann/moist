@@ -23,6 +23,7 @@ jobs:
           - {build: meson, name: gnu13,   compiler: gcc,   version: '13',     fc: gfortran, cc: gcc}
           - {build: meson, name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
           - {build: meson, name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
+          - {build: meson, name: gnu14-ilp64, compiler: gcc, version: '14', fc: gfortran, cc: gcc, ilp64: true, meson_args: '-Dilp64=true -Dlapack=openblas'}
           - {build: fpm,   name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
           - {build: fpm,   name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
     steps:
@@ -38,6 +39,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev
+
+      - name: Install ILP64 BLAS/LAPACK
+        if: matrix.toolchain.ilp64
+        run: sudo apt-get install -y libopenblas64-dev
 
       - name: Install Intel MKL
         if: matrix.toolchain.compiler == 'intel'
@@ -66,7 +71,7 @@ jobs:
       - name: Build and test (meson)
         if: matrix.toolchain.build == 'meson'
         run: |
-          meson setup build
+          meson setup build ${{ matrix.toolchain.meson_args }}
           meson compile -C build
           meson test -C build --suite moist --print-errorlogs
 
