@@ -31,9 +31,14 @@
 !>
 !> `rho_max` also tightens itself as the search runs. Whenever a probed centre
 !> `c` has the opposite sign to the anchor, the segment from the anchor to `c`
-!> crosses the surface, so the closest branch is no further than `||c - anchor||`
-!> -- an upper bound that costs nothing beyond the value already computed, and
-!> that shrinks the ball the search still has to certify.
+!> crosses the surface, so the closest branch is no further out than that
+!> crossing. The crossing cannot lie inside `c`'s own surface-free ball either,
+!> which puts it a further `r` short of the centre:
+!>
+!>     rho_min <= ||c - anchor|| - r
+!>
+!> Both halves of that bound are quantities the probe has already returned, so
+!> the ball the search still has to certify shrinks for free.
 !>
 !> What the certificate covers is the *coverage of the search ball*: every box
 !> is either examined or proven to hold no surface, so no branch escapes the
@@ -137,9 +142,13 @@ module moist_math_solver_octree_branch
       integer :: dbg_free(0:max_addressable_depth) = 0
       integer :: dbg_split(0:max_addressable_depth) = 0
       integer :: dbg_kept(0:max_addressable_depth) = 0
+      !> Were tallies collected?
+      logical :: dbg_valid = .false.
       !> Radius-tightening events: the box number, the distance to the probed
-      !> centre that produced the new upper bound, and the resulting cap
+      !> centre that produced the new upper bound, that distance less the
+      !> centre's own surface-free radius, and the resulting cap
       integer :: dbg_tighten_box(max_logged_tightenings) = 0
+      real(wp) :: dbg_tighten_raw(max_logged_tightenings) = 0.0_wp
       real(wp) :: dbg_tighten_hit(max_logged_tightenings) = 0.0_wp
       real(wp) :: dbg_tighten_cap(max_logged_tightenings) = 0.0_wp
       integer :: n_tightenings = 0
@@ -587,10 +596,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: rho_cap, rho_hit, key, half, centre(3), lsf0, excl_radius
-      real(wp) :: child_key, excl_ratio
+      real(wp) :: child_key, excl_ratio, rho_centre, rho_cross
       integer :: depth, lat(3), child_lat(3), leaf_depth
       integer :: ix, iy, iz, n_pushed
-      logical :: ok
+      logical :: ok, crosses, trace
       !> Trace text for the box currently being examined. Sized to the trace's
       !> action column; an internal write past it is a runtime "End of record".
       character(len=trace_action_width) :: action
@@ -620,6 +629,8 @@ contains
       self%n_seeds = 0
       self%n_boxes_visited = 0
 
+      trace = self%debug
+      self%dbg_valid = trace
       self%dbg_popped = 0
       self%dbg_free = 0
       self%dbg_split = 0
@@ -657,6 +668,7 @@ contains
       self%lattice_base = 2_int64**leaf_depth
       self%dbg_leaf_depth = leaf_depth
 
+      excl_ratio = 0.0_wp
       rho_cap = rho_max
       ! An anchor sitting exactly on the surface is its own closest branch.
       rho_hit = huge(1.0_wp)
@@ -683,7 +695,7 @@ contains
          ! key beyond the cap proves the remainder of the ball carries no
          ! branch weight and the search is finished.
          if (key > rho_cap) then
-            if (self%debug) then
+            if (trace) then
                write (action, "(a)") "beyond rho_max: search complete"
                call trace_row(self, depth, lat, leaf_depth, 0.0_wp, 0.0_wp, key, action)
             end if
@@ -691,7 +703,7 @@ contains
          end if
 
          self%n_boxes_visited = self%n_boxes_visited + 1
-         self%dbg_popped(depth) = self%dbg_popped(depth) + 1
+         if (trace) self%dbg_popped(depth) = self%dbg_popped(depth) + 1
          if (self%n_boxes_visited > self%max_boxes) then
             call fatal_error(error, &
                              "Octree branch search: box budget exhausted before the "// &
@@ -706,19 +718,22 @@ contains
 
          call probe(centre, lsf0, excl_radius, context)
 
-         ! Free upper bound on the closest branch: a sign flip between the
-         ! anchor and this centre means the segment between them crosses the
-         ! surface, so no branch is further out than this centre.
-         excl_ratio = 0.0_wp
-         if (half > 0.0_wp) excl_ratio = excl_radius/(half*sqrt(3.0_wp))
+         if (trace) then
+            excl_ratio = 0.0_wp
+            if (half > 0.0_wp) excl_ratio = excl_radius/(half*sqrt(3.0_wp))
+         end if
 
-         if (lsf0*lsf0_anchor < 0.0_wp) then
-            if (norm2(centre - anchor) < rho_hit) then
-               rho_hit = norm2(centre - anchor)
+         crosses = lsf0_anchor /= 0.0_wp .and. lsf0*lsf0_anchor <= 0.0_wp
+         if (crosses) then
+            rho_centre = norm2(centre - anchor)
+            rho_cross = max(0.0_wp, rho_centre - excl_radius)
+            if (rho_cross < rho_hit) then
+               rho_hit = rho_cross
                rho_cap = min(rho_cap, sqrt(rho_hit*rho_hit + rho2_slack))
                if (self%n_tightenings < max_logged_tightenings) then
                   self%n_tightenings = self%n_tightenings + 1
                   self%dbg_tighten_box(self%n_tightenings) = self%n_boxes_visited
+                  self%dbg_tighten_raw(self%n_tightenings) = rho_centre
                   self%dbg_tighten_hit(self%n_tightenings) = rho_hit
                   self%dbg_tighten_cap(self%n_tightenings) = rho_cap
                end if
@@ -728,8 +743,8 @@ contains
          ! Certified surface-free: the exclusion ball around the centre
          ! swallows the box, so no zero of S lies inside it.
          if (excl_radius >= half*sqrt(3.0_wp)) then
-            self%dbg_free(depth) = self%dbg_free(depth) + 1
-            if (self%debug) then
+            if (trace) then
+               self%dbg_free(depth) = self%dbg_free(depth) + 1
                write (action, "(a)") "surface-free: subtree pruned"
                call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
             end if
@@ -748,11 +763,11 @@ contains
                                          min(2*size(self%surv_rho), self%max_survivors))
             end if
             self%n_surv = self%n_surv + 1
-            self%dbg_kept(depth) = self%dbg_kept(depth) + 1
             self%surv_lat(:, self%n_surv) = lat
             self%surv_centre(:, self%n_surv) = centre
             self%surv_rho(self%n_surv) = key
-            if (self%debug) then
+            if (trace) then
+               self%dbg_kept(depth) = self%dbg_kept(depth) + 1
                write (action, "(a,i0)") "leaf: survivor ", self%n_surv
                call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
             end if
@@ -771,7 +786,7 @@ contains
             cycle
          end if
 
-         self%dbg_split(depth) = self%dbg_split(depth) + 1
+         if (trace) self%dbg_split(depth) = self%dbg_split(depth) + 1
          n_pushed = 0
          do iz = 0, 1
             do iy = 0, 1
@@ -781,7 +796,7 @@ contains
                   if (child_key > rho_cap) cycle
                   n_pushed = n_pushed + 1
                   call heap_push(self, child_key, depth + 1, child_lat, ok)
-                  self%dbg_heap_peak = max(self%dbg_heap_peak, self%heap_size)
+                  if (trace) self%dbg_heap_peak = max(self%dbg_heap_peak, self%heap_size)
                   if (.not. ok) then
                      call fatal_error(error, &
                                       "Octree branch search: heap capacity exhausted")
@@ -791,7 +806,7 @@ contains
             end do
          end do
 
-         if (self%debug) then
+         if (trace) then
             if (n_pushed == 8) then
                write (action, "(a)") "split into 8"
             else
@@ -802,7 +817,7 @@ contains
          end if
       end do
 
-      if (self%debug) call self%trace_tbl%separator()
+      if (trace) call self%trace_tbl%separator()
 
       self%rho_max_final = rho_cap
       self%dbg_n_surv_raw = self%n_surv
@@ -813,7 +828,7 @@ contains
 
       call collect_seeds(self, leaf_depth)
 
-      if (self%debug) call self%report(anchor)
+      if (trace) call self%report(anchor)
    end subroutine octree_run
 
    !> Discard survivors whose distance lower bound exceeds the final cap
@@ -1062,9 +1077,10 @@ contains
    !> are nearly all split rather than certified surface-free is a level where
    !> the exclusion radius is buying nothing. The tightening table answers "did
    !> the search shrink its own ball, and how early?" -- the first sign change
-   !> should arrive within the first handful of boxes. The seed table answers
-   !> "what came out, and is it plausible?" -- seeds should sit at a distance
-   !> close to the certified radius, one per branch.
+   !> should arrive within the first handful of boxes, and the gap between its
+   !> two distance columns is what the exclusion radius bought. The seed table
+   !> answers "what came out, and is it plausible?" -- seeds should sit at a
+   !> distance close to the certified radius, one per branch.
    !>
    !> Callers inside an OpenMP region should wrap this in a critical section;
    !> the report is one contiguous block per anchor so it stays readable.
@@ -1084,49 +1100,58 @@ contains
       write (self%unit, "(a)") ""
 
       !> Where the boxes went, level by level
-      plp = new_prettylistprinter( &
-            widths=[7, 12, 12, 12, 12, 12], &
-            headers=[character(len=12) :: "depth", "edge", "popped", &
-                     "surf-free", "split", "kept"], &
-            unit=self%unit, offset=4, column_gap=1)
-      call plp%print_header()
-      call plp%separator()
+      !>
+      !> Collected only on a debug run, so a report asked for after an ordinary
+      !> one says so rather than printing a table of zeros.
+      if (.not. self%dbg_valid) then
+         write (self%unit, "(4x,a)") &
+            "Per-depth tallies were not collected: set `debug` before `run`."
+         write (self%unit, "(a)") ""
+      else
+         plp = new_prettylistprinter( &
+               widths=[7, 12, 12, 12, 12, 12], &
+               headers=[character(len=12) :: "depth", "edge", "popped", &
+                        "surf-free", "split", "kept"], &
+               unit=self%unit, offset=4, column_gap=1)
+         call plp%print_header()
+         call plp%separator()
 
-      total_popped = 0
-      total_free = 0
-      total_split = 0
-      total_kept = 0
-      do depth = 0, self%dbg_leaf_depth
-         total_popped = total_popped + self%dbg_popped(depth)
-         total_free = total_free + self%dbg_free(depth)
-         total_split = total_split + self%dbg_split(depth)
-         total_kept = total_kept + self%dbg_kept(depth)
-         if (self%dbg_popped(depth) == 0) cycle
+         total_popped = 0
+         total_free = 0
+         total_split = 0
+         total_kept = 0
+         do depth = 0, self%dbg_leaf_depth
+            total_popped = total_popped + self%dbg_popped(depth)
+            total_free = total_free + self%dbg_free(depth)
+            total_split = total_split + self%dbg_split(depth)
+            total_kept = total_kept + self%dbg_kept(depth)
+            if (self%dbg_popped(depth) == 0) cycle
+            call plp%begin_row()
+            call plp%add(depth)
+            call plp%add(2.0_wp*self%dbg_rho_start/real(2**depth, wp), fmt="F12.4")
+            call plp%add(self%dbg_popped(depth))
+            call plp%add(self%dbg_free(depth))
+            call plp%add(self%dbg_split(depth))
+            call plp%add(self%dbg_kept(depth))
+            call plp%end_row()
+         end do
+         call plp%separator()
          call plp%begin_row()
-         call plp%add(depth)
-         call plp%add(2.0_wp*self%dbg_rho_start/real(2**depth, wp), fmt="F12.4")
-         call plp%add(self%dbg_popped(depth))
-         call plp%add(self%dbg_free(depth))
-         call plp%add(self%dbg_split(depth))
-         call plp%add(self%dbg_kept(depth))
+         call plp%add("total")
+         call plp%skip()
+         call plp%add(total_popped)
+         call plp%add(total_free)
+         call plp%add(total_split)
+         call plp%add(total_kept)
          call plp%end_row()
-      end do
-      call plp%separator()
-      call plp%begin_row()
-      call plp%add("total")
-      call plp%skip()
-      call plp%add(total_popped)
-      call plp%add(total_free)
-      call plp%add(total_split)
-      call plp%add(total_kept)
-      call plp%end_row()
-      write (self%unit, "(a)") ""
+         write (self%unit, "(a)") ""
+      end if
 
       !> How the admissible radius came down
       if (self%n_tightenings > 0) then
          plp = new_prettylistprinter( &
-               widths=[10, 14, 14, 14], &
-               headers=[character(len=14) :: "event", "at box", &
+               widths=[10, 14, 14, 14, 14], &
+               headers=[character(len=14) :: "event", "at box", "centre at", &
                         "surface within", "new rho_max"], &
                unit=self%unit, offset=4, column_gap=1)
          call plp%print_header()
@@ -1135,6 +1160,7 @@ contains
             call plp%begin_row()
             call plp%add(i)
             call plp%add(self%dbg_tighten_box(i))
+            call plp%add(self%dbg_tighten_raw(i), fmt="F14.5")
             call plp%add(self%dbg_tighten_hit(i), fmt="F14.5")
             call plp%add(self%dbg_tighten_cap(i), fmt="F14.5")
             call plp%end_row()

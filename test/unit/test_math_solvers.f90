@@ -122,6 +122,7 @@ contains
          & new_unittest("lbfgsb_kernel_bound_active", test_lbfgsb_bound_active), &
          & new_unittest("octree_two_sphere_branches", test_octree_two_sphere), &
          & new_unittest("octree_single_sphere_one_branch", test_octree_single_sphere), &
+         & new_unittest("octree_sign_change_bound_is_tight", test_octree_sign_change_bound), &
          & new_unittest("octree_certifies_empty_ball", test_octree_empty_ball), &
          & new_unittest("octree_seed_modes_agree", test_octree_seed_modes), &
          & new_unittest("octree_budget_is_an_error", test_octree_budget, should_fail=.true.), &
@@ -2151,6 +2152,62 @@ contains
       call check(error, octree%rho_max_final < 1.2_wp, &
                  message="search failed to tighten its own admissible radius")
    end subroutine test_octree_single_sphere
+
+   !> The sign-change bound is refined by the probed centre's own surface-free
+   !> ball, which must leave it above the truth and should land close to it
+   subroutine test_octree_sign_change_bound(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius, rho_true
+
+      !> Squared-distance slack defining the admissible set
+      real(wp), parameter :: slack = 0.25_wp
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 1.0_wp
+      anchor = [3.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      ! The anchor sits 2 Bohr outside the sphere, so rho_min is exactly 2 and
+      ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
+      ! that bounds the crossing by the probed centre alone, without taking off
+      ! that centre's surface-free radius, stops around 2.1035 instead.
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=slack, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run: "//solver_error%message)
+         return
+      end if
+
+      call check(error, octree%n_seeds, 1, &
+                 message="expected exactly one branch seed, got "// &
+                 to_string(octree%n_seeds))
+      if (allocated(error)) return
+
+      rho_true = sqrt(4.0_wp + slack)
+
+      ! The epsilon absorbs a last-bit difference in how the bound is summed,
+      ! not a real shortfall: the margin a working run keeps here is ~2e-3.
+      call check(error, octree%rho_max_final >= rho_true - 1.0e-10_wp, &
+                 message="certified radius fell below the true admissible one")
+      if (allocated(error)) return
+
+      call check(error, octree%rho_max_final <= 1.01_wp*rho_true, &
+                 message="sign-change bound is not being refined by the "// &
+                 "exclusion radius")
+   end subroutine test_octree_sign_change_bound
 
    !> A ball holding no surface is certified empty, with no seeds and without
    !> spending more than the root box.
