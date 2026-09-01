@@ -218,7 +218,7 @@ Additionally, it can be used in cases where small weights could cause numerical 
 Branching
 ---------
 
-``branching.softmax_scale`` (real, default ``0.05``)
+``branching.softmax_scale`` (real, default ``0.0025``)
   Softmax scale of the branch-weight model in concave regions; smaller values   make the branch-weight distribution sharper.
   Branch fractions are computed from the objective values of all competing projections with a softmax over ``-\\Phi`` divided by this scale, so equal objective values receive equal weights and a lower objective value smoothly dominates.
   The branch ``rho`` cutoff is derived from this and the weight cutoff, and the resulting branch fraction is  multiplied into the integration weight for each projected point.

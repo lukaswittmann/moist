@@ -39,7 +39,8 @@ Conventions this module depends on, each verified against finite differences by
   potential.  Despite the C header calling it "the electronic field" it is not
   negated.
 * The ``lsf`` weights are adjoints of the **scaled** level set, while the
-  callback returns the unscaled one, so the host chain rule carries ``scale``.
+  callback returns the density, so the host chain rule carries ``scale``
+  (and the sign flip) that moist applied when it built ``S`` from ``rho``.
 * Nuclear charges come from the structure's atomic numbers, so ECPs are not
   supported here.
 """
@@ -143,15 +144,17 @@ class PySCFHost:
     # level set
     # ------------------------------------------------------------------
 
-    def lsf(self, point: np.ndarray, order: int):
-        """Level-set callback for :class:`~moist.interface.CavityDROPIsodensity`.
+    def density(self, point: np.ndarray, order: int):
+        """Density callback for :class:`~moist.interface.CavityDROPIsodensity`.
 
-        Returns the **unscaled** ``rho_iso - rho`` and its spatial derivatives up
-        to ``order`` only, so the projection's value+gradient phase never pays
-        for the density Hessian.  moist applies :attr:`scale` itself, so scaling
-        here as well would silently square it -- the zero level set, and hence
-        the surface, would be unchanged while every adjoint came back wrong by a
-        factor of ``scale``.
+        Returns the bare ``rho`` and its spatial derivatives up to ``order``
+        only, so the projection's value+gradient phase never pays for the
+        density Hessian.  moist owns the level set built from it: it subtracts
+        :attr:`rho_iso` and applies :attr:`scale` and the DROP sign convention.
+        Doing any of that here as well would move the surface or square the
+        scale -- and a squared scale leaves the zero level set, and hence the
+        surface, unchanged while every adjoint comes back wrong by a factor of
+        ``scale``.
         """
         dm = self._density_matrix()
         ao = self._ao(np.asarray(point).reshape(1, 3), order)[:, 0, :]
@@ -160,7 +163,7 @@ class PySCFHost:
         # BLAS leaves dirty floating-point status flags behind for these shapes
         # -- the SIMD tail reads padding lanes -- so numpy reports divide-by-zero
         # and overflow from a product that performs neither.  The results agree
-        # with a BLAS-free einsum to rounding, which `test_lsf_callback_is_finite`
+        # with a BLAS-free einsum to rounding, which `test_density_callback_is_finite`
         # pins, so the flags are suppressed here rather than paying the
         # order-of-magnitude cost of the einsum path in the hottest callback.
         with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
@@ -168,31 +171,30 @@ class PySCFHost:
             t = proj @ np.ascontiguousarray(ao.T)
 
         rho = t[0, 0]
-        value = self.rho_iso - rho
         i1 = [_component_index((a,)) for a in range(3)]
-        grad = -2.0 * t[i1, 0]
+        drho = 2.0 * t[i1, 0]
         if order < 2:
-            return value, grad
+            return rho, drho
 
         i2 = [[_component_index((a, b)) for b in range(3)] for a in range(3)]
-        hess = np.empty((3, 3))
+        d2rho = np.empty((3, 3))
         for a in range(3):
             for b in range(3):
-                hess[a, b] = -2.0 * (t[i2[a][b], 0] + t[i1[a], i1[b]])
+                d2rho[a, b] = 2.0 * (t[i2[a][b], 0] + t[i1[a], i1[b]])
         if order < 3:
-            return value, grad, hess
+            return rho, drho, d2rho
 
-        third = np.empty((3, 3, 3))
+        d3rho = np.empty((3, 3, 3))
         for a in range(3):
             for b in range(3):
                 for c in range(3):
-                    third[a, b, c] = -2.0 * (
+                    d3rho[a, b, c] = 2.0 * (
                         t[_component_index((a, b, c)), 0]
                         + t[i2[a][b], i1[c]]
                         + t[i2[a][c], i1[b]]
                         + t[i2[b][c], i1[a]]
                     )
-        return value, grad, hess, third
+        return rho, drho, d2rho, d3rho
 
     def make_cavity(self, **kwargs) -> CavityDROPIsodensity:
         """Deprecated compatibility factory for ``CavityDROPIsodensity(self)``."""

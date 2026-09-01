@@ -27,9 +27,11 @@ Implementations
 Two implementations are available:
 
 **Callback** (``moist_cavity_drop_lsf_isodensity_callback_type``)
-   The QM host evaluates the level set and its spatial derivatives at points requested by MOIST.
+   The QM host evaluates the electron density and its spatial derivatives at points requested by MOIST, which then forms :math:`S` from its own :math:`\rho_\mathrm{iso}` and :math:`\alpha`: the host returns :math:`\rho`, not a level set.
    Generally, value and gradient are always required, the Hessian is additionally required and third derivatives are needed for the cavity response and analytic nuclear derivatives.
    The callback route is generally slower due to call overhead, no easy vectorization/missing batching (tbd), and screening and possibly problematic parallelization.
+
+   Both implementations share their parameters (``moist_cavity_drop_lsf_isodensity_param_type``) and build the same :math:`S` from them.
 
 **Internal** (``moist_cavity_drop_lsf_isodensity_internal_type``)
    The QM host supplies the GTO basis set and for every SCF step the current density matrix (in Cartesian-monomial layout, see ``moist_get_isodensity_cart_layout``, and ``moist_set_isodensity_density``).

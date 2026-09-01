@@ -745,7 +745,7 @@ contains
                   !$omp end critical (marchingcubes_abort)
                   cycle
                end if
-               call lsf_priv%f0_screened(grid_vals(ix, iy, iz))
+               call lsf_priv%f0(grid_vals(ix, iy, iz))
             end do
          end do
       end do
@@ -873,7 +873,7 @@ contains
                      loc_top = 0
                      cycle
                   end if
-                  call lsf_priv%f0_screened(center_val)
+                  call lsf_priv%f0(center_val)
                   if (all_pos .and. center_val < 0.0_wp) then
                      all_pos = .false.
                   end if
@@ -1179,7 +1179,7 @@ contains
                p = [coords(1, i), coords(2, j), coords(3, k)]
                call lsf%prepare(p, error)
                if (allocated(error)) return
-               call lsf%f0_screened(cache(i, j, k))
+               call lsf%f0(cache(i, j, k))
             end do
          end do
       end do

@@ -2,7 +2,8 @@
 
 import functools
 import inspect
-from typing import Optional
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 import numpy as np
 
@@ -183,7 +184,6 @@ def new_cfc_drop_cavity(
     a2: Optional[float] = None,
     c: Optional[float] = None,
     m: Optional[int] = None,
-    screen_k: Optional[float] = None,
     do_fine: bool = False,
     tolerance: Optional[float] = None,
     proj_maxiter: Optional[int] = None,
@@ -203,7 +203,6 @@ def new_cfc_drop_cavity(
             _ref("double", a2),
             _ref("double", c),
             _ref("int", m),
-            _ref("double", screen_k),
             _ref("bool", do_fine),
             _ref("double", tolerance),
             _ref("int", proj_maxiter),
@@ -295,6 +294,7 @@ def _callback_takes_order(callback) -> bool:
 
 def new_drop_cavity_isodensity_callback(
     callback,
+    rho_iso: float,
     nleb: Optional[int] = None,
     scale: float = 1000.0,
     debug: bool = False,
@@ -304,7 +304,7 @@ def new_drop_cavity_isodensity_callback(
     tolerance: Optional[float] = None,
     pass_order: Optional[bool] = None,
 ) -> tuple[CavityHandle, object]:
-    """Create a DROP cavity backed by a Python isodensity LSF callback.
+    """Create a DROP cavity backed by a Python isodensity density callback.
 
     Two callback forms are accepted:
 
@@ -320,8 +320,8 @@ def new_drop_cavity_isodensity_callback(
     explicitly to override that when introspection cannot decide (builtins,
     ``*args``, :func:`functools.partial` over a C callable).
 
-    Either form must return ``(value, grad[, hess[, third]])`` or an object with
-    ``value``, ``grad`` and optional ``hess``/``third`` attributes. The returned
+    Either form must return ``(rho, drho[, d2rho[, d3rho]])`` or an object with
+    ``rho``, ``drho`` and optional ``d2rho``/``d3rho`` attributes. The returned
     CFFI callback must be kept alive by the caller for at least as long as the
     cavity handle.
 
@@ -342,9 +342,9 @@ def new_drop_cavity_isodensity_callback(
     state = CallbackState()
 
     @ffi.callback("moist_isodensity_lsf_callback")
-    def c_callback(context, point_ptr, value_ptr, grad_ptr, hess_ptr, third_ptr):
-        want_hess = hess_ptr != ffi.NULL
-        want_third = third_ptr != ffi.NULL
+    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr):
+        want_hess = d2rho_ptr != ffi.NULL
+        want_third = d3rho_ptr != ffi.NULL
         try:
             point = np.frombuffer(ffi.buffer(point_ptr, 24), dtype=np.float64)
             if pass_order:
@@ -353,40 +353,42 @@ def new_drop_cavity_isodensity_callback(
             else:
                 result = callback(point)
 
-            if hasattr(result, "value"):
-                value = result.value
-                grad = result.grad
-                hess = getattr(result, "hess", None)
-                third = getattr(result, "third", None)
+            if hasattr(result, "rho"):
+                rho = result.rho
+                drho = result.drho
+                d2rho = getattr(result, "d2rho", None)
+                d3rho = getattr(result, "d3rho", None)
             else:
-                value, grad = result[0], result[1]
-                hess = result[2] if len(result) > 2 else None
-                third = result[3] if len(result) > 3 else None
+                rho, drho = result[0], result[1]
+                d2rho = result[2] if len(result) > 2 else None
+                d3rho = result[3] if len(result) > 3 else None
 
-            grad = np.asarray(grad, dtype=np.float64)
-            if grad.shape != (3,):
-                raise ValueError("Isodensity callback gradient must have shape (3,)")
+            drho = np.asarray(drho, dtype=np.float64)
+            if drho.shape != (3,):
+                raise ValueError("Isodensity callback density gradient must have shape (3,)")
 
-            value_ptr[0] = float(value)
-            np.frombuffer(ffi.buffer(grad_ptr, 24), dtype=np.float64)[:] = grad
+            rho_ptr[0] = float(rho)
+            np.frombuffer(ffi.buffer(drho_ptr, 24), dtype=np.float64)[:] = drho
             if want_hess:
-                if hess is None:
+                if d2rho is None:
                     raise ValueError("Isodensity callback did not return the requested Hessian")
-                hess = np.asarray(hess, dtype=np.float64)
-                if hess.shape != (3, 3):
-                    raise ValueError("Isodensity callback Hessian must have shape (3, 3)")
-                np.frombuffer(ffi.buffer(hess_ptr, 72), dtype=np.float64)[:] = hess.ravel(order="F")
+                d2rho = np.asarray(d2rho, dtype=np.float64)
+                if d2rho.shape != (3, 3):
+                    raise ValueError("Isodensity callback density Hessian must have shape (3, 3)")
+                np.frombuffer(ffi.buffer(d2rho_ptr, 72), dtype=np.float64)[:] = d2rho.ravel(
+                    order="F"
+                )
             if want_third:
-                if third is None:
+                if d3rho is None:
                     raise ValueError(
                         "Isodensity callback did not return the requested third derivative"
                     )
-                third = np.asarray(third, dtype=np.float64)
-                if third.shape != (3, 3, 3):
+                d3rho = np.asarray(d3rho, dtype=np.float64)
+                if d3rho.shape != (3, 3, 3):
                     raise ValueError(
                         "Isodensity callback third derivative must have shape (3, 3, 3)"
                     )
-                np.frombuffer(ffi.buffer(third_ptr, 216), dtype=np.float64)[:] = third.ravel(
+                np.frombuffer(ffi.buffer(d3rho_ptr, 216), dtype=np.float64)[:] = d3rho.ravel(
                     order="F"
                 )
         except BaseException as exc:
@@ -403,6 +405,7 @@ def new_drop_cavity_isodensity_callback(
         error_check(lib.moist_new_drop_cavity_isodensity_callback)(
             c_callback,
             ffi.NULL,
+            float(rho_iso),
             _ref("double", scale),
             _ref("int", nleb),
             _ref("bool", debug),
@@ -762,43 +765,183 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
     }
 
 
-def get_drop_specific(cavity: CavityHandle, ngrid: Optional[int] = None) -> dict:
-    """Return the DROP-specific cavity fields.
+# Element type tags from moist.h; a field is read with the accessor matching its
+# tag. Preprocessing strips the macros before cffi sees them, so the values are
+# mirrored here.
+FIELD_REAL = 1
+FIELD_INT = 2
+FIELD_BOOL = 3
 
-    ``ngrid`` sizes the buffers and is passed on as the array capacity; it has
-    to be at least the cavity's own ngrid, otherwise the C entry point reports
-    an error and writes nothing. Pass ``None`` to read the size from the cavity.
+_FIELD_READER = {
+    FIELD_REAL: ("moist_get_cavity_field_real", np.float64, "double*"),
+    FIELD_INT: ("moist_get_cavity_field_int", np.int32, "int*"),
+    FIELD_BOOL: ("moist_get_cavity_field_bool", np.bool_, "bool*"),
+}
+
+# Matches MOIST_FIELD_MAX_RANK
+_FIELD_MAX_RANK = 2
+
+_FIELD_NAME_CAP = 64
+_FIELD_ABOUT_CAP = 256
+
+
+@dataclass(frozen=True)
+class CavityField:
+    """Shape and type of one readable cavity field.
+
+    ``shape`` is empty for a scalar and otherwise carries the extents in
+    moist's own order, fastest-varying first -- so a ``(3, ngrid)`` array is
+    reported as ``(3, ngrid)`` and read back Fortran-ordered.
     """
 
-    if ngrid is None:
-        ngrid, _ = get_cavity_sizes(cavity)
+    name: str
+    dtype: np.dtype
+    shape: tuple[int, ...]
+    count: int
 
-    nmax = ffi.new("int *")
-    normal0 = np.zeros((3, ngrid), dtype=np.float64, order="F")
-    wleb = np.zeros(ngrid, dtype=np.float64)
-    r_iI0 = np.zeros(ngrid, dtype=np.float64)
-    switch_f = np.zeros(ngrid, dtype=np.float64)
-    rho = np.zeros(ngrid, dtype=np.float64)
 
-    error_check(lib.moist_get_drop_specific)(
+def get_cavity_field_count(cavity: CavityHandle) -> int:
+    """Return how many named result fields the cavity currently holds."""
+
+    nfield = ffi.new("int *")
+    error_check(lib.moist_get_cavity_field_count)(cavity.handle, nfield)
+    return int(nfield[0])
+
+
+def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
+    """Describe the field at ``index``, counting from zero."""
+
+    name = ffi.new(f"char[{_FIELD_NAME_CAP}]")
+    dtype = ffi.new("int *")
+    rank = ffi.new("int *")
+    dims = ffi.new(f"int[{_FIELD_MAX_RANK}]")
+    count = ffi.new("int *")
+
+    error_check(lib.moist_get_cavity_field_info)(
         cavity.handle,
-        ngrid,
-        nmax,
-        _cast("double*", normal0),
-        _cast("double*", wleb),
-        _cast("double*", r_iI0),
-        _cast("double*", switch_f),
-        _cast("double*", rho),
+        int(index),
+        _FIELD_NAME_CAP,
+        name,
+        dtype,
+        rank,
+        dims,
+        count,
     )
 
+    tag = int(dtype[0])
+    if tag not in _FIELD_READER:
+        raise ValueError(f"moist reported an unknown field type tag {tag}")
+
+    return CavityField(
+        name=ffi.string(name).decode(),
+        dtype=np.dtype(_FIELD_READER[tag][1]),
+        shape=tuple(int(dims[i]) for i in range(int(rank[0]))),
+        count=int(count[0]),
+    )
+
+
+def list_cavity_fields(cavity: CavityHandle) -> tuple[CavityField, ...]:
+    """Describe every result the cavity currently holds.
+
+    The list is what the cavity itself declares, so it grows with the cavity
+    type and omits optional properties that were never computed. Read it again
+    after an update: a rebuild changes the extents.
+    """
+
+    return tuple(
+        get_cavity_field_info(cavity, index)
+        for index in range(get_cavity_field_count(cavity))
+    )
+
+
+def get_cavity_field_about(cavity: CavityHandle, name: str) -> str:
+    """Return the one-line description moist attaches to a field."""
+
+    about = ffi.new(f"char[{_FIELD_ABOUT_CAP}]")
+    error_check(lib.moist_get_cavity_field_about)(
+        cavity.handle,
+        _char(name),
+        _FIELD_ABOUT_CAP,
+        about,
+    )
+    return ffi.string(about).decode()
+
+
+def get_cavity_field(
+    cavity: CavityHandle,
+    name: str,
+    info: Optional[CavityField] = None,
+) -> np.ndarray:
+    """Return one named cavity result.
+
+    Rank-2 fields come back Fortran-ordered with moist's own shape. A name the
+    cavity does not currently hold -- unknown, or an optional property that was
+    not requested -- raises rather than returning zeros.
+
+    ``info`` skips the shape lookup when the caller already has a descriptor
+    from :func:`list_cavity_fields`; it has to describe the same cavity state.
+    """
+
+    if info is None:
+        info = _find_cavity_field(cavity, name)
+
+    reader, dtype, ctype = _FIELD_READER[_tag_of(info.dtype)]
+    values = np.zeros(info.count, dtype=dtype)
+    error_check(getattr(lib, reader))(
+        cavity.handle,
+        _char(name),
+        info.count,
+        _cast(ctype, values),
+    )
+
+    if not info.shape:
+        return values[0]
+    return values.reshape(info.shape, order="F")
+
+
+def get_cavity_fields(
+    cavity: CavityHandle,
+    names: Optional[Iterable[str]] = None,
+) -> dict:
+    """Return the named cavity results as a ``{name: value}`` mapping.
+
+    With ``names`` omitted this reads everything the cavity holds; the fields
+    are enumerated once and the descriptors reused, so the mapping is
+    consistent with a single cavity state.
+    """
+
+    fields = list_cavity_fields(cavity)
+    if names is not None:
+        wanted = list(names)
+        known = {field.name: field for field in fields}
+        missing = [name for name in wanted if name not in known]
+        if missing:
+            raise KeyError(
+                "cavity does not hold the field(s) "
+                + ", ".join(repr(name) for name in missing)
+                + "; available: "
+                + ", ".join(field.name for field in fields)
+            )
+        fields = [known[name] for name in wanted]
+
     return {
-        "nmax": int(nmax[0]),
-        "normal0": normal0,
-        "wleb": wleb,
-        "r_iI0": r_iI0,
-        "f": switch_f,
-        "rho": rho,
+        field.name: get_cavity_field(cavity, field.name, info=field)
+        for field in fields
     }
+
+
+def _find_cavity_field(cavity: CavityHandle, name: str) -> CavityField:
+    for field in list_cavity_fields(cavity):
+        if field.name == name:
+            return field
+    raise KeyError(f"cavity does not hold a field named {name!r}")
+
+
+def _tag_of(dtype: np.dtype) -> int:
+    for tag, (_, candidate, _) in _FIELD_READER.items():
+        if dtype == np.dtype(candidate):
+            return tag
+    raise ValueError(f"no moist field accessor for dtype {dtype}")
 
 
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:

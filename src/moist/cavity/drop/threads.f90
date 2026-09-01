@@ -10,7 +10,8 @@
 !>
 !> 2. `drop_abort_latch_type`: a shared error abort mechanism
 !>    Failures insode `!$omp do` cannot be returned as easily directly;
-!>    Save it inside the latch and draon loop; raise first failure after loop
+!>    Save it inside the latch and drain the loop; after the loop the failure
+!>    at the lowest grid point is raised, so the report is schedule-independent
 !>
 !> Usage:
 !>   ```fortran
@@ -37,7 +38,7 @@ module moist_cavity_drop_threads
    !> `nthreads` is the single source of truth for the team size: it is read
    !> from the shared context and **must** be pinned on the parallel region
    !> with `num_threads(slots%nthreads)`, or a larger live team indexes the
-   !> slot arrays out of bounds.
+   !> slot arrays out of bounds
    type :: drop_worker_slots_type
       !> Per-thread LSF evaluators, one per slot
       type(lsf_thread_slot), allocatable :: lsf(:)
@@ -48,14 +49,12 @@ module moist_cavity_drop_threads
    contains
       !> Clone the evaluators for a parallel region
       procedure :: init => worker_slots_init
-      !> Release the clones
-      procedure :: release => worker_slots_release
    end type drop_worker_slots_type
 
-   !> First-writer-wins error latch for a parallel grid loop
+   !> Lowest-grid-point-wins error latch for a parallel grid loop
    !>
-   !> A latch is written at most once per loop, on a failure path, so the
-   !> serialization it costs is irrelevant.
+   !> A latch is written only on a failure path, so the serialization it costs
+   !> is irrelevant.
    type :: drop_abort_latch_type
       !> Whether any thread has latched a failure
       logical :: requested = .false.
@@ -63,7 +62,7 @@ module moist_cavity_drop_threads
       type(error_type), allocatable :: error
       !> Latched status code, when the failure carried one instead
       integer :: status = 0
-      !> Grid point that failed
+      !> Grid point of the latched failure; 0 for a failure with no grid point
       integer :: igrid = 0
    contains
       !> Clear the latch before a parallel region
@@ -86,7 +85,7 @@ contains
    !>
    !> `phi` is allocated only when `param`, `mol` and `radii` are all supplied;
    !> the projection and curvature loops do not evaluate the objective and pass
-   !> none of them.
+   !> none of them
    !>
    !> @param[out] self      Worker slots
    !> @param[in]  ctx       Shared context; sole source of the team size
@@ -125,7 +124,7 @@ contains
       do islot = 1, self%nthreads
          allocate (self%lsf(islot)%lsf, source=lsf_model)
          ! The screened-derivative cache is sized here, before the first
-         ! %prepare call; a later upgrade would have to reallocate it.
+         ! %prepare call; a later upgrade would have to reallocate it
          call self%lsf(islot)%lsf%set_max_deriv(max_deriv)
          if (want_phi) then
             call self%phi(islot)%set_parameters(param)
@@ -133,18 +132,6 @@ contains
          end if
       end do
    end subroutine worker_slots_init
-
-   !> Release the per-thread clones
-   !>
-   !> @param[inout] self Worker slots
-   subroutine worker_slots_release(self)
-      !> Worker slots
-      class(drop_worker_slots_type), intent(inout) :: self
-
-      if (allocated(self%lsf)) deallocate (self%lsf)
-      if (allocated(self%phi)) deallocate (self%phi)
-      self%nthreads = 0
-   end subroutine worker_slots_release
 
 !* ================================================================================= *!
 !*                                    Abort latch                                    *!
@@ -165,12 +152,12 @@ contains
 
    !> Latch an error object raised by a worker, transferring ownership
    !>
-   !> `err` is deallocated on return whether or not this caller won the race,
-   !> so the worker can simply drop out of the loop afterwards.
+   !> `err` is deallocated on return whether or not this caller won, so the
+   !> worker can simply drop out of the loop afterwards
    !>
    !> @param[inout] self  Abort latch
    !> @param[inout] err   Error to latch; deallocated on return
-   !> @param[in]    igrid Grid point that failed
+   !> @param[in]    igrid Grid point that failed; absent means a setup failure
    subroutine abort_latch_error(self, err, igrid)
       !> Abort latch
       class(drop_abort_latch_type), intent(inout) :: self
@@ -179,11 +166,18 @@ contains
       !> Failing grid point
       integer, intent(in), optional :: igrid
 
+      !> Grid point this candidate carries
+      integer :: candidate
+
+      candidate = 0
+      if (present(igrid)) candidate = igrid
+
       !$omp critical (drop_abort_latch)
-      if (.not. self%requested) then
+      if (latch_wins(self, candidate)) then
          self%requested = .true.
+         self%igrid = candidate
+         self%status = 0
          call move_alloc(err, self%error)
-         if (present(igrid)) self%igrid = igrid
       end if
       !$omp end critical (drop_abort_latch)
 
@@ -194,7 +188,7 @@ contains
    !>
    !> @param[inout] self    Abort latch
    !> @param[in]    message Diagnostic to report
-   !> @param[in]    igrid   Grid point that failed
+   !> @param[in]    igrid   Grid point that failed; absent means a setup failure
    subroutine abort_latch_message(self, message, igrid)
       !> Abort latch
       class(drop_abort_latch_type), intent(inout) :: self
@@ -203,11 +197,20 @@ contains
       !> Failing grid point
       integer, intent(in), optional :: igrid
 
+      !> Grid point this candidate carries
+      integer :: candidate
+
+      candidate = 0
+      if (present(igrid)) candidate = igrid
+
       !$omp critical (drop_abort_latch)
-      if (.not. self%requested) then
+      if (latch_wins(self, candidate)) then
          self%requested = .true.
+         self%igrid = candidate
+         self%status = 0
+         ! `fatal_error` is intent(out) in its error argument, so a message
+         ! latched over an earlier one releases it
          call fatal_error(self%error, message)
-         if (present(igrid)) self%igrid = igrid
       end if
       !$omp end critical (drop_abort_latch)
    end subroutine abort_latch_message
@@ -215,7 +218,7 @@ contains
    !> Latch a failure described by a status code
    !>
    !> The code is stored verbatim; turning it into a diagnostic needs the
-   !> caller's context and happens after the parallel region.
+   !> caller's context and happens after the parallel region
    !>
    !> @param[inout] self   Abort latch
    !> @param[in]    status Status code to latch
@@ -229,12 +232,33 @@ contains
       integer, intent(in) :: igrid
 
       !$omp critical (drop_abort_latch)
-      if (.not. self%requested) then
+      if (latch_wins(self, igrid)) then
          self%requested = .true.
-         self%status = status
          self%igrid = igrid
+         self%status = status
+         ! A status latched over an error object: the two representations are
+         ! alternatives, so the loser must go
+         if (allocated(self%error)) deallocate (self%error)
       end if
       !$omp end critical (drop_abort_latch)
    end subroutine abort_latch_status
+
+   !> Whether a candidate failure displaces the one currently latched
+   !>
+   !> Call only from inside the `drop_abort_latch` critical region
+   !>
+   !> @param[in] self      Abort latch
+   !> @param[in] candidate Grid point of the candidate failure
+   !> @return    wins      `.true.` when the candidate must be stored
+   pure function latch_wins(self, candidate) result(wins)
+      !> Abort latch
+      class(drop_abort_latch_type), intent(in) :: self
+      !> Grid point of the candidate failure
+      integer, intent(in) :: candidate
+      !> Whether the candidate displaces the latched failure
+      logical :: wins
+
+      wins = .not. self%requested .or. candidate < self%igrid
+   end function latch_wins
 
 end module moist_cavity_drop_threads

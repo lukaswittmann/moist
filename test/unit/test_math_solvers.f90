@@ -23,6 +23,8 @@ module test_math_solvers
    use moist_math_solver_newton_deflation, only: new_newton_deflation_solver, &
                                                  moist_math_solver_newton_deflation_type
    use moist_math_solver_deflation, only: moist_deflation_operator_type
+   use moist_math_solver_octree_branch, only: moist_math_octree_branch_type, &
+                                              octree_seed_cluster, octree_seed_per_leaf
    use mctc_env_error, only: moist_error_type => error_type
    ! Raw vendored solver APIs (upstream test ports folded into this suite).
    use slsqp_module, only: slsqp_solver
@@ -36,6 +38,20 @@ module test_math_solvers
    private
 
    public :: collect_math_solvers
+
+   !> Context for the analytic probe: a union of spheres, as a signed distance.
+   !>
+   !> `S(x) = min_i (||x - c_i|| - R_i)` is exactly 1-Lipschitz, so `|S(x)|` is
+   !> a valid surface-free radius -- the same certificate the SvdW level set
+   !> supplies, without pulling the whole cavity machinery into a solver test.
+   type :: sphere_union_context
+      !> Sphere centres (3, nsphere)
+      real(wp) :: centre(3, 2) = 0.0_wp
+      !> Sphere radii
+      real(wp) :: radius(2) = 1.0_wp
+      !> Number of spheres actually used
+      integer :: nsphere = 1
+   end type sphere_union_context
 
    !> Tolerance for Newton solver
    real(wp), parameter :: newton_thr = 1.0e-10_wp
@@ -103,7 +119,15 @@ contains
          & new_unittest("slsqp_maxiter_fail", test_slsqp_maxiter_fail, should_fail=.true.), &
          & new_unittest("newton_deflation_max_roots", test_newton_deflation_max_roots), &
          & new_unittest("deflation_operator_gradient_fd", test_deflation_operator_gradient_fd), &
-         & new_unittest("lbfgsb_kernel_bound_active", test_lbfgsb_bound_active) &
+         & new_unittest("lbfgsb_kernel_bound_active", test_lbfgsb_bound_active), &
+         & new_unittest("octree_two_sphere_branches", test_octree_two_sphere), &
+         & new_unittest("octree_single_sphere_one_branch", test_octree_single_sphere), &
+         & new_unittest("octree_sign_change_bound_is_tight", test_octree_sign_change_bound), &
+         & new_unittest("octree_certifies_empty_ball", test_octree_empty_ball), &
+         & new_unittest("octree_seed_modes_agree", test_octree_seed_modes), &
+         & new_unittest("octree_budget_is_an_error", test_octree_budget, should_fail=.true.), &
+         & new_unittest("octree_depth_cap_is_an_error", test_octree_depth_cap), &
+         & new_unittest("octree_negative_slack_is_an_error", test_octree_negative_slack) &
          & ]
    end subroutine collect_math_solvers
 
@@ -1997,5 +2021,387 @@ contains
                  "bound-active objective not n*(1-3)^2 = 12")
       if (allocated(error)) return
    end subroutine test_lbfgsb_bound_active
+   !* ================================================================================= *!
+   !*              Certified octree branch search on an analytic level set              *!
+   !* ================================================================================= *!
+
+   !> Probe callback: level set value and exact Lipschitz exclusion radius
+   !> @param[in]  x       Evaluation point
+   !> @param[out] lsf0    Level set value
+   !> @param[out] radius  Surface-free radius around `x`
+   !> @param[in]  context Sphere union definition
+   subroutine sphere_union_probe(x, lsf0, radius, context)
+      real(wp), intent(in) :: x(3)
+      real(wp), intent(out) :: lsf0
+      real(wp), intent(out) :: radius
+      class(*), intent(in) :: context
+
+      integer :: i
+      real(wp) :: d
+
+      lsf0 = huge(1.0_wp)
+      radius = 0.0_wp
+
+      select type (context)
+      type is (sphere_union_context)
+         do i = 1, context%nsphere
+            d = norm2(x - context%centre(:, i)) - context%radius(i)
+            lsf0 = min(lsf0, d)
+         end do
+      class default
+         return
+      end select
+
+      radius = abs(lsf0)
+   end subroutine sphere_union_probe
+
+   !> Two equal spheres straddling the anchor: the closest-point projection is
+   !> two-valued and the search must return both branches.
+   subroutine test_octree_two_sphere(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+      integer :: i, n_left, n_right
+
+      ! Spheres of radius 1 centred at x = -2 and x = +2. The anchor sits at
+      ! the origin, equidistant from both surfaces at rho = 1.
+      ctx%nsphere = 2
+      ctx%centre(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%centre(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius = [1.0_wp, 1.0_wp]
+      anchor = 0.0_wp
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
+                      rho2_slack=0.5_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run: "//solver_error%message)
+         return
+      end if
+
+      call check(error, octree%n_seeds, 2, &
+                 message="expected exactly two branch seeds, got "// &
+                 to_string(octree%n_seeds))
+      if (allocated(error)) return
+
+      ! One seed on each side, each near the inner pole of its sphere.
+      n_left = 0
+      n_right = 0
+      do i = 1, octree%n_seeds
+         if (octree%seeds(1, i) < 0.0_wp) n_left = n_left + 1
+         if (octree%seeds(1, i) > 0.0_wp) n_right = n_right + 1
+         call check(error, abs(norm2(octree%seeds(:, i) - anchor) - 1.0_wp) < 0.2_wp, &
+                    message="seed is not near the surface at rho = 1")
+         if (allocated(error)) return
+      end do
+      call check(error, n_left == 1 .and. n_right == 1, &
+                 message="branch seeds are not one per sphere")
+   end subroutine test_octree_two_sphere
+
+   !> A single sphere admits exactly one branch, and the search tightens its own
+   !> radius down to that branch instead of certifying the ball it started from.
+   subroutine test_octree_single_sphere(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      ! Start from a ball far wider than needed: the anchor is 1 Bohr inside a
+      ! sphere of radius 2, so the only branch sits at rho = 1.
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run: "//solver_error%message)
+         return
+      end if
+
+      call check(error, octree%n_seeds, 1, &
+                 message="expected exactly one branch seed, got "// &
+                 to_string(octree%n_seeds))
+      if (allocated(error)) return
+
+      ! rho_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
+      ! the run started from: the sign-change bound did the tightening.
+      call check(error, octree%rho_max_final < 1.2_wp, &
+                 message="search failed to tighten its own admissible radius")
+   end subroutine test_octree_single_sphere
+
+   !> The sign-change bound is refined by the probed centre's own surface-free
+   !> ball, which must leave it above the truth and should land close to it
+   subroutine test_octree_sign_change_bound(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius, rho_true
+
+      !> Squared-distance slack defining the admissible set
+      real(wp), parameter :: slack = 0.25_wp
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 1.0_wp
+      anchor = [3.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      ! The anchor sits 2 Bohr outside the sphere, so rho_min is exactly 2 and
+      ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
+      ! that bounds the crossing by the probed centre alone, without taking off
+      ! that centre's surface-free radius, stops around 2.1035 instead.
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=slack, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run: "//solver_error%message)
+         return
+      end if
+
+      call check(error, octree%n_seeds, 1, &
+                 message="expected exactly one branch seed, got "// &
+                 to_string(octree%n_seeds))
+      if (allocated(error)) return
+
+      rho_true = sqrt(4.0_wp + slack)
+
+      ! The epsilon absorbs a last-bit difference in how the bound is summed,
+      ! not a real shortfall: the margin a working run keeps here is ~2e-3.
+      call check(error, octree%rho_max_final >= rho_true - 1.0e-10_wp, &
+                 message="certified radius fell below the true admissible one")
+      if (allocated(error)) return
+
+      call check(error, octree%rho_max_final <= 1.01_wp*rho_true, &
+                 message="sign-change bound is not being refined by the "// &
+                 "exclusion radius")
+   end subroutine test_octree_sign_change_bound
+
+   !> A ball holding no surface is certified empty, with no seeds and without
+   !> spending more than the root box.
+   subroutine test_octree_empty_ball(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 10.0_wp
+      anchor = 0.0_wp
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      ! The surface is 10 Bohr away; a ball of radius 1 around the anchor holds
+      ! none of it, and the root box alone proves that.
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=1.0_wp, &
+                      rho2_slack=0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run: "//solver_error%message)
+         return
+      end if
+
+      call check(error, octree%n_seeds, 0, &
+                 message="empty ball produced seeds")
+      if (allocated(error)) return
+      call check(error, octree%n_boxes_visited, 1, &
+                 message="empty ball took more than the root box to certify")
+   end subroutine test_octree_empty_ball
+
+   !> The per-leaf reference mode must see the same branches as the clustered
+   !> mode, just spread over many more seeds.
+   subroutine test_octree_seed_modes(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+      integer :: n_cluster, n_leaf
+
+      ctx%nsphere = 2
+      ctx%centre(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%centre(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius = [1.0_wp, 1.0_wp]
+      anchor = 0.0_wp
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%init(seed_size=0.1_wp, seed_mode=octree_seed_cluster, &
+                       error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init (cluster): "//solver_error%message)
+         return
+      end if
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
+                      rho2_slack=0.5_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run (cluster): "//solver_error%message)
+         return
+      end if
+      n_cluster = octree%n_seeds
+
+      call octree%init(seed_size=0.1_wp, seed_mode=octree_seed_per_leaf, &
+                       error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init (per leaf): "//solver_error%message)
+         return
+      end if
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=2.0_wp, &
+                      rho2_slack=0.5_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree run (per leaf): "//solver_error%message)
+         return
+      end if
+      n_leaf = octree%n_seeds
+
+      call check(error, n_cluster == 2, &
+                 message="clustered mode did not reduce to one seed per branch")
+      if (allocated(error)) return
+      call check(error, n_leaf > n_cluster, &
+                 message="per-leaf mode should emit more seeds than clustered mode")
+   end subroutine test_octree_seed_modes
+
+   !> Exhausting the box budget must be reported, never silently truncated: a
+   !> partial search carries no completeness certificate.
+   subroutine test_octree_budget(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.01_wp, max_boxes=8, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "budget exhausted as expected: "//solver_error%message)
+         return
+      end if
+   end subroutine test_octree_budget
+
+   !> A depth cap that stops short of the requested seed size must be reported.
+   !> Continuing with coarser leaves would merge minima the configured
+   !> resolution separates, while still claiming a completed enumeration.
+   subroutine test_octree_depth_cap(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      ! A 5 Bohr ball needs depth 7 to reach 0.1 Bohr leaves; three is not enough.
+      call octree%init(seed_size=0.1_wp, max_depth=3, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+
+      call check(error, allocated(solver_error), &
+                 message="a depth cap short of seed_size was accepted silently")
+      if (allocated(error)) return
+      call check(error, octree%n_seeds, 0, &
+                 message="a failed run must not hand back seeds")
+   end subroutine test_octree_depth_cap
+
+   !> A negative squared-distance slack would poison the radius cap with a NaN,
+   !> after which every comparison against it is false and nothing is bounded.
+   subroutine test_octree_negative_slack(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_octree_branch_type) :: octree
+      type(sphere_union_context) :: ctx
+      type(moist_error_type), allocatable :: solver_error
+      real(wp) :: anchor(3), lsf0, radius
+
+      ctx%nsphere = 1
+      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%radius(1) = 2.0_wp
+      anchor = [1.0_wp, 0.0_wp, 0.0_wp]
+
+      call octree%init(seed_size=0.1_wp, error=solver_error)
+      if (allocated(solver_error)) then
+         call test_failed(error, "octree init: "//solver_error%message)
+         return
+      end if
+
+      call sphere_union_probe(anchor, lsf0, radius, ctx)
+
+      call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
+                      rho2_slack=-0.25_wp, probe=sphere_union_probe, &
+                      context=ctx, error=solver_error)
+
+      call check(error, allocated(solver_error), &
+                 message="a negative rho2_slack was accepted")
+   end subroutine test_octree_negative_slack
 
 end module test_math_solvers

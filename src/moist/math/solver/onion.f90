@@ -323,7 +323,7 @@ contains
          return
       end if
 
-      call self%lsf%f012_r_screened(lsf0=lsf0)
+      call self%lsf%f012_r(lsf0=lsf0)
 
       lsf_val = lsf0
 

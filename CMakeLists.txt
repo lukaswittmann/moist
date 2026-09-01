@@ -131,20 +131,19 @@ endif()
 # every `if(NOT TARGET <name>::<name>)` guard short-circuits -- keeping the
 # whole graph offline. EXCLUDE_FROM_ALL stops their unconditional app/ and
 # test/ subdirectories from compiling (they are still configured, so referenced
-# targets such as mstore::mstore must exist -- hence mstore is added too).
+# targets such as mstore::mstore must exist).
 # ---------------------------------------------------------------------------
 # Silence the subprojects' own test/app suites.
 set(BUILD_TESTING            OFF CACHE BOOL "" FORCE)  # toml-f, fclap, mstore, ...
-set(WITH_TESTS               OFF CACHE BOOL "" FORCE)  # multicharge, s-dftd3
 set(ENABLE_TESTING           OFF CACHE BOOL "" FORCE)  # jonquil
 set(TESTDRIVE_BUILD_TESTING  OFF CACHE BOOL "" FORCE)  # test-drive
 
-# mctc-lib and dftd4 call enable_testing()/add_test() with no BUILD_TESTING
-# guard, registering ctest cases for their own *-tester binaries -- which are
+# mctc-lib calls enable_testing()/add_test() with no BUILD_TESTING guard,
+# registering ctest cases for its own *-tester binaries -- which are
 # EXCLUDE_FROM_ALL here and never built, so the cases would dangle as "Not Run".
 # Shadow add_test() with a flag-gated no-op (the builtin stays reachable as
 # _add_test) so only moist's own suite, which flips _moist_allow_tests on,
-# registers. Safe because neither subproject calls set_tests_properties.
+# registers. Safe because the subproject does not call set_tests_properties.
 set(_moist_allow_tests OFF)
 function(add_test)
   if(_moist_allow_tests)
@@ -165,14 +164,11 @@ function(moist_add_subproject name)
 endfunction()
 
 #                        depends on
-moist_add_subproject(test-drive)   # (leaf)
 moist_add_subproject(toml-f)       # (leaf)
 moist_add_subproject(fclap)        # (leaf, CLI only)
 moist_add_subproject(jonquil)      # toml-f
 moist_add_subproject(mctc-lib)     # jonquil, toml-f (WITH_JSON)
-moist_add_subproject(mstore)       # mctc-lib  (only to satisfy dftd4 test config)
-moist_add_subproject(multicharge)  # mctc-lib, LAPACK
-moist_add_subproject(dftd4)        # mctc-lib, multicharge, BLAS, mstore
+# test-drive and mstore are test-only and added under MOIST_TESTS below.
 
 # ---------------------------------------------------------------------------
 # moist source list
@@ -281,10 +277,7 @@ endif()
 # Link the dependency stack (matches lib_deps in config/meson.build).
 target_link_libraries(moist PUBLIC
   mctc-lib::mctc-lib
-  multicharge::multicharge
-  dftd4::dftd4
   jonquil::jonquil
-  test-drive::test-drive
   LAPACK::LAPACK
   BLAS::BLAS
 )
@@ -357,15 +350,20 @@ if(MOIST_TESTS)
   set(_moist_allow_tests ON)  # re-enable the shadowed add_test() for moist's suite
   set(_unit "${CMAKE_CURRENT_SOURCE_DIR}/test/unit")
 
+  # Test-only subprojects (mirrors test/meson.build, which resolves both inside
+  # the test tree rather than in lib_deps).
+  moist_add_subproject(test-drive)  # (leaf)
+  moist_add_subproject(mstore)      # mctc-lib
+
   # Kept in sync with the `tests` list in test/unit/meson.build.
   set(moist_test_suites
     api utils utils_timer utils_context utils_mem utils_prettylistprint
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_cpcm
+    cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
     cavity_iswig cavity_numsa cavity_marchingcubes
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint

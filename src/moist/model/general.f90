@@ -55,12 +55,18 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      allocate (self%cavity, source=cavity)
+      !> Allocation status of the cavity copy
+      integer :: stat
+
+      allocate (self%cavity, source=cavity, stat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "Failed to copy model cavity")
+         return
+      end if
       self%ctx => ctx
       self%cavity%ctx => ctx
       allocate (self%components(0))
       self%updated = .false.
-      if (.not. allocated(self%cavity)) call fatal_error(error, "Failed to copy model cavity")
 
    end subroutine new_model_general
 
@@ -93,6 +99,7 @@ contains
          call move_alloc(self%components(i)%item, grown(i)%item)
       end do
       allocate (grown(n + 1)%item, source=component)
+      grown(n + 1)%item%ctx => self%ctx
       call move_alloc(grown, self%components)
 
    end subroutine add_component

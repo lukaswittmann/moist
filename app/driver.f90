@@ -224,7 +224,7 @@ contains
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
-                                              c=config%cfc_c, m=config%cfc_m, screen_k=config%cfc_screen_k)
+                                              c=config%cfc_c, m=config%cfc_m)
                         call new_cavity_drop(tmp_cavity, ctx, &
                                              nleb=config%nleb, &
                                              tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
@@ -262,7 +262,7 @@ contains
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
-                                              c=config%cfc_c, m=config%cfc_m, screen_k=config%cfc_screen_k)
+                                              c=config%cfc_c, m=config%cfc_m)
                         call new_mc_cavity(tmp_cavity, ctx, radius_model, cfc_template, &
                                            config%cavity_mc_spacing, config%dump, error)
                      end block

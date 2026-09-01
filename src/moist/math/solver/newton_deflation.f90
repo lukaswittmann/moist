@@ -114,15 +114,15 @@ module moist_math_solver_newton_deflation
 
       !> Optional ball cap on subsequent roots: once the first root is
       !> accepted, the inner Newton is rebuilt with axis-aligned bounds
-      !> that intersect [xl_init, xu_init] with [anchor - phi_max, anchor + phi_max]
+      !> that intersect [xl_init, xu_init] with [anchor - rho_max, anchor + rho_max]
       !> on the first n_anchor components, where
-      !>     phi_max = phi_min + branch_rho_cut.
+      !>     rho_max = sqrt(rho_min^2 + branch_rho2_slack).
       !> Useful when the residual is the projection KKT system on
       !> z = (x, lambda): n_anchor == 3 and lambda keeps its wide bounds.
       logical :: has_ball = .false.
       real(wp), allocatable :: anchor(:)
       integer  :: n_anchor = 0
-      real(wp) :: branch_rho_cut = 0.0_wp
+      real(wp) :: branch_rho2_slack = 0.0_wp
 
       logical :: debug = .false.
    contains
@@ -158,8 +158,10 @@ contains
    !>                               Only the first n_anchor entries of x are
    !>                               capped; remaining entries (e.g. lambda in
    !>                               a 4-D KKT system) keep [xlow, xupp].
-   !> @param[in]  branch_rho_cut    Maximum allowed displacement beyond the
-   !>                               first root: phi_max = phi_min + branch_rho_cut.
+   !> @param[in]  branch_rho2_slack Squared-distance slack allowed beyond the
+   !>                               first root: rho_max^2 = rho_min^2 + branch_rho2_slack.
+   !>                               Squared because the admissible set of the
+   !>                               quadratic objective is a difference of squares.
    !>                               Inactive when <= 0 or anchor is absent.
    !> @param[in]  debug             If true, print per-iteration diagnostics
    !> @param[out] error             Error descriptor
@@ -169,7 +171,7 @@ contains
                                           alpha, use_broyden, max_retries, retry_radius, &
                                           max_roots, p_power, alpha_shift, dedup_tol, &
                                           bounds_mode, xlow, xupp, &
-                                          anchor, branch_rho_cut, &
+                                          anchor, branch_rho2_slack, &
                                           debug, error)
       class(solver_base_type), allocatable, intent(out) :: solver
       integer, intent(in) :: n, m
@@ -190,7 +192,7 @@ contains
       integer, intent(in), optional :: bounds_mode
       real(wp), dimension(:), intent(in), optional :: xlow, xupp
       real(wp), dimension(:), intent(in), optional :: anchor
-      real(wp), intent(in), optional :: branch_rho_cut
+      real(wp), intent(in), optional :: branch_rho2_slack
       logical, intent(in), optional :: debug
       type(error_type), allocatable, intent(out) :: error
 
@@ -242,10 +244,10 @@ contains
          allocate (tmp%xu_init(n)); tmp%xu_init = xupp
       end if
 
-      ! Ball cap setup: anchor + positive branch_rho_cut, plus bounds present.
+      ! Ball cap setup: anchor + positive branch_rho2_slack, plus bounds present.
       tmp%has_ball = .false.
-      if (present(branch_rho_cut)) tmp%branch_rho_cut = branch_rho_cut
-      if (present(anchor) .and. tmp%branch_rho_cut > 0.0_wp) then
+      if (present(branch_rho2_slack)) tmp%branch_rho2_slack = branch_rho2_slack
+      if (present(anchor) .and. tmp%branch_rho2_slack > 0.0_wp) then
          if (size(anchor) > n) then
             call fatal_error(error, "Newton-deflation: anchor size > n")
             return
@@ -495,12 +497,11 @@ contains
             first_root_found = .true.
 
             ! After the first accepted root, tighten Newton's bounds to
-            ! anchor +/- (phi_min + branch_rho_cut) on the n_anchor leading
-            ! components. lambda (and any other tail entries) keep their
-            ! initial bounds.
+            ! anchor +/- rho_max on the n_anchor leading components.
+            ! lambda (and any other tail entries) keep their initial bounds.
             if (self%has_ball .and. .not. ball_armed) then
                phi_min = norm2(x_trial(1:self%n_anchor) - self%anchor)
-               phi_max = phi_min + self%branch_rho_cut
+               phi_max = sqrt(phi_min*phi_min + self%branch_rho2_slack)
                allocate (xl_tight(self%n))
                allocate (xu_tight(self%n))
                if (allocated(self%xl_init)) then

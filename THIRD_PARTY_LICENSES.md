@@ -34,16 +34,12 @@ files in-tree (unmodified upstream). Listed here for completeness.
 
 | Subproject | License file(s) | License |
 |---|---|---|
-| json-fortran | `subprojects/json-fortran-8.2.5/LICENSE` | BSD-3-Clause (Jacob Williams) |
-| dftd4 | `subprojects/dftd4/COPYING(.LESSER)` | LGPL-3.0-or-later |
-| s-dftd3 | `subprojects/s-dftd3/COPYING(.LESSER)` | LGPL-3.0-or-later |
 | toml-f | `subprojects/toml-f/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
 | jonquil | `subprojects/jonquil/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
 | test-drive | `subprojects/test-drive/LICENSE-Apache`, `LICENSE-MIT` | Apache-2.0 OR MIT |
-| mctc-lib | `subprojects/mctc-lib/LICENSE` | see file |
-| mstore | `subprojects/mstore/LICENSE` | see file |
-| multicharge | `subprojects/multicharge/LICENSE` | see file |
-| fclap | `subprojects/fclap/LICENSE.md` | see file |
+| mctc-lib | `subprojects/mctc-lib/LICENSE` | Apache-2.0 |
+| mstore | `subprojects/mstore/LICENSE` | Apache-2.0 |
+| fclap | `subprojects/fclap/LICENSE.md` | MIT (Christian Selzer) |
 
 ## Notes
 

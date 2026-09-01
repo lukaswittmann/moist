@@ -2,7 +2,9 @@
 module test_cavity_drop_cfc
    use mctc_env_accuracy, only: wp
    use moist_cavity_drop_lsf_cfc_kernel, only: cfc_atomic_term_eval, &
-                                               cfc_pair_term_eval, cfc_log_lift
+                                               cfc_pair_term_eval, cfc_spatial_eval, &
+                                               cfc_nuclear_eval, cfc_hessian_eval, &
+                                               cfc_tangent_eval, cfc_hvp_eval
    use test_helpers, only: fd4_scalar
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none (type, external)
@@ -83,7 +85,8 @@ contains
                   new_unittest("pair_swap_a_b", test_pair_swap_invariance), &
                   new_unittest("log_lift_grad_fd", test_log_lift_grad_fd), &
                   new_unittest("log_lift_hess_fd", test_log_lift_hess_fd), &
-                  new_unittest("log_lift_third_fd", test_log_lift_third_fd) &
+                  new_unittest("log_lift_third_fd", test_log_lift_third_fd), &
+                  new_unittest("lift_defines_every_output", test_lift_defines_every_output) &
                   ]
    end subroutine collect_cavity_drop_cfc
 
@@ -102,11 +105,16 @@ contains
       real(wp), intent(out) :: pd2_rr(ndim, ndim)
       real(wp), intent(out) :: pd3_rrr(ndim, ndim, ndim)
 
+      !> Order-4 accumulator of the kernel; this suite checks orders 0..3 only
+      real(wp) :: pd4_rrrr(ndim, ndim, ndim, ndim)
+
       pd0 = 0.0_wp
       pd1_r = 0.0_wp
       pd2_rr = 0.0_wp
       pd3_rrr = 0.0_wp
-      call cfc_atomic_term_eval(d_a, R_a, a1, max_deriv, pd0, pd1_r, pd2_rr, pd3_rrr)
+      pd4_rrrr = 0.0_wp
+      call cfc_atomic_term_eval(d_a, R_a, a1, max_deriv, pd0, pd1_r, pd2_rr, pd3_rrr, &
+                                pd4_rrrr)
    end subroutine eval_atom
 
    !> Evaluate the pair-term kernel at one (d_a, d_b) configuration.
@@ -121,15 +129,54 @@ contains
       real(wp), intent(out) :: pd3_aaa(ndim, ndim, ndim), pd3_aab(ndim, ndim, ndim)
       real(wp), intent(out) :: pd3_abb(ndim, ndim, ndim), pd3_bbb(ndim, ndim, ndim)
 
+      !> Order-4 split accumulators; this suite checks total orders 0..3 only
+      real(wp) :: pd4_aaaa(ndim, ndim, ndim, ndim), pd4_aaab(ndim, ndim, ndim, ndim)
+      real(wp) :: pd4_aabb(ndim, ndim, ndim, ndim), pd4_abbb(ndim, ndim, ndim, ndim)
+      real(wp) :: pd4_bbbb(ndim, ndim, ndim, ndim)
+
       pd0 = 0.0_wp
       pd1_a = 0.0_wp; pd1_b = 0.0_wp
       pd2_aa = 0.0_wp; pd2_ab = 0.0_wp; pd2_bb = 0.0_wp
       pd3_aaa = 0.0_wp; pd3_aab = 0.0_wp
       pd3_abb = 0.0_wp; pd3_bbb = 0.0_wp
+      pd4_aaaa = 0.0_wp; pd4_aaab = 0.0_wp; pd4_aabb = 0.0_wp
+      pd4_abbb = 0.0_wp; pd4_bbbb = 0.0_wp
       call cfc_pair_term_eval(d_a, d_b, R_a, R_b, a2, c_par, max_deriv, &
                               pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
-                              pd3_aaa, pd3_aab, pd3_abb, pd3_bbb)
+                              pd3_aaa, pd3_aab, pd3_abb, pd3_bbb, &
+                              pd4_aaaa, pd4_aaab, pd4_aabb, pd4_abbb, pd4_bbbb)
    end subroutine eval_pair
+
+   !> Lift an accumulated pseudo-density stack to derivatives of `+log PD`
+   !>
+   !> The kernel's `cfc_spatial_eval` returns derivatives of the level set
+   !> `S = -log PD` (the sign the LSF contract wants); the checks below are
+   !> written against `+log PD`, so this wrapper negates. Orders above
+   !> `max_deriv` come back as exact zeros from the kernel, not as garbage,
+   !> which is what lets this wrapper negate all four unconditionally.
+   subroutine eval_log_lift(pd0, pd1_r, pd2_rr, pd3_rrr, max_deriv, &
+                            lpd0, lpd1_r, lpd2_rr, lpd3_rrr)
+      real(wp), intent(in)  :: pd0
+      real(wp), intent(in)  :: pd1_r(ndim)
+      real(wp), intent(in)  :: pd2_rr(ndim, ndim)
+      real(wp), intent(in)  :: pd3_rrr(ndim, ndim, ndim)
+      integer, intent(in)  :: max_deriv
+      real(wp), intent(out) :: lpd0
+      real(wp), intent(out) :: lpd1_r(ndim)
+      real(wp), intent(out) :: lpd2_rr(ndim, ndim)
+      real(wp), intent(out) :: lpd3_rrr(ndim, ndim, ndim)
+
+      !> Order-4 input and output of the kernel, unused here
+      real(wp) :: pd4_rrrr(ndim, ndim, ndim, ndim), f4_rrrr(ndim, ndim, ndim, ndim)
+
+      pd4_rrrr = 0.0_wp
+      call cfc_spatial_eval(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, max_deriv, &
+                            lpd0, lpd1_r, lpd2_rr, lpd3_rrr, f4_rrrr)
+      lpd0 = -lpd0
+      lpd1_r = -lpd1_r
+      lpd2_rr = -lpd2_rr
+      lpd3_rrr = -lpd3_rrr
+   end subroutine eval_log_lift
 
    !* ================================================================================= *!
    !*                              Atomic-term FD tests                                 *!
@@ -922,7 +969,7 @@ contains
    !* ================================================================================= *!
 
    !> Reference scalar field PD(r) = sum of two atom-centered Gaussians.
-   !> Used as a known smooth positive PD to verify cfc_log_lift against
+   !> Used as a known smooth positive PD to verify the level-set lift against
    !> finite differences of log(PD).
    pure subroutine ref_pd(r, pd0, pd1, pd2, pd3)
       real(wp), intent(in) :: r(ndim)
@@ -993,7 +1040,7 @@ contains
       do ipt = 1, n_atom_pts
          r = atom_pts(:, ipt)
          call ref_pd(r, pd0, pd1, pd2, pd3)
-         call cfc_log_lift(pd0, pd1, pd2, pd3, 1, lpd0, lpd1, lpd2, lpd3)
+         call eval_log_lift(pd0, pd1, pd2, pd3, 1, lpd0, lpd1, lpd2, lpd3)
          do axis = 1, ndim
             shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
             call ref_log_pd_value(shifted, f_pp)
@@ -1026,23 +1073,23 @@ contains
       do ipt = 1, n_atom_pts
          r = atom_pts(:, ipt)
          call ref_pd(r, pd0, pd1, pd2, pd3)
-         call cfc_log_lift(pd0, pd1, pd2, pd3, 2, lpd0, lpd1, lpd2, lpd3)
+         call eval_log_lift(pd0, pd1, pd2, pd3, 2, lpd0, lpd1, lpd2, lpd3)
          do axis = 1, ndim
             shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             g_pp = lpd1_s
             shifted = r; shifted(axis) = r(axis) + h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             g_p = lpd1_s
             shifted = r; shifted(axis) = r(axis) - h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             g_m = lpd1_s
             shifted = r; shifted(axis) = r(axis) - 2.0_wp*h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 1, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             g_mm = lpd1_s
             do i = 1, ndim
                numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
@@ -1071,23 +1118,23 @@ contains
       do ipt = 1, n_atom_pts
          r = atom_pts(:, ipt)
          call ref_pd(r, pd0, pd1, pd2, pd3)
-         call cfc_log_lift(pd0, pd1, pd2, pd3, 3, lpd0, lpd1, lpd2, lpd3)
+         call eval_log_lift(pd0, pd1, pd2, pd3, 3, lpd0, lpd1, lpd2, lpd3)
          do axis = 1, ndim
             shifted = r; shifted(axis) = r(axis) + 2.0_wp*h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             h_pp = lpd2_s
             shifted = r; shifted(axis) = r(axis) + h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             h_p = lpd2_s
             shifted = r; shifted(axis) = r(axis) - h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             h_m = lpd2_s
             shifted = r; shifted(axis) = r(axis) - 2.0_wp*h
             call ref_pd(shifted, pd0_s, pd1_s, pd2_s, pd3_s)
-            call cfc_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
+            call eval_log_lift(pd0_s, pd1_s, pd2_s, pd3_s, 2, lpd0_s, lpd1_s, lpd2_s, lpd3_s)
             h_mm = lpd2_s
             do j = 1, ndim
                do i = 1, ndim
@@ -1106,5 +1153,201 @@ contains
          end do
       end do
    end subroutine test_log_lift_third_fd
+
+   !* ================================================================================= *!
+   !*                  Every lift result is defined on every return path                *!
+   !* ================================================================================= *!
+
+   !> No lift routine may leave an `intent(out)` result undefined
+   !>
+   !> Each of the five lift routines dispatches on `max_deriv` and its lower
+   !> branches assign only the orders they were asked for. Without an
+   !> unconditional zeroing prologue the higher-order dummies would come back
+   !> undefined -- a value the caller cannot even inspect safely, and one that a
+   !> `-finit-real=snan` build cannot catch because these are dummy arguments,
+   !> not locals.
+   !>
+   !> This is the standing enforcement of that contract, and it is a real test,
+   !> not an assertion of intent: every result is poisoned with a sentinel before
+   !> the call, so a routine that stopped zeroing would hand the sentinel straight
+   !> back. The orders *at or below* `max_deriv` are additionally required to be
+   !> non-zero somewhere, so the check cannot pass by the routine having become a
+   !> no-op that zeroes everything.
+   !>
+   !> The `PD <= 0` early return (a fully screened-out point) is exercised too:
+   !> it shares the same prologue, so all-zero is the correct answer there for
+   !> every order.
+   subroutine test_lift_defines_every_output(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Value written into every result before the call; any of it surviving
+      !> means the routine left that result undefined
+      real(wp), parameter :: poison = -1.2345678901234e30_wp
+
+      !> Aggregate pseudo-density stack; deliberately generic, not a real system
+      real(wp) :: pd0, pd1_r(ndim), pd2_rr(ndim, ndim), pd3_rrr(ndim, ndim, ndim)
+      real(wp) :: pd4_rrrr(ndim, ndim, ndim, ndim)
+      !> Per-atom, contracted and two-nucleus input families
+      real(wp) :: qa0(ndim), qa1_r(ndim, ndim), qa2_rr(ndim, ndim, ndim)
+      real(wp) :: qa3_rrr(ndim, ndim, ndim, ndim)
+      real(wp) :: qq0(ndim, ndim), qq1_r(ndim, ndim, ndim), qq2_rr(ndim, ndim, ndim, ndim)
+      real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
+      real(wp) :: hv0(ndim), hv1_r(ndim, ndim), hv2_rr(ndim, ndim, ndim)
+      !> Lift results
+      real(wp) :: f0, f1_r(ndim), f2_rr(ndim, ndim), f3_rrr(ndim, ndim, ndim)
+      real(wp) :: f4_rrrr(ndim, ndim, ndim, ndim)
+      real(wp) :: n1(ndim), n2(ndim, ndim), n3(ndim, ndim, ndim), n4(ndim, ndim, ndim, ndim)
+      real(wp) :: e2(ndim, ndim), e3(ndim, ndim, ndim), e4(ndim, ndim, ndim, ndim)
+      real(wp) :: t0, t1(ndim), t2(ndim, ndim), t3(ndim, ndim, ndim)
+      real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
+      !> Dispatch level and a spare index
+      integer :: md, ipass
+
+      call fill_ramp(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, 1)
+      call fill_ramp(tg0, tg1_r, tg2_rr, tg3_rrr, pd4_rrrr, 2)
+      qa0 = [0.7_wp, -0.3_wp, 0.4_wp]
+      qa1_r = 0.21_wp
+      qa2_rr = -0.13_wp
+      qa3_rrr = 0.07_wp
+      qq0 = 0.31_wp
+      qq1_r = -0.19_wp
+      qq2_rr = 0.11_wp
+      hv0 = [0.5_wp, 0.2_wp, -0.6_wp]
+      hv1_r = -0.23_wp
+      hv2_rr = 0.17_wp
+
+      ! Pass 1 runs the normal path; pass 2 drives PD to zero so the early
+      ! return is covered by exactly the same assertions.
+      do ipass = 1, 2
+         if (ipass == 2) pd0 = 0.0_wp
+
+         do md = 0, 4
+            f0 = poison; f1_r = poison; f2_rr = poison
+            f3_rrr = poison; f4_rrrr = poison
+            call cfc_spatial_eval(pd0, pd1_r, pd2_rr, pd3_rrr, pd4_rrrr, md, &
+                                  f0, f1_r, f2_rr, f3_rrr, f4_rrrr)
+            call no_poison(error, [f0], "cfc_spatial_eval f0", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(f1_r, [size(f1_r)]), "cfc_spatial_eval f1_r", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(f2_rr, [size(f2_rr)]), "cfc_spatial_eval f2_rr", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(f3_rrr, [size(f3_rrr)]), &
+                           "cfc_spatial_eval f3_rrr", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(f4_rrrr, [size(f4_rrrr)]), &
+                           "cfc_spatial_eval f4_rrrr", poison)
+            if (allocated(error)) return
+            if (ipass == 1 .and. md >= 4) then
+               call check(error, any(f4_rrrr /= 0.0_wp), &
+                          "cfc_spatial_eval returned an all-zero order-4 tensor at max_deriv 4")
+               if (allocated(error)) return
+            end if
+            if (ipass == 1 .and. md < 4) then
+               call check(error, all(f4_rrrr == 0.0_wp), &
+                          "cfc_spatial_eval left order 4 non-zero below max_deriv 4")
+               if (allocated(error)) return
+            end if
+         end do
+
+         do md = 0, 3
+            n1 = poison; n2 = poison; n3 = poison; n4 = poison
+            call cfc_nuclear_eval(pd0, pd1_r, pd2_rr, pd3_rrr, qa0, qa1_r, qa2_rr, qa3_rrr, &
+                                  md, n1, n2, n3, n4)
+            call no_poison(error, reshape(n1, [size(n1)]), "cfc_nuclear_eval f1_rA", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(n2, [size(n2)]), "cfc_nuclear_eval f2_r_rA", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(n3, [size(n3)]), "cfc_nuclear_eval f3_rr_rA", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(n4, [size(n4)]), "cfc_nuclear_eval f4_rrr_rA", poison)
+            if (allocated(error)) return
+
+            t0 = poison; t1 = poison; t2 = poison; t3 = poison
+            call cfc_tangent_eval(pd0, pd1_r, pd2_rr, pd3_rrr, tg0, tg1_r, tg2_rr, tg3_rrr, &
+                                  md, t0, t1, t2, t3)
+            call no_poison(error, [t0], "cfc_tangent_eval tangent_f0", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(t1, [size(t1)]), "cfc_tangent_eval tangent_f1_r", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(t2, [size(t2)]), "cfc_tangent_eval tangent_f2_rr", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(t3, [size(t3)]), &
+                           "cfc_tangent_eval tangent_f3_rrr", poison)
+            if (allocated(error)) return
+         end do
+
+         do md = 0, 2
+            e2 = poison; e3 = poison; e4 = poison
+            call cfc_hessian_eval(pd0, pd1_r, pd2_rr, qa0, qa1_r, qa2_rr, &
+                                  qa0, qa1_r, qa2_rr, qq0, qq1_r, qq2_rr, md, e2, e3, e4)
+            call no_poison(error, reshape(e2, [size(e2)]), "cfc_hessian_eval f2_rArB", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(e3, [size(e3)]), "cfc_hessian_eval f3_r_rArB", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(e4, [size(e4)]), "cfc_hessian_eval f4_rr_rArB", poison)
+            if (allocated(error)) return
+
+            h1 = poison; h2 = poison; h3 = poison
+            call cfc_hvp_eval(pd0, pd1_r, pd2_rr, tg0, tg1_r, tg2_rr, qa0, qa1_r, qa2_rr, &
+                              hv0, hv1_r, hv2_rr, md, h1, h2, h3)
+            call no_poison(error, reshape(h1, [size(h1)]), "cfc_hvp_eval hvp_f1_rA", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(h2, [size(h2)]), "cfc_hvp_eval hvp_f2_r_rA", poison)
+            if (allocated(error)) return
+            call no_poison(error, reshape(h3, [size(h3)]), "cfc_hvp_eval hvp_f3_rr_rA", poison)
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_lift_defines_every_output
+
+   !> Fill a whole pseudo-density stack with a deterministic non-degenerate ramp
+   !>
+   !> @param[out] a0    Order-0 slot
+   !> @param[out] a1    Order-1 slot
+   !> @param[out] a2    Order-2 slot
+   !> @param[out] a3    Order-3 slot
+   !> @param[out] a4    Order-4 slot
+   !> @param[in]  seed  Distinguishes two stacks that must not be identical
+   subroutine fill_ramp(a0, a1, a2, a3, a4, seed)
+      real(wp), intent(out) :: a0
+      real(wp), intent(out) :: a1(ndim)
+      real(wp), intent(out) :: a2(ndim, ndim)
+      real(wp), intent(out) :: a3(ndim, ndim, ndim)
+      real(wp), intent(out) :: a4(ndim, ndim, ndim, ndim)
+      integer, intent(in) :: seed
+
+      integer :: i, j, k, l
+
+      a0 = 1.0_wp + 0.5_wp*real(seed, wp)
+      do i = 1, ndim
+         a1(i) = 0.11_wp*real(i*seed, wp) - 0.2_wp
+         do j = 1, ndim
+            a2(i, j) = 0.07_wp*real(i + j, wp) - 0.05_wp*real(seed, wp)
+            do k = 1, ndim
+               a3(i, j, k) = 0.013_wp*real(i + 2*j + 3*k + seed, wp)
+               do l = 1, ndim
+                  a4(i, j, k, l) = 0.003_wp*real(i*j + k*l + seed, wp)
+               end do
+            end do
+         end do
+      end do
+   end subroutine fill_ramp
+
+   !> Fail unless every element differs from the poison sentinel
+   !>
+   !> @param[inout] error testdrive failure
+   !> @param[in]    vals  Flattened result array
+   !> @param[in]    what  Result name, for the message
+   !> @param[in]    p     Poison sentinel
+   subroutine no_poison(error, vals, what, p)
+      type(error_type), allocatable, intent(inout) :: error
+      real(wp), intent(in) :: vals(:)
+      character(len=*), intent(in) :: what
+      real(wp), intent(in) :: p
+
+      call check(error, .not. any(vals == p), &
+                 what//" was left undefined above max_deriv (poison survived)")
+   end subroutine no_poison
 
 end module test_cavity_drop_cfc

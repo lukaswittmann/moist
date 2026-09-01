@@ -302,7 +302,7 @@ contains
             cycle
          end if
 
-         call slots%lsf(thread_slot)%lsf%f012_r_screened( &
+         call slots%lsf(thread_slot)%lsf%f012_r( &
             lsf0_loc, lsf1_r_loc, lsf2_rr_loc)
 
          g_vec = lsf1_r_loc
@@ -368,7 +368,12 @@ contains
       !$omp end parallel do
 
       if (abort%requested) then
-         call move_alloc(abort%error, error)
+         if (allocated(abort%error)) then
+            call move_alloc(abort%error, error)
+         else
+            call fatal_error(error, &
+                             "Curvature computation aborted. (unreachable in normal execution)")
+         end if
          return
       end if
 
@@ -435,7 +440,7 @@ contains
          ! (see the parallel loops for the general contract).
          call lsf%prepare(self%xyz(:, i), error)
          if (allocated(error)) return
-         call lsf%f012_r_screened(lsf0=S_val, lsf1_r=grad_S)
+         call lsf%f012_r(lsf0=S_val, lsf1_r=grad_S)
          s_vals(i) = abs(S_val)
          grad_s_norms(i) = sqrt(dot_product(grad_S, grad_S))
       end do

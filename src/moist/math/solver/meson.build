@@ -14,4 +14,5 @@ srcs += files(
   'deflation.f90',
   'slsqp_deflation.f90',
   'newton_deflation.f90',
+  'octree_branch.f90',
 )

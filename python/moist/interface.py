@@ -11,12 +11,13 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, fields
 from enum import Enum, IntEnum
-from typing import Callable, Iterator, Optional, Protocol, Union
+from typing import Callable, Iterable, Iterator, Optional, Protocol, Union
 import warnings
 
 import numpy as np
 
 from . import library
+from .library import CavityField
 
 
 # -----------------------------------------------------------------------------
@@ -88,11 +89,28 @@ class CavitySnapshotDROP(CavitySnapshot):
     ``wleb``
         ``(ngrid,)`` Lebedev quadrature weights.
     ``r_iI0``
-        ``(3, ngrid)`` displacement of each grid point from its anchor atom.
+        ``(ngrid,)`` distance from each grid point to its owner sphere centre.
     ``f``
         ``(ngrid,)`` switching-function values.
     ``rho``
-        ``(ngrid,)`` level-set (density) values at the projected points.
+        ``(ngrid,)`` distance each point was projected from its anchor.
+    ``numbering``
+        ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
+        with ``base = nsph * num_leb``.  The same physical point keeps its id
+        across rebuilds, which is what makes a surface comparable between
+        geometry steps.
+    ``anchor_id``, ``branch``, ``branch_count``
+        ``(ngrid,)`` the same information unpacked, as moist itself tracks it.
+        Points sharing an ``anchor_id`` are branches of one anchor, ``branch``
+        is one-based, and ``branch_count`` counts the *surviving* branches in
+        the point's anchor group -- so ``branch_count > 1`` marks the branched
+        points and a point whose siblings were filtered away reports one.
+    ``wbranch``
+        ``(ngrid,)`` branch weights, one for an unbranched point.
+
+    Everything the cavity holds beyond these -- curvatures, grid densities,
+    projection diagnostics -- is reachable by name through
+    :meth:`Cavity.results` and :meth:`Cavity.get`.
     """
 
     nmax: int
@@ -101,6 +119,16 @@ class CavitySnapshotDROP(CavitySnapshot):
     r_iI0: np.ndarray
     f: np.ndarray
     rho: np.ndarray
+    numbering: np.ndarray
+    anchor_id: np.ndarray
+    branch: np.ndarray
+    branch_count: np.ndarray
+    wbranch: np.ndarray
+
+    @property
+    def branched(self) -> np.ndarray:
+        """``(ngrid,)`` mask of points sharing an anchor with another point."""
+        return self.branch_count > 1
 
 
 @dataclass(frozen=True)
@@ -456,6 +484,45 @@ class Cavity(ABC):
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
         """Wrap the model-owned native copy without taking update ownership."""
 
+    def fields(self) -> tuple[library.CavityField, ...]:
+        """Describe every result this cavity currently holds.
+
+        The list is the cavity's own declaration, so it covers whichever type
+        this is and omits optional properties that were never computed.  Read
+        it again after an update; a rebuild changes the extents.
+        """
+        self._require_updated()
+        return library.list_cavity_fields(self._handle)
+
+    def get(self, name: str) -> np.ndarray:
+        """Return one named cavity result, using moist's own name for it.
+
+        Names not carried by :meth:`snapshot` are reachable here -- ``k1``,
+        ``KM``, ``rho_grid``, ``phi0`` and the rest.  A field the cavity does
+        not currently hold raises; an optional property that was not requested
+        is absent rather than zero.
+
+        Each call copies afresh out of the native arrays, so the result is
+        writable -- unlike the snapshot's, which back a cached value.
+        """
+        self._require_updated()
+        return library.get_cavity_field(self._handle, name)
+
+    def describe(self, name: str) -> str:
+        """Return moist's one-line description of a named result."""
+        self._require_updated()
+        return library.get_cavity_field_about(self._handle, name)
+
+    def results(self, names: Optional[Iterable[str]] = None) -> dict:
+        """Return the cavity's named results as a ``{name: value}`` mapping.
+
+        With ``names`` omitted this reads everything the cavity holds, which is
+        the general form of :meth:`snapshot`: the snapshot is a typed value for
+        the fields most callers want, this is the whole declared set.
+        """
+        self._require_updated()
+        return library.get_cavity_fields(self._handle, names)
+
     @property
     def cavity(self) -> CavitySnapshot:
         """Compatibility alias for :meth:`snapshot`."""
@@ -550,6 +617,24 @@ class CavityISwiG(_CavityGenericBase):
         )
 
 
+#: DROP fields the typed snapshot carries on top of the generic results.
+#: Everything else the cavity declares stays reachable through
+#: :meth:`Cavity.results`.
+_DROP_SNAPSHOT_FIELDS = (
+    "nmax",
+    "normal0",
+    "wleb",
+    "r_iI0",
+    "f",
+    "rho",
+    "numbering",
+    "anchor_id",
+    "branch",
+    "branch_count",
+    "wbranch",
+)
+
+
 class _CavityDROPBase(Cavity):
     """Shared behaviour for standalone and model-owned DROP cavities."""
 
@@ -557,7 +642,8 @@ class _CavityDROPBase(Cavity):
 
     def _read_snapshot(self) -> CavitySnapshotDROP:
         generic = library.get_cavity_results(self._handle)
-        drop = library.get_drop_specific(self._handle, ngrid=generic["ngrid"])
+        drop = library.get_cavity_fields(self._handle, _DROP_SNAPSHOT_FIELDS)
+        drop["nmax"] = int(drop["nmax"])
         return CavitySnapshotDROP(**generic, **drop)
 
     def _model_view(self, handle: library.CavityHandle) -> Cavity:
@@ -691,7 +777,6 @@ class CavityDROPCFC(_CavityDROPBase):
         a2: Optional[float] = None,
         c: Optional[float] = None,
         m: Optional[int] = None,
-        screen_k: Optional[float] = None,
         debug: bool = False,
         verbosity: int = 0,
         do_fine: bool = False,
@@ -709,7 +794,6 @@ class CavityDROPCFC(_CavityDROPBase):
                 a2=a2,
                 c=c,
                 m=m,
-                screen_k=screen_k,
                 debug=debug,
                 verbosity=verbosity,
                 do_fine=do_fine,
@@ -728,39 +812,37 @@ class CavityDROPCFC(_CavityDROPBase):
 CavityDROP = CavityDROPSvdW
 
 
-#: ``(value, grad)``, ``(value, grad, hess)`` or ``(value, grad, hess, third)``:
+#: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:
 #: the tuple grows with the requested order so a caller never pays for a
 #: derivative it did not ask for.
-LevelSetDerivatives = tuple[Union[float, np.ndarray], ...]
+DensityDerivatives = tuple[Union[float, np.ndarray], ...]
 
-#: A raw level-set callback.  It takes ``(point, order)``, or just ``(point)``
-#: when the cavity was built with ``pass_order=False``.
-IsodensityCallback = Callable[..., LevelSetDerivatives]
+#: A raw density callback.  It takes ``(point, order)``, or just ``(point)``
+#: when the cavity was built with ``pass_order=False``.  It returns the bare
+#: electron density: moist builds ``S = scale * (rho_iso - rho)`` from it.
+IsodensityCallback = Callable[..., DensityDerivatives]
 
 
 class IsodensitySource(Protocol):
-    """Provider of an unscaled isodensity level set and its MOIST scale."""
+    """Provider of an electron density and the level set MOIST builds from it."""
 
+    rho_iso: float
     scale: float
 
-    def lsf(self, point: np.ndarray, order: int) -> LevelSetDerivatives:
-        """Return the level-set value and spatial derivatives through ``order``."""
+    def density(self, point: np.ndarray, order: int) -> DensityDerivatives:
+        """Return the density and its spatial derivatives through ``order``."""
         ...
 
 
 class CavityDROPIsodensity(_CavityDROPBase):
-    """DROP cavity driven by an isodensity source or a raw Python callback.
-
-    A source exposes ``lsf(point, order)`` and ``scale``.  Passing a source is
-    the canonical interface because it keeps the callback and its scaling
-    invariant together.  Raw callbacks remain supported for non-host callers.
-    """
+    """DROP cavity driven by an isodensity source or a raw Python callback."""
 
     density_dependent = True
 
     def __init__(
         self,
         source: Optional[Union[IsodensitySource, IsodensityCallback]] = None,
+        rho_iso: Optional[float] = None,
         nleb: Optional[int] = None,
         scale: Optional[float] = None,
         debug: bool = False,
@@ -781,27 +863,40 @@ class CavityDROPIsodensity(_CavityDROPBase):
             )
             source = callback
         if source is None:
-            raise TypeError("CavityDROPIsodensity requires a level-set source")
+            raise TypeError("CavityDROPIsodensity requires a density source")
 
-        provider_callback = getattr(source, "lsf", None)
+        provider_callback = getattr(source, "density", None)
         if callable(provider_callback):
             if not hasattr(source, "scale"):
                 raise TypeError("An isodensity source must expose a scale")
+            if not hasattr(source, "rho_iso"):
+                raise TypeError("An isodensity source must expose a rho_iso")
             source_scale = float(source.scale)
             if scale is not None and float(scale) != source_scale:
                 raise ValueError("cavity scale must match the isodensity source scale")
+            source_rho_iso = float(source.rho_iso)
+            if rho_iso is not None and float(rho_iso) != source_rho_iso:
+                raise ValueError("cavity rho_iso must match the isodensity source rho_iso")
             resolved_callback = provider_callback
             resolved_scale = source_scale
+            resolved_rho_iso = source_rho_iso
         elif callable(source):
+            if rho_iso is None:
+                raise TypeError(
+                    "The isodensity callback has to return the density, so rho_iso "
+                    "must be given explicitly"
+                )
             resolved_callback = source
             resolved_scale = 1000.0 if scale is None else float(scale)
+            resolved_rho_iso = float(rho_iso)
         else:
             raise TypeError(
-                "source must be callable or expose callable lsf(point, order)"
+                "source must be callable or expose callable density(point, order)"
             )
 
         handle, callback_ref = library.new_drop_cavity_isodensity_callback(
             callback=resolved_callback,
+            rho_iso=resolved_rho_iso,
             nleb=nleb,
             scale=resolved_scale,
             debug=debug,

@@ -90,7 +90,7 @@ module moist_math_solver_slsqp_deflation
       logical :: has_ball = .false.
       !> Anchor point for the ball constraint (only used when has_ball)
       real(wp), pointer :: anchor(:) => null()
-      !> Squared cap radius (phi_min + branch_rho_cut)^2; mutated between
+      !> Squared cap radius rho_min^2 + branch_rho2_slack; mutated between
       !> outer iterations. Set to huge() until the first root is accepted,
       !> so the inequality is trivially satisfied during the un-deflated solve.
       real(wp), pointer :: phi_max_sq => null()
@@ -143,12 +143,14 @@ module moist_math_solver_slsqp_deflation
       real(wp) :: tol_relax_factor = 1.0_wp
 
       !> Optional ball cap on subsequent roots: ||x - anchor||^2 <=
-      !> (phi_min + branch_rho_cut)^2 where phi_min is the displacement
-      !> norm of the first accepted root. Active only when both anchor
-      !> and a positive branch_rho_cut are provided.
+      !> rho_min^2 + branch_rho2_slack, where rho_min is the displacement
+      !> norm of the first accepted root. The slack is a squared length
+      !> because the admissible set of the quadratic objective is a
+      !> difference of squares. Active only when both anchor and a positive
+      !> branch_rho2_slack are provided.
       logical :: has_ball = .false.
       real(wp), allocatable :: anchor(:)
-      real(wp) :: branch_rho_cut = 0.0_wp
+      real(wp) :: branch_rho2_slack = 0.0_wp
       !> Mutated between outer iterations. Reached through the wrapped
       !> context's pointer (subobject of a TARGET parent is itself a valid
       !> pointer target per F2008 16.4.1.4).
@@ -201,11 +203,11 @@ contains
    !> @param[in]  anchor         Optional anchor point used to enforce a ball
    !>                            cap once the first root is found. Must have
    !>                            length n if supplied.
-   !> @param[in]  branch_rho_cut Maximum allowed displacement *beyond* the
+   !> @param[in]  branch_rho2_slack Squared-distance slack allowed *beyond* the
    !>                            first-root distance: subsequent SLSQP solves
    !>                            see an extra inequality
-   !>                            (phi_min + branch_rho_cut)^2 - ||x - anchor||^2 >= 0.
-   !>                            Inactive while branch_rho_cut <= 0 or anchor
+   !>                            rho_min^2 + branch_rho2_slack - ||x - anchor||^2 >= 0.
+   !>                            Inactive while branch_rho2_slack <= 0 or anchor
    !>                            is absent.
    !> @param[in]  debug          If true, print per-iteration diagnostics
    !> @param[out] error          Error descriptor
@@ -214,7 +216,7 @@ contains
                                          xl, xu, max_iter, tol, toldx, toldf, &
                                          max_roots, p_power, alpha_shift, dedup_tol, &
                                          max_retries, retry_radius, tol_relax_factor, &
-                                         anchor, branch_rho_cut, &
+                                         anchor, branch_rho2_slack, &
                                          debug, error)
       class(solver_base_type), allocatable, intent(out) :: solver
       integer, intent(in) :: n, m, meq
@@ -234,7 +236,7 @@ contains
       real(wp), intent(in), optional :: retry_radius
       real(wp), intent(in), optional :: tol_relax_factor
       real(wp), dimension(:), intent(in), optional :: anchor
-      real(wp), intent(in), optional :: branch_rho_cut
+      real(wp), intent(in), optional :: branch_rho2_slack
       logical, intent(in), optional :: debug
       type(error_type), allocatable, intent(out) :: error
 
@@ -276,8 +278,8 @@ contains
       ! Activate the ball cap only when the caller provides BOTH a finite
       ! positive radius and an anchor of the right size.
       tmp%has_ball = .false.
-      if (present(branch_rho_cut)) tmp%branch_rho_cut = branch_rho_cut
-      if (present(anchor) .and. tmp%branch_rho_cut > 0.0_wp) then
+      if (present(branch_rho2_slack)) tmp%branch_rho2_slack = branch_rho2_slack
+      if (present(anchor) .and. tmp%branch_rho2_slack > 0.0_wp) then
          if (size(anchor) /= n) then
             call fatal_error(error, "SLSQP-deflation: anchor size /= n")
             return
@@ -394,7 +396,7 @@ contains
       if (self%has_ball) then
          self%phi_max_sq = sum((self%xu - self%xl)**2)
          if (self%phi_max_sq <= 0.0_wp) then
-            self%phi_max_sq = (100.0_wp*max(self%branch_rho_cut, 1.0_wp))**2
+            self%phi_max_sq = 1.0e4_wp*max(self%branch_rho2_slack, 1.0_wp)
          end if
       end if
 
@@ -470,7 +472,7 @@ contains
             ! which the inner solver's source-copied context still points
             ! to via this solver's `phi_max_sq` field.
             if (self%has_ball) then
-               self%phi_max_sq = (norm2(x_trial - self%anchor) + self%branch_rho_cut)**2
+               self%phi_max_sq = sum((x_trial - self%anchor)**2) + self%branch_rho2_slack
                if (self%debug) then
                   write (output_unit, '(x,a,es12.4)') &
                      '[deflation] ball cap (phi_max) = ', sqrt(self%phi_max_sq)

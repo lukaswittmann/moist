@@ -3,8 +3,6 @@ module test_cavity_drop_primitives
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use test_helpers, only: get_test_structures, get_test_radii, get_test_points, fd4_scalar
-   use moist_cavity_drop_lsf_svdw_ssd, only: ssd0, ssd1_r, ssd2_rr, ssd3_rrr, ssd4_rrrr, &
-                                             ssd012_r, ssd2_r_rA, ssd1_rA, ssd2_rArB
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -25,19 +23,11 @@ module test_cavity_drop_primitives
 
 contains
 
-   !> Collect SSD/phi primitive FD tests plus the switching nuclear-grad
+   !> Collect the phi primitive FD tests plus the switching nuclear gradient
    subroutine collect_cavity_drop_primitives(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("ssd_f1_r", test_ssd_f1_r), &
-                  new_unittest("ssd_f2_rr", test_ssd_f2_rr), &
-                  new_unittest("ssd_f3_rrr", test_ssd_f3_rrr), &
-                  new_unittest("ssd_f4_rrrr", test_ssd_f4_rrrr), &
-                  new_unittest("ssd_f1_ra", test_ssd_f1_rA), &
-                  new_unittest("ssd_f2_rarb", test_ssd_f2_rArB), &
-                  new_unittest("ssd_f2_r_ra", test_ssd_f2_r_rA), &
-                  new_unittest("ssd_f012_r", test_ssd_f012_r), &
                   new_unittest("phi_f0", test_phi_f0), &
                   new_unittest("phi_f1_r", test_phi_f1_r), &
                   new_unittest("phi_f2_rr", test_phi_f2_rr), &
@@ -50,494 +40,6 @@ contains
                   new_unittest("switching_f1_ra", test_switching_f1_rA) &
                   ]
    end subroutine collect_cavity_drop_primitives
-
-   subroutine test_ssd_f1_r(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim)
-      real(wp) :: numeric(ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: work_point(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd1_r(point, center, radius)
-
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*h
-                  f_pp = ssd0(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) + h
-                  f_p = ssd0(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - h
-                  f_m = ssd0(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*h
-                  f_mm = ssd0(work_point, center, radius)
-                  numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
-               end do
-
-               do i = 1, ndim
-                  call check(error, analytic(i), numeric(i), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f1_r
-
-   subroutine test_ssd_f2_rr(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim, ndim)
-      real(wp) :: numeric(ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: work_point(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd2_rr(point, center, radius)
-
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*h
-                  g_pp = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) + h
-                  g_p = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - h
-                  g_m = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*h
-                  g_mm = ssd1_r(work_point, center, radius)
-                  do i = 1, ndim
-                     numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
-                  end do
-               end do
-
-               do i = 1, ndim
-                  do j = 1, ndim
-                     call check(error, analytic(i, j), numeric(i, j), &
-                                thr_abs=ABS_THR, thr_rel=REL_THR)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f2_rr
-
-   subroutine test_ssd_f3_rrr(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, k, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim, ndim, ndim)
-      real(wp) :: numeric(ndim, ndim, ndim)
-      real(wp) :: hess_pp(ndim, ndim), hess_p(ndim, ndim), hess_m(ndim, ndim), hess_mm(ndim, ndim)
-      real(wp) :: work_point(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd3_rrr(point, center, radius)
-
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*h
-                  hess_pp = ssd2_rr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) + h
-                  hess_p = ssd2_rr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - h
-                  hess_m = ssd2_rr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*h
-                  hess_mm = ssd2_rr(work_point, center, radius)
-                  do i = 1, ndim
-                     do j = 1, ndim
-                        numeric(i, j, axis) = fd4_scalar( &
-                                              hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
-                     end do
-                  end do
-               end do
-
-               do i = 1, ndim
-                  do j = 1, ndim
-                     do k = 1, ndim
-                        call check(error, analytic(i, j, k), numeric(i, j, k), &
-                                   thr_abs=ABS_THR, thr_rel=REL_THR)
-                        if (allocated(error)) return
-                     end do
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f3_rrr
-
-   subroutine test_ssd_f4_rrrr(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, k, m, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim, ndim, ndim, ndim)
-      real(wp) :: numeric(ndim, ndim, ndim, ndim)
-      real(wp) :: third_pp(ndim, ndim, ndim), third_p(ndim, ndim, ndim)
-      real(wp) :: third_m(ndim, ndim, ndim), third_mm(ndim, ndim, ndim)
-      real(wp) :: work_point(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd4_rrrr(point, center, radius)
-
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*h
-                  third_pp = ssd3_rrr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) + h
-                  third_p = ssd3_rrr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - h
-                  third_m = ssd3_rrr(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*h
-                  third_mm = ssd3_rrr(work_point, center, radius)
-                  do i = 1, ndim
-                     do j = 1, ndim
-                        do k = 1, ndim
-                           numeric(i, j, k, axis) = fd4_scalar( &
-                                                    third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
-                        end do
-                     end do
-                  end do
-               end do
-
-               do i = 1, ndim
-                  do j = 1, ndim
-                     do k = 1, ndim
-                        do m = 1, ndim
-                           call check(error, analytic(i, j, k, m), numeric(i, j, k, m), &
-                                      thr_abs=ABS_THR, thr_rel=REL_THR)
-                           if (allocated(error)) return
-                        end do
-                     end do
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f4_rrrr
-
-   subroutine test_ssd_f2_r_rA(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim, ndim)
-      real(wp) :: numeric(ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: work_center(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd2_r_rA(point, center, radius)
-
-               do axis = 1, ndim
-                  work_center = center
-                  work_center(axis) = center(axis) + 2.0_wp*h
-                  g_pp = ssd1_r(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) + h
-                  g_p = ssd1_r(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - h
-                  g_m = ssd1_r(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - 2.0_wp*h
-                  g_mm = ssd1_r(point, work_center, radius)
-                  do i = 1, ndim
-                     numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
-                  end do
-               end do
-
-               do i = 1, ndim
-                  do j = 1, ndim
-                     call check(error, analytic(i, j), numeric(i, j), &
-                                thr_abs=ABS_THR, thr_rel=REL_THR)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f2_r_rA
-
-   subroutine test_ssd_f1_rA(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim)
-      real(wp) :: numeric(ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: work_center(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd1_rA(point, center, radius)
-
-               do axis = 1, ndim
-                  work_center = center
-                  work_center(axis) = center(axis) + 2.0_wp*h
-                  f_pp = ssd0(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) + h
-                  f_p = ssd0(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - h
-                  f_m = ssd0(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - 2.0_wp*h
-                  f_mm = ssd0(point, work_center, radius)
-                  numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
-               end do
-
-               do i = 1, ndim
-                  call check(error, analytic(i), numeric(i), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f1_rA
-
-   subroutine test_ssd_f2_rArB(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic(ndim, ndim)
-      real(wp) :: numeric(ndim, ndim)
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: work_center(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               analytic = ssd2_rArB(point, center, radius)
-
-               do axis = 1, ndim
-                  work_center = center
-                  work_center(axis) = center(axis) + 2.0_wp*h
-                  g_pp = ssd1_rA(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) + h
-                  g_p = ssd1_rA(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - h
-                  g_m = ssd1_rA(point, work_center, radius)
-                  work_center = center
-                  work_center(axis) = center(axis) - 2.0_wp*h
-                  g_mm = ssd1_rA(point, work_center, radius)
-                  do i = 1, ndim
-                     numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
-                  end do
-               end do
-
-               do i = 1, ndim
-                  do j = 1, ndim
-                     call check(error, analytic(i, j), numeric(i, j), &
-                                thr_abs=ABS_THR, thr_rel=REL_THR)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f2_rArB
-
-   !> Test combined SSD value, gradient, and Hessian against finite differences.
-   subroutine test_ssd_f012_r(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type), allocatable :: mols(:)
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:), points(:, :)
-      integer :: icase, ipt, jc, i, j, axis
-      real(wp) :: point(ndim), center(ndim), radius
-      real(wp) :: analytic_val, numeric_val
-      real(wp) :: analytic_grad(ndim), numeric_grad(ndim)
-      real(wp) :: analytic_hess(ndim, ndim), numeric_hess(ndim, ndim)
-      real(wp) :: f_pp, f_p, f_m, f_mm
-      real(wp) :: g_pp(ndim), g_p(ndim), g_m(ndim), g_mm(ndim)
-      real(wp) :: work_point(ndim)
-      real(wp) :: h
-
-      h = STEP_SIZE
-
-      call get_test_structures(mols)
-      do icase = 1, size(mols)
-         mol = mols(icase)
-         call get_test_radii(mol, radii)
-         call get_test_points(mol, points)
-
-         do ipt = 1, size(points, 2)
-            point = points(:, ipt)
-            do jc = 1, mol%nat
-               center = mol%xyz(:, jc)
-               radius = radii(jc)
-               call ssd012_r(point, center, radius, analytic_val, analytic_grad, analytic_hess)
-               numeric_val = ssd0(point, center, radius)
-
-               do axis = 1, ndim
-                  work_point = point
-                  work_point(axis) = point(axis) + 2.0_wp*h
-                  f_pp = ssd0(work_point, center, radius)
-                  g_pp = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) + h
-                  f_p = ssd0(work_point, center, radius)
-                  g_p = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - h
-                  f_m = ssd0(work_point, center, radius)
-                  g_m = ssd1_r(work_point, center, radius)
-                  work_point = point
-                  work_point(axis) = point(axis) - 2.0_wp*h
-                  f_mm = ssd0(work_point, center, radius)
-                  g_mm = ssd1_r(work_point, center, radius)
-
-                  numeric_grad(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
-                  do i = 1, ndim
-                     numeric_hess(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
-                  end do
-               end do
-
-               call check(error, analytic_val, numeric_val, thr_abs=ABS_THR, thr_rel=REL_THR)
-               if (allocated(error)) return
-               do i = 1, ndim
-                  call check(error, analytic_grad(i), numeric_grad(i), &
-                             thr_abs=ABS_THR, thr_rel=REL_THR)
-                  if (allocated(error)) return
-               end do
-               do i = 1, ndim
-                  do j = 1, ndim
-                     call check(error, analytic_hess(i, j), numeric_hess(i, j), &
-                                thr_abs=ABS_THR, thr_rel=REL_THR)
-                     if (allocated(error)) return
-                  end do
-               end do
-            end do
-         end do
-      end do
-   end subroutine test_ssd_f012_r
 
    !> Test phi value against the direct quadratic expression.
    subroutine test_phi_f0(error)
@@ -1105,19 +607,21 @@ contains
          call prim%set_max_deriv(3)
 
          if (allocated(lsf1)) deallocate (lsf1)
+         if (allocated(dummy_rr_rA)) deallocate (dummy_rr_rA)
          allocate (lsf1(ndim, mol_base%nat))
+         allocate (dummy_rr_rA(ndim, ndim, ndim, mol_base%nat))
 
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
             call prim%update(mol_base, radii)
-            call prim%ssd_system%update(centers_base, radii)
+            call prim%set_centers(centers_base)
             call prim%prepare(point, lsf_err)
             if (allocated(lsf_err)) then
                call test_failed(error, "LSF prepare failed: "//lsf_err%message)
                return
             end if
-            call prim%f0_screened(lsf0)
-            call prim%f3_rr_rA_screened(lsf1_rA=lsf1, &
+            call prim%f0(lsf0)
+            call prim%f3_rr_rA(lsf1_rA=lsf1, &
                                         lsf3_rr_rA=dummy_rr_rA)
             analytic = sw%f1_rA(lsf0, lsf1)
 
@@ -1128,9 +632,9 @@ contains
                   centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
-                  call prim%ssd_system%update(centers_local, radii)
+                  call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
-                  call prim%f0_screened(lsf0_tmp)
+                  call prim%f0(lsf0_tmp)
                   f_pp = sw%f0(lsf0_tmp)
 
                   mol_shift = mol_base
@@ -1138,9 +642,9 @@ contains
                   centers_local(axis, atom) = centers_local(axis, atom) + eps
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
-                  call prim%ssd_system%update(centers_local, radii)
+                  call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
-                  call prim%f0_screened(lsf0_tmp)
+                  call prim%f0(lsf0_tmp)
                   f_p = sw%f0(lsf0_tmp)
 
                   mol_shift = mol_base
@@ -1148,9 +652,9 @@ contains
                   centers_local(axis, atom) = centers_local(axis, atom) - eps
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
-                  call prim%ssd_system%update(centers_local, radii)
+                  call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
-                  call prim%f0_screened(lsf0_tmp)
+                  call prim%f0(lsf0_tmp)
                   f_m = sw%f0(lsf0_tmp)
 
                   mol_shift = mol_base
@@ -1158,9 +662,9 @@ contains
                   centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                   mol_shift%xyz = centers_local
                   call prim%update(mol_shift, radii)
-                  call prim%ssd_system%update(centers_local, radii)
+                  call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
-                  call prim%f0_screened(lsf0_tmp)
+                  call prim%f0(lsf0_tmp)
                   f_mm = sw%f0(lsf0_tmp)
 
                   numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)

@@ -123,6 +123,10 @@ contains
       real(wp) :: cross_vec(3), J_val, inv_J
       real(wp), allocatable :: lsf3_rr_rA(:, :, :, :)
       real(wp), allocatable :: lsf3_rrr(:, :, :)
+      !> LSF active slot of entry `i` of `active_idx`
+      integer, allocatable :: lsf_slot(:)
+      !> Nuclear partials of the atom entry currently being processed
+      real(wp) :: s1_rA(3), s2_r_rA(3, 3), s3_rr_rA(3, 3, 3)
       real(wp) :: dA_dR(3, 3)
       real(wp) :: dg_dR(3)
 
@@ -138,6 +142,7 @@ contains
       real(wp) :: B11, B12, B22, tr_B, det_B, disc, sqrt_disc
       real(wp) :: beta1, beta2, lambda_switch
       real(wp), parameter :: det_B_guard = 1.0e-30_wp
+      real(wp), parameter :: weight_tol = 1.0e-30_wp
       real(wp) :: Binv11, Binv12, Binv22
       real(wp) :: tau1(2), tau2(2), w1(2), w2(2)
       real(wp) :: vmin_B(2), vmax_B(2), u_switch(3)
@@ -195,7 +200,7 @@ contains
       if (present(anchor_only)) anchor_only_loc = anchor_only
 
       ! Initialize thread-local primitives
-      ! Gradient uses third spatial derivatives (f3_rrr_screened, f3_rr_rA_screened);
+      ! Gradient uses third spatial derivatives (f3_rrr, f3_rr_rA);
       ! upgrade SSD storage so f3_rrr_arr is allocated before any %prepare call
       timer_ref_thread = 1
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
@@ -294,7 +299,7 @@ contains
       !$omp& dtau1, dtau2, dw1, dw2, &
       !$omp& dlambda_switch, &
       !$omp& min_axis_surf, proj_surf, v_norm_surf, n_dot_q1_surf, &
-      !$omp& i, n_active, active_idx, &
+      !$omp& i, n_active, active_idx, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
       !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, anchor_xi_local, &
       !$omp& w_pre_i, f_wleb_s, f_wleb_ds, wleb_prune_factor, dw_pre_dR, &
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
@@ -306,11 +311,12 @@ contains
 !$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
-      ! lsf3_rr_rA is deliberately not allocated here: f3_rr_rA_screened takes
-      ! it as `allocatable, intent(out)` and allocates it itself, so a
-      ! pre-allocation would be discarded on the first call.
+      ! The LSF nuclear outputs are active-indexed and caller-owned; the buffers
+      ! are sized to the atom count, which bounds `active_count()` from above.
       allocate (lsf3_rrr(3, 3, 3))
+      allocate (lsf3_rr_rA(3, 3, 3, self%nsph))
       allocate (active_idx(self%nsph))
+      allocate (lsf_slot(self%nsph))
       allocate (dn_dR_buf(3, self%nsph, 3))
       allocate (lsf1_rA(3, self%nsph))
       allocate (lsf2_r_rA(3, 3, self%nsph))
@@ -351,12 +357,18 @@ contains
          end if
 
          ! Get nuclear and mixed derivatives
-         call slots%lsf(thread_slot)%lsf%f3_rr_rA_screened(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
-         call slots%lsf(thread_slot)%lsf%f3_rrr_screened(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+         call slots%lsf(thread_slot)%lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
 
          ! Get LSF gradient magnitude
          g_norm_sq = dot_product(lsf1_r, lsf1_r)
          g_norm = sqrt(g_norm_sq)
+
+         if (g_norm <= weight_tol) then
+            call abort%latch_message("[Error] Level set gradient vanishes", igrid)
+            !$omp cancel do
+            cycle
+         end if
 
          ! Compute Lagrangian gradient and hessian
          G_lagrangian = phi1_r - lambda_val*lsf1_r
@@ -374,7 +386,13 @@ contains
          ! Screening: only active nodes have nonzero lsf1_rA / lsf2_r_rA;
          ! phi2_r_rA is nonzero only at owner_idx (which is always active)
          if (anchor_only_loc) then
+            ! Walk every atom, not just the LSF-active ones; an atom screening
+            ! dropped simply carries no LSF partials, which `lsf_slot` records
             n_active = self%nsph
+            lsf_slot(1:n_active) = 0
+            do i = 1, slots%lsf(thread_slot)%lsf%active_count()
+               lsf_slot(slots%lsf(thread_slot)%lsf%active_atom(i)) = i
+            end do
             do i = 1, n_active
                active_idx(i) = i
             end do
@@ -382,16 +400,19 @@ contains
             n_active = slots%lsf(thread_slot)%lsf%active_count()
             do i = 1, n_active
                active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
+               lsf_slot(i) = i
             end do
          end if
 
          ! Pack all RHS into batch array
          do i = 1, n_active
             iatom = active_idx(i)
+            call gather_lsf_partials(lsf_slot(i), lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+                                     s1_rA, s2_r_rA, s3_rr_rA)
             do iaxis = 1, 3
                kkt_rhs_batch(1:3, (i - 1)*3 + iaxis) = -(phi2_r_rA(:, iaxis, iatom) &
-                                                         - lambda_val*lsf2_r_rA(:, iaxis, iatom))
-               kkt_rhs_batch(4, (i - 1)*3 + iaxis) = -lsf1_rA(iaxis, iatom)
+                                                         - lambda_val*s2_r_rA(:, iaxis))
+               kkt_rhs_batch(4, (i - 1)*3 + iaxis) = -s1_rA(iaxis)
             end do
          end do
 
@@ -610,6 +631,11 @@ contains
          cross_vec(2) = y1(3)*y2(1) - y1(1)*y2(3)
          cross_vec(3) = y1(1)*y2(2) - y1(2)*y2(1)
          J_val = sqrt(dot_product(cross_vec, cross_vec))
+         if (J_val <= weight_tol) then
+            call abort%latch_message("[Error] Closest-point Jacobian vanishes", igrid)
+            !$omp cancel do
+            cycle
+         end if
          inv_J = 1.0_wp/J_val
 
          ! Precompute Gram-Schmidt data for Q derivative
@@ -670,6 +696,8 @@ contains
          ! Loop over active atoms and axes to compute dJ/dr_A
          do i = 1, n_active
             iatom = active_idx(i)
+            call gather_lsf_partials(lsf_slot(i), lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+                                     s1_rA, s2_r_rA, s3_rr_rA)
             do iaxis = 1, 3
 
                ! Retrieve stored derivatives
@@ -677,7 +705,7 @@ contains
                dr_i_dR = self%xyz1_rA(:, iaxis, iatom, igrid)
 
                ! dg/dr_A = explicit + Hessian * dr/dr_A
-               dg_dR = lsf2_r_rA(:, iaxis, iatom) + matmul(lsf2_rr, dr_i_dR)
+               dg_dR = s2_r_rA(:, iaxis) + matmul(lsf2_rr, dr_i_dR)
 
                ! dA/dr_A = -dlambda*H - lambda*(dH/dr_A)
                dA_dR = -dlambda_val*lsf2_rr
@@ -685,7 +713,7 @@ contains
                   dA_dR(:, :) = dA_dR(:, :) &
                                 - lambda_val*lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
                end do
-               dA_dR(:, :) = dA_dR(:, :) - lambda_val*lsf3_rr_rA(:, :, iaxis, iatom)
+               dA_dR(:, :) = dA_dR(:, :) - lambda_val*s3_rr_rA(:, :, iaxis)
 
                ! dn_surf/dr_A = (I - n*n^T) * dg/dr_A / |g|
                dn_surf_dR = (dg_dR - n_surf*dot_product(n_surf, dg_dR))/g_norm
@@ -791,7 +819,7 @@ contains
                ! projected point:
                !   dH/dr_A = d^3S/(dr dr dR_A) + (d^3S/dr^3) . dr/dr_A
                if (allocated(self%k1_rA) .and. allocated(self%k2_rA)) then
-                  dH_curv = lsf3_rr_rA(:, :, iaxis, iatom)
+                  dH_curv = s3_rr_rA(:, :, iaxis)
                   do jaxis = 1, 3
                      dH_curv(:, :) = dH_curv(:, :) &
                                      + lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
@@ -935,8 +963,7 @@ contains
       self%V_tot1_rA = self%V_tot1_rA + V_tot_local
       !$omp end critical (gradient_reduction)
 
-      deallocate (lsf3_rrr, active_idx, dn_dR_buf)
-      if (allocated(lsf3_rr_rA)) deallocate (lsf3_rr_rA)
+      deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
       deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA, anchor_xi_local)
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local)
       !$omp end parallel
@@ -1088,5 +1115,42 @@ contains
 
       call self%compute_gradient_drop(error, anchor_only=.true.)
    end subroutine compute_anchor_gradient
+
+   !> Gather one atom's LSF nuclear partials out of the active-indexed outputs
+   !>
+   !> @param[in]  islot      LSF active slot, or zero when the atom is inactive
+   !> @param[in]  lsf1_rA    Active-indexed dS/dR_A
+   !> @param[in]  lsf2_r_rA  Active-indexed d^2S/(dr dR_A)
+   !> @param[in]  lsf3_rr_rA Active-indexed d^3S/(dr^2 dR_A)
+   !> @param[out] s1_rA      This atom's dS/dR_A [3]
+   !> @param[out] s2_r_rA    This atom's d^2S/(dr dR_A) [3, 3]
+   !> @param[out] s3_rr_rA   This atom's d^3S/(dr^2 dR_A) [3, 3, 3]
+   pure subroutine gather_lsf_partials(islot, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+                                       s1_rA, s2_r_rA, s3_rr_rA)
+      !> LSF active slot, or zero
+      integer, intent(in) :: islot
+      !> Active-indexed nuclear gradient
+      real(wp), intent(in) :: lsf1_rA(:, :)
+      !> Active-indexed mixed second derivative
+      real(wp), intent(in) :: lsf2_r_rA(:, :, :)
+      !> Active-indexed mixed third derivative
+      real(wp), intent(in) :: lsf3_rr_rA(:, :, :, :)
+      !> Gathered nuclear gradient
+      real(wp), intent(out) :: s1_rA(3)
+      !> Gathered mixed second derivative
+      real(wp), intent(out) :: s2_r_rA(3, 3)
+      !> Gathered mixed third derivative
+      real(wp), intent(out) :: s3_rr_rA(3, 3, 3)
+
+      if (islot > 0) then
+         s1_rA = lsf1_rA(:, islot)
+         s2_r_rA = lsf2_r_rA(:, :, islot)
+         s3_rr_rA = lsf3_rr_rA(:, :, :, islot)
+      else
+         s1_rA = 0.0_wp
+         s2_r_rA = 0.0_wp
+         s3_rr_rA = 0.0_wp
+      end if
+   end subroutine gather_lsf_partials
 
 end submodule moist_cavity_drop_derivatives_forward

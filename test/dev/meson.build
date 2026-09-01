@@ -19,6 +19,6 @@ endforeach
 dev_tester = executable(
   'dev_tester',
   sources: dev_test_srcs,
-  dependencies: [moist_dep, mstore_dep],
+  dependencies: [moist_dep, mstore_dep, testdrive_dep],
   link_language: 'fortran',
 )

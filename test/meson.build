@@ -14,6 +14,13 @@ if not mstore_dep.found()
   subdir_done()
 endif
 
+testdrive_dep = dependency(
+  'test-drive',
+  version: '>=0.5.0',
+  fallback: ['test-drive', 'testdrive_dep'],
+  default_options: ['default_library=static'],
+)
+
 test_env = environment()
 test_env.set('MOIST_SOURCE_ROOT', meson.project_source_root())
 

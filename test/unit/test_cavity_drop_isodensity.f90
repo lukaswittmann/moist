@@ -25,7 +25,7 @@
 !> files in `test/unit/data` (generated using PySCF)
 module test_cavity_drop_isodensity
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_ptr, c_null_ptr, c_funloc, &
-                                          c_associated, c_f_pointer
+                                          c_associated, c_f_pointer, c_null_funptr
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -33,7 +33,8 @@ module test_cavity_drop_isodensity
    use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
    use moist_model_gems_utils, only: BuildSuperStructure
-   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
+                                                   moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_internal, only: &
       moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_drop_lsf_isodensity_callback, only: &
@@ -138,7 +139,11 @@ contains
                   new_unittest("internal_vs_callback", test_internal_vs_callback), &
                   new_unittest("max_deriv_gating_internal", test_max_deriv_internal), &
                   new_unittest("max_deriv_gating_callback", test_max_deriv_callback), &
-                  new_unittest("internal_screening_equivalence", test_internal_screening_equivalence) &
+                  new_unittest("internal_fourth_fd", test_internal_fourth_fd), &
+                  new_unittest("internal_fourth_gating", test_internal_fourth_gating), &
+                  new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
+                  new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
+                  new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1046,60 +1051,197 @@ contains
       end if
    end function binomial_small
 
-   !> C-interoperable isodensity level set callback
+   !> C-interoperable isodensity density callback
    !>
-   !> Returns the *unscaled* level set S = rho_iso - rho and its spatial
-   !> derivatives
+   !> Returns the bare density rho and its spatial derivatives; the LSF applies
+   !> the isovalue, the sign convention and its multiplier
    !>
-   !> The LSF applies its own multiplier
-   !>
-   !> hess/third are NULL when the cavity did not request that order
+   !> d2rho/d3rho are NULL when the cavity did not request that order
    !>
    !> @param[in]  context Unused callback context
    !> @param[in]  point   Evaluation point in Bohr
-   !> @param[out] value   Level set value
-   !> @param[out] grad    Level set spatial gradient
-   !> @param[out] hess    Level set spatial Hessian (Fortran (3,3), or NULL)
-   !> @param[out] third   Level set third spatial derivative (Fortran (3,3,3), or NULL)
+   !> @param[out] rho     Electron density
+   !> @param[out] drho    Density spatial gradient
+   !> @param[out] d2rho   Density spatial Hessian (Fortran (3,3), or NULL)
+   !> @param[out] d3rho   Density third spatial derivative (Fortran (3,3,3), or NULL)
    !> @returns            0 (this reference implementation never fails)
-   function iso_reference_callback(context, point, value, grad, hess, third) result(status) bind(C)
+   function iso_reference_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
       !> Unused callback context (the test keeps its data in module state)
       type(c_ptr), value :: context
       !> Evaluation point in Bohr
       real(c_double), intent(in) :: point(3)
-      !> Level set value
-      real(c_double), intent(out) :: value
-      !> Level set spatial gradient
-      real(c_double), intent(out) :: grad(3)
-      !> Level set spatial Hessian (Fortran (3,3), or NULL)
-      type(c_ptr), value :: hess
-      !> Level set third spatial derivative (Fortran (3,3,3), or NULL)
-      type(c_ptr), value :: third
+      !> Electron density
+      real(c_double), intent(out) :: rho
+      !> Density spatial gradient
+      real(c_double), intent(out) :: drho(3)
+      !> Density spatial Hessian (Fortran (3,3), or NULL)
+      type(c_ptr), value :: d2rho
+      !> Density third spatial derivative (Fortran (3,3,3), or NULL)
+      type(c_ptr), value :: d3rho
       !> Zero on success
       integer(c_int) :: status
 
       real(c_double), pointer :: hptr(:, :), tptr(:, :, :)
-      real(wp) :: rho, drho(3), d2rho(3, 3), d3rho(3, 3, 3)
+      real(wp) :: rho_w, drho_w(3), d2rho_w(3, 3), d3rho_w(3, 3, 3)
       logical :: want_hess, want_third
 
       status = 0_c_int
       if (c_associated(context)) return
-      want_hess = c_associated(hess)
-      want_third = c_associated(third)
+      want_hess = c_associated(d2rho)
+      want_third = c_associated(d3rho)
 
-      call rho_product_rule(real(point, wp), rho, drho, d2rho, d3rho)
+      call rho_product_rule(real(point, wp), rho_w, drho_w, d2rho_w, d3rho_w)
 
-      value = real(rho_iso_ref - rho, c_double)
-      grad = real(-drho, c_double)
+      rho = real(rho_w, c_double)
+      drho = real(drho_w, c_double)
       if (want_hess) then
-         call c_f_pointer(hess, hptr, [3, 3])
-         hptr = real(-d2rho, c_double)
+         call c_f_pointer(d2rho, hptr, [3, 3])
+         hptr = real(d2rho_w, c_double)
       end if
       if (want_third) then
-         call c_f_pointer(third, tptr, [3, 3, 3])
-         tptr = real(-d3rho, c_double)
+         call c_f_pointer(d3rho, tptr, [3, 3, 3])
+         tptr = real(d3rho_w, c_double)
       end if
    end function iso_reference_callback
+
+   !> The log-ratio exclusion radius must never over-claim
+   subroutine test_exclusion_radius(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Fraction of the claimed radius actually probed
+      real(wp), parameter :: probe_frac = 0.999_wp
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      real(wp), allocatable :: points(:, :)
+      type(mctc_error), allocatable :: lsf_err
+      real(wp) :: centre(ndim), probe(ndim), lsf_centre, lsf_probe, r
+      integer :: icase, ipoint, idir, ithr, n_certified
+
+      ! Unscreened, and at the cavity's production screening threshold. Screening
+      ! only ever drops density, so the exterior branch -- the one that divides by
+      ! a *smaller* rho -- is the one that could be pushed into over-claiming.
+      real(wp), parameter :: thresholds(2) = [0.0_wp, 1.0e-11_wp]
+
+      ! A deterministic spread of probe directions; no RNG, so a failure here
+      ! reproduces exactly.
+      integer, parameter :: ndir = 14
+      real(wp), parameter :: dirs(ndim, ndir) = reshape([ &
+                             1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
+                             0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, &
+                             0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, &
+                             1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, 1.0_wp, -1.0_wp, &
+                             1.0_wp, 1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, &
+                             1.0_wp, -1.0_wp, -1.0_wp, -1.0_wp, 1.0_wp, 1.0_wp], &
+                             [ndim, ndir])
+
+      n_certified = 0
+      do icase = 1, ntests
+      do ithr = 1, size(thresholds)
+         call build_molecular_internal_lsf(lsf, icase, thresholds(ithr), mol, error)
+         if (allocated(error)) return
+         call get_test_points(mol, points)
+
+         do ipoint = 1, size(points, 2)
+            centre = points(:, ipoint)
+
+            call lsf%prepare(centre, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+               return
+            end if
+            call lsf%f0(lsf_centre)
+
+            r = lsf%exclusion_radius(lsf_centre)
+            if (r <= 0.0_wp) cycle
+            n_certified = n_certified + 1
+
+            do idir = 1, ndir
+               probe = centre + probe_frac*r*dirs(:, idir)/norm2(dirs(:, idir))
+
+               call lsf%prepare(probe, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                  return
+               end if
+               call lsf%f0(lsf_probe)
+
+               if (lsf_probe*lsf_centre <= 0.0_wp) then
+                  call test_failed(error, "exclusion radius over-claims on "// &
+                                   test_label(icase)//": S changes sign inside "// &
+                                   "the ball it certifies as surface-free")
+                  return
+               end if
+            end do
+         end do
+      end do
+      end do
+
+      if (n_certified == 0) then
+         call test_failed(error, "the isodensity LSF certified no ball at all: "// &
+                          "the probe loop never ran")
+      end if
+   end subroutine test_exclusion_radius
+
+   !> `log_grad_out = 0` is the off switch for a certificate that is a model
+   subroutine test_exclusion_radius_gate(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_cb
+      type(structure_type) :: mol
+      real(wp), allocatable :: radii(:)
+      real(wp) :: r_out, r_in, unit_s
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+
+      ! Exterior (S > 0) and interior (S < 0) values of equal density contrast:
+      ! rho = rho_iso/e outside, rho = e*rho_iso inside. Built from the LSF's own
+      ! scale, since `S = scale (rho_iso - rho)` and the certificate divides that
+      ! scale back out.
+      allocate (radii(mol%nat), source=2.0_wp)
+      unit_s = lsf%param%scale*lsf%param%rho_iso
+      r_out = lsf%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp)))
+      r_in = lsf%exclusion_radius(unit_s*(1.0_wp - exp(1.0_wp)))
+
+      if (.not. (r_out > 0.0_wp .and. r_in > 0.0_wp)) then
+         call test_failed(error, "the default parameters must certify something")
+         return
+      end if
+      if (r_in >= r_out) then
+         call test_failed(error, "the interior branch must be the more "// &
+                          "conservative one: its ball can reach a nuclear cusp")
+         return
+      end if
+
+      ! Same contrast, so the same |ln(rho/rho_iso)| = 1: the radii are the
+      ! reciprocals of the two bounds in force.
+      call check(error, r_out, 1.0_wp/lsf%param%log_grad_out, thr=1.0e-12_wp, &
+                 more="exterior radius is 1/log_grad_out at unit log contrast")
+      if (allocated(error)) return
+
+      ! The callback variant shares the certificate, so on the same geometry and
+      ! the same parameters it must return the same radius -- it differs only in
+      ! where `rho` comes from, and the certificate never asks for `rho` itself.
+      ! No `prepare` here, so the shared reference density is not touched and
+      ! this stays independent of the `cb_gto` lock.
+      call lsf_cb%new(c_null_funptr, c_null_ptr, lsf%param%rho_iso, lsf%param%scale)
+      call lsf_cb%update(mol, radii)
+      call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp))), &
+                 r_out, thr=0.0_wp, &
+                 more="both isodensity variants must certify the same radius")
+      if (allocated(error)) return
+      call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(1.0_wp))), &
+                 r_in, thr=0.0_wp, &
+                 more="both isodensity variants must certify the same radius")
+      if (allocated(error)) return
+
+      call lsf%param%new(log_grad_out=0.0_wp)
+      call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
+                 more="log_grad_out = 0 must certify nothing")
+   end subroutine test_exclusion_radius_gate
 
    !> Build the internal isodensity LSF over the module reference density
    !>
@@ -1185,7 +1327,7 @@ contains
       real(wp), allocatable :: radii(:)
 
       allocate (radii(mol%nat), source=2.0_wp)
-      call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, lsf_scale)
+      call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, rho_iso_ref, lsf_scale)
       call lsf%update(mol, radii)
    end subroutine build_callback_lsf
 
@@ -1216,7 +1358,7 @@ contains
       real(wp) :: v012_i, v012_c, g012_i(3), g012_c(3), h012_i(3, 3), h012_c(3, 3)
       real(wp) :: v_i, g_i(3), h_i(3, 3)
       real(wp) :: v_c, g_c(3), h_c(3, 3)
-      real(wp), allocatable :: t_i(:, :, :), t_c(:, :, :)
+      real(wp) :: t_i(3, 3, 3), t_c(3, 3, 3)
       real(wp) :: dev_val, dev_grad, dev_hess, dev_third, scale_ref
       type(mctc_error), allocatable :: lsf_err
       integer :: ip
@@ -1249,37 +1391,37 @@ contains
             call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
             return
          end if
-         call lsf_int%f0_screened(v0_i)
-         call lsf_int%f012_r_screened(v01_i, g01_i)
-         call lsf_int%f012_r_screened(v012_i, g012_i, h012_i)
-         call lsf_int%f3_rrr_screened(v_i, g_i, h_i, t_i)
+         call lsf_int%f0(v0_i)
+         call lsf_int%f012_r(v01_i, g01_i)
+         call lsf_int%f012_r(v012_i, g012_i, h012_i)
+         call lsf_int%f3_rrr(v_i, g_i, h_i, t_i)
          call lsf_cb%prepare(pts(:, ip), lsf_err)
          if (allocated(lsf_err)) then
             call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
             return
          end if
-         call lsf_cb%f0_screened(v0_c)
-         call lsf_cb%f012_r_screened(v01_c, g01_c)
-         call lsf_cb%f012_r_screened(v012_c, g012_c, h012_c)
-         call lsf_cb%f3_rrr_screened(v_c, g_c, h_c, t_c)
+         call lsf_cb%f0(v0_c)
+         call lsf_cb%f012_r(v01_c, g01_c)
+         call lsf_cb%f012_r(v012_c, g012_c, h012_c)
+         call lsf_cb%f3_rrr(v_c, g_c, h_c, t_c)
 
          call check(error, v0_i, v0_c, thr=THR_VAL, &
-                    more="internal vs callback f0_screened value")
+                    more="internal vs callback f0 value")
          if (allocated(error)) return
          call check(error, v01_i, v01_c, thr=THR_VAL, &
-                    more="internal vs callback f012_r_screened value without Hessian")
+                    more="internal vs callback f012_r value without Hessian")
          if (allocated(error)) return
          call check(error, maxval(abs(g01_i - g01_c)), 0.0_wp, thr=THR_GRAD, &
-                    more="internal vs callback f012_r_screened gradient without Hessian")
+                    more="internal vs callback f012_r gradient without Hessian")
          if (allocated(error)) return
          call check(error, v012_i, v012_c, thr=THR_VAL, &
-                    more="internal vs callback f012_r_screened value")
+                    more="internal vs callback f012_r value")
          if (allocated(error)) return
          call check(error, maxval(abs(g012_i - g012_c)), 0.0_wp, thr=THR_GRAD, &
-                    more="internal vs callback f012_r_screened gradient")
+                    more="internal vs callback f012_r gradient")
          if (allocated(error)) return
          call check(error, maxval(abs(h012_i - h012_c)), 0.0_wp, thr=THR_HESS, &
-                    more="internal vs callback f012_r_screened Hessian")
+                    more="internal vs callback f012_r Hessian")
          if (allocated(error)) return
 
          dev_val = max(dev_val, abs(v_i - v_c))
@@ -1342,14 +1484,14 @@ contains
             call check(error, lsf%prepared_deriv, 1, &
                        more="internal molecular test cached the wrong order at max_deriv=1")
             if (allocated(error)) return
-            call lsf%f012_r_screened(v1, g1)
+            call lsf%f012_r(v1, g1)
 
             call lsf%set_max_deriv(2)
             call lsf%prepare(pts(:, ip), lsf_err)
             call check(error, lsf%prepared_deriv, 2, &
                        more="internal molecular test cached the wrong order at max_deriv=2")
             if (allocated(error)) return
-            call lsf%f012_r_screened(v2, g2, h2)
+            call lsf%f012_r(v2, g2, h2)
 
             call check_max_deriv_pair(error, v1, g1, v2, g2, h2, &
                                       "internal molecular test", any_nonzero)
@@ -1407,7 +1549,7 @@ contains
          call check(error, lsf%prepared_deriv, 1, &
                     more="callback isodensity LSF cached the wrong order at max_deriv=1")
          if (allocated(error)) return
-         call lsf%f012_r_screened(v1, g1)
+         call lsf%f012_r(v1, g1)
 
          call lsf%set_max_deriv(2)
          call lsf%prepare(pts(:, ip), lsf_err)
@@ -1418,7 +1560,7 @@ contains
          call check(error, lsf%prepared_deriv, 2, &
                     more="callback isodensity LSF cached the wrong order at max_deriv=2")
          if (allocated(error)) return
-         call lsf%f012_r_screened(v2, g2, h2)
+         call lsf%f012_r(v2, g2, h2)
 
          call check_max_deriv_pair(error, v1, g1, v2, g2, h2, "callback", any_nonzero)
          if (allocated(error)) return
@@ -1485,7 +1627,7 @@ contains
       real(wp), allocatable :: pts(:, :)
       real(wp) :: v_e, g_e(3), h_e(3, 3)
       real(wp) :: v_s, g_s(3), h_s(3, 3)
-      real(wp), allocatable :: t_e(:, :, :), t_s(:, :, :)
+      real(wp) :: t_e(3, 3, 3), t_s(3, 3, 3)
       real(wp) :: far_pts(3, 4), centroid(3), extent
       type(mctc_error), allocatable :: lsf_err
       real(wp), parameter :: THR_SCREEN = 1.0e-12_wp
@@ -1525,9 +1667,9 @@ contains
                call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
                return
             end if
-            call lsf_exact%f3_rrr_screened(v_e, g_e, h_e, t_e)
+            call lsf_exact%f3_rrr(v_e, g_e, h_e, t_e)
             call lsf_screened%prepare(pts(:, ip), lsf_err)
-            call lsf_screened%f3_rrr_screened(v_s, g_s, h_s, t_s)
+            call lsf_screened%f3_rrr(v_s, g_s, h_s, t_s)
 
             call check(error, abs(v_e - v_s), 0.0_wp, thr=THR_SCREEN, &
                        more="screened vs exact molecular isodensity value")
@@ -1559,9 +1701,9 @@ contains
                call test_failed(error, "internal LSF prepare failed: "//lsf_err%message)
                return
             end if
-            call lsf_exact%f3_rrr_screened(v_e, g_e, h_e, t_e)
+            call lsf_exact%f3_rrr(v_e, g_e, h_e, t_e)
             call lsf_screened%prepare(far_pts(:, ip), lsf_err)
-            call lsf_screened%f3_rrr_screened(v_s, g_s, h_s, t_s)
+            call lsf_screened%f3_rrr(v_s, g_s, h_s, t_s)
 
             call check(error, abs(v_e - v_s), 0.0_wp, thr=THR_SCREEN, &
                        more="screened vs exact molecular isodensity value (far point)")
@@ -1578,5 +1720,272 @@ contains
          end do
       end do
    end subroutine test_internal_screening_equivalence
+
+   !* ===================================================================
+   !*                  Fourth spatial derivative (internal)
+   !* ===================================================================
+
+   !> Prepare the internal LSF and translate an evaluator failure into a test one
+   !>
+   !> @param[inout] lsf   Internal isodensity LSF
+   !> @param[in]    point Evaluation point in Bohr
+   !> @param[out]   error Set when `prepare` reports a failure
+   subroutine prepare_internal(lsf, point, error)
+      !> Internal isodensity LSF
+      type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf
+      !> Evaluation point in Bohr
+      real(wp), intent(in) :: point(3)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: lsf_err
+
+      call lsf%prepare(point, lsf_err)
+      if (allocated(lsf_err)) call test_failed(error, "internal LSF prepare failed: " &
+                                               //lsf_err%message)
+   end subroutine prepare_internal
+
+   !> Third spatial derivative of the internal LSF at one point
+   !>
+   !> The caller must have set `max_deriv` to at least 3 already
+   !>
+   !> @param[inout] lsf   Internal isodensity LSF
+   !> @param[in]    point Evaluation point in Bohr
+   !> @param[out]   t3    Third spatial derivative
+   !> @param[out]   error Set when `prepare` reports a failure
+   subroutine third_at(lsf, point, t3, error)
+      !> Internal isodensity LSF
+      type(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: lsf
+      !> Evaluation point in Bohr
+      real(wp), intent(in) :: point(3)
+      !> Third spatial derivative
+      real(wp), intent(out) :: t3(ndim, ndim, ndim)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call prepare_internal(lsf, point, error)
+      if (allocated(error)) return
+      call lsf%f3_rrr(lsf3_rrr=t3)
+   end subroutine third_at
+
+   !> The internal backend's analytic `f4_rrrr` matches a 4-point central FD of
+   !> its own `f3_rrr`, and is fully index symmetric
+   !>
+   !> This is the LSF-level counterpart of [[test_gto_fourth_fd]]: it covers the
+   !> sign/scale lift, the `(3,3,3,3)` cache and the `tmm` scratch that the bare
+   !> evaluator test does not touch.
+   !>
+   !> @param[out] error Set on mismatch
+   subroutine test_internal_fourth_fd(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: f4(ndim, ndim, ndim, ndim)
+      real(wp) :: tpp(ndim, ndim, ndim), tp(ndim, ndim, ndim)
+      real(wp) :: tm(ndim, ndim, ndim), tmm(ndim, ndim, ndim)
+      real(wp) :: pp(ndim), fd, dev, scale_ref
+      real(wp), parameter :: h = 2.0e-3_wp
+      integer :: ip, ax, ix, jx, kx
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+      call get_test_points(mol, pts, 8)
+
+      scale_ref = 0.0_wp
+      do ip = 1, size(pts, 2)
+         call lsf%set_max_deriv(4)
+         call prepare_internal(lsf, pts(:, ip), error)
+         if (allocated(error)) return
+         call check(error, lsf%prepared_deriv, 4, &
+                    more="internal LSF cached the wrong order at max_deriv=4")
+         if (allocated(error)) return
+         call lsf%f4_rrrr(f4)
+         scale_ref = max(scale_ref, maxval(abs(f4)))
+
+         ! A fourth derivative of a smooth field is symmetric under every index
+         ! permutation; the packed slot table must reproduce that exactly
+         dev = 0.0_wp
+         do ax = 1, ndim
+            do ix = 1, ndim
+               do jx = 1, ndim
+                  do kx = 1, ndim
+                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ix, ax, jx, kx)))
+                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ax, jx, ix, kx)))
+                     dev = max(dev, rel_deviation(f4(ax, ix, jx, kx), f4(ax, ix, kx, jx)))
+                  end do
+               end do
+            end do
+         end do
+         call check(error, dev, 0.0_wp, thr=1.0e-14_wp, &
+                    more="internal f4_rrrr permutation symmetry")
+         if (allocated(error)) return
+
+         ! Dropping back to order 3 for the FD stencil also exercises the cache
+         ! being refilled at a lower order between two order-4 evaluations
+         call lsf%set_max_deriv(3)
+         do ax = 1, ndim
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            call third_at(lsf, pp, tpp, error)
+            if (allocated(error)) return
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            call third_at(lsf, pp, tp, error)
+            if (allocated(error)) return
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            call third_at(lsf, pp, tm, error)
+            if (allocated(error)) return
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            call third_at(lsf, pp, tmm, error)
+            if (allocated(error)) return
+
+            do ix = 1, ndim
+               do jx = 1, ndim
+                  do kx = 1, ndim
+                     fd = fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), &
+                                     tm(ix, jx, kx), tmm(ix, jx, kx), h)
+                     call check(error, f4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     if (allocated(error)) return
+                  end do
+               end do
+            end do
+         end do
+      end do
+
+      !> Otherwise the agreement above would be a comparison of zeros
+      call check(error, scale_ref > 1.0e-6_wp, &
+                 "internal f4_rrrr vanished at every test point")
+   end subroutine test_internal_fourth_fd
+
+   !> Order 4 is reached only when asked for, and asking late is safe
+   !>
+   !> Three separate contracts:
+   !>
+   !>   * the per-instance scratch is sized for the order actually requested, and
+   !>     raising `max_deriv` *after* a low-order `prepare` already sized it must
+   !>     grow it rather than let `gto_eval` write past its end;
+   !>   * the `tmm` scratch stays unallocated until an order-4 `prepare` runs;
+   !>   * raising the order must not disturb the lower orders' values.
+   !>
+   !> The callback backend is checked in the same test for the opposite property:
+   !> its published C ABI stops at the third derivative, so `set_max_deriv(4)`
+   !> must still leave `prepared_deriv` at 3 rather than claim an order it cannot
+   !> deliver.
+   !>
+   !> @param[out] error Set on contract violation
+   subroutine test_internal_fourth_gating(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(structure_type) :: mol
+      real(wp), allocatable :: pts(:, :)
+      real(wp) :: v3, g3(ndim), h3(ndim, ndim), t3(ndim, ndim, ndim)
+      real(wp) :: v4, g4(ndim), h4(ndim, ndim), t4(ndim, ndim, ndim)
+      real(wp) :: f4(ndim, ndim, ndim, ndim)
+      integer :: ip
+      logical :: any_nonzero
+
+      call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
+      if (allocated(error)) return
+      call get_test_points(mol, pts, 6)
+
+      ! The value+gradient projection phase sizes the scratch first ...
+      call lsf%set_max_deriv(1)
+      call prepare_internal(lsf, pts(:, 1), error)
+      if (allocated(error)) return
+      call check(error, lsf%prepared_deriv, 1, &
+                 more="internal LSF cached the wrong order at max_deriv=1")
+      if (allocated(error)) return
+      call check(error, size(lsf%phi, 2), moist_iso_gto_nslot(1), &
+                 more="max_deriv=1 must not size the AO table for a higher order")
+      if (allocated(error)) return
+      call check(error, .not. allocated(lsf%tmm), &
+                 "the fourth-derivative scratch must not be allocated at max_deriv=1")
+      if (allocated(error)) return
+
+      any_nonzero = .false.
+      do ip = 1, size(pts, 2)
+         call lsf%set_max_deriv(3)
+         call prepare_internal(lsf, pts(:, ip), error)
+         if (allocated(error)) return
+         call lsf%f3_rrr(v3, g3, h3, t3)
+
+         ! ... and only then is order 4 asked for, on an already-sized instance
+         call lsf%set_max_deriv(4)
+         call prepare_internal(lsf, pts(:, ip), error)
+         if (allocated(error)) return
+         call check(error, lsf%prepared_deriv, 4, &
+                    more="internal LSF cached the wrong order at max_deriv=4")
+         if (allocated(error)) return
+         call check(error, size(lsf%phi, 2), moist_iso_gto_nslot(4), &
+                    more="max_deriv=4 must grow the AO table to the fourth-order slots")
+         if (allocated(error)) return
+         call check(error, allocated(lsf%tmm), &
+                    "the fourth-derivative scratch must be allocated at max_deriv=4")
+         if (allocated(error)) return
+         call lsf%f3_rrr(v4, g4, h4, t4)
+         call lsf%f4_rrrr(f4)
+         if (maxval(abs(f4)) > 0.0_wp) any_nonzero = .true.
+
+         call check(error, v3, v4, thr=0.0_wp, &
+                    more="internal isodensity LSF value depends on max_deriv")
+         if (allocated(error)) return
+         call check(error, maxval(abs(g3 - g4)), 0.0_wp, thr=0.0_wp, &
+                    more="internal isodensity LSF gradient depends on max_deriv")
+         if (allocated(error)) return
+         call check(error, maxval(abs(h3 - h4)), 0.0_wp, thr=0.0_wp, &
+                    more="internal isodensity LSF Hessian depends on max_deriv")
+         if (allocated(error)) return
+         call check(error, maxval(abs(t3 - t4)), 0.0_wp, thr=0.0_wp, &
+                    more="internal isodensity LSF third derivative depends on max_deriv")
+         if (allocated(error)) return
+      end do
+
+      call check(error, any_nonzero, &
+                 "internal isodensity LSF returned a zero f4_rrrr at max_deriv=4")
+      if (allocated(error)) return
+
+      ! The callback ABI stops at the third derivative and must say so
+      !$omp critical(iso_reference_density)
+      call run_callback_fourth_cap(error)
+      !$omp end critical(iso_reference_density)
+   end subroutine test_internal_fourth_gating
+
+   !> Body of the callback half of [[test_internal_fourth_gating]], run under the
+   !> `cb_gto` lock
+   !>
+   !> @param[out] error Set on contract violation
+   subroutine run_callback_fourth_cap(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf
+      type(structure_type) :: mol
+      real(wp), allocatable :: pts(:, :)
+      type(mctc_error), allocatable :: lsf_err
+      integer :: ip
+
+      call set_reference_density(mol, error)
+      if (allocated(error)) return
+      call build_callback_lsf(lsf, mol)
+      call get_test_points(mol, pts, 4)
+
+      call lsf%set_max_deriv(4)
+      do ip = 1, size(pts, 2)
+         call lsf%prepare(pts(:, ip), lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "callback LSF prepare failed: "//lsf_err%message)
+            return
+         end if
+         !> Not 4: the C ABI carries no fourth-derivative buffer, so claiming
+         !> order 4 here would make `require_deriv` wave through an `f4_rrrr`
+         !> read that the base type is supposed to abort
+         call check(error, lsf%prepared_deriv, 3, &
+                    more="callback isodensity LSF claimed an order its ABI cannot deliver")
+         if (allocated(error)) return
+      end do
+   end subroutine run_callback_fourth_cap
 
 end module test_cavity_drop_isodensity

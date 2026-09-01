@@ -12,10 +12,13 @@ module moist_build_info
    implicit none
    private
 
-   public :: git_commit
+   public :: git_commit, build_host
 
    !> Short git commit hash of the build, or "unknown" when the commit is not
    !> available at build time (release tarball, or a bare `fpm build`).
    character(len=*), parameter :: git_commit = "unknown"
+
+   !> Host program this copy of moist was built as part of
+   character(len=*), parameter :: build_host = ""
 
 end module moist_build_info

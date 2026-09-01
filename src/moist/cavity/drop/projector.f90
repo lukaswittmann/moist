@@ -21,6 +21,7 @@ module moist_cavity_drop_projector
                                                 moist_math_solver_slsqp_deflation_type
    use moist_math_solver_newton_deflation, only: new_newton_deflation_solver, &
                                                  moist_math_solver_newton_deflation_type
+   use moist_math_solver_octree_branch, only: moist_math_octree_branch_type
    use moist_cavity_drop_types, only: projection_workspace_type
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
@@ -29,6 +30,7 @@ module moist_cavity_drop_projector
    private
 
    public :: drop_projector_type
+
    !> Projector type for efficient grid point projection onto LSF surface
 
    !> Context type for thread-safe projection callbacks
@@ -46,6 +48,15 @@ module moist_cavity_drop_projector
       !*------------------------ Solver configuration------------------------ *!
 
       integer :: proj_level = 3
+
+      !> Screening threshold used while seeding
+      real(wp) :: seed_screening_threshold = 0.0_wp
+      !> Production screening threshold, captured at init so it can be restored
+      real(wp) :: prod_screening_threshold = -1.0_wp
+      !> Multiple of `seed_screening_threshold` below which a seed-stage solver tolerance must not go
+      real(wp) :: seed_tol_factor = 30.0_wp
+      !> Absolute floor on every seed-stage solver tolerance
+      real(wp) :: seed_tol_abs = 1.0e-6_wp
 
       !> Tolerances
       real(wp) :: multistart_tol = 1.0e-9_wp
@@ -75,8 +86,10 @@ module moist_cavity_drop_projector
 
       !> Minimum point-to-point separation for deduplicating projected candidates (Bohr)
       real(wp) :: branch_sep_cut = 1.0E-10_wp
-      !> Maximum allowed rho difference from the closest candidate to keep branch alternatives (Bohr)
-      real(wp) :: branch_rho_cut = 2.0_wp
+      !> Squared-distance difference a branch may have over the closest one and still carry weight
+      real(wp) :: branch_rho2_slack = 0.5_wp
+      !> Headroom (Bohr) added in quadrature to the search cap
+      real(wp) :: branch_search_margin = 1.0_wp
 
       !*------------------- Deflation solver configuration------------------- *!
 
@@ -88,11 +101,7 @@ module moist_cavity_drop_projector
       real(wp) :: deflation_alpha = 1.0_wp
       !> L2 tolerance for considering two enumerated roots identical (Bohr)
       real(wp) :: deflation_root_tol = 1.0e-6_wp
-      !> Multiplier on inner-solver tolerances (tol/toldx/toldf for SLSQP,
-      !> tol/tolx for Newton). Deflation only needs to identify the basin
-      !> of each root; tight convergence is left to the downstream Newton
-      !> refinement step. 100 = two orders of magnitude looser than the
-      !> regular multistart tolerance.
+      !> Multiplier on inner-solver tolerances (tol/toldx/toldf for SLSQP, tol/tolx for Newton)
       real(wp) :: deflation_tol_relax = 100.0_wp
 
       !*--------------------- Riemannian escape settings--------------------- *!
@@ -136,8 +145,12 @@ module moist_cavity_drop_projector
       real(wp) :: cached_ssd_point(3) = [huge(0.0_wp), huge(0.0_wp), huge(0.0_wp)]
       logical :: ssd_cache_valid = .false.
 
-      !> LSF evaluation failure seen during the current `project_point`
-      type(error_type), allocatable :: lsf_error
+      !> Failure during the current `project_point` that invalidates the whole
+      !> build rather than just this anchor: an LSF that cannot evaluate, or a
+      !> certified search that ran out of budget before it could finish. The
+      !> caller promotes this to a fatal error instead of dropping the point,
+      !> because a surface silently missing points is worse than no surface.
+      type(error_type), allocatable :: abort_error
 
       !> Cache for SLSQP callbacks (reuse phi computation across objective/gradient/constraint)
       real(wp) :: cached_phi0 = 0.0_wp
@@ -152,10 +165,26 @@ module moist_cavity_drop_projector
       real(wp) :: work_tangent_t1(3)
       real(wp) :: work_tangent_t2(3)
 
+      !> Certified octree branch search (projection level 9). Scratch is sized
+      !> on first use and reused for every subsequent anchor on this thread.
+      type(moist_math_octree_branch_type) :: octree
+      !> Octree configuration, overwritten from the cavity parameters at init
+      real(wp) :: octree_seed_size = 0.2_wp
+      integer :: octree_max_boxes = 200000
+      integer :: octree_max_survivors = 20000
+      integer :: octree_max_depth = 12
+      integer :: octree_seed_mode = 1
+
    contains
       procedure :: init => projector_init
       procedure :: init_primitives => projector_init_primitives
       procedure :: compute_ssd => projector_compute_ssd
+      !> Swap the LSF gate to/from the loose seed-stage threshold
+      procedure, private :: seed_screening => projector_seed_screening
+      !> Solver tolerance matched to the seed-stage gate
+      procedure, private :: seed_tol => projector_seed_tol
+      !> Ball-cap slack for the deflation solvers, widened by the search margin
+      procedure, private :: search_rho2_slack => projector_search_rho2_slack
       procedure :: project_point => projector_project_point
       procedure, private :: run_multistart_solver => projector_run_multistart_solver
       procedure, private :: run_single_solver => projector_run_single_solver
@@ -165,6 +194,8 @@ module moist_cavity_drop_projector
       procedure :: check_constrained_optimality
       procedure :: riemannian_newton_escape
       procedure :: retract_to_surface
+      procedure, private :: run_octree_search => projector_run_octree_search
+      procedure, private :: trace_rho_bound => projector_trace_rho_bound
       procedure :: destroy => projector_destroy
       !> Finalizer
       final :: finalize_projector
@@ -212,7 +243,7 @@ contains
 
       ! Compute screened LSF value, gradient, AND Hessian.
       ! The Hessian is cached for the subsequent Jacobian call at the same point.
-      call ctx%lsf%f012_r_screened( &
+      call ctx%lsf%f012_r( &
          lsf0=ctx%projector%cached_lsf0, &
          lsf1_r=ctx%projector%cached_lsf1_r, &
          lsf2_rr=ctx%projector%cached_lsf2_rr)
@@ -275,96 +306,12 @@ contains
 
    end subroutine projection_jacobian
 
-   !> Build a warm-started seed z = (x_init, lambda_init) for the
-   !> Newton-deflation 4-D KKT system by taking one tangent-plane Newton
-   !> step toward the level set surface from the anchor.
-   !>
-   !> At z = (anchor, 0) the residual reduces to F = (0, 0, 0, -L(anchor)),
-   !> so the inner solver's first Newton step has magnitude
-   !> ||dx|| = |L(anchor)| / ||grad L(anchor)||, which becomes huge near
-   !> branched anchors that sit close to triple-junctions of L (where
-   !> ||grad L|| -> 0). Pre-computing the same step here lets us *cap*
-   !> its magnitude and pass a moderate, well-conditioned seed to the
-   !> inner Newton, so deflation iterations start in a regime where each
-   !> step is small.
-   !>
-   !> Formula (assuming x_in = anchor):
-   !>   step = -L * grad_L / ||grad_L||^2
-   !>   x_init = anchor + step                     (tangent-plane projection)
-   !>   lambda_init = -phi_alpha * L / ||grad_L||^2 (KKT condition at x_init)
-   !>
-   !> The step is capped to 0.5 * branch_rho_cut so the warm-started seed
-   !> stays well inside the post-first-root ball cap. If ||grad_L||^2 is
-   !> below an absolute floor we fall back to (x_in, 0) and let the inner
-   !> Newton try its own first step.
-   !>
-   !> @param[in]  x_in           Caller's spatial seed (typically the anchor)
-   !> @param[in]  anchor         Anchor point (defines the phi objective)
-   !> @param[in]  phi_alpha      Coefficient in phi(x) = phi_alpha/2 * ||x - anchor||^2
-   !> @param[in]  branch_rho_cut Maximum rho excursion allowed for branches (Bohr)
-   !> @param[in]  context        Projection context (carries projector pointer)
-   !> @param[out] z_seed         Warm-started 4-D seed (x_init, lambda_init)
-   subroutine newton_warm_start_seed(x_in, anchor, phi_alpha, branch_rho_cut, &
-                                     context, z_seed)
-      !> Spatial seed (3 components)
-      real(wp), intent(in) :: x_in(3)
-      !> Anchor point (3 components)
-      real(wp), intent(in) :: anchor(3)
-      !> phi objective coefficient
-      real(wp), intent(in) :: phi_alpha
-      !> Maximum rho excursion (Bohr); used to cap the warm-start step
-      real(wp), intent(in) :: branch_rho_cut
-      !> Projection context (forwarded to projection_residual / _jacobian)
-      class(*), intent(in) :: context
-      !> Warm-started seed for the 4-D KKT solve
-      real(wp), intent(out) :: z_seed(4)
-
-      real(wp) :: z0(4), f0(4), jac0(4, 4)
-      real(wp) :: lsf_val, grad_lsf(3), grad_norm_sq, step(3), step_norm, scale
-      real(wp), parameter :: grad_floor_sq = 1.0e-12_wp
-      real(wp), parameter :: step_cap_frac = 0.5_wp
-
-      ! Default fallback: zero-lambda seed at the caller's spatial point.
-      z_seed(1:3) = x_in
-      z_seed(4) = 0.0_wp
-
-      ! Probe (anchor, lambda=0): residual gives -L(anchor), Jacobian gives
-      ! -grad L(anchor) in column 4 (or row 4 - they're symmetric).
-      z0(1:3) = anchor
-      z0(4) = 0.0_wp
-      call projection_residual(z0, f0, context)
-      call projection_jacobian(z0, jac0, context)
-
-      lsf_val = -f0(4)
-      grad_lsf = -jac0(1:3, 4)
-      grad_norm_sq = dot_product(grad_lsf, grad_lsf)
-
-      ! If ||grad L|| is essentially zero we cannot form the tangent-plane
-      ! projection. Hand the un-warmed seed to Newton and let line search
-      ! do what it can.
-      if (grad_norm_sq < grad_floor_sq) return
-
-      step = -lsf_val*grad_lsf/grad_norm_sq
-      step_norm = norm2(step)
-
-      ! Cap the step magnitude so the warm-started seed stays well inside
-      ! the post-first-root ball cap (|x - anchor| <= phi_min + rho_cut).
-      scale = 1.0_wp
-      if (step_norm > step_cap_frac*branch_rho_cut .and. step_norm > 0.0_wp) then
-         scale = step_cap_frac*branch_rho_cut/step_norm
-         step = scale*step
-      end if
-
-      z_seed(1:3) = anchor + step
-      z_seed(4) = scale*(-phi_alpha*lsf_val/grad_norm_sq)
-   end subroutine newton_warm_start_seed
-
    !* ================================================================================= *!
    !*                          Initialization and SSD screening                         *!
    !* ================================================================================= *!
 
    !> Initialize the projector with molecular structure and solver parameters
-   subroutine projector_init(self, param, lsf_model, branch_sep_cut, branch_rho_cut, &
+   subroutine projector_init(self, param, lsf_model, branch_sep_cut, &
                              tol, maxiter, verbosity, debug)
       class(drop_projector_type), intent(inout) :: self
       type(moist_cavity_drop_parameters_type), intent(in) :: param
@@ -372,16 +319,24 @@ contains
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
       !> Minimum point-to-point separation for deduplicating projected candidates (Bohr)
       real(wp), intent(in) :: branch_sep_cut
-      !> Maximum allowed rho difference from the closest candidate (Bohr)
-      real(wp), intent(in) :: branch_rho_cut
       real(wp), intent(in), optional :: tol
       integer, intent(in), optional :: maxiter
       integer, intent(in), optional :: verbosity
       logical, intent(in), optional :: debug
 
-      ! Store branching cutoffs
+      ! Store branching cutoffs. The squared slack is the single admissibility
+      ! criterion shared by the filter, the deflation ball caps and the
+      ! certified octree search.
       self%branch_sep_cut = branch_sep_cut
-      self%branch_rho_cut = branch_rho_cut
+      self%branch_rho2_slack = param%branch_rho2_slack()
+
+      ! Octree search configuration (level 9); the scratch itself is sized on
+      ! first use, since this routine has no channel to report a bad budget.
+      self%octree_seed_size = param%octree_seed_size
+      self%octree_max_boxes = param%octree_max_boxes
+      self%octree_max_survivors = param%octree_max_survivors
+      self%octree_max_depth = param%octree_max_depth
+      self%octree_seed_mode = param%octree_seed_mode
 
       ! Store solver configuration
       if (present(tol)) then
@@ -416,6 +371,11 @@ contains
       call self%phi%set_input(mol, radii)
       call self%lsf%update(mol, radii)
 
+      ! The gate the cell grid was built for; the seed stage may loosen it
+      ! temporarily, and this is what it gets restored to.
+      self%prod_screening_threshold = self%lsf%screening_threshold
+
+
       ! Invalidate SSD point cache (geometry changed)
       self%ssd_cache_valid = .false.
 
@@ -428,6 +388,73 @@ contains
       end if
 
    end subroutine projector_init_primitives
+
+   !> Solver tolerance to use during the seed stage
+   !>
+   !> Raises `base_tol` to the noise floor the loose gate imposes, so a seed
+   !> solver is never asked for precision the screened `S` cannot deliver.
+   !> Returns `base_tol` unchanged when the seed swap is inactive.
+   !>
+   !> @param[in] self     Projector instance
+   !> @param[in] base_tol Production tolerance
+   !> @returns   tol      Tolerance for the seed stage
+   pure function projector_seed_tol(self, base_tol) result(tol)
+      class(drop_projector_type), intent(in) :: self
+      real(wp), intent(in) :: base_tol
+      real(wp) :: tol
+
+      tol = max(base_tol, self%seed_tol_abs)
+
+      ! A loose gate additionally imposes its own noise floor
+      if (self%seed_screening_threshold <= 0.0_wp) return
+      if (self%prod_screening_threshold <= 0.0_wp) return
+      if (self%seed_screening_threshold <= self%prod_screening_threshold) return
+
+      tol = max(tol, self%seed_tol_factor*self%seed_screening_threshold)
+   end function projector_seed_tol
+
+   !> Ball-cap slack for the deflation solvers
+   !>
+   !> Derived on every call rather than cached at `init`, so widening the
+   !> margin afterwards actually reaches the solvers.
+   !>
+   !> @param[in] self  Projector instance
+   !> @return    slack Squared cap slack (Bohr^2)
+   pure function projector_search_rho2_slack(self) result(slack)
+      class(drop_projector_type), intent(in) :: self
+      real(wp) :: slack
+
+      slack = self%branch_rho2_slack + self%branch_search_margin**2
+   end function projector_search_rho2_slack
+
+   !> Switch the LSF screening gate between the seed and production thresholds
+   !>
+   !> The seed stage only has to put each seed in the correct basin; Newton
+   !> re-polishes it against the production gate afterwards. A looser gate
+   !> there shrinks the active set, which is what `prepare` spends its time on.
+   !> Swapping costs one O(ncenters) pass over the cached reach column -- no
+   !> allocation and no re-sort -- so it is affordable once per solve.
+   !>
+   !> Any swap invalidates the SSD cache: the same point screened at two
+   !> thresholds gives two different active sets.
+   !>
+   !> @param[inout] self LSF projector instance
+   !> @param[in]    on   `.true.` for the seed threshold, `.false.` to restore
+   subroutine projector_seed_screening(self, on)
+      class(drop_projector_type), intent(inout) :: self
+      logical, intent(in) :: on
+
+      if (self%seed_screening_threshold <= 0.0_wp) return
+      if (self%prod_screening_threshold <= 0.0_wp) return
+      if (self%seed_screening_threshold <= self%prod_screening_threshold) return
+
+      if (on) then
+         call self%lsf%set_screening_threshold(self%seed_screening_threshold)
+      else
+         call self%lsf%set_screening_threshold(self%prod_screening_threshold)
+      end if
+      self%ssd_cache_valid = .false.
+   end subroutine projector_seed_screening
 
    !> Compute SSD data for an evaluation point using per-cell screening.
    !>
@@ -452,12 +479,12 @@ contains
       end if
 
       ! The LSF already reported it cannot evaluate at some point of this solve
-      if (allocated(self%lsf_error)) return
+      if (allocated(self%abort_error)) return
 
       call self%mol_cell_grid%query(point, start, n)
       call self%lsf%prepare_subset(point, &
                                    self%mol_cell_grid%cell_nlat(start + 1:start + n), &
-                                   self%lsf_error)
+                                   self%abort_error)
 
       self%cached_ssd_point(:) = point(:)
       self%ssd_cache_valid = .true.
@@ -562,7 +589,7 @@ contains
 
       ! The LSF failed and now serves substitute values
       if (associated(ctx%projector)) then
-         if (allocated(ctx%projector%lsf_error)) then
+         if (allocated(ctx%projector%abort_error)) then
             stop_solver = .true.
             return
          end if
@@ -717,7 +744,7 @@ contains
       ! Using ctx%lsf which comes from the projector context
       call ctx%projector%compute_ssd(x)
 
-      call ctx%lsf%f012_r_screened( &
+      call ctx%lsf%f012_r( &
          lsf0=ctx%projector%cached_lsf0, &
          lsf1_r=ctx%projector%cached_lsf1_r)
 
@@ -750,6 +777,46 @@ contains
       grad_g(1, :) = ctx%projector%cached_lsf1_r(:)
 
    end subroutine slsqp_constraint_grad
+
+   !> Level set probe for the certified octree search (context-aware)
+   !>
+   !> Returns the LSF value and the radius of a ball around `x` that the LSF
+   !> can prove holds no surface. Only the value is needed, so this runs on the
+   !> cheapest evaluation path -- the caller drops the LSF to `max_deriv = 0`
+   !> for the duration of the search.
+   !>
+   !> An LSF failure is latched in the projector's `abort_error` exactly as in
+   !> the SLSQP callbacks; the value handed back afterwards is stale, but the
+   !> caller checks `abort_error` once the search returns and discards the run.
+   !>
+   !> @param[in]  x       Evaluation point
+   !> @param[out] lsf0    LSF value at `x`
+   !> @param[out] radius  Surface-free radius around `x` (0 when uncertified)
+   !> @param[in]  context Projection context
+   subroutine octree_probe(x, lsf0, radius, context)
+      real(wp), intent(in) :: x(3)
+      real(wp), intent(out) :: lsf0
+      real(wp), intent(out) :: radius
+      class(*), intent(in) :: context
+
+      type(projection_context_type) :: ctx
+
+      lsf0 = 0.0_wp
+      radius = 0.0_wp
+
+      select type (context)
+      type is (projection_context_type)
+         ctx = context
+      class default
+         return
+      end select
+
+      if (.not. associated(ctx%projector)) return
+
+      call ctx%projector%compute_ssd(x)
+      call ctx%lsf%f0(lsf0)
+      radius = ctx%lsf%exclusion_radius(lsf0)
+   end subroutine octree_probe
 
    !* ================================================================================= *!
    !*                    Seed generation: multi-start solver drivers                    *!
@@ -906,9 +973,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=fine_radii, &
             n_points=fine_n_points, &
             normal=anchor - self%lsf%mol%xyz(:, owner), &
@@ -929,9 +996,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=self%multistart_radius, &
             n_points=self%multistart_leb_num, &
             normal=anchor - self%lsf%mol%xyz(:, owner), &
@@ -963,7 +1030,7 @@ contains
             bounds_mode=3, &
             xlow=lxl, xupp=lxu, &
             anchor=anchor, &
-            branch_rho_cut=self%branch_rho_cut, &
+            branch_rho2_slack=self%search_rho2_slack(), &
             error=error &
             )
       else if (level >= 4) then
@@ -980,9 +1047,9 @@ contains
             xl=xl, &
             xu=xu, &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             tol_relax_factor=self%deflation_tol_relax, &
             max_roots=self%deflation_max_roots, &
             p_power=self%deflation_p_power, &
@@ -990,7 +1057,7 @@ contains
             dedup_tol=self%deflation_root_tol, &
             retry_radius=retry_radius, &
             anchor=anchor, &
-            branch_rho_cut=self%branch_rho_cut, &
+            branch_rho2_slack=self%search_rho2_slack(), &
             error=error &
             )
       else
@@ -1009,9 +1076,9 @@ contains
             xu=xu, &
             owner_pos=self%lsf%mol%xyz(:, owner), &
             max_iter=self%multistart_max_iter, &
-            tol=self%multistart_tol, &
-            toldx=self%multistart_tol, &
-            toldf=self%multistart_tol, &
+            tol=self%seed_tol(self%multistart_tol), &
+            toldx=self%seed_tol(self%multistart_tol), &
+            toldf=self%seed_tol(self%multistart_tol), &
             radii=self%multistart_radius, &
             n_points=self%multistart_leb_num, &
             error=error &
@@ -1034,26 +1101,19 @@ contains
       call self%lsf%set_max_deriv(req_max_deriv)
       self%ssd_cache_valid = .false.
 
-      ! Solve and extract candidates. Newton-deflation operates on z=(x,lambda),
-      ! so it gets its own 4-D seed; SLSQP variants share x_slsqp.
+      ! Seeds only have to land in the right basin, so screen loosely here
+      if (level /= 6) call self%seed_screening(.true.)
+
+      ! Solve and extract candidates
       if (level == 6) then
-         ! Warm-start the Newton seed with one tangent-plane step toward
-         ! LSF=0 (and the corresponding lambda). Seeding at (anchor, 0)
-         ! makes the first deflated Newton step's amplitude scale like
-         ! L(anchor)/||grad L(anchor)||, which blows up at branched
-         ! anchors near triple-junctions of LSF where the gradient is
-         ! nearly stationary. A bounded warm-start sidesteps this.
-         call newton_warm_start_seed(x_slsqp, anchor, &
-                                     self%phi%param%phi_alpha, &
-                                     self%branch_rho_cut, &
-                                     proj_context, z_seed)
          call solver%solve(z_seed, error)
          x_slsqp = z_seed(1:3)
       else
          call solver%solve(x_slsqp, error)
       end if
 
-      ! Restore second-order for subsequent Newton refinement
+      ! Restore the production gate and second-order for Newton refinement
+      if (level /= 6) call self%seed_screening(.false.)
       call self%lsf%set_max_deriv(2)
       self%ssd_cache_valid = .false.
 
@@ -1113,8 +1173,13 @@ contains
    !> @param[out]   x_seeds      Seed point (3, 1)
    !> @param[out]   n_seeds      Always 1 on success
    !> @param[out]   error        Error descriptor
+   !> @param[out]   converged    Optional: whether SLSQP itself converged. The
+   !>                            seed is returned either way (the caller may
+   !>                            still refine it), so a caller that needs to
+   !>                            trust the seed's displacement must ask
    subroutine projector_run_single_solver(self, anchor, xl, xu, proj_context, &
-                                          index, x_slsqp, x_seeds, n_seeds, error)
+                                          index, x_slsqp, x_seeds, n_seeds, error, &
+                                          converged)
       class(drop_projector_type), intent(inout), target :: self
       real(wp), intent(in) :: anchor(3), xl(3), xu(3)
       type(projection_context_type), intent(in) :: proj_context
@@ -1123,6 +1188,7 @@ contains
       real(wp), allocatable, intent(out) :: x_seeds(:, :)
       integer, intent(out) :: n_seeds
       type(error_type), allocatable, intent(out) :: error
+      logical, intent(out), optional :: converged
 
       class(solver_base_type), allocatable :: solver
 
@@ -1138,9 +1204,9 @@ contains
          con_grad_ctx=slsqp_constraint_grad, &
          context=proj_context, &
          max_iter=self%slsqp_max_iter, &
-         tol=self%slsqp_tol, &
-         toldx=self%slsqp_tol, &
-         toldf=self%slsqp_tol, &
+         tol=self%seed_tol(self%slsqp_tol), &
+         toldx=self%seed_tol(self%slsqp_tol), &
+         toldf=self%seed_tol(self%slsqp_tol), &
          xl=xl, &
          xu=xu &
          )
@@ -1153,12 +1219,16 @@ contains
       ! SLSQP only needs value + gradient (max_deriv=1 skips per-atom Hessians)
       call self%lsf%set_max_deriv(1)
       self%ssd_cache_valid = .false.
+      call self%seed_screening(.true.)
 
       call solver%solve(x_slsqp, error)
 
-      ! Restore second-order for subsequent Newton refinement
+      ! Restore the production gate and second-order for Newton refinement
+      call self%seed_screening(.false.)
       call self%lsf%set_max_deriv(2)
       self%ssd_cache_valid = .false.
+
+      if (present(converged)) converged = .not. allocated(error)
 
       if (allocated(error)) then
          if (self%verbosity >= 3) then
@@ -1178,6 +1248,291 @@ contains
       x_seeds(:, 1) = x_slsqp(:)
 
    end subroutine projector_run_single_solver
+
+   !> Cheap upper bound on the closest branch distance, by sphere tracing
+   !>
+   !> When phase 0 gives no bound the search would otherwise start from the
+   !> full displacement threshold, and certifying a 15 Bohr ball costs an order
+   !> of magnitude more boxes than certifying the shell that actually matters.
+   !>
+   !> A single ray does far better. Marching along the surface normal by the
+   !> Newton step `|S| / ||grad S||` reaches the surface in a handful of
+   !> evaluations, and the step either overshoots -- flipping the sign, which
+   !> proves by the intermediate value theorem that the surface lies no further
+   !> out than this point -- or converges onto it, at which point `|S|` inside
+   !> the feasibility tolerance means the same thing to the same standard the
+   !> phase-0 point is judged by.
+   !>
+   !> The plain sphere-tracing step of `|S|` is not enough here. It is the safe
+   !> step for a 1-Lipschitz field precisely because it cannot cross the
+   !> surface, and where the SvdW smoothing makes `||grad S||` small it creeps:
+   !> each step cuts `|S|` by only a factor `||grad S||`, so the walk converges
+   !> geometrically and runs out of budget short of the surface. On a symmetric
+   !> carbon cube that was every single ray.
+   !>
+   !> The ray can still stall, running tangentially past a shoulder without ever
+   !> reaching the surface; the step budget catches that and the caller keeps
+   !> its conservative fallback.
+   !>
+   !> @param[inout] self         Projector instance
+   !> @param[in]    anchor       Anchor point
+   !> @param[in]    lsf0_anchor  LSF value at the anchor, for the sign test
+   !> @param[in]    proj_context Callback context
+   !> @param[in]    feasible_tol |S| at which a point counts as on the surface
+   !> @param[out]   rho_bound    Upper bound on rho_min (valid only if `found`)
+   !> @param[out]   found        Whether the ray reached the surface
+   subroutine projector_trace_rho_bound(self, anchor, lsf0_anchor, proj_context, &
+                                        feasible_tol, rho_bound, found)
+      class(drop_projector_type), intent(inout), target :: self
+      real(wp), intent(in) :: anchor(3)
+      real(wp), intent(in) :: lsf0_anchor
+      type(projection_context_type), intent(in) :: proj_context
+      real(wp), intent(in) :: feasible_tol
+      real(wp), intent(out) :: rho_bound
+      logical, intent(out) :: found
+
+      !> Steps allowed before the ray is declared stalled
+      integer, parameter :: max_steps = 48
+      !> Gradient norm below which the direction is meaningless
+      real(wp), parameter :: grad_floor = 1.0e-8_wp
+
+      real(wp) :: x(3), grad(3), val(1), grad_row(1, 3), grad_norm, step_dir(3)
+      real(wp) :: step_len, max_step
+      integer :: istep
+
+      rho_bound = 0.0_wp
+      found = .false.
+
+      ! Prime the cached value and gradient at the anchor. `slsqp_constraint_grad`
+      ! hands back whatever the last `slsqp_constraint` call computed, and that
+      ! call was at the phase-0 point -- stepping the anchor along a gradient
+      ! belonging to somewhere else sends the ray off in the wrong direction.
+      x = anchor
+      call slsqp_constraint(x, val, proj_context)
+
+      ! No single step may leave the region the caller would have certified
+      ! anyway, so a near-vanishing gradient cannot fling the ray across the
+      ! molecule and bound `rho_min` by something meaningless.
+      max_step = self%max_displacement_threshold
+
+      do istep = 1, max_steps
+         if (abs(val(1)) <= feasible_tol) then
+            rho_bound = norm2(x - anchor)
+            found = .true.
+            return
+         end if
+
+         call slsqp_constraint_grad(x, grad_row, proj_context)
+         grad = grad_row(1, :)
+         grad_norm = norm2(grad)
+         if (grad_norm < grad_floor) return
+
+         ! Toward the surface: up the gradient from inside, down it from
+         ! outside, by the first-order distance estimate |S| / ||grad S||.
+         step_dir = grad/grad_norm
+         if (val(1) > 0.0_wp) step_dir = -step_dir
+         step_len = min(abs(val(1))/grad_norm, max_step)
+         x = x + step_len*step_dir
+
+         call slsqp_constraint(x, val, proj_context)
+
+         ! A sign flip means the segment just traversed crosses the surface,
+         ! so the surface is no further out than this point.
+         if (val(1)*lsf0_anchor < 0.0_wp) then
+            rho_bound = norm2(x - anchor)
+            found = .true.
+            return
+         end if
+      end do
+   end subroutine projector_trace_rho_bound
+
+   !> Enumerate every branch seed for one anchor, with a completeness certificate
+   !>
+   !> Two phases. Phase 0 runs the plain local SLSQP and keeps its point as a
+   !> seed without refining it -- the Newton pass downstream refines every seed
+   !> at once, so doing it here would only duplicate work. What phase 0 really
+   !> buys is its displacement: knowing one branch at `rho_1` caps every other
+   !> branch that can still carry weight at `sqrt(rho_1^2 + slack)`, which for
+   !> the default softmax is a shell barely a tenth of a Bohr thick. The octree
+   !> then has to certify that shell rather than the whole displacement bound.
+   !>
+   !> Correctness never rests on phase 0. Its `rho_1` is a local minimum and may
+   !> not be the closest one, which only makes the certified ball a superset of
+   !> the required one; if it does not converge at all the search simply starts
+   !> from the full displacement bound and tightens itself from the first sign
+   !> change it meets. Either way the octree's own bound is what is certified.
+   !>
+   !> @param[inout] self         Projector instance
+   !> @param[in]    anchor       Anchor point
+   !> @param[in]    xl           Lower bounds for the phase-0 solve
+   !> @param[in]    xu           Upper bounds for the phase-0 solve
+   !> @param[in]    proj_context Callback context
+   !> @param[in]    index        Grid point index (for diagnostics)
+   !> @param[inout] x_slsqp      Initial guess (overwritten by the phase-0 solve)
+   !> @param[in]    lsf0_anchor  LSF value at the anchor
+   !> @param[in]    rho_fallback Displacement bound used when phase 0 fails
+   !> @param[out]   x_seeds      Seed points (3, n_seeds)
+   !> @param[out]   n_seeds      Number of seeds
+   !> @param[out]   error        Search failed to obtain a certificate
+   subroutine projector_run_octree_search(self, anchor, xl, xu, proj_context, index, &
+                                          x_slsqp, lsf0_anchor, rho_fallback, &
+                                          x_seeds, n_seeds, error)
+      class(drop_projector_type), intent(inout), target :: self
+      real(wp), intent(in) :: anchor(3), xl(3), xu(3)
+      type(projection_context_type), intent(in) :: proj_context
+      integer, intent(in) :: index
+      real(wp), intent(inout) :: x_slsqp(3)
+      real(wp), intent(in) :: lsf0_anchor
+      real(wp), intent(in) :: rho_fallback
+      real(wp), allocatable, intent(out) :: x_seeds(:, :)
+      integer, intent(out) :: n_seeds
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Largest |S| at which the phase-0 point still counts as sitting on the
+      !> surface. Matches the feasibility tolerance the KKT check uses.
+      real(wp), parameter :: phase0_feasible_tol = 1.0e-6_wp
+
+      real(wp), allocatable :: phase0_seeds(:, :)
+      real(wp) :: rho_1, rho_start, tmp_val(1), rho_traced
+      integer :: n_phase0, n_octree, i_seed
+      logical :: phase0_usable, phase0_bound, traced_ok
+
+      n_seeds = 0
+
+      ! The octree scratch is sized once per thread. projector_init cannot do
+      ! it because it has no channel to report an invalid budget.
+      if (.not. allocated(self%octree%seeds)) then
+         call self%octree%init(seed_size=self%octree_seed_size, &
+                               max_boxes=self%octree_max_boxes, &
+                               max_survivors=self%octree_max_survivors, &
+                               max_depth=self%octree_max_depth, &
+                               seed_mode=self%octree_seed_mode, &
+                               error=error)
+         if (allocated(error)) return
+      end if
+
+      ! The search reports itself at the end of `run`. Anchors are projected in
+      ! parallel, so serialize it or the per-anchor blocks interleave into
+      ! something unreadable.
+      self%octree%debug = self%debug
+      self%octree%unit = output_unit
+      self%octree%point_id = index
+
+      !> Phase 0: local SLSQP, no Newton refinement
+
+      call self%run_single_solver(anchor, xl, xu, proj_context, index, x_slsqp, &
+                                  phase0_seeds, n_phase0, error)
+      if (allocated(error)) return
+
+      rho_1 = norm2(x_slsqp - anchor)
+      phase0_usable = rho_1 <= rho_fallback
+
+      ! Whether phase 0 hands over a *bound* is a question about its point, not
+      ! about its exit status. `rho_min <= rho_1` needs the segment from the
+      ! anchor to hit the surface, which the intermediate value theorem gives
+      ! when the point landed on the surface or crossed to the far side of it.
+      ! An SLSQP that stopped on iteration count usually still lands there, and
+      ! reading its status as "no bound" sends the search off to certify the
+      ! whole displacement ball for nothing -- on a symmetric carbon cube that
+      ! was a fifth of the anchors, at four times the boxes each.
+      call slsqp_constraint(x_slsqp, tmp_val, proj_context)
+      phase0_bound = phase0_usable .and. &
+                     (abs(tmp_val(1)) <= phase0_feasible_tol .or. &
+                      tmp_val(1)*lsf0_anchor < 0.0_wp)
+
+      if (phase0_bound) then
+         rho_start = sqrt(rho_1*rho_1 + self%branch_rho2_slack)
+      else
+         ! Phase 0 gave nothing usable. Rather than fall straight back to the
+         ! displacement threshold, spend a few LSF evaluations tracing one ray
+         ! to the surface; on a symmetric cluster that is the difference
+         ! between a 15 Bohr ball and the shell that actually holds branches.
+         call self%trace_rho_bound(anchor, lsf0_anchor, proj_context, &
+                                   phase0_feasible_tol, rho_traced, traced_ok)
+         if (traced_ok) then
+            rho_start = sqrt(rho_traced*rho_traced + self%branch_rho2_slack)
+         else
+            rho_start = rho_fallback
+         end if
+         if (self%verbosity >= 3) then
+            if (traced_ok) then
+               write (output_unit, "(x,i12,x,a,es10.3,a,f8.4)") index, &
+                  "[octree] Phase-0 point is not a surface crossing (S = ", tmp_val(1), &
+                  "); sphere trace bounds rho_min <= ", rho_traced
+            else
+               write (output_unit, "(x,i12,x,a,es10.3,a)") index, &
+                  "[octree] Phase-0 point is not a surface crossing (S = ", tmp_val(1), &
+                  ") and the ray stalled, certifying the full ball"
+            end if
+         end if
+      end if
+
+      !> Certified octree search over the admissible ball
+
+      ! The search reads only the LSF value, so drop the per-atom derivative
+      ! work for its duration.
+      call self%lsf%set_max_deriv(0)
+      self%ssd_cache_valid = .false.
+
+      if (self%debug) then
+         !$omp critical (drop_octree_report)
+         call self%octree%run(anchor=anchor, &
+                              lsf0_anchor=lsf0_anchor, &
+                              rho_max=rho_start, &
+                              rho2_slack=self%branch_rho2_slack, &
+                              probe=octree_probe, &
+                              context=proj_context, &
+                              error=error)
+         !$omp end critical (drop_octree_report)
+      else
+         call self%octree%run(anchor=anchor, &
+                              lsf0_anchor=lsf0_anchor, &
+                              rho_max=rho_start, &
+                              rho2_slack=self%branch_rho2_slack, &
+                              probe=octree_probe, &
+                              context=proj_context, &
+                              error=error)
+      end if
+
+      call self%lsf%set_max_deriv(2)
+      self%ssd_cache_valid = .false.
+
+      ! A search that could not finish is fatal to the whole build, not just to
+      ! this anchor. The ordinary per-anchor failure path would keep the anchor
+      ! and mark it unconverged, quietly deleting it from the quadrature -- and
+      ! a certified level that silently drops points is worse than none.
+      if (allocated(error)) then
+         call move_alloc(error, self%abort_error)
+         return
+      end if
+      if (allocated(self%abort_error)) return
+
+      n_octree = self%octree%n_seeds
+
+      if (self%verbosity >= 3) then
+         write (output_unit, "(x,i12,x,a,i0,a,i0,a,es10.3)") index, &
+            "[octree] ", n_octree, " seed(s) from ", self%octree%n_boxes_visited, &
+            " boxes, certified rho <= ", self%octree%rho_max_final
+      end if
+
+      !> Hand phase-0 and octree seeds to the caller as one list
+
+      ! The phase-0 point is kept as a seed whenever it is inside the
+      ! displacement bound, even when it gave no usable *bound* -- refining it
+      ! costs one Newton solve and `filter_candidates` drops it if it is not a
+      ! branch that carries weight.
+      allocate (x_seeds(3, n_octree + n_phase0), source=0.0_wp)
+      if (phase0_usable) then
+         do i_seed = 1, n_phase0
+            n_seeds = n_seeds + 1
+            x_seeds(:, n_seeds) = phase0_seeds(:, i_seed)
+         end do
+      end if
+      do i_seed = 1, n_octree
+         n_seeds = n_seeds + 1
+         x_seeds(:, n_seeds) = self%octree%seeds(:, i_seed)
+      end do
+   end subroutine projector_run_octree_search
 
    !* ================================================================================= *!
    !*                 Projection pipeline (seed refinement and dispatch)                *!
@@ -1220,11 +1575,9 @@ contains
       !> workspace may still be unallocated on its first use, so skip the
       !> allocation sanity check.
       if (n_seeds > 0) then
+         ! `reserve` reports which buffer it refused and why; keep that.
          call work%reserve(n_seeds, error)
-         if (allocated(error)) then
-            call fatal_error(error, "Projection workspace allocation failure")
-            return
-         end if
+         if (allocated(error)) return
          if (.not. allocated(work%points) .or. .not. allocated(work%normals) .or. &
              .not. allocated(work%rho) .or. .not. allocated(work%lambda) .or. &
              .not. allocated(work%phi) .or. .not. allocated(work%converged) .or. &
@@ -1245,10 +1598,7 @@ contains
             n_points = n_points + 1
             if (n_points > work%capacity) then
                call work%reserve(n_points, error)
-               if (allocated(error)) then
-                  call fatal_error(error, "Projection workspace allocation failure")
-                  return
-               end if
+               if (allocated(error)) return
             end if
             work%points(:, n_points) = x_seeds(:, i_seed)
             work%rho(n_points) = sqrt(dot_product( &
@@ -1260,7 +1610,7 @@ contains
             grad_phi_seed = self%phi%f1_r( &
                             x_seeds(:, i_seed), anchor, owner)
 
-            call self%lsf%f012_r_screened( &
+            call self%lsf%f012_r( &
                lsf0=self%cached_lsf0, &
                lsf1_r=self%cached_lsf1_r)
             norm_grad2 = dot_product(self%cached_lsf1_r, self%cached_lsf1_r)
@@ -1318,10 +1668,7 @@ contains
             n_points = n_points + 1
             if (n_points > work%capacity) then
                call work%reserve(n_points, error)
-               if (allocated(error)) then
-                  call fatal_error(error, "Projection workspace allocation failure")
-                  return
-               end if
+               if (allocated(error)) return
             end if
             work%points(:, n_points) = x_refined(:)
             work%lambda(n_points) = lambda_refined
@@ -1391,7 +1738,7 @@ contains
       n_points = 0
       call work%clear()
       self%ssd_cache_valid = .false.
-      if (allocated(self%lsf_error)) deallocate (self%lsf_error)
+      if (allocated(self%abort_error)) deallocate (self%abort_error)
 
       level = self%proj_level
       if (present(proj_level)) level = proj_level
@@ -1440,7 +1787,14 @@ contains
                        ((level >= 5)) &
                        )
 
-      if (use_multistart) then
+      ! Level 9 certifies every anchor: there is no gradient gate, because a
+      ! gate would leave the anchors it skips uncertified and the guarantee is
+      ! the whole point of the level. Cheap gating belongs in a heuristic mode.
+      if (level >= 9) then
+         call self%run_octree_search(anchor, xl, xu, proj_context, index, &
+                                     x_slsqp, tmp_val(1), rho_max, &
+                                     x_seeds, n_seeds, error)
+      else if (use_multistart) then
          call self%run_multistart_solver(level, anchor, xl, xu, proj_context, &
                                          owner, index, x_slsqp, x_seeds, n_seeds, &
                                          adaptive_retry_rad, error)
@@ -1567,7 +1921,8 @@ contains
    !> @param[out] error        Error if no valid candidate exists
    !> @param[in]  anchor       Optional anchor for debug diagnostics
    !> @param[in]  pp_sep_cut_inp Optional minimum separation for point removal
-   !> @param[in]  pm_sep_cut_inp Optional rho separation for point removal
+   !> @param[in]  pm_sep_cut_inp Optional squared-rho slack over the closest
+   !>                            candidate; branches beyond it carry no weight
    subroutine filter_candidates(self, candidates, n_candidates, keep_mask, error, anchor, &
                                 pp_sep_cut_inp, pm_sep_cut_inp)
       class(drop_projector_type), intent(inout) :: self
@@ -1579,7 +1934,7 @@ contains
       real(wp), intent(in), optional :: pp_sep_cut_inp
       real(wp), intent(in), optional :: pm_sep_cut_inp
 
-      real(wp) :: dist2_i, pp_sep_cut, pm_sep_cut, rho_min
+      real(wp) :: dist2_i, pp_sep_cut, pm_sep_cut, rho2_min
       real(wp), allocatable :: unique(:, :)
       integer :: i, j, n_selected
       type(prettylistprinter) :: minima_tbl, dist_tbl
@@ -1609,7 +1964,7 @@ contains
       if (present(pm_sep_cut_inp)) then
          pm_sep_cut = pm_sep_cut_inp
       else
-         pm_sep_cut = self%branch_rho_cut
+         pm_sep_cut = self%branch_rho2_slack
       end if
 
       n_selected = 0
@@ -1625,18 +1980,21 @@ contains
          end if
       end do
 
-      !> Discard points whose anchor-point distance exceeds the minimum by more than pm_sep_cut
-      rho_min = huge(1.0_wp)
+      !> Discard points that cannot carry branch weight. A branch enters the
+      !> quadrature with weight exp[-(Phi_b - Phi_min)/sigma], and with the
+      !> quadratic objective Phi = (alpha/2) rho^2 that admissible set is a
+      !> difference of *squares*: rho_b^2 <= rho_min^2 + pm_sep_cut.
+      rho2_min = huge(1.0_wp)
       do i = 1, n_candidates
          if (keep_mask(i)) then
-            dist2_i = norm2(candidates(:, i) - anchor)
-            if (dist2_i < rho_min) rho_min = dist2_i
+            dist2_i = sum((candidates(:, i) - anchor)**2)
+            if (dist2_i < rho2_min) rho2_min = dist2_i
          end if
       end do
       n_selected = 0
       do i = 1, n_candidates
          if (keep_mask(i)) then
-            if (norm2(candidates(:, i) - anchor) - rho_min > pm_sep_cut) then
+            if (sum((candidates(:, i) - anchor)**2) - rho2_min > pm_sep_cut) then
                keep_mask(i) = .false.
             else
                n_selected = n_selected + 1
@@ -2035,7 +2393,7 @@ contains
       real(wp) :: mu_min, mu_max
       real(wp) :: v_min(2), v_max(2)  ! Eigenvectors (unused, but needed for interface)
       real(wp) :: eig_tol, HL_norm
-      real(wp), allocatable :: lsf3_S(:, :, :)  ! Third derivative of LSF (3,3,3)
+      real(wp) :: lsf3_S(3, 3, 3)  ! Third derivative of LSF (3,3,3)
       real(wp) :: d_degen(3)    ! Degenerate direction lifted to 3D
       real(wp) :: D3_ddd        ! Third-order directional derivative D^3 L[d,d,d]
       integer :: i, j, k, i_retract
@@ -2062,7 +2420,7 @@ contains
       ! Step 0: Verify KKT conditions
       ! Compute LSF constraint and derivatives at solution
       call self%compute_ssd(r_star)
-      call self%lsf%f012_r_screened( &
+      call self%lsf%f012_r( &
          lsf0=S_val, lsf1_r=grad_S, lsf2_rr=hess_S)
 
       ! Check feasibility: |S(r*)| < tol_feas
@@ -2184,7 +2542,7 @@ contains
          self%ssd_cache_valid = .false.
          call self%compute_ssd(r_star)
 
-         call self%lsf%f3_rrr_screened(lsf3_rrr=lsf3_S)
+         call self%lsf%f3_rrr(lsf3_rrr=lsf3_S)
 
          ! Restore to second-order
          call self%lsf%set_max_deriv(2)
@@ -2199,7 +2557,6 @@ contains
             end do
          end do
          D3_ddd = -lambda*D3_ddd
-         deallocate (lsf3_S)
 
          if (self%debug) then
             write (output_unit, "(3x,a)") "=> Second-order test degenerate; checking third-order condition"
@@ -2324,7 +2681,7 @@ contains
 
          ! Step 1: Compute derivatives at current point
          call self%compute_ssd(r_curr)
-         call self%lsf%f012_r_screened( &
+         call self%lsf%f012_r( &
             lsf0=S_val, lsf1_r=grad_S, lsf2_rr=hess_S)
          call self%phi%f012_r(r_curr, anchor, owner, phi_val, grad_phi, hess_phi)
 
@@ -2533,7 +2890,7 @@ contains
       do iter = 1, self%retract_max_iter
          ! Evaluate constraint
          call self%compute_ssd(r_curr)
-         call self%lsf%f012_r_screened(lsf0=S_val, lsf1_r=grad_S)
+         call self%lsf%f012_r(lsf0=S_val, lsf1_r=grad_S)
 
          ! Check convergence
          if (abs(S_val) < tol_S) then
@@ -2585,6 +2942,7 @@ contains
    subroutine finalize_projector(self)
       type(drop_projector_type), intent(inout) :: self
       call self%mol_cell_grid%destroy()
+      call self%octree%destroy()
       if (allocated(self%lsf)) deallocate (self%lsf)
 
    end subroutine finalize_projector

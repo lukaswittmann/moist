@@ -56,6 +56,8 @@ module moist_api
    use moist_cavity_drop_lsf_isodensity_internal, only: &
       moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
+   use moist_cavity_fields, only: cavity_field_query_type, cavity_field_max_rank, &
+      & cavity_field_real, cavity_field_int, cavity_field_bool
    use moist_data_solvents, only: solvation_system_parameters, new_solvation_system_parameters, get_solvent_id
    use moist_version, only: get_moist_version
    use moist_output_ascii, only: ascii_moist_header => moist_header, &
@@ -66,6 +68,8 @@ module moist_api
 
    character(len=*), parameter :: namespace = "moist_"
    integer, parameter :: api_max_cstr = 4096
+   !> Longest cavity field name the API will scan for
+   integer, parameter :: max_field_name_len = 64
 
    type :: vp_error
       type(error_type), allocatable :: ptr
@@ -99,8 +103,8 @@ module moist_api
 
    type :: vp_component
       !> Run context owned by this handle until the component is copied into a
-      !> model; `general_model_add_component` re-points the copy at the model
-      !> context so the copy stays valid after this handle is deleted.
+      !> model; `solvation_model_general%add_component` re-points the copy at the
+      !> model context so the copy stays valid after this handle is deleted.
       type(moist_context_type) :: ctx
       !> Concrete component owned by this opaque handle
       class(solvation_model_component_type), allocatable :: ptr
@@ -139,9 +143,18 @@ module moist_api
    public :: get_cavity_sizes_api
    public :: get_cavity_results_api
    public :: delete_cavity_api
+   ! Named cavity result fields
+   public :: get_cavity_field_count_api
+   public :: get_cavity_field_info_api
+   public :: get_cavity_field_about_api
+   public :: get_cavity_field_real_api
+   public :: get_cavity_field_int_api
+   public :: get_cavity_field_bool_api
+   ! Legacy DROP API (deprecated - use the generic cavity operations above)
+   public :: update_drop_cavity_api
+   public :: get_drop_sizes_api, get_drop_grid_size_api, get_drop_results_api
+   public :: delete_drop_cavity_api
    ! Type-specific getters
-   public :: get_drop_specific_api
-   public :: get_drop_numbering_api
    public :: get_drop_cavity_tolerance_api
    public :: get_isodensity_cart_layout_api
    public :: set_isodensity_density_api
@@ -1032,12 +1045,7 @@ contains
 
       select type (general => model%ptr)
       type is (solvation_model_general)
-         ! The model stores a copy, so hand it the model-owned context first:
-         ! the copy keeps whatever pointer the source carried, and this handle's
-         ! own context dies with `moist_delete_solvation_component`.
-         component%ptr%ctx => model%ctx
          call general%add_component(component%ptr, model_error)
-         component%ptr%ctx => component%ctx
          if (allocated(model_error)) then
             call api_error(error%ptr, "general_model_add_component", model_error%message)
          end if
@@ -1669,8 +1677,7 @@ contains
          call c_f_pointer(c_proj_level, p_proj_level)
          use_proj_level = p_proj_level
       end if
-      ! new_cavity_drop has historically used 0.05 as its public default.
-      use_branch_weight_s = 0.05_wp
+      use_branch_weight_s = defaults%branch_weight_s
       if (c_associated(c_branch_weight_s)) then
          call c_f_pointer(c_branch_weight_s, p_branch_weight_s)
          use_branch_weight_s = p_branch_weight_s
@@ -1991,7 +1998,7 @@ contains
 
 !> Create a CFC-DROP cavity handle with default CPCM radii.
    function new_cfc_drop_cavity_api(verror, nleb, c_debug, c_verbose, &
-         c_a1, c_a2, c_c, c_m, c_screen_k, c_do_fine, c_tolerance, &
+         c_a1, c_a2, c_c, c_m, c_do_fine, c_tolerance, &
          c_proj_maxiter, c_proj_level, c_branch_weight_s, c_rho_grid_h, &
          c_wleb_prune_level) result(vcav) &
          & bind(C, name=namespace//"new_cfc_drop_cavity")
@@ -2003,7 +2010,6 @@ contains
       type(c_ptr), value :: c_a2
       type(c_ptr), value :: c_c
       type(c_ptr), value :: c_m
-      type(c_ptr), value :: c_screen_k
       type(c_ptr), value :: c_do_fine
       type(c_ptr), value :: c_tolerance
       type(c_ptr), value :: c_proj_maxiter
@@ -2015,10 +2021,10 @@ contains
       type(vp_error), pointer :: error
       logical(c_bool), pointer :: p_debug, p_do_fine
       integer(c_int), pointer :: p_verbose, p_m
-      real(c_double), pointer :: p_a1, p_a2, p_c, p_screen_k
+      real(c_double), pointer :: p_a1, p_a2, p_c
       logical :: use_debug, use_do_fine
       integer :: use_verbose, use_m
-      real(wp) :: use_a1, use_a2, use_c, use_screen_k, use_tolerance
+      real(wp) :: use_a1, use_a2, use_c, use_tolerance
       integer :: use_proj_maxiter, use_proj_level, use_wleb_prune_level
       real(wp) :: use_branch_weight_s, use_rho_grid_h
       type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
@@ -2043,30 +2049,25 @@ contains
          use_do_fine = p_do_fine
       end if
 
-      use_a1 = cfc_template%a1
+      use_a1 = cfc_template%param%a1
       if (c_associated(c_a1)) then
          call c_f_pointer(c_a1, p_a1)
          use_a1 = p_a1
       end if
-      use_a2 = cfc_template%a2
+      use_a2 = cfc_template%param%a2
       if (c_associated(c_a2)) then
          call c_f_pointer(c_a2, p_a2)
          use_a2 = p_a2
       end if
-      use_c = cfc_template%c
+      use_c = cfc_template%param%c
       if (c_associated(c_c)) then
          call c_f_pointer(c_c, p_c)
          use_c = p_c
       end if
-      use_m = cfc_template%m
+      use_m = cfc_template%param%m
       if (c_associated(c_m)) then
          call c_f_pointer(c_m, p_m)
          use_m = p_m
-      end if
-      use_screen_k = cfc_template%screen_k
-      if (c_associated(c_screen_k)) then
-         call c_f_pointer(c_screen_k, p_screen_k)
-         use_screen_k = p_screen_k
       end if
       if (.not. decode_drop_tolerance(c_tolerance, use_tolerance)) then
          call api_error(error%ptr, "new_cfc_drop_cavity_api", &
@@ -2078,8 +2079,7 @@ contains
                                 use_proj_maxiter, use_proj_level, use_branch_weight_s, &
                                 use_rho_grid_h, use_wleb_prune_level)
 
-      call cfc_template%new(a1=use_a1, a2=use_a2, c=use_c, m=use_m, &
-                            screen_k=use_screen_k)
+      call cfc_template%new(a1=use_a1, a2=use_a2, c=use_c, m=use_m)
       call new_drop_cavity_from_lsf(error, c_null_ptr, nleb, use_debug, use_verbose, &
                                     use_do_fine, use_tolerance, use_proj_maxiter, &
                                     use_proj_level, use_branch_weight_s, use_rho_grid_h, &
@@ -2173,12 +2173,14 @@ contains
 !> `update_cavity` as an ordinary API error naming that status; no cavity data
 !> are produced.
    function new_drop_cavity_isodensity_callback_api(verror, callback, context, &
-         c_scale, nleb, c_debug, c_verbose, c_do_fine, c_wleb_prune_level, &
+         rho_iso, c_scale, nleb, c_debug, c_verbose, c_do_fine, c_wleb_prune_level, &
          c_tolerance) result(vcav) &
          & bind(C, name=namespace//"new_drop_cavity_isodensity_callback")
       type(c_ptr), value :: verror
       type(c_funptr), value :: callback
       type(c_ptr), value :: context
+      !> Density isovalue defining the surface
+      real(c_double), value :: rho_iso
       type(c_ptr), value :: c_scale
       type(c_ptr), value :: nleb
       type(c_ptr), value :: c_debug
@@ -2282,7 +2284,7 @@ contains
          block
             type(moist_cavity_drop_lsf_isodensity_callback_type) :: lsf_template
 
-            call lsf_template%new(callback, context, scale=use_scale)
+            call lsf_template%new(callback, context, real(rho_iso, wp), scale=use_scale)
 
             if (associated(pnleb)) then
                call new_cavity_drop(cavity, cav%ctx, nleb=pnleb, &
@@ -3251,123 +3253,393 @@ contains
 ! TYPE-SPECIFIC CAVITY API (Tier 2 - DROP-specific fields)
 !===============================================================================!
 
-!> Get DROP-specific cavity data
-!> Only works for cavity_type_drop, returns error for other types
-! TODO: this routine should also accept NULL pointers
-   subroutine get_drop_specific_api(verror, vcav, ngrid_cap, &
-         & nmax, normal0, wleb, r_iI0, &
-         & f, rho) &
-         & bind(C, name=namespace//"get_drop_specific")
-      type(c_ptr), value :: verror
-      type(vp_error), pointer :: error
-      type(c_ptr), value :: vcav
-      type(vp_cavity), pointer :: cav
-
-      ! Caller-allocated grid capacity (must be >= the cavity's ngrid)
-      integer(c_int), value :: ngrid_cap
-
-      ! DROP-specific outputs, dimensioned with the caller's capacity; only the
-      ! leading ngrid entries of each are written.
-      integer(c_int), intent(out) :: nmax
-      real(c_double), intent(out) :: normal0(3, ngrid_cap)
-      real(c_double), intent(out) :: wleb(ngrid_cap)
-      real(c_double), intent(out) :: r_iI0(ngrid_cap)
-      real(c_double), intent(out) :: f(ngrid_cap)
-      real(c_double), intent(out) :: rho(ngrid_cap)
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-
-      if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "get_drop_specific_api", "Cavity handle is missing")
-         return
-      end if
-      call c_f_pointer(vcav, cav)
-
-      if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "get_drop_specific_api", "Cavity is not initialized")
-         return
-      end if
-
-      ! Use SELECT TYPE to access DROP-specific fields
-      select type (cavity => cav%ptr)
-      type is (cavity_type_drop)
-         if (ngrid_cap < cavity%ngrid) then
-            call api_error(error%ptr, "get_drop_specific_api", &
-                           "Array capacity too small - use ngrid value from get_cavity_sizes")
-            return
-         end if
-
-         ! Access DROP-specific fields
-         nmax = cavity%nmax
-         normal0(:, :cavity%ngrid) = cavity%normal0(:, :)
-         wleb(:cavity%ngrid) = cavity%wleb
-         r_iI0(:cavity%ngrid) = cavity%r_iI0
-         f(:cavity%ngrid) = cavity%f
-         rho(:cavity%ngrid) = cavity%rho
-      class default
-         call api_error(error%ptr, "get_drop_specific_api", "Cavity is not DROP type - cannot get DROP-specific data")
-      end select
-
-   end subroutine get_drop_specific_api
-
-!> Get the stable per- numbering of a DROP cavity.
-!> The numbering is a unique id (anchor id plus branch offset) that identifies
-!> the same physical surface point across cavity rebuilds, even when points are
-!> culled.  It lets callers match grid points between successive cavities (e.g.
-!> to interpolate/animate the surface over an SCF or optimization trajectory).
-!> @param[in]  verror     Error handle
-!> @param[in]  vcav       DROP cavity handle
-!> @param[in]  ngrid_cap  Caller-allocated capacity of numbering (>= ngrid)
-!> @param[out] numbering  Per-point unique id, native point order (ngrid)
-   subroutine get_drop_numbering_api(verror, vcav, ngrid_cap, numbering) &
-         & bind(C, name=namespace//"get_drop_numbering")
+!> Number of named result fields the cavity currently holds
+!>
+!> The list is built from the cavity's own declarations, so it grows with the
+!> cavity type and shrinks when optional properties were not requested. Fields
+!> keep the names the cavity uses internally.
+!> @param[in]  verror    Error handle
+!> @param[in]  vcav      Cavity handle
+!> @param[out] nfield    Number of readable fields
+   subroutine get_cavity_field_count_api(verror, vcav, nfield) &
+         & bind(C, name=namespace//"get_cavity_field_count")
       !> Error handle
       type(c_ptr), value :: verror
       !> Fortran error pointer
       type(vp_error), pointer :: error
-      !> DROP cavity handle
+      !> Cavity handle
       type(c_ptr), value :: vcav
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      !> Caller-allocated grid capacity (must be >= the cavity's ngrid)
-      integer(c_int), value :: ngrid_cap
-      !> Per-point unique numbering; only the leading ngrid entries are written
-      integer(c_int), intent(out) :: numbering(ngrid_cap)
+      !> Number of readable fields
+      integer(c_int), intent(out) :: nfield
+
+      type(cavity_field_query_type) :: query
+
+      nfield = 0
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_count_api", error, cav)) return
+
+      call query%enumerate()
+      call cav%ptr%list_fields(query)
+      nfield = query%nfield
+
+   end subroutine get_cavity_field_count_api
+
+!> Describe one readable field by position
+!>
+!> `dtype` is one of the MOIST_FIELD_* tags, `rank` is 0 for a scalar, and
+!> `dims` holds the extents with the fastest-varying one first; `count` is the
+!> number of elements a fetch writes.
+!> @param[in]  verror    Error handle
+!> @param[in]  vcav      Cavity handle
+!> @param[in]  ifield    0-based field position, below the reported count
+!> @param[in]  name_cap  Capacity of the name buffer, including the terminator
+!> @param[out] name      Field name, null-terminated
+!> @param[out] dtype     Element type tag
+!> @param[out] rank      Array rank, 0 for a scalar
+!> @param[out] dims      Extents, fastest-varying first (MOIST_FIELD_MAX_RANK)
+!> @param[out] count     Number of elements the field writes
+   subroutine get_cavity_field_info_api(verror, vcav, ifield, name_cap, name, &
+         & dtype, rank, dims, count) &
+         & bind(C, name=namespace//"get_cavity_field_info")
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> 0-based field position
+      integer(c_int), value :: ifield
+      !> Capacity of the name buffer
+      integer(c_int), value :: name_cap
+      !> Field name, null-terminated
+      character(kind=c_char), intent(inout) :: name(*)
+      !> Element type tag
+      integer(c_int), intent(out) :: dtype
+      !> Array rank
+      integer(c_int), intent(out) :: rank
+      !> Extents, fastest-varying first
+      integer(c_int), intent(out) :: dims(cavity_field_max_rank)
+      !> Number of elements the field writes
+      integer(c_int), intent(out) :: count
+
+      type(cavity_field_query_type) :: query
+
+      dtype = 0
+      rank = 0
+      dims = 1
+      count = 0
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_info_api", error, cav)) return
+
+      call query%enumerate()
+      call cav%ptr%list_fields(query)
+
+      if (ifield < 0 .or. ifield >= query%nfield) then
+         call api_error(error%ptr, "get_cavity_field_info_api", &
+            & "Field index out of range - use the count from get_cavity_field_count")
+         return
+      end if
+
+      associate (info => query%info(ifield + 1))
+         if (name_cap <= len(info%name)) then
+            call api_error(error%ptr, "get_cavity_field_info_api", &
+               & "Name buffer too small for field '"//info%name//"'")
+            return
+         end if
+         call f_c_character(info%name, name, name_cap)
+         dtype = info%dtype
+         rank = info%rank
+         dims = info%dims
+         count = info%count()
+      end associate
+
+   end subroutine get_cavity_field_info_api
+
+!> Describe one readable field in prose
+!>
+!> Writes the one-line description the cavity declared alongside the array.
+!> @param[in]  verror      Error handle
+!> @param[in]  vcav        Cavity handle
+!> @param[in]  cname       Field name
+!> @param[in]  about_cap   Capacity of the description buffer, with terminator
+!> @param[out] about       Description, null-terminated
+   subroutine get_cavity_field_about_api(verror, vcav, cname, about_cap, about) &
+         & bind(C, name=namespace//"get_cavity_field_about")
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> Field name
+      type(c_ptr), value :: cname
+      !> Capacity of the description buffer
+      integer(c_int), value :: about_cap
+      !> Description, null-terminated
+      character(kind=c_char), intent(inout) :: about(*)
+
+      type(cavity_field_query_type) :: query
+
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_about_api", error, cav)) return
+      if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_about_api", query)) return
+
+      if (about_cap <= len(query%hit%about)) then
+         call api_error(error%ptr, "get_cavity_field_about_api", &
+            & "Description buffer too small for field '"//query%hit%name//"'")
+         return
+      end if
+      call f_c_character(query%hit%about, about, about_cap)
+
+   end subroutine get_cavity_field_about_api
+
+!> Read a real-valued field by name
+!>
+!> The buffer is filled in Fortran order for rank-2 fields. `cap` is the number
+!> of elements the caller allocated; it has to be at least the `count` reported
+!> by get_cavity_field_info, otherwise nothing is written.
+!> @param[in]  verror  Error handle
+!> @param[in]  vcav    Cavity handle
+!> @param[in]  cname   Field name
+!> @param[in]  cap     Allocated element capacity
+!> @param[out] values  Field payload
+   subroutine get_cavity_field_real_api(verror, vcav, cname, cap, values) &
+         & bind(C, name=namespace//"get_cavity_field_real")
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> Field name
+      type(c_ptr), value :: cname
+      !> Allocated element capacity
+      integer(c_int), value :: cap
+      !> Field payload
+      real(c_double), intent(out) :: values(cap)
+
+      type(cavity_field_query_type) :: query
+
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_real_api", error, cav)) return
+      if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_real_api", query)) return
+      if (.not. check_field_payload(error, query, cavity_field_real, cap, &
+         & "get_cavity_field_real_api")) return
+
+      values(:size(query%rvals)) = query%rvals
+
+   end subroutine get_cavity_field_real_api
+
+!> Read an integer-valued field by name
+!>
+!> Fields that report a sphere index are handed out 0-based, matching
+!> get_cavity_results; ids such as `numbering` and `anchor_id` are passed
+!> through as the cavity stores them.
+!> @param[in]  verror  Error handle
+!> @param[in]  vcav    Cavity handle
+!> @param[in]  cname   Field name
+!> @param[in]  cap     Allocated element capacity
+!> @param[out] values  Field payload
+   subroutine get_cavity_field_int_api(verror, vcav, cname, cap, values) &
+         & bind(C, name=namespace//"get_cavity_field_int")
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> Field name
+      type(c_ptr), value :: cname
+      !> Allocated element capacity
+      integer(c_int), value :: cap
+      !> Field payload
+      integer(c_int), intent(out) :: values(cap)
+
+      type(cavity_field_query_type) :: query
+
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_int_api", error, cav)) return
+      if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_int_api", query)) return
+      if (.not. check_field_payload(error, query, cavity_field_int, cap, &
+         & "get_cavity_field_int_api")) return
+
+      values(:size(query%ivals)) = query%ivals
+
+   end subroutine get_cavity_field_int_api
+
+!> Read a logical-valued field by name
+!> @param[in]  verror  Error handle
+!> @param[in]  vcav    Cavity handle
+!> @param[in]  cname   Field name
+!> @param[in]  cap     Allocated element capacity
+!> @param[out] values  Field payload
+   subroutine get_cavity_field_bool_api(verror, vcav, cname, cap, values) &
+         & bind(C, name=namespace//"get_cavity_field_bool")
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> Field name
+      type(c_ptr), value :: cname
+      !> Allocated element capacity
+      integer(c_int), value :: cap
+      !> Field payload
+      logical(c_bool), intent(out) :: values(cap)
+
+      type(cavity_field_query_type) :: query
+
+      if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_bool_api", error, cav)) return
+      if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_bool_api", query)) return
+      if (.not. check_field_payload(error, query, cavity_field_bool, cap, &
+         & "get_cavity_field_bool_api")) return
+
+      values(:size(query%lvals)) = logical(query%lvals, c_bool)
+
+   end subroutine get_cavity_field_bool_api
+
+!> Resolve the error and cavity handles shared by the field entry points
+!>
+!> @param[in]  verror  Error handle
+!> @param[in]  vcav    Cavity handle
+!> @param[in]  origin  Entry point name used in error messages
+!> @param[out] error   Fortran error pointer, associated on success
+!> @param[out] cav     Fortran cavity pointer, associated on success
+!> @return             Whether both handles resolved to a usable cavity
+   logical function resolve_field_cavity(verror, vcav, origin, error, cav) result(ok)
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Cavity handle
+      type(c_ptr), value :: vcav
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+
+      ok = .false.
+      nullify (error)
+      nullify (cav)
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
 
       if (.not. c_associated(vcav)) then
-         call api_error(error%ptr, "get_drop_numbering_api", "Cavity handle is missing")
+         call api_error(error%ptr, origin, "Cavity handle is missing")
          return
       end if
       call c_f_pointer(vcav, cav)
 
       if (.not. associated(cav%ptr)) then
-         call api_error(error%ptr, "get_drop_numbering_api", "Cavity is not initialized")
+         call api_error(error%ptr, origin, "Cavity is not initialized")
          return
       end if
 
-      select type (cavity => cav%ptr)
-      type is (cavity_type_drop)
-         if (.not. allocated(cavity%numbering)) then
-            call api_error(error%ptr, "get_drop_numbering_api", &
-               & "Cavity numbering is not available - update the cavity first")
-            return
-         end if
-         if (ngrid_cap < cavity%ngrid) then
-            call api_error(error%ptr, "get_drop_numbering_api", &
-               & "Array capacity too small - use ngrid value from get_cavity_sizes")
-            return
-         end if
-         numbering(:cavity%ngrid) = cavity%numbering
-      class default
-         call api_error(error%ptr, "get_drop_numbering_api", &
-            & "Cavity is not DROP type - cannot get DROP-specific data")
-      end select
+      ok = .true.
 
-   end subroutine get_drop_numbering_api
+   end function resolve_field_cavity
+
+!> Look one named field up on a cavity
+!>
+!> A name the cavity does not declare is an error, and so is a field whose
+!> optional property was never requested: the cavity simply does not declare an
+!> array it has not computed, so no caller can mistake absence for zeros.
+!>
+!> @param[inout] error  Fortran error pointer
+!> @param[in]    cav    Fortran cavity pointer
+!> @param[in]    cname  Field name as a C string
+!> @param[in]    origin Entry point name used in error messages
+!> @param[inout] query  Query walker holding the fetched payload on success
+!> @return              Whether the field was found
+   logical function fetch_cavity_field(error, cav, cname, origin, query) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Fortran cavity pointer
+      type(vp_cavity), pointer :: cav
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Query walker
+      type(cavity_field_query_type), intent(inout) :: query
+
+      character(len=:, kind=c_char), allocatable :: name
+
+      ok = .false.
+
+      if (.not. c_associated(cname)) then
+         call api_error(error%ptr, origin, "Field name is missing")
+         return
+      end if
+      call c_f_character_ptr(cname, name, max_field_name_len)
+
+      if (len(name) == 0) then
+         call api_error(error%ptr, origin, "Field name is empty")
+         return
+      end if
+
+      call query%fetch(name)
+      call cav%ptr%list_fields(query)
+
+      if (.not. query%found) then
+         call api_error(error%ptr, origin, &
+            & "Cavity has no field '"//name//"' - it is either unknown or was not computed; "// &
+            & "enumerate the available fields with get_cavity_field_count/get_cavity_field_info")
+         return
+      end if
+
+      ok = .true.
+
+   end function fetch_cavity_field
+
+!> Check that a fetched field matches the requested element type and fits
+!>
+!> @param[inout] error   Fortran error pointer
+!> @param[in]    query   Query walker holding the fetched payload
+!> @param[in]    dtype   Element type the caller asked for
+!> @param[in]    cap     Allocated element capacity
+!> @param[in]    origin  Entry point name used in error messages
+!> @return               Whether the payload may be copied out
+   logical function check_field_payload(error, query, dtype, cap, origin) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer :: error
+      !> Query walker holding the fetched payload
+      type(cavity_field_query_type), intent(in) :: query
+      !> Element type the caller asked for
+      integer, intent(in) :: dtype
+      !> Allocated element capacity
+      integer(c_int), intent(in) :: cap
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+
+      ok = .false.
+
+      if (query%hit%dtype /= dtype) then
+         call api_error(error%ptr, origin, &
+            & "Field '"//query%hit%name//"' has a different element type - "// &
+            & "read the type tag from get_cavity_field_info")
+         return
+      end if
+
+      if (cap < query%hit%count()) then
+         call api_error(error%ptr, origin, &
+            & "Array capacity too small for field '"//query%hit%name// &
+            & "' - use the count from get_cavity_field_info")
+         return
+      end if
+
+      ok = .true.
+
+   end function check_field_payload
 
 !===============================================================================!
 ! GRADIENT API (Tier 3 - Cavity and A-matrix gradients)

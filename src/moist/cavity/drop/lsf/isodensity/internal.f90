@@ -21,8 +21,11 @@ module moist_cavity_drop_lsf_isodensity_internal
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
+                                         lsf_base_update, lsf_candidate_space_user
+   use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
+   use moist_cavity_drop_lsf_isodensity_param, only: &
+      moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
    implicit none (type, external)
    private
 
@@ -34,10 +37,8 @@ module moist_cavity_drop_lsf_isodensity_internal
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_internal_type
       !> Cartesian-monomial Gaussian basis and density matrix
       type(moist_iso_gto_type) :: gto
-      !> Constant multiplier applied to the level set value and derivatives
-      real(wp) :: scale = 1.0_wp
-      !> Density isovalue defining the surface
-      real(wp) :: rho_iso = 0.0_wp
+      !> Level set parameters (isovalue and constant multiplier)
+      type(moist_cavity_drop_lsf_isodensity_param_type) :: param
       !> Cached evaluation point in Bohr
       real(wp) :: point(ndim) = 0.0_wp
       !> Cached LSF value
@@ -48,14 +49,21 @@ module moist_cavity_drop_lsf_isodensity_internal
       real(wp) :: hess(ndim, ndim) = 0.0_wp
       !> Cached third spatial derivative
       real(wp) :: third(ndim, ndim, ndim) = 0.0_wp
+      !> Cached fourth spatial derivative
+      real(wp) :: fourth(ndim, ndim, ndim, ndim) = 0.0_wp
       !> Highest requested derivative order
       integer :: max_deriv = 0
-      !> Per-instance scratch AO-derivative table (ncart, 0:19)
+      !> Largest nuclear charge in the bound structure
+      real(wp) :: zmax = 0.0_wp
+      !> Per-instance scratch AO-derivative table (ncart, 0:nslot-1), sized to the
+      !> highest order this instance has been asked for so far
       real(wp), allocatable :: phi(:, :)
       !> Per-instance scratch density-weighted value vector (ncart)
       real(wp), allocatable :: t0(:)
       !> Per-instance scratch density-weighted gradient vectors (ncart, 3)
       real(wp), allocatable :: tm(:, :)
+      !> Per-instance scratch density-weighted Hessian vectors (ncart, 6)
+      real(wp), allocatable :: tmm(:, :)
       !> Per-instance scratch active-component index list (ncart)
       integer, allocatable :: act(:)
    contains
@@ -67,11 +75,14 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: set_max_deriv => lsf_set_max_deriv
       procedure, public :: active_count => lsf_active_count
       procedure, public :: active_atom => lsf_active_atom
-      procedure, public :: f0_screened => lsf_f0_screened
-      procedure, public :: f012_r_screened => lsf_f012_r_screened
-      procedure, public :: f3_rrr_screened => lsf_f3_rrr_screened
-      procedure, public :: f3_rr_rA_screened => lsf_f3_rr_rA_screened
-      procedure, public :: neighbor_cutoff => lsf_neighbor_cutoff
+      procedure, public :: f0 => lsf_f0
+      procedure, public :: f012_r => lsf_f012_r
+      procedure, public :: f3_rrr => lsf_f3_rrr
+      procedure, public :: f4_rrrr => lsf_f4_rrrr
+      procedure, public :: f3_rr_rA => lsf_f3_rr_rA
+      procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      procedure, public :: screening_offset => lsf_screening_offset
+      procedure, public :: exclusion_radius => lsf_exclusion_radius
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
@@ -98,6 +109,11 @@ contains
       real(wp), intent(in), optional :: scale
       type(error_type), allocatable, intent(out) :: error
 
+      !> Candidate ids index this LSF's per-atom GTO shells
+      self%candidate_space = lsf_candidate_space_user
+
+      self%radius_dependent = .false.
+
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
       if (allocated(error)) return
       !> The per-instance scratch is sized from ``gto%ncart``, so a re-configured
@@ -106,9 +122,9 @@ contains
       if (allocated(self%phi)) deallocate (self%phi)
       if (allocated(self%t0)) deallocate (self%t0)
       if (allocated(self%tm)) deallocate (self%tm)
+      if (allocated(self%tmm)) deallocate (self%tmm)
       if (allocated(self%act)) deallocate (self%act)
-      self%rho_iso = rho_iso
-      if (present(scale)) self%scale = scale
+      call self%param%new(rho_iso=rho_iso, scale=scale)
    end subroutine lsf_new
 
    !> Install the cartesian-monomial density matrix for the current SCF step
@@ -134,12 +150,14 @@ contains
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
 
-      self%mol = mol
-      self%radii = radii
-      self%ncenters = mol%nat
+      call lsf_base_update(self, mol, radii)
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)
+      self%zmax = 0.0_wp
+      if (allocated(mol%num)) then
+         if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)
+      end if
    end subroutine lsf_update
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
@@ -168,16 +186,22 @@ contains
       integer, intent(in), optional :: cand_atoms(:)
 
       real(wp) :: rho, drho(ndim), d2rho(ndim, ndim), d3rho(ndim, ndim, ndim)
-      integer :: nderiv
+      real(wp) :: d4rho(ndim, ndim, ndim, ndim)
+      integer :: nderiv, nslot
 
-      nderiv = min(max(self%max_deriv, 1), 3)
+      nderiv = min(max(self%max_deriv, 1), 4)
+      nslot = moist_iso_gto_nslot(nderiv)
 
       if (.not. allocated(self%phi)) then
-         allocate (self%phi(self%gto%ncart, 0:19))
+         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
          allocate (self%t0(self%gto%ncart))
          allocate (self%tm(self%gto%ncart, 3))
          allocate (self%act(self%gto%ncart))
+      else if (size(self%phi, 2) < nslot) then
+         deallocate (self%phi)
+         allocate (self%phi(self%gto%ncart, 0:nslot - 1))
       end if
+      if (nderiv >= 4 .and. .not. allocated(self%tmm)) allocate (self%tmm(self%gto%ncart, 6))
 
       ! The evaluator derives the derivative order from the outputs it is handed,
       ! so the value+gradient phase passes neither the Hessian nor the third
@@ -190,27 +214,32 @@ contains
       case (2)
          call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
                             rho, drho, d2rho=d2rho, cand_atoms=cand_atoms)
-      case default
+      case (3)
          call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
                             rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms)
+      case default
+         call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
+                            rho, drho, d2rho=d2rho, d3rho=d3rho, cand_atoms=cand_atoms, &
+                            d4rho=d4rho, tmm=self%tmm)
       end select
 
       self%point = point
       ! Record what this point's cache actually holds, so an accessor asked for
       ! a higher order aborts instead of returning the zeros below
       self%prepared_deriv = nderiv
-      self%value = self%scale*(self%rho_iso - rho)
-      self%grad = -self%scale*drho
+      self%value = self%param%scale*(self%param%rho_iso - rho)
+      self%grad = -self%param%scale*drho
       if (nderiv >= 2) then
-         self%hess = -self%scale*d2rho
+         self%hess = -self%param%scale*d2rho
       else
          self%hess = 0.0_wp
       end if
       if (nderiv >= 3) then
-         self%third = -self%scale*d3rho
+         self%third = -self%param%scale*d3rho
       else
          self%third = 0.0_wp
       end if
+      if (nderiv >= 4) self%fourth = -self%param%scale*d4rho
    end subroutine lsf_prepare_impl
 
    !> Evaluate cached data; candidate lists are ignored for true density LSFs
@@ -274,12 +303,12 @@ contains
    !>
    !> @param[in]  self LSF instance
    !> @param[out] val  LSF value
-   subroutine lsf_f0_screened(self, val)
+   subroutine lsf_f0(self, val)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
       real(wp), intent(out) :: val
 
       val = self%value
-   end subroutine lsf_f0_screened
+   end subroutine lsf_f0
 
    !> Return cached LSF value, gradient, and Hessian
    !>
@@ -287,7 +316,7 @@ contains
    !> @param[out] lsf0    Optional LSF value
    !> @param[out] lsf1_r  Optional spatial gradient
    !> @param[out] lsf2_rr Optional spatial Hessian
-   subroutine lsf_f012_r_screened(self, lsf0, lsf1_r, lsf2_rr)
+   subroutine lsf_f012_r(self, lsf0, lsf1_r, lsf2_rr)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
@@ -296,10 +325,10 @@ contains
       if (present(lsf0)) lsf0 = self%value
       if (present(lsf1_r)) lsf1_r(:) = self%grad(:)
       if (present(lsf2_rr)) then
-         call self%require_deriv(2, "f012_r_screened(lsf2_rr)")
+         call self%require_deriv(2, "f012_r(lsf2_rr)")
          lsf2_rr(:, :) = self%hess(:, :)
       end if
-   end subroutine lsf_f012_r_screened
+   end subroutine lsf_f012_r
 
    !> Return cached lower derivatives and the third spatial derivative
    !>
@@ -308,17 +337,29 @@ contains
    !> @param[out] lsf1_r   Optional spatial gradient
    !> @param[out] lsf2_rr  Optional spatial Hessian
    !> @param[out] lsf3_rrr Spatial third derivative
-   subroutine lsf_f3_rrr_screened(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
+   subroutine lsf_f3_rrr(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf0
       real(wp), intent(out), optional :: lsf1_r(:)
       real(wp), intent(out), optional :: lsf2_rr(:, :)
-      real(wp), allocatable, intent(out) :: lsf3_rrr(:, :, :)
+      real(wp), intent(out) :: lsf3_rrr(:, :, :)
 
-      call self%require_deriv(3, "f3_rrr_screened")
-      call self%f012_r_screened(lsf0, lsf1_r, lsf2_rr)
-      allocate (lsf3_rrr(ndim, ndim, ndim), source=self%third)
-   end subroutine lsf_f3_rrr_screened
+      call self%require_deriv(3, "f3_rrr")
+      call self%f012_r(lsf0, lsf1_r, lsf2_rr)
+      lsf3_rrr(:, :, :) = self%third
+   end subroutine lsf_f3_rrr
+
+   !> Return the cached fourth spatial derivative
+   !>
+   !> @param[in]  self      LSF instance
+   !> @param[out] lsf4_rrrr Fourth spatial derivative [3, 3, 3, 3]
+   subroutine lsf_f4_rrrr(self, lsf4_rrrr)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      real(wp), intent(out) :: lsf4_rrrr(:, :, :, :)
+
+      call self%require_deriv(4, "f4_rrrr")
+      lsf4_rrrr(:, :, :, :) = self%fourth
+   end subroutine lsf_f4_rrrr
 
    !> Return zero nuclear-derivative placeholders
    !>
@@ -329,37 +370,73 @@ contains
    !> @param[out] lsf1_rA    Optional nuclear gradient placeholder
    !> @param[out] lsf2_r_rA  Optional mixed second derivative placeholder
    !> @param[out] lsf3_rr_rA Mixed third derivative placeholder
-   subroutine lsf_f3_rr_rA_screened(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+   subroutine lsf_f3_rr_rA(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
       real(wp), intent(out), optional :: lsf1_rA(:, :)
       real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
-      real(wp), allocatable, intent(out) :: lsf3_rr_rA(:, :, :, :)
+      real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
 
       if (present(lsf1_rA)) lsf1_rA(:, :) = 0.0_wp
       if (present(lsf2_r_rA)) lsf2_r_rA(:, :, :) = 0.0_wp
-      allocate (lsf3_rr_rA(ndim, ndim, ndim, self%ncenters), source=0.0_wp)
-   end subroutine lsf_f3_rr_rA_screened
+      lsf3_rr_rA(:, :, :, :) = 0.0_wp
+   end subroutine lsf_f3_rr_rA
 
-   !> Radial offset (from the atom surface) the cavity cell grid must span so
-   !> that every atom whose shells still contribute at a point is returned as a
-   !> candidate for that point
+   !> Return a zero jet-contracted nuclear vector-Jacobian product
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Contracted nuclear gradient placeholder [3, >= n_active]
+   subroutine lsf_vjp_f1_rA(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:, :)
+
+      res(:, 1:self%active_count()) = 0.0_wp
+   end subroutine lsf_vjp_f1_rA
+
+   !> Radial offset (from the atom surface) beyond which no shell of this atom
+   !> still contributes at the current screening threshold
    !>
    !> Reports the global shell reach for the current screening threshold, minus
-   !> the atom radius (the cell-grid reach is ``radius + neighbor_cutoff``), so
-   !> ``radius + neighbor_cutoff = max(radius, reach)``.  With screening disabled
-   !> (threshold <= 0) the reach is huge and the grid degrades to a full scan --
-   !> every atom is a candidate, i.e. exact evaluation.
+   !> the atom radius, so ``radius + screening_offset = max(radius, reach)``.
+   !> With screening disabled (threshold <= 0) the reach is huge and the cavity
+   !> cell grid degrades to a full scan -- every atom is a candidate, i.e. exact
+   !> evaluation.
    !>
    !> @param[in] self   LSF instance
    !> @param[in] radius Atom radius (Bohr)
    !> @returns          Radial offset from the atom surface (Bohr)
-   pure function lsf_neighbor_cutoff(self, radius) result(d)
+   pure function lsf_screening_offset(self, radius) result(d)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> Atom radius (Bohr)
       real(wp), intent(in) :: radius
-
+      !> Radial offset from the atom surface (Bohr)
       real(wp) :: d
 
       d = max(0.0_wp, self%gto%reach(self%screening_threshold) - radius)
-   end function lsf_neighbor_cutoff
+   end function lsf_screening_offset
+
+   !> Radius of a ball around the evaluation point free of surface
+   !>
+   !> Delegates to [[isodensity_exclusion_radius]], which carries the derivation
+   !> and the caveats; the two isodensity variants share it because they share
+   !> the level set, differing only in where `rho` comes from.
+   !>
+   !> @param[in] self  LSF instance
+   !> @param[in] lsf0  LSF value at the evaluation point
+   !> @returns   r     Surface-free radius (zero when uncertified)
+   pure function lsf_exclusion_radius(self, lsf0) result(r)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> LSF value at the evaluation point
+      real(wp), intent(in) :: lsf0
+      !> Surface-free radius
+      real(wp) :: r
+
+      r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
+   end function lsf_exclusion_radius
 
 end module moist_cavity_drop_lsf_isodensity_internal

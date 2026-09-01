@@ -97,12 +97,16 @@ contains
 
       ! a_i = c*f_i/xi_i^2 and w_i = c/xi_i^2, so da/dxi = -2a/xi and
       ! dw/dxi = -2w/xi; both land on the width channel.
-      where (abs(acc%w_a) > seed_weight_tol)
-         eff%w_xi = eff%w_xi - 2.0_wp*self%a*acc%w_a/self%xi0
-      end where
-      where (abs(acc%w_w) > seed_weight_tol)
-         eff%w_xi = eff%w_xi - 2.0_wp*self%wleb*acc%w_w/self%xi0
-      end where
+      do igrid = 1, self%ngrid
+         if (abs(acc%w_a(igrid)) > seed_weight_tol) then
+            eff%w_xi(igrid) = eff%w_xi(igrid) &
+                              - 2.0_wp*self%a(igrid)*acc%w_a(igrid)/self%xi0(igrid)
+         end if
+         if (abs(acc%w_w(igrid)) > seed_weight_tol) then
+            eff%w_xi(igrid) = eff%w_xi(igrid) &
+                              - 2.0_wp*self%wleb(igrid)*acc%w_w(igrid)/self%xi0(igrid)
+         end if
+      end do
 
       if (fold_switching) then
          do igrid = 1, self%ngrid

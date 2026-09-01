@@ -828,8 +828,13 @@ contains
       ! siblings survive, which is what puts the branch channel under test.
       if (branching) then
          cavity%param%branch_weight_s = BRANCH_SOFTMAX_S
-         cavity%param%branch_rho_cut = log(1.0_wp/cavity%param%wleb_cut) &
-                                       *sqrt(BRANCH_SOFTMAX_S)
+         ! branch_dphi_max scales with the softmax width, so recompute the
+         ! derived parameters rather than leaving a stale admissible set.
+         call cavity%param%compute_derived(cav_error)
+         if (allocated(cav_error)) then
+            call test_failed(error, "failed to recompute derived parameters: "//cav_error%message)
+            return
+         end if
          call cavity%branch_weight%init(BRANCH_SOFTMAX_S)
       end if
 

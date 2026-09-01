@@ -90,10 +90,9 @@ module moist_cli
       real(wp) :: cfc_a2 = -9.0_wp
       real(wp) :: cfc_c = 5.0_wp
       integer :: cfc_m = 4
-      real(wp) :: cfc_screen_k = 3.0_wp
 
       !> Enable all optional cavity properties (curvature, normals, etc.)
-      logical :: cavity_fine = .true.
+      logical :: cavity_fine = .false.
       !> Finest marching-cubes grid spacing in bohr (cavity mode "mc")
       real(wp) :: cavity_mc_spacing = 0.2_wp
       !> Write cavity files to disk (grid types: xyz/csv/pqr, marching cubes: obj/pqr)
@@ -348,16 +347,12 @@ subroutine get_arguments(config, error)
          call args%get('cfc_m', config%cfc_m)
       end if
 
-      if (args%has_key('cfc_screen_k')) then
-         call args%get('cfc_screen_k', config%cfc_screen_k)
-      end if
-
       if (args%has_key('grad')) then
          call args%get('grad', config%grad)
       end if
 
-      if (args%has_key('nofine')) then
-         call args%get('nofine', config%cavity_fine)
+      if (args%has_key('fine')) then
+         call args%get('fine', config%cavity_fine)
       end if
       if (args%has_key('cavity_mc_spacing')) then
          call args%get('cavity_mc_spacing', config%cavity_mc_spacing)
@@ -752,7 +747,8 @@ contains
          choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
             "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
             "5=SLSQP-deflation", "6=Newton-deflation", &
-            "7=Multistart", "8=Fine multistart"], &
+            "7=Multistart", "8=Fine multistart", &
+            "9=Certified octree"], &
          print_choices=.true., &
          group_idx=grp_technical)
       call p%add_argument('--wleb-switch', data_type='integer', &
@@ -764,9 +760,9 @@ contains
             "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4"], &
          print_choices=.true., &
          group_idx=grp_technical)
-      call p%add_argument('--nofine', action='store_false', &
-         dest='nofine', &
-         help='Skip optional cavity properties (curvature, normals, etc.)', &
+      call p%add_argument('--fine', action='store_true', &
+         dest='fine', &
+         help='Compute optional cavity properties (curvature, normals, etc.)', &
          group_idx=grp_technical)
    end subroutine add_cavity_drop_arguments
 
@@ -851,12 +847,6 @@ contains
          action=not_less_than(1), &
          dest='cfc_m', metavar='INT', &
          help='CFC pair-term power', &
-         group_idx=grp_technical)
-      call p%add_argument('--screen-k', data_type='real', &
-         default_val=3.0_wp, &
-         action=not_less_than(0.0_wp), &
-         dest='cfc_screen_k', metavar='REAL', &
-         help='CFC SSD screening sharpness k', &
          group_idx=grp_technical)
    end subroutine add_cavity_drop_cfc_arguments
 

@@ -265,6 +265,17 @@ contains
       select case (self%phi_source)
       case (potential_source%charges)
          ! Compute internally from atomic point charges
+         if (.not. allocated(coupling%electrostatics%qat)) then
+            call fatal_error(error, &
+               & "[pcm_ensure_charges] internal potential requires atomic charges")
+            return
+         end if
+         if (size(coupling%electrostatics%qat, 1) /= self%mol_solu%nat .or. &
+             size(coupling%electrostatics%qat, 2) < 1) then
+            call fatal_error(error, &
+               & "[pcm_ensure_charges] atomic charge shape mismatch")
+            return
+         end if
          allocate (phi_new(ngrid))
          call self%ctx%timer%start("Molecular potential")
          call compute_point_charge_potential(self%mol_solu, cavity, coupling, phi_new)

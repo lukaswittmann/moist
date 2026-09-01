@@ -101,14 +101,18 @@ typedef struct _moist_cavity* moist_cavity;
 typedef struct _moist_radii* moist_radii;
 
 /// Callback ABI for external isodensity DROP level set functions.
-/// The callback receives a point in Bohr and must write an LSF value and
-/// spatial gradient using the DROP sign convention (interior negative, exterior
-/// positive).  The `hess` and `third` pointers are optional: they are NULL when
+/// The callback receives a point in Bohr and must write the ELECTRON DENSITY
+/// rho(r) there and its spatial gradient -- the bare density, not a level set:
+/// do not subtract an isovalue and do not flip the sign.  moist forms the level
+/// set itself as S = scale * (rho_iso - rho), with rho_iso and scale supplied to
+/// moist_new_drop_cavity_isodensity_callback(), which is what puts S in the DROP
+/// sign convention (interior negative, exterior positive).
+/// The `d2rho` and `d3rho` pointers are optional: they are NULL when
 /// the cavity does not need that derivative order (e.g. the value+gradient-only
 /// projection phase), and a NULL pointer means the callback should skip
 /// computing that derivative, not merely skip writing it.  Dereferencing a NULL
-/// `hess`/`third` is a host bug, so branch on them before writing.
-/// `hess` and `third` follow the Fortran layout convention above; both are
+/// `d2rho`/`d3rho` is a host bug, so branch on them before writing.
+/// `d2rho` and `d3rho` follow the Fortran layout convention above; both are
 /// symmetric under any index permutation, so the storage order is immaterial
 /// in practice.
 ///
@@ -124,22 +128,34 @@ typedef struct _moist_radii* moist_radii;
 /// The status value itself is opaque to moist and is echoed verbatim in the
 /// error message, so hosts may use it to carry their own error codes.
 ///
-/// V_0_6 CONTRACT.  Two things changed relative to V_0_5: `hess`/`third` became
-/// nullable (see above), and the return type became `int`.  The `void` -> `int`
-/// change is deliberately compiler-visible: a callback still written against the
-/// V_0_5 signature no longer type-checks against this typedef, so every stale
-/// implementation is a compile error at the point where it is registered rather
-/// than a silent misbehaviour at run time.  Fixing that compile error is the
-/// prompt to also audit the nullable `hess`/`third` handling.
+/// V_0_6 CONTRACT.  Three things changed relative to V_0_5: `d2rho`/`d3rho`
+/// (V_0_5 `hess`/`third`) became nullable (see above), the return type became
+/// `int`, and -- the one to read twice -- what the callback returns changed
+/// meaning.  V_0_5 asked for the finished level set, with the host applying its
+/// own isovalue and the DROP sign; V_0_6 asks for the raw density and moist
+/// applies rho_iso and the sign.  Porting a V_0_5 callback is deleting that
+/// arithmetic: write `rho` where you wrote `rho_iso - rho`, drop the negation on
+/// every derivative, and pass your isovalue to the factory instead.
+///
+/// Two of the three breaks are compiler-visible.  The `void` -> `int` change
+/// means a callback still written against the V_0_5 signature no longer
+/// type-checks against this typedef, and the new required `rho_iso` argument of
+/// moist_new_drop_cavity_isodensity_callback() means no V_0_5 registration
+/// compiles either.  The density-vs-level-set change is not: the C signature is
+/// identical, so fixing those two compile errors is the prompt to port the
+/// callback body and to audit the nullable `d2rho`/`d3rho` handling.  A callback
+/// ported at the registration but not in its body reports a surface at the wrong
+/// isovalue with an inside-out gradient -- a plausible-looking cavity, not a
+/// crash.
 ///
 /// See test_isodensity_callback_cavity() in test/api/example.c for a callback
 /// written against this contract.
 typedef int (*moist_isodensity_lsf_callback)(void* /* context */,
                                              const double* /* point[3] */,
-                                             double* /* value */,
-                                             double* /* grad[3] */,
-                                             double* /* hess: Fortran (3,3), or NULL */,
-                                             double* /* third: Fortran (3,3,3), or NULL */);
+                                             double* /* rho */,
+                                             double* /* drho[3] */,
+                                             double* /* d2rho: Fortran (3,3), or NULL */,
+                                             double* /* d3rho: Fortran (3,3,3), or NULL */);
 
 /*
  * Type generic macro for convenience
@@ -476,7 +492,7 @@ moist_delete_solvation_model(moist_model* /* model */) moist_API_SUFFIX__V_0_5;
 ///          tolerance (master numerical tolerance, default from the DROP parameters),
 ///          proj_maxiter (maximum projection iterations, default 150),
 ///          proj_level (projection strategy, default 3),
-///          branch_weight_s (branch softmax scale, default 0.05),
+///          branch_weight_s (branch softmax scale, default 0.0025),
 ///          rho_grid_h (grid-density kernel length, default 1.0),
 ///          wleb_prune_level (smooth weight pruning level 0-6, default 0)
 /// Pass NULL for any optional parameter to use the default.
@@ -518,7 +534,7 @@ moist_new_drop_cavity_with_radii(moist_error /* error */,
                                 const int* /* wleb_prune_level */) moist_API_SUFFIX__V_0_6;
 
 /// Create a CFC-DROP cavity with default CPCM radii.
-/// Optional: nleb, debug, verbose, CFC a1/a2/c/m/screen_k parameters,
+/// Optional: nleb, debug, verbose, CFC a1/a2/c/m parameters,
 ///          do_fine, and the shared DROP tolerance/projection/branching,
 ///          grid-density, and weight-pruning controls.
 /// Pass NULL for any optional parameter to use the compiled default.
@@ -531,7 +547,6 @@ moist_new_cfc_drop_cavity(moist_error /* error */,
                           const double* /* a2 */,
                           const double* /* c */,
                           const int* /* m */,
-                          const double* /* screen_k */,
                           const bool* /* do_fine */,
                           const double* /* tolerance */,
                           const int* /* proj_maxiter */,
@@ -554,10 +569,14 @@ moist_new_iswig_cavity(moist_error /* error */,
 /// Create DROP cavity handle backed by an external isodensity LSF callback.
 /// The callback must remain valid until the cavity is deleted. The context
 /// pointer is passed back unchanged on every callback invocation.
+/// `rho_iso` is the density contour the surface follows and is required -- the
+/// callback returns the bare density, so moist owns the isovalue. `scale`
+/// rescales the level set without moving its zero surface (NULL -> default).
 moist_API_ENTRY moist_cavity moist_API_CALL
 moist_new_drop_cavity_isodensity_callback(moist_error /* error */,
                                          moist_isodensity_lsf_callback /* callback */,
                                          void* /* context */,
+                                         const double /* rho_iso */,
                                          const double* /* scale */,
                                          const int* /* nleb */,
                                          const bool* /* debug */,
@@ -679,36 +698,108 @@ moist_delete_cavity(moist_cavity* /* cavity */) moist_API_SUFFIX__V_0_5;
  * Type-specific getters (Tier 2 - DROP-specific fields)
 **/
 
-/// Get DROP-specific cavity data (only works for DROP cavities)
-/// Returns DROP-only fields (nmax, normal, wleb, r_iI0, f, rho)
-/// Call moist_get_cavity_sizes first to get ngrid for array allocation, then
-/// pass the capacity you allocated with (see the capacity convention at the
-/// top of this header). Nothing is written when the capacity is too small.
-moist_API_ENTRY void moist_API_CALL
-moist_get_drop_specific(moist_error /* error */,
-                       moist_cavity /* cavity */,
-                       const int /* ngrid_cap: allocated grid capacity, must be
-                                    >= the ngrid reported by
-                                    moist_get_cavity_sizes */,
-                       int* /* nmax */,
-                       double* /* normal: Fortran (3,ngrid_cap) */,
-                       double* /* wleb[ngrid_cap] */,
-                       double* /* r_iI0[ngrid_cap] */,
-                       double* /* f[ngrid_cap] */,
-                       double* /* rho[ngrid_cap] */) moist_API_SUFFIX__V_0_6;
+/// Named result fields (Tier 2 - everything a cavity holds, by name)
+///
+/// A cavity declares the per-point and per-sphere arrays it currently holds,
+/// each under the name it uses internally. Enumerate them with
+/// moist_get_cavity_field_count + moist_get_cavity_field_info, then read one
+/// with the accessor matching its type tag. Extending a cavity with a new
+/// result therefore needs no new entry point here.
+///
+/// A field that was not computed is NOT declared: the optional DROP properties
+/// (curvature, grid-point density, ...) appear only once the matching property
+/// request was set, and asking for one that is absent is an error rather than a
+/// buffer of zeros. Nothing is written to a rejected buffer.
+///
+/// Names are the cavity's own, so `xyz`, `a`, `owner`, `radii` and `asph` carry
+/// exactly the values moist_get_cavity_results reports, `owner` 0-based
+/// included. DROP adds the projection results -- `numbering`, `anchor_id`,
+/// `branch`, `branch_count`, `wbranch`, `wleb`, `rho`, `r_iI0`, `normal0`,
+/// `converged` and the diagnostics -- and iSwiG adds its own `numbering`.
 
-/// Get the stable per-grid point numbering of a DROP cavity (DROP-specific)
-/// The numbering uniquely identifies the same physical surface point across
-/// cavity rebuilds, so callers can match points between successive cavities.
-/// Call moist_get_cavity_sizes first to get ngrid for array allocation, then
-/// pass the capacity you allocated with. Nothing is written when it is too small.
+/// Element type tags reported by moist_get_cavity_field_info. The values are
+/// part of the contract; read a field with the accessor matching its tag.
+#define MOIST_FIELD_REAL 1
+#define MOIST_FIELD_INT 2
+#define MOIST_FIELD_BOOL 3
+
+/// Highest rank a field can have, i.e. the length of the `dims` buffer
+/// moist_get_cavity_field_info writes.
+#define MOIST_FIELD_MAX_RANK 2
+
+/// Number of named result fields the cavity currently holds.
+/// The count changes when the cavity is rebuilt or its property request
+/// changes, so read it again after moist_update_cavity.
 moist_API_ENTRY void moist_API_CALL
-moist_get_drop_numbering(moist_error /* error */,
-                         moist_cavity /* cavity */,
-                         const int /* ngrid_cap: allocated grid capacity, must
-                                      be >= the ngrid reported by
-                                      moist_get_cavity_sizes */,
-                         int* /* numbering[ngrid_cap] */) moist_API_SUFFIX__V_0_6;
+moist_get_cavity_field_count(moist_error /* error */,
+                             moist_cavity /* cavity */,
+                             int* /* nfield */) moist_API_SUFFIX__V_0_6;
+
+/// Describe one readable field by position.
+/// `index` is 0-based and must be below the reported count. `dtype` is one of
+/// the MOIST_FIELD_* tags, `rank` is 0 for a scalar, `dims` receives
+/// MOIST_FIELD_MAX_RANK extents with the fastest-varying one first (unused
+/// entries are 1), and `count` is the number of elements a read writes -- pass
+/// it as the capacity below. An oversized name is rejected rather than
+/// truncated, so nothing is written when `name_cap` is too small.
+moist_API_ENTRY void moist_API_CALL
+moist_get_cavity_field_info(moist_error /* error */,
+                            moist_cavity /* cavity */,
+                            const int /* index: 0-based, below the count from
+                                         moist_get_cavity_field_count */,
+                            const int /* name_cap: capacity of name, including
+                                         the null terminator */,
+                            char* /* name[name_cap] */,
+                            int* /* dtype: one of MOIST_FIELD_* */,
+                            int* /* rank: 0 for a scalar */,
+                            int* /* dims[MOIST_FIELD_MAX_RANK] */,
+                            int* /* count: elements a read writes */) moist_API_SUFFIX__V_0_6;
+
+/// Write the one-line description of a named field into `about`.
+/// An oversized description is rejected rather than truncated.
+moist_API_ENTRY void moist_API_CALL
+moist_get_cavity_field_about(moist_error /* error */,
+                             moist_cavity /* cavity */,
+                             const char* /* name */,
+                             const int /* about_cap: capacity of about,
+                                          including the null terminator */,
+                             char* /* about[about_cap] */) moist_API_SUFFIX__V_0_6;
+
+/// Read a MOIST_FIELD_REAL field by name.
+/// `cap` is the number of elements allocated and must be at least the `count`
+/// moist_get_cavity_field_info reports; a rank-2 field is written flat in
+/// Fortran order per the layout convention at the top of this header.
+moist_API_ENTRY void moist_API_CALL
+moist_get_cavity_field_real(moist_error /* error */,
+                            moist_cavity /* cavity */,
+                            const char* /* name */,
+                            const int /* cap: allocated element capacity, must
+                                         be >= the count reported for the
+                                         field */,
+                            double* /* values[cap] */) moist_API_SUFFIX__V_0_6;
+
+/// Read a MOIST_FIELD_INT field by name.
+/// Sphere indices are handed out 0-based, matching moist_get_cavity_results;
+/// the DROP point ids `numbering` and `anchor_id` and the 1-based `branch` are
+/// passed through as the cavity stores them.
+moist_API_ENTRY void moist_API_CALL
+moist_get_cavity_field_int(moist_error /* error */,
+                           moist_cavity /* cavity */,
+                           const char* /* name */,
+                           const int /* cap: allocated element capacity, must
+                                        be >= the count reported for the
+                                        field */,
+                           int* /* values[cap] */) moist_API_SUFFIX__V_0_6;
+
+/// Read a MOIST_FIELD_BOOL field by name.
+moist_API_ENTRY void moist_API_CALL
+moist_get_cavity_field_bool(moist_error /* error */,
+                            moist_cavity /* cavity */,
+                            const char* /* name */,
+                            const int /* cap: allocated element capacity, must
+                                         be >= the count reported for the
+                                         field */,
+                            bool* /* values[cap] */) moist_API_SUFFIX__V_0_6;
 
 /// Assemble A-matrix and compute xi values
 /// Must be called before accessing xi or using the A-matrix
@@ -888,6 +979,7 @@ moist_contract_amat1_q1q2_surface_weights(moist_error /* error */,
 ///   w_lsf0[ngrid]                      - LSF value adjoint weights
 ///   w_lsf1    Fortran (3,ngrid)        - LSF gradient adjoint weights
 ///   w_lsf2    Fortran (3,3,ngrid)      - LSF Hessian adjoint weights
+/// Note: w_lsf2 is NOT symmetric
 /// This entry point covers the xi/f/xyz channels only; it is a thin wrapper
 /// that forwards NULL for the extended channels below.
 moist_API_ENTRY void moist_API_CALL
@@ -947,7 +1039,7 @@ moist_update_drop_cavity(moist_error /* error */,
                         moist_structure /* mol */,
                         const int* /* nleb */) moist_API_SUFFIX__V_0_5;
 
-/// Get DROP sizes (legacy - use moist_get_cavity_sizes and moist_get_drop_specific instead)
+/// Get DROP sizes (legacy - use moist_get_cavity_sizes and the named field API instead)
 moist_API_ENTRY void moist_API_CALL
 moist_get_drop_sizes(moist_error /* error */,
                     moist_cavity /* cavity */,
@@ -955,7 +1047,15 @@ moist_get_drop_sizes(moist_error /* error */,
                     int* /* nmax */,
                     int* /* nsph */) moist_API_SUFFIX__V_0_5;
 
-/// Get DROP results (legacy - use moist_get_cavity_results and moist_get_drop_specific instead)
+/// Get DROP grid sizes only (legacy - use moist_get_cavity_sizes and the named
+/// field API instead). Same as moist_get_drop_sizes without nsph.
+moist_API_ENTRY void moist_API_CALL
+moist_get_drop_grid_size(moist_error /* error */,
+                    moist_cavity /* cavity */,
+                    int* /* ngrid */,
+                    int* /* nmax */) moist_API_SUFFIX__V_0_5;
+
+/// Get DROP results (legacy - use moist_get_cavity_results and the named field API instead)
 /// Call moist_get_cavity_sizes first and pass the capacities you allocated the
 /// arrays with (see the capacity convention at the top of this header).
 moist_API_ENTRY void moist_API_CALL

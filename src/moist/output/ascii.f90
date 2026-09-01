@@ -3,7 +3,7 @@
 !> All banner output should go through this module so that the art
 !> is defined in exactly one place.
 module moist_output_ascii
-   use moist_build_info, only: git_commit
+   use moist_build_info, only: git_commit, build_host
    use moist_version, only: get_moist_version
    implicit none(type, external)
    private
@@ -69,7 +69,7 @@ contains
       !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit
       character(len=:), allocatable :: version_string, line
-      integer :: inner, pad_l, pad_r
+      integer :: inner
       character(len=*), parameter :: top = &
                                      "     .---------------------------------------------."
       character(len=*), parameter :: bot = &
@@ -81,12 +81,30 @@ contains
       ! Center the banner: inner width = box width minus 5 leading spaces and
       ! the two corner characters; derived from `top` so the two stay in sync.
       inner = len(top) - 7
-      pad_l = max(0, (inner - len(line))/2)
-      pad_r = max(0, inner - len(line) - pad_l)
 
       write (unit, "(a)") top
-      write (unit, "(a)") "     |"//repeat(" ", pad_l)//line//repeat(" ", pad_r)//"|"
+      write (unit, "(a)") boxed(line)
+      ! Second line only when moist was built into a host program; a standalone
+      ! build leaves build_host empty and the banner looks as it always did.
+      if (len_trim(build_host) > 0) then
+         write (unit, "(a)") boxed(trim(build_host))
+      end if
       write (unit, "(a)") bot, ""
+
+   contains
+
+      !> One centred line of the box
+      function boxed(text) result(row)
+         !> Text to centre
+         character(len=*), intent(in) :: text
+         !> The finished row, borders included
+         character(len=:), allocatable :: row
+         integer :: pad_l, pad_r
+
+         pad_l = max(0, (inner - len(text))/2)
+         pad_r = max(0, inner - len(text) - pad_l)
+         row = "     |"//repeat(" ", pad_l)//text//repeat(" ", pad_r)//"|"
+      end function boxed
 
    end subroutine moist_build_header
 
