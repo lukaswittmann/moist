@@ -90,9 +90,6 @@ module moist_cavity_drop_projector
       real(wp) :: branch_rho2_slack = 0.5_wp
       !> Headroom (Bohr) added in quadrature to the search cap
       real(wp) :: branch_search_margin = 1.0_wp
-      !> Cap on the Newton-deflation warm-start step (Bohr). A conditioning
-      !> guard on the seed, unrelated to branch admissibility.
-      real(wp) :: warm_start_step_cap = 0.65_wp
 
       !*------------------- Deflation solver configuration------------------- *!
 
