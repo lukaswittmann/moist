@@ -4,6 +4,7 @@
 !> High-level interface to level 2 basic linear algebra subprogram operations
 module moist_math_blas_level2
    use mctc_env, only: sp, dp
+   use moist_math_lapack_kinds, only: blas_ik => lapack_ik
    implicit none
    private
 
@@ -56,32 +57,32 @@ module moist_math_blas_level2
    !> m by n matrix.
    interface blas_gemv
       pure subroutine sgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
-         import :: sp
+         import :: sp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: m
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(sp), intent(in) :: a(lda, *)
          real(sp), intent(in) :: x(*)
          real(sp), intent(inout) :: y(*)
          real(sp), intent(in) :: alpha
          real(sp), intent(in) :: beta
          character(len=1), intent(in) :: trans
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: m
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine sgemv
       pure subroutine dgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
-         import :: dp
+         import :: dp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: m
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(dp), intent(in) :: a(lda, *)
          real(dp), intent(in) :: x(*)
          real(dp), intent(inout) :: y(*)
          real(dp), intent(in) :: alpha
          real(dp), intent(in) :: beta
          character(len=1), intent(in) :: trans
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: m
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine dgemv
    end interface blas_gemv
 
@@ -93,30 +94,30 @@ module moist_math_blas_level2
    !> A is an n by n symmetric matrix.
    interface blas_symv
       pure subroutine ssymv(uplo, n, alpha, a, lda, x, incx, beta, y, incy)
-         import :: sp
+         import :: sp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(sp), intent(in) :: a(lda, *)
          real(sp), intent(in) :: x(*)
          real(sp), intent(inout) :: y(*)
          character(len=1), intent(in) :: uplo
          real(sp), intent(in) :: alpha
          real(sp), intent(in) :: beta
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine ssymv
       pure subroutine dsymv(uplo, n, alpha, a, lda, x, incx, beta, y, incy)
-         import :: dp
+         import :: dp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(dp), intent(in) :: a(lda, *)
          real(dp), intent(in) :: x(*)
          real(dp), intent(inout) :: y(*)
          character(len=1), intent(in) :: uplo
          real(dp), intent(in) :: alpha
          real(dp), intent(in) :: beta
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine dsymv
    end interface blas_symv
 
@@ -128,28 +129,28 @@ module moist_math_blas_level2
    !> vector and A is an m by n matrix.
    interface blas_ger
       pure subroutine sger(m, n, alpha, x, incx, y, incy, a, lda)
-         import :: sp
+         import :: sp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: m
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(sp), intent(in) :: x(*)
          real(sp), intent(in) :: y(*)
          real(sp), intent(inout) :: a(lda, *)
          real(sp), intent(in) :: alpha
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: m
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine sger
       pure subroutine dger(m, n, alpha, x, incx, y, incy, a, lda)
-         import :: dp
+         import :: dp, blas_ik
+         integer(blas_ik), intent(in) :: incx
+         integer(blas_ik), intent(in) :: incy
+         integer(blas_ik), intent(in) :: m
+         integer(blas_ik), intent(in) :: n
+         integer(blas_ik), intent(in) :: lda
          real(dp), intent(in) :: x(*)
          real(dp), intent(in) :: y(*)
          real(dp), intent(inout) :: a(lda, *)
          real(dp), intent(in) :: alpha
-         integer, intent(in) :: incx
-         integer, intent(in) :: incy
-         integer, intent(in) :: m
-         integer, intent(in) :: n
-         integer, intent(in) :: lda
       end subroutine dger
    end interface blas_ger
 
@@ -300,7 +301,7 @@ contains
       character(len=1), intent(in), optional :: trans
       real(sp) :: a, b
       character(len=1) :: tra
-      integer :: incx, incy, m, n, lda
+      integer(blas_ik) :: incx, incy, m, n, lda
       if (present(alpha)) then
          a = alpha
       else
@@ -333,7 +334,7 @@ contains
       character(len=1), intent(in), optional :: trans
       real(dp) :: a, b
       character(len=1) :: tra
-      integer :: incx, incy, m, n, lda
+      integer(blas_ik) :: incx, incy, m, n, lda
       if (present(alpha)) then
          a = alpha
       else
@@ -366,7 +367,7 @@ contains
       real(sp), intent(in), optional :: beta
       character(len=1) :: ula
       real(sp) :: a, b
-      integer :: incx, incy, n, lda
+      integer(blas_ik) :: incx, incy, n, lda
       if (present(alpha)) then
          a = alpha
       else
@@ -398,7 +399,7 @@ contains
       real(dp), intent(in), optional :: beta
       character(len=1) :: ula
       real(dp) :: a, b
-      integer :: incx, incy, n, lda
+      integer(blas_ik) :: incx, incy, n, lda
       if (present(alpha)) then
          a = alpha
       else
@@ -428,7 +429,7 @@ contains
       real(sp), intent(inout) :: amat(:, :)
       real(sp), intent(in), optional :: alpha
       real(sp) :: a
-      integer :: m, n, incx, incy, lda
+      integer(blas_ik) :: m, n, incx, incy, lda
 
       if (present(alpha)) then
          a = alpha
@@ -450,7 +451,7 @@ contains
       real(dp), intent(inout) :: amat(:, :)
       real(dp), intent(in), optional :: alpha
       real(dp) :: a
-      integer :: m, n, incx, incy, lda
+      integer(blas_ik) :: m, n, incx, incy, lda
 
       if (present(alpha)) then
          a = alpha
