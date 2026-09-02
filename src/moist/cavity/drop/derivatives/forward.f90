@@ -11,6 +11,7 @@
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
@@ -188,8 +189,8 @@ contains
       real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
       real(wp), allocatable :: branch_weights(:), branch_dweights(:, :)
 
-      ! Thread-local xi buffer (avoids storing debug arrays)
-      real(wp), allocatable :: anchor_xi_local(:, :)
+      !> Thread-local iSwig neighbour cache, reused across grid points
+      type(iswig_workspace_type) :: iswig_work
       ! Scalar temps for atomic reduction (avoids gfortran aliasing issue)
       real(wp) :: ai_val, vi_val
 
@@ -300,7 +301,7 @@ contains
       !$omp& dlambda_switch, &
       !$omp& min_axis_surf, proj_surf, v_norm_surf, n_dot_q1_surf, &
       !$omp& i, n_active, active_idx, lsf_slot, s1_rA, s2_r_rA, s3_rr_rA, &
-      !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, anchor_xi_local, &
+      !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, iswig_work, &
       !$omp& w_pre_i, f_wleb_s, f_wleb_ds, wleb_prune_factor, dw_pre_dR, &
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
       !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
@@ -321,13 +322,11 @@ contains
       allocate (lsf1_rA(3, self%nsph))
       allocate (lsf2_r_rA(3, 3, self%nsph))
       allocate (phi2_r_rA(3, 3, self%nsph))
-      allocate (anchor_xi_local(3, self%nsph))
       allocate (kkt_rhs_batch(4, 3*self%nsph))
       allocate (A_tot_local(3, self%nsph), source=0.0_wp)
       allocate (V_tot_local(3, self%nsph), source=0.0_wp)
 
-      !> The anchor_xi depends only on the nuclear geometry of the anchor system
-      anchor_xi_local = 0.0_wp
+      call iswig_work%init(self%iswig)
 
       !$omp do schedule(dynamic)
       do igrid = 1, self%ngrid
@@ -893,9 +892,10 @@ contains
 
          !> iswig switching derivatives: evaluated at anchor position
          !> Uses built-in sorted neighbor list for inner loops (early exit).
-         self%f1_rA(:, :, igrid) = self%iswig%swi1_rA( &
-                                   anchor, owner_idx, self%anchor_xi0(igrid), anchor_xi_local, &
-                                   active=active_idx(1:n_active))
+         !> The anchor_xi depends only on the nuclear geometry of the anchor
+         !> system, so its chain-rule term is identically zero and is not applied.
+         call self%iswig%swi1_rA(anchor, owner_idx, self%anchor_xi0(igrid), iswig_work, &
+                                 self%f1_rA(:, :, igrid))
 
          if (do_timing) call self%ctx%timer%stop(h_sw)
 
@@ -964,7 +964,8 @@ contains
       !$omp end critical (gradient_reduction)
 
       deallocate (lsf3_rrr, lsf3_rr_rA, active_idx, lsf_slot, dn_dR_buf)
-      deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA, anchor_xi_local)
+      deallocate (lsf1_rA, lsf2_r_rA, phi2_r_rA)
+      call iswig_work%destroy()
       deallocate (kkt_rhs_batch, A_tot_local, V_tot_local)
       !$omp end parallel
 

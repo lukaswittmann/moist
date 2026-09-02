@@ -26,6 +26,7 @@
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
    !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
+   use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_surface_weights_type, build_seed_state, seed_state_ok, seed_weight_tol
@@ -100,8 +101,11 @@ contains
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
       !> Effective position adjoint seen by every seed
       real(wp) :: w_xyz_local(3)
-      !> iSwig switching-gradient scratch
-      real(wp), allocatable :: f1_rA_pt(:, :), anchor_xi_zero(:, :)
+      !> iSwig neighbour cache and the sparse switching rows it feeds
+      type(iswig_workspace_type) :: iswig_work
+      real(wp), allocatable :: swi_rows(:, :)
+      real(wp) :: swi_owner_row(3), swi_f0, swi_dxi
+      integer :: jj, knb
 
       !> Effective primitive surface adjoints
       type(drop_surface_weights_type) :: eff
@@ -135,15 +139,19 @@ contains
       !$omp& vjp_pt, phi0, phi1_r, phi2_rr, lambda_val, &
       !$omp& kkt_rhs, kkt_info, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
-      !$omp& w_xyz_local, f1_rA_pt, anchor_xi_zero, lsf_error)
+      !$omp& w_xyz_local, iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, &
+      !$omp& jj, knb, lsf_error)
       thread_slot = 1
       !$ thread_slot = omp_get_thread_num() + 1
 
       allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
       allocate (vjp_pt(3, self%nsph), source=0.0_wp)
       allocate (active_idx(self%nsph))
-      allocate (f1_rA_pt(3, self%nsph), source=0.0_wp)
-      allocate (anchor_xi_zero(3, self%nsph), source=0.0_wp)
+      call iswig_work%init(self%iswig)
+      ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is bounded
+      ! by the atom count on either traversal, so this stays valid even if the
+      ! workspace has to grow itself.
+      allocate (swi_rows(3, self%nsph))
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
@@ -234,20 +242,25 @@ contains
                           grad_threads(:, owner_idx, thread_slot))
 
          !* ------------------------- iSwig switching channel ------------------------- *!
-         ! f_i depends on the nuclear geometry alone; swi1_rA already returns
-         ! the full (3, nsph) gradient, so this channel costs the same in both
-         ! modes. anchor_xi has no nuclear dependence, matching forward.f90.
+         ! f_i depends on the nuclear geometry alone; only the owner atom and neighbours are nonzero
          if (abs(eff%w_f(igrid)) > seed_weight_tol) then
-            f1_rA_pt = self%iswig%swi1_rA(anchor, owner_idx, self%anchor_xi0(igrid), &
-                                          anchor_xi_zero)
-            grad_threads(:, :, thread_slot) = grad_threads(:, :, thread_slot) &
-                                              + eff%w_f(igrid)*f1_rA_pt
+            call self%iswig%swi_collect(anchor, owner_idx, self%anchor_xi0(igrid), &
+                                        swi_f0, iswig_work)
+            call self%iswig%swi1_rA_sparse(iswig_work, swi_rows, swi_owner_row, swi_dxi)
+            do jj = 1, iswig_work%n_nb
+               knb = iswig_work%idx(jj)
+               grad_threads(:, knb, thread_slot) = grad_threads(:, knb, thread_slot) &
+                                                   + eff%w_f(igrid)*swi_rows(:, jj)
+            end do
+            grad_threads(:, owner_idx, thread_slot) = &
+               grad_threads(:, owner_idx, thread_slot) + eff%w_f(igrid)*swi_owner_row
          end if
 
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, vjp_pt, active_idx, f1_rA_pt, anchor_xi_zero)
+      deallocate (lsf3_rrr, vjp_pt, active_idx, swi_rows)
+      call iswig_work%destroy()
       !$omp end parallel
 
       if (abort%requested) then
