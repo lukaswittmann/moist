@@ -9,10 +9,17 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
-                                          new_swif_smooth_step
+                                          new_swif_smooth_step, &
+                                          moist_cavity_drop_swif_sigmoid_bump_type, &
+                                          new_swif_sigmoid_bump
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig, &
                                          iswig_workspace_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
+                                                   drop_seed_result_type, &
+                                                   drop_seed_state_tangent_type, &
+                                                   build_seed_state, apply_seed, &
+                                                   seed_state_ok, seed_curv_disc_guard
    use moist_math_lapack_gesv, only: lapack_gesv
    use moist_math_lapack_getrf, only: lapack_getrf
    use moist_math_lapack_getrs, only: lapack_getrs
@@ -76,6 +83,29 @@ module test_cavity_drop_primitives
    !> Tolerance of the `gesv` comparison, measured as `rel_deviation`
    real(wp), parameter :: kkt_gesv_tol = 1.0e-12_wp
 
+   !* ------------------------ seed-state tangent fixtures -------------------------- *!
+
+   !> Central-difference steps of the seed-state tangent test
+   real(wp), parameter :: seed_fd_steps(2) = [1.0e-5_wp, 1.0e-6_wp]
+
+   !> Tolerance of the seed-state tangent comparison, measured as `rel_deviation`
+   real(wp), parameter :: seed_fd_tol = 1.0e-6_wp
+
+   !> Smallest `|B12|` the fixture may reach
+   real(wp), parameter :: seed_fd_b12_min = 1.0e-6_wp
+
+   !> Smallest eigenvalue gap `sqrt_disc_B` the fixture may reach
+   real(wp), parameter :: seed_fd_gap_min = 0.1_wp
+
+   !> Smallest `proj_surf` the fixture may reach
+   real(wp), parameter :: seed_fd_proj_min = 0.5_wp
+
+   !> Smallest `disc_curv` the curvature fixtures may reach
+   real(wp), parameter :: seed_fd_disc_min = 1.0e-3_wp
+
+   !> Anti-vacuity floor on the finite-difference reference
+   real(wp), parameter :: seed_fd_live_min = 1.0e-4_wp
+
 contains
 
    !> Collect the phi primitive FD tests plus the switching nuclear gradient
@@ -111,7 +141,13 @@ contains
                   new_unittest("kkt_factor_matches_lu", test_kkt_factor_matches_lu), &
                   new_unittest("kkt_factor_matches_gesv", test_kkt_factor_matches_gesv), &
                   new_unittest("kkt_factor_reuse", test_kkt_factor_reuse), &
-                  new_unittest("kkt_factor_singular", test_kkt_factor_singular) &
+                  new_unittest("kkt_factor_singular", test_kkt_factor_singular), &
+                  new_unittest("seed_state_tangent_plain", test_seed_state_tangent_plain), &
+                  new_unittest("seed_state_tangent_prune", test_seed_state_tangent_prune), &
+                  new_unittest("seed_state_tangent_curvature", &
+                               test_seed_state_tangent_curvature), &
+                  new_unittest("seed_state_tangent_curvature_prune", &
+                               test_seed_state_tangent_curvature_prune) &
                   ]
    end subroutine collect_cavity_drop_primitives
 
@@ -2505,5 +2541,669 @@ contains
                           "gesv reported success on a vanishing level-set gradient")
       end if
    end subroutine test_kkt_factor_singular
+
+   !* --------------------------- seed-state tangent tests --------------------------- *!
+
+   !> Switching functions of the seed-state tangent fixture
+   !>
+   !> @param[out] f_crit  Critical-gradient switch
+   !> @param[out] f_foc   Focusing switch
+   !> @param[out] f_wleb  Lebedev-weight pruning switch
+   subroutine seed_state_switches(f_crit, f_foc, f_wleb)
+      !> Critical-gradient switch
+      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(out) :: f_crit
+      !> Focusing switch
+      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(out) :: f_foc
+      !> Lebedev-weight pruning switch
+      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(out) :: f_wleb
+
+      call new_swif_sigmoid_bump(f_crit, 0.2_wp, 2.5_wp)
+      call new_swif_sigmoid_bump(f_foc, -3.0_wp, 3.0_wp)
+      ! Narrow on purpose. The fixture sits at `|w_pre_i| ~ 0.21`, and a wide
+      ! window such as [0.02, 1.5] puts that on the switch's upper plateau,
+      ! where `wleb_prune_factor` and its tangent are both identically zero and
+      ! every pruning assertion below becomes vacuous.
+      call new_swif_sigmoid_bump(f_wleb, 0.05_wp, 0.40_wp)
+   end subroutine seed_state_switches
+
+   !> Fill the `Inputs` block of a seed state with the tangent-test fixture
+   !>
+   !> The numbers are chosen so that every guarded branch stays on its regular
+   !> side: `|B12|` is far from `eig_2x2_symmetric`'s diagonal branch, the
+   !> eigenvalue gap `sqrt_disc_B` is far from the degenerate one, the curvature
+   !> discriminant is far above `seed_curv_disc_guard`, and `|w_pre_i|` lands
+   !> inside the `f_wleb` transition window.
+   !>
+   !> `lsf3_rrr` is fully symmetric on purpose. `apply_seed` forms `dB12` with
+   !> the `A`-symmetry shortcut `q1 . (A dq2) = (A q1) . dq2`, which needs
+   !> `res%dH` -- and therefore `lsf3_rrr(:, :, k)` -- symmetric in its first two
+   !> indices. A third derivative without that symmetry breaks the whole `B`
+   !> chain and everything downstream of it for a reason that is a property of
+   !> the fixture, not a defect of the tangent.
+   !>
+   !> @param[in]  want_curvature  Whether the curvature block is requested
+   !> @param[out] state           Seed state with only the `Inputs` block filled
+   pure subroutine seed_state_fixture(want_curvature, state)
+      !> Whether the curvature block is requested
+      logical, intent(in) :: want_curvature
+      !> Seed state
+      type(drop_seed_state_type), intent(out) :: state
+
+      integer :: i, j, k
+      real(wp) :: ri, rj, rk
+
+      state%lsf1_r = [0.70_wp, -0.35_wp, 0.55_wp]
+      state%lsf2_rr = reshape([0.90_wp, 0.21_wp, -0.13_wp, &
+                               0.21_wp, 0.63_wp, 0.17_wp, &
+                               -0.13_wp, 0.17_wp, 1.11_wp], [ndim, ndim])
+      do k = 1, ndim
+         rk = real(k, wp)
+         do j = 1, ndim
+            rj = real(j, wp)
+            do i = 1, ndim
+               ri = real(i, wp)
+               state%lsf3_rrr(i, j, k) = 0.013_wp*(ri*rj + rj*rk + ri*rk) &
+                                         + 0.007_wp*(ri + rj + rk) &
+                                         + 0.004_wp*ri*rj*rk
+            end do
+         end do
+      end do
+      state%lambda_val = 0.37_wp
+      state%alpha_coeff = 1.23_wp
+      state%anchor = [1.30_wp, 0.40_wp, -0.90_wp]
+      state%owner_xyz = [0.10_wp, -0.20_wp, 0.30_wp]
+      state%anchor_wleb0 = 0.41_wp
+      state%cpjac_scal0 = 0.83_wp
+      state%w_f0 = 0.61_wp
+      state%wbranch = 0.77_wp
+      state%wleb = 0.29_wp
+      state%xi0 = 1.90_wp
+      state%want_curvature = want_curvature
+   end subroutine seed_state_fixture
+
+   !> Seed direction of the tangent test; `dlsf2_rr` is symmetric, as `d(grad^2 S)` is
+   !>
+   !> @param[out] dlsf1_r   Seed perturbation of `grad S` at fixed `r`
+   !> @param[out] dlsf2_rr  Seed perturbation of `grad^2 S` at fixed `r`
+   !> @param[out] dr        Induced motion of the projected point
+   !> @param[out] dlambda   Induced change of the Lagrange multiplier
+   pure subroutine seed_state_seed(dlsf1_r, dlsf2_rr, dr, dlambda)
+      !> Seed perturbation of the level-set gradient
+      real(wp), intent(out) :: dlsf1_r(ndim)
+      !> Seed perturbation of the level-set Hessian
+      real(wp), intent(out) :: dlsf2_rr(ndim, ndim)
+      !> Induced motion of the projected point
+      real(wp), intent(out) :: dr(ndim)
+      !> Induced change of the multiplier
+      real(wp), intent(out) :: dlambda
+
+      dlsf1_r = [0.13_wp, 0.29_wp, -0.19_wp]
+      dlsf2_rr = reshape([0.15_wp, 0.09_wp, 0.27_wp, &
+                          0.09_wp, -0.22_wp, -0.18_wp, &
+                          0.27_wp, -0.18_wp, 0.31_wp], [ndim, ndim])
+      dr = [0.23_wp, -0.11_wp, 0.31_wp]
+      dlambda = 0.19_wp
+   end subroutine seed_state_seed
+
+   !> Displace the fixture `Inputs` along the input tangent the seed induces
+   !>
+   !> `build_seed_state` maps the `Inputs` block to the `Derived` block, so its
+   !> tangent is a directional derivative in those inputs alone. Five of them
+   !> move: the level-set gradient and Hessian by `res%dg` and `res%dH`, the
+   !> multiplier by `dlambda`, and -- because `cpjac_scal0` and `w_f0` are the
+   !> primal `J` and `f` at this very point, which is exactly why `apply_seed`
+   !> forms `dw_pre` as the product rule of those two -- by `res%dJ` and
+   !> `res%dw_f`. Everything else is held fixed. `lsf3_rrr` is not displaced
+   !> because `build_seed_state` never reads it.
+   !>
+   !> @param[in]  want_curvature  Whether the curvature block is requested
+   !> @param[in]  res             Linear response at the base point
+   !> @param[in]  dlambda         Induced change of the multiplier
+   !> @param[in]  step            Signed displacement
+   !> @param[out] state           Displaced seed state, `Inputs` block only
+   pure subroutine displace_seed_state(want_curvature, res, dlambda, step, state)
+      !> Whether the curvature block is requested
+      logical, intent(in) :: want_curvature
+      !> Linear response at the base point
+      type(drop_seed_result_type), intent(in) :: res
+      !> Induced change of the multiplier
+      real(wp), intent(in) :: dlambda
+      !> Signed displacement
+      real(wp), intent(in) :: step
+      !> Displaced seed state
+      type(drop_seed_state_type), intent(out) :: state
+
+      call seed_state_fixture(want_curvature, state)
+      state%lsf1_r = state%lsf1_r + step*res%dg
+      state%lsf2_rr = state%lsf2_rr + step*res%dH
+      state%lambda_val = state%lambda_val + step*dlambda
+      state%cpjac_scal0 = state%cpjac_scal0 + step*res%dJ
+      state%w_f0 = state%w_f0 + step*res%dw_f
+   end subroutine displace_seed_state
+
+   !> Central difference of the whole derived block, field by field
+   !>
+   !> @param[in]  state_p  Derived block at `+h`
+   !> @param[in]  state_m  Derived block at `-h`
+   !> @param[in]  inv2h    `1 / (2 h)`
+   !> @param[out] fd       Finite-difference reference for the state tangent
+   pure subroutine seed_state_central_difference(state_p, state_m, inv2h, fd)
+      !> Displaced states
+      type(drop_seed_state_type), intent(in) :: state_p, state_m
+      !> Reciprocal of twice the step
+      real(wp), intent(in) :: inv2h
+      !> Finite-difference reference
+      type(drop_seed_state_tangent_type), intent(out) :: fd
+
+      fd%dA_mat = (state_p%A_mat - state_m%A_mat)*inv2h
+      fd%dq1 = (state_p%q1 - state_m%q1)*inv2h
+      fd%dq2 = (state_p%q2 - state_m%q2)*inv2h
+      fd%dAq1 = (state_p%Aq1 - state_m%Aq1)*inv2h
+      fd%dAq2 = (state_p%Aq2 - state_m%Aq2)*inv2h
+      fd%dB11 = (state_p%B11 - state_m%B11)*inv2h
+      fd%dB12 = (state_p%B12 - state_m%B12)*inv2h
+      fd%dB22 = (state_p%B22 - state_m%B22)*inv2h
+      fd%ddet_B = (state_p%det_B - state_m%det_B)*inv2h
+      fd%dBinv11 = (state_p%Binv11 - state_m%Binv11)*inv2h
+      fd%dBinv12 = (state_p%Binv12 - state_m%Binv12)*inv2h
+      fd%dBinv22 = (state_p%Binv22 - state_m%Binv22)*inv2h
+      fd%dlambda_switch = (state_p%lambda_switch - state_m%lambda_switch)*inv2h
+      fd%dvmin_B = (state_p%vmin_B - state_m%vmin_B)*inv2h
+      fd%du_switch = (state_p%u_switch - state_m%u_switch)*inv2h
+      fd%dtau1 = (state_p%tau1 - state_m%tau1)*inv2h
+      fd%dtau2 = (state_p%tau2 - state_m%tau2)*inv2h
+      fd%dw1 = (state_p%w1 - state_m%w1)*inv2h
+      fd%dw2 = (state_p%w2 - state_m%w2)*inv2h
+      fd%dy1 = (state_p%y1 - state_m%y1)*inv2h
+      fd%dy2 = (state_p%y2 - state_m%y2)*inv2h
+      fd%dcross_vec = (state_p%cross_vec - state_m%cross_vec)*inv2h
+      fd%dinv_J = (state_p%inv_J - state_m%inv_J)*inv2h
+      fd%dn_dot_q1 = (state_p%n_dot_q1 - state_m%n_dot_q1)*inv2h
+      fd%dproj_surf = (state_p%proj_surf - state_m%proj_surf)*inv2h
+      fd%dv_norm_surf = (state_p%v_norm_surf - state_m%v_norm_surf)*inv2h
+      fd%dP_tan = (state_p%P_tan - state_m%P_tan)*inv2h
+      fd%dAP_tan = (state_p%AP_tan - state_m%AP_tan)*inv2h
+      fd%df_crit0 = (state_p%f_crit0 - state_m%f_crit0)*inv2h
+      fd%df_crit_dS = (state_p%f_crit_dS - state_m%f_crit_dS)*inv2h
+      fd%df_foc_f0 = (state_p%f_foc_f0 - state_m%f_foc_f0)*inv2h
+      fd%df_foc_dS = (state_p%f_foc_dS - state_m%f_foc_dS)*inv2h
+      fd%dwleb_prune_factor = (state_p%wleb_prune_factor - state_m%wleb_prune_factor)*inv2h
+      fd%dg_norm_sq = (state_p%g_norm_sq - state_m%g_norm_sq)*inv2h
+      fd%dHn = (state_p%Hn - state_m%Hn)*inv2h
+      fd%dCn = (state_p%Cn - state_m%Cn)*inv2h
+      fd%dT_curv = (state_p%T_curv - state_m%T_curv)*inv2h
+      fd%dD_curv = (state_p%D_curv - state_m%D_curv)*inv2h
+      fd%dKM_curv = (state_p%KM_curv - state_m%KM_curv)*inv2h
+      fd%ddisc_curv = (state_p%disc_curv - state_m%disc_curv)*inv2h
+   end subroutine seed_state_central_difference
+
+   !> Fail unless a scalar stays above a floor, naming the quantity
+   !>
+   !> @param[inout] error  Error handle
+   !> @param[in]    tag    Fixture and step description
+   !> @param[in]    what   What the floor protects
+   !> @param[in]    name   Quantity name
+   !> @param[in]    val    Quantity value
+   !> @param[in]    floor  Smallest admissible value
+   subroutine check_seed_floor(error, tag, what, name, val, floor)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> What the floor protects
+      character(len=*), intent(in) :: what
+      !> Quantity name
+      character(len=*), intent(in) :: name
+      !> Quantity value
+      real(wp), intent(in) :: val
+      !> Smallest admissible value
+      real(wp), intent(in) :: floor
+
+      character(len=256) :: message
+
+      if (allocated(error)) return
+      if (val > floor) return
+      write (message, "(7a,es24.16,a,es12.4)") "seed tangent [", tag, "] ", what, " ", name, &
+         " collapsed to ", val, ", which must stay above ", floor
+      call test_failed(error, trim(message))
+   end subroutine check_seed_floor
+
+   !> Fail unless the fixture is still the one the comparison assumes
+   !>
+   !> A flipped branch makes the finite difference meaningless rather than the
+   !> tangent wrong, so these are checked at the base point and at both
+   !> displacements before any field is compared.
+   !>
+   !> @param[inout] error           Error handle
+   !> @param[in]    tag             Fixture and step description
+   !> @param[in]    state           State to guard
+   !> @param[in]    ref             Base-point state, for the discrete choices
+   !> @param[in]    status          Status of `build_seed_state`
+   !> @param[in]    use_wleb_prune  Whether Lebedev-weight pruning is active
+   subroutine check_seed_guards(error, tag, state, ref, status, use_wleb_prune)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> State to guard and the base-point state
+      type(drop_seed_state_type), intent(in) :: state, ref
+      !> Status of `build_seed_state`
+      integer, intent(in) :: status
+      !> Whether Lebedev-weight pruning is active
+      logical, intent(in) :: use_wleb_prune
+
+      character(len=256) :: message
+
+      if (allocated(error)) return
+      if (status /= seed_state_ok) then
+         write (message, "(3a,i0)") "seed tangent [", tag, &
+            "] fixture is degenerate, build_seed_state returned status ", status
+         call test_failed(error, trim(message))
+         return
+      end if
+      if (state%min_axis /= ref%min_axis) then
+         write (message, "(3a,i0,a,i0)") "seed tangent [", tag, &
+            "] fixture flipped min_axis from ", ref%min_axis, " to ", state%min_axis
+         call test_failed(error, trim(message))
+         return
+      end if
+      ! Off `eig_2x2_symmetric`'s `|b| <= 1e-14` diagonal branch, and away from
+      ! the degenerate eigenvalue that `dvmin_B` divides by
+      call check_seed_floor(error, tag, "guard", "abs(B12)", abs(state%B12), seed_fd_b12_min)
+      call check_seed_floor(error, tag, "guard", "sqrt_disc_B", state%sqrt_disc_B, &
+                            seed_fd_gap_min)
+      call check_seed_floor(error, tag, "guard", "proj_surf", state%proj_surf, &
+                            seed_fd_proj_min)
+      if (allocated(error)) return
+      if (state%want_curvature) then
+         call check_seed_floor(error, tag, "guard", "disc_curv", state%disc_curv, &
+                               max(seed_fd_disc_min, seed_curv_disc_guard))
+         if (allocated(error)) return
+      end if
+      if (use_wleb_prune) then
+         if (sign(1.0_wp, state%w_pre_i) /= sign(1.0_wp, ref%w_pre_i)) then
+            write (message, "(3a,es24.16,a,es24.16)") "seed tangent [", tag, &
+               "] fixture flipped the sign of w_pre_i from ", ref%w_pre_i, " to ", state%w_pre_i
+            call test_failed(error, trim(message))
+            return
+         end if
+         ! The pruning chain is only live off the switch's plateaus
+         call check_seed_floor(error, tag, "pruning channel", "abs(f_wleb_ds)", &
+                               abs(state%f_wleb_ds), seed_fd_live_min)
+         call check_seed_floor(error, tag, "pruning channel", "abs(f_wleb_d2S)", &
+                               abs(state%f_wleb_d2S), seed_fd_live_min)
+         call check_seed_floor(error, tag, "pruning channel", "abs(wleb_prune_factor)", &
+                               abs(state%wleb_prune_factor), seed_fd_live_min)
+         if (allocated(error)) return
+      end if
+   end subroutine check_seed_guards
+
+   !> Compare one tangent component against its central difference
+   !>
+   !> @param[inout] error  Error handle
+   !> @param[in]    tag    Fixture and step description
+   !> @param[in]    name   Field name, so a failure localises to one field
+   !> @param[in]    got    Analytic tangent
+   !> @param[in]    want   Central-difference reference
+   subroutine check_seed_fd(error, tag, name, got, want)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> Field name
+      character(len=*), intent(in) :: name
+      !> Analytic tangent and its central-difference reference
+      real(wp), intent(in) :: got, want
+
+      real(wp) :: dev
+      character(len=256) :: message
+
+      if (allocated(error)) return
+      dev = rel_deviation(got, want)
+      if (dev <= seed_fd_tol) return
+      write (message, "(5a,es12.4,a,es24.16,a,es24.16)") "seed tangent [", tag, "] ", name, &
+         " differs from its central difference by ", dev, ": ", got, " vs ", want
+      call test_failed(error, trim(message))
+   end subroutine check_seed_fd
+
+   !> `check_seed_fd` over a vector field, with the component in the message
+   !>
+   !> @param[inout] error  Error handle
+   !> @param[in]    tag    Fixture and step description
+   !> @param[in]    name   Field name
+   !> @param[in]    got    Analytic tangent
+   !> @param[in]    want   Central-difference reference
+   subroutine check_seed_fd_vec(error, tag, name, got, want)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> Field name
+      character(len=*), intent(in) :: name
+      !> Analytic tangent and its central-difference reference
+      real(wp), intent(in) :: got(:), want(:)
+
+      character(len=64) :: elem
+      integer :: i
+
+      do i = 1, size(got)
+         write (elem, "(a,i0,a)") name//"(", i, ")"
+         call check_seed_fd(error, tag, trim(elem), got(i), want(i))
+         if (allocated(error)) return
+      end do
+   end subroutine check_seed_fd_vec
+
+   !> `check_seed_fd` over a matrix field, with the element in the message
+   !>
+   !> @param[inout] error  Error handle
+   !> @param[in]    tag    Fixture and step description
+   !> @param[in]    name   Field name
+   !> @param[in]    got    Analytic tangent
+   !> @param[in]    want   Central-difference reference
+   subroutine check_seed_fd_mat(error, tag, name, got, want)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> Field name
+      character(len=*), intent(in) :: name
+      !> Analytic tangent and its central-difference reference
+      real(wp), intent(in) :: got(:, :), want(:, :)
+
+      character(len=64) :: elem
+      integer :: i, j
+
+      do j = 1, size(got, 2)
+         do i = 1, size(got, 1)
+            write (elem, "(a,i0,a,i0,a)") name//"(", i, ",", j, ")"
+            call check_seed_fd(error, tag, trim(elem), got(i, j), want(i, j))
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine check_seed_fd_mat
+
+   !> Fail unless the channels under test actually carry a signal
+   !>
+   !> A tangent field that is zero for a trivial reason passes any tolerance, so
+   !> the finite-difference reference of every field that is expected to move is
+   !> required to be non-negligible before it is compared. Fields that are
+   !> switched off in this configuration are excluded here and are still
+   !> compared -- against a reference of zero, which is the assertion that they
+   !> stay off.
+   !>
+   !> @param[inout] error           Error handle
+   !> @param[in]    tag             Fixture and step description
+   !> @param[in]    fd              Central-difference reference
+   !> @param[in]    want_curvature  Whether the curvature block is requested
+   !> @param[in]    use_wleb_prune  Whether Lebedev-weight pruning is active
+   subroutine check_seed_tangent_live(error, tag, fd, want_curvature, use_wleb_prune)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> Central-difference reference
+      type(drop_seed_state_tangent_type), intent(in) :: fd
+      !> Configuration flags
+      logical, intent(in) :: want_curvature, use_wleb_prune
+
+      if (allocated(error)) return
+      call check_seed_floor(error, tag, "reference", "dA_mat", maxval(abs(fd%dA_mat)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dq1", maxval(abs(fd%dq1)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dq2", maxval(abs(fd%dq2)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dAq1", maxval(abs(fd%dAq1)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dAq2", maxval(abs(fd%dAq2)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dB11", abs(fd%dB11), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dB12", abs(fd%dB12), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dB22", abs(fd%dB22), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "ddet_B", abs(fd%ddet_B), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dBinv11", abs(fd%dBinv11), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dBinv12", abs(fd%dBinv12), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dBinv22", abs(fd%dBinv22), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dlambda_switch", &
+                            abs(fd%dlambda_switch), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dvmin_B", maxval(abs(fd%dvmin_B)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "du_switch", maxval(abs(fd%du_switch)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dtau1", maxval(abs(fd%dtau1)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dtau2", maxval(abs(fd%dtau2)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dw1", maxval(abs(fd%dw1)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dw2", maxval(abs(fd%dw2)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dy1", maxval(abs(fd%dy1)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dy2", maxval(abs(fd%dy2)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dcross_vec", &
+                            maxval(abs(fd%dcross_vec)), seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dinv_J", abs(fd%dinv_J), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dn_dot_q1", abs(fd%dn_dot_q1), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dproj_surf", abs(fd%dproj_surf), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dv_norm_surf", abs(fd%dv_norm_surf), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dP_tan", maxval(abs(fd%dP_tan)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dAP_tan", maxval(abs(fd%dAP_tan)), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "df_crit0", abs(fd%df_crit0), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "df_crit_dS", abs(fd%df_crit_dS), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "df_foc_f0", abs(fd%df_foc_f0), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "df_foc_dS", abs(fd%df_foc_dS), &
+                            seed_fd_live_min)
+      call check_seed_floor(error, tag, "reference", "dg_norm_sq", abs(fd%dg_norm_sq), &
+                            seed_fd_live_min)
+      if (allocated(error)) return
+      if (use_wleb_prune) then
+         call check_seed_floor(error, tag, "reference", "dwleb_prune_factor", &
+                               abs(fd%dwleb_prune_factor), seed_fd_live_min)
+         if (allocated(error)) return
+      end if
+      if (want_curvature) then
+         call check_seed_floor(error, tag, "reference", "dHn", maxval(abs(fd%dHn)), &
+                               seed_fd_live_min)
+         call check_seed_floor(error, tag, "reference", "dCn", maxval(abs(fd%dCn)), &
+                               seed_fd_live_min)
+         call check_seed_floor(error, tag, "reference", "dT_curv", abs(fd%dT_curv), &
+                               seed_fd_live_min)
+         call check_seed_floor(error, tag, "reference", "dD_curv", abs(fd%dD_curv), &
+                               seed_fd_live_min)
+         call check_seed_floor(error, tag, "reference", "dKM_curv", abs(fd%dKM_curv), &
+                               seed_fd_live_min)
+         call check_seed_floor(error, tag, "reference", "ddisc_curv", abs(fd%ddisc_curv), &
+                               seed_fd_live_min)
+         if (allocated(error)) return
+      end if
+   end subroutine check_seed_tangent_live
+
+   !> Compare every component of `drop_seed_state_tangent_type` against the
+   !> central difference of the corresponding derived field
+   !>
+   !> @param[inout] error   Error handle
+   !> @param[in]    tag     Fixture and step description
+   !> @param[in]    dstate  Analytic state tangent from `apply_seed`
+   !> @param[in]    fd      Central-difference reference
+   subroutine check_seed_tangent_fields(error, tag, dstate, fd)
+      !> Error handle
+      type(error_type), allocatable, intent(inout) :: error
+      !> Fixture and step description
+      character(len=*), intent(in) :: tag
+      !> Analytic state tangent and its central-difference reference
+      type(drop_seed_state_tangent_type), intent(in) :: dstate, fd
+
+      call check_seed_fd_mat(error, tag, "dA_mat", dstate%dA_mat, fd%dA_mat)
+      call check_seed_fd_vec(error, tag, "dq1", dstate%dq1, fd%dq1)
+      call check_seed_fd_vec(error, tag, "dq2", dstate%dq2, fd%dq2)
+      ! The scratch inside `apply_seed` carries `dA . q` only; the state tangent
+      ! must add `A . dq`, and this is the assertion that sees the difference
+      call check_seed_fd_vec(error, tag, "dAq1", dstate%dAq1, fd%dAq1)
+      call check_seed_fd_vec(error, tag, "dAq2", dstate%dAq2, fd%dAq2)
+      call check_seed_fd(error, tag, "dB11", dstate%dB11, fd%dB11)
+      call check_seed_fd(error, tag, "dB12", dstate%dB12, fd%dB12)
+      call check_seed_fd(error, tag, "dB22", dstate%dB22, fd%dB22)
+      call check_seed_fd(error, tag, "ddet_B", dstate%ddet_B, fd%ddet_B)
+      call check_seed_fd(error, tag, "dBinv11", dstate%dBinv11, fd%dBinv11)
+      call check_seed_fd(error, tag, "dBinv12", dstate%dBinv12, fd%dBinv12)
+      call check_seed_fd(error, tag, "dBinv22", dstate%dBinv22, fd%dBinv22)
+      ! Two independent routes to one scalar. `dstate%dlambda_switch` is the
+      ! basis-invariant `u . (dM_tan u)`, while the reference differences the
+      ! primal `lambda_switch`, which `eig_2x2_symmetric` builds from
+      ! `trace*trace - 4*det`. The cancellation floor of that construction
+      ! scales as `eps/sqrt_disc_B**2`, which at the fixture's gap is orders
+      ! below the finite-difference noise, so the ordinary tolerance covers it.
+      call check_seed_fd(error, tag, "dlambda_switch", dstate%dlambda_switch, &
+                         fd%dlambda_switch)
+      call check_seed_fd_vec(error, tag, "dvmin_B", dstate%dvmin_B, fd%dvmin_B)
+      call check_seed_fd_vec(error, tag, "du_switch", dstate%du_switch, fd%du_switch)
+      call check_seed_fd_vec(error, tag, "dtau1", dstate%dtau1, fd%dtau1)
+      call check_seed_fd_vec(error, tag, "dtau2", dstate%dtau2, fd%dtau2)
+      call check_seed_fd_vec(error, tag, "dw1", dstate%dw1, fd%dw1)
+      call check_seed_fd_vec(error, tag, "dw2", dstate%dw2, fd%dw2)
+      call check_seed_fd_vec(error, tag, "dy1", dstate%dy1, fd%dy1)
+      call check_seed_fd_vec(error, tag, "dy2", dstate%dy2, fd%dy2)
+      call check_seed_fd_vec(error, tag, "dcross_vec", dstate%dcross_vec, fd%dcross_vec)
+      call check_seed_fd(error, tag, "dinv_J", dstate%dinv_J, fd%dinv_J)
+      call check_seed_fd(error, tag, "dn_dot_q1", dstate%dn_dot_q1, fd%dn_dot_q1)
+      call check_seed_fd(error, tag, "dproj_surf", dstate%dproj_surf, fd%dproj_surf)
+      call check_seed_fd(error, tag, "dv_norm_surf", dstate%dv_norm_surf, fd%dv_norm_surf)
+      call check_seed_fd_mat(error, tag, "dP_tan", dstate%dP_tan, fd%dP_tan)
+      call check_seed_fd_mat(error, tag, "dAP_tan", dstate%dAP_tan, fd%dAP_tan)
+      call check_seed_fd(error, tag, "df_crit0", dstate%df_crit0, fd%df_crit0)
+      call check_seed_fd(error, tag, "df_crit_dS", dstate%df_crit_dS, fd%df_crit_dS)
+      call check_seed_fd(error, tag, "df_foc_f0", dstate%df_foc_f0, fd%df_foc_f0)
+      call check_seed_fd(error, tag, "df_foc_dS", dstate%df_foc_dS, fd%df_foc_dS)
+      ! Zero on both sides when pruning is off, which is the assertion that the
+      ! chain stays switched off
+      call check_seed_fd(error, tag, "dwleb_prune_factor", dstate%dwleb_prune_factor, &
+                         fd%dwleb_prune_factor)
+      call check_seed_fd(error, tag, "dg_norm_sq", dstate%dg_norm_sq, fd%dg_norm_sq)
+      ! Likewise zero on both sides without `want_curvature`, which is what the
+      ! early return in `apply_seed` and the type's default initialisation claim
+      call check_seed_fd_vec(error, tag, "dHn", dstate%dHn, fd%dHn)
+      call check_seed_fd_vec(error, tag, "dCn", dstate%dCn, fd%dCn)
+      call check_seed_fd(error, tag, "dT_curv", dstate%dT_curv, fd%dT_curv)
+      call check_seed_fd(error, tag, "dD_curv", dstate%dD_curv, fd%dD_curv)
+      call check_seed_fd(error, tag, "dKM_curv", dstate%dKM_curv, fd%dKM_curv)
+      call check_seed_fd(error, tag, "ddisc_curv", dstate%ddisc_curv, fd%ddisc_curv)
+   end subroutine check_seed_tangent_fields
+
+   !> Central-difference the derived seed state along the seed-induced tangent
+   !>
+   !> `build_seed_state` is a map from the `Inputs` block to the `Derived`
+   !> block, and `apply_seed`'s optional `dstate` claims to be its directional
+   !> derivative along the input tangent the seed induces. This displaces the
+   !> inputs by `+/- h` along that tangent, rebuilds the state at each end and
+   !> compares `(F(+h) - F(-h))/(2h)` against every component of
+   !> `drop_seed_state_tangent_type`, plus the two `drop_seed_result_type`
+   !> channels that share the same displaced states.
+   !>
+   !> @param[out] error           Error handle
+   !> @param[in]  want_curvature  Whether the curvature block is requested
+   !> @param[in]  use_wleb_prune  Whether Lebedev-weight pruning is active
+   subroutine run_seed_state_tangent(error, want_curvature, use_wleb_prune)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      !> Configuration flags
+      logical, intent(in) :: want_curvature, use_wleb_prune
+
+      type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit, f_foc, f_wleb
+      type(drop_seed_state_type) :: state, state_p, state_m
+      type(drop_seed_result_type) :: res
+      type(drop_seed_state_tangent_type) :: dstate, fd
+      real(wp) :: dlsf1_r(ndim), dlsf2_rr(ndim, ndim), dr(ndim), dlambda
+      real(wp) :: h, inv2h, fd_gnorm, fd_jval
+      integer :: status, status_p, status_m, istep
+      character(len=64) :: tag
+
+      call seed_state_switches(f_crit, f_foc, f_wleb)
+      call seed_state_fixture(want_curvature, state)
+      call seed_state_seed(dlsf1_r, dlsf2_rr, dr, dlambda)
+
+      call build_seed_state(state, f_crit, f_foc, f_wleb, use_wleb_prune, status)
+      call check_seed_guards(error, "base point", state, state, status, use_wleb_prune)
+      if (allocated(error)) return
+
+      call apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res, dstate)
+
+      do istep = 1, size(seed_fd_steps)
+         h = seed_fd_steps(istep)
+         inv2h = 0.5_wp/h
+         write (tag, "(a,l1,a,l1,a,es9.2)") "curv ", want_curvature, ", prune ", &
+            use_wleb_prune, ", h ", h
+
+         call displace_seed_state(want_curvature, res, dlambda, h, state_p)
+         call build_seed_state(state_p, f_crit, f_foc, f_wleb, use_wleb_prune, status_p)
+         call check_seed_guards(error, trim(tag)//", +h", state_p, state, status_p, &
+                                use_wleb_prune)
+         if (allocated(error)) return
+
+         call displace_seed_state(want_curvature, res, dlambda, -h, state_m)
+         call build_seed_state(state_m, f_crit, f_foc, f_wleb, use_wleb_prune, status_m)
+         call check_seed_guards(error, trim(tag)//", -h", state_m, state, status_m, &
+                                use_wleb_prune)
+         if (allocated(error)) return
+
+         call seed_state_central_difference(state_p, state_m, inv2h, fd)
+         call check_seed_tangent_live(error, trim(tag), fd, want_curvature, use_wleb_prune)
+         if (allocated(error)) return
+         call check_seed_tangent_fields(error, trim(tag), dstate, fd)
+         if (allocated(error)) return
+
+         ! Two `drop_seed_result_type` channels the same displaced states pin
+         fd_gnorm = (state_p%g_norm - state_m%g_norm)*inv2h
+         call check_seed_fd(error, trim(tag), "res%d_gnorm", res%d_gnorm, fd_gnorm)
+         fd_jval = (norm2(state_p%cross_vec) - norm2(state_m%cross_vec))*inv2h
+         call check_seed_fd(error, trim(tag), "res%dJ", res%dJ, fd_jval)
+         if (allocated(error)) return
+      end do
+   end subroutine run_seed_state_tangent
+
+   !> Seed-state tangent without curvature and without Lebedev-weight pruning
+   subroutine test_seed_state_tangent_plain(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_seed_state_tangent(error, .false., .false.)
+   end subroutine test_seed_state_tangent_plain
+
+   !> Seed-state tangent with Lebedev-weight pruning, without curvature
+   subroutine test_seed_state_tangent_prune(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_seed_state_tangent(error, .false., .true.)
+   end subroutine test_seed_state_tangent_prune
+
+   !> Seed-state tangent with curvature, without Lebedev-weight pruning
+   subroutine test_seed_state_tangent_curvature(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_seed_state_tangent(error, .true., .false.)
+   end subroutine test_seed_state_tangent_curvature
+
+   !> Seed-state tangent with curvature and Lebedev-weight pruning
+   subroutine test_seed_state_tangent_curvature_prune(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_seed_state_tangent(error, .true., .true.)
+   end subroutine test_seed_state_tangent_curvature_prune
 
 end module test_cavity_drop_primitives

@@ -20,13 +20,15 @@
 !>
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
-   use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
+   use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric, &
+      & eig_2x2_offdiag_tol
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_type
 
    implicit none(type, external)
    private
 
    public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type
+   public :: drop_seed_state_tangent_type
    public :: build_seed_state, apply_seed, compute_branch_phi_adj
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
@@ -50,6 +52,10 @@ module moist_cavity_drop_derivatives_kernel
    !> individual principal-curvature derivatives are ill-defined at `k1 = k2`,
    !> while the mean and Gaussian curvatures stay smooth
    real(wp), parameter :: seed_curv_disc_guard = 1.0e-10_wp
+   !> Below this eigenvalue gap of `B` the switched eigenvector is treated as
+   !> degenerate. `d(u_switch)` scales as `1/gap`, and at `gap = 0` the
+   !> eigenvector itself is arbitrary, so no derivative exists to compute
+   real(wp), parameter :: seed_eig_gap_guard = 1.0e-10_wp
 
    !> Per-grid point forward state consumed by [[apply_seed]]
    !>
@@ -90,6 +96,15 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: Binv11 = 0.0_wp, Binv12 = 0.0_wp, Binv22 = 0.0_wp
       !> Eigenvector of `B` for the switched eigenvalue, lifted to 3D
       real(wp) :: u_switch(3) = 0.0_wp
+      !> Whether `eig_2x2_symmetric` built `vmin_B` from `[B12, lambda - B11]`
+      !> rather than falling back to a canonical basis vector; `vmin_norm` is
+      !> meaningful only in the first case
+      logical :: vmin_offdiag = .false.
+      !> Switched (smaller) eigenvalue of `B` and the eigenvalue gap
+      !> `lambda_max - lambda_min = sqrt(disc)`
+      real(wp) :: lambda_switch = 0.0_wp, sqrt_disc_B = 0.0_wp
+      !> Normalised 2D eigenvector of `B` and the norm it was divided by
+      real(wp) :: vmin_B(2) = 0.0_wp, vmin_norm = 0.0_wp
       !> Sphere tangent frame and its projection into the surface tangent plane
       real(wp) :: t1_vec(3) = 0.0_wp, t2_vec(3) = 0.0_wp
       real(wp) :: tau1(2) = 0.0_wp, tau2(2) = 0.0_wp
@@ -105,12 +120,21 @@ module moist_cavity_drop_derivatives_kernel
       !> Switching-function values and slopes
       real(wp) :: f_crit0 = 0.0_wp, f_crit_dS = 0.0_wp
       real(wp) :: f_foc_f0 = 0.0_wp, f_foc_dS = 0.0_wp
+      !> Switching-function curvatures, consumed by the second-order chain
+      real(wp) :: f_crit_d2S = 0.0_wp, f_foc_d2S = 0.0_wp
       !> Lebedev-weight pruning chain factor
       real(wp) :: wleb_prune_factor = 1.0_wp
+      !> Whether Lebedev-weight pruning was active when the state was built
+      logical :: use_wleb_prune = .false.
+      !> Pre-pruning weight product, and the pruning-switch slope and curvature
+      !> at `|w_pre_i|`; all zero when pruning is off
+      real(wp) :: w_pre_i = 0.0_wp, f_wleb_ds = 0.0_wp, f_wleb_d2S = 0.0_wp
       !> Shape-operator invariants (only when `want_curvature`)
       real(wp) :: Hn(3) = 0.0_wp, Cn(3) = 0.0_wp
       real(wp) :: T_curv = 0.0_wp, D_curv = 0.0_wp
       real(wp) :: KM_curv = 0.0_wp, disc_curv = 0.0_wp
+      !> Adjugate of the level-set Hessian (only when `want_curvature`)
+      real(wp) :: adjH(3, 3) = 0.0_wp
 
    end type drop_seed_state_type
 
@@ -127,6 +151,90 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of the principal curvatures (zero unless `want_curvature`)
       real(wp) :: dk1 = 0.0_wp, dk2 = 0.0_wp
    end type drop_seed_result_type
+
+   !> Tangent of the derived block of [[drop_seed_state_type]] along one seed
+   !>
+   !> [[apply_seed]] forms this entire chain as local scratch on its way to
+   !> [[drop_seed_result_type]] and then discards it. The second-order path
+   !> needs it, so [[apply_seed]] hands it back through an optional argument
+   !> rather than through a second routine: two copies of the same expression
+   !> are free to contract differently under `-ffp-contract=fast`, and the
+   !> shipped first-order path must stay bit-for-bit unchanged.
+   !>
+   !> One seed direction per instance. Only the derived fields that
+   !> [[apply_seed]] reads and that are not frozen appear here:
+   !>
+   !>   * `dn_surf`, `d_gnorm` and `dH` live on [[drop_seed_result_type]] and
+   !>     are not duplicated
+   !>   * `dt1_vec` and `dt2_vec` are absent because they vanish identically.
+   !>     The sphere tangent frame is rigid (see the comment on `dtau1` in
+   !>     [[apply_seed]]): the anchor rides its owner sphere, so
+   !>     `anchor - owner_xyz = R_own * u_leb` is invariant under every nuclear
+   !>     direction, at every order. They become nonzero only once the radii
+   !>     themselves are geometry dependent, which is not implemented
+   !>   * `min_axis` and `want_curvature` are frozen discrete choices
+   !>
+   !> Every component is default initialised, which is load bearing rather than
+   !> stylistic: the `want_curvature` early return in [[apply_seed]] leaves the
+   !> curvature block untouched and relies on `intent(out)` default
+   !> initialisation to zero it.
+   type :: drop_seed_state_tangent_type
+
+      !* -------------------------- KKT matrix and frame -------------------------- *!
+
+      !> Sensitivity of the tangent-restricted KKT matrix `A`
+      real(wp) :: dA_mat(3, 3) = 0.0_wp
+      !> Sensitivity of the surface tangent frame
+      real(wp) :: dq1(3) = 0.0_wp, dq2(3) = 0.0_wp
+      !> Sensitivity of `A` applied to the tangent frame, both product-rule terms
+      real(wp) :: dAq1(3) = 0.0_wp, dAq2(3) = 0.0_wp
+      !> Sensitivity of `B = Q^T A Q` and of its determinant
+      real(wp) :: dB11 = 0.0_wp, dB12 = 0.0_wp, dB22 = 0.0_wp, ddet_B = 0.0_wp
+      !> Sensitivity of `B^-1`
+      real(wp) :: dBinv11 = 0.0_wp, dBinv12 = 0.0_wp, dBinv22 = 0.0_wp
+      !> Sensitivity of the switched eigenvalue, from the basis-invariant route
+      real(wp) :: dlambda_switch = 0.0_wp
+      !> Sensitivity of the switched eigenvector, in the `B` basis and lifted
+      real(wp) :: dvmin_B(2) = 0.0_wp, du_switch(3) = 0.0_wp
+
+      !* -------------------- Lifted tangents and the Jacobian -------------------- *!
+
+      !> Sensitivity of the sphere frame projected onto the surface frame
+      real(wp) :: dtau1(2) = 0.0_wp, dtau2(2) = 0.0_wp
+      !> Sensitivity of the `B^-1` images of those projections
+      real(wp) :: dw1(2) = 0.0_wp, dw2(2) = 0.0_wp
+      !> Sensitivity of the lifted tangent vectors and of their cross product
+      real(wp) :: dy1(3) = 0.0_wp, dy2(3) = 0.0_wp, dcross_vec(3) = 0.0_wp
+      !> Sensitivity of `1/J`
+      real(wp) :: dinv_J = 0.0_wp
+
+      !* ----------------------- Projector and Gram-Schmidt ----------------------- *!
+
+      !> Sensitivity of the Gram-Schmidt data behind `q1`
+      real(wp) :: dn_dot_q1 = 0.0_wp, dproj_surf = 0.0_wp, dv_norm_surf = 0.0_wp
+      !> Sensitivity of the tangent projector and of `A P`
+      real(wp) :: dP_tan(3, 3) = 0.0_wp, dAP_tan(3, 3) = 0.0_wp
+
+      !* ------------------------- Switching and weights -------------------------- *!
+
+      !> Sensitivity of the switching values and of their slopes
+      real(wp) :: df_crit0 = 0.0_wp, df_crit_dS = 0.0_wp
+      real(wp) :: df_foc_f0 = 0.0_wp, df_foc_dS = 0.0_wp
+      !> Sensitivity of the Lebedev-weight pruning factor; identically zero when
+      !> pruning is off
+      real(wp) :: dwleb_prune_factor = 0.0_wp
+      !> Sensitivity of `|grad S|^2`
+      real(wp) :: dg_norm_sq = 0.0_wp
+
+      !* -------------------------- Curvature invariants -------------------------- *!
+
+      !> Sensitivity of the Hessian and adjugate normal contractions
+      real(wp) :: dHn(3) = 0.0_wp, dCn(3) = 0.0_wp
+      !> Sensitivity of the shape-operator invariants
+      real(wp) :: dT_curv = 0.0_wp, dD_curv = 0.0_wp
+      real(wp) :: dKM_curv = 0.0_wp, ddisc_curv = 0.0_wp
+
+   end type drop_seed_state_tangent_type
 
    !> Surface adjoints reduced to the channels the seed loop actually reads
    !>
@@ -186,7 +294,9 @@ contains
       real(wp) :: lambda_switch, beta_max
       real(wp) :: vmin_B(2), vmax_B(2)
       !> Lebedev pruning scratch
-      real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds
+      real(wp) :: w_pre_i, f_wleb_s, f_wleb_ds, f_wleb_d2s
+      !> Off-diagonal entry of the unnormalised `vmin_B`
+      real(wp) :: vmin_off
       !> Adjugate of the level-set Hessian
       real(wp) :: adjH(3, 3)
       !> Trace and normal contractions of the Hessian
@@ -200,7 +310,7 @@ contains
          status = seed_state_singular_gradient
          return
       end if
-      call f_crit%eval(state%g_norm, state%f_crit0, state%f_crit_dS)
+      call f_crit%eval(state%g_norm, state%f_crit0, state%f_crit_dS, state%f_crit_d2S)
 
       ! A = alpha*I - lambda*H
       state%A_mat = -state%lambda_val*state%lsf2_rr
@@ -224,7 +334,26 @@ contains
       call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
       state%u_switch = vmin_B(1)*state%q1 + vmin_B(2)*state%q2
-      call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS)
+      ! Keep the eigen data the tangent needs; `vmin_norm` is the normalisation
+      ! `eig_2x2_symmetric` divided by, recomputed here rather than returned
+      state%lambda_switch = lambda_switch
+      ! The eigenvalue gap as `hypot(B11 - B22, 2 B12)`, not the algebraically
+      ! equal `beta_max - lambda_switch`. That form inherits
+      ! `eig_2x2_symmetric`'s `disc = trace^2 - 4 det`, a cancellation that
+      ! loses the entire gap once it drops below `sqrt(eps)*|trace|`: at
+      ! `B = [[1.3, 1e-8], [1e-8, 1.3]]` it returns exactly zero while `|B12|`
+      ! is six orders above that routine's own diagonal-branch threshold, so
+      ! the branch test below is no protection for the division on it
+      state%sqrt_disc_B = hypot(state%B11 - state%B22, 2.0_wp*state%B12)
+      state%vmin_B = vmin_B
+      state%vmin_offdiag = abs(state%B12) > eig_2x2_offdiag_tol
+      if (state%vmin_offdiag) then
+         vmin_off = lambda_switch - state%B11
+         state%vmin_norm = sqrt(state%B12*state%B12 + vmin_off*vmin_off)
+      else
+         state%vmin_norm = 0.0_wp
+      end if
+      call f_foc%eval(lambda_switch, state%f_foc_f0, state%f_foc_dS, state%f_foc_d2S)
 
       state%Binv11 = state%B22/state%det_B
       state%Binv12 = -state%B12/state%det_B
@@ -268,12 +397,19 @@ contains
       state%AP_tan = matmul(state%A_mat, state%P_tan)
 
       ! d(w_pre * S)/dp = (S + |w_pre|*S') * d(w_pre)/dp
+      state%use_wleb_prune = use_wleb_prune
       if (use_wleb_prune) then
          w_pre_i = state%anchor_wleb0*state%cpjac_scal0*state%w_f0
-         call f_wleb%eval(abs(w_pre_i), f_wleb_s, f_wleb_ds)
+         call f_wleb%eval(abs(w_pre_i), f_wleb_s, f_wleb_ds, f_wleb_d2s)
          state%wleb_prune_factor = f_wleb_s + abs(w_pre_i)*f_wleb_ds
+         state%w_pre_i = w_pre_i
+         state%f_wleb_ds = f_wleb_ds
+         state%f_wleb_d2S = f_wleb_d2s
       else
          state%wleb_prune_factor = 1.0_wp
+         state%w_pre_i = 0.0_wp
+         state%f_wleb_ds = 0.0_wp
+         state%f_wleb_d2S = 0.0_wp
       end if
 
       ! Frame-independent shape-operator invariants of the level set:
@@ -296,6 +432,7 @@ contains
             adjH(2, 1) = adjH(1, 2)
             adjH(3, 1) = adjH(1, 3)
             adjH(3, 2) = adjH(2, 3)
+            state%adjH = adjH
 
             state%Cn = matmul(adjH, n)
             nCn = dot_product(n, state%Cn)
@@ -321,7 +458,8 @@ contains
    !> @param[in]  dr       Induced motion of the projected point
    !> @param[in]  dlambda  Induced change of the Lagrange multiplier
    !> @param[out] res      Linear response of the per-point map
-   pure subroutine apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res)
+   !> @param[out] dstate   Tangent of the derived seed state along this seed
+   pure subroutine apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Seed perturbation of the level-set gradient and Hessian
@@ -330,6 +468,9 @@ contains
       real(wp), intent(in) :: dr(3), dlambda
       !> Linear response
       type(drop_seed_result_type), intent(out) :: res
+      !> Tangent of the derived block of `state`; every field behind this
+      !> argument is computed only when it is present
+      type(drop_seed_state_tangent_type), intent(out), optional :: dstate
 
       !> Sensitivity of the tangent-restricted KKT matrix
       real(wp) :: dA(3, 3)
@@ -347,6 +488,10 @@ contains
       real(wp) :: dw_pre
       !> Curvature-invariant sensitivities
       real(wp) :: dadjH(3, 3), dtrH, dnHn, dT, dnCn, dD, d_disc
+      !> Line-by-line derivative of the `eig_2x2_symmetric` construction,
+      !> needed only for `dstate`
+      real(wp) :: dtrace_B, ddisc_B, dsqrt_disc_B, dlambda_switch_eig
+      real(wp) :: dvmin_raw(2)
       !> Cartesian index
       integer :: kaxis
 
@@ -397,6 +542,69 @@ contains
                + matmul(state%P_tan, matmul(state%A_mat, dP_tan))
       dlambda_switch = dot_product(state%u_switch, matmul(dM_tan, state%u_switch))
 
+      if (present(dstate)) then
+         dstate%dA_mat = dA
+         dstate%dq1 = dq1
+         dstate%dq2 = dq2
+         ! The scratch `dAq1`/`dAq2` above carry the `dA . q` term only, because
+         ! the `dq` half rides separately in `dB11`/`dB12`/`dB22`. The state
+         ! tangent needs the full product rule
+         dstate%dAq1 = dAq1 + matmul(state%A_mat, dq1)
+         dstate%dAq2 = dAq2 + matmul(state%A_mat, dq2)
+         dstate%dB11 = dB11
+         dstate%dB12 = dB12
+         dstate%dB22 = dB22
+         dstate%ddet_B = ddet_B
+         dstate%dBinv11 = dBinv11
+         dstate%dBinv12 = dBinv12
+         dstate%dBinv22 = dBinv22
+         dstate%dP_tan = dP_tan
+         dstate%dAP_tan = matmul(dA, state%P_tan) + matmul(state%A_mat, dP_tan)
+         dstate%dlambda_switch = dlambda_switch
+
+         ! d(v_min) by differentiating the shipped `eig_2x2_symmetric`
+         ! construction line by line, which reproduces its sign convention
+         ! `v_min = [B12, lambda_min - B11]/norm` automatically.
+         !
+         ! The two guards are independent, and each covers a case the other
+         ! does not. Off the off-diagonal branch the primal returns a canonical
+         ! basis vector, which is piecewise constant, so the derivative is zero
+         ! rather than this formula -- and there `vmin_norm` is not even the
+         ! norm of a vector the primal used. A vanishing gap is the separate
+         ! degeneracy: the eigenvector is arbitrary at `k1 = k2`, so zero is the
+         ! guard's answer, the same one `seed_curv_disc_guard` gives, not a
+         ! claim that the derivative is zero
+         if (state%vmin_offdiag .and. state%sqrt_disc_B > seed_eig_gap_guard) then
+            dtrace_B = dB11 + dB22
+            ! `d(disc)` as `d((B11 - B22)^2 + 4 B12^2)`. Algebraically identical
+            ! to the `trace^2 - 4 det` form, but that one loses relative
+            ! accuracy exactly where the gap is small and this quantity matters
+            ddisc_B = 2.0_wp*(state%B11 - state%B22)*(dB11 - dB22) &
+                      + 8.0_wp*state%B12*dB12
+            dsqrt_disc_B = ddisc_B/(2.0_wp*state%sqrt_disc_B)
+            dlambda_switch_eig = 0.5_wp*(dtrace_B - dsqrt_disc_B)
+            dvmin_raw(1) = dB12
+            dvmin_raw(2) = dlambda_switch_eig - dB11
+            dstate%dvmin_B = (dvmin_raw &
+                              - state%vmin_B*dot_product(state%vmin_B, dvmin_raw)) &
+                             /state%vmin_norm
+         else
+            dstate%dvmin_B = 0.0_wp
+         end if
+         dstate%du_switch = dstate%dvmin_B(1)*state%q1 + state%vmin_B(1)*dq1 &
+                            + dstate%dvmin_B(2)*state%q2 + state%vmin_B(2)*dq2
+
+         dstate%dn_dot_q1 = res%dn_surf(state%min_axis)
+         dstate%dproj_surf = -2.0_wp*state%n_dot_q1*dstate%dn_dot_q1
+         ! Mirror the primal `max(proj_surf, 1e-30)` clamp: once it bites the
+         ! norm is constant, exactly as the `dq1` branch above assumes
+         if (state%proj_surf > 1.0e-30_wp) then
+            dstate%dv_norm_surf = dstate%dproj_surf/(2.0_wp*state%v_norm_surf)
+         else
+            dstate%dv_norm_surf = 0.0_wp
+         end if
+      end if
+
       ! The sphere tangent frame is rigid, so dt1 = dt2 = 0
       dtau1(1) = dot_product(dq1, state%t1_vec)
       dtau1(2) = dot_product(dq2, state%t1_vec)
@@ -439,6 +647,31 @@ contains
          res%dxi = 0.0_wp
       end if
 
+      if (present(dstate)) then
+         dstate%dtau1 = dtau1
+         dstate%dtau2 = dtau2
+         dstate%dw1 = dw1
+         dstate%dw2 = dw2
+         dstate%dy1 = dy1
+         dstate%dy2 = dy2
+         dstate%dcross_vec = dcross
+         dstate%dinv_J = -res%dJ*state%inv_J*state%inv_J
+         dstate%dg_norm_sq = 2.0_wp*state%g_norm*res%d_gnorm
+         dstate%df_crit0 = state%f_crit_dS*res%d_gnorm
+         dstate%df_crit_dS = state%f_crit_d2S*res%d_gnorm
+         dstate%df_foc_f0 = state%f_foc_dS*dlambda_switch
+         dstate%df_foc_dS = state%f_foc_d2S*dlambda_switch
+         ! wleb_prune_factor = S(|w|) + |w| S'(|w|), so with
+         ! d|w| = sign(w_pre_i) * dw_pre the chain collapses to one factor
+         if (state%use_wleb_prune) then
+            dstate%dwleb_prune_factor = sign(1.0_wp, state%w_pre_i)*dw_pre &
+                                        *(2.0_wp*state%f_wleb_ds &
+                                          + abs(state%w_pre_i)*state%f_wleb_d2S)
+         else
+            dstate%dwleb_prune_factor = 0.0_wp
+         end if
+      end if
+
       if (.not. state%want_curvature) return
 
       associate (H => state%lsf2_rr, n => state%n_surf, dH => res%dH)
@@ -473,6 +706,15 @@ contains
          end if
          res%dk1 = 0.5_wp*dT + d_disc
          res%dk2 = 0.5_wp*dT - d_disc
+
+         if (present(dstate)) then
+            dstate%dHn = matmul(dH, n) + matmul(H, res%dn_surf)
+            dstate%dCn = matmul(dadjH, n) + matmul(state%adjH, res%dn_surf)
+            dstate%dT_curv = dT
+            dstate%dD_curv = dD
+            dstate%dKM_curv = 0.5_wp*dT
+            dstate%ddisc_curv = d_disc
+         end if
       end associate
 
    end subroutine apply_seed
