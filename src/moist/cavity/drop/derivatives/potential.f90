@@ -10,12 +10,11 @@
 !> in [[moist_cavity_drop_derivatives_kernel]]
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_surface_weights_type, build_seed_state, seed_state_ok
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, seed_normal_channel, &
       & seed_jet_basis
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
@@ -126,7 +125,8 @@ contains
       real(wp) :: lambda_val
       !> Bordered KKT sensitivity system
       real(wp) :: kkt_rhs(4, 4)
-      integer(lapack_ik) :: kkt_info
+      !> Factorization reused by every solve at this grid point
+      type(drop_kkt_factor_type) :: kkt_fac
       !> Point-local level-set adjoints built from the 13 jet seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
       !> Folded surface adjoints and the branch objective adjoint
@@ -198,12 +198,10 @@ contains
          kkt_rhs(1, 2) = lambda_val
          kkt_rhs(2, 3) = lambda_val
          kkt_rhs(3, 4) = lambda_val
-         call drop_kkt_solve(phi2_rr - lambda_val*lsf2_rr, lsf1_r, kkt_rhs, kkt_info)
-         if (kkt_info /= 0_lapack_ik) then
-            call fatal_error(error, &
-                             "contract_surface_lsf_weights: KKT sensitivity solve failed")
-            return
-         end if
+         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, error)
+         if (allocated(error)) return
+         call kkt_fac%solve(kkt_rhs, error)
+         if (allocated(error)) return
 
          call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)

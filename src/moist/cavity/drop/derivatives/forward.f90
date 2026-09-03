@@ -10,11 +10,10 @@
 !> are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
-   use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
    implicit none(type, external)
 
 contains
@@ -75,8 +74,8 @@ contains
       logical :: do_timing
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type) :: abort
-      !> Per-thread LSF evaluation failure, handed to the latch
-      type(error_type), allocatable :: lsf_error
+      !> Per-thread failure on its way to the latch
+      type(error_type), allocatable :: worker_error
 
       !> Pre-resolved timer handles for the per-grid point hot loop
       integer :: h_grad, h_prim, h_pos, h_disp, h_dist, h_norm, h_cpj, h_gw, &
@@ -99,7 +98,8 @@ contains
       real(wp) :: G_lagrangian(3), H_lagrangian(3, 3)
       real(wp) :: kkt_rhs(4, 1)
       real(wp) :: rhs_vec(4)
-      integer(lapack_ik) :: kkt_info
+      !> Factorization reused by every solve at this grid point
+      type(drop_kkt_factor_type) :: kkt_fac
       real(wp), allocatable :: kkt_rhs_batch(:, :)
 
       !> swi: Rho derivatives
@@ -286,7 +286,7 @@ contains
       !$omp& iatom, iaxis, jaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
       !$omp& lsf1_rA, lsf2_r_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
       !$omp& G_lagrangian, H_lagrangian, kkt_rhs, rhs_vec, &
-      !$omp& kkt_info, rho_unit, &
+      !$omp& kkt_fac, rho_unit, &
       !$omp& delta_matrix, r_iI_vec, r_iI_norm, r_hat_dot_r, &
       !$omp& grad_r_hat_dot_r, alpha_coeff, g_vec, g_norm_sq, g_norm, A_mat, &
       !$omp& t1_vec, t2_vec, y1, y2, cross_vec, &
@@ -307,7 +307,7 @@ contains
       !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
       !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
       !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
-      !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
+      !$omp& A_tot_local, V_tot_local, worker_error, do_timing)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
@@ -348,9 +348,9 @@ contains
          phi2_r_rA = slots%phi(thread_slot)%f2_r_rA(point, anchor, owner_idx)
 
          ! Compute SSD on-the-fly for this point
-         call slots%lsf(thread_slot)%lsf%prepare(point, lsf_error)
-         if (allocated(lsf_error)) then
-            call abort%latch_error(lsf_error, igrid)
+         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             !$omp cancel do
             cycle
          end if
@@ -416,9 +416,15 @@ contains
          end do
 
          ! Single factorization + solve for all RHS
-         call drop_kkt_solve(H_lagrangian, lsf1_r, kkt_rhs_batch(:, 1:3*n_active), kkt_info)
-         if (kkt_info /= 0_lapack_ik) then
-            call abort%latch_message("[Error] Bordered KKT sensitivity solve failed", igrid)
+         call kkt_fac%factor(H_lagrangian, lsf1_r, worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
+            !$omp cancel do
+            cycle
+         end if
+         call kkt_fac%solve(kkt_rhs_batch(:, 1:3*n_active), worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             !$omp cancel do
             cycle
          end if

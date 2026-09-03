@@ -24,15 +24,14 @@
 !>     It is contracted with a scalar weight
 !>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
-   !$ use omp_lib, only: omp_get_thread_num
-   use moist_math_lapack_kinds, only: lapack_ik
+!$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_surface_weights_type, build_seed_state, seed_state_ok, seed_weight_tol
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, seed_normal_channel, &
       & seed_jet_basis, seed_anchor, degenerate_point_error
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
@@ -68,8 +67,8 @@ contains
       integer :: thread_slot, ithread
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type) :: abort
-      !> Per-thread LSF evaluation failure
-      type(error_type), allocatable :: lsf_error
+      !> Per-thread failure on its way to the latch
+      type(error_type), allocatable :: worker_error
 
       !> Shared per-grid point sensitivity kernel state and its response
       type(drop_seed_state_type) :: state
@@ -95,7 +94,8 @@ contains
 
       !> Bordered KKT system with four field seeds and three anchor seeds
       real(wp) :: kkt_rhs(4, 7)
-      integer(lapack_ik) :: kkt_info
+      !> Factorization reused by every solve at this grid point
+      type(drop_kkt_factor_type) :: kkt_fac
 
       !> Point-local level-set adjoint weights built from the 13 field seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
@@ -137,12 +137,12 @@ contains
       !$omp& iatom, i, n_active, active_idx, state, status, &
       !$omp& point, anchor, owner_idx, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, &
       !$omp& vjp_pt, phi0, phi1_r, phi2_rr, lambda_val, &
-      !$omp& kkt_rhs, kkt_info, &
+      !$omp& kkt_rhs, kkt_fac, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
       !$omp& w_xyz_local, iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, &
-      !$omp& jj, knb, lsf_error)
+      !$omp& jj, knb, worker_error)
       thread_slot = 1
-      !$ thread_slot = omp_get_thread_num() + 1
+!$    thread_slot = omp_get_thread_num() + 1
 
       allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
       allocate (vjp_pt(3, self%nsph), source=0.0_wp)
@@ -162,14 +162,14 @@ contains
          owner_idx = self%owner(igrid)
          lambda_val = self%lambda0(igrid)
 
-         call slots%lsf(thread_slot)%lsf%prepare(point, lsf_error)
+         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
 
          ! The failure cannot be returned from inside this worksharing construct,
          ! so park it for the post-region promotion and let the flag drain the
          ! loop. The LSF's cached derivatives are substitutes; stop before
          ! reading them.
-         if (allocated(lsf_error)) then
-            call abort%latch_error(lsf_error, igrid)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             cycle
          end if
 
@@ -210,10 +210,14 @@ contains
          kkt_rhs(1, 5) = self%param%phi_alpha
          kkt_rhs(2, 6) = self%param%phi_alpha
          kkt_rhs(3, 7) = self%param%phi_alpha
-         call drop_kkt_solve(phi2_rr - lambda_val*lsf2_rr, lsf1_r, kkt_rhs, kkt_info)
-         if (kkt_info /= 0_lapack_ik) then
-            call abort%latch_message( &
-               "get_surface_gradient_drop: KKT sensitivity solve failed", igrid)
+         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
+            cycle
+         end if
+         call kkt_fac%solve(kkt_rhs, worker_error)
+         if (allocated(worker_error)) then
+            call abort%latch_error(worker_error, igrid)
             cycle
          end if
 

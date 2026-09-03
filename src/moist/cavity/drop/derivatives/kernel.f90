@@ -23,7 +23,7 @@ module moist_cavity_drop_derivatives_kernel
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_type
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type

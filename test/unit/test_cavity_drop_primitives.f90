@@ -12,8 +12,13 @@ module test_cavity_drop_primitives
                                           new_swif_smooth_step
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig, &
                                          iswig_workspace_type
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_math_lapack_gesv, only: lapack_gesv
+   use moist_math_lapack_getrf, only: lapack_getrf
+   use moist_math_lapack_getrs, only: lapack_getrs
+   use moist_math_lapack_kinds, only: lapack_ik
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_primitives
@@ -61,6 +66,16 @@ module test_cavity_drop_primitives
    real(wp), parameter :: iswig_theta_off(n_iswig_dirs) = &
                           [-0.12_wp, -0.04_wp, 0.04_wp, 0.12_wp]
 
+   !* --------------------------- bordered KKT fixtures ---------------------------- *!
+
+   !> Bordered-KKT systems exercised by the factor tests
+   integer, parameter :: kkt_ncase = 6
+   !> Right-hand sides per system; the widest batch in the gradient path
+   integer, parameter :: kkt_nrhs = 7
+
+   !> Tolerance of the `gesv` comparison, measured as `rel_deviation`
+   real(wp), parameter :: kkt_gesv_tol = 1.0e-12_wp
+
 contains
 
    !> Collect the phi primitive FD tests plus the switching nuclear gradient
@@ -92,7 +107,11 @@ contains
                   new_unittest("iswig_swi2_block_translation", &
                                test_iswig_swi2_block_translation), &
                   new_unittest("iswig_swi2_block_xi_fd", test_iswig_swi2_block_xi_fd), &
-                  new_unittest("iswig_swi2_block_guarded", test_iswig_swi2_block_guarded) &
+                  new_unittest("iswig_swi2_block_guarded", test_iswig_swi2_block_guarded), &
+                  new_unittest("kkt_factor_matches_lu", test_kkt_factor_matches_lu), &
+                  new_unittest("kkt_factor_matches_gesv", test_kkt_factor_matches_gesv), &
+                  new_unittest("kkt_factor_reuse", test_kkt_factor_reuse), &
+                  new_unittest("kkt_factor_singular", test_kkt_factor_singular) &
                   ]
    end subroutine collect_cavity_drop_primitives
 
@@ -677,7 +696,7 @@ contains
             end if
             call prim%f0(lsf0)
             call prim%f3_rr_rA(lsf1_rA=lsf1, &
-                                        lsf3_rr_rA=dummy_rr_rA)
+                               lsf3_rr_rA=dummy_rr_rA)
             analytic = sw%f1_rA(lsf0, lsf1)
 
             do atom = 1, mol_base%nat
@@ -857,7 +876,6 @@ contains
       end do
    end subroutine iswig_probes
 
-
    !> Compare the switching value and gradient against the committed fixture.
    !>
    !> `test/unit/data/iswig_swi1_golden.txt` was produced by the hand-written
@@ -959,7 +977,7 @@ contains
       integer :: stat
 
       do
-         read (unit, '(a1)', iostat=stat) first
+         read (unit, "(a1)", iostat=stat) first
          if (stat /= 0) return
          if (first /= "#") then
             backspace (unit)
@@ -987,7 +1005,7 @@ contains
 
       if (rel_deviation(got, reference) <= iswig_golden_tol) return
 
-      write (message, '(a,1x,a,1x,i0,1x,i0,a,es24.16,a,es24.16)') &
+      write (message, "(a,1x,a,1x,i0,1x,i0,a,es24.16,a,es24.16)") &
          "iSwiG golden mismatch", tag, icase, iprobe, " "//quantity//": got ", &
          got, " want ", reference
       call test_failed(error, trim(message))
@@ -1360,7 +1378,7 @@ contains
       if (err(2) < 1.0e-11_wp) return
       if (err(2) <= err(1)) return
 
-      write (message, '(a,a,a,es12.4,a,es12.4)') "iSwiG ", what, &
+      write (message, "(a,a,a,es12.4,a,es12.4)") "iSwiG ", what, &
          " finite difference diverges: ", err(1), " -> ", err(2)
       call test_failed(error, trim(message))
    end subroutine check_converges
@@ -1464,11 +1482,13 @@ contains
                                     v, 0.0_wp, hvp, dxi2)
                do iatom = 1, mol%nat
                   do axis = 1, ndim
-                     call check_exact_zero(error, hvp(axis, iatom), "translation hvp")
+                     call check(error, hvp(axis, iatom), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                                more="iSwiG translation hvp is not exactly zero")
                      if (allocated(error)) return
                   end do
                end do
-               call check_exact_zero(error, dxi2, "translation dxi2")
+               call check(error, dxi2, 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                          more="iSwiG translation dxi2 is not exactly zero")
                if (allocated(error)) return
             end do
             call work%destroy()
@@ -1525,18 +1545,22 @@ contains
 
          call iswig%swi1_rA_sparse(work, rows, owner_row, dxi)
          call iswig%swi2_rArB_sparse(work, v, rows, owner_row, dxi2, vxi=0.5_wp)
-         call check_exact_zero(error, dxi, "dxi")
+         call check(error, dxi, 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                    more="iSwiG isolated dxi is not exactly zero")
          if (allocated(error)) return
-         call check_exact_zero(error, dxi2, "dxi2")
+         call check(error, dxi2, 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                    more="iSwiG isolated dxi2 is not exactly zero")
          if (allocated(error)) return
 
          call iswig%swi1_rA(pos, 1, iswig_fd_xi, work, grad)
          call iswig_hvp_dense(iswig, pos, 1, iswig_fd_xi, v, 0.5_wp, hvp, dxi2)
          do iatom = 1, 2
             do axis = 1, ndim
-               call check_exact_zero(error, grad(axis, iatom), "isolated gradient")
+               call check(error, grad(axis, iatom), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                          more="iSwiG isolated gradient is not exactly zero")
                if (allocated(error)) return
-               call check_exact_zero(error, hvp(axis, iatom), "isolated hvp")
+               call check(error, hvp(axis, iatom), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                          more="iSwiG isolated hvp is not exactly zero")
                if (allocated(error)) return
             end do
          end do
@@ -1794,7 +1818,7 @@ contains
                      do j = 1, ndim
                         do i = 1, ndim
                            if (blk(i, ia, j, ib) == blk(j, ib, i, ia)) cycle
-                           write (message, '(a,4(1x,i0),a,es24.16,a,es24.16)') &
+                           write (message, "(a,4(1x,i0),a,es24.16,a,es24.16)") &
                               "iSwiG block is not symmetric at", i, ia, j, ib, &
                               ": ", blk(i, ia, j, ib), " vs ", blk(j, ib, i, ia)
                            call test_failed(error, trim(message))
@@ -1878,7 +1902,8 @@ contains
                         call check(error, hvp(axis), 0.0_wp, &
                                    thr_abs=1.0e-12_wp, thr_rel=0.0_wp)
                      else
-                        call check_exact_zero(error, hvp(axis), "block translation row")
+                        call check(error, hvp(axis), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                                   more="iSwiG block translation row is not exactly zero")
                      end if
                      if (allocated(error)) return
                   end do
@@ -1890,7 +1915,8 @@ contains
                end do
                macc(:) = macc(:) + mix(:, 1)
                do axis = 1, ndim
-                  call check_exact_zero(error, macc(axis), "block translation mix")
+                  call check(error, macc(axis), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                             more="iSwiG block translation mix is not exactly zero")
                   if (allocated(error)) return
                end do
                ! `swi2_rArB_sparse` has to annihilate the same translation,
@@ -1902,17 +1928,18 @@ contains
                                            vxi=0.0_wp)
                do jj = 1, work%n_nb
                   do axis = 1, ndim
-                     call check_exact_zero(error, rows2(axis, jj), &
-                                           "sparse translation row")
+                     call check(error, rows2(axis, jj), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                                more="iSwiG sparse translation row is not exactly zero")
                      if (allocated(error)) return
                   end do
                end do
                do axis = 1, ndim
-                  call check_exact_zero(error, owner_row2(axis), &
-                                        "sparse translation owner row")
+                  call check(error, owner_row2(axis), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                             more="iSwiG sparse translation owner row is not exactly zero")
                   if (allocated(error)) return
                end do
-               call check_exact_zero(error, dxi2_sp, "sparse translation dxi2")
+               call check(error, dxi2_sp, 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                          more="iSwiG sparse translation dxi2 is not exactly zero")
                if (allocated(error)) return
             end do
             call work%destroy()
@@ -2057,15 +2084,18 @@ contains
             do ia = 1, n
                do j = 1, ndim
                   do i = 1, ndim
-                     call check_exact_zero(error, blk(i, far, j, ia), "saturated row")
+                     call check(error, blk(i, far, j, ia), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                                more="iSwiG saturated row is not exactly zero")
                      if (allocated(error)) return
-                     call check_exact_zero(error, blk(i, ia, j, far), "saturated column")
+                     call check(error, blk(i, ia, j, far), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                                more="iSwiG saturated column is not exactly zero")
                      if (allocated(error)) return
                   end do
                end do
             end do
             do i = 1, ndim
-               call check_exact_zero(error, mix(i, far), "saturated mix")
+               call check(error, mix(i, far), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                          more="iSwiG saturated mix is not exactly zero")
                if (allocated(error)) return
             end do
          end if
@@ -2171,7 +2201,8 @@ contains
          do ia = 1, n
             do j = 1, ndim
                do i = 1, ndim
-                  call check_exact_zero(error, blk(i, ia, j, ib), what)
+                  call check(error, blk(i, ia, j, ib), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                             more="iSwiG "//what//" is not exactly zero")
                   if (allocated(error)) return
                end do
             end do
@@ -2179,11 +2210,13 @@ contains
       end do
       do ia = 1, n
          do i = 1, ndim
-            call check_exact_zero(error, mix(i, ia), what)
+            call check(error, mix(i, ia), 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                       more="iSwiG "//what//" is not exactly zero")
             if (allocated(error)) return
          end do
       end do
-      call check_exact_zero(error, d2xi, what)
+      call check(error, d2xi, 0.0_wp, thr_abs=0.0_wp, thr_rel=0.0_wp, &
+                 more="iSwiG "//what//" is not exactly zero")
    end subroutine check_block_zero
 
    !> Compare two 3-vectors at the block's agreement tolerance
@@ -2208,32 +2241,269 @@ contains
       do axis = 1, ndim
          if (abs(got(axis) - want(axis)) <= &
              max(iswig_block_tol, iswig_block_tol*abs(want(axis)))) cycle
-         write (message, '(a,a,i0,a,es24.16,a,es24.16)') what, " mismatch on axis ", &
+         write (message, "(a,a,i0,a,es24.16,a,es24.16)") what, " mismatch on axis ", &
             axis, ": got ", got(axis), " want ", want(axis)
          call test_failed(error, trim(message))
          return
       end do
    end subroutine check_close
 
-   !> Assert a value is exactly zero, not merely small
+   !* ------------------------------ bordered KKT tests ----------------------------- *!
+
+   !> Deterministic well-conditioned bordered-KKT system, seeded from the case index
    !>
-   !> @param[out] error Error handle
-   !> @param[in]  value Value that must be a true zero
-   !> @param[in]  what  Name for the failure message
-   subroutine check_exact_zero(error, value, what)
+   !> Every case but the last builds `H` symmetric, as the actual `phi_rr - lambda S_rr` is.
+   !> The last is asymmetric: the routine under test takes a general `(3, 3)` to test for
+   !> indexing errors.
+   !>
+   !> @param[in]  seed         Case index
+   !> @param[out] H_lagrangian Lagrangian Hessian
+   !> @param[out] lsf1_r       Level-set gradient
+   !> @param[out] rhs          Right-hand side batch
+   pure subroutine kkt_fixture(seed, H_lagrangian, lsf1_r, rhs)
+      !> Case index
+      integer, intent(in) :: seed
+      !> Lagrangian Hessian
+      real(wp), intent(out) :: H_lagrangian(3, 3)
+      !> Level-set gradient
+      real(wp), intent(out) :: lsf1_r(3)
+      !> Right-hand side batch
+      real(wp), intent(out) :: rhs(4, kkt_nrhs)
+
+      integer :: i, j
+
+      do i = 1, ndim
+         do j = 1, i
+            H_lagrangian(i, j) = sin(0.9_wp*real(7*seed + 5*i + 11*j, wp))
+            H_lagrangian(j, i) = H_lagrangian(i, j)
+         end do
+         H_lagrangian(i, i) = H_lagrangian(i, i) + 3.0_wp
+         lsf1_r(i) = 1.0_wp + 0.5_wp*sin(0.7_wp*real(13*seed + 17*i, wp))
+      end do
+      if (seed == kkt_ncase) then
+         do i = 1, ndim
+            do j = 1, i - 1
+               H_lagrangian(i, j) = H_lagrangian(i, j) &
+                                    + 0.5_wp*sin(0.3_wp*real(31*i + 37*j, wp))
+            end do
+         end do
+      end if
+      do j = 1, kkt_nrhs
+         do i = 1, 4
+            rhs(i, j) = sin(0.6_wp*real(3*seed + 19*i + 23*j, wp))
+         end do
+      end do
+   end subroutine kkt_fixture
+
+   !> Assemble the bordered matrix the way the pre-refactor helper did
+   !>
+   !> @param[in]  H_lagrangian Lagrangian Hessian
+   !> @param[in]  lsf1_r       Level-set gradient
+   !> @param[out] kkt_mat      Bordered matrix
+   pure subroutine kkt_assemble(H_lagrangian, lsf1_r, kkt_mat)
+      !> Lagrangian Hessian
+      real(wp), intent(in) :: H_lagrangian(3, 3)
+      !> Level-set gradient
+      real(wp), intent(in) :: lsf1_r(3)
+      !> Bordered matrix
+      real(wp), intent(out) :: kkt_mat(4, 4)
+
+      kkt_mat = 0.0_wp
+      kkt_mat(1:3, 1:3) = H_lagrangian
+      kkt_mat(1:3, 4) = -lsf1_r
+      kkt_mat(4, 1:3) = lsf1_r
+   end subroutine kkt_assemble
+
+   !> The factor object is exactly a bordered assembly plus `getrf`/`getrs`
+   subroutine test_kkt_factor_matches_lu(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
-      !> Value that must be a true zero
-      real(wp), intent(in) :: value
-      !> Name for the failure message
-      character(len=*), intent(in) :: what
 
+      type(drop_kkt_factor_type) :: kkt
+      type(mctc_error), allocatable :: kkt_error
+      real(wp) :: H_lagrangian(ndim, ndim), lsf1_r(ndim)
+      real(wp) :: rhs_fac(4, kkt_nrhs), rhs_ref(4, kkt_nrhs), kkt_mat(4, 4)
+      integer(lapack_ik) :: ipiv(4), info_ref
+      integer :: icase, i, j
       character(len=160) :: message
 
-      if (value == 0.0_wp) return
+      do icase = 1, kkt_ncase
+         call kkt_fixture(icase, H_lagrangian, lsf1_r, rhs_ref)
+         rhs_fac = rhs_ref
 
-      write (message, '(a,a,a,es24.16)') "iSwiG ", what, " is not exactly zero: ", value
-      call test_failed(error, trim(message))
-   end subroutine check_exact_zero
+         call kkt_assemble(H_lagrangian, lsf1_r, kkt_mat)
+         call lapack_getrf(4_lapack_ik, 4_lapack_ik, kkt_mat, 4_lapack_ik, ipiv, info_ref)
+         if (info_ref /= 0_lapack_ik) then
+            write (message, "(a,i0,a,i0)") "KKT case ", icase, &
+               ": the reference getrf failed on a nonsingular fixture, status ", info_ref
+            call test_failed(error, trim(message))
+            return
+         end if
+         call lapack_getrs("n", 4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
+                           4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
+
+         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+         call kkt%solve(rhs_fac, kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": solve against valid factors failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+
+         do j = 1, kkt_nrhs
+            do i = 1, 4
+               if (rhs_fac(i, j) == rhs_ref(i, j)) cycle
+               write (message, "(a,i0,a,i0,1x,i0,a,es24.16,a,es24.16)") "KKT case ", icase, &
+                  ": factor solution differs from a direct getrf/getrs at", i, j, &
+                  ": ", rhs_fac(i, j), " vs ", rhs_ref(i, j)
+               call test_failed(error, trim(message))
+               return
+            end do
+         end do
+      end do
+   end subroutine test_kkt_factor_matches_lu
+
+   !> The factor/solve pair reproduces the one-shot `gesv` helper it replaced
+   subroutine test_kkt_factor_matches_gesv(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(drop_kkt_factor_type) :: kkt
+      type(mctc_error), allocatable :: kkt_error
+      real(wp) :: H_lagrangian(ndim, ndim), lsf1_r(ndim)
+      real(wp) :: rhs_fac(4, kkt_nrhs), rhs_ref(4, kkt_nrhs), kkt_mat(4, 4)
+      real(wp) :: dev
+      integer(lapack_ik) :: ipiv(4), info_ref
+      integer :: icase, i, j
+      character(len=160) :: message
+
+      do icase = 1, kkt_ncase
+         call kkt_fixture(icase, H_lagrangian, lsf1_r, rhs_ref)
+         rhs_fac = rhs_ref
+
+         call kkt_assemble(H_lagrangian, lsf1_r, kkt_mat)
+         call lapack_gesv(4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
+                          4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
+
+         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+         call kkt%solve(rhs_fac, kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": solve against valid factors failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+         if (info_ref /= 0_lapack_ik) then
+            write (message, "(a,i0,a,i0)") "KKT case ", icase, &
+               ": gesv failed on a nonsingular fixture, status ", info_ref
+            call test_failed(error, trim(message))
+            return
+         end if
+         do j = 1, kkt_nrhs
+            do i = 1, 4
+               dev = rel_deviation(rhs_fac(i, j), rhs_ref(i, j))
+               if (dev <= kkt_gesv_tol) cycle
+               write (message, "(a,i0,a,i0,1x,i0,a,es12.4,a,es24.16,a,es24.16)") &
+                  "KKT case ", icase, ": factor solution differs from gesv at", i, j, &
+                  " by ", dev, ": ", rhs_fac(i, j), " vs ", rhs_ref(i, j)
+               call test_failed(error, trim(message))
+               return
+            end do
+         end do
+      end do
+   end subroutine test_kkt_factor_matches_gesv
+
+   !> Two solves against one factorization equal a single solve of the batch
+   subroutine test_kkt_factor_reuse(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(drop_kkt_factor_type) :: kkt
+      type(mctc_error), allocatable :: kkt_error
+      real(wp) :: H_lagrangian(ndim, ndim), lsf1_r(ndim)
+      real(wp) :: rhs_split(4, kkt_nrhs), rhs_ref(4, kkt_nrhs)
+      integer :: icase, i, j
+      character(len=160) :: message
+
+      do icase = 1, kkt_ncase
+         call kkt_fixture(icase, H_lagrangian, lsf1_r, rhs_ref)
+         rhs_split = rhs_ref
+
+         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+
+         ! One factorization, one batch -- the reference.
+         call kkt%solve(rhs_ref, kkt_error)
+         ! The same factorization, reused across two later calls.
+         call kkt%solve(rhs_split(:, 1:4), kkt_error)
+         call kkt%solve(rhs_split(:, 5:kkt_nrhs), kkt_error)
+         if (allocated(kkt_error)) then
+            write (message, "(a,i0,2a)") "KKT case ", icase, &
+               ": a solve against valid factors failed: ", trim(kkt_error%message)
+            call test_failed(error, trim(message))
+            return
+         end if
+
+         do j = 1, kkt_nrhs
+            do i = 1, 4
+               if (rhs_split(i, j) == rhs_ref(i, j)) cycle
+               write (message, "(a,i0,a,i0,1x,i0,a,es24.16,a,es24.16)") "KKT case ", icase, &
+                  ": reused factors differ from a single batch solve at", i, j, &
+                  ": ", rhs_split(i, j), " vs ", rhs_ref(i, j)
+               call test_failed(error, trim(message))
+               return
+            end do
+         end do
+      end do
+   end subroutine test_kkt_factor_reuse
+
+   !> A vanishing level-set gradient is reported, not silently solved
+   subroutine test_kkt_factor_singular(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(drop_kkt_factor_type) :: kkt
+      type(mctc_error), allocatable :: kkt_error
+      real(wp) :: H_lagrangian(ndim, ndim), lsf1_r(ndim)
+      real(wp) :: rhs_ref(4, kkt_nrhs), kkt_mat(4, 4)
+      integer(lapack_ik) :: ipiv(4), info_ref
+
+      call kkt_fixture(1, H_lagrangian, lsf1_r, rhs_ref)
+      lsf1_r = 0.0_wp
+
+      call kkt_assemble(H_lagrangian, lsf1_r, kkt_mat)
+      call lapack_gesv(4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
+                       4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
+
+      call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+
+      if (.not. allocated(kkt_error)) then
+         call test_failed(error, &
+                          "KKT factorization reported success on a vanishing level-set gradient")
+         return
+      end if
+      if (info_ref == 0_lapack_ik) then
+         call test_failed(error, &
+                          "gesv reported success on a vanishing level-set gradient")
+      end if
+   end subroutine test_kkt_factor_singular
 
 end module test_cavity_drop_primitives

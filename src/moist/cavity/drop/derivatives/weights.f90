@@ -12,7 +12,7 @@
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_weights
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
       & drop_seed_state_type, compute_branch_phi_adj, seed_weight_tol
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 

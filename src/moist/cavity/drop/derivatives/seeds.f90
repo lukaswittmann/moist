@@ -1,8 +1,8 @@
-!> Provides the seeds for the DROP derivative paths
+!> Provides the seeds for the DROP derivatives
 !>
 !> * A seed is one unit perturbation direction pushed through the linear
 !>   per-point map of [[moist_cavity_drop_derivatives_kernel]]
-!> * The kernel yields the surface observables for a given seed
+!> * The kernel yields the surface quantity for a given seed
 !> * This module sends needed seeds through the kernel and collects
 !>   their responses
 !>
@@ -22,23 +22,22 @@
 module moist_cavity_drop_derivatives_seeds
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
-   use moist_math_lapack_gesv, only: lapack_gesv
+   use moist_math_lapack_getrf, only: lapack_getrf
+   use moist_math_lapack_getrs, only: lapack_getrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
       & drop_surface_weights_type, apply_seed, seed_weight_tol, seed_status_message
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
-   public :: drop_kkt_solve, seed_normal_channel, seed_jet_basis, seed_anchor
+   public :: drop_kkt_factor_type, seed_normal_channel, seed_jet_basis, seed_anchor
    public :: degenerate_point_error
 
    !> Number of level-set jet directions: one value, three gradient, nine Hessian
    integer, parameter, public :: drop_n_jet_seeds = 13
 
-contains
-
-   !> Solve the bordered KKT sensitivity system for a batch of right-hand sides
+   !> LU factorization of the bordered KKT sensitivity matrix
    !>
    !> With the Lagrangian Hessian `H_L = phi_rr - lambda S_rr` and the level-set
    !> gradient `g = S_r`,
@@ -48,36 +47,102 @@ contains
    !>   [ g^T   0 ] [ dlambda/dp ] = [ b_4   ]
    !> ```
    !>
-   !> The full bordered system is solved rather than eliminating `dlambda`,
+   !> The full bordered system is factored rather than eliminating `dlambda`,
    !> so `H_L` itself need not be invertible.
    !>
-   !> @param[in]    H_lagrangian Lagrangian Hessian at the projected point
-   !> @param[in]    lsf1_r       Level-set gradient at the projected point
-   !> @param[inout] rhs          `(4, nrhs)`; right-hand sides in, solutions out
-   !> @param[out]   info         LAPACK status; nonzero means singular
-   subroutine drop_kkt_solve(H_lagrangian, lsf1_r, rhs, info)
+   !> Factorization is split from the solve because the Hessian passes need the
+   !> factors to across solve calls at one grid point:
+   !> the primal right-hand sides are known up front, the per-direction tangent ones
+   !> (`K dx = db - dK x`) only once the primal solution exists. Components are
+   !> fixed size, so an instance is stack-local inside the OpenMP grid loops and
+   !> the path stays allocation-free; only a failure allocates, and that through
+   !> the error object both routines report with.
+   type :: drop_kkt_factor_type
+      !> LU factors of the bordered matrix, as returned by `getrf`
+      real(wp) :: lu(4, 4)
+      !> Pivot indices of the factorization
+      integer(lapack_ik) :: ipiv(4)
+   contains
+      !> Assemble and factor the bordered matrix
+      procedure :: factor => drop_kkt_factor
+      !> Solve a right-hand side batch with the stored factors
+      procedure :: solve => drop_kkt_apply
+   end type drop_kkt_factor_type
+
+contains
+
+   !> Assemble and factor the bordered KKT sensitivity matrix
+   !>
+   !> A singular bordered matrix means a degenerate projected point, which is a
+   !> condition of the geometry rather than a programming error. The LAPACK
+   !> status is therefore turned into an error object here, so no caller has to
+   !> know that a status code is what LAPACK returns.
+   !>
+   !> @param[out] self         Factorization
+   !> @param[in]  H_lagrangian Lagrangian Hessian at the projected point
+   !> @param[in]  lsf1_r       Level-set gradient at the projected point
+   !> @param[out] error        Error object, allocated when the system is singular
+   subroutine drop_kkt_factor(self, H_lagrangian, lsf1_r, error)
+      !> Factorization
+      class(drop_kkt_factor_type), intent(out) :: self
       !> Lagrangian Hessian
       real(wp), intent(in) :: H_lagrangian(3, 3)
       !> Level-set gradient
       real(wp), intent(in) :: lsf1_r(3)
-      !> Right-hand sides in, solutions out
-      real(wp), intent(inout) :: rhs(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
       !> LAPACK status
-      integer(lapack_ik), intent(out) :: info
+      integer(lapack_ik) :: info
+      !> Rendered status; fixed length, so the message build is thread safe
+      character(len=32) :: status
 
-      !> Bordered matrix, destroyed by the factorization
-      real(wp) :: kkt_mat(4, 4)
-      !> Pivot indices
-      integer(lapack_ik) :: ipiv(4)
+      self%lu = 0.0_wp
+      self%lu(1:3, 1:3) = H_lagrangian
+      self%lu(1:3, 4) = -lsf1_r
+      self%lu(4, 1:3) = lsf1_r
 
-      kkt_mat = 0.0_wp
-      kkt_mat(1:3, 1:3) = H_lagrangian
-      kkt_mat(1:3, 4) = -lsf1_r
-      kkt_mat(4, 1:3) = lsf1_r
+      call lapack_getrf(4_lapack_ik, 4_lapack_ik, self%lu, 4_lapack_ik, self%ipiv, info)
+      if (info /= 0_lapack_ik) then
+         write (status, "(i0)") info
+         call fatal_error(error, "Bordered KKT sensitivity matrix is singular"// &
+                          " (getrf status "//trim(status)//")")
+      end if
+   end subroutine drop_kkt_factor
 
-      call lapack_gesv(4_lapack_ik, int(size(rhs, 2), lapack_ik), kkt_mat, &
-                       4_lapack_ik, ipiv, rhs, 4_lapack_ik, info)
-   end subroutine drop_kkt_solve
+   !> Solve a right-hand side batch with the stored factors
+   !>
+   !> Requires a successful [[drop_kkt_factor]]. Once the factors exist `getrs`
+   !> has no failure mode of its own: only an illegal argument sets its status,
+   !> and that is a programming error rather than a degenerate point. So this
+   !> path cannot be reached from a correct caller and cannot be exercised by a
+   !> test; it reports for consistency with the factorization, not because a
+   !> caller is expected to meet it.
+   !>
+   !> @param[in]    self  Factorization
+   !> @param[inout] rhs   `(4, nrhs)`; right-hand sides in, solutions out
+   !> @param[out]   error Error object, allocated when LAPACK rejects the call
+   subroutine drop_kkt_apply(self, rhs, error)
+      !> Factorization
+      class(drop_kkt_factor_type), intent(in) :: self
+      !> Right-hand sides in, solutions out
+      real(wp), contiguous, intent(inout) :: rhs(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> LAPACK status
+      integer(lapack_ik) :: info
+      !> Rendered status; fixed length, so the message build is thread safe
+      character(len=32) :: status
+
+      call lapack_getrs("n", 4_lapack_ik, int(size(rhs, 2), lapack_ik), self%lu, &
+                        4_lapack_ik, self%ipiv, rhs, 4_lapack_ik, info)
+      if (info /= 0_lapack_ik) then
+         write (status, "(i0)") info
+         call fatal_error(error, "Bordered KKT sensitivity solve failed"// &
+                          " (getrs status "//trim(status)//")")
+      end if
+   end subroutine drop_kkt_apply
 
    !> Fold an outward-normal adjoint into the level-set gradient and position channels
    !>
@@ -85,9 +150,6 @@ contains
    !> a fixed point through `grad S`, which lands on the gradient channel, and
    !> through the point's own motion, which lands on the position channel as
    !> `H @ normal_grad`.
-   !>
-   !> Call this only once the point is known to be usable -- a rejected point
-   !> must not leave a half-contracted weight behind.
    !>
    !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
@@ -277,7 +339,7 @@ contains
    end subroutine seed_anchor
 
    !> Report a degenerate projected point from the sensitivity kernel
-    !>
+   !>
    !> @param[in]  context Calling routine, used to prefix the diagnostic
    !> @param[in]  status  Status code returned by `build_seed_state`
    !> @param[in]  igrid   Grid point that failed
