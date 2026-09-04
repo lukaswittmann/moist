@@ -104,6 +104,10 @@ module test_cavity_drop_lsf
    real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
+   !> Threshold for exact algebraic identities of the kernels, such as the
+   !> spatial-index symmetry of `f3_rr_rA`. Far tighter than the finite-difference
+   !> thresholds above because nothing numerical stands between the two entries
+   real(wp), parameter :: SYM_THR = 1.0e-13_wp
 
    !> Finite-difference thresholds of the CFC-only high-order block.
    !>
@@ -171,6 +175,8 @@ contains
                   new_unittest("cfc_f2_r_ra_fd", test_cfc_f2_r_rA_fd), &
                   new_unittest("svdw_f3_rr_ra_fd", test_svdw_f3_rr_rA_fd), &
                   new_unittest("cfc_f3_rr_ra_fd", test_cfc_f3_rr_rA_fd), &
+                  new_unittest("svdw_f3_rr_ra_symmetric", test_svdw_f3_rr_rA_symmetry), &
+                  new_unittest("cfc_f3_rr_ra_symmetric", test_cfc_f3_rr_rA_symmetry), &
                   !> Radius derivatives
                   new_unittest("svdw_f1_rad_fd", test_svdw_f1_rad_fd), &
                   new_unittest("cfc_f1_rad_fd", test_cfc_f1_rad_fd), &
@@ -979,6 +985,117 @@ contains
    end subroutine run_f2_r_rA_fd
 
    !> SvdW dispatch for the mixed third FD check.
+   !* ================================================================================= *!
+   !*                     Mixed third derivative: index symmetry                        *!
+   !* ================================================================================= *!
+   !
+   ! `f3_rr_rA(i, j, s, a)` is `d^3 S / dr_i dr_j dA_s^a`, so equality of mixed
+   ! partials makes it symmetric in `(i, j)`. That is not a cosmetic property.
+   ! The DROP nuclear adjoint contracts this tensor against `w_lsf2`, which
+   ! `seed_jet_basis` accumulates from nine *single-entry* Hessian basis seeds.
+   ! The second-order chain in `derivatives/kernel.f90` collapses symmetric pairs
+   ! into factors of two, which is wrong per seed and right only after the
+   ! transpose pair is summed -- and that rescue is exact precisely because the
+   ! weight contracted against it is symmetric in `(i, j)`.
+   !
+   ! In other words, this symmetry is what lets the shipped adjoint be correct
+   ! while every individual off-diagonal seed response is wrong by order 100%.
+   ! It is a property of the generated kernels rather than of anything moist
+   ! asserts at run time, so a kernel regeneration could silently remove it. This
+   ! check is cheap -- no finite differences -- so it sweeps every structure,
+   ! blend and evaluation point rather than sampling one.
+
+   !> SvdW dispatch for the mixed-third-derivative symmetry check.
+   subroutine test_svdw_f3_rr_rA_symmetry(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f3_rr_rA_symmetry(error, kind_svdw)
+   end subroutine test_svdw_f3_rr_rA_symmetry
+
+   !> CFC dispatch for the mixed-third-derivative symmetry check.
+   subroutine test_cfc_f3_rr_rA_symmetry(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_f3_rr_rA_symmetry(error, kind_cfc)
+   end subroutine test_cfc_f3_rr_rA_symmetry
+
+   !> `f3_rr_rA` must be symmetric in its two spatial indices
+   !>
+   !> Held to a far tighter threshold than the finite-difference checks in this
+   !> file, because this is an algebraic identity of the kernel rather than a
+   !> numerical comparison: both entries should come out of the same expression.
+   !> A genuine asymmetry would be order one, so nothing is gained by being
+   !> generous here and a loose bound would hide exactly the regression that
+   !> matters.
+   subroutine run_f3_rr_rA_symmetry(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: analytic(:, :, :, :)
+      real(wp) :: point(ndim), dev, scale, biggest_mag
+      integer  :: icase, ipt, atom, axis, i, j, iblend, igamma, nblend, ngamma
+      type(mctc_error), allocatable :: lsf_err
+      character(len=192) :: message
+
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+      call get_test_structures(mols)
+
+      biggest_mag = 0.0_wp
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (analytic(ndim, ndim, ndim, mol%nat))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  point = points(:, ipt)
+                  call lsf%prepare(point, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call lsf%f3_rr_rA(lsf3_rr_rA=analytic)
+                  biggest_mag = max(biggest_mag, maxval(abs(analytic)))
+                  do atom = 1, mol%nat
+                     do axis = 1, ndim
+                        do j = 2, ndim
+                           do i = 1, j - 1
+                              scale = max(abs(analytic(i, j, axis, atom)), &
+                                          abs(analytic(j, i, axis, atom)), 1.0_wp)
+                              dev = abs(analytic(i, j, axis, atom) &
+                                        - analytic(j, i, axis, atom))/scale
+                              if (dev > SYM_THR) then
+                                 write (message, "(a,i0,a,i0,a,i0,a,i0,a,es12.4)") &
+                                    "f3_rr_rA is not symmetric in its spatial indices"// &
+                                    " (case ", icase, ", point ", ipt, ", atom ", atom, &
+                                    ", axis ", axis, "): relative gap ", dev
+                                 call test_failed(error, trim(message))
+                                 return
+                              end if
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+            end do
+         end do
+         deallocate (analytic)
+      end do
+
+      ! The sweep must actually have produced a nonzero tensor somewhere, or the
+      ! symmetry above is satisfied by a field of zeros
+      if (biggest_mag <= 1.0e-6_wp) then
+         call test_failed(error, "f3_rr_rA symmetry sweep saw no signal:"// &
+                          " the tensor is zero everywhere it was probed")
+      end if
+   end subroutine run_f3_rr_rA_symmetry
+
    subroutine test_svdw_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
       call run_f3_rr_rA_fd(error, kind_svdw)

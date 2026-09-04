@@ -14,5 +14,6 @@ srcs += files(
   'threads.f90',
 )
 
+subdir('gaussian')
 subdir('lsf')
 subdir('derivatives')

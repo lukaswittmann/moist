@@ -8,6 +8,7 @@ module moist_math_lapack_getrs
    private
 
    public :: wrap_getrs
+   public :: lapack_getrs
 
    !> Solves a system of linear equations
    !>    A * X = B  or  A**T * X = B

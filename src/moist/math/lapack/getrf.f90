@@ -8,6 +8,7 @@ module moist_math_lapack_getrf
    private
 
    public :: wrap_getrf
+   public :: lapack_getrf
 
    !> Computes an LU factorization of a general M-by-N matrix A
    !> using partial pivoting with row interchanges.
