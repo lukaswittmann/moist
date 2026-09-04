@@ -231,6 +231,16 @@ module moist_cavity_drop
       procedure :: get_surface_response => get_surface_response_drop
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
+      !> Contract fixed surface-coordinate weights into the nuclear Hessian
+      procedure :: get_surface_hessian_fixed => get_surface_hessian_fixed_drop
+      !> Forward tangent of the surface map along nuclear directions (pass 1)
+      procedure :: get_surface_tangent => get_surface_tangent_drop
+      !> Adjoint-response half of the surface Hessian (J^T omega_v)
+      procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
+      !> Public: surface Hessian-vector products (both halves)
+      procedure :: get_surface_hessian => get_surface_hessian_drop
+      !> Public: dense nuclear Hessian of the cavity contribution
+      procedure :: get_hessian => get_hessian_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop
@@ -496,6 +506,93 @@ module moist_cavity_drop
          real(wp), intent(inout) :: gradient(:, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_gradient_drop
+
+      !> [deriv/hessian_fixed.f90] Fixed-adjoint half of the surface Hessian
+      !>
+      !> Contracts the second derivative of the surface map against adjoints held
+      !> fixed, i.e. the `(dJ^T/dv) omega` term with `omega_v = 0`.
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    acc     Accumulated surface-observable adjoints, held fixed
+      !> @param[inout] hessian Nuclear-Hessian accumulator (3, nsph, 3, nsph)
+      !> @param[out]   error   Error object
+      module subroutine get_surface_hessian_fixed_drop(self, acc, hessian, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_fixed_drop
+
+      !> [deriv/tangent_forward.f90] Pass 1: forward tangent of the surface map
+      !>
+      !> @param[in]  self      DROP cavity instance
+      !> @param[in]  dirs      Nuclear directions (3, nsph, ndir)
+      !> @param[out] d_a       Tangent of the area element (ngrid, ndir)
+      !> @param[out] d_wleb    Tangent of the final Lebedev weight (ngrid, ndir)
+      !> @param[out] d_xi0     Tangent of the Gaussian width (ngrid, ndir)
+      !> @param[out] d_wbranch Tangent of the softmax branch weight (ngrid, ndir)
+      !> @param[out] error     Error object
+      module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
+                                                 d_wbranch, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_tangent_drop
+
+      !> [deriv/hessian_response.f90] Adjoint-response half of the surface Hessian
+      !>
+      !> The `J^T (d omega/dv)` term: runs the forward tangent, differentiates the
+      !> weight folding, and contracts the moving adjoints against the primal map.
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    acc     Raw surface adjoints, held fixed
+      !> @param[in]    dirs    Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hvp     Accumulator (3, nsph, ndir)
+      !> @param[out]   error   Error object
+      module subroutine get_surface_hessian_response_drop(self, acc, dirs, hvp, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_response_drop
+
+      !> [deriv/hessian.f90] Surface Hessian-vector products
+      !>
+      !> Sums the fixed-adjoint and adjoint-response halves. HVP is the
+      !> primitive; the dense Hessian is a wrapper over it.
+      !>
+      !> @param[in]    self  DROP cavity instance
+      !> @param[in]    acc   Accumulated surface-observable adjoints
+      !> @param[in]    dirs  Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hvp   Accumulator (3, nsph, ndir)
+      !> @param[out]   error Error object
+      module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_drop
+
+      !> [deriv/hessian.f90] Dense nuclear Hessian of the cavity contribution
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    acc     Accumulated surface-observable adjoints
+      !> @param[inout] hessian Accumulator (3, nsph, 3, nsph)
+      !> @param[out]   error   Error object
+      module subroutine get_hessian_drop(self, acc, hessian, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_hessian_drop
 
    end interface
 

@@ -164,15 +164,16 @@ contains
       integer :: min_axis_surf
       real(wp) :: proj_surf, v_norm_surf, n_dot_q1_surf
 
-      !> Principal-curvature gradient intermediates (frame-free invariants).
-      !> Grid-level (per igrid): shape-operator invariants of the LSF Hessian H;
-      !> Hn = H n, adjH = adj(H), Cn = adj(H) n; T = k1+k2 = 2*KM, D = k1*k2 = KG.
-      real(wp) :: Hn_curv(3), Cn_curv(3), adjH(3, 3)
-      real(wp) :: trH_curv, nHn_curv, T_curv, nCn_curv, D_curv, KM_curv, disc_curv
-      !> Per-(atom,axis): total nuclear derivative of H and adj(H) and the
-      !> resulting curvature-invariant derivatives.
-      real(wp) :: dH_curv(3, 3), dadjH(3, 3)
-      real(wp) :: dtrH_c, dnHn_c, dT_c, dnCn_c, dD_c, d_disc_c
+      !> Principal-curvature gradient intermediates.
+      !> Grid-level (per igrid): the level-set shape operator in the surface
+      !> tangent frame, S_ab = q_a^T H q_b / |g|, its half-difference
+      !> (S11 - S22)/2 and the discriminant sqrt(half_diff^2 + S12^2) = |k1-k2|/2.
+      real(wp) :: Hq1_c(3), Hq2_c(3)
+      real(wp) :: S11_c, S12_c, S22_c, half_diff_c, disc_curv
+      !> Per-(atom,axis): total nuclear derivative of H and of the shape
+      !> operator entries, and the resulting trace/discriminant derivatives.
+      real(wp) :: dH_curv(3, 3), dHq1_c(3), dHq2_c(3)
+      real(wp) :: dS11_c, dS12_c, dS22_c, dhalf_diff_c, dT_c, d_disc_c
       !> Guard below which the k1/k2 split is treated as (near-)umbilic and the
       !> discriminant derivative is set to zero (individual k1/k2 derivatives are
       !> ill-defined at k1 = k2; KM and KG remain smooth).
@@ -304,9 +305,9 @@ contains
       !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, iswig_work, &
       !$omp& w_pre_i, f_wleb_s, f_wleb_ds, wleb_prune_factor, dw_pre_dR, &
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
-      !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
-      !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
-      !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
+      !$omp& Hq1_c, Hq2_c, S11_c, S12_c, S22_c, half_diff_c, disc_curv, &
+      !$omp& dH_curv, dHq1_c, dHq2_c, dS11_c, dS12_c, dS22_c, dhalf_diff_c, &
+      !$omp& dT_c, d_disc_c, &
       !$omp& A_tot_local, V_tot_local, worker_error, do_timing)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
@@ -516,13 +517,19 @@ contains
 
          dn_dR_buf = 0.0_wp
 
-         ! Screening: lsf2_r_rA and xyz1_rA are zero for inactive atoms
+         ! `lsf2_r_rA` is active-slot indexed -- slot `lsf_slot(i)` belongs to
+         ! atom `active_idx(i)` -- so it must go through `gather_lsf_partials`
+         ! like every other read of it; indexing it by atom is only the identity
+         ! while nothing is screened. `xyz1_rA` is atom indexed and zero for
+         ! inactive atoms.
          do i = 1, n_active
             iatom = active_idx(i)
+            call gather_lsf_partials(lsf_slot(i), lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+                                     s1_rA, s2_r_rA, s3_rr_rA)
             do iaxis = 1, 3
                ! Total derivative of grad(S) w.r.t. r_A:
                ! d(grad(S))/dr_A = ( d^2 S/ dr dr_A) + ( d^2 S/ dr^2 ) * ( dr/ dr_A)
-               dg_dR = lsf2_r_rA(:, iaxis, iatom) &
+               dg_dR = s2_r_rA(:, iaxis) &
                        + matmul(lsf2_rr, self%xyz1_rA(:, iaxis, iatom, igrid))
 
                ! Normal derivative:
@@ -667,35 +674,33 @@ contains
             wleb_prune_factor = 1.0_wp
          end if
 
-         ! Grid-level principal-curvature invariants (frame independent)
-         ! Shape operator of the level set: eigenvalues on the tangent plane are
-         ! the principal curvatures k1 >= k2. Using invariants avoids the
-         ! discontinuous tangent-frame choice of the forward compute_curvature:
-         !   T = k1 + k2 = 2*KM = (tr H - n^T H n)/|g|
-         !   D = k1 * k2 = KG   = (n^T adj(H) n)/|g|^2   (Goldman implicit-surface)
-         !   k1,k2 = KM +/- sqrt(KM^2 - KG)
+         !* ------------------ Principal curvature derivatives k1/k2 ------------------ *!
+
+         ! Grid-level shape operator of the level set in the surface tangent
+         ! frame Q = [q1, q2] already built for the closest-point Jacobian:
+         !   S_ab = q_a^T H q_b / |g|,  a, b in {1, 2}
+         ! whose eigenvalues are the principal curvatures k1 >= k2,
+         !   k1,k2 = half_trace +/- sqrt(half_diff^2 + S12^2),
+         ! with half_trace = (S11 + S22)/2 = KM and half_diff = (S11 - S22)/2.
+         ! Both of those are invariant under a rotation of Q, so *any* smooth
+         ! tangent frame gives the correct derivative below -- the frame need
+         ! not be the one `compute_curvature` picks, only orthonormal, tangent
+         ! and differentiated consistently (`dq1_dR`, `dq2_dR`).
+         !
+         ! The discriminant is deliberately a sum of squares and not the
+         ! algebraically equal invariant form `sqrt(KM^2 - KG)`. `KM^2 - KG`
+         ! is `((k1 - k2)/2)^2` written as a difference of two quantities of
+         ! size `KM^2`, so it loses the gap exactly where the gap is small --
+         ! and the gap is then divided by. `properties.f90` computes the primal
+         ! this way for the same reason.
          if (allocated(self%k1_rA)) then
-            Hn_curv = matmul(lsf2_rr, n_surf)
-            trH_curv = lsf2_rr(1, 1) + lsf2_rr(2, 2) + lsf2_rr(3, 3)
-            nHn_curv = dot_product(n_surf, Hn_curv)
-            T_curv = (trH_curv - nHn_curv)/g_norm
-
-            ! Adjugate (cofactor matrix) of the symmetric Hessian H = lsf2_rr
-            adjH(1, 1) = lsf2_rr(2, 2)*lsf2_rr(3, 3) - lsf2_rr(2, 3)*lsf2_rr(2, 3)
-            adjH(2, 2) = lsf2_rr(1, 1)*lsf2_rr(3, 3) - lsf2_rr(1, 3)*lsf2_rr(1, 3)
-            adjH(3, 3) = lsf2_rr(1, 1)*lsf2_rr(2, 2) - lsf2_rr(1, 2)*lsf2_rr(1, 2)
-            adjH(1, 2) = lsf2_rr(1, 3)*lsf2_rr(2, 3) - lsf2_rr(1, 2)*lsf2_rr(3, 3)
-            adjH(1, 3) = lsf2_rr(1, 2)*lsf2_rr(2, 3) - lsf2_rr(2, 2)*lsf2_rr(1, 3)
-            adjH(2, 3) = lsf2_rr(1, 2)*lsf2_rr(1, 3) - lsf2_rr(1, 1)*lsf2_rr(2, 3)
-            adjH(2, 1) = adjH(1, 2)
-            adjH(3, 1) = adjH(1, 3)
-            adjH(3, 2) = adjH(2, 3)
-
-            Cn_curv = matmul(adjH, n_surf)
-            nCn_curv = dot_product(n_surf, Cn_curv)
-            D_curv = nCn_curv/g_norm_sq
-            KM_curv = 0.5_wp*T_curv
-            disc_curv = sqrt(max(KM_curv*KM_curv - D_curv, 0.0_wp))
+            Hq1_c = matmul(lsf2_rr, q1)
+            Hq2_c = matmul(lsf2_rr, q2)
+            S11_c = dot_product(q1, Hq1_c)/g_norm
+            S12_c = dot_product(q1, Hq2_c)/g_norm
+            S22_c = dot_product(q2, Hq2_c)/g_norm
+            half_diff_c = 0.5_wp*(S11_c - S22_c)
+            disc_curv = sqrt(half_diff_c*half_diff_c + S12_c*S12_c)
          end if
 
          ! Loop over active atoms and axes to compute dJ/dr_A
@@ -830,40 +835,29 @@ contains
                                      + lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
                   end do
 
-                  ! dT = d[(tr H - n^T H n)/|g|]
-                  ! d(n^T H n) = 2 (dn . H n) + n^T dH n   (H symmetric)
-                  dtrH_c = dH_curv(1, 1) + dH_curv(2, 2) + dH_curv(3, 3)
-                  dnHn_c = 2.0_wp*dot_product(dn_surf_dR, Hn_curv) &
-                           + dot_product(n_surf, matmul(dH_curv, n_surf))
-                  dT_c = (dtrH_c - dnHn_c)/g_norm - T_curv*d_gnorm/g_norm
+                  dHq1_c = matmul(dH_curv, q1)
+                  dHq2_c = matmul(dH_curv, q2)
 
-                  ! d(adj H) via product rule (symmetric)
-                  dadjH(1, 1) = dH_curv(2, 2)*lsf2_rr(3, 3) + lsf2_rr(2, 2)*dH_curv(3, 3) &
-                                - 2.0_wp*lsf2_rr(2, 3)*dH_curv(2, 3)
-                  dadjH(2, 2) = dH_curv(1, 1)*lsf2_rr(3, 3) + lsf2_rr(1, 1)*dH_curv(3, 3) &
-                                - 2.0_wp*lsf2_rr(1, 3)*dH_curv(1, 3)
-                  dadjH(3, 3) = dH_curv(1, 1)*lsf2_rr(2, 2) + lsf2_rr(1, 1)*dH_curv(2, 2) &
-                                - 2.0_wp*lsf2_rr(1, 2)*dH_curv(1, 2)
-                  dadjH(1, 2) = dH_curv(1, 3)*lsf2_rr(2, 3) + lsf2_rr(1, 3)*dH_curv(2, 3) &
-                                - dH_curv(1, 2)*lsf2_rr(3, 3) - lsf2_rr(1, 2)*dH_curv(3, 3)
-                  dadjH(1, 3) = dH_curv(1, 2)*lsf2_rr(2, 3) + lsf2_rr(1, 2)*dH_curv(2, 3) &
-                                - dH_curv(2, 2)*lsf2_rr(1, 3) - lsf2_rr(2, 2)*dH_curv(1, 3)
-                  dadjH(2, 3) = dH_curv(1, 2)*lsf2_rr(1, 3) + lsf2_rr(1, 2)*dH_curv(1, 3) &
-                                - dH_curv(1, 1)*lsf2_rr(2, 3) - lsf2_rr(1, 1)*dH_curv(2, 3)
-                  dadjH(2, 1) = dadjH(1, 2)
-                  dadjH(3, 1) = dadjH(1, 3)
-                  dadjH(3, 2) = dadjH(2, 3)
+                  ! dS_ab = [dq_a.(H q_b) + dq_b.(H q_a) + q_a.(dH q_b)]/|g|
+                  !         - S_ab d|g|/|g|,  using H = H^T for the mixed terms
+                  dS11_c = (2.0_wp*dot_product(dq1_dR, Hq1_c) &
+                            + dot_product(q1, dHq1_c))/g_norm &
+                           - S11_c*d_gnorm/g_norm
+                  dS12_c = (dot_product(dq1_dR, Hq2_c) + dot_product(dq2_dR, Hq1_c) &
+                            + dot_product(q1, dHq2_c))/g_norm &
+                           - S12_c*d_gnorm/g_norm
+                  dS22_c = (2.0_wp*dot_product(dq2_dR, Hq2_c) &
+                            + dot_product(q2, dHq2_c))/g_norm &
+                           - S22_c*d_gnorm/g_norm
 
-                  ! dD = d[(n^T adj(H) n)/|g|^2]
-                  ! d(n^T adj n) = 2 (dn . adj(H) n) + n^T d(adj H) n
-                  dnCn_c = 2.0_wp*dot_product(dn_surf_dR, Cn_curv) &
-                           + dot_product(n_surf, matmul(dadjH, n_surf))
-                  dD_c = dnCn_c/g_norm_sq - 2.0_wp*D_curv*d_gnorm/g_norm
-
-                  ! Discriminant split: disc^2 = KM^2 - KG, so
-                  ! 2 disc d(disc) = 2 KM dKM - dKG = (T/2) dT - dD.
+                  ! disc^2 = half_diff^2 + S12^2, so
+                  ! disc d(disc) = half_diff d(half_diff) + S12 dS12 -- a sum of
+                  ! products of quantities that are themselves O(disc), so the
+                  ! quotient keeps the relative accuracy `disc` was computed with
+                  dT_c = dS11_c + dS22_c
+                  dhalf_diff_c = 0.5_wp*(dS11_c - dS22_c)
                   if (disc_curv > curv_disc_guard) then
-                     d_disc_c = (KM_curv*dT_c - dD_c)/(2.0_wp*disc_curv)
+                     d_disc_c = (half_diff_c*dhalf_diff_c + S12_c*dS12_c)/disc_curv
                   else
                      d_disc_c = 0.0_wp
                   end if
@@ -1132,7 +1126,8 @@ contains
    !> @param[out] s1_rA      This atom's dS/dR_A [3]
    !> @param[out] s2_r_rA    This atom's d^2S/(dr dR_A) [3, 3]
    !> @param[out] s3_rr_rA   This atom's d^3S/(dr^2 dR_A) [3, 3, 3]
-   pure subroutine gather_lsf_partials(islot, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
+   pure subroutine gather_lsf_partials(islot,&
+                                       lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
                                        s1_rA, s2_r_rA, s3_rr_rA)
       !> LSF active slot, or zero
       integer, intent(in) :: islot

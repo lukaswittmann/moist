@@ -52,11 +52,13 @@ module moist_cavity_drop_derivatives_seeds
    !>
    !> Factorization is split from the solve because the Hessian passes need the
    !> factors to across solve calls at one grid point:
-   !> the primal right-hand sides are known up front, the per-direction tangent ones
-   !> (`K dx = db - dK x`) only once the primal solution exists. Components are
+   !> the primal right-hand sides are known up front, the per-direction tangent
+   !> ones (`K dx = db - dK x`) only once the primal solution exists; `solve`
+   !> takes the first, `solve_tangent` the second. Components are
    !> fixed size, so an instance is stack-local inside the OpenMP grid loops and
-   !> the path stays allocation-free; only a failure allocates, and that through
-   !> the error object both routines report with.
+   !> the path stays allocation-free -- the tangent batch buffer belongs to the
+   !> caller for that same reason; only a failure allocates, and that through
+   !> the error object all three routines report with.
    type :: drop_kkt_factor_type
       !> LU factors of the bordered matrix, as returned by `getrf`
       real(wp) :: lu(4, 4)
@@ -67,6 +69,8 @@ module moist_cavity_drop_derivatives_seeds
       procedure :: factor => drop_kkt_factor
       !> Solve a right-hand side batch with the stored factors
       procedure :: solve => drop_kkt_apply
+      !> Solve the tangent of a right-hand side batch with the same factors
+      procedure :: solve_tangent => drop_kkt_solve_tangent
    end type drop_kkt_factor_type
 
 contains
@@ -143,6 +147,118 @@ contains
                           " (getrs status "//trim(status)//")")
       end if
    end subroutine drop_kkt_apply
+
+   !> Solve the tangent of a right-hand side batch with the same factors
+   !>
+   !> Differentiating `K x = b` along a perturbation gives `K dx = db - dK x`,
+   !> where `dK` carries the same bordered layout [[drop_kkt_factor]] assembles:
+   !>
+   !> ```
+   !>   dK = [ dH_L  -dg ]
+   !>        [ dg^T    0 ]
+   !> ```
+   !>
+   !> so the two `dlsf1_r` terms enter with *opposite* signs -- the multiplier
+   !> term on rows 1-3 adds, the position term on row 4 subtracts.
+   !>
+   !> `H_L = phi_rr - lambda S_rr` and the objective Hessian `phi_rr = alpha*I`
+   !> is constant in both the point and the anchor, so `d(phi_rr)` vanishes
+   !> identically and the caller passes `dH_lagrangian = -dlambda S_rr -
+   !> lambda d(S_rr)`, with nothing from the objective.
+   !>
+   !> Batched over directions deliberately: `dK` varies with the direction while
+   !> `x` varies with the seed, so one grid point carries `nseed*ndir` tangent
+   !> right-hand sides that all share the single 4x4 factorization. Forming them
+   !> all and issuing one `getrs` costs a grid point one LAPACK call instead of
+   !> `ndir` of them, on a matrix small enough that per-call overhead would
+   !> otherwise dominate the solve. Column `(idir-1)*nseed + iseed`, so the
+   !> seeds of one direction are contiguous; the driver depends on that.
+   !>
+   !> The batch is an argument rather than a local because `(4, nseed*ndir)` is
+   !> not a fixed size: allocating it here would allocate once per grid point
+   !> and lose the allocation-free path this type advertises. The caller
+   !> allocates it once per thread outside the grid loop and reuses it for every
+   !> point; this routine only checks that its shape is consistent.
+   !>
+   !> Requires a successful [[drop_kkt_factor]]. As in [[drop_kkt_apply]], once
+   !> the factors exist `getrs` has no failure mode a correct caller can reach,
+   !> so that status is reported for consistency rather than because it is
+   !> expected. The shape mismatch above it is a programming error in the
+   !> caller, and unlike the `getrs` status it is reachable and tested.
+   !>
+   !> @param[in]    self          Factorization, from a prior `factor` call
+   !> @param[in]    dH_lagrangian Tangent of the Lagrangian Hessian, `(3, 3, ndir)`
+   !> @param[in]    dlsf1_r       Tangent of the level-set gradient, `(3, ndir)`
+   !> @param[in]    x             Primal solutions `(4, nseed)`, as `solve` returns them
+   !> @param[inout] rhs           `db` in, `dx` out; `(4, nseed*ndir)`
+   !> @param[out]   error         Error object, allocated on inconsistent shapes
+   subroutine drop_kkt_solve_tangent(self, dH_lagrangian, dlsf1_r, x, rhs, error)
+      !> Factorization, from a prior `factor` call
+      class(drop_kkt_factor_type), intent(in) :: self
+      !> Tangent of the Lagrangian Hessian block, `(3, 3, ndir)`
+      real(wp), contiguous, intent(in) :: dH_lagrangian(:, :, :)
+      !> Tangent of the level-set gradient, `(3, ndir)`
+      real(wp), contiguous, intent(in) :: dlsf1_r(:, :)
+      !> Primal solutions `x`, `(4, nseed)`, as returned by `solve`; never modified
+      real(wp), contiguous, intent(in) :: x(:, :)
+      !> `db` in, `dx` out; `(4, nseed*ndir)`, column `(idir-1)*nseed + iseed`
+      real(wp), contiguous, intent(inout) :: rhs(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Batch extents, taken from the tangent and primal arguments
+      integer :: ndir, nseed
+      !> Direction, seed, column and Cartesian indices
+      integer :: idir, iseed, icol, iaxis
+      !> LAPACK status
+      integer(lapack_ik) :: info
+      !> Rendered status; fixed length, so the message build is thread safe
+      character(len=32) :: status
+      !> Rendered shapes; fixed length, for the same reason
+      character(len=64) :: shapes
+
+      ndir = size(dH_lagrangian, 3)
+      nseed = size(x, 2)
+
+      if (size(dH_lagrangian, 1) /= 3 .or. size(dH_lagrangian, 2) /= 3 .or. &
+          size(dlsf1_r, 1) /= 3 .or. size(dlsf1_r, 2) /= ndir .or. &
+          size(x, 1) /= 4 .or. size(rhs, 1) /= 4 .or. &
+          size(rhs, 2) /= nseed*ndir) then
+         write (shapes, "(4(a, i0))") "nseed ", nseed, ", ndir ", ndir, &
+            ", rhs ", size(rhs, 1), " x ", size(rhs, 2)
+         call fatal_error(error, "Tangent KKT batch has inconsistent shapes ("// &
+                          trim(shapes)//"; expected rhs 4 x nseed*ndir)")
+         return
+      end if
+
+      do idir = 1, ndir
+         do iseed = 1, nseed
+            icol = (idir - 1)*nseed + iseed
+            do iaxis = 1, 3
+               ! Rows 1-3: the -dg block sits in column 4, so the multiplier
+               ! term comes back into the right-hand side with a plus sign.
+               rhs(iaxis, icol) = rhs(iaxis, icol) &
+                                  - dH_lagrangian(iaxis, 1, idir)*x(1, iseed) &
+                                  - dH_lagrangian(iaxis, 2, idir)*x(2, iseed) &
+                                  - dH_lagrangian(iaxis, 3, idir)*x(3, iseed) &
+                                  + dlsf1_r(iaxis, idir)*x(4, iseed)
+            end do
+            ! Row 4 carries +dg^T, so its term subtracts.
+            rhs(4, icol) = rhs(4, icol) &
+                           - dlsf1_r(1, idir)*x(1, iseed) &
+                           - dlsf1_r(2, idir)*x(2, iseed) &
+                           - dlsf1_r(3, idir)*x(3, iseed)
+         end do
+      end do
+
+      call lapack_getrs("n", 4_lapack_ik, int(size(rhs, 2), lapack_ik), self%lu, &
+                        4_lapack_ik, self%ipiv, rhs, 4_lapack_ik, info)
+      if (info /= 0_lapack_ik) then
+         write (status, "(i0)") info
+         call fatal_error(error, "Tangent KKT sensitivity solve failed"// &
+                          " (getrs status "//trim(status)//")")
+      end if
+   end subroutine drop_kkt_solve_tangent
 
    !> Fold an outward-normal adjoint into the level-set gradient and position channels
    !>
