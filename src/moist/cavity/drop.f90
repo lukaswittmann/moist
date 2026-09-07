@@ -33,6 +33,8 @@ module moist_cavity_drop
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
    use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
@@ -294,7 +296,7 @@ module moist_cavity_drop
    interface
 
       !* ============================================================================== *!
-      !*               Internal DROP routines (should not be used outside)               *!
+      !*               Internal DROP routines (should not be used outside)              *!
       !* ============================================================================== *!
 
       !> [projection.f90] Compute the next capacity for projection work arrays
@@ -465,6 +467,51 @@ module moist_cavity_drop
          logical, intent(in) :: want_curvature
          type(drop_seed_state_type), intent(inout) :: state
       end subroutine fill_seed_state
+
+      !> [deriv/grid_driver.f90] Shared per-grid-point prologue of the DROP
+      !> derivative traversals
+      !>
+      !> @param[in]    self           DROP cavity instance
+      !> @param[inout] slots          Per-thread evaluator clones (shared)
+      !> @param[in]    thread_slot    Slot of the calling thread
+      !> @param[in]    igrid          Grid point to prepare
+      !> @param[in]    want_curvature Whether the curvature invariants are needed
+      !> @param[inout] abort          Shared failure latch of the parallel region
+      !> @param[out]   anchor         Anchor of the grid point
+      !> @param[out]   owner_idx      Owner sphere of the anchor
+      !> @param[out]   lambda_val     Lagrange multiplier of the projection
+      !> @param[out]   lsf1_r         Level-set gradient at the projected point
+      !> @param[out]   lsf2_rr        Level-set Hessian at the projected point
+      !> @param[inout] lsf3_rrr       Caller-owned third-derivative buffer
+      !> @param[out]   phi1_r         Objective gradient at the projected point
+      !> @param[inout] state          Seed state
+      !> @param[out]   kkt_fac        Factorized bordered KKT system
+      !> @param[out]   ok             Whether the point may be processed further
+      !> @param[inout] lsf4_rrrr      Caller-owned fourth-derivative buffer
+      !> @param[out]   kkt_rhs        Solved standard jet and anchor seeds
+      module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
+                                            want_curvature, abort, anchor, owner_idx, &
+                                            lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
+                                            phi1_r, state, kkt_fac, ok, lsf4_rrrr, kkt_rhs)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_worker_slots_type), intent(inout) :: slots
+         integer, intent(in) :: thread_slot
+         integer, intent(in) :: igrid
+         logical, intent(in) :: want_curvature
+         type(drop_abort_latch_type), intent(inout) :: abort
+         real(wp), intent(out) :: anchor(3)
+         integer, intent(out) :: owner_idx
+         real(wp), intent(out) :: lambda_val
+         real(wp), intent(out) :: lsf1_r(3), lsf2_rr(3, 3)
+         real(wp), intent(inout) :: lsf3_rrr(3, 3, 3)
+         real(wp), intent(out) :: phi1_r(3)
+         type(drop_seed_state_type), intent(inout) :: state
+         type(drop_kkt_factor_type), intent(out) :: kkt_fac
+         logical, intent(out) :: ok
+         real(wp), intent(inout), optional :: lsf4_rrrr(3, 3, 3, 3)
+         real(wp), intent(out), optional :: kkt_rhs(4, 7)
+      end subroutine drop_point_prologue
 
       !> Contract surface weights to per-grid LSF adjoint weights
       !>

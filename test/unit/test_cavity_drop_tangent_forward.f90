@@ -66,15 +66,13 @@
 module test_cavity_drop_tangent_forward
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type, new
+   use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
+   use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
-   use moist_radii, only: default_cpcm_radii
-   use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fill_legacy_radii, get_test_cross
+   use moist_context, only: moist_context_type
+   use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN, FIX_CROSS
 
    implicit none(type, external)
    private
@@ -84,12 +82,6 @@ module test_cavity_drop_tangent_forward
    !> Cartesian dimension
    integer, parameter :: ndim = 3
 
-   !> Level-set model of a fixture
-   integer, parameter :: LSF_SVDW = 1, LSF_CFC = 2
-
-   !> Geometry of a fixture
-   integer, parameter :: FIX_PLAIN = 1, FIX_CROSS = 2
-
    !> Directions pushed through in one call: one sparse, one dense
    integer, parameter :: NDIR = 2
 
@@ -97,22 +89,8 @@ module test_cavity_drop_tangent_forward
    integer, parameter :: CH_A = 1, CH_WLEB = 2, CH_XI = 3, CH_WBRANCH = 4
    integer, parameter :: NCHAN = 4
 
-   !> Shared fixture settings
-   real(wp), parameter :: BLEND_K = 2.5_wp
-   real(wp), parameter :: BLEND_3B = 1.0_wp
-   integer, parameter :: NUM_LEB = 50
-   real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
-   integer, parameter :: PROJ_LEVEL = 2
-   integer, parameter :: WLEB_PRUNE = 4
-
-   !> Branching fixture: multistart level and softmax temperature
-   real(wp), parameter :: CROSS_BLEND_K = 1.0_wp
-   integer, parameter :: CROSS_PROJ_LEVEL = 7
+   !> Softmax temperature of the branching fixture
    real(wp), parameter :: CROSS_BRANCH_S = 0.5_wp
-
-   !> Production softmax temperature, used by the non-branching fixture
-   real(wp), parameter :: PLAIN_BRANCH_S = 0.0025_wp
 
    !> Central-difference steps every finite-difference assertion runs at
    !>
@@ -268,8 +246,9 @@ contains
       !> Grid extent, direction and step indices
       integer :: ngrid, idir, istep
 
-      call fixture_geometry(fix_kind, mol)
-      call build_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error)
+      call drop_fixture_geometry(fix_kind, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                  cross_branch_s=CROSS_BRANCH_S, want_fine=.false.)
       if (allocated(error)) return
 
       call assert_branching(cavity, fix_kind, "base geometry", error)
@@ -359,7 +338,8 @@ contains
          mol_disp = mol
          mol_disp%xyz = mol%xyz + real(OFFSET(iside), wp)*step*vdir
 
-         call build_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error)
+         call build_drop_test_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error, &
+                                     cross_branch_s=CROSS_BRANCH_S, want_fine=.false.)
          if (allocated(error)) return
 
          call assert_grid_match(ref_cav, cavity, label//" "//trim(side), error)
@@ -462,8 +442,9 @@ contains
       real(wp) :: implied, diff
 
       do ifix = FIX_PLAIN, FIX_CROSS
-         call fixture_geometry(ifix, mol)
-         call build_cavity(cavity, ctx, mol, ifix, LSF_SVDW, error)
+         call drop_fixture_geometry(ifix, mol)
+         call build_drop_test_cavity(cavity, ctx, mol, ifix, LSF_SVDW, error, &
+                                     cross_branch_s=CROSS_BRANCH_S, want_fine=.false.)
          if (allocated(error)) return
          call build_directions(cavity%nsph, dirs)
          call tangent_of(cavity, dirs, tan_out, error)
@@ -520,8 +501,9 @@ contains
       real(wp) :: d_f, r_own, implied, diff
 
       do ifix = FIX_PLAIN, FIX_CROSS
-         call fixture_geometry(ifix, mol)
-         call build_cavity(cavity, ctx, mol, ifix, LSF_SVDW, error)
+         call drop_fixture_geometry(ifix, mol)
+         call build_drop_test_cavity(cavity, ctx, mol, ifix, LSF_SVDW, error, &
+                                     cross_branch_s=CROSS_BRANCH_S, want_fine=.false.)
          if (allocated(error)) return
          call build_directions(cavity%nsph, dirs)
          call tangent_of(cavity, dirs, tan_out, error)
@@ -585,8 +567,9 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: dirs(:, :, :), tan_out(:, :, :)
 
-      call fixture_geometry(FIX_PLAIN, mol)
-      call build_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error, &
+                                  want_fine=.false.)
       if (allocated(error)) return
       call assert_branching(cavity, FIX_PLAIN, "single-branch fixture", error)
       if (allocated(error)) return
@@ -626,8 +609,9 @@ contains
       real(wp), allocatable :: dirs(:, :, :), o1(:, :), o2(:, :), o3(:, :), o4(:, :)
       integer :: ngrid
 
-      call fixture_geometry(FIX_PLAIN, mol)
-      call build_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error, &
+                                  want_fine=.false.)
       if (allocated(error)) return
 
       ngrid = cavity%ngrid
@@ -897,123 +881,5 @@ contains
       end do
 
    end subroutine build_directions
-
-   !> Fixture geometry
-   !>
-   !> `FIX_PLAIN` is asymmetric on purpose: a symmetric geometry drives the
-   !> multistart projection into sibling branches, which is the other fixture's
-   !> job. `FIX_CROSS` is the shared five-carbon cross, whose concave seams give
-   !> several minima per anchor.
-   !>
-   !> @param[in]  fix_kind Geometry selector
-   !> @param[out] mol      Structure
-   subroutine fixture_geometry(fix_kind, mol)
-      !> Geometry selector
-      integer, intent(in) :: fix_kind
-      !> Structure
-      type(structure_type), intent(out) :: mol
-
-      select case (fix_kind)
-      case (FIX_PLAIN)
-         call new(mol, [8, 6, 1], reshape([ &
-                                          0.00_wp, 0.00_wp, 0.00_wp, &
-                                          0.00_wp, 0.00_wp, 4.60_wp, &
-                                          2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-      case default
-         call get_test_cross(mol)
-      end select
-
-   end subroutine fixture_geometry
-
-   !> Build the DROP cavity for a fixture and a level-set model
-   !>
-   !> @param[out]   cavity   Constructed cavity
-   !> @param[inout] ctx      Run context borrowed by the cavity; must outlive it
-   !> @param[in]    mol      Structure to build on
-   !> @param[in]    fix_kind Geometry of the fixture
-   !> @param[in]    lsf_kind Level-set model
-   !> @param[out]   error    Error handle
-   subroutine build_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error)
-      !> Constructed cavity
-      type(cavity_type_drop), allocatable, intent(out) :: cavity
-      !> Run context borrowed by the cavity
-      type(moist_context_type), target, intent(inout) :: ctx
-      !> Structure to build on
-      type(structure_type), intent(in) :: mol
-      !> Geometry of the fixture
-      integer, intent(in) :: fix_kind
-      !> Level-set model
-      integer, intent(in) :: lsf_kind
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), allocatable :: radii(:)
-      type(mctc_error), allocatable :: cav_error
-      !> Per-fixture settings. Named apart from the module parameters they are
-      !> assigned from: Fortran is case insensitive, so a local `blend_k` would
-      !> shadow `BLEND_K` and turn the assignment into a silent self-assignment.
-      real(wp) :: blend_k_loc, branch_s_loc
-      integer :: proj_level_loc
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      ! The softmax scale is only raised on the branching fixture. It also sets
-      ! the admissible branch radius (`branch_dphi_max` in `parameters.f90`),
-      ! and at `s = 0.5` with this `wleb_cut` that radius is tens of Bohr --
-      ! which is what keeps the cross's far siblings alive, and what empties
-      ! the grid outright on the compact one.
-      if (fix_kind == FIX_CROSS) then
-         blend_k_loc = CROSS_BLEND_K
-         proj_level_loc = CROSS_PROJ_LEVEL
-         branch_s_loc = CROSS_BRANCH_S
-      else
-         blend_k_loc = BLEND_K
-         proj_level_loc = PROJ_LEVEL
-         branch_s_loc = PLAIN_BRANCH_S
-      end if
-
-      allocate (cavity)
-      call new_context(ctx, verbosity=0)
-      select case (lsf_kind)
-      case (LSF_SVDW)
-         block
-            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=blend_k_loc, blend_3b=BLEND_3B)
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=proj_level_loc, wleb_prune_level=WLEB_PRUNE, &
-                                 branch_weight_s=branch_s_loc, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=svdw_template, error=cav_error)
-         end block
-      case default
-         block
-            type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-            call cfc_template%new()
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=proj_level_loc, wleb_prune_level=WLEB_PRUNE, &
-                                 branch_weight_s=branch_s_loc, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=cfc_template, error=cav_error)
-         end block
-      end select
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to initialize cavity: "//cav_error%message)
-         return
-      end if
-
-      call cavity%update(mol, error=cav_error)
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to build cavity: "//cav_error%message)
-         return
-      end if
-      if (cavity%ngrid == 0) then
-         call test_failed(error, "empty grid")
-         return
-      end if
-
-   end subroutine build_cavity
 
 end module test_cavity_drop_tangent_forward

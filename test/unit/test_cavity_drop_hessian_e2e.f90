@@ -179,15 +179,13 @@
 module test_cavity_drop_hessian_e2e
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type, new
+   use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_radii, only: default_cpcm_radii
-   use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fill_legacy_radii
+   use moist_context, only: moist_context_type
+   use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN
 
    implicit none(type, external)
    private
@@ -196,9 +194,6 @@ module test_cavity_drop_hessian_e2e
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
-
-   !> Level-set model of the fixture
-   integer, parameter :: LSF_SVDW = 1, LSF_CFC = 2
 
    !> Surface-adjoint channels. Unlike the fixed-adjoint half, the numerical
    !> reference drives `w_a` and `w_w` too: it differentiates whatever the
@@ -210,16 +205,6 @@ module test_cavity_drop_hessian_e2e
 
    !> Outcome of a numerical-Hessian build
    integer, parameter :: E2E_OK = 0, E2E_GRID_CHANGED = 1
-
-   !> Shared fixture, identical to `test_cavity_drop_hessian_fixed` so the two
-   !> sets of numbers describe the same functional
-   real(wp), parameter :: BLEND_K = 2.5_wp
-   real(wp), parameter :: BLEND_3B = 1.0_wp
-   integer, parameter :: NUM_LEB = 50
-   real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
-   integer, parameter :: PROJ_LEVEL = 2
-   integer, parameter :: WLEB_PRUNE = 4
 
    !> Central-difference step of the reference assertions
    !>
@@ -506,7 +491,7 @@ contains
       real(wp) :: worst, worst_rel, scale, drift
       integer :: status, iatom, iaxis, jaxis
 
-      call fixture_geometry(mol)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
       call numerical_surface_hessian(mol, lsf_kind, channels, step, hess5, &
                                      status, label, error)
       if (allocated(error)) return
@@ -663,7 +648,7 @@ contains
 
       status = E2E_OK
 
-      call build_cavity(ref_cav, ref_ctx, mol, lsf_kind, error)
+      call build_drop_test_cavity(ref_cav, ref_ctx, mol, FIX_PLAIN, lsf_kind, error)
       if (allocated(error)) return
 
       nsph = ref_cav%nsph
@@ -679,7 +664,8 @@ contains
                mol_disp%xyz(baxis, batom) = mol%xyz(baxis, batom) &
                                             + real(OFFSET(ioff), wp)*step
 
-               call build_cavity(cavity, ctx, mol_disp, lsf_kind, error)
+               call build_drop_test_cavity(cavity, ctx, mol_disp, FIX_PLAIN, lsf_kind, &
+                                           error)
                if (allocated(error)) return
 
                ! A point that appears, vanishes, is reordered, changes owner or
@@ -876,8 +862,8 @@ contains
       call class_bounds(chan_class, lsf_kind, steps, abs_tol, rel_tol, sym_tol)
       nset = size(mask, 2)
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, lsf_kind, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
       if (allocated(error)) return
       nsph = cavity%nsph
 
@@ -1049,8 +1035,8 @@ contains
       mask = .false.
       mask(smooth_channels()) = .true.
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, lsf_kind, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
       if (allocated(error)) return
       nsph = cavity%nsph
       ndir = ndim*nsph
@@ -1209,8 +1195,8 @@ contains
       mask = .false.
       mask(smooth_channels()) = .true.
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
       nsph = cavity%nsph
 
@@ -1817,92 +1803,5 @@ contains
       w = 0.60_wp + 0.35_wp*sin(0.7_wp*real(id, wp) + 1.3_wp*real(channel, wp)) &
           + 0.11_wp*cos(0.23_wp*real(id, wp)*real(channel + 2, wp))
    end function point_weight
-
-   !> Shared fixture geometry
-   !>
-   !> Asymmetric on purpose: a symmetric geometry drives the multistart
-   !> projection into sibling branches, and a branched grid moves the branch
-   !> softmax with the geometry
-   !>
-   !> @param[out] mol Structure
-   subroutine fixture_geometry(mol)
-      !> Structure
-      type(structure_type), intent(out) :: mol
-
-      call new(mol, [8, 6, 1], reshape([ &
-                                       0.00_wp, 0.00_wp, 0.00_wp, &
-                                       0.00_wp, 0.00_wp, 4.60_wp, &
-                                       2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-   end subroutine fixture_geometry
-
-   !> Build the DROP cavity for a structure and a level-set model
-   !>
-   !> @param[out]   cavity   Constructed cavity
-   !> @param[inout] ctx      Run context borrowed by the cavity; must outlive it
-   !> @param[in]    mol      Structure to build on
-   !> @param[in]    lsf_kind Level-set model
-   !> @param[out]   error    Error handle
-   subroutine build_cavity(cavity, ctx, mol, lsf_kind, error)
-      !> Constructed cavity
-      type(cavity_type_drop), allocatable, intent(out) :: cavity
-      !> Run context borrowed by the cavity
-      type(moist_context_type), target, intent(inout) :: ctx
-      !> Structure to build on
-      type(structure_type), intent(in) :: mol
-      !> Level-set model
-      integer, intent(in) :: lsf_kind
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), allocatable :: radii(:)
-      type(mctc_error), allocatable :: cav_error
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      allocate (cavity)
-      call new_context(ctx, verbosity=0)
-      select case (lsf_kind)
-      case (LSF_SVDW)
-         block
-            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=BLEND_K, blend_3b=BLEND_3B)
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=PROJ_LEVEL, wleb_prune_level=WLEB_PRUNE, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=svdw_template, error=cav_error)
-         end block
-      case default
-         block
-            type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-            call cfc_template%new()
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=PROJ_LEVEL, wleb_prune_level=WLEB_PRUNE, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=cfc_template, error=cav_error)
-         end block
-      end select
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to initialize cavity: "//cav_error%message)
-         return
-      end if
-
-      ! Curvature and normals are surface observables this suite drives, so the
-      ! cavity has to be asked for them
-      call cavity%properties(do_fine=.true.)
-
-      call cavity%update(mol, error=cav_error)
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to build cavity: "//cav_error%message)
-         return
-      end if
-      if (cavity%ngrid == 0) then
-         call test_failed(error, "empty grid")
-         return
-      end if
-
-   end subroutine build_cavity
 
 end module test_cavity_drop_hessian_e2e

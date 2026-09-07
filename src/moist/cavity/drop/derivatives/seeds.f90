@@ -26,7 +26,7 @@ module moist_cavity_drop_derivatives_seeds
    use moist_math_lapack_getrs, only: lapack_getrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
-      & drop_surface_weights_type, apply_seed, seed_weight_tol, seed_status_message
+      & drop_surface_weights_type, apply_seed, seed_status_message, seed_contribution
 
    implicit none(type, external)
    private
@@ -368,15 +368,10 @@ contains
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, dr_dp, dlambda_dp, res)
 
-         ! No w_f term: the switching factor is an anchor-only iSwig overlap,
-         ! so a level-set perturbation at fixed nuclei leaves it alone.
-         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi
-         if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
-            contribution = contribution + eff%branch_phi_adj(igrid)*dot_product(phi1_r, dr_dp)
-         end if
-         if (eff%have_wk) then
-            contribution = contribution + eff%w_k1(igrid)*res%dk1 + eff%w_k2(igrid)*res%dk2
-         end if
+         ! A field seed leaves the anchor alone, so no rigid-motion shift; the
+         ! switching factor is an anchor-only iSwiG overlap and is absent for
+         ! the same reason. See [[seed_contribution]].
+         contribution = seed_contribution(eff, igrid, w_xyz_pt, dr_dp, res, phi1_r)
 
          if (ibasis == 1) then
             w_lsf0_pt = w_lsf0_pt + contribution
@@ -439,16 +434,11 @@ contains
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, dr_dp, dlambda_dp, res)
 
-         contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi
-         if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
-            ! phi = 0.5*alpha*|r - anchor|^2, so at fixed r the owner's rigid
-            ! motion contributes -phi1_r on top of the point-motion term
-            contribution = contribution + eff%branch_phi_adj(igrid) &
-                           *(dot_product(phi1_r, dr_dp) - phi1_r(iaxis))
-         end if
-         if (eff%have_wk) then
-            contribution = contribution + eff%w_k1(igrid)*res%dk1 + eff%w_k2(igrid)*res%dk2
-         end if
+         ! phi = 0.5*alpha*|r - anchor|^2, so at fixed r the owner's rigid
+         ! motion contributes -phi1_r on top of the point-motion term; that is
+         ! the shift [[seed_contribution]] takes.
+         contribution = seed_contribution(eff, igrid, w_xyz_pt, dr_dp, res, phi1_r, &
+                                          phi1_r(iaxis))
 
          grad_owner(iaxis) = grad_owner(iaxis) + contribution
       end do

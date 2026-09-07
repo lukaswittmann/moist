@@ -33,6 +33,7 @@ module moist_cavity_drop_derivatives_kernel
    public :: drop_seed_state_tangent_type, drop_seed_input_tangent_type
    public :: drop_seed_result_tangent_type
    public :: build_seed_state, apply_seed, apply_seed_tangent, compute_branch_phi_adj
+   public :: branch_point_adjoint, seed_contribution
    public :: switched_eigenvalue_response, switched_eigenvalue_curvature
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
@@ -67,7 +68,7 @@ module moist_cavity_drop_derivatives_kernel
    !> caller before [[build_seed_state]] runs; everything below it is derived.
    type :: drop_seed_state_type
 
-      !* --------------------------------- Inputs --------------------------------- *!
+      !* ----------------------------------- Inputs ----------------------------------- *!
 
       !> Level-set gradient and Hessian at the projected point
       real(wp) :: lsf1_r(3) = 0.0_wp, lsf2_rr(3, 3) = 0.0_wp
@@ -85,7 +86,7 @@ module moist_cavity_drop_derivatives_kernel
       !> Whether the caller needs the principal-curvature response
       logical :: want_curvature = .false.
 
-      !* -------------------------------- Derived --------------------------------- *!
+      !* ----------------------------------- Derived ---------------------------------- *!
 
       !> Level-set gradient norm and its square
       real(wp) :: g_norm = 0.0_wp, g_norm_sq = 0.0_wp
@@ -185,7 +186,7 @@ module moist_cavity_drop_derivatives_kernel
    !> initialisation to zero it.
    type :: drop_seed_state_tangent_type
 
-      !* -------------------------- KKT matrix and frame -------------------------- *!
+      !* ---------------------------- KKT matrix and frame ---------------------------- *!
 
       !> Sensitivity of the tangent-restricted KKT matrix `A`
       real(wp) :: dA_mat(3, 3) = 0.0_wp
@@ -210,7 +211,7 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of the switched eigenvector, in the `B` basis and lifted
       real(wp) :: dvmin_B(2) = 0.0_wp, du_switch(3) = 0.0_wp
 
-      !* -------------------- Lifted tangents and the Jacobian -------------------- *!
+      !* ---------------------- Lifted tangents and the Jacobian ---------------------- *!
 
       !> Sensitivity of the sphere frame projected onto the surface frame
       real(wp) :: dtau1(2) = 0.0_wp, dtau2(2) = 0.0_wp
@@ -221,12 +222,12 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of `1/J`
       real(wp) :: dinv_J = 0.0_wp
 
-      !* ------------------------------ Gram-Schmidt ------------------------------ *!
+      !* -------------------------------- Gram-Schmidt -------------------------------- *!
 
       !> Sensitivity of the Gram-Schmidt data behind `q1`
       real(wp) :: dn_dot_q1 = 0.0_wp, dproj_surf = 0.0_wp, dv_norm_surf = 0.0_wp
 
-      !* ------------------------- Switching and weights -------------------------- *!
+      !* ---------------------------- Switching and weights --------------------------- *!
 
       !> Sensitivity of the switching values and of their slopes
       real(wp) :: df_crit0 = 0.0_wp, df_crit_dS = 0.0_wp
@@ -237,7 +238,7 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of `|grad S|^2`
       real(wp) :: dg_norm_sq = 0.0_wp
 
-      !* -------------------------- Curvature invariants -------------------------- *!
+      !* ---------------------------- Curvature invariants ---------------------------- *!
 
       !> Sensitivity of the Hessian applied to the tangent frame, as the
       !> **total** `d(H q_a) = dH q_a + H dq_a`, matching what the old `dHn`
@@ -1094,7 +1095,7 @@ contains
       !> Cartesian index
       integer :: kaxis
 
-      !*  =============================== Level-set jet ================================ *!
+      !* ================================ Level-set jet =============================== *!
 
       dres%dg = ddlsf1_r + matmul(dinp_v%dlsf2_rr, dr) + matmul(state%lsf2_rr, ddr)
 
@@ -1116,7 +1117,7 @@ contains
                       - state%n_surf*dres%d_gnorm)/state%g_norm &
                      - res_b%dn_surf*res_v%d_gnorm/state%g_norm
 
-      !*  =============================== Tangent frame ================================ *!
+      !* ================================ Tangent frame =============================== *!
 
       ! `min_axis` is a frozen discrete choice, so the Gram-Schmidt axis is fixed
       v_tmp_b = -res_b%dn_surf(state%min_axis)*state%n_surf &
@@ -1160,7 +1161,7 @@ contains
                 + res_v%dn_surf(1)*dstate_b%dq1(2) - res_v%dn_surf(2)*dstate_b%dq1(1) &
                 + state%n_surf(1)*ddq1(2) - state%n_surf(2)*ddq1(1)
 
-      !*  ================================= KKT matrix ================================= *!
+      !* ================================= KKT matrix ================================= *!
 
       ! `dstate%dAq1`/`dAq2` carry the FULL product rule `dA q + A dq`, unlike the
       ! partial scratch [[apply_seed]] feeds into its own `dB` lines, where the
@@ -1207,7 +1208,7 @@ contains
                  /(state%det_B*state%det_B) &
                  - 2.0_wp*dstate_b%dBinv22*dstate_v%ddet_B/state%det_B
 
-      !*  ========================= Basis-invariant eigenvalue ========================= *!
+      !* ========================= Basis-invariant eigenvalue ========================= *!
 
       ! `u . (ddM u)` in contracted form. The assembly it replaces built `ddP`
       ! out of eight `spread`s and `ddM` out of fourteen matrix-matrix products,
@@ -1229,7 +1230,7 @@ contains
       ddlambda_switch = 2.0_wp*dot_product(dstate_v%du_switch, dstate_b%dM_u) &
                         + ddlambda_curv
 
-      !*  ====================== Lifted tangents and the Jacobian ====================== *!
+      !* ====================== Lifted tangents and the Jacobian ====================== *!
 
       ! The sphere tangent frame is rigid at every order, so `dt1 = dt2 = 0`
       ddtau1(1) = dot_product(ddq1, state%t1_vec)
@@ -1284,7 +1285,7 @@ contains
                  + dot_product(state%cross_vec, ddcross))*state%inv_J &
                 + cross_dot_b*dstate_v%dinv_J
 
-      !*  ============================ Switching and weights =========================== *!
+      !* ============================ Switching and weights =========================== *!
 
       dres%dw_f = dstate_v%df_foc_f0*state%f_crit_dS*res_b%d_gnorm &
                   + state%f_foc_f0*dstate_v%df_crit_dS*res_b%d_gnorm &
@@ -1318,7 +1319,7 @@ contains
       ! the primal's and `intent(out)` default initialisation zeroes `dk1`/`dk2`
       if (.not. state%want_curvature) return
 
-      !*  ============================ Curvature invariants ============================ *!
+      !* ============================ Curvature invariants ============================ *!
 
       associate (H => state%lsf2_rr, dH_b => res_b%dH, ddH => dres%dH)
          ! `d(q_a . H q_b) = dq_a . H q_b + q_a . d(H q_b)`, and `d(H q_b)` is
@@ -1430,7 +1431,7 @@ contains
       !> Grid extent and group bookkeeping
       integer :: ngrid, igroup_start, igroup_end, group_size, m_branch, im_grid
       !> Weight-adjoint scratch
-      real(wp) :: adj_wleb, adj_branch, mean_adj_branch, factor_m
+      real(wp) :: adj_branch, mean_adj_branch
 
       branch_phi_adj = 0.0_wp
       ngrid = size(branch_count)
@@ -1456,14 +1457,8 @@ contains
          mean_adj_branch = 0.0_wp
          do m_branch = 1, group_size
             im_grid = igroup_start + m_branch - 1
-            adj_branch = 0.0_wp
-            if (abs(w_xi(im_grid)) > seed_weight_tol &
-                .and. wleb(im_grid) > seed_weight_tol &
-                .and. wbranch(im_grid) > tiny(1.0_wp)) then
-               adj_wleb = -0.5_wp*w_xi(im_grid)*xi0(im_grid)/wleb(im_grid)
-               factor_m = wleb(im_grid)/wbranch(im_grid)
-               adj_branch = adj_wleb*factor_m
-            end if
+            call branch_point_adjoint(w_xi(im_grid), wleb(im_grid), xi0(im_grid), &
+                                      wbranch(im_grid), adj_branch)
             mean_adj_branch = mean_adj_branch + wbranch(im_grid)*adj_branch
             branch_phi_adj(im_grid) = adj_branch
          end do
@@ -1478,6 +1473,144 @@ contains
       end do
 
    end subroutine compute_branch_phi_adj
+
+   !> One point's branch adjoint, optionally with its directional tangent
+   !>
+   !> The single home of the raw per-point block: `[[compute_branch_phi_adj]]`
+   !> calls it primal-only inside its group loop and
+   !> `[[branch_phi_adj_tangent]]` calls it with the tangent arguments, so both
+   !> passes execute the *same* compiled statements. That is deliberate -- a
+   !> verbatim second copy of the chain in another routine is free to contract
+   !> its multiplies and adds differently and would drift by an ulp.
+   !>
+   !> What comes back here is the **raw** per-point adjoint, *before* the group
+   !> reduction `[[compute_branch_phi_adj]]` applies on top of it. It is
+   !> therefore not the same quantity as the stored `branch_phi_adj`, which
+   !> already carries `-wbranch*(adj - mean_adj)/sigma_phi`; the tangent pass
+   !> needs the raw value and cannot read the stored one back.
+   !>
+   !> `adj_wleb * factor` is kept factored rather than collapsed to
+   !> `-0.5 w_xi xi0/wbranch` -- the `wleb` cancels algebraically -- because the
+   !> factored form is the one the reverse pass was derived in and the one a
+   !> reviewer can diff against the primal.
+   !>
+   !> The five tangent arguments are all-or-none: supply `dw_xi`, `dwleb`,
+   !> `dxi0`, `dwbranch` and `dadj_branch` together, or none of them. The
+   !> tangent takes the *primal's* branch on the *primal's* condition and is a
+   !> hard zero on the else -- it never carries a threshold of its own.
+   !>
+   !> @param[in]  w_xi        Folded width adjoint at the point
+   !> @param[in]  wleb        Lebedev weight at the point
+   !> @param[in]  xi0         Gaussian width at the point
+   !> @param[in]  wbranch     Softmax branch weight at the point
+   !> @param[out] adj_branch  Branch adjoint, zero when the gate is shut
+   !> @param[in]  dw_xi       Tangent of the folded width adjoint
+   !> @param[in]  dwleb       Tangent of the Lebedev weight
+   !> @param[in]  dxi0        Tangent of the Gaussian width
+   !> @param[in]  dwbranch    Tangent of the branch weight
+   !> @param[out] dadj_branch Tangent of the branch adjoint, zero on the same gate
+   pure subroutine branch_point_adjoint(w_xi, wleb, xi0, wbranch, adj_branch, &
+                                        dw_xi, dwleb, dxi0, dwbranch, dadj_branch)
+      !> Point values
+      real(wp), intent(in) :: w_xi, wleb, xi0, wbranch
+      !> Branch adjoint
+      real(wp), intent(out) :: adj_branch
+      !> Point tangents, present together with `dadj_branch` or not at all
+      real(wp), intent(in), optional :: dw_xi, dwleb, dxi0, dwbranch
+      !> Tangent of the branch adjoint; its presence selects the tangent half
+      real(wp), intent(out), optional :: dadj_branch
+
+      !> Weight-adjoint scratch and its tangent
+      real(wp) :: adj_wleb, dadj_wleb, factor_m, dfactor_m
+
+      adj_branch = 0.0_wp
+      if (present(dadj_branch)) dadj_branch = 0.0_wp
+      if (abs(w_xi) > seed_weight_tol &
+          .and. wleb > seed_weight_tol &
+          .and. wbranch > tiny(1.0_wp)) then
+         adj_wleb = -0.5_wp*w_xi*xi0/wleb
+         factor_m = wleb/wbranch
+         adj_branch = adj_wleb*factor_m
+         if (present(dadj_branch)) then
+            dadj_wleb = -0.5_wp*(dw_xi*xi0 + w_xi*dxi0)/wleb &
+                        + 0.5_wp*w_xi*xi0*dwleb/(wleb*wleb)
+            dfactor_m = dwleb/wbranch - wleb*dwbranch/(wbranch*wbranch)
+            dadj_branch = dadj_wleb*factor_m + adj_wleb*dfactor_m
+         end if
+      end if
+
+   end subroutine branch_point_adjoint
+
+   !> Adjoint contribution of one seed
+   !>
+   !> The contraction every seed basis performs: `[[seed_jet_basis]]`,
+   !> `[[seed_anchor]]` and the fixed-adjoint Hessian's own primal seed loop all
+   !> reduce one seed's response against the folded surface adjoints, and they
+   !> do it here rather than each in their own copy. A verbatim second copy of
+   !> the chain in another routine is free to contract its multiplies and adds
+   !> differently, so the three would drift by an ulp against each other; one
+   !> shared routine makes them execute the same compiled statements.
+   !>
+   !> The accumulation order is load bearing and must stay as written:
+   !> position, width, branch, curvature. Reordering the terms changes the bits
+   !> independently of any contraction.
+   !>
+   !> No switching term appears: `f_i` is an anchor-only iSwiG overlap, so a
+   !> level-set perturbation at fixed nuclei leaves it alone, and the anchor's
+   !> own motion is carried by the switching channel of the caller instead.
+   !>
+   !> The branch term is gated on the *stored* `eff%branch_phi_adj`, so a
+   !> caller whose grid carries no multi-branch anchor group -- the
+   !> fixed-adjoint Hessian, whose `check_frozen_weights` rejects anything else
+   !> -- pays one comparison against an array that `[[prepare_surface_weights]]`
+   !> allocated to zero, and skips the term.
+   !>
+   !> `branch_shift` is the rigid-motion piece of an anchor seed: the objective
+   !> is `phi = 0.5*alpha*|r - anchor|^2`, so at fixed `r` the owner's rigid
+   !> motion along one axis contributes `-phi1_r(iaxis)` on top of the
+   !> point-motion term. A field seed leaves the anchor alone and omits it.
+   !>
+   !> @param[in] eff          Folded surface adjoints
+   !> @param[in] igrid        Grid point
+   !> @param[in] w_xyz_pt     Effective position adjoint
+   !> @param[in] dr           Induced point motion of the seed
+   !> @param[in] res          Linear response of the seed
+   !> @param[in] phi1_r       Objective gradient at the projected point
+   !> @param[in] branch_shift Rigid-motion shift of an anchor seed, omitted otherwise
+   !> @return                 Adjoint contribution
+   pure function seed_contribution(eff, igrid, w_xyz_pt, dr, res, phi1_r, branch_shift) &
+      result(contribution)
+      !> Folded surface adjoints
+      type(drop_surface_weights_type), intent(in) :: eff
+      !> Grid point
+      integer, intent(in) :: igrid
+      !> Effective position adjoint
+      real(wp), intent(in) :: w_xyz_pt(3)
+      !> Induced point motion
+      real(wp), intent(in) :: dr(3)
+      !> Linear response
+      type(drop_seed_result_type), intent(in) :: res
+      !> Objective gradient at the projected point
+      real(wp), intent(in) :: phi1_r(3)
+      !> Rigid-motion shift, present for an anchor seed only
+      real(wp), intent(in), optional :: branch_shift
+      !> Adjoint contribution
+      real(wp) :: contribution
+
+      !> Objective motion the branch adjoint contracts against
+      real(wp) :: branch_dphi
+
+      contribution = dot_product(w_xyz_pt, dr) + eff%w_xi(igrid)*res%dxi
+      if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
+         branch_dphi = dot_product(phi1_r, dr)
+         if (present(branch_shift)) branch_dphi = branch_dphi - branch_shift
+         contribution = contribution + eff%branch_phi_adj(igrid)*branch_dphi
+      end if
+      if (eff%have_wk) then
+         contribution = contribution + eff%w_k1(igrid)*res%dk1 + eff%w_k2(igrid)*res%dk2
+      end if
+
+   end function seed_contribution
 
    !> Render a degeneracy status as a diagnostic message
    !>

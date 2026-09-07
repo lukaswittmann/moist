@@ -68,20 +68,74 @@
 !> with `apply_seed` and `apply_seed_tangent` differentiating that form. It was
 !> a source change, as this header said, and not a tolerance the test could
 !> pick. `svdw_hvp_single_atom` and `cfc_hvp_single_atom` went green on it; the
-!> remaining failures in this suite name `w_xi` and the multi-atom blocks, not
-!> a curvature channel.
+!> failures it left behind named `w_xi` and the multi-atom blocks, not a
+!> curvature channel, and those turned out not to be defects at all.
+!>
+!> ## Why the stencil is six-point
+!>
+!> The three cases that survived the discriminant fix -- `svdw/multi`,
+!> `cfc/multi` and the `w_xi` channel -- were the stencil, not the Hessian.
+!> Differencing all 140 (level set, channel, direction) combinations of this
+!> fixture over `3e-3 .. 3e-6` with the old four-point stencil shows every one
+!> of them falling as `h^4` across two full decades and then rising as `1/h`.
+!> For `svdw/multi` at atom 1 axis 1 the residual `hv - fd` ran
+!>
+!>     h         3e-3       1e-3       3e-4       1e-4       3e-5      1e-5
+!>     dev   -1.66e-5   -2.05e-7   -1.67e-9  -4.36e-11  -3.15e-10  -1.77e-9
+!>     ratio        .       81.0      122.9       38.4          .         .
+!>
+!> against the `81.0` and `123.4` that exact `O(h^4)` predicts. The analytic
+!> value is the limit those differences converge to; the `2.1e-7` this suite
+!> used to report was the four-point stencil's own truncation at `h = 1e-3` and
+!> nothing else. The multi-atom cases were the worst of them only because the
+!> truncation coefficient of `DIR_MULTI` is about 24 times the worst single
+!> column's: the fifth directional derivative of a nine-component direction
+!> picks up every cross term, a unit column picks up one.
+!>
+!> **No step could have fixed it.** Truncation `2.0e5 h^4` under `1e-10` wants
+!> `h < 1.5e-4`; the round-off floor `1.8e-14 / h` under `1e-10` wants
+!> `h > 1.8e-4`. The two walls cross *above* the target and the window is
+!> empty by 20%, which is why two rounds of step tuning kept landing on
+!> `1.7x .. 2x` over the bound, best case `2.0e-10` at `h = 1.5e-4`, and never
+!> closer. Raising the order moves only the first wall, and moves it a long
+!> way: `6.3e7 h^6 < 1e-10` wants `h < 1.4e-3`, so the window opens to
+!> `3e-4 .. 1e-3` and the suite has a factor of three to place two steps in.
+!> One extra pair of geometries buys that; nothing else needed to change.
+!>
+!> Sensitivity was checked by injection rather than argued. Scaling the
+!> analytic contraction by `1 + 1e-9` fails all five finite-difference cases,
+!> every one of the ten labels reading back a worst deviation of `0.99e-9` to
+!> `1.01e-9` relative, and the two-step ratio printed with the failure landing
+!> in `0.988 .. 1.006` across all ten -- the "constant error" signature the
+!> message documents, against `5.6` for truncation. It reads that cleanly here
+!> only because truncation at the shipped steps is `4e-11`, four orders under
+!> the injected fault; a fault comparable to the truncation would put the ratio
+!> between the two, which is what the message says to expect.
+!>
+!> What is left is an arithmetic floor that is not reducible. The difference
+!> sits `1.2e-11 .. 4.8e-11` from the analytic value at the shipped steps, and
+!> that band is *flat*: the block maximum over the 140 combinations spans
+!> `0.2 .. 38` while the deviation does not move with it. The noise is
+!> absolute, not proportional to anything, so a block-scaled bound would be
+!> modelling a structure that is not there. Its origin is the reproducibility
+!> of [[get_surface_gradient_drop]] between two independently rebuilt cavities
+!> -- `1.8e-14` absolute, one or two ulp of a gradient of order ten --
+!> amplified by `1/h`. Tightening the projection does not touch it, measured
+!> directly rather than inferred: `PROJ_TOL = 1e-15` reproduces the whole
+!> step sweep to within its own noise, and `1e-16` stops the projection
+!> converging at all, at which point the grid moves under displacement and
+!> [[assert_grid_match]] refuses the step.
+!>
 module test_cavity_drop_hessian_fixed
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type, new
+   use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_radii, only: default_cpcm_radii
-   use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fill_legacy_radii
+   use moist_context, only: moist_context_type
+   use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN
 
    implicit none(type, external)
    private
@@ -90,9 +144,6 @@ module test_cavity_drop_hessian_fixed
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
-
-   !> Level-set model of the fixture
-   integer, parameter :: LSF_SVDW = 1, LSF_CFC = 2
 
    !> Nuclear direction of the contraction
    integer, parameter :: DIR_SINGLE = 1, DIR_MULTI = 2
@@ -103,38 +154,96 @@ module test_cavity_drop_hessian_fixed
    integer, parameter :: CH_XI = 1, CH_F = 2, CH_XYZ = 3, CH_N = 4
    integer, parameter :: CH_K1 = 5, CH_K2 = 6, NCHAN = 6
 
-   !> Shared fixture: SvdW blending, Lebedev order and projection settings
-   real(wp), parameter :: BLEND_K = 2.5_wp
-   real(wp), parameter :: BLEND_3B = 1.0_wp
-   integer, parameter :: NUM_LEB = 50
-   real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
-   integer, parameter :: PROJ_LEVEL = 2
-   integer, parameter :: WLEB_PRUNE = 4
-
    !> Central-difference steps every assertion runs at
    !>
-   !> Measured, not assumed. Swept over `3e-3 .. 1e-5` on all four
-   !> level-set/direction combinations: the `O(h^4)` stencil below reaches the
-   !> round-off floor already at `1e-3`, sits on it through `3e-4`, and starts
-   !> climbing again below `1e-4`. Both steps are required, so a value that
-   !> agrees at one step only -- the signature of a step on the round-off wall
-   !> or above the plateau -- fails.
+   !> Both are required, so a value that agrees at one step only -- the
+   !> signature of a step on the round-off wall or above the truncation wall --
+   !> fails. That was always the intent of this parameter; with the four-point
+   !> stencil there was no pair that could deliver it, and with the six-point
+   !> stencil there is a factor of three to choose from. Deviation over the ten
+   !> cases this suite runs, as a fraction of the bound (`> 1` fails):
+   !>
+   !>     h        2.0e-3  1.5e-3  1.2e-3  1.0e-3  8.0e-4  6.0e-4  4.0e-4  3.0e-4  2.0e-4
+   !>     of bound   26.2    4.79    1.32    0.49    0.24    0.32    0.49    0.82    0.87
+   !>
+   !> Those come from a scan harness driving one step at a time, so they are not
+   !> reproducible from the absolute deviations tabulated at `FD_ABS`, which are
+   !> a different maximum over a different set of components. The headroom of
+   !> the shipped pair was measured directly instead, by tightening both bounds
+   !> until the suite breaks -- see `FD_ABS`.
+   !>
+   !> The two walls are visible on either side and the pair above brackets the
+   !> bottom. Note how much steeper the upper wall is than it was: truncation is
+   !> `h^6` now, so a step 50% too coarse fails outright where the four-point
+   !> stencil would have degraded gently. That asymmetry is the reason the
+   !> coarse step is `8e-4` and not `1e-3`, which passes at 0.49 with the wall
+   !> immediately behind it.
+   !>
+   !> The lower wall is round-off and re-rolls with the arithmetic: rebuilding
+   !> the whole sweep at `PROJ_TOL = 1e-15` reproduces the truncation side
+   !> exactly (26.2, 4.80, 1.31, 0.48) and moves the round-off side by up to
+   !> 50% (0.30, 0.47, 0.46, 0.95). The pair above is chosen far enough from it
+   !> that this does not matter; a pair at `3e-4` would not survive it.
    !>
    !> There is also a ceiling, and it is enforced rather than assumed:
    !> [[assert_grid_match]] rejects a step large enough to change the grid, and
-   !> the stencil reaches out to `2h`.
-   real(wp), parameter :: FD_STEPS(2) = [1.0E-3_wp, 3.0E-4_wp]
+   !> the stencil now reaches out to `3h`. Measured on this fixture, the grid
+   !> first moves at a displacement of `2e-2` under `DIR_MULTI`, against the
+   !> `2.4e-3` the coarse step above reaches -- a factor of eight in hand.
+   !>
+   !> **Historical.** Two step sweeps were run against the four-point stencil,
+   !> on 2026-09-03 and 2026-09-07, and neither could close this suite. Best
+   !> pair `[1.0e-3, 3.0e-4]` at three failures; every pair in a decade either
+   !> side did worse. The conclusion recorded at the time -- that the remaining
+   !> failures were not step-tunable -- was correct and for the reason the
+   !> module header now gives: the window was empty, so no pair existed. A step
+   !> sweep cannot distinguish "wrong derivative" from "stencil of insufficient
+   !> order", and both sweeps were spent finding that out.
+   real(wp), parameter :: FD_STEPS(2) = [8.0E-4_wp, 6.0E-4_wp]
 
    !> Finite-difference agreement bounds
    !>
-   !> **These are the target, not the measured floor: four of the eight
-   !> finite-difference cases below fail at this bound and are meant to.**
+   !> The `1e-10` the project asked for, and since the six-point stencil of
+   !> 2026-09-07 every case in this suite meets it with room. Worst absolute
+   !> deviation of the differenced gradient from the analytic contraction, over
+   !> both steps:
    !>
-   !> Measured 2026-09-03 on this fixture, worst deviation over both steps.
-   !> The first four rows are what the assertion below now reports, absolute and
-   !> relative on the *same* component; the six channel rows come from a sweep
-   !> and take each maximum independently:
+   !> | case        | absolute | at                          |
+   !> |-------------|----------|-----------------------------|
+   !> | cfc/multi   | 6.4e-11  | atom 1 axis 2, h = 6e-4     |
+   !> | cfc/single  | 4.6e-11  | atom 3 axis 3, h = 6e-4     |
+   !> | w_xyz       | 4.4e-11  | atom 1 axis 1, h = 6e-4     |
+   !> | svdw/single | 4.3e-11  | atom 1 axis 3, h = 8e-4     |
+   !> | svdw/multi  | 4.2e-11  | atom 2 axis 3, h = 6e-4     |
+   !> | w_f         | 1.8e-11  | atom 3 axis 1, h = 8e-4     |
+   !> | w_xi        | 1.6e-11  | atom 2 axis 3, h = 6e-4     |
+   !> | w_k2        | 1.3e-11  | atom 2 axis 3, h = 6e-4     |
+   !> | w_k1        | 5.1e-12  | atom 3 axis 2, h = 6e-4     |
+   !> | w_n         | 2.9e-12  | atom 2 axis 2, h = 6e-4     |
+   !>
+   !> The bound is `max(FD_ABS, FD_REL |ref|)` per component, so the worst
+   !> *absolute* deviation and the worst *fraction of the bound* are usually
+   !> different components. The binding fraction is 0.32, on `svdw/multi`.
+   !> Measured the direct way rather than inferred from it: the suite still
+   !> passes with both bounds divided by three, and fails at four, so the
+   !> headroom is between 3x and 4x.
+   !>
+   !> Every number above is bit-for-bit identical at `OMP_NUM_THREADS` 1, 2, 4
+   !> and 8, so the margin is a property of the arithmetic and not of a
+   !> summation order. It is *not* independent of the arithmetic itself: at
+   !> `PROJ_TOL = 1e-15` the same sweep re-rolls the round-off side by up to
+   !> 50%, which is why `FD_STEPS` sits where it does rather than one notch
+   !> finer.
+   !>
+   !> The floor these numbers sit on is absolute and flat -- see the module
+   !> header -- so a **block- or norm-scaled bound would be modelling a
+   !> structure the noise does not have**. It has been measured and rejected
+   !> once; do not reintroduce it.
+   !>
+      !> **Historical.** Measured 2026-09-03 on this fixture with the four-point
+   !> stencil, when three of the eight cases failed. Worst deviation over both
+   !> steps; the first four rows are absolute and relative on the *same*
+   !> component, the six channel rows take each maximum independently:
    !>
    !> | case         | absolute | relative | at              |
    !> |--------------|----------|----------|-----------------|
@@ -151,10 +260,11 @@ module test_cavity_drop_hessian_fixed
    !>
    !> Everything except `w_k1` and `w_k2` is still on the `O(h^4)` truncation
    !> wing at these two steps and reaches `5e-11 .. 1e-10` absolute at
-   !> `h = 1e-4`; `FD_STEPS` is deliberately left where it is so the numbers
-   !> above stay comparable with the previous sweep. `w_k1` and `w_k2` grow as
-   !> `1/h` all the way from `1e-3` to `1e-5` (7.4e-8 -> 3.9e-6): they are
-   !> noise limited, and no step reaches `1e-10`. See the module header.
+   !> `h = 1e-4`. `w_k1` and `w_k2` grew as `1/h` all the way from `1e-3` to
+   !> `1e-5` (7.4e-8 -> 3.9e-6): they were noise limited by the cancellation in
+   !> the curvature discriminant, and the `kernel.f90` fix is what removed that.
+   !> The rest of the table is four-point truncation, which the six-point
+   !> stencil pushed two orders below the bound. See the module header.
    real(wp), parameter :: FD_ABS = 1.0E-10_wp
    real(wp), parameter :: FD_REL = 1.0E-10_wp
 
@@ -248,17 +358,36 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
+      !> Per-channel error handle
+      type(error_type), allocatable :: chan_error
       !> Channel index
       integer :: ichannel
       !> Channel label
       character(len=12) :: label(NCHAN)
+      !> Collected report
+      character(len=:), allocatable :: report
 
       label = [character(len=12) :: "w_xi", "w_f", "w_xyz", "w_n", "w_k1", "w_k2"]
 
+      ! Every channel is driven even after one has failed. Returning on the first
+      ! failure names `w_xi` and hides the other five, and the channels do not
+      ! fail together: which of them is over the bound is the whole diagnosis
+      report = ""
       do ichannel = 1, NCHAN
-         call run_hvp_fd(LSF_SVDW, DIR_MULTI, [ichannel], trim(label(ichannel)), error)
-         if (allocated(error)) return
+         call run_hvp_fd(LSF_SVDW, DIR_MULTI, [ichannel], trim(label(ichannel)), chan_error)
+         if (allocated(chan_error)) then
+            report = report//new_line('a')//"   "//chan_error%message
+            ! `error_type` escalates to an `error stop` when it is finalized with
+            ! a non-zero status, so a handled error has to be cleared before it
+            ! goes out of scope
+            chan_error%stat = 0
+            deallocate (chan_error)
+         end if
       end do
+
+      if (len(report) > 0) then
+         call test_failed(error, "single-channel finite differences failed:"//report)
+      end if
    end subroutine test_single_channels
 
    !> Central-difference the shipped surface gradient against the rank-4 result
@@ -286,18 +415,18 @@ contains
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
-      !> Analytic Hessian, its contraction and the differenced reference
+      !> Analytic Hessian, its contraction and the differenced references
       real(wp), allocatable :: hess(:, :, :, :), hv(:, :), fd(:, :, :)
       !> Nuclear direction
       real(wp), allocatable :: vdir(:, :)
       !> Grid and atom extents, loop indices
       integer :: nsph, iatom, iaxis, istep
       !> Deviation bookkeeping
-      real(wp) :: diff, worst, worst_rel, ref, bad_ana, bad_ref
+      real(wp) :: diff, worst, worst_rel, ref, res_coarse, res_fine
       integer :: bad_step, bad_atom, bad_axis
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, lsf_kind, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
       if (allocated(error)) return
 
       nsph = cavity%nsph
@@ -357,8 +486,6 @@ contains
                      bad_step = istep
                      bad_atom = iatom
                      bad_axis = iaxis
-                     bad_ana = hv(iaxis, iatom)
-                     bad_ref = ref
                   end if
                end if
             end do
@@ -366,12 +493,26 @@ contains
       end do
 
       if (bad_step > 0) then
+         ! Both steps' deviations on the offending component are reported, not
+         ! only the one that failed: a constant discrepancy -- what a wrong
+         ! Hessian gives -- reads the same at both, while truncation from a
+         ! step above the window scales as `(h1/h2)^6`, 5.6 for the shipped
+         ! pair. Nothing else can move a deviation with the step here, because
+         ! [[assert_grid_match]] has already ruled out a change of grid
+         res_coarse = hv(bad_axis, bad_atom) - fd(bad_axis, bad_atom, 1)
+         res_fine = hv(bad_axis, bad_atom) - fd(bad_axis, bad_atom, 2)
          call test_failed(error, "fixed-adjoint Hessian mismatch for "//label// &
                           ": worst deviation "//to_string(worst)//" absolute, "// &
                           to_string(worst_rel)//" relative, at atom "//to_string(bad_atom)// &
                           " axis "//to_string(bad_axis)//" (h = "// &
-                          to_string(FD_STEPS(bad_step))//"): analytic "//to_string(bad_ana)// &
-                          " finite difference "//to_string(bad_ref))
+                          to_string(FD_STEPS(bad_step))//"): analytic "// &
+                          to_string(hv(bad_axis, bad_atom))//", finite difference "// &
+                          to_string(fd(bad_axis, bad_atom, bad_step))// &
+                          "; that component deviates "//to_string(res_coarse)//" at h = "// &
+                          to_string(FD_STEPS(1))//" and "//to_string(res_fine)//" at h = "// &
+                          to_string(FD_STEPS(2))//", a ratio of "// &
+                          to_string(res_coarse/sign(max(abs(res_fine), tiny(1.0_wp)), res_fine))// &
+                          " against 5.6 for truncation and 1 for a constant error")
          return
       end if
 
@@ -419,16 +560,32 @@ contains
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol_disp
 
-      !> Five-point central stencil of the first derivative, `O(h^4)`
+      !> Six-point central stencil of the first derivative, `O(h^6)`
       !>
-      !> A three-point stencil leaves an `O(h^2)` truncation error that, at a
-      !> step small enough to keep the grid stable, is still four orders above
-      !> the round-off floor of the gradient -- large enough to set the
-      !> comparison tolerance itself. The extra pair of geometries costs two
-      !> cavity builds and buys three orders, which is what lets the assertion
-      !> below be tight enough to mean something.
-      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
-      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+      !> The order is not a refinement, it is what makes the assertion below
+      !> possible at all. Every stencil here competes with the same round-off
+      !> floor: the gradient reproduces to `1.8e-14` between two independently
+      !> rebuilt cavities, so a difference carries `1.8e-14 / h` of noise
+      !> whatever its order, and it has to land under `FD_ABS` at a step whose
+      !> truncation is also under `FD_ABS`. Those two demands define a window
+      !> in `h`, and the order of the stencil decides whether the window is
+      !> empty. Measured on this fixture, where the truncation coefficients are
+      !> `f5/30 = 2.0e5` and `f7/140 = 6.3e7`:
+      !>
+      !>     stencil    truncation < 1e-10   round-off < 1e-10   window
+      !>     4 point    h < 1.5e-4           h > 1.8e-4          empty, 1.2x
+      !>     6 point    h < 1.4e-3           h > 1.8e-4          3e-4 .. 1e-3
+      !>
+      !> The four-point stencil misses by 20%, which is why two rounds of step
+      !> tuning on this suite never found a step that worked and could not have.
+      !> Six points cost one more pair of geometries and open a window a factor
+      !> of three wide; the sweep across it is tabulated at `FD_STEPS`. A
+      !> three-point stencil is out by orders on the same arithmetic and was
+      !> never a candidate here, so its coefficient has not been measured on
+      !> this fixture and is deliberately not tabulated above.
+      integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
+      real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
+                                         45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
 
       real(wp), allocatable :: grad(:, :)
       integer :: iside
@@ -442,7 +599,7 @@ contains
          mol_disp = mol
          mol_disp%xyz = mol%xyz + real(OFFSET(iside), wp)*step*vdir
 
-         call build_cavity(cavity, ctx, mol_disp, lsf_kind, error)
+         call build_drop_test_cavity(cavity, ctx, mol_disp, FIX_PLAIN, lsf_kind, error)
          if (allocated(error)) return
 
          call assert_frozen_eff(cavity, label//" "//trim(side), error)
@@ -498,8 +655,8 @@ contains
       integer :: nsph, iatom, jatom, iaxis, jaxis
       real(wp) :: diff, scale
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
 
       nsph = cavity%nsph
@@ -566,8 +723,8 @@ contains
       real(wp), allocatable :: hess(:, :, :, :), ws(:)
       integer :: ichannel
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
 
       allocate (hess(ndim, cavity%nsph, ndim, cavity%nsph))
@@ -618,8 +775,8 @@ contains
 
       real(wp), allocatable :: hess(:, :, :, :)
 
-      call fixture_geometry(mol)
-      call build_cavity(cavity, ctx, mol, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
 
       call frozen_adjoint(cavity, all_channels(), acc, error)
@@ -858,92 +1015,5 @@ contains
       end select
 
    end subroutine build_direction
-
-   !> Shared fixture geometry
-   !>
-   !> Asymmetric on purpose: a symmetric geometry drives the multistart
-   !> projection into sibling branches, and a branched grid violates the
-   !> frozen-weight precondition of the whole suite.
-   !>
-   !> @param[out] mol Structure
-   subroutine fixture_geometry(mol)
-      !> Structure
-      type(structure_type), intent(out) :: mol
-
-      call new(mol, [8, 6, 1], reshape([ &
-                                       0.00_wp, 0.00_wp, 0.00_wp, &
-                                       0.00_wp, 0.00_wp, 4.60_wp, &
-                                       2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-   end subroutine fixture_geometry
-
-   !> Build the DROP cavity for a structure and a level-set model
-   !>
-   !> @param[out]   cavity   Constructed cavity
-   !> @param[inout] ctx      Run context borrowed by the cavity; must outlive it
-   !> @param[in]    mol      Structure to build on
-   !> @param[in]    lsf_kind Level-set model
-   !> @param[out]   error    Error handle
-   subroutine build_cavity(cavity, ctx, mol, lsf_kind, error)
-      !> Constructed cavity
-      type(cavity_type_drop), allocatable, intent(out) :: cavity
-      !> Run context borrowed by the cavity
-      type(moist_context_type), target, intent(inout) :: ctx
-      !> Structure to build on
-      type(structure_type), intent(in) :: mol
-      !> Level-set model
-      integer, intent(in) :: lsf_kind
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), allocatable :: radii(:)
-      type(mctc_error), allocatable :: cav_error
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      allocate (cavity)
-      call new_context(ctx, verbosity=0)
-      select case (lsf_kind)
-      case (LSF_SVDW)
-         block
-            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=BLEND_K, blend_3b=BLEND_3B)
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=PROJ_LEVEL, wleb_prune_level=WLEB_PRUNE, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=svdw_template, error=cav_error)
-         end block
-      case default
-         block
-            type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-            call cfc_template%new()
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=PROJ_LEVEL, wleb_prune_level=WLEB_PRUNE, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=cfc_template, error=cav_error)
-         end block
-      end select
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to initialize cavity: "//cav_error%message)
-         return
-      end if
-
-      ! Curvature and normals are surface observables this suite drives, so the
-      ! cavity has to be asked for them
-      call cavity%properties(do_fine=.true.)
-
-      call cavity%update(mol, error=cav_error)
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to build cavity: "//cav_error%message)
-         return
-      end if
-      if (cavity%ngrid == 0) then
-         call test_failed(error, "empty grid")
-         return
-      end if
-
-   end subroutine build_cavity
 
 end module test_cavity_drop_hessian_fixed

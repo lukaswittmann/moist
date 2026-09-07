@@ -96,7 +96,7 @@ contains
    end subroutine scatter_iswig_rows
 
    !* ================================================================================= *!
-   !*                          Influence-set block scatter                               *!
+   !*                            Influence-set block scatter                            *!
    !* ================================================================================= *!
 
    !> Scatter the local iSwiG second-derivative block of one point into a Hessian

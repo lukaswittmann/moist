@@ -41,18 +41,32 @@ module test_cavity_drop_primitives
 
    !> Finite-difference thresholds of the phi-primitive comparisons.
    !>
-   !> Tightened to the project-wide `1e-10 / 1e-10` target on 2026-09-03 from
-   !> `5e-9 / 5e-9`. Measured with the failure suppressed so the whole block is
-   !> scanned rather than stopping at the first exceedance: the worst deviation
-   !> anywhere in the phi ladder is `1.75e-10` absolute against a reference of
-   !> `10.19` (relative `1.7e-11`, which the `max(thr_abs, thr_rel * expected)`
-   !> rule passes), and `phi_f1_r` / `phi_f012_r` fail on a `1.53e-10` deviation
-   !> against a reference of `-0.777`, where the absolute bound is the binding
-   !> one. This block is therefore *at* `1e-10`, not orders from it -- one more
-   !> decade of step refinement would likely close it.
+   !> The project-wide `1e-10 / 1e-10` target, held since 2026-09-03.
    real(wp), parameter :: ABS_THR = 1.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-10_wp
-   real(wp), parameter :: STEP_SIZE = 1.0e-4_wp
+
+   !> Step of the phi-primitive comparisons
+   !>
+   !> These references are already `fd4_scalar`, so the `O(h^4)` truncation term
+   !> is invisible over the whole useful range and the error is pure roundoff,
+   !> falling as `1/h`. Worst `|analytic - numeric| / max(ABS_THR, REL_THR*|n|)`
+   !> over `phi_f1_r` -- so a value below one passes -- measured 2026-09-07:
+   !>
+   !>     h      3e-2    1e-2   3e-3   1e-3   6e-4   3e-4   1e-4   1e-6
+   !>     ratio  0.0026  0.014  0.054  0.152  0.150  0.500  1.53   88.0
+   !>
+   !> Every decade of *coarsening* buys a decade (`1e-4 -> 1e-3` is
+   !> `1.53 -> 0.152`), which is the `eps/h` signature. `1e-4` was the old value
+   !> and is why `phi_f1_r` and `phi_f012_r` failed; the header used to predict
+   !> that "one more decade of step refinement would likely close it", which is
+   !> exactly backwards.
+   !>
+   !> The step cannot simply be made as coarse as possible, because `STEP_SIZE`
+   !> is shared with the switching ladder, where truncation does bite:
+   !> `switching_f1_rA` fails from `8e-4` upward. The joint window is
+   !> `[3e-4, 6e-4]` -- verified at `3e-4`, `4e-4` and `6e-4`, and broken on
+   !> either side at `1e-4` and `8e-4` -- and `4e-4` is its logarithmic centre.
+   real(wp), parameter :: STEP_SIZE = 4.0e-4_wp
 
    !* --------------------------- iSwiG switching fixtures -------------------------- *!
 
@@ -77,7 +91,22 @@ module test_cavity_drop_primitives
    real(wp), parameter :: iswig_fd_xi = 1.6_wp
 
    !> Step sizes of the iSwiG finite differences, coarse first
-   real(wp), parameter :: iswig_fd_steps(2) = [4.0e-3_wp, 2.0e-3_wp]
+   !>
+   !> Was `4e-3 / 2e-3` until 2026-09-07, where `iswig_swi1_rA_fd` and
+   !> `iswig_swi2_rArB_fd` missed the bound by a factor of ~30 on truncation.
+   !> These references are already `fd4_scalar`, so the step was the only thing
+   !> that had to move -- as the tolerance's own comment predicted. Pass/fail of
+   !> the whole suite by pair, measured 2026-09-07:
+   !>
+   !>     [4e-3, 2e-3]    both tests fail   (truncation, the old value)
+   !>     [1e-3, 5e-4]    all pass
+   !>     [6e-4, 3e-4]    all pass          (this pair)
+   !>     [3e-4, 1.5e-4]  all pass
+   !>     [1e-4, 5e-5]    both tests fail   (roundoff)
+   !>
+   !> The window is bracketed on both sides a decade apart, and this pair is
+   !> near its logarithmic centre.
+   real(wp), parameter :: iswig_fd_steps(2) = [6.0e-4_wp, 3.0e-4_wp]
 
    !> Tolerance of the block-versus-sparse comparison
    real(wp), parameter :: iswig_block_tol = 1.0e-13_wp
@@ -85,13 +114,12 @@ module test_cavity_drop_primitives
    !> Tolerances of the iSwiG finite-difference comparisons.
    !>
    !> Tightened to the project-wide `1e-10 / 1e-10` target on 2026-09-03 from
-   !> `1e-8 / 1e-8`. Measured worst deviation over the whole block, failure
-   !> suppressed: `3.48e-9` absolute at a reference of `2.214` in
-   !> `iswig_swi1_ra_fd` and `3.85e-9` at `-1.306` in `iswig_swi2_rarb_fd`, so
-   !> both fail by a factor of roughly 30. `iswig_fd_steps` is `4e-3 / 2e-3`,
-   !> coarse enough that this is truncation of the difference rather than the
-   !> arithmetic of the analytic row: the step, not the tolerance, is what would
-   !> have to move.
+   !> `1e-8 / 1e-8`. At `iswig_fd_steps = 4e-3 / 2e-3` both `iswig_swi1_rA_fd`
+   !> and `iswig_swi2_rArB_fd` missed it by a factor of roughly 30 -- `3.48e-9`
+   !> absolute at a reference of `2.214` and `3.85e-9` at `-1.306`. That comment
+   !> read the cause correctly: it was truncation of the difference rather than
+   !> the arithmetic of the analytic row, so the step was what had to move, and
+   !> the bound stands unchanged. See [[iswig_fd_steps]] for the sweep.
    real(wp), parameter :: iswig_fd_abs = 1.0e-10_wp
    real(wp), parameter :: iswig_fd_rel = 1.0e-10_wp
 
@@ -111,17 +139,36 @@ module test_cavity_drop_primitives
 
    !* ------------------------ seed-state tangent fixtures -------------------------- *!
 
-   !> Central-difference steps of the seed-state tangent test
-   real(wp), parameter :: seed_fd_steps(2) = [1.0e-5_wp, 1.0e-6_wp]
+   !> Stencil steps of the seed-state tangent test
+   !>
+   !> The references use the 4-point `fd4_scalar` stencil, so the truncation
+   !> error is `O(h^4)` and the useful window sits four decades coarser than a
+   !> 2-point difference would want. Worst `rel_deviation` over the whole seed
+   !> block, failures suppressed, measured 2026-09-07:
+   !>
+   !>     h      1e-2    1e-3    3e-4    1e-4     3e-5     1e-5
+   !>     worst  1.3e-3  1.2e-7  9.7e-10 1.5e-11  2.2e-11  9.6e-11
+   !>
+   !> `dinv_J` binds from 1e-2 down to 1e-4 and falls as `h^4` (ratios 1.1e4,
+   !> then 124 across a 3.33x step, against 3.33^4 = 123); below that
+   !> `df_crit_dS` binds and rises again on roundoff. The pair straddles the
+   !> minimum a decade apart, so a derivative that is simply wrong -- flat in
+   !> `h` rather than converging -- cannot hide at either end.
+   real(wp), parameter :: seed_fd_steps(2) = [1.0e-4_wp, 3.0e-5_wp]
 
    !> Tolerance of the seed-state tangent comparison, measured as `rel_deviation`.
    !>
-   !> Tightened to the project-wide `1e-10` target on 2026-09-03 from `1e-6`.
-   !> Measured worst `rel_deviation` over the whole seed block, failure
-   !> suppressed: `1.73e-8` on `dinv_J` at `h = 1e-5`, two orders above the
-   !> bound. Nine of the ten seed tangent cases fail; the smallest failing
-   !> deviation is `1.18e-10` on `dJ` at `h = 1e-6`, so the block spans the
-   !> bound rather than sitting uniformly above it.
+   !> The project-wide `1e-10` target, held since 2026-09-03. It was
+   !> unreachable while the references were 2-point central differences: those
+   !> bottomed out at `5.7e-10` on `dinv_J`, a reciprocal whose `C h^2`
+   !> truncation cannot get under the bound before `eps/h` roundoff takes over,
+   !> and `dJ` and `dwleb` failed at *opposite* ends of the ladder, so no single
+   !> step satisfied every field. That was a property of the stencil, not of the
+   !> analytic tangents, which converge cleanly -- see [[seed_fd_steps]].
+   !>
+   !> With the 4-point stencil the worst field over the whole block is
+   !> `1.5e-11`, so the bound now has 6.6x headroom at the coarse step and 4.5x
+   !> at the fine one.
    real(wp), parameter :: seed_fd_tol = 1.0e-10_wp
 
    !> Tolerance for the seed-linearity identity, which is algebra rather than a
@@ -3111,85 +3158,90 @@ contains
       state%w_f0 = state%w_f0 + step*res%dw_f
    end subroutine displace_seed_state
 
-   !> Central difference of the whole derived block, field by field
+   !> 4-point central difference of the whole derived block, field by field
    !>
-   !> @param[in]  state_p   Derived block at `+h`
-   !> @param[in]  state_m   Derived block at `-h`
-   !> @param[in]  inv2h     `1 / (2 h)`
+   !> `build_seed_state` is the map from the `Inputs` block to the `Derived`
+   !> block; this differences it along the seed-induced tangent. The stencil is
+   !> `fd4_scalar`'s, so `st` holds the rebuilt states at the `fd4_offsets`
+   !> displacements `[+2h, +h, -h, -2h]` in that order.
+   !>
+   !> @param[in]  st        Rebuilt states in `fd4_offsets` order
+   !> @param[in]  h         Step size
    !> @param[in]  u_switch  Switched eigenvector at the *base* point
    !> @param[out] fd        Finite-difference reference for the state tangent
-   pure subroutine seed_state_central_difference(state_p, state_m, inv2h, u_switch, fd)
-      !> Displaced states
-      type(drop_seed_state_type), intent(in) :: state_p, state_m
-      !> Reciprocal of twice the step
-      real(wp), intent(in) :: inv2h
+   pure subroutine seed_state_central_difference(st, h, u_switch, fd)
+      !> Displaced states, in `fd4_offsets` order
+      type(drop_seed_state_type), intent(in) :: st(4)
+      !> Step size
+      real(wp), intent(in) :: h
       !> Switched eigenvector at the base point, held fixed on purpose
       real(wp), intent(in) :: u_switch(ndim)
       !> Finite-difference reference
       type(drop_seed_state_tangent_type), intent(out) :: fd
 
-      fd%dA_mat = (state_p%A_mat - state_m%A_mat)*inv2h
-      fd%dq1 = (state_p%q1 - state_m%q1)*inv2h
-      fd%dq2 = (state_p%q2 - state_m%q2)*inv2h
-      fd%dAq1 = (state_p%Aq1 - state_m%Aq1)*inv2h
-      fd%dAq2 = (state_p%Aq2 - state_m%Aq2)*inv2h
-      fd%dB11 = (state_p%B11 - state_m%B11)*inv2h
-      fd%dB12 = (state_p%B12 - state_m%B12)*inv2h
-      fd%dB22 = (state_p%B22 - state_m%B22)*inv2h
-      fd%ddet_B = (state_p%det_B - state_m%det_B)*inv2h
-      fd%dBinv11 = (state_p%Binv11 - state_m%Binv11)*inv2h
-      fd%dBinv12 = (state_p%Binv12 - state_m%Binv12)*inv2h
-      fd%dBinv22 = (state_p%Binv22 - state_m%Binv22)*inv2h
-      fd%dlambda_switch = (state_p%lambda_switch - state_m%lambda_switch)*inv2h
+      fd%dA_mat = fd4_scalar(st(1)%A_mat, st(2)%A_mat, st(3)%A_mat, st(4)%A_mat, h)
+      fd%dq1 = fd4_scalar(st(1)%q1, st(2)%q1, st(3)%q1, st(4)%q1, h)
+      fd%dq2 = fd4_scalar(st(1)%q2, st(2)%q2, st(3)%q2, st(4)%q2, h)
+      fd%dAq1 = fd4_scalar(st(1)%Aq1, st(2)%Aq1, st(3)%Aq1, st(4)%Aq1, h)
+      fd%dAq2 = fd4_scalar(st(1)%Aq2, st(2)%Aq2, st(3)%Aq2, st(4)%Aq2, h)
+      fd%dB11 = fd4_scalar(st(1)%B11, st(2)%B11, st(3)%B11, st(4)%B11, h)
+      fd%dB12 = fd4_scalar(st(1)%B12, st(2)%B12, st(3)%B12, st(4)%B12, h)
+      fd%dB22 = fd4_scalar(st(1)%B22, st(2)%B22, st(3)%B22, st(4)%B22, h)
+      fd%ddet_B = fd4_scalar(st(1)%det_B, st(2)%det_B, st(3)%det_B, st(4)%det_B, h)
+      fd%dBinv11 = fd4_scalar(st(1)%Binv11, st(2)%Binv11, st(3)%Binv11, st(4)%Binv11, h)
+      fd%dBinv12 = fd4_scalar(st(1)%Binv12, st(2)%Binv12, st(3)%Binv12, st(4)%Binv12, h)
+      fd%dBinv22 = fd4_scalar(st(1)%Binv22, st(2)%Binv22, st(3)%Binv22, st(4)%Binv22, h)
+      fd%dlambda_switch = fd4_scalar(st(1)%lambda_switch, st(2)%lambda_switch, st(3)%lambda_switch, st(4)%lambda_switch, h)
       ! `M = P A P` is not itself a derived field, so the reference assembles the
-      ! tangent projector `P = I - n n^T` at either end from the stored normal.
-      ! `dM_u` is `(dM) u` at the base eigenvector, not `d(M u)`, so the
+      ! tangent projector `P = I - n n^T` at each stencil point from the stored
+      ! normal. `dM_u` is `(dM) u` at the base eigenvector, not `d(M u)`, so the
       ! difference is taken on `M` alone and contracted with the fixed
       ! `u_switch` afterwards. Differencing the whole product would add `M du`,
       ! which is `O(1)` here because `du` leaves the `u` eigendirection
       block
-         real(wp) :: P_p(ndim, ndim), P_m(ndim, ndim)
-         integer :: i, j
+         real(wp) :: P(ndim, ndim), M(ndim, ndim, 4)
+         integer :: i, j, k
 
-         do j = 1, ndim
-            do i = 1, ndim
-               P_p(i, j) = -state_p%n_surf(i)*state_p%n_surf(j)
-               P_m(i, j) = -state_m%n_surf(i)*state_m%n_surf(j)
+         do k = 1, 4
+            do j = 1, ndim
+               do i = 1, ndim
+                  P(i, j) = -st(k)%n_surf(i)*st(k)%n_surf(j)
+               end do
+               P(j, j) = P(j, j) + 1.0_wp
             end do
-            P_p(j, j) = P_p(j, j) + 1.0_wp
-            P_m(j, j) = P_m(j, j) + 1.0_wp
+            M(:, :, k) = matmul(P, matmul(st(k)%A_mat, P))
          end do
-         fd%dM_u = matmul((matmul(P_p, matmul(state_p%A_mat, P_p)) &
-                           - matmul(P_m, matmul(state_m%A_mat, P_m)))*inv2h, u_switch)
+         fd%dM_u = matmul(fd4_scalar(M(:, :, 1), M(:, :, 2), M(:, :, 3), &
+                                     M(:, :, 4), h), u_switch)
       end block
-      fd%dvmin_B = (state_p%vmin_B - state_m%vmin_B)*inv2h
-      fd%du_switch = (state_p%u_switch - state_m%u_switch)*inv2h
-      fd%dtau1 = (state_p%tau1 - state_m%tau1)*inv2h
-      fd%dtau2 = (state_p%tau2 - state_m%tau2)*inv2h
-      fd%dw1 = (state_p%w1 - state_m%w1)*inv2h
-      fd%dw2 = (state_p%w2 - state_m%w2)*inv2h
-      fd%dy1 = (state_p%y1 - state_m%y1)*inv2h
-      fd%dy2 = (state_p%y2 - state_m%y2)*inv2h
-      fd%dcross_vec = (state_p%cross_vec - state_m%cross_vec)*inv2h
-      fd%dinv_J = (state_p%inv_J - state_m%inv_J)*inv2h
-      fd%dn_dot_q1 = (state_p%n_dot_q1 - state_m%n_dot_q1)*inv2h
-      fd%dproj_surf = (state_p%proj_surf - state_m%proj_surf)*inv2h
-      fd%dv_norm_surf = (state_p%v_norm_surf - state_m%v_norm_surf)*inv2h
-      fd%df_crit0 = (state_p%f_crit0 - state_m%f_crit0)*inv2h
-      fd%df_crit_dS = (state_p%f_crit_dS - state_m%f_crit_dS)*inv2h
-      fd%df_foc_f0 = (state_p%f_foc_f0 - state_m%f_foc_f0)*inv2h
-      fd%df_foc_dS = (state_p%f_foc_dS - state_m%f_foc_dS)*inv2h
-      fd%dwleb_prune_factor = (state_p%wleb_prune_factor - state_m%wleb_prune_factor)*inv2h
-      fd%dg_norm_sq = (state_p%g_norm_sq - state_m%g_norm_sq)*inv2h
-      fd%dHq1 = (state_p%Hq1 - state_m%Hq1)*inv2h
-      fd%dHq2 = (state_p%Hq2 - state_m%Hq2)*inv2h
-      fd%dS11 = (state_p%S11 - state_m%S11)*inv2h
-      fd%dS12 = (state_p%S12 - state_m%S12)*inv2h
-      fd%dS22 = (state_p%S22 - state_m%S22)*inv2h
-      fd%dT_curv = (state_p%T_curv - state_m%T_curv)*inv2h
-      fd%dKM_curv = (state_p%KM_curv - state_m%KM_curv)*inv2h
-      fd%dhalf_diff = (state_p%half_diff - state_m%half_diff)*inv2h
-      fd%ddisc_curv = (state_p%disc_curv - state_m%disc_curv)*inv2h
+      fd%dvmin_B = fd4_scalar(st(1)%vmin_B, st(2)%vmin_B, st(3)%vmin_B, st(4)%vmin_B, h)
+      fd%du_switch = fd4_scalar(st(1)%u_switch, st(2)%u_switch, st(3)%u_switch, st(4)%u_switch, h)
+      fd%dtau1 = fd4_scalar(st(1)%tau1, st(2)%tau1, st(3)%tau1, st(4)%tau1, h)
+      fd%dtau2 = fd4_scalar(st(1)%tau2, st(2)%tau2, st(3)%tau2, st(4)%tau2, h)
+      fd%dw1 = fd4_scalar(st(1)%w1, st(2)%w1, st(3)%w1, st(4)%w1, h)
+      fd%dw2 = fd4_scalar(st(1)%w2, st(2)%w2, st(3)%w2, st(4)%w2, h)
+      fd%dy1 = fd4_scalar(st(1)%y1, st(2)%y1, st(3)%y1, st(4)%y1, h)
+      fd%dy2 = fd4_scalar(st(1)%y2, st(2)%y2, st(3)%y2, st(4)%y2, h)
+      fd%dcross_vec = fd4_scalar(st(1)%cross_vec, st(2)%cross_vec, st(3)%cross_vec, st(4)%cross_vec, h)
+      fd%dinv_J = fd4_scalar(st(1)%inv_J, st(2)%inv_J, st(3)%inv_J, st(4)%inv_J, h)
+      fd%dn_dot_q1 = fd4_scalar(st(1)%n_dot_q1, st(2)%n_dot_q1, st(3)%n_dot_q1, st(4)%n_dot_q1, h)
+      fd%dproj_surf = fd4_scalar(st(1)%proj_surf, st(2)%proj_surf, st(3)%proj_surf, st(4)%proj_surf, h)
+      fd%dv_norm_surf = fd4_scalar(st(1)%v_norm_surf, st(2)%v_norm_surf, st(3)%v_norm_surf, st(4)%v_norm_surf, h)
+      fd%df_crit0 = fd4_scalar(st(1)%f_crit0, st(2)%f_crit0, st(3)%f_crit0, st(4)%f_crit0, h)
+      fd%df_crit_dS = fd4_scalar(st(1)%f_crit_dS, st(2)%f_crit_dS, st(3)%f_crit_dS, st(4)%f_crit_dS, h)
+      fd%df_foc_f0 = fd4_scalar(st(1)%f_foc_f0, st(2)%f_foc_f0, st(3)%f_foc_f0, st(4)%f_foc_f0, h)
+      fd%df_foc_dS = fd4_scalar(st(1)%f_foc_dS, st(2)%f_foc_dS, st(3)%f_foc_dS, st(4)%f_foc_dS, h)
+      fd%dwleb_prune_factor = fd4_scalar(st(1)%wleb_prune_factor, st(2)%wleb_prune_factor, st(3)%wleb_prune_factor, st(4)%wleb_prune_factor, h)
+      fd%dg_norm_sq = fd4_scalar(st(1)%g_norm_sq, st(2)%g_norm_sq, st(3)%g_norm_sq, st(4)%g_norm_sq, h)
+      fd%dHq1 = fd4_scalar(st(1)%Hq1, st(2)%Hq1, st(3)%Hq1, st(4)%Hq1, h)
+      fd%dHq2 = fd4_scalar(st(1)%Hq2, st(2)%Hq2, st(3)%Hq2, st(4)%Hq2, h)
+      fd%dS11 = fd4_scalar(st(1)%S11, st(2)%S11, st(3)%S11, st(4)%S11, h)
+      fd%dS12 = fd4_scalar(st(1)%S12, st(2)%S12, st(3)%S12, st(4)%S12, h)
+      fd%dS22 = fd4_scalar(st(1)%S22, st(2)%S22, st(3)%S22, st(4)%S22, h)
+      fd%dT_curv = fd4_scalar(st(1)%T_curv, st(2)%T_curv, st(3)%T_curv, st(4)%T_curv, h)
+      fd%dKM_curv = fd4_scalar(st(1)%KM_curv, st(2)%KM_curv, st(3)%KM_curv, st(4)%KM_curv, h)
+      fd%dhalf_diff = fd4_scalar(st(1)%half_diff, st(2)%half_diff, st(3)%half_diff, st(4)%half_diff, h)
+      fd%ddisc_curv = fd4_scalar(st(1)%disc_curv, st(2)%disc_curv, st(3)%disc_curv, st(4)%disc_curv, h)
    end subroutine seed_state_central_difference
 
    !> Fail unless a scalar stays above a floor, naming the quantity
@@ -3571,10 +3623,10 @@ contains
    !> `build_seed_state` is a map from the `Inputs` block to the `Derived`
    !> block, and `apply_seed`'s optional `dstate` claims to be its directional
    !> derivative along the input tangent the seed induces. This displaces the
-   !> inputs by `+/- h` along that tangent, rebuilds the state at each end and
-   !> compares `(F(+h) - F(-h))/(2h)` against every component of
-   !> `drop_seed_state_tangent_type`, plus the two `drop_seed_result_type`
-   !> channels that share the same displaced states.
+   !> inputs to the four `fd4_offsets` points along that tangent, rebuilds the
+   !> state at each and compares the `fd4_scalar` stencil against every
+   !> component of `drop_seed_state_tangent_type`, plus the two
+   !> `drop_seed_result_type` channels that share the same displaced states.
    !>
    !> @param[out] error           Error handle
    !> @param[in]  want_curvature  Whether the curvature block is requested
@@ -3586,13 +3638,13 @@ contains
       logical, intent(in) :: want_curvature, use_wleb_prune
 
       type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit, f_foc, f_wleb
-      type(drop_seed_state_type) :: state, state_p, state_m
+      type(drop_seed_state_type) :: state, st(4)
       type(drop_seed_result_type) :: res
       type(drop_seed_state_tangent_type) :: dstate, fd
       real(wp) :: dlsf1_r(ndim), dlsf2_rr(ndim, ndim), dr(ndim), dlambda
-      real(wp) :: h, inv2h, fd_gnorm, fd_jval
-      integer :: status, status_p, status_m, istep
-      character(len=64) :: tag
+      real(wp) :: h, fd_gnorm, fd_jval, gn(4), jv(4)
+      integer :: status, status_s, istep, ioff
+      character(len=64) :: tag, otag
 
       call seed_state_switches(f_crit, f_foc, f_wleb)
       call seed_state_fixture(want_curvature, state)
@@ -3606,32 +3658,32 @@ contains
 
       do istep = 1, size(seed_fd_steps)
          h = seed_fd_steps(istep)
-         inv2h = 0.5_wp/h
          write (tag, "(a,l1,a,l1,a,es9.2)") "curv ", want_curvature, ", prune ", &
             use_wleb_prune, ", h ", h
 
-         call displace_seed_state(want_curvature, res, dlambda, h, state_p)
-         call build_seed_state(state_p, f_crit, f_foc, f_wleb, use_wleb_prune, status_p)
-         call check_seed_guards(error, trim(tag)//", +h", state_p, state, status_p, &
-                                use_wleb_prune)
-         if (allocated(error)) return
+         do ioff = 1, size(fd4_offsets)
+            call displace_seed_state(want_curvature, res, dlambda, &
+                                     fd4_offsets(ioff)*h, st(ioff))
+            call build_seed_state(st(ioff), f_crit, f_foc, f_wleb, use_wleb_prune, &
+                                  status_s)
+            write (otag, "(a,sp,f5.1,a)") trim(tag)//", ", fd4_offsets(ioff), "h"
+            call check_seed_guards(error, trim(otag), st(ioff), state, status_s, &
+                                   use_wleb_prune)
+            if (allocated(error)) return
+            gn(ioff) = st(ioff)%g_norm
+            jv(ioff) = norm2(st(ioff)%cross_vec)
+         end do
 
-         call displace_seed_state(want_curvature, res, dlambda, -h, state_m)
-         call build_seed_state(state_m, f_crit, f_foc, f_wleb, use_wleb_prune, status_m)
-         call check_seed_guards(error, trim(tag)//", -h", state_m, state, status_m, &
-                                use_wleb_prune)
-         if (allocated(error)) return
-
-         call seed_state_central_difference(state_p, state_m, inv2h, state%u_switch, fd)
+         call seed_state_central_difference(st, h, state%u_switch, fd)
          call check_seed_tangent_live(error, trim(tag), fd, want_curvature, use_wleb_prune)
          if (allocated(error)) return
          call check_seed_tangent_fields(error, trim(tag), dstate, fd)
          if (allocated(error)) return
 
          ! Two `drop_seed_result_type` channels the same displaced states pin
-         fd_gnorm = (state_p%g_norm - state_m%g_norm)*inv2h
+         fd_gnorm = fd4_scalar(gn(1), gn(2), gn(3), gn(4), h)
          call check_seed_fd(error, trim(tag), "res%d_gnorm", res%d_gnorm, fd_gnorm)
-         fd_jval = (norm2(state_p%cross_vec) - norm2(state_m%cross_vec))*inv2h
+         fd_jval = fd4_scalar(jv(1), jv(2), jv(3), jv(4), h)
          call check_seed_fd(error, trim(tag), "res%dJ", res%dJ, fd_jval)
          if (allocated(error)) return
       end do
@@ -3789,30 +3841,29 @@ contains
       state%xi0 = state%xi0 + step*dinp_v%dxi0
    end subroutine displace_seed_inputs
 
-   !> Central difference of the whole linear response, field by field
+   !> 4-point central difference of the whole linear response, field by field
    !>
-   !> @param[in]  res_p  Response at `+h`
-   !> @param[in]  res_m  Response at `-h`
-   !> @param[in]  inv2h  `1 / (2 h)`
-   !> @param[out] fd     Finite-difference reference for the result tangent
-   pure subroutine seed_result_central_difference(res_p, res_m, inv2h, fd)
-      !> Displaced responses
-      type(drop_seed_result_type), intent(in) :: res_p, res_m
-      !> Reciprocal of twice the step
-      real(wp), intent(in) :: inv2h
+   !> @param[in]  rs  Displaced responses in `fd4_offsets` order
+   !> @param[in]  h   Step size
+   !> @param[out] fd  Finite-difference reference for the result tangent
+   pure subroutine seed_result_central_difference(rs, h, fd)
+      !> Displaced responses, in `fd4_offsets` order
+      type(drop_seed_result_type), intent(in) :: rs(4)
+      !> Step size
+      real(wp), intent(in) :: h
       !> Finite-difference reference
       type(drop_seed_result_tangent_type), intent(out) :: fd
 
-      fd%dg = (res_p%dg - res_m%dg)*inv2h
-      fd%dH = (res_p%dH - res_m%dH)*inv2h
-      fd%dn_surf = (res_p%dn_surf - res_m%dn_surf)*inv2h
-      fd%d_gnorm = (res_p%d_gnorm - res_m%d_gnorm)*inv2h
-      fd%dJ = (res_p%dJ - res_m%dJ)*inv2h
-      fd%dw_f = (res_p%dw_f - res_m%dw_f)*inv2h
-      fd%dwleb = (res_p%dwleb - res_m%dwleb)*inv2h
-      fd%dxi = (res_p%dxi - res_m%dxi)*inv2h
-      fd%dk1 = (res_p%dk1 - res_m%dk1)*inv2h
-      fd%dk2 = (res_p%dk2 - res_m%dk2)*inv2h
+      fd%dg = fd4_scalar(rs(1)%dg, rs(2)%dg, rs(3)%dg, rs(4)%dg, h)
+      fd%dH = fd4_scalar(rs(1)%dH, rs(2)%dH, rs(3)%dH, rs(4)%dH, h)
+      fd%dn_surf = fd4_scalar(rs(1)%dn_surf, rs(2)%dn_surf, rs(3)%dn_surf, rs(4)%dn_surf, h)
+      fd%d_gnorm = fd4_scalar(rs(1)%d_gnorm, rs(2)%d_gnorm, rs(3)%d_gnorm, rs(4)%d_gnorm, h)
+      fd%dJ = fd4_scalar(rs(1)%dJ, rs(2)%dJ, rs(3)%dJ, rs(4)%dJ, h)
+      fd%dw_f = fd4_scalar(rs(1)%dw_f, rs(2)%dw_f, rs(3)%dw_f, rs(4)%dw_f, h)
+      fd%dwleb = fd4_scalar(rs(1)%dwleb, rs(2)%dwleb, rs(3)%dwleb, rs(4)%dwleb, h)
+      fd%dxi = fd4_scalar(rs(1)%dxi, rs(2)%dxi, rs(3)%dxi, rs(4)%dxi, h)
+      fd%dk1 = fd4_scalar(rs(1)%dk1, rs(2)%dk1, rs(3)%dk1, rs(4)%dk1, h)
+      fd%dk2 = fd4_scalar(rs(1)%dk2, rs(2)%dk2, rs(3)%dk2, rs(4)%dk2, h)
    end subroutine seed_result_central_difference
 
    !> Fail unless the result channels under test actually carry a signal
@@ -3909,17 +3960,17 @@ contains
       logical, intent(in) :: want_curvature, use_wleb_prune
 
       type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit, f_foc, f_wleb
-      type(drop_seed_state_type) :: state, state_p, state_m
-      type(drop_seed_result_type) :: res_b, res_v, res_p, res_m
+      type(drop_seed_state_type) :: state, st(4)
+      type(drop_seed_result_type) :: res_b, res_v, rs(4)
       type(drop_seed_state_tangent_type) :: dstate_b, dstate_v
       type(drop_seed_input_tangent_type) :: dinp_v
       type(drop_seed_result_tangent_type) :: dres, fd
       real(wp) :: dlsf1_r(ndim), dlsf2_rr(ndim, ndim), dr(ndim), dlambda
       real(wp) :: ddlsf1_r(ndim), ddlsf2_rr(ndim, ndim), ddr(ndim), ddlambda
       real(wp) :: dlsf1_r_v(ndim), dlsf2_rr_v(ndim, ndim), dr_v(ndim), dlambda_v
-      real(wp) :: h, inv2h
-      integer :: status, status_p, status_m, istep, kaxis
-      character(len=64) :: tag
+      real(wp) :: h
+      integer :: status, status_s, istep, kaxis, ioff
+      character(len=64) :: tag, otag
 
       call seed_state_switches(f_crit, f_foc, f_wleb)
       call seed_state_fixture(want_curvature, state)
@@ -3962,27 +4013,28 @@ contains
 
       do istep = 1, size(seed_fd_steps)
          h = seed_fd_steps(istep)
-         inv2h = 0.5_wp/h
          write (tag, "(a,l1,a,l1,a,es9.2)") "result curv ", want_curvature, ", prune ", &
             use_wleb_prune, ", h ", h
 
-         call displace_seed_inputs(want_curvature, dinp_v, h, state_p)
-         call build_seed_state(state_p, f_crit, f_foc, f_wleb, use_wleb_prune, status_p)
-         call check_seed_guards(error, trim(tag)//", +h", state_p, state, status_p, &
-                                use_wleb_prune)
-         if (allocated(error)) return
-         call apply_seed(state_p, dlsf1_r + h*ddlsf1_r, dlsf2_rr + h*ddlsf2_rr, &
-                         dr + h*ddr, dlambda + h*ddlambda, res_p)
+         ! The displacement enters twice -- once through the rebuilt state and
+         ! once through the seed the response is taken at -- so both have to run
+         ! over the same stencil offset
+         do ioff = 1, size(fd4_offsets)
+            associate (s_h => fd4_offsets(ioff)*h)
+               call displace_seed_inputs(want_curvature, dinp_v, s_h, st(ioff))
+               call build_seed_state(st(ioff), f_crit, f_foc, f_wleb, &
+                                     use_wleb_prune, status_s)
+               write (otag, "(a,sp,f5.1,a)") trim(tag)//", ", fd4_offsets(ioff), "h"
+               call check_seed_guards(error, trim(otag), st(ioff), state, status_s, &
+                                      use_wleb_prune)
+               if (allocated(error)) return
+               call apply_seed(st(ioff), dlsf1_r + s_h*ddlsf1_r, &
+                               dlsf2_rr + s_h*ddlsf2_rr, dr + s_h*ddr, &
+                               dlambda + s_h*ddlambda, rs(ioff))
+            end associate
+         end do
 
-         call displace_seed_inputs(want_curvature, dinp_v, -h, state_m)
-         call build_seed_state(state_m, f_crit, f_foc, f_wleb, use_wleb_prune, status_m)
-         call check_seed_guards(error, trim(tag)//", -h", state_m, state, status_m, &
-                                use_wleb_prune)
-         if (allocated(error)) return
-         call apply_seed(state_m, dlsf1_r - h*ddlsf1_r, dlsf2_rr - h*ddlsf2_rr, &
-                         dr - h*ddr, dlambda - h*ddlambda, res_m)
-
-         call seed_result_central_difference(res_p, res_m, inv2h, fd)
+         call seed_result_central_difference(rs, h, fd)
          call check_seed_result_live(error, trim(tag), fd, want_curvature)
          if (allocated(error)) return
          call check_seed_result_fields(error, trim(tag), dres, fd)
@@ -4133,17 +4185,17 @@ contains
       logical, intent(in) :: want_curvature
 
       type(moist_cavity_drop_swif_sigmoid_bump_type) :: f_crit, f_foc, f_wleb
-      type(drop_seed_state_type) :: state, state_p, state_m
-      type(drop_seed_result_type) :: res_v, res_ij, res_ji, res_sym, res_p, res_m
+      type(drop_seed_state_type) :: state, st(4)
+      type(drop_seed_result_type) :: res_v, res_ij, res_ji, res_sym, rs(4)
       type(drop_seed_state_tangent_type) :: dstate_v, dstate_ij, dstate_ji, dstate_sym
       type(drop_seed_input_tangent_type) :: dinp_v
       type(drop_seed_result_tangent_type) :: dres_ij, dres_ji, dres_sym, dres_pair, fd
       real(wp) :: e_ij(ndim, ndim), e_ji(ndim, ndim), e_sym(ndim, ndim)
       real(wp) :: zero_r(ndim), zero_m(ndim, ndim)
       real(wp) :: dlsf1_r_v(ndim), dlsf2_rr_v(ndim, ndim), dr_v(ndim), dlambda_v
-      real(wp) :: h, inv2h
-      integer :: status, status_p, status_m, istep, kaxis
-      character(len=64) :: tag
+      real(wp) :: h
+      integer :: status, status_s, istep, kaxis, ioff
+      character(len=64) :: tag, otag
 
       zero_r = 0.0_wp
       zero_m = 0.0_wp
@@ -4202,22 +4254,19 @@ contains
 
       do istep = 1, size(seed_fd_steps)
          h = seed_fd_steps(istep)
-         inv2h = 0.5_wp/h
          write (tag, "(a,l1,a,es9.2)") "asym pair, curv ", want_curvature, ", h ", h
 
-         call displace_seed_inputs(want_curvature, dinp_v, h, state_p)
-         call build_seed_state(state_p, f_crit, f_foc, f_wleb, .false., status_p)
-         call check_seed_guards(error, trim(tag)//", +h", state_p, state, status_p, .false.)
-         if (allocated(error)) return
-         call apply_seed(state_p, zero_r, e_sym, zero_r, 0.0_wp, res_p)
+         do ioff = 1, size(fd4_offsets)
+            call displace_seed_inputs(want_curvature, dinp_v, fd4_offsets(ioff)*h, &
+                                      st(ioff))
+            call build_seed_state(st(ioff), f_crit, f_foc, f_wleb, .false., status_s)
+            write (otag, "(a,sp,f5.1,a)") trim(tag)//", ", fd4_offsets(ioff), "h"
+            call check_seed_guards(error, trim(otag), st(ioff), state, status_s, .false.)
+            if (allocated(error)) return
+            call apply_seed(st(ioff), zero_r, e_sym, zero_r, 0.0_wp, rs(ioff))
+         end do
 
-         call displace_seed_inputs(want_curvature, dinp_v, -h, state_m)
-         call build_seed_state(state_m, f_crit, f_foc, f_wleb, .false., status_m)
-         call check_seed_guards(error, trim(tag)//", -h", state_m, state, status_m, .false.)
-         if (allocated(error)) return
-         call apply_seed(state_m, zero_r, e_sym, zero_r, 0.0_wp, res_m)
-
-         call seed_result_central_difference(res_p, res_m, inv2h, fd)
+         call seed_result_central_difference(rs, h, fd)
          call check_seed_result_fields(error, trim(tag), dres_pair, fd)
          if (allocated(error)) return
       end do

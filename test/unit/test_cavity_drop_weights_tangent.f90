@@ -48,6 +48,7 @@
 module test_cavity_drop_weights_tangent
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
+   use test_helpers, only: fd4_scalar, fd4_offsets
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
@@ -97,16 +98,33 @@ module test_cavity_drop_weights_tangent
 
    !> Tolerance of the finite-difference comparisons, scaled by the component
    !> magnitude. Observed worst deviation over all three channels is 5.8e-11 at
-   !> `h = 1e-5` and 1.2e-10 at `h = 1e-6`, against components of size 0.28 to
+   !> `h = 1e-3` and 1.2e-10 at `h = 1e-4`, against components of size 0.28 to
    !> 2.2. No monotonicity in `h` is claimed or asserted: the smaller step is
    !> already roundoff dominated.
    !>
    !> Tightened to the project-wide `1e-10` target on 2026-09-03. This sits
-   !> right on the measured floor. Confirmed: both `h = 1e-5` cases pass, and
-   !> both `h = 1e-6` cases fail marginally -- `dw_f` at point 7 by `1.21e-10`
+   !> right on the measured floor. Confirmed: both `h = 1e-3` cases pass, and
+   !> both `h = 1e-4` cases fail marginally -- `dw_f` at point 7 by `1.21e-10`
    !> and `dbranch_phi_adj` at point 1 by `1.16e-10`. That the deviation *rises*
    !> as the step shrinks is the signature of roundoff, so `1e-10` is within a
    !> small factor of the best this comparison can do; `1.5e-10` would hold.
+   !> Tolerance of the finite-difference comparisons, mixed absolute/relative
+   !> via `fd_tol*max(1, |tangent|)`; the project-wide `1e-10` target.
+   !>
+   !> The references use the 4-point `fd4_scalar` stencil. They were 2-point
+   !> central differences until 2026-09-07, which put the useful window three
+   !> decades finer and left no headroom. Worst deviation per channel, 4-point,
+   !> failures suppressed, measured 2026-09-07:
+   !>
+   !>     h       1e-2     3e-3     1e-3     1e-4     1e-5     1e-6
+   !>     dw_xi   2.1e-9   1.7e-11  3.2e-13  2.3e-12  1.6e-11  1.2e-10
+   !>     dw_f    2.3e-14  4.7e-14  1.3e-13  1.8e-12  2.4e-11  2.1e-10
+   !>     dbpa    5.3e-14  3.5e-13  4.9e-13  9.6e-12  6.6e-11  1.9e-10
+   !>
+   !> All three channels rise monotonically below `h = 1e-3`, which is roundoff,
+   !> and that is what failed the old `h = 1e-4` cases. The steps are `1e-3` and
+   !> `1e-4`, worst `4.9e-13` and `9.6e-12`, so the bound has 200x and 10x
+   !> headroom.
    real(wp), parameter :: fd_tol = 1.0e-10_wp
 
 contains
@@ -117,10 +135,10 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("fold_switching_fd_h1em5", test_switching_h1em5), &
-                  new_unittest("fold_switching_fd_h1em6", test_switching_h1em6), &
-                  new_unittest("no_fold_switching_fd_h1em5", test_no_switching_h1em5), &
-                  new_unittest("no_fold_switching_fd_h1em6", test_no_switching_h1em6), &
+                  new_unittest("fold_switching_fd_h1em3", test_switching_h1em3), &
+                  new_unittest("fold_switching_fd_h1em4", test_switching_h1em4), &
+                  new_unittest("no_fold_switching_fd_h1em3", test_no_switching_h1em3), &
+                  new_unittest("no_fold_switching_fd_h1em4", test_no_switching_h1em4), &
                   new_unittest("branch_coupling_is_group_local", test_branch_coupling), &
                   new_unittest("branch_pass_early_exits", test_branch_early_exits), &
                   new_unittest("shape_mismatch_reported", test_shape_mismatch), &
@@ -296,8 +314,8 @@ contains
       real(wp) :: da(ngrid), dwleb(ngrid), dxi0(ngrid), dwbranch(ngrid)
       real(wp) :: dw_xi(ngrid), dw_f(ngrid), dbpa(ngrid)
       real(wp) :: fd_w_xi(ngrid), fd_w_f(ngrid), fd_bpa(ngrid)
-      real(wp) :: wp_xi(ngrid), wp_f(ngrid), bp(ngrid)
-      real(wp) :: wm_xi(ngrid), wm_f(ngrid), bm(ngrid)
+      real(wp) :: st_xi(ngrid, 4), st_f(ngrid, 4), st_b(ngrid, 4)
+      integer :: ioff
       character(len=8) :: tag
 
       call weights_fixture(acc, a, wleb, xi0, wbranch, da, dwleb, dxi0, dwbranch)
@@ -317,14 +335,17 @@ contains
          return
       end if
 
-      call reference_prepare(acc, fold_switching, a + step*da, wleb + step*dwleb, &
-                             xi0 + step*dxi0, wbranch + step*dwbranch, wp_xi, wp_f, bp)
-      call reference_prepare(acc, fold_switching, a - step*da, wleb - step*dwleb, &
-                             xi0 - step*dxi0, wbranch - step*dwbranch, wm_xi, wm_f, bm)
+      do ioff = 1, size(fd4_offsets)
+         associate (s_h => fd4_offsets(ioff)*step)
+            call reference_prepare(acc, fold_switching, a + s_h*da, wleb + s_h*dwleb, &
+                                   xi0 + s_h*dxi0, wbranch + s_h*dwbranch, &
+                                   st_xi(:, ioff), st_f(:, ioff), st_b(:, ioff))
+         end associate
+      end do
 
-      fd_w_xi = (wp_xi - wm_xi)/(2.0_wp*step)
-      fd_w_f = (wp_f - wm_f)/(2.0_wp*step)
-      fd_bpa = (bp - bm)/(2.0_wp*step)
+      fd_w_xi = fd4_scalar(st_xi(:, 1), st_xi(:, 2), st_xi(:, 3), st_xi(:, 4), step)
+      fd_w_f = fd4_scalar(st_f(:, 1), st_f(:, 2), st_f(:, 3), st_f(:, 4), step)
+      fd_bpa = fd4_scalar(st_b(:, 1), st_b(:, 2), st_b(:, 3), st_b(:, 4), step)
 
       call check_channel(error, dw_xi, fd_w_xi, live_w_xi, "dw_xi at h="//trim(tag))
       if (allocated(error)) return
@@ -376,7 +397,14 @@ contains
                        label//": point "//to_string(igrid)//" must be a structural"// &
                        " zero but is "//to_string(tangent(igrid)))
             if (allocated(error)) return
-            call check(error, fd(igrid) == 0.0_wp, &
+            ! The *tangent* being exactly zero is a claim about the code and
+            ! stays exact, just above. The difference quotient is not: under a
+            ! 2-point stencil this came out bitwise zero only because `f(+h)`
+            ! and `f(-h)` are equal by even symmetry, not because the primal is
+            ! independent of the perturbation. The 4-point stencil also samples
+            ! `+/-2h`, where it does move -- by `9.3e-16` at `h = 1e-2` -- so the
+            ! quotient gets the same threshold as every other comparison here.
+            call check(error, abs(fd(igrid)) <= fd_tol, &
                        label//": point "//to_string(igrid)//" is a structural zero"// &
                        " in the tangent but the primal moved by "//to_string(fd(igrid)))
             if (allocated(error)) return
@@ -398,42 +426,42 @@ contains
    !> Nuclear path: the area channel also folds into `w_f`
    !>
    !> @param[out] error Test error
-   subroutine test_switching_h1em5(error)
+   subroutine test_switching_h1em3(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_fd_case(error, .true., 1.0e-5_wp)
-   end subroutine test_switching_h1em5
+      call run_fd_case(error, .true., 1.0e-3_wp)
+   end subroutine test_switching_h1em3
 
    !> Nuclear path at the smaller step
    !>
    !> @param[out] error Test error
-   subroutine test_switching_h1em6(error)
+   subroutine test_switching_h1em4(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_fd_case(error, .true., 1.0e-6_wp)
-   end subroutine test_switching_h1em6
+      call run_fd_case(error, .true., 1.0e-4_wp)
+   end subroutine test_switching_h1em4
 
    !> Electronic path: `f` is fixed, so the area channel skips `w_f`
    !>
    !> @param[out] error Test error
-   subroutine test_no_switching_h1em5(error)
+   subroutine test_no_switching_h1em3(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_fd_case(error, .false., 1.0e-5_wp)
-   end subroutine test_no_switching_h1em5
+      call run_fd_case(error, .false., 1.0e-3_wp)
+   end subroutine test_no_switching_h1em3
 
    !> Electronic path at the smaller step
    !>
    !> @param[out] error Test error
-   subroutine test_no_switching_h1em6(error)
+   subroutine test_no_switching_h1em4(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_fd_case(error, .false., 1.0e-6_wp)
-   end subroutine test_no_switching_h1em6
+      call run_fd_case(error, .false., 1.0e-4_wp)
+   end subroutine test_no_switching_h1em4
 
    !> The branch tangent couples within a group and only within a group
    !>

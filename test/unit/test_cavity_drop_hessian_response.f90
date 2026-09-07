@@ -90,61 +90,110 @@
 !>     exactly one everywhere, `branch_phi_adj` and its tangent are identically
 !>     zero, and the composite above is available. SvdW and CFC.
 !>   * `FIX_CROSS`, the five-carbon cross at `proj_level = 7` with a softened
-!>     softmax (`s = 0.5`), does branch. That is the only fixture on which
+!>     softmax (`s = 2.0`), does branch. That is the only fixture on which
 !>     `dbranch_phi_adj` is nonzero, and therefore the only one that can catch a
 !>     driver which drops the branch channel of pass 2. The fixed half refuses
 !>     this grid, so the composite is not available here.
 !>
-!> **The branched fixture does not reach the project bound, and the reason is
-!> the fixture.** It plateaus at `1.5e-8` absolute across the whole window and
-!> rises as `1/h` below it, which puts the round-off of the gradient difference
-!> at `~7e-12` -- three orders above the same quantity on `FIX_PLAIN`. The
-!> amplifier is the branches themselves: `get_test_cross` has no near-degenerate
-!> minima, only 3.5-4.4 Bohr secondary solutions kept alive by the softened
-!> softmax, and their `wleb` sits near the pruning floor with `xi0` three orders
-!> above the grid's typical value. [[branch_point_adjoint]] forms
-!> `-0.5 w_xi xi0 / wbranch` on exactly those points, so `branch_phi_adj` is
-!> enormous there and cancels in the group mean. A better-conditioned branched
-!> fixture would need branches of comparable weight, which this geometry does
-!> not have; the case therefore ships as a failure with a measured number.
+!> ## What the softmax temperature of the branched fixture buys
+!>
+!> `CROSS_BRANCH_S` was `0.5` until 2026-09-07, and at that value
+!> `svdw_cross_branching_fd` could not be made to pass at any step: it bottomed
+!> out at `1.5e-8`, a factor of 150 over the bound. The cause was not the
+!> derivative and not the stencil. It was `max|G|`.
+!>
+!> **The floor of a differenced reference is `~4 eps max|G| / h`**, where `max|G|`
+!> is the largest component of the gradient being differenced -- not of the
+!> derivative being checked. Measured on this fixture across six softmax
+!> temperatures, `floor * h / (eps max|G|)` stays in `3.5 .. 7.0` while `max|G|`
+!> itself moves by a factor of 134, so the law fixes the whole design:
+!>
+!> | `s`  | branched pts | `max|branch_phi_adj|` | `max|G|` | `floor * h` |
+!> |------|--------------|-----------------------|----------|-------------|
+!> | 0.25 |      0       |  0                    |   35.2   |   4e-14     |
+!> | 0.5  |     12       |  4.4e2                | **4721** |   5e-12     |
+!> | 1.0  |     12       |  2.4e1                |    338   |   2.9e-13   |
+!> | 2.0  |     12       |  4.0                  |   95.3   |   7.3e-14   |
+!> | 4.0  |     12       |  1.1                  |   57.3   |   6.0e-14   |
+!> | 8.0  |     12       |  3.8e-1               |   47.4   |   7.3e-14   |
+!>
+!> At `s = 0.5` a floor under `1e-10` needs `h > 4 eps * 4721 / 1e-10`, about
+!> `5e-2` Bohr. No stencil reaches that -- the grid guard would fire first and
+!> the truncation term of any order would be enormous there -- which is why two
+!> rounds of step tuning on this case failed and had to.
+!>
+!> **What made `max|G|` 4721 rather than 35.** The gradient carries
+!> `branch_phi_adj` and nothing else on this fixture is remotely that large; the
+!> table's first and last rows bracket it, a grid with no branches at all and a
+!> grid with the same twelve branch points but a negligible branch adjoint both
+!> sitting near 40. The twelve points are six anchor groups of two, each a live
+!> branch and one that is all but dead, and the dead one is the problem. At
+!> `s = 0.5` it carried `wbranch = 1.5e-4` and `wleb = 8.6e-6` against the live
+!> branch's `0.9998` and `0.268`. Since the Gaussian width goes as
+!> `xi0 ~ wleb^(-1/2)`, that put `xi0 = 425` next to a live `2.50` -- a factor
+!> of 170, which is `sqrt(3.1e4)` exactly. [[branch_point_adjoint]] forms
+!> `-0.5 w_xi xi0 / wbranch` and the group reduction multiplies `wbranch` back
+!> in, so what survives is `branch_phi_adj ~ w_xi xi0 / (2 s)`: the `wbranch`
+!> cancels and the width does not. **A dying branch does not stop contributing
+!> as its weight goes to zero -- its adjoint grows, because its Lebedev weight
+!> is what is going to zero and `xi0` is that weight to the `-1/2`.**
+!>
+!> Raising `s` to `2.0` shares the group weight more evenly, which lifts the
+!> dead branch's `wleb` and collapses its `xi0`. `max|G|` falls 50-fold, the
+!> floor falls with it, and the case passes -- see `FD_STEPS` for the step this
+!> then requires, which is larger, not smaller.
+!>
+!> Two things this is *not*. It is not a cancellation: `adj_m - mean_adj_branch`
+!> inside [[compute_branch_phi_adj]] was checked at every branched point and the
+!> two differ by four orders, never by less. And it is not a production concern:
+!> at the production temperature the same branch is not kept alive at all -- the
+!> `s = 0.25` row above already has no branches -- so a branch that survives a
+!> sharp softmax is genuinely near-degenerate and has neither a tiny `wleb` nor
+!> a huge `xi0`. The pathology belongs to a far solution held open by a softened
+!> softmax, which is what this fixture is made of.
 !>
 !> ## The mutation that shaped the branched case
 !>
 !> `deff%branch_phi_adj` was zeroed after pass 2 in
 !> `derivatives/hessian_response.f90` and the suite re-run:
 !>
-!>   * `svdw_cross_branching_fd` fails at `6.50e-3` absolute and `4.67e-3`
+!>   * `svdw_cross_branching_fd` fails at `4.3069029e-1` absolute and `3.24e-2`
 !>     relative -- worst component atom 2 axis 3, direction 1, analytic
-!>     `12.5652314` against a reference of `12.5717282`. That is five and a half
-!>     orders above the fixture's own `1.5e-8` floor;
-!>   * the number is *identical in every digit at all of h = 2.5e-4, 2.0e-4 and
-!>     1.5e-4*. A step-independent deviation is a missing term, not a stencil
-!>     artefact, and that is the cleanest part of the signature;
+!>     `12.8716481` against a reference of `13.3023384`. That is nine and a half
+!>     orders above the fixture's floor of `~8e-11`;
+!>   * the number is *identical in every printed digit at both steps*,
+!>     `4.306903e-1` at `h = 1.1e-3` and at `h = 8.0e-4`. A step-independent
+!>     deviation is a missing term, not a stencil artefact, and that is the
+!>     cleanest part of the signature;
 !>   * every `FIX_PLAIN` case is unchanged, bit for bit, including the two
 !>     composites and the all-channel case. `branch_phi_adj` is structurally
 !>     zero there, so a driver that drops it is invisible to an unbranched
-!>     fixture -- which is why one branched fixture is worth its cost even at
-!>     `1.5e-8`.
+!>     fixture -- which is why one branched fixture is worth its cost.
 !>
 !> ## Step and grid guard
 !>
-!> `FD_STEPS` is measured; the sweep is in the comment on that parameter. The
-!> grid is guarded at every stencil geometry ([[assert_grid_match]]) on
-!> `numbering`, `owner`, `branch_count` and `anchor_id`, so a step large enough
-!> to re-enumerate the grid fails loudly instead of putting a step into the
-!> reference.
+!> `FD_STEPS` and `COMPOSITE_STEPS` are measured; the sweeps are in the comments
+!> on those parameters. The grid is guarded at every stencil geometry
+!> ([[assert_grid_match]]) on `numbering`, `owner`, `branch_count` and
+!> `anchor_id`, so a step large enough to re-enumerate the grid fails loudly
+!> instead of putting a step into the reference.
+!>
+!> The guard matters more than it did: the shipped steps are four times the
+!> fourth-order ones they replaced, and a seven-point stencil reaches `3h`
+!> rather than `2h`. It was swept and does not fire anywhere the sweeps above
+!> go -- the largest displacement any of them applies is `3 * 3.0e-3`, nine
+!> times the `1e-3` reach of the shipped `FD_STEPS(1)`, on both fixtures and
+!> both level-set models.
 module test_cavity_drop_hessian_response
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type, new
+   use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
-   use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
-   use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
+   use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_radii, only: default_cpcm_radii
-   use moist_context, only: moist_context_type, new_context
-   use test_helpers, only: fill_legacy_radii, get_test_cross
+   use moist_context, only: moist_context_type
+   use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN, FIX_CROSS
 
    implicit none(type, external)
    private
@@ -153,12 +202,6 @@ module test_cavity_drop_hessian_response
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
-
-   !> Level-set model of a fixture
-   integer, parameter :: LSF_SVDW = 1, LSF_CFC = 2
-
-   !> Geometry of a fixture
-   integer, parameter :: FIX_PLAIN = 1, FIX_CROSS = 2
 
    !> Directions pushed through in one call: one sparse, one dense
    integer, parameter :: NDIR = 2
@@ -169,103 +212,151 @@ module test_cavity_drop_hessian_response
    integer, parameter :: CH_K1 = 5, CH_K2 = 6, CH_A = 7, CH_W = 8
    integer, parameter :: NCHAN = 8
 
-   !> Shared fixture settings
-   real(wp), parameter :: BLEND_K = 2.5_wp
-   real(wp), parameter :: BLEND_3B = 1.0_wp
-   integer, parameter :: NUM_LEB = 50
-   real(wp), parameter :: PROJ_TOL = 1.0E-14_wp
-   integer, parameter :: PROJ_MAXITER = 1000
-   integer, parameter :: PROJ_LEVEL = 2
-   integer, parameter :: WLEB_PRUNE = 4
+   !> Softmax temperature of the branching fixture
+   real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
 
-   !> Branching fixture: multistart level and softmax temperature
-   real(wp), parameter :: CROSS_BLEND_K = 1.0_wp
-   integer, parameter :: CROSS_PROJ_LEVEL = 7
-   real(wp), parameter :: CROSS_BRANCH_S = 0.5_wp
-
-   !> Production softmax temperature, used by the non-branching fixture
-   real(wp), parameter :: PLAIN_BRANCH_S = 0.0025_wp
+   !> Branch set the cross fixture is expected to find: six anchor groups of two
+   !>
+   !> Pinned rather than merely asserted nonzero, because `CROSS_BRANCH_S` also
+   !> sets the admissible branch radius --
+   !> `branch_rho_cut = log(1/wleb_cut) sqrt(branch_weight_s)` -- so raising it
+   !> from `0.5` to `2.0` on 2026-09-07 doubled that radius. Branch *discovery*
+   !> on this geometry is known to be platform dependent (the 4.4 Bohr secondary
+   !> minimum sits at the edge of the multistart seed rings), and a platform that
+   !> admitted a different set would change `max|G|` and with it the round-off
+   !> floor the steps are chosen against. This count was stable at
+   !> `s = 0.5, 1, 2, 4, 8` here, a sixteen-fold range; if it ever fires
+   !> elsewhere, re-measure `max|G|` and the sweep in the comment on `FD_STEPS`
+   !> rather than adjusting the number.
+   integer, parameter :: CROSS_BRANCHED_PTS = 12
+   integer, parameter :: CROSS_MAX_BRANCH = 2
 
    !> Central-difference steps of the subtraction identity
    !>
-   !> Measured over both directions, as `worst absolute / worst relative`, the
-   !> relative one taken over exactly the components that already exceed
-   !> `FD_ABS` -- that is, over the components that decide the test, so a `0`
-   !> entry means no component is over the absolute bound at all:
+   !> Measured over both directions and all four subtraction cases, as the worst
+   !> absolute deviation `|analytic - FD|`. A `*` marks a step at which some
+   !> component misses the absolute bound but is saved by the relative one, so
+   !> the case still passes; a value with no `*` is clean on both:
    !>
-   !> | h      | svdw/plain        | cfc/plain         | svdw/cross        |
-   !> |--------|-------------------|-------------------|-------------------|
-   !> | 1.0e-3 | 1.10e-08 / 2.5e-09| 2.34e-07 / 1.1e-08| 8.92e-09 / 6.1e-07|
-   !> | 6.0e-4 | 1.43e-09 / 3.2e-10| 3.03e-08 / 1.0e-09| 1.09e-08 / 7.3e-08|
-   !> | 5.0e-4 | 6.99e-10 / 1.6e-10| 1.46e-08 / 4.9e-10| 1.84e-08 / 4.1e-08|
-   !> | 4.0e-4 | 3.01e-10 / 6.2e-11| 5.96e-09 / 2.0e-10| 1.73e-08 / 3.4e-08|
-   !> | 3.5e-4 | 1.90e-10 / 4.1e-11| 3.52e-09 / 1.2e-10| 1.91e-08 / 3.0e-08|
-   !> | 3.0e-4 | 8.69e-11 / 0      | 1.89e-09 / 6.4e-11| 1.66e-08 / 3.6e-08|
-   !> | 2.5e-4 | 7.32e-11 / 0      | 8.75e-10 / 3.0e-11| 1.51e-08 / 6.8e-08|
-   !> | 2.0e-4 | 4.04e-11 / 0      | 3.87e-10 / 1.3e-11| 1.51e-08 / 8.9e-08|
-   !> | 1.5e-4 | 8.68e-11 / 0      | 1.31e-10 / 2.2e-10| 6.20e-08 / 8.2e-08|
-   !> | 1.0e-4 | 1.62e-10 / 1.9e-09| 8.98e-11 / 0      | 3.84e-08 / 3.1e-08|
+   !> | h      | svdw/plain | cfc/plain  | svdw/all   | svdw/cross |
+   !> |--------|------------|------------|------------|------------|
+   !> | 3.0e-3 | 3.36e-09 * | 4.18e-08 * | 3.35e-09 * | 9.68e-10 * |
+   !> | 2.5e-3 | 1.13e-09 * | 1.40e-08 * | 1.13e-09 * | 3.21e-10 * |
+   !> | 2.0e-3 | 2.90e-10 * | 3.68e-09 * | 2.85e-10 * | 1.06e-10   |
+   !> | 1.5e-3 | 5.42e-11   | 6.63e-10   | 6.87e-11   | 8.62e-11   |
+   !> | 1.3e-3 | 4.42e-11   | 2.77e-10   | 4.04e-11   | 1.11e-10   |
+   !> | 1.2e-3 | 3.78e-11   | 1.63e-10   | 2.78e-11   | 7.61e-11   |
+   !> | 1.1e-3 | 4.77e-11   | 1.02e-10   | 3.13e-11   | 8.20e-11   |
+   !> | 1.0e-3 | 8.05e-11   | 6.52e-11   | 4.63e-11   | 1.17e-10   |
+   !> | 9.0e-4 | 2.58e-11   | 4.53e-11   | 6.13e-11   | 9.83e-11   |
+   !> | 8.0e-4 | 5.59e-11   | 5.21e-11   | 4.34e-11   | 7.87e-11   |
+   !> | 7.0e-4 | 7.35e-11   | 4.90e-11   | 1.11e-10   | 7.22e-11   |
+   !> | 6.0e-4 | 1.15e-10   | 3.77e-11   | 5.95e-11   | 1.65e-10 * |
+   !> | 5.0e-4 | 1.18e-10   | 1.20e-10   | 1.55e-10   | 1.93e-10   |
+   !> | 4.0e-4 | 1.00e-10   | 1.26e-10   | 1.40e-10   | 2.70e-10   |
+   !> | 3.0e-4 | 2.40e-10   | 1.31e-10   | 1.06e-10   | 2.49e-10 * |
    !>
-   !> A clean bowl on `FIX_PLAIN`: `O(h^4)` truncation on the way down -- the
-   !> `cfc/plain` absolute column falls by a factor of 124 from `1e-3` to
-   !> `3e-4`, which is `(10/3)^4` -- and round-off on the way up below `1.5e-4`.
-   !> The two steps below are inside the flat bottom for both level-set models
-   !> and are a factor of 1.25 apart. Both are required, so a value that agrees
-   !> at one step only -- the signature of a step sitting on the round-off wall
-   !> -- fails. `1.5e-4` is deliberately not one of them: `cfc/plain` has a
-   !> round-off spike there (`2.2e-10` relative) that `2.0e-4` and `1.0e-4` on
-   !> either side of it do not.
+   !> **Read the table by columns, not by rows.** The two walls move
+   !> independently. Truncation is `O(h^6)` and is set by the level-set model:
+   !> `cfc/plain` is twelve times `svdw/plain` at `3e-3` and is what closes the
+   !> window from above, at about `1.2e-3`. Round-off is `~4 eps max|G| / h` and
+   !> is set by the fixture: `svdw/cross` carries the largest `max|G|` of the
+   !> four and is what closes it from below, at about `7e-4`. Everything in
+   !> between is one flat, jittery bottom near `5e-11`; the ordering inside it is
+   !> noise and must not be read as a trend.
    !>
-   !> The floor is two orders below what the sibling suites reach, and the
-   !> subtraction is why: `G(acc) - G(acc_frozen)` is formed at each stencil
+   !> The pair below sits in that window, a factor of 1.375 apart. Both are
+   !> required, so a value that agrees at one step only -- the signature of a
+   !> step sitting on a wall -- fails. Worst excess over the whole suite,
+   !> `max(|d|/FD_ABS, |d|/(FD_REL |ref|))` minimised per component as the test
+   !> does, is `0.57`, so both bounds can be tightened by `1.75` before anything
+   !> breaks; it is bit-identical across repeated runs and thread counts.
+   !>
+   !> **Before moving these, read the module header's floor law.** The window is
+   !> a property of `max|G|`, and `max|G|` is a property of the fixtures. If a
+   !> fixture changes, `4 eps max|G| / 1e-10` is the smallest step that can still
+   !> work, and no stencil order will rescue a step below it -- raising the order
+   !> only moves the *upper* wall. That is the whole reason this reference is
+   !> `O(h^6)`: the steps it needs are ten times larger than the fourth-order
+   !> ones it replaced, which is the opposite of the usual instinct.
+   !>
+   !> The subtraction is why these columns bottom out two orders below what the
+   !> sibling suites reach: `G(acc) - G(acc_frozen)` is formed at each stencil
    !> geometry, so everything the two gradients share -- the whole `Phi' . eff`
    !> term, most of the projection's own round-off -- never reaches the
-   !> difference quotient. `svdw/cross` is the case that does not benefit; see
-   !> the module header for what its floor is made of.
-   real(wp), parameter :: FD_STEPS(2) = [2.5E-4_wp, 2.0E-4_wp]
+   !> difference quotient. `svdw/cross` benefits like the rest but is still the
+   !> column that closes the window from below, for the plain reason that its
+   !> `max|G|` is the largest of the four: `95` against `40` on `FIX_PLAIN`.
+   !>
+   !> **Historical.** At fourth order and `CROSS_BRANCH_S = 0.5` the shipped pair
+   !> was `[3.0e-4, 2.5e-4]` and no pair passed the suite; the failure counts of
+   !> the last sweep taken there, all other parameters unchanged, were
+   !> `[1.5e-4, 1.0e-4] 4`, `[2.0e-4, 1.5e-4] 4`, `[2.5e-4, 2.0e-4] 3`,
+   !> `[3.0e-4, 2.5e-4] 1`, `[4.0e-4, 3.0e-4] 2`, `[6.0e-4, 4.0e-4] 4`,
+   !> `[1.0e-3, 6.0e-4] 4`. The one survivor was `svdw_cross_branching_fd`, and
+   !> the header explains why it could not have been tuned away.
+   real(wp), parameter :: FD_STEPS(2) = [1.1E-3_wp, 8.0E-4_wp]
 
    !> Central-difference steps of the composite assertion
    !>
    !> The composite differences the shipped gradient itself rather than a
-   !> difference of two gradients, so it inherits the fixed half's floor rather
-   !> than this suite's. Measured worst deviation of
-   !> `FD - (H_fixed . v + response)`, over both directions:
+   !> difference of two gradients, so nothing cancels before the difference
+   !> quotient and its floor is the bare `~4 eps max|G| / h`. Worst absolute
+   !> deviation of `FD - (H_fixed . v + response)`, over both directions, at
+   !> `O(h^6)`:
    !>
-   !> | h      | svdw/plain        | cfc/plain         |
-   !> |--------|-------------------|-------------------|
-   !> | 3.0e-3 | 3.07e-05 / 2.4e-06| 2.16e-05 / 9.8e-07|
-   !> | 1.0e-3 | 3.79e-07 / 3.0e-08| 2.66e-07 / 1.2e-08|
-   !> | 6.0e-4 | 4.91e-08 / 3.9e-09| 3.45e-08 / 1.6e-09|
-   !> | 4.0e-4 | 9.67e-09 / 7.8e-10| 6.84e-09 / 3.1e-10|
-   !> | 3.0e-4 | 3.10e-09 / 2.6e-10| 2.22e-09 / 9.8e-11|
-   !> | 2.5e-4 | 1.50e-09 / 1.3e-10| 1.02e-09 / 4.6e-11|
-   !> | 2.2e-4 | 9.53e-10 / 2.0e-10| 6.45e-10 / 2.1e-11|
-   !> | 1.9e-4 | 5.06e-10 / 4.2e-11| 2.75e-10 / 4.1e-11|
-   !> | 1.7e-4 | 3.35e-10 / 1.3e-09| 2.49e-10 / 4.5e-10|
-   !> | 1.5e-4 | 2.60e-10 / 6.9e-11| 2.28e-10 / 3.3e-11|
-   !> | 1.4e-4 | 1.40e-10 / 1.4e-10| 1.29e-10 / 3.2e-10|
-   !> | 1.2e-4 | 2.35e-10 / 2.5e-10| 2.55e-10 / 4.7e-10|
-   !> | 1.0e-4 | 3.64e-10 / 2.6e-09| 2.16e-10 / 4.7e-10|
+   !> | h      | svdw/plain | cfc/plain  |
+   !> |--------|------------|------------|
+   !> | 3.0e-3 | 5.23e-08   | 5.82e-08   |
+   !> | 2.0e-3 | 4.59e-09   | 5.13e-09   |
+   !> | 1.5e-3 | 8.19e-10   | 9.08e-10   |
+   !> | 1.2e-3 | 2.20e-10   | 2.32e-10   |
+   !> | 1.0e-3 | 1.02e-10   | 9.55e-11   |
+   !> | 9.0e-4 | 5.18e-11   | 5.67e-11   |
+   !> | 8.0e-4 | 5.92e-11   | 5.25e-11   |
+   !> | 7.0e-4 | 2.50e-11   | 7.26e-11   |
+   !> | 6.0e-4 | 5.12e-11   | 4.62e-11   |
+   !> | 5.0e-4 | 4.57e-11   | 6.56e-11   |
+   !> | 4.0e-4 | 7.24e-11   | 8.82e-11   |
    !>
-   !> Same bowl, one order shallower and with a much rougher bottom: the
-   !> absolute column never goes under `1e-10`, so the composite is decided by
-   !> the relative bound throughout, and the relative column below `2e-4` is
-   !> round-off jitter rather than a trend -- `1.7e-4` misses by an order while
-   !> `1.9e-4` and `1.5e-4` on either side of it pass. Those two are the pair,
-   !> and they are the only pair in the sweep that passes for both level-set
-   !> models. The margin is a factor of two, and that is a statement about the
-   !> reference, not about either half.
-   real(wp), parameter :: COMPOSITE_STEPS(2) = [1.9E-4_wp, 1.5E-4_wp]
+   !> The two models track each other here, unlike in the subtraction sweep:
+   !> both walls are properties of the shipped gradient, which is the same
+   !> object in both. Truncation closes the window at about `1.1e-3` and the
+   !> bottom is flat from there down past `4e-4` -- the round-off wall of
+   !> `FIX_PLAIN` is far enough below that this sweep never reaches it. The pair
+   !> below sits mid-window, a factor of 1.5 apart, worst excess `0.51`.
+   !>
+   !> **This sweep is the before-and-after of the stencil change.** At `O(h^4)`
+   !> the bowl bottomed at `1.4e-4` and the absolute column never went under
+   !> `1e-10` at any step, so the composite passed on the relative bound alone
+   !> with a margin of two; the pair was `[1.9e-4, 1.5e-4]`, picked around a
+   !> round-off spike at `1.7e-4`. Sixth order takes the bottom of the bowl from
+   !> `1.29e-10` to `2.50e-11`, and the shipped pair from `5.06e-10`/`2.60e-10`
+   !> to `5.18e-11`/`5.12e-11` -- five-fold at the bottom, five to ten at the
+   !> pair -- and widens the window by an order, at four extra cavity builds per
+   !> step.
+   real(wp), parameter :: COMPOSITE_STEPS(2) = [9.0E-4_wp, 6.0E-4_wp]
 
    !> Finite-difference agreement bounds
    !>
    !> The project target, `1e-10` absolute and `1e-10` relative; a component
-   !> fails only when it misses *both*. Met by `svdw_plain_fd`, `cfc_plain_fd`
-   !> and both composites. Missed, deliberately and with the numbers in the
-   !> module header, by `svdw_plain_all_channels_fd` (the curvature channels'
-   !> known amplification, `1.0e-8`) and by `svdw_cross_branching_fd` (the
-   !> branched fixture's own floor, `1.5e-8`). Neither is given a tolerance of
-   !> its own.
+   !> fails only when it misses *both*. **Every case in this suite meets it**,
+   !> with `1.75` in hand -- the worst excess over all eight tests, both steps
+   !> and both directions is `0.57`, measured by the same `min` of the two
+   !> ratios the comparison takes.
+   !>
+   !> The suite carried two documented exceptions and has neither any more.
+   !> `svdw_plain_all_channels_fd` was a deliberate miss at `1.0e-8`, charged to
+   !> "the curvature channels' known amplification"; that amplification was the
+   !> `sqrt(KM^2 - KG)` cancellation in `kernel.f90`, fixed 2026-09-07.
+   !> `svdw_cross_branching_fd` was a deliberate miss at `1.5e-8`, charged to
+   !> the branched fixture's own round-off floor; that floor was `max|G|`, and
+   !> the module header has what it was made of and what moved it.
+   !>
+   !> Neither was given a tolerance of its own, and neither should be. A
+   !> per-case bound here would have hidden both diagnoses: the curvature one
+   !> was a real defect in shipped code, and the branch one was a fixture
+   !> parameter that also cost the case nine orders of discriminating power.
    real(wp), parameter :: FD_ABS = 1.0E-10_wp
    real(wp), parameter :: FD_REL = 1.0E-10_wp
 
@@ -338,12 +429,14 @@ contains
 
    !> SvdW on the branching fixture
    !>
-   !> The only case in which `dbranch_phi_adj` is nonzero, and **expected to
-   !> fail at the project bound, at `1.5e-8`**: the fixture's far-branch points
-   !> put a `7e-12` round-off floor under the gradient difference. The module
-   !> header has the diagnosis, and the mutation that shows the branch channel
-   !> is nevertheless present and right to five and a half orders better than a
-   !> driver which drops it.
+   !> The only case in which `dbranch_phi_adj` is nonzero, and the only reason
+   !> `FIX_CROSS` is built at all. It failed at `1.5e-8` until 2026-09-07, when
+   !> `CROSS_BRANCH_S` went from `0.5` to `2.0`; the module header has why that
+   !> is a fifty-fold cut in the reference's round-off floor rather than a
+   !> loosened fixture. It is now the *most* discriminating case in the suite as
+   !> well as a passing one: zeroing the branch channel of pass 2 moves it by
+   !> `0.43`, nine and a half orders over its floor and step-independent to
+   !> every printed digit.
    !>
    !> @param[out] error Error handle
    subroutine test_svdw_cross(error)
@@ -387,8 +480,9 @@ contains
       !> Extents and loop indices
       integer :: nsph, idir, istep
 
-      call fixture_geometry(fix_kind, mol)
-      call build_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error)
+      call drop_fixture_geometry(fix_kind, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                  cross_branch_s=CROSS_BRANCH_S)
       if (allocated(error)) return
       call assert_branching(cavity, fix_kind, "base geometry", error)
       if (allocated(error)) return
@@ -483,8 +577,8 @@ contains
 
       channels = moving_channels()
 
-      call fixture_geometry(FIX_PLAIN, mol)
-      call build_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
       if (allocated(error)) return
       call assert_branching(cavity, FIX_PLAIN, "base geometry", error)
       if (allocated(error)) return
@@ -580,8 +674,8 @@ contains
 
       channels = all_channels()
 
-      call fixture_geometry(FIX_PLAIN, mol)
-      call build_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
       call assert_branching(cavity, FIX_PLAIN, "single-branch fixture", error)
       if (allocated(error)) return
@@ -629,8 +723,8 @@ contains
       real(wp), allocatable :: dirs(:, :, :), hvp(:, :, :)
       integer :: nsph
 
-      call fixture_geometry(FIX_PLAIN, mol)
-      call build_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
       if (allocated(error)) return
 
       nsph = cavity%nsph
@@ -718,9 +812,16 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      !> Five-point central stencil of the first derivative
-      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
-      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+      !> Seven-point central stencil of the first derivative, `O(h^6)`
+      !>
+      !> Sixth order rather than fourth because the round-off floor of this
+      !> reference is set by `max|G|` and cannot be lowered by taking a smaller
+      !> step; the only way under the project bound is to take a *larger* one,
+      !> and that needs the truncation term of a higher-order stencil. See the
+      !> comment on `FD_STEPS`.
+      integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
+      real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
+                                         45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -739,7 +840,8 @@ contains
          mol_disp = mol
          mol_disp%xyz = mol%xyz + real(OFFSET(iside), wp)*step*vdir
 
-         call build_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error)
+         call build_drop_test_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error, &
+                                     cross_branch_s=CROSS_BRANCH_S)
          if (allocated(error)) return
          call assert_grid_match(ref_cav, cavity, label//" "//trim(side), error)
          if (allocated(error)) return
@@ -797,9 +899,16 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      !> Five-point central stencil of the first derivative
-      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
-      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+      !> Seven-point central stencil of the first derivative, `O(h^6)`
+      !>
+      !> The same order the subtraction reference uses, for the same reason and
+      !> with a smaller payoff: this one differences the shipped gradient rather
+      !> than a difference of two, so its floor was always `eps max|G| / h` and
+      !> was already the binding wall at fourth order. The sweep in the comment
+      !> on `COMPOSITE_STEPS` has the before and after.
+      integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
+      real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
+                                         45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -817,7 +926,8 @@ contains
          mol_disp = mol
          mol_disp%xyz = mol%xyz + real(OFFSET(iside), wp)*step*vdir
 
-         call build_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error)
+         call build_drop_test_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error, &
+                                     cross_branch_s=CROSS_BRANCH_S)
          if (allocated(error)) return
          call assert_grid_match(ref_cav, cavity, label//" "//trim(side), error)
          if (allocated(error)) return
@@ -1054,6 +1164,18 @@ contains
             call test_failed(error, "the branching fixture did not branch at "//label// &
                              "; dbranch_phi_adj would then be structurally zero and the"// &
                              " branch channel of pass 2 untested")
+            return
+         end if
+         if (count(cavity%branch_count(1:cavity%ngrid) > 1) /= CROSS_BRANCHED_PTS &
+             .or. maxval(cavity%branch_count(1:cavity%ngrid)) /= CROSS_MAX_BRANCH) then
+            call test_failed(error, "the branching fixture found a different branch set"// &
+                             " at "//label//": "// &
+                             to_string(count(cavity%branch_count(1:cavity%ngrid) > 1))// &
+                             " branched points of max multiplicity "// &
+                             to_string(maxval(cavity%branch_count(1:cavity%ngrid)))// &
+                             ", expected "//to_string(CROSS_BRANCHED_PTS)//" of "// &
+                             to_string(CROSS_MAX_BRANCH)//"; the step choice is tied to"// &
+                             " this set through max|G| -- see CROSS_BRANCHED_PTS")
             return
          end if
       end select
@@ -1362,125 +1484,5 @@ contains
       end do
 
    end subroutine build_directions
-
-   !> Fixture geometry
-   !>
-   !> `FIX_PLAIN` is asymmetric on purpose: a symmetric geometry drives the
-   !> multistart projection into sibling branches, which is the other fixture's
-   !> job. `FIX_CROSS` is the shared five-carbon cross, whose concave seams give
-   !> several minima per anchor.
-   !>
-   !> @param[in]  fix_kind Geometry selector
-   !> @param[out] mol      Structure
-   subroutine fixture_geometry(fix_kind, mol)
-      !> Geometry selector
-      integer, intent(in) :: fix_kind
-      !> Structure
-      type(structure_type), intent(out) :: mol
-
-      select case (fix_kind)
-      case (FIX_PLAIN)
-         call new(mol, [8, 6, 1], reshape([ &
-                                          0.00_wp, 0.00_wp, 0.00_wp, &
-                                          0.00_wp, 0.00_wp, 4.60_wp, &
-                                          2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-      case default
-         call get_test_cross(mol)
-      end select
-
-   end subroutine fixture_geometry
-
-   !> Build the DROP cavity for a fixture and a level-set model
-   !>
-   !> @param[out]   cavity   Constructed cavity
-   !> @param[inout] ctx      Run context borrowed by the cavity; must outlive it
-   !> @param[in]    mol      Structure to build on
-   !> @param[in]    fix_kind Geometry of the fixture
-   !> @param[in]    lsf_kind Level-set model
-   !> @param[out]   error    Error handle
-   subroutine build_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error)
-      !> Constructed cavity
-      type(cavity_type_drop), allocatable, intent(out) :: cavity
-      !> Run context borrowed by the cavity
-      type(moist_context_type), target, intent(inout) :: ctx
-      !> Structure to build on
-      type(structure_type), intent(in) :: mol
-      !> Geometry of the fixture
-      integer, intent(in) :: fix_kind
-      !> Level-set model
-      integer, intent(in) :: lsf_kind
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      real(wp), allocatable :: radii(:)
-      type(mctc_error), allocatable :: cav_error
-      !> Per-fixture settings. Named apart from the module parameters they are
-      !> assigned from: Fortran is case insensitive, so a local `blend_k` would
-      !> shadow `BLEND_K` and turn the assignment into a silent self-assignment.
-      real(wp) :: blend_k_loc, branch_s_loc
-      integer :: proj_level_loc
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      ! The softmax scale is only raised on the branching fixture; it also sets
-      ! the admissible branch radius, and that is what keeps the cross's far
-      ! siblings alive -- and what makes them the noisiest points on the grid.
-      if (fix_kind == FIX_CROSS) then
-         blend_k_loc = CROSS_BLEND_K
-         proj_level_loc = CROSS_PROJ_LEVEL
-         branch_s_loc = CROSS_BRANCH_S
-      else
-         blend_k_loc = BLEND_K
-         proj_level_loc = PROJ_LEVEL
-         branch_s_loc = PLAIN_BRANCH_S
-      end if
-
-      allocate (cavity)
-      call new_context(ctx, verbosity=0)
-      select case (lsf_kind)
-      case (LSF_SVDW)
-         block
-            type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=blend_k_loc, blend_3b=BLEND_3B)
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=proj_level_loc, wleb_prune_level=WLEB_PRUNE, &
-                                 branch_weight_s=branch_s_loc, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=svdw_template, error=cav_error)
-         end block
-      case default
-         block
-            type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-            call cfc_template%new()
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                 tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                 proj_level=proj_level_loc, wleb_prune_level=WLEB_PRUNE, &
-                                 branch_weight_s=branch_s_loc, &
-                                 radius_model=default_cpcm_radii(), &
-                                 lsf_model=cfc_template, error=cav_error)
-         end block
-      end select
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to initialize cavity: "//cav_error%message)
-         return
-      end if
-
-      ! Curvature and normals are surface observables this suite drives, so the
-      ! cavity has to be asked for them
-      call cavity%properties(do_fine=.true.)
-
-      call cavity%update(mol, error=cav_error)
-      if (allocated(cav_error)) then
-         call test_failed(error, "failed to build cavity: "//cav_error%message)
-         return
-      end if
-      if (cavity%ngrid == 0) then
-         call test_failed(error, "empty grid")
-         return
-      end if
-
-   end subroutine build_cavity
 
 end module test_cavity_drop_hessian_response

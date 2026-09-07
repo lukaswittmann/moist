@@ -87,7 +87,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_response
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_surface_weights_type, build_seed_state, seed_state_ok, seed_weight_tol
+      & drop_surface_weights_type, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, &
       & seed_jet_basis, seed_anchor, degenerate_point_error
    use moist_cavity_drop_derivatives_weights_tangent, only: prepare_surface_weights_tangent
@@ -136,28 +136,26 @@ contains
       integer :: thread_slot, ithread
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type) :: abort
-      !> Per-thread failure on its way to the latch
-      type(error_type), allocatable :: worker_error
 
       !> Shared per-grid point sensitivity kernel state
       type(drop_seed_state_type) :: state
-      !> Degeneracy status
-      integer :: status
+      !> Whether the shared prologue cleared the point for this traversal
+      logical :: point_ok
 
       !> Grid, direction, atom and active-slot indices
       integer :: igrid, idir, ndir, iatom, i, n_active
       integer, allocatable :: active_idx(:)
 
-      !> Projected point, anchor and owner sphere
-      real(wp) :: point(3), anchor(3)
+      !> Anchor and owner sphere
+      real(wp) :: anchor(3)
       integer :: owner_idx
       !> Level-set jet at the projected point
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
+      real(wp) :: lsf1_r(3), lsf2_rr(3, 3)
       real(wp), allocatable :: lsf3_rrr(:, :, :)
       !> Jet-contracted nuclear partials of the level set, one column per active atom
       real(wp), allocatable :: vjp_pt(:, :)
       !> Objective jet at the projected point
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
+      real(wp) :: phi1_r(3)
       !> Lagrange multiplier of the projection
       real(wp) :: lambda_val
 
@@ -201,13 +199,24 @@ contains
                           " (3, nsph, ndir)")
          return
       end if
+      ! No `check_frozen_weights` here, and that asymmetry with
+      ! [[get_surface_hessian_fixed_drop]] is deliberate rather than an omission.
+      ! That routine refuses `w_a`, `w_w` and multi-branch anchor groups because
+      ! its half differentiates the primal map at *fixed* adjoints and so has no
+      ! second-order branch term to offer. This half is the mirror image: the
+      ! folding of those very channels is what it differentiates, and pass 2
+      ! ([[prepare_surface_weights_tangent]]) emits `d(branch_phi_adj)` as one of
+      ! its three moving channels. Guarding here would reject grids this
+      ! traversal handles correctly. The public accessors still refuse branched
+      ! grids, because they compose both halves and inherit the fixed half's
+      ! restriction.
       if (self%ngrid <= 0) return
 
       h_shres = self%ctx%timer%resolve("Surface Hessian (adjoint response)", &
                                        self%ctx%timer%current(), cat_gradient)
       call self%ctx%timer%start(h_shres)
 
-      !* ----------------------- Passes 1 and 2: the moving weights -------------------- *!
+      !* --------------------- Passes 1 and 2: the moving weights --------------------- *!
       call prepare_surface_weights(self, acc, .true., eff)
       call weight_tangents(self, acc, eff, dirs, deff, error)
       if (allocated(error)) then
@@ -224,13 +233,13 @@ contains
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& idir, iatom, i, n_active, active_idx, state, status, &
-      !$omp& point, anchor, owner_idx, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& vjp_pt, phi0, phi1_r, phi2_rr, lambda_val, &
+      !$omp& idir, iatom, i, n_active, active_idx, state, point_ok, &
+      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
+      !$omp& vjp_pt, phi1_r, lambda_val, &
       !$omp& kkt_rhs, kkt_fac, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, &
       !$omp& iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, swi_live, &
-      !$omp& jj, knb, worker_error)
+      !$omp& jj, knb)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
 
@@ -245,41 +254,17 @@ contains
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
-         if (abort%requested) cycle
-
-         point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
-         owner_idx = self%owner(igrid)
-         lambda_val = self%lambda0(igrid)
-
-         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
-
-         ! The failure cannot be returned from inside this worksharing construct,
-         ! so park it for the post-region promotion and let the flag drain the
-         ! loop. The LSF's cached derivatives are substitutes; stop before
-         ! reading them.
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-
-         call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
-
-         state%lsf1_r = lsf1_r
-         state%lsf2_rr = lsf2_rr
-         state%lsf3_rrr = lsf3_rrr
-         state%lambda_val = lambda_val
-         ! No curvature: `d(w_k1)` and `d(w_k2)` vanish identically whatever the
-         ! host put in `acc`, so this half never reads a curvature response.
-         call fill_seed_state(self, igrid, .false., state)
-
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
-         if (status /= seed_state_ok) then
-            call abort%latch_status(status, igrid)
-            cycle
-         end if
+         !* -------------------------- Shared point prologue -------------------------- *!
+         ! Point, jets, seed state and the solved jet and anchor seeds -- the
+         ! latter direction independent, so solved once for the whole direction
+         ! loop. No curvature: `d(w_k1)` and `d(w_k2)` vanish identically
+         ! whatever the host put in `acc`, so this half never reads a curvature
+         ! response and asks [[fill_seed_state]] for none.
+         call drop_point_prologue(self, slots, thread_slot, igrid, .false., abort, &
+                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok, &
+                                  kkt_rhs=kkt_rhs)
+         if (.not. point_ok) cycle
 
          ! Outward-normal channel: `d(w_xyz)` and `d(w_n)` are identically zero
          ! (`weights_tangent.f90`, module header -- a consumer of pass 2 "gains
@@ -287,31 +272,6 @@ contains
          ! contraction outright"), so the effective position adjoint every seed
          ! sees is the zero vector and [[seed_normal_channel]] is not called.
          w_xyz_local = 0.0_wp
-
-         !* ------------------------ Bordered KKT sensitivities ----------------------- *!
-         ! Columns 1-4 are the level-set value and gradient seeds; the nine
-         ! Hessian seeds have a zero right-hand side. Columns 5-7 are the
-         ! anchor seeds: moving the owner rigidly leaves the field untouched
-         ! and drives the system through -d^2 phi/dr dR_owner = +alpha*I.
-         ! Direction independent, so solved once for the whole direction loop.
-         kkt_rhs = 0.0_wp
-         kkt_rhs(4, 1) = -1.0_wp
-         kkt_rhs(1, 2) = lambda_val
-         kkt_rhs(2, 3) = lambda_val
-         kkt_rhs(3, 4) = lambda_val
-         kkt_rhs(1, 5) = self%param%phi_alpha
-         kkt_rhs(2, 6) = self%param%phi_alpha
-         kkt_rhs(3, 7) = self%param%phi_alpha
-         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, worker_error)
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-         call kkt_fac%solve(kkt_rhs, worker_error)
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
 
          !* --------------------- Direction-independent point data -------------------- *!
          n_active = slots%lsf(thread_slot)%lsf%active_count()

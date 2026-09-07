@@ -72,7 +72,8 @@ module moist_cavity_drop_derivatives_weights_tangent
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, seed_weight_tol
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
+      & seed_weight_tol, branch_point_adjoint
 
    implicit none(type, external)
    private
@@ -323,9 +324,9 @@ contains
          do m_branch = 1, group_size
             im_grid = igroup_start + m_branch - 1
             call branch_point_adjoint(w_xi(im_grid), wleb(im_grid), xi0(im_grid), &
-                                      wbranch(im_grid), dw_xi(im_grid), dwleb(im_grid), &
-                                      dxi0(im_grid), dwbranch(im_grid), &
-                                      adj_branch, dadj_branch)
+                                      wbranch(im_grid), adj_branch, &
+                                      dw_xi(im_grid), dwleb(im_grid), dxi0(im_grid), &
+                                      dwbranch(im_grid), dadj_branch)
             mean_adj_branch = mean_adj_branch + wbranch(im_grid)*adj_branch
             dmean_adj_branch = dmean_adj_branch + dwbranch(im_grid)*adj_branch &
                                + wbranch(im_grid)*dadj_branch
@@ -338,9 +339,9 @@ contains
          do m_branch = 1, group_size
             im_grid = igroup_start + m_branch - 1
             call branch_point_adjoint(w_xi(im_grid), wleb(im_grid), xi0(im_grid), &
-                                      wbranch(im_grid), dw_xi(im_grid), dwleb(im_grid), &
-                                      dxi0(im_grid), dwbranch(im_grid), &
-                                      adj_branch, dadj_branch)
+                                      wbranch(im_grid), adj_branch, &
+                                      dw_xi(im_grid), dwleb(im_grid), dxi0(im_grid), &
+                                      dwbranch(im_grid), dadj_branch)
             dbranch_phi_adj(im_grid) = &
                -(dwbranch(im_grid)*(adj_branch - mean_adj_branch) &
                  + wbranch(im_grid)*(dadj_branch - dmean_adj_branch))/sigma_phi
@@ -350,53 +351,5 @@ contains
       end do
 
    end subroutine branch_phi_adj_tangent
-
-   !> One point's branch adjoint and its directional tangent
-   !>
-   !> The primal half is [[compute_branch_phi_adj]]'s inner block verbatim, so
-   !> the two stay comparable line by line; the tangent is its product rule.
-   !> `adj_wleb * factor` is kept factored rather than collapsed to
-   !> `-0.5 w_xi xi0/wbranch` -- the `wleb` cancels algebraically -- because the
-   !> factored form is the one the primal evaluates and the one a reviewer can
-   !> diff against it.
-   !>
-   !> @param[in]  w_xi        Folded width adjoint at the point
-   !> @param[in]  wleb        Lebedev weight at the point
-   !> @param[in]  xi0         Gaussian width at the point
-   !> @param[in]  wbranch     Softmax branch weight at the point
-   !> @param[in]  dw_xi       Tangent of the folded width adjoint
-   !> @param[in]  dwleb       Tangent of the Lebedev weight
-   !> @param[in]  dxi0        Tangent of the Gaussian width
-   !> @param[in]  dwbranch    Tangent of the branch weight
-   !> @param[out] adj_branch  Branch adjoint, zero when the primal gate is shut
-   !> @param[out] dadj_branch Its directional tangent, zero on the same gate
-   pure subroutine branch_point_adjoint(w_xi, wleb, xi0, wbranch, &
-                                        dw_xi, dwleb, dxi0, dwbranch, &
-                                        adj_branch, dadj_branch)
-      !> Point values
-      real(wp), intent(in) :: w_xi, wleb, xi0, wbranch
-      !> Point tangents
-      real(wp), intent(in) :: dw_xi, dwleb, dxi0, dwbranch
-      !> Branch adjoint and its tangent
-      real(wp), intent(out) :: adj_branch, dadj_branch
-
-      !> Weight-adjoint scratch and its tangent
-      real(wp) :: adj_wleb, dadj_wleb, factor_m, dfactor_m
-
-      adj_branch = 0.0_wp
-      dadj_branch = 0.0_wp
-      if (abs(w_xi) > seed_weight_tol &
-          .and. wleb > seed_weight_tol &
-          .and. wbranch > tiny(1.0_wp)) then
-         adj_wleb = -0.5_wp*w_xi*xi0/wleb
-         dadj_wleb = -0.5_wp*(dw_xi*xi0 + w_xi*dxi0)/wleb &
-                     + 0.5_wp*w_xi*xi0*dwleb/(wleb*wleb)
-         factor_m = wleb/wbranch
-         dfactor_m = dwleb/wbranch - wleb*dwbranch/(wbranch*wbranch)
-         adj_branch = adj_wleb*factor_m
-         dadj_branch = dadj_wleb*factor_m + adj_wleb*dfactor_m
-      end if
-
-   end subroutine branch_point_adjoint
 
 end module moist_cavity_drop_derivatives_weights_tangent

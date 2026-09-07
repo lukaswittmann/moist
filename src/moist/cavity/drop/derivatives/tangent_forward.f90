@@ -93,7 +93,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_seed_result_type, build_seed_state, apply_seed, seed_state_ok, seed_weight_tol
+      & drop_seed_result_type, apply_seed, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, degenerate_point_error
    implicit none(type, external)
 
@@ -137,20 +137,20 @@ contains
       !> Shared per-grid point sensitivity kernel state and its response
       type(drop_seed_state_type) :: state
       type(drop_seed_result_type) :: res
-      !> Degeneracy status
-      integer :: status
+      !> Whether the shared prologue cleared the point for this traversal
+      logical :: point_ok
 
       !> Grid, direction, sphere and Cartesian indices
       integer :: igrid, idir, ndir, jj, knb
 
-      !> Projected point, anchor and owner sphere
-      real(wp) :: point(3), anchor(3)
+      !> Anchor and owner sphere
+      real(wp) :: anchor(3)
       integer :: owner_idx
       !> Level-set jet at the projected point
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
+      real(wp) :: lsf1_r(3), lsf2_rr(3, 3)
       real(wp), allocatable :: lsf3_rrr(:, :, :)
       !> Objective jet at the projected point
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
+      real(wp) :: phi1_r(3)
       !> Lagrange multiplier of the projection
       real(wp) :: lambda_val
 
@@ -218,9 +218,9 @@ contains
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& idir, jj, knb, state, res, status, &
-      !$omp& point, anchor, owner_idx, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& phi0, phi1_r, phi2_rr, lambda_val, &
+      !$omp& idir, jj, knb, state, res, point_ok, &
+      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
+      !$omp& phi1_r, lambda_val, &
       !$omp& dlsf0, dlsf1_r, dlsf2_rr, kkt_rhs, kkt_fac, dr, dlambda, &
       !$omp& iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, df_dir, &
       !$omp& worker_error)
@@ -239,41 +239,19 @@ contains
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
-         if (abort%requested) cycle
+         !* -------------------------- Shared point prologue -------------------------- *!
+         ! Point, jets, seed state and the bordered factorization. Every failure
+         ! path -- a latch already set, a refusing level set, a degenerate
+         ! state, a singular bordered system -- has recorded itself. The
+         ! standard 16-seed batch is *not* requested: this pass has one
+         ! right-hand side per nuclear direction, and it cannot be built before
+         ! the level set's directional tangents below are known.
+         call drop_point_prologue(self, slots, thread_slot, igrid, .false., abort, &
+                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok)
+         if (.not. point_ok) cycle
 
-         point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
-         owner_idx = self%owner(igrid)
-         lambda_val = self%lambda0(igrid)
-
-         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
-
-         ! The failure cannot be returned from inside this worksharing construct,
-         ! so park it for the post-region promotion and let the flag drain the
-         ! loop. The LSF's cached derivatives are substitutes; stop before
-         ! reading them.
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-
-         call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
-
-         state%lsf1_r = lsf1_r
-         state%lsf2_rr = lsf2_rr
-         state%lsf3_rrr = lsf3_rrr
-         state%lambda_val = lambda_val
-         call fill_seed_state(self, igrid, .false., state)
-
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
-         if (status /= seed_state_ok) then
-            call abort%latch_status(status, igrid)
-            cycle
-         end if
-
-         !* --------------- Directional nuclear tangents of the jet ---------------- *!
+         !* ----------------- Directional nuclear tangents of the jet ----------------- *!
          ! The level set contracts its own nuclear index: `tangent_*` returns
          ! `sum_B v_B . d(jet)/dR_B` at the fixed point, so the active-slot
          ! index space never has to be reconciled with the atom index space of
@@ -292,13 +270,8 @@ contains
          end do
 
          !* ------------------------ Bordered KKT sensitivities ----------------------- *!
-         ! One factorization, one batched solve: every direction shares the 4x4
-         ! matrix of this grid point.
-         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, worker_error)
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
+         ! One batched solve on the factorization the prologue already built:
+         ! every direction shares the 4x4 matrix of this grid point.
          call kkt_fac%solve(kkt_rhs, worker_error)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)

@@ -120,14 +120,14 @@ contains
       end if
       if (self%ngrid <= 0) return
 
-      !* --------------------------------- Both halves --------------------------------- *!
+      !* --------------------------------- Both halves -------------------------------- *!
       allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
       allocate (total(ndim, self%nsph, ndir), source=0.0_wp)
 
       call surface_hessian_halves(self, acc, dirs, hess_fixed, total, error)
       if (allocated(error)) return
 
-      !* -------------------------- Contract the fixed half ----------------------------- *!
+      !* --------------------------- Contract the fixed half -------------------------- *!
       ! `total` already holds the response half of every direction, so the
       ! contraction lands on top of it and the two are summed exactly once.
       do idir = 1, ndir
@@ -186,7 +186,7 @@ contains
       end if
       if (self%ngrid <= 0 .or. self%nsph <= 0) return
 
-      !* ---------------------------- Cartesian unit directions ------------------------ *!
+      !* -------------------------- Cartesian unit directions ------------------------- *!
       ndir = ndim*self%nsph
       allocate (dirs(ndim, self%nsph, ndir), source=0.0_wp)
       do iatom = 1, self%nsph
@@ -195,7 +195,7 @@ contains
          end do
       end do
 
-      !* --------------------------------- Both halves --------------------------------- *!
+      !* --------------------------------- Both halves -------------------------------- *!
       allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
       allocate (resp(ndim, self%nsph, ndir), source=0.0_wp)
 

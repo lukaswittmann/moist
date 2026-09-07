@@ -55,8 +55,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_fixed
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
       & drop_seed_result_type, drop_seed_state_tangent_type, &
       & drop_seed_input_tangent_type, drop_seed_result_tangent_type, &
-      & drop_surface_weights_type, build_seed_state, apply_seed, apply_seed_tangent, &
-      & seed_state_ok, seed_weight_tol
+      & drop_surface_weights_type, apply_seed, apply_seed_tangent, &
+      & seed_weight_tol, seed_contribution
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, drop_n_jet_seeds, &
       & seed_normal_channel, degenerate_point_error
    use moist_cavity_drop_derivatives_field_tangent, only: drop_field_tangent, &
@@ -121,22 +121,22 @@ contains
 
       !> Shared per-grid point sensitivity kernel state
       type(drop_seed_state_type) :: state
-      !> Degeneracy status
-      integer :: status
+      !> Whether the shared prologue cleared the point for this traversal
+      logical :: point_ok
 
       !> Grid, atom, axis, seed and active-slot indices
       integer :: igrid, iatom, i, k, iaxis, ibasis
       integer :: n_active, ndir_atom, idir, dir_atom, dir_axis
       integer, allocatable :: active_idx(:), dir_atoms(:)
 
-      !> Projected point, anchor and owner sphere
-      real(wp) :: point(3), anchor(3)
+      !> Anchor and owner sphere
+      real(wp) :: anchor(3)
       integer :: owner_idx
       !> Level-set jet at the projected point
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
+      real(wp) :: lsf1_r(3), lsf2_rr(3, 3)
       real(wp), allocatable :: lsf3_rrr(:, :, :), lsf4_rrrr(:, :, :, :)
       !> Objective jet at the projected point
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
+      real(wp) :: phi1_r(3)
       !> Lagrange multiplier of the projection
       real(wp) :: lambda_val
 
@@ -220,9 +220,9 @@ contains
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
       !$omp& iatom, i, k, iaxis, ibasis, n_active, ndir_atom, idir, dir_atom, dir_axis, &
-      !$omp& active_idx, dir_atoms, state, status, &
-      !$omp& point, anchor, owner_idx, lsf0, lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr, &
-      !$omp& phi0, phi1_r, phi2_rr, lambda_val, kkt_rhs, kkt_fac, &
+      !$omp& active_idx, dir_atoms, state, point_ok, &
+      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, lsf4_rrrr, &
+      !$omp& phi1_r, lambda_val, kkt_rhs, kkt_fac, &
       !$omp& seed_dlsf1, seed_dlsf2, seed_x, res_seed, dstate_seed, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, normal_grad, nwn, &
       !$omp& dv0, dv1, dv2, dv3, rhs_v, dr_v, dl_v, res_v, dstate_v, dinp_v, dres, &
@@ -250,40 +250,17 @@ contains
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
-         if (abort%requested) cycle
-
-         point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
-         owner_idx = self%owner(igrid)
-         lambda_val = self%lambda0(igrid)
-
-         call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
-
-         ! The failure cannot be returned from inside this worksharing construct,
-         ! so park it for the post-region promotion and let the flag drain the
-         ! loop. The LSF's cached derivatives are substitutes; stop before
-         ! reading them.
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-
-         call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call slots%lsf(thread_slot)%lsf%f4_rrrr(lsf4_rrrr)
-         call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
-
-         state%lsf1_r = lsf1_r
-         state%lsf2_rr = lsf2_rr
-         state%lsf3_rrr = lsf3_rrr
-         state%lambda_val = lambda_val
-         call fill_seed_state(self, igrid, eff%have_wk, state)
-
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
-         if (status /= seed_state_ok) then
-            call abort%latch_status(status, igrid)
-            cycle
-         end if
+         !* -------------------------- Shared point prologue -------------------------- *!
+         ! Point, jets, seed state and the solved jet and anchor seeds. Every
+         ! failure path -- a latch already set, a refusing level set, a
+         ! degenerate state, a singular bordered system -- has recorded itself.
+         ! `lsf4_rrrr` is the one extra jet order this half needs: the field
+         ! tangent reads it, and CFC asks for the highest *total* order.
+         call drop_point_prologue(self, slots, thread_slot, igrid, eff%have_wk, abort, &
+                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok, &
+                                  lsf4_rrrr=lsf4_rrrr, kkt_rhs=kkt_rhs)
+         if (.not. point_ok) cycle
 
          ! Outward-normal channel, as in the gradient path. `normal_grad` is
          ! kept here as well as folded, because the direction loop needs its
@@ -299,30 +276,6 @@ contains
          end if
          call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
 
-         !* ------------------------ Bordered KKT sensitivities ----------------------- *!
-         ! Columns 1-4 are the level-set value and gradient seeds; the nine
-         ! Hessian seeds have a zero right-hand side. Columns 5-7 are the
-         ! anchor seeds: moving the owner rigidly leaves the field untouched
-         ! and drives the system through -d^2 phi/dr dR_owner = +alpha*I.
-         kkt_rhs = 0.0_wp
-         kkt_rhs(4, 1) = -1.0_wp
-         kkt_rhs(1, 2) = lambda_val
-         kkt_rhs(2, 3) = lambda_val
-         kkt_rhs(3, 4) = lambda_val
-         kkt_rhs(1, 5) = self%param%phi_alpha
-         kkt_rhs(2, 6) = self%param%phi_alpha
-         kkt_rhs(3, 7) = self%param%phi_alpha
-         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, worker_error)
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-         call kkt_fac%solve(kkt_rhs, worker_error)
-         if (allocated(worker_error)) then
-            call abort%latch_error(worker_error, igrid)
-            cycle
-         end if
-
          !* --------------------- Basis seeds and their responses --------------------- *!
          ! The 16 seeds are those of [[seed_jet_basis]] and [[seed_anchor]],
          ! collected into one array because the second-order chain needs each
@@ -335,7 +288,7 @@ contains
                             seed_x(1:3, ibasis), seed_x(4, ibasis), &
                             res_seed(ibasis), dstate_seed(ibasis))
             contribution = seed_contribution(eff, igrid, w_xyz_local, &
-                                             seed_x(1:3, ibasis), res_seed(ibasis))
+                                             seed_x(1:3, ibasis), res_seed(ibasis), phi1_r)
             call scatter_jet_weight(ibasis, contribution, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
          end do
 
@@ -544,7 +497,7 @@ contains
    end subroutine get_surface_hessian_fixed_drop
 
    !* ================================================================================= *!
-   !*                              Scope of the fixed half                               *!
+   !*                              Scope of the fixed half                              *!
    !* ================================================================================= *!
 
    !> Reject an accumulator whose effective weights are geometry dependent
@@ -688,48 +641,18 @@ contains
    !*                        Adjoint contraction of one seed                            *!
    !* ================================================================================= *!
 
-   !> Adjoint contribution of one seed
-   !>
-   !> The contraction [[seed_jet_basis]] and [[seed_anchor]] both perform, with
-   !> the branch term left out: this submodule admits only grids on which
-   !> `branch_phi_adj` vanishes identically, and [[check_frozen_weights]]
-   !> enforces that. The switching channel is absent for the same reason it is
-   !> absent there -- the iSwiG overlap is anchor-only, so a level-set
-   !> perturbation at fixed nuclei leaves it alone, and the anchor's own motion
-   !> is carried by the block of the switching channel instead.
-   !>
-   !> @param[in] eff      Folded surface adjoints
-   !> @param[in] igrid    Grid point
-   !> @param[in] w_xyz_pt Effective position adjoint
-   !> @param[in] dr       Induced point motion of the seed
-   !> @param[in] res      Linear response of the seed
-   !> @return             Adjoint contribution
-   pure function seed_contribution(eff, igrid, w_xyz_pt, dr, res) result(contribution)
-      !> Folded surface adjoints
-      type(drop_surface_weights_type), intent(in) :: eff
-      !> Grid point
-      integer, intent(in) :: igrid
-      !> Effective position adjoint
-      real(wp), intent(in) :: w_xyz_pt(ndim)
-      !> Induced point motion
-      real(wp), intent(in) :: dr(ndim)
-      !> Linear response
-      type(drop_seed_result_type), intent(in) :: res
-      !> Adjoint contribution
-      real(wp) :: contribution
-
-      contribution = dot_product(w_xyz_pt, dr) + eff%w_xi(igrid)*res%dxi
-      if (eff%have_wk) then
-         contribution = contribution + eff%w_k1(igrid)*res%dk1 + eff%w_k2(igrid)*res%dk2
-      end if
-   end function seed_contribution
-
    !> Directional derivative of [[seed_contribution]]
    !>
-   !> Term by term the product rule applied to the contraction above, with the
+   !> Term by term the product rule applied to that contraction, with the
    !> surface adjoints themselves held fixed -- which is the whole premise of
    !> this half. The position adjoint still moves, because the normal fold
    !> inside it is built from the level-set gradient at the projected point.
+   !>
+   !> This one stays local, unlike its primal: this submodule is its only
+   !> caller, so there is no second copy of the chain to share with. The branch
+   !> term is absent for the reason the module header gives -- a grid carrying
+   !> a multi-branch anchor group is rejected by [[check_frozen_weights]] --
+   !> and the switching term for the reason [[seed_contribution]] gives.
    !>
    !> @param[in] eff       Folded surface adjoints
    !> @param[in] igrid     Grid point

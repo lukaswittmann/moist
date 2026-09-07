@@ -28,6 +28,7 @@ module test_cavity_drop_kkt
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use test_helpers, only: fd4_scalar, fd4_offsets
    implicit none(type, external)
    private
 
@@ -40,14 +41,30 @@ module test_cavity_drop_kkt
 
    !> Tolerance for the exact algebraic comparisons (same arithmetic, same order)
    real(wp), parameter :: exact_tol = 1.0e-13_wp
-   !> Tolerance for the finite-difference comparisons; the observed deviation is
-   !> ~1.6e-10 at h = 1e-5 and ~9.3e-11 at h = 1e-6.
+   !> Tolerance for the finite-difference comparisons, absolute on components of
+   !> order one; the project-wide `1e-10` target, held since 2026-09-03.
    !>
-   !> Tightened to the project-wide `1e-10` target on 2026-09-03. Confirmed:
-   !> `tangent_fd_h1em5` fails at `1.62e-10` (column 7, component 4: 1.0677750945
-   !> against 1.0677750947) and `tangent_fd_h1em6` passes. Both are truncation,
-   !> not noise -- the deviation still falls with the step -- so the floor here
-   !> is the step, not the arithmetic, and `h = 1e-6` already reaches `1e-10`.
+   !> The references use the 4-point `fd4_scalar` stencil. They were 2-point
+   !> central differences until 2026-09-07, which could not honestly reach this
+   !> bound: every stencil point refactorizes and re-solves, so the solver's own
+   !> error is amplified by `1/2h` and *rises* as the step falls, while
+   !> truncation falls as `h^2`. Measured worst deviation, 2-point:
+   !>
+   !>     h    1e-3    1e-4    3e-5    1e-5     1e-6
+   !>     dev  1.5e-6  1.5e-8  1.4e-9  1.6e-10  9.1e-11
+   !>
+   !> Clean `h^2` down to `3e-5`, then the fall stops: `1e-6` gives `9.1e-11`
+   !> where truncation alone predicts `1.5e-12`. That is the roundoff floor, so
+   !> `tangent_fd_h1em6` was not passing on accuracy -- it sat 10% under the
+   !> bound with nowhere better to go, and `tangent_fd_h1em5` failed at
+   !> `1.62e-10`. The same fixture with the 4-point stencil:
+   !>
+   !>     h    1e-2    3e-3     1e-3     3e-4     1e-4     3e-5     1e-6
+   !>     dev  2.8e-8  2.3e-10  2.9e-12  7.7e-13  1.8e-12  7.2e-12  1.2e-10
+   !>
+   !> `h^4` truncation (123x across a 3.33x step) reaches the floor four decades
+   !> coarser, where the `1/h` amplification is four decades smaller. The
+   !> minimum is `7.7e-13`, 130x under the bound.
    real(wp), parameter :: fd_tol = 1.0e-10_wp
 
 contains
@@ -62,8 +79,8 @@ contains
                   new_unittest("zero_tangent_matches_solve", test_zero_tangent), &
                   new_unittest("tangent_explicit_dk", test_tangent_explicit_dk), &
                   new_unittest("batched_matches_per_direction", test_batched_per_direction), &
-                  new_unittest("tangent_fd_h1em5", test_tangent_fd_h1em5), &
-                  new_unittest("tangent_fd_h1em6", test_tangent_fd_h1em6), &
+                  new_unittest("tangent_fd_h1em3", test_tangent_fd_h1em3), &
+                  new_unittest("tangent_fd_h1em4", test_tangent_fd_h1em4), &
                   new_unittest("shape_mismatch_reports_error", test_shape_mismatch) &
                   ]
    end subroutine collect_cavity_drop_kkt
@@ -420,23 +437,23 @@ contains
       call check_batch(error, batch, reference, exact_tol, "batched versus per-direction")
    end subroutine test_batched_per_direction
 
-   !> Finite-difference check at `h = 1e-5`
+   !> Finite-difference check at `h = 1e-3`
    !> @param[out] error Test error
-   subroutine test_tangent_fd_h1em5(error)
+   subroutine test_tangent_fd_h1em3(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_tangent_fd(error, 1.0e-5_wp)
-   end subroutine test_tangent_fd_h1em5
+      call run_tangent_fd(error, 1.0e-3_wp)
+   end subroutine test_tangent_fd_h1em3
 
-   !> Finite-difference check at `h = 1e-6`
+   !> Finite-difference check at `h = 1e-4`
    !> @param[out] error Test error
-   subroutine test_tangent_fd_h1em6(error)
+   subroutine test_tangent_fd_h1em4(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_tangent_fd(error, 1.0e-6_wp)
-   end subroutine test_tangent_fd_h1em6
+      call run_tangent_fd(error, 1.0e-4_wp)
+   end subroutine test_tangent_fd_h1em4
 
    !> Compare the tangent batch against central differences of the primal solve
    !>
@@ -463,9 +480,9 @@ contains
       real(wp) :: b0(4, nseed), db(4, nseed*ndir)
       real(wp) :: x(4, nseed)
       real(wp) :: batch(4, nseed*ndir), reference(4, nseed*ndir)
-      real(wp) :: plus(4, nseed*ndir), minus(4, nseed*ndir)
+      real(wp) :: stencil(4, nseed*ndir, 4)
       logical :: failed
-      integer :: idir, iseed, icol
+      integer :: idir, iseed, icol, ioff
 
       call kkt_fixture(H0, g0, dH, dg, b0, db)
 
@@ -483,32 +500,34 @@ contains
       call promote(error, merr, "solve_tangent", failed)
       if (failed) return
 
-      do idir = 1, ndir
-         do iseed = 1, nseed
-            icol = (idir - 1)*nseed + iseed
-            plus(:, icol) = b0(:, iseed) + h*db(:, icol)
-            minus(:, icol) = b0(:, iseed) - h*db(:, icol)
-         end do
+      ! The right-hand side, the Hessian and the gradient all move together at
+      ! each stencil point, and the factorisation is redone there, so `1/h`
+      ! amplifies the solver's own error -- see `fd_tol` for why that makes the
+      ! 4-point stencil the only one that reaches the bound on this fixture
+      do ioff = 1, size(fd4_offsets)
+         associate (s_h => fd4_offsets(ioff)*h)
+            do idir = 1, ndir
+               do iseed = 1, nseed
+                  icol = (idir - 1)*nseed + iseed
+                  stencil(:, icol, ioff) = b0(:, iseed) + s_h*db(:, icol)
+               end do
 
-         call fac_step%factor(H0 + h*dH(:, :, idir), g0 + h*dg(:, idir), merr)
-         call promote(error, merr, "displaced factor", failed)
-         if (failed) return
-         call fac_step%solve(plus(:, (idir - 1)*nseed + 1:idir*nseed), merr)
-         call promote(error, merr, "displaced solve", failed)
-         if (failed) return
-
-         call fac_step%factor(H0 - h*dH(:, :, idir), g0 - h*dg(:, idir), merr)
-         call promote(error, merr, "displaced factor", failed)
-         if (failed) return
-         call fac_step%solve(minus(:, (idir - 1)*nseed + 1:idir*nseed), merr)
-         call promote(error, merr, "displaced solve", failed)
-         if (failed) return
+               call fac_step%factor(H0 + s_h*dH(:, :, idir), g0 + s_h*dg(:, idir), merr)
+               call promote(error, merr, "displaced factor", failed)
+               if (failed) return
+               call fac_step%solve( &
+                  stencil(:, (idir - 1)*nseed + 1:idir*nseed, ioff), merr)
+               call promote(error, merr, "displaced solve", failed)
+               if (failed) return
+            end do
+         end associate
       end do
 
-      reference = (plus - minus)/(2.0_wp*h)
+      reference = fd4_scalar(stencil(:, :, 1), stencil(:, :, 2), stencil(:, :, 3), &
+                             stencil(:, :, 4), h)
 
       call check_batch(error, batch, reference, fd_tol, &
-                       "central difference at h = "//to_string(h))
+                       "4-point central difference at h = "//to_string(h))
    end subroutine run_tangent_fd
 
    !> An inconsistent batch shape must be reported rather than read out of bounds

@@ -379,7 +379,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_prim)
 
-         !* ---------------------- r_i derivative ---------------------- *!
+         !* ------------------------------ r_i derivative ----------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_pos)
 
          ! Solve for each active atom and axis
@@ -441,7 +441,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_pos)
 
-         !* ---------------------- rho_i derivative (optional) ---------------------- *!
+         !* ----------------------- rho_i derivative (optional) ----------------------- *!
          if (allocated(self%rho1_rA)) then
             if (do_timing) call self%ctx%timer%start(h_disp)
             rho_vec = point - anchor
@@ -475,7 +475,7 @@ contains
             if (do_timing) call self%ctx%timer%stop(h_disp)
          end if
 
-         !* -------------------- r_iI derivative (optional) -------------------- *!
+         !* ------------------------ r_iI derivative (optional) ----------------------- *!
          if (allocated(self%r_iI1_rA)) then
             if (do_timing) call self%ctx%timer%start(h_dist)
             ! r_iI1_rA \equiv R_i when i \in I
@@ -507,7 +507,7 @@ contains
             if (do_timing) call self%ctx%timer%stop(h_dist)
          end if
 
-         !* -------------------- surface normal derivative -------------------- *!
+         !* ------------------------ surface normal derivative ------------------------ *!
          ! n = grad(S) / ||grad(S)||
          ! dn/dr_A = (1/||grad(S)||) * [d(grad(S))/dr_A - n * (n^T * d(grad(S))/dr_A)]
          ! where d(grad(S))/dr_A = explicit + Hessian * dr/dr_A
@@ -549,7 +549,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_norm)
 
-         !* -------------------- cpjac_scal derivative -------------------- *!
+         !* -------------------------- cpjac_scal derivative -------------------------- *!
          ! 2x2 tangent-restricted approach matching projection.f90:
          !   n = g/|g|, Q = [q1,q2] from setup_tangent_frame(n)
          !   B = Q^T A Q (2x2), switch on beta2, Binv = B^{-1}
@@ -874,7 +874,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_cpj)
 
-         !* ---------------------- xi_i derivative ---------------------- *!
+         !* ----------------------------- xi_i derivative ----------------------------- *!
          ! Compute derivative of Gaussian widths w.r.t. nuclear coordinates
          if (do_timing) call self%ctx%timer%start(h_gw)
 
@@ -887,7 +887,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_gw)
 
-         !* ---------------------- f_i derivative ---------------------- *!
+         !* ------------------------------ f_i derivative ----------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_sw)
 
          !> iswig switching derivatives: evaluated at anchor position
@@ -899,7 +899,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_sw)
 
-         !* ---------------------- a_i derivative ---------------------- *!
+         !* ------------------------------ a_i derivative ----------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_area)
          ! Screening: f1_rA and wleb1_rA are zero for inactive atoms
          do i = 1, n_active
@@ -913,7 +913,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_area)
 
-         !* ---------------------- v_i derivative ---------------------- *!
+         !* ------------------------------ v_i derivative ----------------------------- *!
          if (do_timing) call self%ctx%timer%start(h_vol)
 
          ! New volume formula: v_i = (1/3) * a_i * (r_i . n_i)
@@ -940,7 +940,7 @@ contains
 
          if (do_timing) call self%ctx%timer%stop(h_vol)
 
-         !* -------- Per-atom accumulation -------- *!
+         !* -------------------------- Per-atom accumulation -------------------------- *!
          do i = 1, n_active
             iatom = active_idx(i)
             do iaxis = 1, 3
@@ -979,7 +979,7 @@ contains
          return
       end if
 
-      !* ========================= Branch-weight post-pass ========================= *!
+      !* =========================== Branch-weight post-pass ========================== *!
       call self%ctx%timer%start(h_bw)
 
       ! TODO: This will (have to be) refactored; for now this is a slightly ugly solution (and not parallel)
