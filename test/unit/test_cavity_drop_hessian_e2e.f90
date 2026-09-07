@@ -92,40 +92,38 @@
 !> | **w_k1**| **7.7e-11** | **1.6e-09** |
 !> | **w_k2**| **2.6e-11** | **2.0e-10** |
 !>
-!> Four to six orders, which is what `hessian.md` records for the discriminant
-!> cancellation at `kernel.f90:489` -- this suite differences
-!> `get_surface_gradient`, which runs `build_seed_state`, so the seed path is
-!> the one it sees. (The same defect in `compute_gradient_drop` was fixed; that
-!> path is not in this loop.) Three things make this an independent
-!> confirmation rather than a restatement: the curvature asymmetry is `1/h`
-!> across **six decades** with no descending branch anywhere, which no step
-!> choice can be; all eight channels are differentiated across *identical*
-!> rebuilds of the *same* grid, so a projection- or rebuild-borne floor would
-!> have to appear in all of them and appears in exactly two; and the floor
-!> tracks the fixture's curvature degeneracy across level sets -- CFC, whose
-!> smallest `|k1 - k2| / |KM|` is four orders below SvdW's, is 15-20x noisier
-!> in `w_k1`/`w_k2` while being *identical* to SvdW in every smooth channel.
+!> **The two bold rows are pre-fix and are kept as the record of how the defect
+!> was found.** They were four to six orders above the other six, which is what
+!> `hessian.md` recorded for the discriminant cancellation at `kernel.f90:489`
+!> -- this suite differences `get_surface_gradient`, which runs
+!> `build_seed_state`, so the seed path is the one it saw. Three things made it
+!> an independent confirmation rather than a restatement: the curvature
+!> asymmetry was `1/h` across **six decades** with no descending branch
+!> anywhere, which no step choice can be; all eight channels are differentiated
+!> across *identical* rebuilds of the *same* grid, so a projection- or
+!> rebuild-borne floor would have to appear in all of them and appeared in
+!> exactly two; and the floor tracked the fixture's curvature degeneracy across
+!> level sets -- CFC, whose smallest `|k1 - k2| / |KM|` is four orders below
+!> SvdW's, was 15-20x noisier in `w_k1`/`w_k2` while being *identical* to SvdW
+!> in every smooth channel.
 !>
-!> **Curvature bowl.** Because the floor is fixed and the truncation is not,
-!> the curvature channels optimise at a **ten times larger step** than the
-!> smooth ones: `w_k1`/`w_k2` reach `3.5e-8` (SvdW) and `4.4e-7` (CFC) at
-!> `h = 3e-3` and get monotonically worse below it (`3.2e-7` / `9.4e-6` already
-!> at `h = 3e-4`). There is no step at which they reach `1e-10`.
+!> **Fixed 2026-09-07** by giving `build_seed_state`, `apply_seed` and
+!> `apply_seed_tangent` the shape operator in the surface tangent frame and the
+!> sum-of-squares discriminant `sqrt(half_diff^2 + S12^2)`. Every claim below
+!> about a curvature *floor* is therefore historical. What replaced it:
 !>
-!> **Recommended tolerances for the end-to-end comparison.** Reference floor
-!> and a bound with roughly a decade of headroom, absolute on the Hessian:
+!> **Curvature bowl -- gone.** The curvature channels used to optimise at a ten
+!> times larger step than the smooth ones (`3.5e-8` SvdW / `4.4e-7` CFC at
+!> `h = 3e-3`, monotonically worse below, `3.2e-7` / `9.4e-6` at `h = 3e-4`),
+!> because their floor was fixed and the truncation was not. They now descend
+!> with the smooth ones and are measured at the *same* two steps: the
+!> reference's own asymmetry at `h = 3e-4` is `2.6e-11` (SvdW) and `7.1e-11`
+!> (CFC), against `3.5e-8` / `5.3e-7` at the old `h = 3e-3`.
 !>
-!> | channels     | step  | floor (SvdW / CFC) | recommend |
-!> |--------------|-------|--------------------|-----------|
-!> | six smooth   | 3e-4  | 1.0e-10 / 8.5e-11  | 1e-09     |
-!> | w_k1, w_k2   | 3e-3  | 3.5e-08 / 4.4e-07  | 1e-06 / 1e-05 |
-!> | all eight    | 1e-3  | 3.0e-08 / 1.6e-07  | 1e-06     |
-!>
-!> A single `1e-10` for everything is out of reach by a factor of ~300 (SvdW)
-!> to ~1600 (CFC) as long as the curvature channels are live, and out of reach
-!> for `w_xyz` even alone. Two steps should be required, as the fixed-adjoint
-!> suite already does, so that a value agreeing at one step only -- a step on
-!> the round-off wall -- still fails.
+!> **A single bound now covers all eight channels.** `CURV_STEP`,
+!> `CURV_STEPS`, `CURV_SYM_TOL_*` and `CURV_TOL_*` are each set to their smooth
+!> counterpart's value. They are kept as separate names, not merged, so that a
+!> future class-specific regression is still reported as one.
 !>
 !> ## What the comparison achieved (2026-09-04)
 !>
@@ -138,13 +136,14 @@
 !> | class     | steps          | worst measured | asserted        |
 !> |-----------|----------------|----------------|-----------------|
 !> | smooth    | 3e-4, 2.5e-4   | 1.3e-10        | 3e-10           |
-!> | curvature | 4e-3, 3e-3     | 6.1e-08 SvdW   | 2e-07           |
-!> |           |                | 6.5e-07 CFC    | 2e-06           |
+!> | curvature | 3e-4, 2.5e-4   | 3.4e-11 SvdW   | 3e-10           |
+!> |           |                | 8.2e-11 CFC    | 3e-10           |
 !>
-!> **The two classes must not share a bound.** They are three (SvdW) to four
-!> (CFC) orders apart, and a common bound would be set by the curvature noise
-!> -- so a real smooth-channel regression of two orders would pass unnoticed
-!> behind a limitation that is neither new nor in this code.
+!> The curvature row is the state after the 2026-09-07 discriminant fix; before
+!> it, that class ran at `4e-3, 3e-3` against `2e-07` / `2e-06` and could not
+!> reach `1e-10` at any step. It is now the *tighter* of the two classes -- the
+!> smooth six are reference-round-off limited at `1.3e-10` while the curvature
+!> pair sits at `8.2e-11`.
 !>
 !> **`1e-10` on the smooth six was the target and is not reachable, by a
 !> factor of 1.3, and the reason is the reference.** Five of the seven smooth
@@ -222,24 +221,27 @@ module test_cavity_drop_hessian_e2e
    integer, parameter :: PROJ_LEVEL = 2
    integer, parameter :: WLEB_PRUNE = 4
 
-   !> Central-difference steps, each at the bowl of its own channel class
+   !> Central-difference step of the reference assertions
    !>
-   !> Measured, see the module header: the smooth channels bottom out at
-   !> `3e-4` and the curvature ones ten times higher, because their floor is a
-   !> fixed arithmetic noise rather than truncation
+   !> Measured, see the module header. Both classes bottom out at `3e-4`. The
+   !> curvature step used to be ten times higher, because that class's floor was
+   !> a fixed arithmetic noise rather than truncation; the sum-of-squares
+   !> discriminant removed it, and the two names now carry the same value.
    real(wp), parameter :: SMOOTH_STEP = 3.0E-4_wp
-   real(wp), parameter :: CURV_STEP = 3.0E-3_wp
+   real(wp), parameter :: CURV_STEP = 3.0E-4_wp
 
-   !> Bounds on the reference's own error, one decade above the measurement
+   !> Bounds on the reference's own error, about two decades above the
+   !> measurement
    !>
-   !> Worst asymmetry measured at the steps above: `1.5e-10` / `1.5e-10` for the
-   !> smooth set (SvdW / CFC) and `3.5e-8` / `5.3e-7` for the curvature set.
-   !> The two classes are separated on purpose -- a common bound would be set by
-   !> the curvature noise and the smooth assertion would then be vacuous by four
-   !> orders.
+   !> Worst asymmetry measured at the step above: `1.5e-10` / `1.5e-10` for the
+   !> smooth set (SvdW / CFC) and `2.6e-11` / `7.1e-11` for the curvature set.
+   !> The three names are kept apart so a class- or level-set-specific
+   !> regression is still reported as one, but they no longer need to differ:
+   !> before the discriminant fix the curvature pair measured `3.5e-8` / `5.3e-7`
+   !> at `h = 3e-3` and was asserted at `5e-7` / `5e-6`.
    real(wp), parameter :: SMOOTH_SYM_TOL = 5.0E-09_wp
-   real(wp), parameter :: CURV_SYM_TOL_SVDW = 5.0E-07_wp
-   real(wp), parameter :: CURV_SYM_TOL_CFC = 5.0E-06_wp
+   real(wp), parameter :: CURV_SYM_TOL_SVDW = 5.0E-09_wp
+   real(wp), parameter :: CURV_SYM_TOL_CFC = 5.0E-09_wp
 
    !> Below this the reference carries no information and any comparison
    !> against it would pass for the wrong reason
@@ -247,13 +249,15 @@ module test_cavity_drop_hessian_e2e
 
    !> Channel classes of the end-to-end comparison
    !>
-   !> Split because their numerical references have different floors and
-   !> therefore different bowls: the smooth six are truncation limited and
-   !> optimise around `3e-4`, the curvature pair is limited by a fixed
-   !> arithmetic noise and optimises ten times higher. A single bound over both
-   !> would be set by the curvature noise and the smooth assertion would then
-   !> be vacuous by three to four orders -- which is exactly the regression
-   !> this split exists to keep visible
+   !> Originally split because their numerical references had different floors
+   !> and therefore different bowls: the smooth six are truncation limited and
+   !> optimise around `3e-4`, while the curvature pair was limited by a fixed
+   !> arithmetic noise -- the discriminant cancellation -- and optimised ten
+   !> times higher. With that fixed both classes are truncation limited at the
+   !> same step and carry the same bounds. The split is kept because it still
+   !> reports which class moved, and because the two classes reach the analytic
+   !> side through different code: only the curvature pair drives
+   !> `apply_seed_tangent`'s curvature block
    integer, parameter :: CLASS_SMOOTH = 1, CLASS_CURV = 2
 
    !> Width of an adjoint-set name
@@ -272,6 +276,9 @@ module test_cavity_drop_hessian_e2e
    real(wp), parameter :: SMOOTH_STEPS(*) = [3.0E-4_wp, 2.5E-4_wp]
 
    !> Central-difference steps of the curvature comparison
+   !>
+   !> The same pair as `SMOOTH_STEPS` since the 2026-09-07 discriminant fix;
+   !> they were `4e-3, 3e-3` while this class had a `1/h` floor to sit above.
    real(wp), parameter :: CURV_STEPS(*) = [3.0E-4_wp, 2.5E-4_wp]
 
    !> Agreement bound of the smooth class, absolute *and* relative
@@ -315,45 +322,38 @@ module test_cavity_drop_hessian_e2e
    !> is `6e-10` while its absolute miss is `1.3e-10`.
    !>
    !> `3e-10` leaves a factor of `2.4` over the worst measured value at the two
-   !> steps used, and stays three orders below the curvature class's bound, so
-   !> a smooth-channel regression is still visible by three orders.
+   !> steps used. Since the 2026-09-07 discriminant fix the curvature class is
+   !> asserted at the same number rather than three orders above it, and is the
+   !> *tighter* of the two in practice (`8.2e-11` worst against this class's
+   !> `1.3e-10`), so a smooth-channel regression can no longer hide behind a
+   !> curvature limitation -- there is none left to hide behind.
    real(wp), parameter :: SMOOTH_TOL = 3.0E-10_wp
 
    !> Agreement bounds of the curvature class, absolute *and* relative
    !>
-   !> Same metric as `SMOOTH_TOL`, and decided by the absolute half throughout
-   !> -- these blocks have `max |H| < 1.5`, so the relative half never rescues
-   !> a component. Worst over the block:
+   !> Same metric as `SMOOTH_TOL`. Worst over the block, at the two steps used:
    !>
-   !> | set      | 6e-3 SvdW / CFC   | 4e-3              | 3e-3              |
-   !> |----------|-------------------|-------------------|-------------------|
-   !> | w_k1     | 5.1e-08 / 8.8e-07 | 5.6e-08 / 6.5e-07 | 3.0e-08 / 4.6e-07 |
-   !> | w_k2     | 6.8e-08 / 7.4e-07 | 6.1e-08 / 2.6e-07 | 2.3e-08 / 2.6e-07 |
-   !> | combined | 7.2e-08 / 4.9e-07 | 1.3e-08 / 9.6e-08 | 6.9e-09 / 5.7e-08 |
+   !> | set      | 3.0e-4 SvdW / CFC | 2.5e-4 SvdW / CFC |
+   !> |----------|-------------------|-------------------|
+   !> | w_k1     | 1.9e-11 / 4.0e-11 | 1.8e-11 / 5.2e-11 |
+   !> | w_k2     | 3.1e-11 / 5.0e-11 | 2.7e-11 / 8.2e-11 |
+   !> | combined | 3.2e-11 / 8.1e-11 | 3.4e-11 / 6.9e-11 |
    !>
-   !> and at `2e-3` and `1e-3` they get worse again (`4.6e-08` / `1.2e-06` and
-   !> `1.2e-07` / `8.9e-07`), with no descending branch anywhere: the floor is
-   !> fixed and the truncation is not, so the optimum sits three to four orders
-   !> above the smooth class's and ten times higher in `h`.
+   !> Descending on both level sets, which is the whole point: before the
+   !> 2026-09-07 discriminant fix this class had no descending branch anywhere
+   !> and was asserted at `2e-07` (SvdW) / `2e-06` (CFC) at ten times the step,
+   !> because `disc = |k1 - k2| / 2` was formed as `sqrt(KM^2 - D)` -- a
+   !> difference of two quantities of size `KM^2` -- and then divided by.
+   !> `build_seed_state` now takes it as `sqrt(half_diff^2 + S12^2)` from the
+   !> shape operator in the surface tangent frame, and `apply_seed` /
+   !> `apply_seed_tangent` differentiate that form.
    !>
-   !> **This bound is the reference's, not the code's, and it cannot be
-   !> improved from here.** `hessian.md` traces it to the discriminant
-   !> cancellation at `kernel.f90:489`, where `disc = |k1 - k2| / 2` is formed
-   !> as `sqrt(KM^2 - D)` -- a difference of two quantities of size `KM^2` --
-   !> and then divided by at `kernel.f90:921`. That is a defect in the
-   !> **shipped reverse gradient**, which this suite differentiates, and
-   !> repairing it changes shipped output; it is deliberately out of scope
-   !> here. The twin defect in the forward path (`compute_gradient_drop`) is
-   !> fixed and no longer contributes, but that path is not what this suite
-   !> differences. The module header's per-channel floor measurement (`1/h` across six
-   !> decades, present in exactly two of eight channels, and 15-20x worse on
-   !> CFC whose curvature degeneracy is four orders deeper) is the independent
-   !> confirmation.
-   !>
-   !> The two numbers leave a factor of `3.3` and `3.1` over the worst measured
-   !> value at the two steps used.
-   real(wp), parameter :: CURV_TOL_SVDW = 1.0E-20_wp
-   real(wp), parameter :: CURV_TOL_CFC = 1.0E-20_wp
+   !> The bound is `SMOOTH_TOL`'s value, and is now the *reference's* limit
+   !> rather than the code's: the curvature pair measures below the smooth six
+   !> (`1.3e-10`), so this class is the tighter of the two. It leaves a factor
+   !> of `8.8` (SvdW) and `3.6` (CFC) over the worst measured value.
+   real(wp), parameter :: CURV_TOL_SVDW = 3.0E-10_wp
+   real(wp), parameter :: CURV_TOL_CFC = 3.0E-10_wp
 
    !> Bounds on the *analytic* Hessian's own structure
    !>
@@ -368,18 +368,22 @@ module test_cavity_drop_hessian_e2e
    !>
    !> | class     | asymmetry | column sum |
    !> |-----------|-----------|------------|
-   !> | smooth    | 4.3e-14   | 7.7e-14    |
-   !> | curvature | 1.1e-10   | 4.5e-11    |
+   !> | smooth    | 4.6e-14   | 7.9e-14    |
+   !> | curvature | 1.3e-13   | 4.0e-13    |
    !>
-   !> The curvature row is `kernel.f90:489` reaching the analytic side as
-   !> well; the smooth row is round-off and nothing else.
+   !> Both rows are round-off and nothing else. The curvature row was `1.1e-10`
+   !> / `4.5e-11` before the 2026-09-07 discriminant fix -- the cancellation
+   !> reaching the analytic side as well, through `apply_seed_tangent`'s own
+   !> `dd_disc`. Three orders of that came back; what remains is CFC's deeper
+   !> third-derivative chain, still within an order of the smooth class.
    !>
    !> Deliberately *not* the reference's own `SMOOTH_SYM_TOL`: the analytic
    !> block is four orders more symmetric than `H_num`, so a bound set by the
    !> reference would be vacuous. This one leaves a factor of 13 (smooth) and
-   !> 9 (curvature).
+   !> 25 (curvature) -- the wider margin because CFC's is the only row that
+   !> moves appreciably with the BLAS backend.
    real(wp), parameter :: ANALYTIC_SYM_TOL_SMOOTH = 1.0E-12_wp
-   real(wp), parameter :: ANALYTIC_SYM_TOL_CURV = 1.0E-12_wp
+   real(wp), parameter :: ANALYTIC_SYM_TOL_CURV = 1.0E-11_wp
 
    !> Bound on `get_surface_hessian` against `get_hessian` on the unit directions
    !>

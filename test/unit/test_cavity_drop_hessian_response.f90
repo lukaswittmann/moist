@@ -56,7 +56,8 @@
 !> | + w_k1, w_k2                   | 1.0e-08 abs / 8.3e-09 rel |
 !>
 !> The curvature row is the near-umbilic amplification of `hessian.md`
-!> (`kernel.f90:489`) arriving by a different route than in
+!> (the `kernel.f90` discriminant, fixed 2026-09-07 -- this table is the
+!> pre-fix measurement) arriving by a different route than in
 !> `test_cavity_drop_hessian_fixed`: `res%dk1` is not merely noisy on this
 !> fixture, it is *large*, so `w_k1 res%dk1` dominates both gradients and the
 !> live-frozen difference loses the digits it dominates. Nothing in this half

@@ -213,15 +213,15 @@ module moist_type
       procedure(get_component_response), deferred :: get_response
       procedure(get_component_gradient), deferred :: get_gradient
       !> Accumulate direct host-trace adjoints needed before the host can build
-      !> its charge-dependent response quantities.
+      !> its charge-dependent response quantities
       procedure :: get_trace_response => get_component_trace_response_default
-      !> Accumulate component-specific surface adjoint weights.
+      !> Accumulate component-specific surface adjoint weights
       procedure :: get_surface_weights => get_component_surface_weights_default
-      !> Accumulate the host's direct trace-geometry surface adjoint weights.
+      !> Accumulate the host's direct trace-geometry surface adjoint weights
       procedure :: get_host_surface_weights => get_component_host_surface_weights_default
-      !> Accumulate the surface adjoint weights the *nuclear gradient* needs.
+      !> Accumulate the surface adjoint weights the nuclear gradient needs
       procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
-      !> Accumulate nuclear-gradient terms that do not flow through the surface.
+      !> Accumulate nuclear-gradient terms that do not flow through the surface
       procedure :: get_direct_gradient => get_component_direct_gradient_default
 
    end type solvation_model_component_type

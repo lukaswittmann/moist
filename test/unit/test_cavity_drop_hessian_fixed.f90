@@ -51,20 +51,25 @@
 !>   `1e-12` puts that floor at `2e-15` relative for the four clean channels
 !>   (a handful of ulp) and `2.5e-11` relative for `w_k1` -- five orders worse.
 !>
-!> * The amplifier is the near-umbilic point. `compute_curvature` forms the
+!> * The amplifier was the near-umbilic point. `compute_curvature` forms the
 !>   principal curvatures stably, `disc = hypot(half_diff, S12)`, but the
-!>   derivative path re-derives the same discriminant by cancellation,
-!>   `disc_curv = sqrt(KM^2 - D)`, and then divides by it:
-!>   `d_disc_c = (KM dT - dD) / (2 disc_curv)`. On this fixture the smallest
+!>   derivative path used to re-derive the same discriminant by cancellation,
+!>   `disc_curv = sqrt(KM^2 - D)`, and then divide by it:
+!>   `d_disc = (KM dT - dD) / (2 disc_curv)`. On this fixture the smallest
 !>   `|k1 - k2| / |KM|` is `1.3e-6` (SvdW, 10 of 126 points below `1e-4`) and
 !>   `9.4e-11` (CFC, one point below the `curv_disc_guard = 1e-10` cutoff
-!>   entirely). `eps KM^2 / (2 disc |k1|)` predicts `4e-11` relative for SvdW
+!>   entirely). `eps KM^2 / (2 disc |k1|)` predicted `4e-11` relative for SvdW
 !>   and `5e-10` for CFC against `2.5e-11` and `1.9e-9` measured.
 !>
-!> Reaching `1e-10` on `w_k1` and `w_k2` is therefore a source change -- the
-!> stable discriminant in the derivative path, the one `compute_curvature` and
-!> `drop_seed_state`'s `sqrt_disc_B` already use -- not a tolerance the test
-!> can pick. No parameter setting reaches it.
+!> **Fixed 2026-09-07.** The two paragraphs above are the diagnosis, kept as the
+!> record; `build_seed_state` now forms the shape operator in the surface
+!> tangent frame and takes `disc = sqrt(half_diff^2 + S12^2)` -- the form
+!> `compute_curvature` and `drop_seed_state`'s own `sqrt_disc_B` already used --
+!> with `apply_seed` and `apply_seed_tangent` differentiating that form. It was
+!> a source change, as this header said, and not a tolerance the test could
+!> pick. `svdw_hvp_single_atom` and `cfc_hvp_single_atom` went green on it; the
+!> remaining failures in this suite name `w_xi` and the multi-atom blocks, not
+!> a curvature channel.
 module test_cavity_drop_hessian_fixed
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
