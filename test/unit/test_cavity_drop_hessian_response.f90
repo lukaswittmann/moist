@@ -163,7 +163,7 @@
 !> ## The mutation that shaped the branched case
 !>
 !> `deff%branch_phi_adj` was zeroed after pass 2 in
-!> `derivatives/hessian_response.f90` and the suite re-run:
+!> `derivatives/hessian_traverse.f90` and the suite re-run:
 !>
 !>   * `svdw_cross_branching_fd` fails at `4.3069029e-1` absolute and `3.24e-2`
 !>     relative -- worst component atom 2 axis 3, direction 1, analytic

@@ -186,7 +186,8 @@ module test_cavity_drop_hessian_e2e
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop
+   use moist_cavity_drop, only: cavity_type_drop, drop_hvp_chunk_dirs, prepare_surface_weights
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
@@ -377,8 +378,12 @@ module test_cavity_drop_hessian_e2e
 
    !> Bound on `get_surface_hessian` against `get_hessian` on the unit directions
    !>
-   !> Exact, and measured exact on both level sets. The dense path adds the
-   !> fixed half's column directly, `h + r`; the HVP path forms
+   !> Exact, and measured exact on both level sets. Any set of at least `3 nsph`
+   !> directions -- the full Cartesian basis here -- is run by
+   !> `get_surface_hessian` in the rank-4 mode of the fixed channel, the mode
+   !> `get_hessian` uses, so both form the same block and the same response
+   !> columns. The dense path
+   !> adds the fixed half's column directly, `h + r`; the HVP path forms
    !> `r + sum_c h_c v_c` with `v` a Cartesian unit vector, so every term but
    !> one is an exact `0 * h_c` and the surviving one an exact `1 * h_c`. The
    !> two sums are therefore the same two operands in the opposite order, which
@@ -386,15 +391,41 @@ module test_cavity_drop_hessian_e2e
    !> contraction, since `fma(h, 1, r)` and `fma(h, 0, r)` are both exact.
    !> Should a future toolchain break this, `1e-13 * max |H|` is the level to
    !> relax it to; it would still be three orders inside any indexing error.
+   !> The per-direction mode is exercised by `HVP_GEN_TOL` below.
    real(wp), parameter :: HVP_UNIT_TOL = 0.0_wp
+
+   !> Bound on a direction set that crosses a `drop_hvp_chunk_dirs` boundary,
+   !> against the same directions run one block at a time
+   !>
+   !> Exact, and measured exact on the fixture this suite drives, for both
+   !> fixed-channel modes. The response half and the per-direction fixed half
+   !> compute every column from its own direction alone, and the rank-4 fixed
+   !> half is direction free and reduced in the first block only, so a block
+   !> boundary falling somewhere in the middle of the set changes neither the
+   !> operands nor their order in any column. That holds only while every block
+   !> prepares its level sets at the *same* derivative order: preparing the
+   !> later, response-only blocks at order 3 moves their columns by one ulp
+   !> (`1.8e-15` against `max |Hv| = 15.7`, measured here), because the
+   !> generated atom kernels schedule their lower orders differently per level.
+   !>
+   !> The number this assertion exists for is the other one: with the
+   !> single-block gate on the fixed accumulation removed, the same comparison
+   !> measures `1.6e+01` -- the whole fixed half counted a second time in every
+   !> column of the second block -- against a `max |Hv|` of `3.1e+01`.
+   real(wp), parameter :: HVP_CHUNK_TOL = 0.0_wp
 
    !> Bound on `get_surface_hessian` against the dense block contracted with a
    !> general direction, relative to the magnitude of that contraction
    !>
-   !> Not exact: the operands differ in order and in magnitude, and the
-   !> response half is only *mathematically* linear in the direction. Measured
-   !> `3.3e-16` (SvdW) and `2.2e-16` (CFC) relative -- one ulp -- against the
-   !> `1e-13` asserted.
+   !> Not exact, and since the fixed channel gained its per-direction mode the
+   !> real cross-check of the two fixed-channel code paths: a direction set
+   !> short of a full basis runs the second-order chain along the supplied
+   !> directions, the dense block runs it along every point's Cartesian unit
+   !> directions and is contracted afterwards. Mathematically the same by
+   !> linearity of the chain; numerically two summation orders. Measured
+   !> `1.9e-15` (SvdW) and `1.1e-15` (CFC) relative against the `1e-13`
+   !> asserted. (Before the per-direction mode both paths shared the block and
+   !> the comparison measured one ulp, `3.3e-16` / `2.2e-16`.)
    real(wp), parameter :: HVP_GEN_TOL = 1.0E-13_wp
 
 contains
@@ -417,6 +448,8 @@ contains
                   new_unittest("analytic_curvature_cfc", test_analytic_curvature_cfc), &
                   new_unittest("hvp_matches_dense_svdw", test_hvp_svdw), &
                   new_unittest("hvp_matches_dense_cfc", test_hvp_cfc), &
+                  new_unittest("hvp_direction_chunking", test_hvp_chunking), &
+                  new_unittest("hvp_direction_chunking_per_dir", test_hvp_chunking_per_dir), &
                   new_unittest("shape_guards", test_shape_guards), &
                   new_unittest("branched_grid_refused", test_branched_grid_refused) &
                   ]
@@ -1173,6 +1206,195 @@ contains
    end subroutine run_hvp
 
    !* ================================================================================= *!
+   !*                        Direction blocks of the HVP path                           *!
+   !* ================================================================================= *!
+
+   !> A direction set that crosses a block boundary reproduces the blocked runs
+   !>
+   !> One level set is enough: what is asserted is a property of the traversal's
+   !> bookkeeping and not of the mathematics, and it is the same bookkeeping on
+   !> both models.
+   !>
+   !> @param[out] error Error handle
+   subroutine test_hvp_chunking(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+
+      logical :: mask(NCHAN)
+      real(wp), allocatable :: dirs(:, :, :)
+      real(wp), allocatable :: hvp_whole(:, :, :), hvp_blocked(:, :, :)
+      real(wp) :: worst, scale
+      integer :: nsph, ndir, nlo
+
+      mask = .false.
+      mask(smooth_channels()) = .true.
+
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      if (allocated(error)) return
+      nsph = cavity%nsph
+
+      !* ---------------------------- A set of two blocks ----------------------------- *!
+      ! Sized from the bound rather than from a literal, and split so that each
+      ! half is one block on its own. Both properties are asserted, because a
+      ! raised bound would otherwise leave this test crossing nothing and still
+      ! passing.
+      ndir = drop_hvp_chunk_dirs + 2
+      nlo = (ndir + 1)/2
+      if (ndir <= drop_hvp_chunk_dirs .or. nlo > drop_hvp_chunk_dirs) then
+         call test_failed(error, "the chunking fixture no longer crosses a direction"// &
+                          " block boundary")
+         return
+      end if
+      call build_direction_batch(nsph, ndir, dirs)
+
+      allocate (hvp_whole(ndim, nsph, ndir), source=0.0_wp)
+      call analytic_hvp(cavity, mask, dirs, hvp_whole, "chunk/svdw whole", error)
+      if (allocated(error)) return
+
+      scale = maxval(abs(hvp_whole))
+      if (scale <= VACUITY_THR) then
+         call test_failed(error, "the chunked Hessian-vector products are vacuous (max "// &
+                          to_string(scale)//")")
+         return
+      end if
+
+      !* ------------------------ The same set, block by block ------------------------ *!
+      allocate (hvp_blocked(ndim, nsph, ndir), source=0.0_wp)
+      call analytic_hvp(cavity, mask, dirs(:, :, 1:nlo), hvp_blocked(:, :, 1:nlo), &
+                        "chunk/svdw first block", error)
+      if (allocated(error)) return
+      call analytic_hvp(cavity, mask, dirs(:, :, nlo + 1:ndir), &
+                        hvp_blocked(:, :, nlo + 1:ndir), "chunk/svdw second block", error)
+      if (allocated(error)) return
+
+      worst = maxval(abs(hvp_whole - hvp_blocked))
+      if (E2E_VERBOSE) write (*, '(a,2es12.3)') "HVP-CHUNK", worst, scale
+      if (worst > HVP_CHUNK_TOL) then
+         call test_failed(error, "the chunked direction set disagrees with the same"// &
+                          " directions run one block at a time: worst deviation "// &
+                          to_string(worst)//" against max |Hv| = "//to_string(scale)// &
+                          " (a direction-free half accumulated once per block would"// &
+                          " look like this)")
+         return
+      end if
+
+   end subroutine test_hvp_chunking
+
+   !> The per-direction fixed half alone, across a block boundary
+   !>
+   !> [[test_hvp_chunking]] reaches the rank-4 mode: its direction set is larger
+   !> than the fixture's `3 nsph`, so the public accessor forms the block. The
+   !> per-direction mode runs in every block and is reached here through the
+   !> half-accessor, on the same direction set, with the same exact bound.
+   !>
+   !> @param[out] error Error handle
+   subroutine test_hvp_chunking_per_dir(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
+
+      logical :: mask(NCHAN)
+      real(wp), allocatable :: dirs(:, :, :)
+      real(wp), allocatable :: hvp_whole(:, :, :), hvp_blocked(:, :, :)
+      real(wp) :: worst, scale
+      integer :: nsph, ndir, nlo
+
+      mask = .false.
+      mask(smooth_channels()) = .true.
+
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
+      if (allocated(error)) return
+      nsph = cavity%nsph
+
+      call frozen_adjoint(cavity, mask, acc, error)
+      if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
+
+      ndir = drop_hvp_chunk_dirs + 2
+      nlo = (ndir + 1)/2
+      if (ndir <= drop_hvp_chunk_dirs .or. nlo > drop_hvp_chunk_dirs) then
+         call test_failed(error, "the chunking fixture no longer crosses a direction"// &
+                          " block boundary")
+         return
+      end if
+      call build_direction_batch(nsph, ndir, dirs)
+
+      allocate (hvp_whole(ndim, nsph, ndir), source=0.0_wp)
+      call per_dir_fixed(cavity, eff, dirs, hvp_whole, "chunk-per-dir/svdw whole", error)
+      if (allocated(error)) return
+
+      scale = maxval(abs(hvp_whole))
+      if (scale <= VACUITY_THR) then
+         call test_failed(error, "the chunked per-direction products are vacuous (max "// &
+                          to_string(scale)//")")
+         return
+      end if
+
+      allocate (hvp_blocked(ndim, nsph, ndir), source=0.0_wp)
+      call per_dir_fixed(cavity, eff, dirs(:, :, 1:nlo), hvp_blocked(:, :, 1:nlo), &
+                         "chunk-per-dir/svdw first block", error)
+      if (allocated(error)) return
+      call per_dir_fixed(cavity, eff, dirs(:, :, nlo + 1:ndir), &
+                         hvp_blocked(:, :, nlo + 1:ndir), "chunk-per-dir/svdw second block", &
+                         error)
+      if (allocated(error)) return
+
+      worst = maxval(abs(hvp_whole - hvp_blocked))
+      if (E2E_VERBOSE) write (*, '(a,2es12.3)') "HVP-CHUNK-PER-DIR", worst, scale
+      if (worst > HVP_CHUNK_TOL) then
+         call test_failed(error, "the chunked per-direction fixed half disagrees with the"// &
+                          " same directions run one block at a time: worst deviation "// &
+                          to_string(worst)//" against max |Hv| = "//to_string(scale))
+         return
+      end if
+
+   end subroutine test_hvp_chunking_per_dir
+
+   !> The per-direction fixed half along a direction set
+   !>
+   !> @param[in]  cavity Cavity to differentiate
+   !> @param[in]  eff    Folded surface adjoints, held fixed
+   !> @param[in]  dirs   Nuclear directions
+   !> @param[out] hvp    Columns
+   !> @param[in]  label  Case description
+   !> @param[out] error  Error handle
+   subroutine per_dir_fixed(cavity, eff, dirs, hvp, label, error)
+      !> Cavity to differentiate
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Folded surface adjoints
+      type(drop_surface_weights_type), intent(in) :: eff
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Columns
+      real(wp), intent(out) :: hvp(:, :, :)
+      !> Case description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(mctc_error), allocatable :: cav_error
+
+      hvp = 0.0_wp
+      call cavity%get_surface_hessian_fixed_dirs(eff, dirs, hvp, cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "the per-direction fixed half failed ("//label//"): "// &
+                          cav_error%message)
+         return
+      end if
+   end subroutine per_dir_fixed
+
+   !* ================================================================================= *!
    !*                                  Shape guards                                     *!
    !* ================================================================================= *!
 
@@ -1606,6 +1828,40 @@ contains
          end do
       end do
    end subroutine build_directions
+
+   !> A batch of nuclear directions large enough to be blocked
+   !>
+   !> Every column is a different smooth function of the direction index, so no
+   !> two are parallel, none is a Cartesian axis and none is a translation -- a
+   !> product that lost a direction, an atom or an axis is visible in the
+   !> comparison this feeds.
+   !>
+   !> @param[in]  nsph Number of spheres
+   !> @param[in]  ndir Number of directions
+   !> @param[out] dirs Directions `(3, nsph, ndir)`
+   subroutine build_direction_batch(nsph, ndir, dirs)
+      !> Number of spheres
+      integer, intent(in) :: nsph
+      !> Number of directions
+      integer, intent(in) :: ndir
+      !> Directions
+      real(wp), allocatable, intent(out) :: dirs(:, :, :)
+
+      integer :: iatom, iaxis, idir
+      real(wp) :: phase
+
+      allocate (dirs(ndim, nsph, ndir))
+      do idir = 1, ndir
+         phase = 0.11_wp*real(idir, wp)
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               dirs(iaxis, iatom, idir) = 0.30_wp*sin(1.7_wp*real(iaxis, wp) &
+                                                      + 0.9_wp*real(iatom, wp) + phase) &
+                                          + 0.05_wp*cos(phase*real(iatom + iaxis, wp))
+            end do
+         end do
+      end do
+   end subroutine build_direction_batch
 
    !* ================================================================================= *!
    !*                              Deviation bookkeeping                                *!

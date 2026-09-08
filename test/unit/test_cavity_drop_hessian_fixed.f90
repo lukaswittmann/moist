@@ -292,6 +292,20 @@ module test_cavity_drop_hessian_fixed
    !> already carries two to three orders of headroom and would survive `1e-10`.
    real(wp), parameter :: SYM_TOL = 1.0E-8_wp
 
+   !> Bound of the per-direction half against the contracted rank-4 half
+   !>
+   !> Two code paths for one quantity: the second-order chain run once along
+   !> the supplied direction, against the same chain run along every point's
+   !> `3 n_local` Cartesian unit directions and contracted afterwards -- the two
+   !> modes `hessian.f90` chooses between. Equal by linearity of the chain,
+   !> numerically two summation orders, so this is a round-off bound and not a
+   !> finite-difference one; the switching block is contracted by yet another
+   !> routine on the per-direction side, so the live `w_f` of `all_channels()`
+   !> covers its index orientation. Measured `1.4e-14 / 24.5` (SvdW) and
+   !> `7.1e-14 / 38.1` (CFC) absolute against `max |Hv|`, i.e. `5.6e-16` and
+   !> `1.9e-15` relative; asserted almost three decades above.
+   real(wp), parameter :: PER_DIR_TOL = 1.0E-12_wp
+
 contains
 
    !> Collect the suite
@@ -306,6 +320,10 @@ contains
                   new_unittest("svdw_hvp_multi_atom", test_svdw_multi), &
                   new_unittest("cfc_hvp_single_atom", test_cfc_single), &
                   new_unittest("cfc_hvp_multi_atom", test_cfc_multi), &
+                  new_unittest("svdw_per_dir_multi_atom", test_svdw_per_dir_multi), &
+                  new_unittest("cfc_per_dir_multi_atom", test_cfc_per_dir_multi), &
+                  new_unittest("svdw_per_dir_matches_rank4", test_svdw_per_dir_vs_rank4), &
+                  new_unittest("cfc_per_dir_matches_rank4", test_cfc_per_dir_vs_rank4), &
                   new_unittest("single_channels", test_single_channels), &
                   new_unittest("hessian_symmetry", test_symmetry), &
                   new_unittest("shape_guard", test_shape_guard) &
@@ -356,6 +374,48 @@ contains
       call run_hvp_fd(LSF_CFC, DIR_MULTI, all_channels(), "cfc/multi", error)
    end subroutine test_cfc_multi
 
+   !> SvdW, every atom moved, through the per-direction mode of the half
+   !>
+   !> @param[out] error Error handle
+   subroutine test_svdw_per_dir_multi(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_hvp_fd(LSF_SVDW, DIR_MULTI, all_channels(), "svdw/multi/per-dir", error, &
+                      per_dir=.true.)
+   end subroutine test_svdw_per_dir_multi
+
+   !> CFC, every atom moved, through the per-direction mode of the half
+   !>
+   !> @param[out] error Error handle
+   subroutine test_cfc_per_dir_multi(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_hvp_fd(LSF_CFC, DIR_MULTI, all_channels(), "cfc/multi/per-dir", error, &
+                      per_dir=.true.)
+   end subroutine test_cfc_per_dir_multi
+
+   !> SvdW: the per-direction half equals the contracted rank-4 half
+   !>
+   !> @param[out] error Error handle
+   subroutine test_svdw_per_dir_vs_rank4(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_per_dir_vs_rank4(LSF_SVDW, "svdw", error)
+   end subroutine test_svdw_per_dir_vs_rank4
+
+   !> CFC: the per-direction half equals the contracted rank-4 half
+   !>
+   !> @param[out] error Error handle
+   subroutine test_cfc_per_dir_vs_rank4(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_per_dir_vs_rank4(LSF_CFC, "cfc", error)
+   end subroutine test_cfc_per_dir_vs_rank4
+
    !> Each adjoint channel driven on its own
    !>
    !> A channel the Hessian dropped entirely would still pass the combined
@@ -400,14 +460,19 @@ contains
       end if
    end subroutine test_single_channels
 
-   !> Central-difference the shipped surface gradient against the rank-4 result
+   !> Central-difference the shipped surface gradient against the analytic half
+   !>
+   !> The analytic side is the rank-4 half contracted with the direction, or,
+   !> with `per_dir`, the per-direction half run along it -- the two modes of
+   !> the same channel, both of which must reproduce the differenced gradient.
    !>
    !> @param[in]  lsf_kind Level-set model of the fixture
    !> @param[in]  dir_kind Nuclear direction to contract with
    !> @param[in]  channels Adjoint channels to populate
    !> @param[in]  label    Human-readable case description
    !> @param[out] error    Error handle
-   subroutine run_hvp_fd(lsf_kind, dir_kind, channels, label, error)
+   !> @param[in]  per_dir  Run the half per direction rather than as the block
+   subroutine run_hvp_fd(lsf_kind, dir_kind, channels, label, error, per_dir)
       !> Level-set model
       integer, intent(in) :: lsf_kind
       !> Nuclear direction
@@ -418,6 +483,8 @@ contains
       character(len=*), intent(in) :: label
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
+      !> Run the half per direction rather than as the block
+      logical, intent(in), optional :: per_dir
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -429,8 +496,10 @@ contains
 
       !> Analytic Hessian, its contraction and the differenced references
       real(wp), allocatable :: hess(:, :, :, :), hv(:, :), fd(:, :, :)
-      !> Nuclear direction
-      real(wp), allocatable :: vdir(:, :)
+      !> Nuclear direction, and the direction set and columns of the per-direction half
+      real(wp), allocatable :: vdir(:, :), dirs(:, :, :), cols(:, :, :)
+      !> Whether the per-direction half is under test
+      logical :: use_per_dir
       !> Grid and atom extents, loop indices
       integer :: nsph, iatom, iaxis, istep
       !> Deviation bookkeeping
@@ -449,22 +518,36 @@ contains
       if (allocated(error)) return
       call prepare_surface_weights(cavity, acc, .true., eff)
 
-      allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
-      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
-      if (allocated(cav_error)) then
-         call test_failed(error, "fixed-adjoint Hessian failed ("//label//"): "// &
-                          cav_error%message)
-         return
-      end if
+      use_per_dir = .false.
+      if (present(per_dir)) use_per_dir = per_dir
 
       call build_direction(dir_kind, nsph, vdir)
-
       allocate (hv(ndim, nsph), source=0.0_wp)
-      do iatom = 1, nsph
-         do iaxis = 1, ndim
-            hv(:, :) = hv(:, :) + hess(:, :, iaxis, iatom)*vdir(iaxis, iatom)
+
+      if (use_per_dir) then
+         allocate (dirs(ndim, nsph, 1), cols(ndim, nsph, 1), source=0.0_wp)
+         dirs(:, :, 1) = vdir
+         call cavity%get_surface_hessian_fixed_dirs(eff, dirs, cols, cav_error)
+         if (allocated(cav_error)) then
+            call test_failed(error, "per-direction fixed-adjoint Hessian failed ("//label// &
+                             "): "//cav_error%message)
+            return
+         end if
+         hv = cols(:, :, 1)
+      else
+         allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
+         call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
+         if (allocated(cav_error)) then
+            call test_failed(error, "fixed-adjoint Hessian failed ("//label//"): "// &
+                             cav_error%message)
+            return
+         end if
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               hv(:, :) = hv(:, :) + hess(:, :, iaxis, iatom)*vdir(iaxis, iatom)
+            end do
          end do
-      end do
+      end if
 
       !* ------------------------- Central-difference reference ------------------------ *!
       allocate (fd(ndim, nsph, size(FD_STEPS)), source=0.0_wp)
@@ -643,6 +726,99 @@ contains
    !* ================================================================================= *!
    !*                              Structural properties                                *!
    !* ================================================================================= *!
+
+   !> The per-direction half against the contracted rank-4 half
+   !>
+   !> Three directions: the sparsest column, the every-atom direction, and a
+   !> third that is neither, so a column-indexing error in either mode shows up
+   !> against the other. Every channel is live, the switching one included.
+   !>
+   !> @param[in]  lsf_kind Level-set model of the fixture
+   !> @param[in]  label    Human-readable case description
+   !> @param[out] error    Error handle
+   subroutine run_per_dir_vs_rank4(lsf_kind, label, error)
+      !> Level-set model
+      integer, intent(in) :: lsf_kind
+      !> Case description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
+      type(mctc_error), allocatable :: cav_error
+      type(structure_type) :: mol
+
+      !> Rank-4 half, direction set, per-direction columns and the contraction
+      real(wp), allocatable :: hess(:, :, :, :), dirs(:, :, :), cols(:, :, :), vdir(:, :)
+      real(wp), allocatable :: contracted(:, :, :)
+      integer, parameter :: NDIR = 3
+      integer :: nsph, iatom, iaxis, idir
+      real(wp) :: scale, worst
+
+      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
+      if (allocated(error)) return
+      nsph = cavity%nsph
+
+      call frozen_adjoint(cavity, all_channels(), acc, error)
+      if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
+
+      allocate (dirs(ndim, nsph, NDIR), source=0.0_wp)
+      call build_direction(DIR_SINGLE, nsph, vdir)
+      dirs(:, :, 1) = vdir
+      call build_direction(DIR_MULTI, nsph, vdir)
+      dirs(:, :, 2) = vdir
+      do iatom = 1, nsph
+         do iaxis = 1, ndim
+            dirs(iaxis, iatom, 3) = 0.4_wp*cos(0.7_wp*real(iatom, wp)*real(iaxis, wp)) - 0.1_wp
+         end do
+      end do
+
+      allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
+      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "fixed-adjoint Hessian failed ("//label//"): "// &
+                          cav_error%message)
+         return
+      end if
+      allocate (cols(ndim, nsph, NDIR), source=0.0_wp)
+      call cavity%get_surface_hessian_fixed_dirs(eff, dirs, cols, cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "per-direction fixed-adjoint Hessian failed ("//label// &
+                          "): "//cav_error%message)
+         return
+      end if
+
+      allocate (contracted(ndim, nsph, NDIR), source=0.0_wp)
+      do idir = 1, NDIR
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               contracted(:, :, idir) = contracted(:, :, idir) &
+                                        + hess(:, :, iaxis, iatom)*dirs(iaxis, iatom, idir)
+            end do
+         end do
+      end do
+
+      scale = maxval(abs(contracted))
+      if (scale <= VACUITY_THR) then
+         call test_failed(error, "the contracted block is vacuous for "//label// &
+                          " (max |Hv| = "//to_string(scale)//")")
+         return
+      end if
+
+      worst = maxval(abs(cols - contracted))
+      if (worst > PER_DIR_TOL*scale) then
+         call test_failed(error, "the per-direction fixed half disagrees with the"// &
+                          " contracted rank-4 half for "//label//": worst deviation "// &
+                          to_string(worst)//" against max |Hv| = "//to_string(scale))
+         return
+      end if
+
+   end subroutine run_per_dir_vs_rank4
 
    !> Symmetry of the assembled fixed-adjoint block
    !>

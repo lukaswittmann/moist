@@ -107,11 +107,15 @@ module test_cavity_drop_field_tangent
    real(wp), parameter :: CFC_ABS_THR = 1.0e-10_wp
    real(wp), parameter :: CFC_REL_THR = 1.0e-10_wp
 
-   !> Threshold of the algebraic half. Nothing numerical stands between
-   !> [[drop_field_tangent]] with zero weights and `vjp_f1_rA(dw0, dw1, dw2)`:
-   !> the extra terms are multiplied by an exact zero, so the two agree to the
-   !> last bit and this only guards against a compiler reassociating them.
-   real(wp), parameter :: EXACT_THR = 1.0e-14_wp
+   !> Threshold of the algebraic half. [[drop_field_tangent]] with zero weights
+   !> is `vjp_f1_rA(dw0, dw1, dw2)` up to the *order of contraction*: the
+   !> tangent reads the weighted row off the materialised jet tensors
+   !> ([[drop_field_jet_contract]]), the reference contracts inside the level
+   !> set's kernel, and the extra terms are multiplied by an exact zero. Two
+   !> summation orders of the same products, so this is a round-off bound and
+   !> not an identity to the bit: measured between `1e-14` (fails) and `1e-13`
+   !> (passes) on the largest SvdW fixture, asserted one decade above.
+   real(wp), parameter :: EXACT_THR = 1.0e-12_wp
 
    !> Anti-vacuity floor. Every case must move the half of the tangent it
    !> exists to test by at least this much, or it is testing nothing.

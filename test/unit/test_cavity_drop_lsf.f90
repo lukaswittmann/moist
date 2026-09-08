@@ -192,6 +192,8 @@ contains
                   new_unittest("cfc_hvp_rad_fd", test_cfc_hvp_rad_fd), &
                   new_unittest("svdw_hvp_ra_joint_fd", test_svdw_hvp_rA_joint_fd), &
                   new_unittest("cfc_hvp_ra_joint_fd", test_cfc_hvp_rA_joint_fd), &
+                  new_unittest("svdw_hvp_jet_matches_parts", test_svdw_hvp_jet), &
+                  new_unittest("cfc_hvp_jet_matches_parts", test_cfc_hvp_jet), &
                   new_unittest("svdw_radius_pairwise", test_svdw_radius_pairwise), &
                   new_unittest("cfc_radius_pairwise", test_cfc_radius_pairwise), &
                   new_unittest("svdw_empty_active", test_svdw_empty_active), &
@@ -2099,6 +2101,93 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call run_hvp_rA_joint_fd(error, kind_cfc)
    end subroutine test_cfc_hvp_rA_joint_fd
+
+   !> SvdW dispatch of the one-pass HVP family check.
+   subroutine test_svdw_hvp_jet(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_jet(error, kind_svdw)
+   end subroutine test_svdw_hvp_jet
+
+   !> CFC dispatch of the one-pass HVP family check.
+   subroutine test_cfc_hvp_jet(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_hvp_jet(error, kind_cfc)
+   end subroutine test_cfc_hvp_jet
+
+   !> `hvp_jet_rA(v)` against `hvp_f1_rA`, `hvp_f2_r_rA` and `hvp_f3_rr_rA`.
+   !>
+   !> The one-pass accessor evaluates the kernel once at its highest level and
+   !> keeps the lower orders the separate accessors discard; the kernels are
+   !> generated per level with their own subexpression schedule, so the two
+   !> agree to round-off and not to the bit, and the bound is `HESSFREE_*`.
+   subroutine run_hvp_jet(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: v(:, :), vrad(:)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp), allocatable :: j1(:, :), j2(:, :, :), j3(:, :, :, :)
+      integer  :: icase, ipt, ia, s_ax, i, j, iblend, igamma, nblend, ngamma, n_active
+      type(mctc_error), allocatable :: lsf_err
+
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (v(ndim, mol%nat), vrad(mol%nat))
+         allocate (h1(ndim, mol%nat), h2(ndim, ndim, mol%nat), h3(ndim, ndim, ndim, mol%nat))
+         allocate (j1(ndim, mol%nat), j2(ndim, ndim, mol%nat), j3(ndim, ndim, ndim, mol%nat))
+         call joint_direction(mol%nat, v, vrad)
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  call lsf%prepare(points(:, ipt), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  n_active = lsf%active_count()
+                  call lsf%hvp_f1_rA(v, h1)
+                  call lsf%hvp_f2_r_rA(v, h2)
+                  call lsf%hvp_f3_rr_rA(v, h3)
+                  call lsf%hvp_jet_rA(v, j1, j2, j3)
+                  do ia = 1, n_active
+                     do s_ax = 1, ndim
+                        call check(error, j1(s_ax, ia), h1(s_ax, ia), &
+                                   thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                   message="hvp_jet_rA order 1 disagrees with hvp_f1_rA")
+                        if (allocated(error)) return
+                        do i = 1, ndim
+                           call check(error, j2(i, s_ax, ia), h2(i, s_ax, ia), &
+                                      thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                      message="hvp_jet_rA order 2 disagrees with hvp_f2_r_rA")
+                           if (allocated(error)) return
+                           do j = 1, ndim
+                              call check(error, j3(i, j, s_ax, ia), h3(i, j, s_ax, ia), &
+                                         thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                         message="hvp_jet_rA order 3 disagrees with hvp_f3_rr_rA")
+                              if (allocated(error)) return
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (v, vrad, h1, h2, h3, j1, j2, j3)
+      end do
+   end subroutine run_hvp_jet
 
    !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`.
    subroutine run_hvp_rA_joint_fd(error, kind)

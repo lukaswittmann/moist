@@ -4,24 +4,45 @@
 !> derivative splits into
 !>
 !>     d/dv [ J^T omega ]  =  (dJ^T/dv) omega  +  J^T (d omega/dv)
-!>                            ^ hessian_fixed     ^ hessian_response
+!>                            ^ fixed channel     ^ response channel
 !>
-!> Both halves are implemented and separately verified next door. This
-!> submodule owns nothing of the mathematics; it owns the *composition* and the
-!> two public entry points that composition makes reachable:
+!> Both halves are channels of the one traversal next door,
+!> [[drop_hessian_traverse]]. This submodule owns nothing of the mathematics;
+!> it owns the *composition* -- which form of the fixed channel to ask for --
+!> and the two public entry points:
 !>
-!>   * [[get_surface_hessian_drop]], the Hessian-vector product, which is the
-!>     primitive -- the response half is intrinsically per direction, so a
-!>     direction set is what it must be asked for;
-!>   * [[get_hessian_drop]], the dense `(3, nsph, 3, nsph)` block, which is a
-!>     wrapper over the same two calls with the `3 nsph` Cartesian unit
-!>     directions supplied **in one batch**. One batched call, not `3 nsph`
-!>     serial ones: the response half rebuilds the whole per-point primal map
-!>     once and loops directions inside it, so the grid traversal is paid once
-!>     either way while `3 nsph` separate calls would pay it `3 nsph` times.
-!>     The fixed half is direction free and already rank 4, so the dense path
-!>     takes its block directly rather than contracting it against unit vectors
-!>     and re-expanding the result.
+!>   * [[get_surface_hessian_drop]], the Hessian-vector product along a set of
+!>     directions;
+!>   * [[get_hessian_drop]], the dense `(3, nsph, 3, nsph)` block.
+!>
+!>
+!> ## Choosing the form of the fixed channel
+!>
+!> The response half is intrinsically per direction. The fixed half is offered
+!> in two forms (see the traversal's header): the direction-free rank-4 block,
+!> built from `3 n_local` Cartesian unit directions at every grid point, and
+!> the per-direction column, built from the supplied directions alone. Their
+!> costs are
+!>
+!>     rank-4:         ngrid * 3 n_local * n_active
+!>     per direction:  ngrid * ndir      * n_active
+!>
+!> so the per-direction form wins whenever fewer directions than the local
+!> basis are asked for, and the rank-4 form whenever the whole basis is. The
+!> crossover `ndir ~ 3 * mean(n_local)` is not known before the grid is walked
+!> -- the cavity stores no per-point active counts -- but `3 nsph` is its upper
+!> bound, and that is the rule [[hvp_fixed_mode]] applies: a direction set
+!> short of a full Cartesian basis runs per direction, a full one runs rank-4
+!> and is contracted. The rule is never worse than the dense path, is exact
+!> where every atom is active, and is one pure function so that a sharper
+!> estimate can replace it.
+!>
+!> [[get_hessian_drop]] asks for the rank-4 form with all `3 nsph` unit
+!> directions handed to the response half **in one batch**: the traversal
+!> walks the grid once (per direction block) either way, where `3 nsph`
+!> separate calls would walk it `3 nsph` times. The rank-4 block is added
+!> column for column with no contraction at all, so this path is bit-for-bit
+!> what [[get_surface_hessian_drop]] returns for the same unit directions.
 !>
 !>
 !> ## Where the fold happens
@@ -29,43 +50,29 @@
 !> What the host accumulates is not what either half contracts.
 !> [[prepare_surface_weights]] folds the area and integration-weight channels
 !> into `w_xi` and `w_f` through `a`, `wleb`, `xi0` and the radii, and derives
-!> `branch_phi_adj` from the branch softmax; everything it returns -- call it
-!> `eff(R)` -- is a function of the geometry. That fold is performed **once**,
-!> here in [[surface_hessian_halves]], and the result is handed to both halves:
-!>
-!>   * the fixed half takes `eff` and nothing else. Its term is
-!>     `(dPhi/dv) . eff` with the weights held fixed, so the raw channels can
-!>     tell it nothing it does not already read out of `eff`;
-!>   * the response half takes `eff` **and** the raw `acc`. Its term is
-!>     `Phi . (d eff/dv)`, and [[prepare_surface_weights_tangent]]
-!>     differentiates the fold out of the raw channels and the primal `eff`
-!>     together, so it genuinely needs both.
-!>
-!> Writing the gradient as `G(R) = Phi(R) . eff(R)`, the two halves are the two
-!> terms of the product rule, and the split is exact because `G` is linear in
-!> `eff` -- every channel enters exactly once.
-!>
-!> The seam sits at this level rather than inside the halves so that `eff` is
-!> the *same object* in both of them by construction. Folding separately in
-!> each half would make that an argument to be made rather than a fact, and it
-!> is the argument that used to force a surrogate accumulator through the fixed
-!> half's door.
+!> `branch_phi_adj` from the branch softmax; everything it returns -- `eff(R)`
+!> -- is a function of the geometry. That fold is performed **once**, in
+!> [[surface_hessian_halves]], and the result is handed to both halves: the
+!> fixed half takes `eff` alone (its term is `(dPhi/dv) . eff` with the weights
+!> held fixed), the response half takes `eff` **and** the raw `acc` (its term
+!> is `Phi . (d eff/dv)`, and [[prepare_surface_weights_tangent]]
+!> differentiates the fold out of the raw channels and the primal `eff`
+!> together). Writing the gradient as `G(R) = Phi(R) . eff(R)`, the two halves
+!> are the two terms of the product rule, and the split is exact because `G`
+!> is linear in `eff`. The seam sits here so that `eff` is the *same object* in
+!> both halves by construction.
 !>
 !>
-!> ## What the composite still refuses
+!> ## What the composite refuses
 !>
 !> A grid carrying a multi-branch anchor group. There the projected point is a
 !> softmax over several anchors, and its second derivative carries a branch
 !> term that **neither** half supplies: the fixed half's second-order chain
 !> omits it (see [[seed_contribution_tangent]]), and the response half moves
 !> `branch_phi_adj` without differentiating the branch geometry a second time.
-!> Both public entry points below reject such a grid rather than return a
-!> Hessian silently short a term.
-!>
-!> The refusal lives here and not in the halves on purpose. The response half
-!> is correct on a branched grid when it is asked for on its own -- guarding
-!> inside it would reject calls it handles -- and the fixed half is only ever
-!> reachable through this composition.
+!> Both public entry points reject such a grid rather than return a Hessian
+!> silently short a term. The refusal lives here and not in the halves: the
+!> response half is correct on a branched grid on its own.
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    implicit none(type, external)
@@ -84,8 +91,7 @@ contains
    !> Accumulates `d/dv [ J^T omega ]` for the energy whose surface adjoints
    !> `acc` holds, one gradient column per supplied nuclear direction. The
    !> result is *added* to `hvp`, and the accumulator is left untouched when
-   !> anything fails -- both halves are formed in local buffers first, so a
-   !> failure in the second one cannot leave the first one behind.
+   !> anything fails -- both halves are formed in local buffers first.
    !>
    !> @param[in]    self  DROP cavity instance (must hold a projected grid)
    !> @param[in]    acc   Accumulated surface-observable adjoints
@@ -104,8 +110,10 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Direction-free fixed half, and the response half of every direction
+      !> Direction-free fixed half (rank-4 form only), and the staged columns
       real(wp), allocatable :: hess_fixed(:, :, :, :), total(:, :, :)
+      !> Form of the fixed channel
+      integer :: fixed_mode
       !> Extents and loop indices
       integer :: ndir, idir, iatom, iaxis
 
@@ -114,39 +122,38 @@ contains
       if (allocated(error)) return
       call check_single_branch(self, "get_surface_hessian_drop", error)
       if (allocated(error)) return
-      if (size(dirs, 1) /= ndim .or. size(dirs, 2) /= self%nsph) then
-         call fatal_error(error, "get_surface_hessian_drop: dirs must be (3, nsph, ndir)")
-         return
-      end if
-      ndir = size(dirs, 3)
-      if (ndir <= 0) then
-         call fatal_error(error, "get_surface_hessian_drop: no direction supplied")
-         return
-      end if
-      if (size(hvp, 1) /= ndim .or. size(hvp, 2) /= self%nsph .or. size(hvp, 3) /= ndir) then
-         call fatal_error(error, "get_surface_hessian_drop: hvp must be (3, nsph, ndir)")
-         return
-      end if
+      call check_direction_set(self, dirs, hvp, "get_surface_hessian_drop", error)
+      if (allocated(error)) return
       if (self%ngrid <= 0) return
+      ndir = size(dirs, 3)
 
       !* --------------------------------- Both halves -------------------------------- *!
-      allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
+      fixed_mode = hvp_fixed_mode(ndir, self%nsph)
       allocate (total(ndim, self%nsph, ndir), source=0.0_wp)
 
-      call surface_hessian_halves(self, acc, dirs, hess_fixed, total, error)
-      if (allocated(error)) return
+      if (fixed_mode == drop_fixed_per_dir) then
+         ! Both channels land their columns in `total` directly
+         call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
+                                     total, error)
+         if (allocated(error)) return
+      else
+         allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
+         call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
+                                     total, error, hess_fixed=hess_fixed)
+         if (allocated(error)) return
 
-      !* --------------------------- Contract the fixed half -------------------------- *!
-      ! `total` already holds the response half of every direction, so the
-      ! contraction lands on top of it and the two are summed exactly once.
-      do idir = 1, ndir
-         do iatom = 1, self%nsph
-            do iaxis = 1, ndim
-               total(:, :, idir) = total(:, :, idir) &
-                                   + hess_fixed(:, :, iaxis, iatom)*dirs(iaxis, iatom, idir)
+         !* -------------------------- Contract the fixed half ------------------------ *!
+         ! `total` already holds the response half of every direction, so the
+         ! contraction lands on top of it and the two are summed exactly once.
+         do idir = 1, ndir
+            do iatom = 1, self%nsph
+               do iaxis = 1, ndim
+                  total(:, :, idir) = total(:, :, idir) &
+                                      + hess_fixed(:, :, iaxis, iatom)*dirs(iaxis, iatom, idir)
+               end do
             end do
          end do
-      end do
+      end if
 
       hvp = hvp + total
    end subroutine get_surface_hessian_drop
@@ -158,12 +165,9 @@ contains
    !> accumulator is left untouched when anything fails.
    !>
    !> Column `(beta, B)` of the block is the Hessian-vector product along the
-   !> Cartesian unit direction `e_(beta, B)`, and that is how it is obtained:
-   !> all `3 nsph` unit directions are handed to the response half in a single
-   !> call. The fixed half is direction free, so its rank-4 block is added
-   !> column for column with no contraction at all -- which is both cheaper and
-   !> exact, and leaves this path bit-for-bit equal to
-   !> [[get_surface_hessian_drop]] driven with the same directions.
+   !> Cartesian unit direction `e_(beta, B)`: all `3 nsph` unit directions are
+   !> handed to the response half in a single call, and the rank-4 fixed half
+   !> is added column for column with no contraction at all.
    !>
    !> @param[in]    self    DROP cavity instance (must hold a projected grid)
    !> @param[in]    acc     Accumulated surface-observable adjoints
@@ -210,7 +214,8 @@ contains
       allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
       allocate (resp(ndim, self%nsph, ndir), source=0.0_wp)
 
-      call surface_hessian_halves(self, acc, dirs, hess_fixed, resp, error)
+      call surface_hessian_halves(self, acc, dirs, drop_fixed_rank4, "get_hessian_drop", &
+                                  resp, error, hess_fixed=hess_fixed)
       if (allocated(error)) return
 
       do iatom = 1, self%nsph
@@ -226,36 +231,72 @@ contains
    !*                              Composition of the halves                            *!
    !* ================================================================================= *!
 
+   !> Form of the fixed channel for a Hessian-vector product of `ndir` directions
+   !>
+   !> Per direction short of a full Cartesian basis, rank-4 at or beyond one;
+   !> the module header has the cost model and why `3 nsph` is the bound used.
+   !>
+   !> @param[in] ndir Directions asked for
+   !> @param[in] nsph Spheres of the cavity
+   !> @return         `drop_fixed_per_dir` or `drop_fixed_rank4`
+   pure function hvp_fixed_mode(ndir, nsph) result(mode)
+      !> Directions asked for
+      integer, intent(in) :: ndir
+      !> Spheres of the cavity
+      integer, intent(in) :: nsph
+      !> Form of the fixed channel
+      integer :: mode
+
+      if (ndir < ndim*nsph) then
+         mode = drop_fixed_per_dir
+      else
+         mode = drop_fixed_rank4
+      end if
+   end function hvp_fixed_mode
+
    !> Evaluate both halves of the surface Hessian into caller-owned buffers
    !>
    !> The single place the two halves meet, and the single place the surface
-   !> adjoints are folded. `hess_fixed` and `resp` are written by the halves
-   !> themselves, which *add* to what they are given, so both are expected
-   !> zeroed on entry and are the caller's staging buffers rather than its
-   !> accumulators -- that is what keeps a public accumulator untouched when the
-   !> second half fails.
+   !> adjoints are folded. Both buffers are *added* to by the traversal, so
+   !> they are expected zeroed on entry and are the caller's staging buffers
+   !> rather than its accumulators -- that is what keeps a public accumulator
+   !> untouched when anything fails.
+   !>
+   !> `columns` receives the response half of every direction and, in the
+   !> per-direction mode, the fixed half as well; `hess_fixed` receives the
+   !> rank-4 fixed half and must be present in that mode.
+   !>
+   !> `context` is the public entry point the user actually called, threaded
+   !> down so that a singular bordered system at some grid point names it.
    !>
    !> @param[in]    self       DROP cavity instance
    !> @param[in]    acc        Accumulated surface-observable adjoints
    !> @param[in]    dirs       Nuclear directions `(3, nsph, ndir)`
-   !> @param[inout] hess_fixed Fixed-adjoint half `(3, nsph, 3, nsph)`
-   !> @param[inout] resp       Adjoint-response half `(3, nsph, ndir)`
+   !> @param[in]    fixed_mode Form of the fixed channel
+   !> @param[in]    context    Calling routine, used to prefix the diagnostics
+   !> @param[inout] columns    Per-direction half or halves `(3, nsph, ndir)`
    !> @param[out]   error      Error object, allocated on failure
-   subroutine surface_hessian_halves(self, acc, dirs, hess_fixed, resp, error)
+   !> @param[inout] hess_fixed Rank-4 fixed half `(3, nsph, 3, nsph)`
+   subroutine surface_hessian_halves(self, acc, dirs, fixed_mode, context, columns, error, &
+                                     hess_fixed)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
       !> Nuclear directions
       real(wp), intent(in) :: dirs(:, :, :)
-      !> Fixed-adjoint half
-      real(wp), intent(inout) :: hess_fixed(:, :, :, :)
-      !> Adjoint-response half
-      real(wp), intent(inout) :: resp(:, :, :)
+      !> Form of the fixed channel
+      integer, intent(in) :: fixed_mode
+      !> Calling routine, so a failure names the entry point the user called
+      character(len=*), intent(in) :: context
+      !> Per-direction columns
+      real(wp), intent(inout) :: columns(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Rank-4 fixed half
+      real(wp), intent(inout), optional :: hess_fixed(:, :, :, :)
 
-      !> Folded surface adjoints of the base geometry, read by both halves
+      !> Folded surface adjoints of the base geometry, read by both channels
       type(drop_surface_weights_type) :: eff
 
       ! `fold_switching = .true.`, as on the nuclear path: a nuclear
@@ -263,16 +304,19 @@ contains
       ! the effective switching adjoint both halves have to see.
       call prepare_surface_weights(self, acc, .true., eff)
 
-      ! The fixed half: `(dPhi/dv) . eff`, the folded weights held fixed. It
-      ! never sees the raw channels, because there is nothing in them it could
-      ! use that `eff` does not already carry.
-      call self%get_surface_hessian_fixed(eff, hess_fixed, error)
-      if (allocated(error)) return
-
-      ! The response half: `Phi . (d eff/dv)`. The fold is what moves here, so
-      ! this one needs the raw channels it was built from as well as the
-      ! primal `eff` it is differentiated around.
-      call self%get_surface_hessian_response(acc, eff, dirs, resp, error)
+      ! The fixed channel is `(dPhi/dv) . eff` with the folded weights held
+      ! fixed and never sees the raw ones. The response channel is
+      ! `Phi . (d eff/dv)`: the fold is what moves there, so it needs the raw
+      ! channels as well as the primal `eff`. Hence both objects go in, and one
+      ! traversal serves the two.
+      if (fixed_mode == drop_fixed_rank4) then
+         call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
+                                    acc=acc, dirs=dirs, hess_fixed=hess_fixed, hvp=columns, &
+                                    error=error)
+      else
+         call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
+                                    acc=acc, dirs=dirs, hvp=columns, error=error)
+      end if
    end subroutine surface_hessian_halves
 
    !* ================================================================================= *!

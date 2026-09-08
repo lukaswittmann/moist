@@ -22,13 +22,16 @@
 !>
 !> ## The three stages
 !>
-!>  1. **Grid loop (parallel).** Per point: the level-set jet and its
-!>     directional nuclear tangents (`tangent_f0/f1_r/f2_rr` -- the LSF's own
-!>     contracted accessors, so the active-slot index space never leaves the
-!>     level set), the bordered KKT solve for `(dr, dlambda)` batched over all
+!>  1. **Grid loop (parallel).** Per point: the level-set jet, its mixed
+!>     nuclear tensors materialised once ([[drop_field_jet_point]]) and
+!>     contracted with every direction ([[drop_field_jet_tangent]]) -- one
+!>     `f3_rr_rA` call per point instead of three contracted accessors per
+!>     direction -- the bordered KKT solve for `(dr, dlambda)` batched over all
 !>     directions, [[apply_seed]] for the base Lebedev-weight motion, the
 !>     sparse iSwiG rows for `d(f)`, and the branch objective's tangent
-!>     `d(Phi)`.
+!>     `d(Phi)`. The tensors are active-slot indexed, so each direction is
+!>     gathered onto the point's active atoms first; that gather is the only
+!>     place the two index spaces meet in this routine.
 !>  2. **Branch softmax (serial).** One [[branch_weight_type:weights_grad]]
 !>     call per contiguous anchor group, with `nparam = ndir`, giving
 !>     `d_wbranch` for every direction of every branch at once.
@@ -94,6 +97,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
       & drop_point_scratch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_result_type, apply_seed, &
       & seed_weight_tol, next_branch_group, max_branch_group_size
+   use moist_cavity_drop_derivatives_field_tangent, only: drop_field_tangent_work_type, &
+      & drop_field_jet_point, drop_field_jet_tangent
    implicit none(type, external)
 
    !> Cartesian dimension
@@ -141,8 +146,13 @@ contains
       !> Whether the shared prologue cleared the point for this traversal
       logical :: point_ok
 
-      !> Grid, direction, sphere and Cartesian indices
-      integer :: igrid, idir, ndir, jj, knb
+      !> Grid, direction, sphere, active-slot and Cartesian indices
+      integer :: igrid, idir, ndir, jj, knb, i
+
+      !> Mixed nuclear tensors of the level set at the point
+      type(drop_field_tangent_work_type) :: ft_work
+      !> One direction gathered onto the point's active slots
+      real(wp), allocatable :: v_act(:, :)
 
       !> Directional nuclear tangents of the level-set jet at the *fixed* point
       real(wp) :: dlsf0
@@ -208,7 +218,7 @@ contains
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& pt, point_ok, idir, jj, knb, res, &
+      !$omp& pt, point_ok, idir, jj, knb, i, res, ft_work, v_act, &
       !$omp& dlsf0, dlsf1_r, dlsf2_rr, dir_rhs, dr, dlambda, &
       !$omp& swi_owner_row, swi_f0, swi_dxi, df_dir, &
       !$omp& worker_error)
@@ -219,6 +229,7 @@ contains
       allocate (dlsf1_r(3, ndir), source=0.0_wp)
       allocate (dlsf2_rr(3, 3, ndir), source=0.0_wp)
       allocate (dir_rhs(4, ndir), source=0.0_wp)
+      allocate (v_act(3, self%nsph), source=0.0_wp)
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
@@ -234,14 +245,22 @@ contains
          if (.not. point_ok) cycle
 
          !* ----------------- Directional nuclear tangents of the jet ----------------- *!
-         ! The level set contracts its own nuclear index: `tangent_*` returns
-         ! `sum_B v_B . d(jet)/dR_B` at the fixed point, so the active-slot
-         ! index space never has to be reconciled with the atom index space of
-         ! `dirs` out here -- which is exactly where the two are easy to confuse.
+         ! `sum_B v_B . d(jet)/dR_B` at the fixed point, for every direction, as
+         ! contractions of the point's mixed nuclear tensors. The tensors are
+         ! formed once per point and unconditionally -- the buffer outlives the
+         ! point -- and each direction is gathered onto the active slots first,
+         ! which is the one place this routine touches the slot index space.
+         pt%n_active = slots%lsf(thread_slot)%lsf%active_count()
+         do i = 1, pt%n_active
+            pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
+         end do
+         call drop_field_jet_point(slots%lsf(thread_slot)%lsf, ft_work)
          do idir = 1, ndir
-            call slots%lsf(thread_slot)%lsf%tangent_f0(dirs(:, :, idir), dlsf0)
-            call slots%lsf(thread_slot)%lsf%tangent_f1_r(dirs(:, :, idir), dlsf1_r(:, idir))
-            call slots%lsf(thread_slot)%lsf%tangent_f2_rr(dirs(:, :, idir), dlsf2_rr(:, :, idir))
+            do i = 1, pt%n_active
+               v_act(:, i) = dirs(:, pt%active_idx(i), idir)
+            end do
+            call drop_field_jet_tangent(ft_work, pt%n_active, v_act, dlsf0, &
+                                        dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
 
             ! Bordered right-hand side of the direction, with
             ! `d^2 phi/(dr dR_owner) = -alpha*I` (`objective_phi.f90`, `f2_r_rA`)
@@ -298,7 +317,7 @@ contains
       end do
       !$omp end do
 
-      deallocate (dlsf1_r, dlsf2_rr, dir_rhs)
+      deallocate (dlsf1_r, dlsf2_rr, dir_rhs, v_act)
       call pt%destroy()
       !$omp end parallel
 

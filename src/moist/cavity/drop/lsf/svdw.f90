@@ -204,6 +204,8 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: hvp_f2_r_rA => lsf_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure, public :: hvp_f3_rr_rA => lsf_hvp_f3_rr_rA
+      !> The three nuclear Hessian-vector products above in one pass
+      procedure, public :: hvp_jet_rA => lsf_hvp_jet_rA
       !> Radius row of the joint Hessian-vector product
       procedure, public :: hvp_f1_rad => lsf_hvp_f1_rad
       !> Joint directional derivative of `f2_r_rad`
@@ -1795,6 +1797,61 @@ contains
          res(:, :, :, ia) = h3
       end do
    end subroutine lsf_hvp_f3_rr_rA
+
+   !> The three nuclear Hessian-vector products in one pass, active-indexed
+   !>
+   !> Same arithmetic as [[lsf_hvp_f3_rr_rA]] at level 2, keeping the two lower
+   !> orders the kernel produces on the way instead of discarding them. The
+   !> direction-contracted power sums and the per-atom tensors are formed once
+   !> for all three, which is the whole saving over three separate calls.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
+   subroutine lsf_hvp_jet_rA(self, v, hvp1, hvp2, hvp3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Contracted nuclear Hessian
+      real(wp), intent(out) :: hvp1(:, :)
+      !> Contracted mixed third derivative
+      real(wp), intent(out) :: hvp2(:, :, :)
+      !> Contracted mixed fourth derivative
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+
+      !> Blending weights and contracted power sums
+      real(wp) :: s_1, s_2, s_3
+      real(wp) :: ws0(nkind), ws1(ndim, nkind), ws2(ndim, ndim, nkind)
+      real(wp) :: ws3(ndim, ndim, ndim, nkind)
+      !> Per-atom kind tensors and their contracted counterparts
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
+      real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      !> Kernel outputs of one atom
+      real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
+      !> Active-list index
+      integer :: ia
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "hvp_jet_rA")
+
+      call svdw_weights(self, s_1, s_2, s_3)
+      call tangent_powersums(self, v, 2, ws0, ws1, ws2, ws3)
+      do ia = 1, self%n_active
+         call atom_tensors(self, ia, 3, at0, at1, at2, at3, at4)
+         call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), 3, aw0, aw1, aw2, aw3)
+         call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                            self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
+                            at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
+         hvp1(:, ia) = h1
+         hvp2(:, :, ia) = h2
+         hvp3(:, :, :, ia) = h3
+      end do
+   end subroutine lsf_hvp_jet_rA
 
    !* ================================================================================= *!
    !*                    Radius row of the joint Hessian-vector product                 *!

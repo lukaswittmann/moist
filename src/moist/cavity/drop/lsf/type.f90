@@ -280,6 +280,8 @@ module moist_cavity_drop_lsf_base
       procedure :: hvp_f2_r_rA => lsf_base_hvp_f2_r_rA
       !> Directional nuclear derivative of `f3_rr_rA`
       procedure :: hvp_f3_rr_rA => lsf_base_hvp_f3_rr_rA
+      !> The three nuclear Hessian-vector products above in one pass
+      procedure :: hvp_jet_rA => lsf_base_hvp_jet_rA
       !> Radius row of the joint Hessian-vector product
       procedure :: hvp_f1_rad => lsf_base_hvp_f1_rad
       !> Joint directional derivative of `f2_r_rad`
@@ -1008,6 +1010,35 @@ contains
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "hvp_f3_rr_rA derivative"
    end subroutine lsf_base_hvp_f3_rr_rA
+
+   !> Erroring default of the one-pass nuclear Hessian-vector family
+   !>
+   !> `hvp_jet_rA` returns what `hvp_f1_rA`, `hvp_f2_r_rA` and `hvp_f3_rr_rA`
+   !> return, for the same nuclear direction, from a single sweep of the active
+   !> atoms: the direction-contracted power sums and the per-atom tensors are
+   !> shared by the three orders, so a caller that wants all of them -- the
+   !> field tangent of the cavity Hessian -- pays for them once. Nuclear only:
+   !> the joint position/radius contraction keeps the three separate accessors
+   !> and their `vrad`.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] hvp1 sum_B v_B . d^2S/(dR_A dR_B) [3, n_active]
+   !> @param[out] hvp2 sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, n_active]
+   !> @param[out] hvp3 sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, n_active]
+   subroutine lsf_base_hvp_jet_rA(self, v, hvp1, hvp2, hvp3)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: v(:, :)
+      real(wp), intent(out) :: hvp1(:, :)
+      real(wp), intent(out) :: hvp2(:, :, :)
+      real(wp), intent(out) :: hvp3(:, :, :, :)
+
+      hvp1 = 0.0_wp*size(v, 2)*self%ncenters
+      hvp2 = 0.0_wp
+      hvp3 = 0.0_wp
+      error stop "moist DROP LSF: Chosen level set does not support "// &
+         "hvp_jet_rA derivative"
+   end subroutine lsf_base_hvp_jet_rA
 
    !* ================================================================================= *!
    !*                      Radius row of the joint Hessian-vector product               *!

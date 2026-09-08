@@ -1,30 +1,31 @@
 !> Per-grid-point prologue shared by the DROP derivative traversals
 !>
-!> Four routines walk the projected grid inside an OpenMP region and open every
+!> Three routines walk the projected grid inside an OpenMP region and open every
 !> point the same way:
 !>
-!> * [[get_surface_gradient_drop]]         (`nuclear.f90`)
-!> * [[get_surface_hessian_fixed_drop]]    (`hessian_fixed.f90`)
-!> * [[get_surface_hessian_response_drop]] (`hessian_response.f90`)
-!> * [[get_surface_tangent_drop]]          (`tangent_forward.f90`)
+!> * [[get_surface_gradient_drop]]  (`nuclear.f90`)
+!> * [[drop_hessian_traverse]]      (`hessian_traverse.f90`), which carries both
+!>   halves of the surface Hessian as two channels of one traversal
+!> * [[get_surface_tangent_drop]]   (`tangent_forward.f90`)
 !>
 !> The common opening is: honour the abort latch, read the point, its anchor,
 !> its owner sphere and its multiplier, `prepare` the thread's level set there,
 !> take the level-set and objective jets, copy the grid-level scalars into the
 !> kernel's seed state, derive the state, and factor the bordered KKT matrix
-!> `[[H_lag, grad S], [grad S^T, 0]]` -- which is the *same* matrix in all four,
-!> because all four differentiate the same stationarity condition.
+!> `[[H_lag, grad S], [grad S^T, 0]]` -- which is the *same* matrix in all three,
+!> because all three differentiate the same stationarity condition.
 !>
 !> Everything past the factorization is caller specific and stays in the
 !> callers. The two seams the prologue does parameterise are:
 !>
-!>   * `want_curvature`, forwarded to [[fill_seed_state]]. The two reverse
-!>     traversals ask for whatever their folded weights carry (`eff%have_wk`);
-!>     the response and forward-tangent halves know their curvature channel is
+!>   * `want_curvature`, forwarded to [[fill_seed_state]]. A traversal that
+!>     contracts folded weights asks for whatever they carry (`eff%have_wk`);
+!>     the forward tangent, and the Hessian traversal when only its
+!>     adjoint-response channel is on, know their curvature channel is
 !>     identically zero and ask for `.false.`
 !>   * `pt%kkt_rhs`, the standard seed batch -- four level-set jet seeds and
-!>     three anchor seeds. Allocated by the three traversals that push the
-!>     fixed 16-seed basis; unallocated for [[get_surface_tangent_drop]], whose
+!>     three anchor seeds. Allocated by the traversals that push the fixed
+!>     16-seed basis; unallocated for [[get_surface_tangent_drop]], whose
 !>     right-hand sides are one column per nuclear direction and cannot be
 !>     built before the level set's directional tangents are known. That caller
 !>     keeps its own solve and shares the factorization only

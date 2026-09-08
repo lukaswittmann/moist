@@ -43,7 +43,8 @@ module moist_cavity_drop_derivatives_seeds
    use moist_math_lapack_getrs, only: lapack_getrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
-      & drop_seed_result_tangent_type, drop_surface_weights_type, apply_seed, &
+      & drop_seed_state_tangent_type, drop_seed_result_tangent_type, &
+      & drop_surface_weights_type, apply_seed, &
       & seed_status_message, seed_contribution
 
    implicit none(type, external)
@@ -66,7 +67,7 @@ module moist_cavity_drop_derivatives_seeds
    !> `drop_n_anchor_seeds` anchor directions of [[seed_anchor]], in that order
    !>
    !> [[fill_seed_basis]] lays that order out and the second-order chain of
-   !> `hessian_fixed.f90` walks the seeds by this index, so the two agree by
+   !> `hessian_traverse.f90` walks the seeds by this index, so the two agree by
    !> construction rather than by two matching literals
    integer, parameter, public :: drop_n_point_seeds = drop_n_jet_seeds + drop_n_anchor_seeds
 
@@ -686,7 +687,9 @@ contains
    !> [[seed_jet_basis_contract]], for the single-weight callers that have no
    !> reason to hold the responses. A caller that contracts the same point
    !> against several weight sets calls the two halves itself and pays the
-   !> expensive one once; see [[get_surface_hessian_response_drop]].
+   !> expensive one once; see [[drop_hessian_traverse]], which applies the basis
+   !> once per grid point and contracts it once per nuclear direction *and* once
+   !> for its own second-order chain.
    !>
    !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
@@ -739,11 +742,19 @@ contains
    !> routine and [[seed_jet_basis_contract]] classify the slot the same way and
    !> agree by construction.
    !>
+   !> `dstate` is the derived-state tangent [[apply_seed]] forms on its way to
+   !> the response and otherwise discards. A second-order caller needs it for
+   !> every seed and a first-order one for none, so it is optional here exactly
+   !> as it is there, and the whole chain behind it is computed only when it is
+   !> asked for. That is what lets the two channels of the surface Hessian share
+   !> one application of the basis rather than making the same 16 calls twice.
+   !>
    !> @param[in]  state    Per-grid point forward state
    !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[out] res_seed Linear response of each seed, `(drop_n_jet_seeds)`
    !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
-   subroutine seed_jet_basis_apply(state, kkt, res_seed, seed_x)
+   !> @param[out] dstate   Tangent of the derived seed state, when the caller needs it
+   subroutine seed_jet_basis_apply(state, kkt, res_seed, seed_x, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Solved KKT sensitivities
@@ -752,6 +763,8 @@ contains
       type(drop_seed_result_type), intent(out) :: res_seed(drop_n_jet_seeds)
       !> Induced point motion and multiplier change of each seed
       real(wp), intent(out) :: seed_x(4, drop_n_jet_seeds)
+      !> Tangent of the derived block of `state` along each seed
+      type(drop_seed_state_tangent_type), intent(out), optional :: dstate(drop_n_jet_seeds)
 
       !> Seed perturbation of the level-set jet
       real(wp) :: dlsf1_r(3), dlsf2_rr(3, 3)
@@ -770,8 +783,15 @@ contains
             seed_x(:, ibasis) = kkt(1:4, seed_rhs_column(ibasis))
          end if
 
-         call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, ibasis), &
-                         seed_x(4, ibasis), res_seed(ibasis))
+         ! An element of an absent optional array cannot be forwarded, so the
+         ! presence is resolved here rather than inside [[apply_seed]]
+         if (present(dstate)) then
+            call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, ibasis), &
+                            seed_x(4, ibasis), res_seed(ibasis), dstate(ibasis))
+         else
+            call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, ibasis), &
+                            seed_x(4, ibasis), res_seed(ibasis))
+         end if
       end do
    end subroutine seed_jet_basis_apply
 
@@ -877,11 +897,16 @@ contains
 
    !> Apply half of [[seed_anchor]]: the three responses of one grid point
    !>
+   !> `dstate` is optional for the reason [[seed_jet_basis_apply]] gives, and
+   !> the two halves carry it the same way so that one caller can collect the
+   !> whole `drop_n_point_seeds` basis in one pass.
+   !>
    !> @param[in]  state    Per-grid point forward state
    !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[out] res_seed Linear response of each seed, `(drop_n_anchor_seeds)`
    !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
-   subroutine seed_anchor_apply(state, kkt, res_seed, seed_x)
+   !> @param[out] dstate   Tangent of the derived seed state, when the caller needs it
+   subroutine seed_anchor_apply(state, kkt, res_seed, seed_x, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
       !> Solved KKT sensitivities
@@ -890,6 +915,8 @@ contains
       type(drop_seed_result_type), intent(out) :: res_seed(drop_n_anchor_seeds)
       !> Induced point motion and multiplier change of each seed
       real(wp), intent(out) :: seed_x(4, drop_n_anchor_seeds)
+      !> Tangent of the derived block of `state` along each seed
+      type(drop_seed_state_tangent_type), intent(out), optional :: dstate(drop_n_anchor_seeds)
 
       !> Zero field perturbation: rigid anchor motion leaves the level set alone
       real(wp) :: dlsf1_r(3), dlsf2_rr(3, 3)
@@ -902,8 +929,13 @@ contains
       do iaxis = 1, drop_n_anchor_seeds
          seed_x(:, iaxis) = kkt(1:4, seed_rhs_column(drop_n_jet_seeds + iaxis))
 
-         call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, iaxis), &
-                         seed_x(4, iaxis), res_seed(iaxis))
+         if (present(dstate)) then
+            call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, iaxis), &
+                            seed_x(4, iaxis), res_seed(iaxis), dstate(iaxis))
+         else
+            call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, iaxis), &
+                            seed_x(4, iaxis), res_seed(iaxis))
+         end if
       end do
    end subroutine seed_anchor_apply
 

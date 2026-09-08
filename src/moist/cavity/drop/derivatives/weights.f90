@@ -1,12 +1,14 @@
 !> Preparation shared by all DROP reverse-mode implementations
 !>
-!> Six submodules call in here:
+!> Five submodules call in here:
 !> * `potential.f90`, the electronic path, which contracts a surface adjoint
 !>   into level-set adjoint weights (cavity response fock),
 !> * `nuclear.f90`, the nuclear path, which contracts a surface adjoint
 !>   against nuclear partial derivatives,
-!> * `hessian.f90`, which composes the two halves of the surface Hessian,
-!> * `hessian_fixed.f90` and `hessian_response.f90`, those two halves, and
+!> * `hessian.f90`, which folds once and drives both halves of the surface
+!>   Hessian off the same object,
+!> * `hessian_traverse.f90`, the single traversal those two halves are channels
+!>   of, and
 !> * `grid_driver.f90`, the per-point prologue the parallel traversals share,
 !>   which is the only caller of [[fill_seed_state]] -- so the forward-tangent
 !>   pass reaches this file through the prologue rather than directly

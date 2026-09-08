@@ -11,16 +11,21 @@
 !> allocates, no local array is declared, and every routine is `pure`, so it may
 !> be called on a thread-local slice inside an `!$omp` region.
 !>
-!> Both scatters accumulate, and both address each element under its own scalar
-!> index: `acc(:, idx(1:n))` would be a many-one section as soon as an influence
-!> set repeats an id, and the repeated writes would be lost.
+!> Every routine here accumulates, and each addresses every element under its
+!> own scalar index: `acc(:, idx(1:n))` would be a many-one section as soon as
+!> an influence set repeats an id, and the repeated writes would be lost.
+!>
+!> [[contract_iswig_block]] is the third reading of the same block: the block
+!> contracted against a nuclear direction on its second atom slot, which is the
+!> Hessian-vector product of the switching channel and lands in a gradient-shaped
+!> `(3, nsph)` column rather than in a rank-4 slab.
 module moist_cavity_drop_gaussian_scatter
    use mctc_env_accuracy, only: wp
 
    implicit none(type, external)
    private
 
-   public :: scatter_iswig_block, scatter_iswig_block_indexed
+   public :: scatter_iswig_block, scatter_iswig_block_indexed, contract_iswig_block
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
@@ -113,5 +118,49 @@ contains
       end do
 
    end subroutine scatter_iswig_block_indexed
+
+   !> Contract the local iSwiG block against a nuclear direction
+   !>
+   !> Accumulates `weight * sum_ib blk(:, ia, :, ib) . v(:, idx(ib))` into
+   !> column `idx(ia)` of `acc`, for every `ia` of the influence set: the
+   !> Hessian-vector product of the switching channel along `v`. The contracted
+   !> slot is the *second* atom index of `blk`, which is the index
+   !> [[scatter_iswig_block]] puts on the column atom of the rank-4 slab, so
+   !> this equals that slab contracted with `v` over its `(jaxis, latom)` pair.
+   !> The loop nest visits `(ia, jaxis, ib)` in the scatters' order.
+   !>
+   !> @param[in]    n      Influence-set size, `work%n_nb + 1`
+   !> @param[in]    idx    Atom ids of the influence set, owner first; only `1:n` read
+   !> @param[in]    blk    Local second-derivative block; only `(:, 1:n, :, 1:n)` read
+   !> @param[in]    weight Scalar the whole point is weighted by
+   !> @param[in]    v      Nuclear direction (3, nsph)
+   !> @param[inout] acc    Gradient-shaped accumulator (3, nsph)
+   pure subroutine contract_iswig_block(n, idx, blk, weight, v, acc)
+      !> Influence-set size
+      integer, intent(in) :: n
+      !> Atom ids of the influence set, owner first; only `1:n` is read
+      integer, intent(in) :: idx(:)
+      !> Local second-derivative block (3, >= n, 3, >= n)
+      real(wp), intent(in) :: blk(:, :, :, :)
+      !> Scalar the whole point is weighted by
+      real(wp), intent(in) :: weight
+      !> Nuclear direction
+      real(wp), intent(in) :: v(:, :)
+      !> Gradient-shaped accumulator (3, nsph)
+      real(wp), intent(inout) :: acc(:, :)
+
+      integer :: ia, ib, katom, latom, jaxis
+
+      do ib = 1, n
+         latom = idx(ib)
+         do jaxis = 1, ndim
+            do ia = 1, n
+               katom = idx(ia)
+               acc(:, katom) = acc(:, katom) + weight*blk(:, ia, jaxis, ib)*v(jaxis, latom)
+            end do
+         end do
+      end do
+
+   end subroutine contract_iswig_block
 
 end module moist_cavity_drop_gaussian_scatter
