@@ -68,23 +68,28 @@
 !> test. It is left in the suite as a failing case with a measured number
 !> rather than removed or given a tolerance of its own.
 !>
-!> ## The composite, and why it needs the surrogate accumulator
+!> ## The composite
 !>
 !> `both_halves_svdw` / `both_halves_cfc` are the first assertions in the
 !> project that run the two halves of the Hessian together:
 !>
 !>     d/dv [ G(R; acc) ]  ==  H_fixed . v  +  response(acc, v)
 !>
-!> `H_fixed` cannot be asked for with `acc` itself: [[check_frozen_weights]]
-!> refuses any accumulator with a live `w_a` or `w_w`, which is exactly the
-!> accumulator this half exists for. It is asked for with `acc_frozen`
-!> instead, and that is not a workaround but an identity --
-!> [[get_surface_hessian_fixed_drop]] reads its accumulator only through
-!> [[prepare_surface_weights]], and the two produce the same `eff` at the base
-!> geometry by construction. There is no subtraction in the composite's
-!> reference, so `w_xyz` and `w_n` are driven here as well; the curvature
-!> channels are not, because the fixed half is itself noise limited on them
-!> (see its own suite's header).
+!> Both halves are driven off one accumulator and one fold of it, the way
+!> `surface_hessian_halves` drives them: `prepare_surface_weights` is called
+!> once on the live `acc`, the fixed half is handed the resulting `eff`, and
+!> this half is handed `acc` and `eff` together. A live `w_a` or `w_w` is no
+!> obstacle to either -- the fixed half never sees the raw channels, and their
+!> motion is exactly what this half contributes. There is no subtraction in the
+!> composite's reference, so `w_xyz` and `w_n` are driven here as well; the
+!> curvature channels are not, because the fixed half is itself noise limited
+!> on them (see its own suite's header).
+!>
+!> The *frozen* accumulator still exists in this suite, but only as a test
+!> device: `fd_surface_gradient` differences `G(acc) - G(acc_frozen)` at each
+!> stencil geometry so the halves' common content never reaches the difference
+!> quotient, and `frozen_response_is_zero` pins the other end of that device.
+!> It is no longer anything production code builds.
 !>
 !> ## Fixtures
 !>
@@ -94,8 +99,9 @@
 !>   * `FIX_CROSS`, the five-carbon cross at `proj_level = 7` with a softened
 !>     softmax (`s = 2.0`), does branch. That is the only fixture on which
 !>     `dbranch_phi_adj` is nonzero, and therefore the only one that can catch a
-!>     driver which drops the branch channel of pass 2. The fixed half refuses
-!>     this grid, so the composite is not available here.
+!>     driver which drops the branch channel of pass 2. The composite refuses
+!>     this grid -- it is short a second-order branch term -- so only this half
+!>     is exercised here, and it is exercised on purpose.
 !>
 !> ## What the softmax temperature of the branched fixture buys
 !>
@@ -191,7 +197,8 @@ module test_cavity_drop_hessian_response
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop
+   use moist_cavity_drop, only: cavity_type_drop, prepare_surface_weights
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
@@ -544,8 +551,9 @@ contains
 
    !> Central-difference the shipped gradient against the sum of both halves
    !>
-   !> Only on `FIX_PLAIN`: the fixed half refuses a branched grid, and on a
-   !> branched grid it would also be missing the second-order branch term.
+   !> Only on `FIX_PLAIN`: on a branched grid the composite is missing the
+   !> second-order branch term, which is why the public entry points refuse
+   !> one.
    !>
    !> @param[in]  lsf_kind Level-set model
    !> @param[in]  label    Human-readable case description
@@ -560,11 +568,14 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(cavity_surface_adjoint_type) :: acc_frozen
+      type(cavity_surface_adjoint_type) :: acc
+      !> The same accumulator, folded -- what the fixed half is asked with
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
-      !> Base-geometry folded weights, which define the frozen accumulator
+      !> Base-geometry folded weights, transcribed for the frozen accumulator
+      !> the differenced reference subtracts
       real(wp), allocatable :: eff_xi(:), eff_f(:)
       !> Fixed half, this half and their sum
       real(wp), allocatable :: hess(:, :, :, :), hvp(:, :, :), total(:, :, :)
@@ -590,14 +601,15 @@ contains
       call fold_effective(cavity, channels, eff_xi, eff_f)
 
       !* ------------------------------- The fixed half -------------------------------- *!
-      ! Asked for with the frozen surrogate, because `check_frozen_weights`
-      ! refuses a live `w_a` or `w_w`. The two accumulators fold to the same
-      ! `eff` at this geometry, and the fixed half reads nothing else.
-      call seed_adjoint(cavity, channels, .true., eff_xi, eff_f, acc_frozen, error)
+      ! Asked for with the live accumulator's own fold, exactly as
+      ! `surface_hessian_halves` asks for it: the half takes the folded weights
+      ! and the composite folds once for both halves.
+      call seed_adjoint(cavity, channels, .false., eff_xi, eff_f, acc, error)
       if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
 
       allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
-      call cavity%get_surface_hessian_fixed(acc_frozen, hess, cav_error)
+      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "fixed-adjoint Hessian failed ("//label//"): "// &
                           cav_error%message)
@@ -718,6 +730,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
@@ -733,11 +746,12 @@ contains
       call fold_effective(cavity, moving_channels(), eff_xi, eff_f)
       call seed_adjoint(cavity, moving_channels(), .false., eff_xi, eff_f, acc, error)
       if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
 
       ! Wrong number of spheres in `dirs`
       allocate (dirs(ndim, nsph + 1, NDIR), source=0.1_wp)
       allocate (hvp(ndim, nsph, NDIR), source=0.0_wp)
-      call cavity%get_surface_hessian_response(acc, dirs, hvp, cav_error)
+      call cavity%get_surface_hessian_response(acc, eff, dirs, hvp, cav_error)
       if (.not. allocated(cav_error)) then
          call test_failed(error, "a mis-shaped direction array was accepted")
          return
@@ -748,7 +762,7 @@ contains
       allocate (dirs(ndim, nsph, NDIR), source=0.1_wp)
       deallocate (hvp)
       allocate (hvp(ndim, nsph, NDIR + 1), source=0.0_wp)
-      call cavity%get_surface_hessian_response(acc, dirs, hvp, cav_error)
+      call cavity%get_surface_hessian_response(acc, eff, dirs, hvp, cav_error)
       if (.not. allocated(cav_error)) then
          call test_failed(error, "a mis-shaped accumulator was accepted")
          return
@@ -1063,13 +1077,17 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
 
       hvp = 0.0_wp
       call seed_adjoint(cavity, channels, frozen, eff_xi, eff_f, acc, error)
       if (allocated(error)) return
 
-      call cavity%get_surface_hessian_response(acc, dirs, hvp, cav_error)
+      ! Both forms, as the composition in `hessian.f90` hands them over: the
+      ! raw channels the fold was built from, and the primal fold itself
+      call prepare_surface_weights(cavity, acc, .true., eff)
+      call cavity%get_surface_hessian_response(acc, eff, dirs, hvp, cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "adjoint-response Hessian failed ("//label//"): "// &
                           cav_error%message)
@@ -1284,11 +1302,11 @@ contains
    !> takes are unconditional here because [[point_weight]] is bounded well away
    !> from `seed_weight_tol = 1e-30`.
    !>
-   !> This is a deliberate duplication of three lines of production code: `eff`
-   !> is not reachable from a test, and reproducing it is what lets the frozen
-   !> accumulator exist at all. It does not have to be bit-for-bit -- a one-ulp
-   !> drift enters the identity as `Phi' . (E' - E)`, some `1e-14` of the
-   !> reference.
+   !> This is a deliberate duplication of three lines of production code. The
+   !> frozen accumulator needs the folded weights *as raw channels*, which is
+   !> not what [[prepare_surface_weights]] returns, so the fold is transcribed
+   !> rather than called. It does not have to be bit-for-bit -- a one-ulp drift
+   !> enters the identity as `Phi' . (E' - E)`, some `1e-14` of the reference.
    !>
    !> @param[in]  cavity   Cavity supplying the grid
    !> @param[in]  channels Adjoint channels the accumulator carries

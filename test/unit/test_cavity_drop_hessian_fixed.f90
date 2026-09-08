@@ -19,6 +19,15 @@
 !> stencil, so the suite fails loudly rather than silently if a future fixture
 !> starts branching.
 !>
+!> That restriction is the *suite's*, not the routine's. The half under test no
+!> longer folds anything: it takes a `drop_surface_weights_type` that
+!> [[prepare_surface_weights]] has already produced, exactly as `hessian.f90`
+!> hands it one. Each stencil geometry here therefore folds its own accumulator
+!> and passes the result, and the differenced reference stays a statement about
+!> this half alone only because the fold is geometry independent on this
+!> fixture. What the composite does with a moving fold is the response suite's
+!> and the end-to-end suite's business.
+!>
 !> The frozen adjoints are a pure function of the persistent point id
 !> `cavity%numbering`, not of the grid slot, because the grid is filtered and
 !> reordered on every rebuild. [[assert_grid_match]] additionally requires the
@@ -131,7 +140,8 @@ module test_cavity_drop_hessian_fixed
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop
+   use moist_cavity_drop, only: cavity_type_drop, prepare_surface_weights
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
@@ -148,9 +158,10 @@ module test_cavity_drop_hessian_fixed
    !> Nuclear direction of the contraction
    integer, parameter :: DIR_SINGLE = 1, DIR_MULTI = 2
 
-   !> Surface-adjoint channels this half can differentiate. `w_a` and `w_w` are
-   !> absent by construction: their fold into `w_xi` and `w_f` is the one part
-   !> of [[prepare_surface_weights]] that moves with the geometry
+   !> Surface-adjoint channels this suite drives. `w_a` and `w_w` are absent by
+   !> construction: their fold into `w_xi` and `w_f` is the one part of
+   !> [[prepare_surface_weights]] that moves with the geometry, and the
+   !> differenced reference below holds the fold fixed
    integer, parameter :: CH_XI = 1, CH_F = 2, CH_XYZ = 3, CH_N = 4
    integer, parameter :: CH_K1 = 5, CH_K2 = 6, NCHAN = 6
 
@@ -297,7 +308,6 @@ contains
                   new_unittest("cfc_hvp_multi_atom", test_cfc_multi), &
                   new_unittest("single_channels", test_single_channels), &
                   new_unittest("hessian_symmetry", test_symmetry), &
-                  new_unittest("frozen_weight_guards", test_frozen_weight_guards), &
                   new_unittest("shape_guard", test_shape_guard) &
                   ]
    end subroutine collect_cavity_drop_hessian_fixed
@@ -412,6 +422,8 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(cavity_surface_adjoint_type) :: acc
+      !> The adjoint as the half under test takes it: already folded
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
@@ -435,9 +447,10 @@ contains
 
       call frozen_adjoint(cavity, channels, acc, error)
       if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
 
       allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
-      call cavity%get_surface_hessian_fixed(acc, hess, cav_error)
+      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "fixed-adjoint Hessian failed ("//label//"): "// &
                           cav_error%message)
@@ -648,6 +661,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
@@ -662,9 +676,10 @@ contains
       nsph = cavity%nsph
       call frozen_adjoint(cavity, all_channels(), acc, error)
       if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
 
       allocate (hess(ndim, nsph, ndim, nsph), source=0.0_wp)
-      call cavity%get_surface_hessian_fixed(acc, hess, cav_error)
+      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "fixed-adjoint Hessian failed: "//cav_error%message)
          return
@@ -702,65 +717,14 @@ contains
    !*                                     Guards                                        *!
    !* ================================================================================= *!
 
-   !> A geometry-dependent effective weight must be refused, not dropped
-   !>
-   !> The area and integration-weight channels fold into `w_xi` and `w_f`
-   !> through grid data that moves with the nuclei. Differentiating that fold is
-   !> the weight-tangent pass; until it exists the fixed-adjoint half owes the
-   !> caller an error rather than a Hessian silently missing those terms.
-   !>
-   !> @param[out] error Error handle
-   subroutine test_frozen_weight_guards(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      type(cavity_type_drop), allocatable :: cavity
-      type(moist_context_type), target :: ctx
-      type(cavity_surface_adjoint_type) :: acc
-      type(mctc_error), allocatable :: cav_error
-      type(structure_type) :: mol
-
-      real(wp), allocatable :: hess(:, :, :, :), ws(:)
-      integer :: ichannel
-
-      call drop_fixture_geometry(FIX_PLAIN, mol)
-      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error)
-      if (allocated(error)) return
-
-      allocate (hess(ndim, cavity%nsph, ndim, cavity%nsph))
-      allocate (ws(cavity%ngrid), source=0.5_wp)
-
-      do ichannel = 1, 2
-         call acc%init(cavity%ngrid)
-         if (ichannel == 1) then
-            call acc%add_surface_weights(cav_error, w_a=ws)
-         else
-            call acc%add_surface_weights(cav_error, w_w=ws)
-         end if
-         if (allocated(cav_error)) then
-            call test_failed(error, "failed to seed the guard channel: "//cav_error%message)
-            return
-         end if
-
-         hess = 0.0_wp
-         call cavity%get_surface_hessian_fixed(acc, hess, cav_error)
-         if (.not. allocated(cav_error)) then
-            call test_failed(error, "a geometry-dependent effective weight was accepted"// &
-                             " (channel "//to_string(ichannel)//")")
-            return
-         end if
-         deallocate (cav_error)
-
-         ! The accumulator the caller passed in must come back untouched
-         if (maxval(abs(hess)) /= 0.0_wp) then
-            call test_failed(error, "the Hessian accumulator was written on a failure")
-            return
-         end if
-      end do
-
-   end subroutine test_frozen_weight_guards
-
    !> A mis-shaped accumulator must be refused
+   !>
+   !> The only guard this half still carries. It used to refuse a live `w_a` or
+   !> `w_w` as well, because it folded the raw accumulator itself and then held
+   !> the result fixed; it now takes the fold as an argument and the term those
+   !> guards stood for belongs to the response half. The one refusal that
+   !> outlived the re-fold -- a multi-branch grid -- is asserted against the
+   !> public entry points, in the end-to-end suite.
    !>
    !> @param[out] error Error handle
    subroutine test_shape_guard(error)
@@ -770,6 +734,7 @@ contains
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
       type(cavity_surface_adjoint_type) :: acc
+      type(drop_surface_weights_type) :: eff
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol
 
@@ -781,9 +746,10 @@ contains
 
       call frozen_adjoint(cavity, all_channels(), acc, error)
       if (allocated(error)) return
+      call prepare_surface_weights(cavity, acc, .true., eff)
 
       allocate (hess(ndim, cavity%nsph + 1, ndim, cavity%nsph), source=0.0_wp)
-      call cavity%get_surface_hessian_fixed(acc, hess, cav_error)
+      call cavity%get_surface_hessian_fixed(eff, hess, cav_error)
       if (.not. allocated(cav_error)) then
          call test_failed(error, "a mis-shaped Hessian accumulator was accepted")
          return

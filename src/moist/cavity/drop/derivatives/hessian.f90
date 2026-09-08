@@ -24,41 +24,48 @@
 !>     and re-expanding the result.
 !>
 !>
-!> ## The frozen surrogate, and why it is an identity rather than a workaround
+!> ## Where the fold happens
 !>
-!> [[check_frozen_weights]] refuses any accumulator carrying a live `w_a` or
-!> `w_w`: those channels fold into `w_xi` and `w_f` through `a`, `wleb`, `xi0`
-!> and the radii, all geometry dependent, and differentiating that fold is the
-!> response half's job -- so a fixed half handed such an accumulator would
-!> silently omit a term. But an accumulator with live `w_a`/`w_w` is precisely
-!> the one the response half exists for, and the composite needs both halves
-!> driven by the same energy.
+!> What the host accumulates is not what either half contracts.
+!> [[prepare_surface_weights]] folds the area and integration-weight channels
+!> into `w_xi` and `w_f` through `a`, `wleb`, `xi0` and the radii, and derives
+!> `branch_phi_adj` from the branch softmax; everything it returns -- call it
+!> `eff(R)` -- is a function of the geometry. That fold is performed **once**,
+!> here in [[surface_hessian_halves]], and the result is handed to both halves:
 !>
-!> The resolution is that the fixed half reads its accumulator through exactly
-!> one door, [[prepare_surface_weights]]. Write the folded weights at the base
-!> geometry as `E = eff(R_0, acc)`. [[freeze_surface_adjoint]] builds
+!>   * the fixed half takes `eff` and nothing else. Its term is
+!>     `(dPhi/dv) . eff` with the weights held fixed, so the raw channels can
+!>     tell it nothing it does not already read out of `eff`;
+!>   * the response half takes `eff` **and** the raw `acc`. Its term is
+!>     `Phi . (d eff/dv)`, and [[prepare_surface_weights_tangent]]
+!>     differentiates the fold out of the raw channels and the primal `eff`
+!>     together, so it genuinely needs both.
 !>
-!>     acc_frozen:  w_xi := E%w_xi,  w_f := E%w_f,  w_a := 0,  w_w := 0
+!> Writing the gradient as `G(R) = Phi(R) . eff(R)`, the two halves are the two
+!> terms of the product rule, and the split is exact because `G` is linear in
+!> `eff` -- every channel enters exactly once.
 !>
-!> with `w_xyz`, `w_n`, `w_k1` and `w_k2` copied unchanged. With both derived
-!> channels zero, [[prepare_surface_weights]] folds nothing, so it returns
-!> `E` again -- bit for bit, since the folds are guarded on
-!> `|w_a| > seed_weight_tol` and are therefore not merely small but skipped.
-!> The fixed half consequently sees the same effective weights it would have
-!> seen from `acc`, and the substitution is an identity, not an approximation.
-!> The guard is left exactly as it stands.
+!> The seam sits at this level rather than inside the halves so that `eff` is
+!> the *same object* in both of them by construction. Folding separately in
+!> each half would make that an argument to be made rather than a fact, and it
+!> is the argument that used to force a surrogate accumulator through the fixed
+!> half's door.
 !>
-!> `branch_phi_adj` is re-derived rather than copied, and it agrees for the
-!> same reason: [[compute_branch_phi_adj]] is a function of the folded `w_xi`
-!> and of grid quantities, and the folded `w_xi` is unchanged. It is moot in
-!> practice, because [[check_frozen_weights]] also refuses a multi-branch grid
-!> -- that refusal propagates out of both entry points unchanged, and is the
-!> honest answer: on a branched grid the fixed half would be missing the
-!> second-order branch term.
 !>
-!> The response half is driven by the **raw** `acc`, not by the surrogate: it
-!> is the fold itself that moves, so freezing it there would zero the very term
-!> it computes ([[test_frozen_response_is_zero]] asserts exactly that).
+!> ## What the composite still refuses
+!>
+!> A grid carrying a multi-branch anchor group. There the projected point is a
+!> softmax over several anchors, and its second derivative carries a branch
+!> term that **neither** half supplies: the fixed half's second-order chain
+!> omits it (see [[seed_contribution_tangent]]), and the response half moves
+!> `branch_phi_adj` without differentiating the branch geometry a second time.
+!> Both public entry points below reject such a grid rather than return a
+!> Hessian silently short a term.
+!>
+!> The refusal lives here and not in the halves on purpose. The response half
+!> is correct on a branched grid when it is asked for on its own -- guarding
+!> inside it would reject calls it handles -- and the fixed half is only ever
+!> reachable through this composition.
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    implicit none(type, external)
@@ -104,6 +111,8 @@ contains
 
       !* ------------------------------- Shape guards --------------------------------- *!
       call check_surface_adjoint(self, acc, "get_surface_hessian_drop", error)
+      if (allocated(error)) return
+      call check_single_branch(self, "get_surface_hessian_drop", error)
       if (allocated(error)) return
       if (size(dirs, 1) /= ndim .or. size(dirs, 2) /= self%nsph) then
          call fatal_error(error, "get_surface_hessian_drop: dirs must be (3, nsph, ndir)")
@@ -180,6 +189,8 @@ contains
       !* ------------------------------- Shape guards --------------------------------- *!
       call check_surface_adjoint(self, acc, "get_hessian_drop", error)
       if (allocated(error)) return
+      call check_single_branch(self, "get_hessian_drop", error)
+      if (allocated(error)) return
       if (any(shape(hessian) /= [ndim, self%nsph, ndim, self%nsph])) then
          call fatal_error(error, "get_hessian_drop: hessian shape mismatch")
          return
@@ -217,11 +228,12 @@ contains
 
    !> Evaluate both halves of the surface Hessian into caller-owned buffers
    !>
-   !> The single place the two halves meet. `hess_fixed` and `resp` are written
-   !> by the halves themselves, which *add* to what they are given, so both are
-   !> expected zeroed on entry and are the caller's staging buffers rather than
-   !> its accumulators -- that is what keeps a public accumulator untouched
-   !> when the second half fails.
+   !> The single place the two halves meet, and the single place the surface
+   !> adjoints are folded. `hess_fixed` and `resp` are written by the halves
+   !> themselves, which *add* to what they are given, so both are expected
+   !> zeroed on entry and are the caller's staging buffers rather than its
+   !> accumulators -- that is what keeps a public accumulator untouched when the
+   !> second half fails.
    !>
    !> @param[in]    self       DROP cavity instance
    !> @param[in]    acc        Accumulated surface-observable adjoints
@@ -243,57 +255,61 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Surrogate accumulator with the base-geometry fold already applied
-      type(cavity_surface_adjoint_type) :: acc_frozen
-
-      call freeze_surface_adjoint(self, acc, acc_frozen, error)
-      if (allocated(error)) return
-
-      ! The fixed half, with the surrogate: see the module header for why the
-      ! substitution is an identity. A multi-branch grid is refused here, and
-      ! that refusal is passed on rather than absorbed.
-      call self%get_surface_hessian_fixed(acc_frozen, hess_fixed, error)
-      if (allocated(error)) return
-
-      ! The response half, with the raw accumulator: the fold is what moves.
-      call self%get_surface_hessian_response(acc, dirs, resp, error)
-   end subroutine surface_hessian_halves
-
-   !> Build the frozen surrogate the fixed half can accept
-   !>
-   !> Replaces the width and switching channels by their base-geometry *folded*
-   !> values and drops the area and integration-weight channels, so that
-   !> [[prepare_surface_weights]] reproduces those same folded weights at every
-   !> geometry. The remaining four channels are `source=`-copies in
-   !> [[prepare_surface_weights]] anyway and are carried over unchanged.
-   !>
-   !> @param[in]  self   DROP cavity instance
-   !> @param[in]  acc    Accumulated surface-observable adjoints
-   !> @param[out] frozen Surrogate accumulator
-   !> @param[out] error  Error object, allocated on failure
-   subroutine freeze_surface_adjoint(self, acc, frozen, error)
-      !> DROP cavity instance
-      class(cavity_type_drop), intent(in) :: self
-      !> Accumulated surface-observable adjoints
-      type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Surrogate accumulator
-      type(cavity_surface_adjoint_type), intent(out) :: frozen
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Base-geometry folded weights
+      !> Folded surface adjoints of the base geometry, read by both halves
       type(drop_surface_weights_type) :: eff
 
       ! `fold_switching = .true.`, as on the nuclear path: a nuclear
       ! displacement moves `f`, so the area channel's `da/df` term is part of
-      ! the effective switching adjoint the fixed half has to see.
+      ! the effective switching adjoint both halves have to see.
       call prepare_surface_weights(self, acc, .true., eff)
 
-      ! `init` zeroes every channel, which is where `w_a` and `w_w` are left.
-      call frozen%init(self%ngrid)
-      call frozen%add_surface_weights(error, w_xi=eff%w_xi, w_f=eff%w_f, &
-                                      w_xyz=acc%w_xyz, w_n=acc%w_n, &
-                                      w_k1=acc%w_k1, w_k2=acc%w_k2)
-   end subroutine freeze_surface_adjoint
+      ! The fixed half: `(dPhi/dv) . eff`, the folded weights held fixed. It
+      ! never sees the raw channels, because there is nothing in them it could
+      ! use that `eff` does not already carry.
+      call self%get_surface_hessian_fixed(eff, hess_fixed, error)
+      if (allocated(error)) return
+
+      ! The response half: `Phi . (d eff/dv)`. The fold is what moves here, so
+      ! this one needs the raw channels it was built from as well as the
+      ! primal `eff` it is differentiated around.
+      call self%get_surface_hessian_response(acc, eff, dirs, resp, error)
+   end subroutine surface_hessian_halves
+
+   !* ================================================================================= *!
+   !*                              Scope of the composite                               *!
+   !* ================================================================================= *!
+
+   !> Reject a grid whose anchor groups branch
+   !>
+   !> The one restriction the composite carries, and the module header has why:
+   !> a branched anchor group puts a second-order branch term into `d/dv G` that
+   !> neither half offers, so the sum of the two would be a Hessian missing a
+   !> term with nothing to say so. `branch_count` is `1` everywhere on an
+   !> unbranched grid and unallocated before the first projection, so both are
+   !> accepted.
+   !>
+   !> Every message is prefixed with the caller's name, as
+   !> [[check_surface_adjoint]] does, so a failure names the entry point the
+   !> user actually called.
+   !>
+   !> @param[in]  self    DROP cavity instance
+   !> @param[in]  context Calling routine, used to prefix the diagnostics
+   !> @param[out] error   Error object, allocated on a branched grid
+   subroutine check_single_branch(self, context, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Calling routine
+      character(len=*), intent(in) :: context
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. allocated(self%branch_count)) return
+      if (self%ngrid <= 0) return
+      if (any(self%branch_count(1:self%ngrid) > 1)) then
+         call fatal_error(error, context//": multi-branch anchor groups carry a"// &
+                          " second-order branch term that neither half of the surface"// &
+                          " Hessian supplies")
+      end if
+   end subroutine check_single_branch
 
 end submodule moist_cavity_drop_derivatives_hessian

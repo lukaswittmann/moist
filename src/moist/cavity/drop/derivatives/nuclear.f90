@@ -25,11 +25,10 @@
 !>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
 !$ use omp_lib, only: omp_get_thread_num
-   use moist_cavity_drop_gaussian, only: iswig_workspace_type
-   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, seed_status_message, &
-      & drop_surface_weights_type, seed_weight_tol
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, seed_normal_channel, &
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, seed_weight_tol
+   use moist_cavity_drop_derivatives_seeds, only: seed_normal_channel, &
       & seed_jet_basis, seed_anchor
    implicit none(type, external)
 
@@ -68,40 +67,21 @@ contains
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type) :: abort
 
-      !> Shared per-grid point sensitivity kernel state and its response
-      type(drop_seed_state_type) :: state
+      !> Per-thread state of the grid point being opened: the jets, the seed
+      !> state, the bordered factorization, the solved seed batch and the
+      !> buffers they are read into
+      type(drop_point_scratch_type) :: pt
       !> Whether the shared prologue cleared the point for this traversal
       logical :: point_ok
 
       !> Grid, atom and active-slot indices
-      integer :: igrid, iatom, i, n_active
-      integer, allocatable :: active_idx(:)
-
-      !> Anchor and owner sphere
-      real(wp) :: anchor(3)
-      integer :: owner_idx
-      !> Level-set jet at the projected point
-      real(wp) :: lsf1_r(3), lsf2_rr(3, 3)
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> Jet-contracted nuclear partials of the level set, one column per active atom
-      real(wp), allocatable :: vjp_pt(:, :)
-      !> Objective jet at the projected point
-      real(wp) :: phi1_r(3)
-      !> Lagrange multiplier of the projection
-      real(wp) :: lambda_val
-
-      !> Bordered KKT system with four field seeds and three anchor seeds
-      real(wp) :: kkt_rhs(4, 7)
-      !> Factorization reused by every solve at this grid point
-      type(drop_kkt_factor_type) :: kkt_fac
+      integer :: igrid, iatom, i
 
       !> Point-local level-set adjoint weights built from the 13 field seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
       !> Effective position adjoint seen by every seed
       real(wp) :: w_xyz_local(3)
-      !> iSwig neighbour cache and the sparse switching rows it feeds
-      type(iswig_workspace_type) :: iswig_work
-      real(wp), allocatable :: swi_rows(:, :)
+      !> Sparse switching rows of the owner sphere
       real(wp) :: swi_owner_row(3), swi_f0, swi_dxi
       integer :: jj, knb
 
@@ -109,8 +89,6 @@ contains
       type(drop_surface_weights_type) :: eff
       !> Timer handle
       integer :: h_sgrad
-      !> Rendered grid index of a degenerate point
-      character(len=32) :: idx
 
       call check_surface_adjoint(self, acc, "get_surface_gradient_drop", error)
       if (allocated(error)) return
@@ -134,24 +112,14 @@ contains
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& iatom, i, n_active, active_idx, state, point_ok, &
-      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& vjp_pt, phi1_r, lambda_val, &
-      !$omp& kkt_rhs, kkt_fac, &
+      !$omp& pt, point_ok, iatom, i, &
       !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, &
-      !$omp& w_xyz_local, iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, &
+      !$omp& w_xyz_local, swi_owner_row, swi_f0, swi_dxi, &
       !$omp& jj, knb)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
 
-      allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
-      allocate (vjp_pt(3, self%nsph), source=0.0_wp)
-      allocate (active_idx(self%nsph))
-      call iswig_work%init(self%iswig)
-      ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is bounded
-      ! by the atom count on either traversal, so this stays valid even if the
-      ! workspace has to grow itself.
-      allocate (swi_rows(3, self%nsph))
+      call pt%init(self%nsph, self%iswig, want_seed_batch=.true., want_vjp=.true.)
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
@@ -160,9 +128,7 @@ contains
          ! failure path -- a latch already set, a refusing level set, a
          ! degenerate state, a singular bordered system -- has recorded itself.
          call drop_point_prologue(self, slots, thread_slot, igrid, eff%have_wk, &
-                                  "get_surface_gradient_drop", abort, anchor, &
-                                  owner_idx, lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
-                                  phi1_r, state, kkt_fac, point_ok, kkt_rhs=kkt_rhs)
+                                  "get_surface_gradient_drop", abort, pt, point_ok)
          if (.not. point_ok) cycle
 
          ! Outward-normal channel: the direct grad-S term rides on w_lsf1 and
@@ -171,10 +137,10 @@ contains
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
-         call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
+         call seed_normal_channel(pt%state, eff, igrid, pt%lsf2_rr, w_lsf1_pt, w_xyz_local)
 
          !* -------------------- Field seeds -> level-set adjoints -------------------- *!
-         call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
+         call seed_jet_basis(pt%state, eff, igrid, pt%phi1_r, pt%kkt_rhs, w_xyz_local, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
 
          !* -------------- Field channel: contract with nuclear partials -------------- *!
@@ -182,55 +148,44 @@ contains
          ! nuclear-gradient row already weighted by (w_lsf0, w_lsf1, w_lsf2), so
          ! the (3, 3, 3, n_active) mixed third derivative the weights used to be
          ! folded against is never materialized -- neither here nor in the kernel.
-         n_active = slots%lsf(thread_slot)%lsf%active_count()
-         do i = 1, n_active
-            active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
+         pt%n_active = slots%lsf(thread_slot)%lsf%active_count()
+         do i = 1, pt%n_active
+            pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
          end do
-         call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, vjp_pt)
-         do i = 1, n_active
-            iatom = active_idx(i)
+         call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, pt%vjp_pt)
+         do i = 1, pt%n_active
+            iatom = pt%active_idx(i)
             grad_threads(:, iatom, thread_slot) = &
-               grad_threads(:, iatom, thread_slot) + vjp_pt(:, i)
+               grad_threads(:, iatom, thread_slot) + pt%vjp_pt(:, i)
          end do
 
          !* ------------------------- Anchor channel (owner) -------------------------- *!
-         call seed_anchor(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
-                          grad_threads(:, owner_idx, thread_slot))
+         call seed_anchor(pt%state, eff, igrid, pt%phi1_r, pt%kkt_rhs, w_xyz_local, &
+                          grad_threads(:, pt%owner_idx, thread_slot))
 
          !* ------------------------- iSwig switching channel ------------------------- *!
          ! f_i depends on the nuclear geometry alone; only the owner atom and neighbours are nonzero
          if (abs(eff%w_f(igrid)) > seed_weight_tol) then
-            call self%iswig%swi_collect(anchor, owner_idx, self%anchor_xi0(igrid), &
-                                        swi_f0, iswig_work)
-            call self%iswig%swi1_rA_sparse(iswig_work, swi_rows, swi_owner_row, swi_dxi)
-            do jj = 1, iswig_work%n_nb
-               knb = iswig_work%idx(jj)
+            call self%iswig%swi_collect(pt%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
+                                        swi_f0, pt%iswig_work)
+            call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
+            do jj = 1, pt%iswig_work%n_nb
+               knb = pt%iswig_work%idx(jj)
                grad_threads(:, knb, thread_slot) = grad_threads(:, knb, thread_slot) &
-                                                   + eff%w_f(igrid)*swi_rows(:, jj)
+                                                   + eff%w_f(igrid)*pt%swi_rows(:, jj)
             end do
-            grad_threads(:, owner_idx, thread_slot) = &
-               grad_threads(:, owner_idx, thread_slot) + eff%w_f(igrid)*swi_owner_row
+            grad_threads(:, pt%owner_idx, thread_slot) = &
+               grad_threads(:, pt%owner_idx, thread_slot) + eff%w_f(igrid)*swi_owner_row
          end if
 
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, vjp_pt, active_idx, swi_rows)
-      call iswig_work%destroy()
+      call pt%destroy()
       !$omp end parallel
 
       if (abort%requested) then
-         ! An LSF failure or a KKT failure arrives as a ready-made error; a
-         ! kernel degeneracy arrives as a status code that needs this routine's
-         ! name to become a diagnostic.
-         if (allocated(abort%error)) then
-            call move_alloc(abort%error, error)
-         else
-            write (idx, "(i0)") abort%igrid
-            call fatal_error(error, "get_surface_gradient_drop: "// &
-                             seed_status_message(abort%status)// &
-                             " at grid point "//trim(idx))
-         end if
+         call abort%raise("get_surface_gradient_drop", error)
          call self%ctx%timer%stop(h_sgrad)
          return
       end if

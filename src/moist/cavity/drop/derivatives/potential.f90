@@ -9,11 +9,10 @@
 !> The per-grid point sensitivity kernel is shared with the nuclear path
 !> in [[moist_cavity_drop_derivatives_kernel]]
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_surface_weights_type, build_seed_state, seed_state_ok
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, seed_normal_channel, &
-      & seed_jet_basis
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
+   use moist_cavity_drop_derivatives_seeds, only: seed_normal_channel, seed_jet_basis
    implicit none(type, external)
 
 contains
@@ -84,6 +83,19 @@ contains
    !> contribute here. It does contribute to the nuclear gradient, which is why
    !> the area channel is folded into the width channel only.
    !>
+   !> The per-point opening is [[drop_point_prologue]]'s, exactly as on the four
+   !> parallel traversals, so this electronic path cannot drift away from them.
+   !> It runs the prologue on a one-slot [[drop_worker_slots_type]] and a local
+   !> latch, and because the loop is serial it reads that latch itself rather
+   !> than draining the grid: an LSF or KKT failure is returned immediately, and
+   !> a degenerate seed state clears the latch and skips its point alone.
+   !>
+   !> The prologue solves the full seven-column seed batch where this routine
+   !> needs only the four jet columns. The three extra right-hand sides are
+   !> three more columns of one `getrs` on an already factored 4x4, which is not
+   !> worth a second batch layout to avoid; [[seed_jet_basis]] reads columns 1-4
+   !> and ignores the rest.
+   !>
    !> @param[in]  self    DROP cavity instance (must hold a projected grid)
    !> @param[in]  acc     Accumulated surface-observable adjoints
    !> @param[out] w_lsf0  Adjoint weights for LSF values S_i (ngrid)
@@ -104,29 +116,17 @@ contains
       !> Error object, allocated on failure (KKT sensitivity solve)
       type(error_type), allocatable, intent(out) :: error
 
-      !> Level-set clone and objective used to rebuild the per-point jet
-      type(lsf_thread_slot) :: lsf_slot
-      type(moist_cavity_drop_objective_phi_type) :: phi
-      !> Shared per-grid point sensitivity kernel state and its response
-      type(drop_seed_state_type) :: state
-      !> Grid, seed and Cartesian indices
+      !> Level-set clone and objective used to rebuild the per-point jet; one
+      !> slot, because this traversal is serial
+      type(drop_worker_slots_type) :: slots
+      !> Per-thread state of the grid point being opened
+      type(drop_point_scratch_type) :: pt
+      !> Failure latch of the prologue; read and cleared by this loop itself
+      type(drop_abort_latch_type) :: abort
+      !> Whether the shared prologue cleared the point
+      logical :: point_ok
+      !> Grid index
       integer :: igrid
-      !> Degeneracy status returned by the kernel
-      integer :: status
-      !> Projected point, anchor and owner sphere
-      real(wp) :: point(3), anchor(3)
-      integer :: owner_idx
-      !> Level-set jet at the projected point
-      real(wp) :: lsf0, lsf1_r(3), lsf2_rr(3, 3)
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> Objective jet at the projected point
-      real(wp) :: phi0, phi1_r(3), phi2_rr(3, 3)
-      !> Lagrange multiplier of the projection
-      real(wp) :: lambda_val
-      !> Bordered KKT sensitivity system
-      real(wp) :: kkt_rhs(4, 4)
-      !> Factorization reused by every solve at this grid point
-      type(drop_kkt_factor_type) :: kkt_fac
       !> Point-local level-set adjoints built from the 13 jet seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
       !> Folded surface adjoints and the branch objective adjoint
@@ -141,39 +141,38 @@ contains
       ! identically zero here. The nuclear path passes .true.
       call prepare_surface_weights(self, acc, .false., eff)
 
-      allocate (lsf_slot%lsf, source=self%lsf_model)
-      call lsf_slot%lsf%set_max_deriv(3)
-      call phi%set_parameters(self%param)
-      call phi%set_input(self%mol, self%radii)
-      allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
+      ! One slot rather than the context's team: nothing below is parallel, and
+      ! a clone carries the level set's screened-derivative cache with it.
+      call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii, &
+                      nthreads=1)
+      call pt%init(self%nsph, self%iswig, want_seed_batch=.true.)
+      call abort%reset()
 
       w_lsf0 = 0.0_wp
       w_lsf1 = 0.0_wp
       w_lsf2 = 0.0_wp
 
       do igrid = 1, self%ngrid
-         point = self%xyz(:, igrid)
-         anchor = self%anchorxyz(:, igrid)
-         owner_idx = self%owner(igrid)
-         lambda_val = self%lambda0(igrid)
-
-         ! Serial loop, so an evaluation failure can be returned immediately
-         ! (see the parallel loops for the general contract).
-         call lsf_slot%lsf%prepare(point, error)
-         if (allocated(error)) return
-         call lsf_slot%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-         call phi%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
-
-         state%lsf1_r = lsf1_r
-         state%lsf2_rr = lsf2_rr
-         state%lsf3_rrr = lsf3_rrr
-         state%lambda_val = lambda_val
-         call fill_seed_state(self, igrid, eff%have_wk, state)
-
-         call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
-                               self%param%wleb_prune_level > 0, status)
-
-         if (status /= seed_state_ok) cycle
+         !* -------------------------- Shared point prologue -------------------------- *!
+         ! Point, jets, seed state and the solved jet and anchor seeds -- the
+         ! same opening the four parallel traversals get.
+         call drop_point_prologue(self, slots, 1, igrid, eff%have_wk, &
+                                  "contract_surface_lsf_weights", abort, pt, point_ok)
+         if (.not. point_ok) then
+            ! The latch exists for a worksharing construct that cannot return.
+            ! This loop can, so it reads the latch itself: a level-set refusal
+            ! or a singular bordered system arrives as an error object and is
+            ! returned at once, while a degenerate seed state carries only a
+            ! status code and skips its own point. That one has to clear the
+            ! latch, or the next prologue call would see a failure still
+            ! requested and drain the rest of the grid.
+            if (allocated(abort%error)) then
+               call move_alloc(abort%error, error)
+               return
+            end if
+            call abort%reset()
+            cycle
+         end if
 
          ! Fold an optional outward-normal adjoint weight into the field channels:
          ! the direct grad-S contribution normal_grad = P_tan(w_n)/|grad S| enters
@@ -185,32 +184,21 @@ contains
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
-         call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
+         call seed_normal_channel(pt%state, eff, igrid, pt%lsf2_rr, w_lsf1_pt, w_xyz_local)
 
-         ! KKT sensitivities for all 13 basis perturbations from one
-         ! factorization: only the value (ibasis 1) and gradient (ibasis 2-4)
-         ! perturbations enter the right-hand side; the nine Hessian
-         ! perturbations have rhs = 0 and hence dr/dp = 0, dlambda/dp = 0.
-         ! Only the value (column 1) and gradient (columns 2-4) seeds move the
-         ! point; the nine Hessian seeds have a zero right-hand side.
-         kkt_rhs = 0.0_wp
-         kkt_rhs(4, 1) = -1.0_wp
-         kkt_rhs(1, 2) = lambda_val
-         kkt_rhs(2, 3) = lambda_val
-         kkt_rhs(3, 4) = lambda_val
-         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, &
-                             "contract_surface_lsf_weights", error, igrid)
-         if (allocated(error)) return
-         call kkt_fac%solve(kkt_rhs, "contract_surface_lsf_weights", error, igrid)
-         if (allocated(error)) return
-
-         call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &
+         ! The 13 jet seeds share the point's one factorization. Only the value
+         ! (column 1) and the three gradient directions (columns 2-4) move the
+         ! point; the nine Hessian perturbations have rhs = 0 and hence
+         ! dr/dp = 0, dlambda/dp = 0.
+         call seed_jet_basis(pt%state, eff, igrid, pt%phi1_r, pt%kkt_rhs, w_xyz_local, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
 
          w_lsf0(igrid) = w_lsf0(igrid) + w_lsf0_pt
          w_lsf1(:, igrid) = w_lsf1(:, igrid) + w_lsf1_pt
          w_lsf2(:, :, igrid) = w_lsf2(:, :, igrid) + w_lsf2_pt
       end do
+
+      call pt%destroy()
 
    end subroutine contract_surface_lsf_weights
 

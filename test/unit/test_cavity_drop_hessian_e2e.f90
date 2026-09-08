@@ -130,8 +130,9 @@
 !>
 !> ## What the comparison achieved (2026-09-04)
 !>
-!> `get_hessian` -- `get_surface_hessian_fixed` on a frozen surrogate plus
-!> `get_surface_hessian_response`, see `derivatives/hessian.f90` -- against
+!> `get_hessian` -- one fold of the surface adjoints driving
+!> `get_surface_hessian_fixed` and `get_surface_hessian_response`, see
+!> `derivatives/hessian.f90` -- against
 !> `H_num`, per adjoint set, on both level sets. The tables of measured
 !> agreement live on `SMOOTH_TOL` and on `CURV_TOL_SVDW`/`CURV_TOL_CFC`; the
 !> summary is:
@@ -172,10 +173,11 @@
 !>     and is the check that the two halves are being told apart. `d(eff)` has
 !>     no curvature channel, so a curvature-only accumulator has no response
 !>     half to drop;
-!>   * **the raw accumulator handed to the fixed half** instead of the frozen
-!>     surrogate: every set that drives `w_a` or `w_w` is refused by
-!>     [[check_frozen_weights]], with its message, rather than answered
-!>     wrongly;
+!>   * **the multi-branch refusal removed** from the two entry points:
+!>     `branched_grid_refused` fails outright. Measured 2026-09-08, when the
+!>     refusal moved out of the fixed half -- where it had been one of three
+!>     guards on a raw accumulator that half no longer takes -- and up to the
+!>     composition that is actually short the term;
 !>   * **the dense wrapper's column index transposed** (`nsph (alpha-1) + A`
 !>     for `3 (A-1) + alpha`): caught by the analytic symmetry check at
 !>     `9.9e+0` and by the unit-direction HVP check at `1.5e+1`.
@@ -188,7 +190,7 @@ module test_cavity_drop_hessian_e2e
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
-                           LSF_SVDW, LSF_CFC, FIX_PLAIN
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN, FIX_CROSS
 
    implicit none(type, external)
    private
@@ -415,7 +417,8 @@ contains
                   new_unittest("analytic_curvature_cfc", test_analytic_curvature_cfc), &
                   new_unittest("hvp_matches_dense_svdw", test_hvp_svdw), &
                   new_unittest("hvp_matches_dense_cfc", test_hvp_cfc), &
-                  new_unittest("shape_guards", test_shape_guards) &
+                  new_unittest("shape_guards", test_shape_guards), &
+                  new_unittest("branched_grid_refused", test_branched_grid_refused) &
                   ]
    end subroutine collect_cavity_drop_hessian_e2e
 
@@ -1284,6 +1287,90 @@ contains
       end if
 
    end subroutine test_shape_guards
+
+   !> A branched grid must be refused by both public entry points
+   !>
+   !> The one restriction the composite carries. A multi-branch anchor group
+   !> makes the projected point a softmax over several anchors, and the second
+   !> derivative of that carries a term neither half supplies -- the fixed
+   !> half's second-order chain omits it and the response half only moves
+   !> `branch_phi_adj`. Returning the sum of the two halves anyway would be a
+   !> Hessian silently short a term, so `get_hessian` and `get_surface_hessian`
+   !> refuse the grid instead.
+   !>
+   !> The refusal used to live inside the fixed half, where it was one of three
+   !> guards on the accumulator. The other two went with the re-folding; this
+   !> one is a property of the grid, not of the adjoints, and it moved up to the
+   !> entry points that compose the halves.
+   !>
+   !> The fixture is asserted to branch before anything else is checked: a cross
+   !> that quietly stopped branching would leave this test passing on a refusal
+   !> that never had to fire.
+   !>
+   !> @param[out] error Error handle
+   subroutine test_branched_grid_refused(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Softmax scale that makes the cross branch, as the response suite uses
+      real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(cavity_surface_adjoint_type) :: acc
+      type(mctc_error), allocatable :: cav_error
+      logical :: mask(NCHAN)
+      real(wp), allocatable :: hessian(:, :, :, :), hvp(:, :, :), dirs(:, :, :)
+      integer :: nsph
+
+      mask = .false.
+      mask(smooth_channels()) = .true.
+
+      call drop_fixture_geometry(FIX_CROSS, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, FIX_CROSS, LSF_SVDW, error, &
+                                  cross_branch_s=CROSS_BRANCH_S)
+      if (allocated(error)) return
+      nsph = cavity%nsph
+
+      ! The precondition, not an observation: without it the refusal below
+      ! could be satisfied by a grid that has nothing to refuse
+      if (.not. allocated(cavity%branch_count)) then
+         call test_failed(error, "the branching fixture carries no branch count")
+         return
+      end if
+      if (.not. any(cavity%branch_count(1:cavity%ngrid) > 1)) then
+         call test_failed(error, "the branching fixture does not branch (max"// &
+                          " branch_count "// &
+                          to_string(maxval(cavity%branch_count(1:cavity%ngrid)))//")")
+         return
+      end if
+
+      call frozen_adjoint(cavity, mask, acc, error)
+      if (allocated(error)) return
+
+      !* ---------------------------------- Dense path ---------------------------------- *!
+      allocate (hessian(ndim, nsph, ndim, nsph), source=0.0_wp)
+      call cavity%get_hessian(acc, hessian, cav_error)
+      call expect_rejected(cav_error, "get_hessian on a branched grid", error)
+      if (allocated(error)) return
+      if (maxval(abs(hessian)) /= 0.0_wp) then
+         call test_failed(error, "get_hessian accumulated into a rejected buffer")
+         return
+      end if
+
+      !* ----------------------------------- HVP path ----------------------------------- *!
+      call build_directions(nsph, dirs)
+      allocate (hvp(ndim, nsph, size(dirs, 3)), source=0.0_wp)
+      call cavity%get_surface_hessian(acc, dirs, hvp, cav_error)
+      call expect_rejected(cav_error, "get_surface_hessian on a branched grid", error)
+      if (allocated(error)) return
+      if (maxval(abs(hvp)) /= 0.0_wp) then
+         call test_failed(error, "get_surface_hessian accumulated into a rejected buffer")
+         return
+      end if
+
+   end subroutine test_branched_grid_refused
 
    !> A call that must fail, and must say so through the error handle
    !>

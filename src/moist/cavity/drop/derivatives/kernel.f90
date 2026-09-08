@@ -1672,9 +1672,9 @@ contains
    !>
    !> The branch term is gated on the *stored* `eff%branch_phi_adj`, so a
    !> caller whose grid carries no multi-branch anchor group -- the
-   !> fixed-adjoint Hessian, whose `check_frozen_weights` rejects anything else
-   !> -- pays one comparison against an array that `[[prepare_surface_weights]]`
-   !> allocated to zero, and skips the term.
+   !> fixed-adjoint Hessian, which is only reachable through entry points that
+   !> refuse a branched grid -- pays one comparison against an array that
+   !> `[[prepare_surface_weights]]` allocated to zero, and skips the term.
    !>
    !> `branch_shift` is the rigid-motion piece of an anchor seed: the objective
    !> is `phi = 0.5*alpha*|r - anchor|^2`, so at fixed `r` the owner's rigid

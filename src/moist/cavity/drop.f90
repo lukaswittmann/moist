@@ -33,8 +33,8 @@ module moist_cavity_drop
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
-   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
    use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
@@ -48,6 +48,9 @@ module moist_cavity_drop
    public :: new_cavity_drop
    public :: drop_property_request
    public :: drop_request_default, drop_request_diagnostics, drop_request_fine
+   !> Exposed for the derivative test suites: the two internal Hessian halves
+   !> take the *folded* weights, and this is the only thing that produces them
+   public :: prepare_surface_weights
 
    !> DROP cavity type
    type, extends(cavity_type) :: cavity_type_drop
@@ -233,11 +236,16 @@ module moist_cavity_drop
       procedure :: get_surface_response => get_surface_response_drop
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
-      !> Contract fixed surface-coordinate weights into the nuclear Hessian
+      !> Internal: fixed-adjoint half of the surface Hessian, on folded weights
+      !>
+      !> This and the two below are DROP-specific rather than part of the
+      !> generic cavity API: they trade in `drop_surface_weights_type`, and
+      !> they are the halves `get_surface_hessian` composes, not entry points
+      !> a host would reach for
       procedure :: get_surface_hessian_fixed => get_surface_hessian_fixed_drop
-      !> Forward tangent of the surface map along nuclear directions (pass 1)
+      !> Internal: forward tangent of the surface map along nuclear directions (pass 1)
       procedure :: get_surface_tangent => get_surface_tangent_drop
-      !> Adjoint-response half of the surface Hessian (J^T omega_v)
+      !> Internal: adjoint-response half of the surface Hessian (J^T omega_v)
       procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
       !> Public: surface Hessian-vector products (both halves)
       procedure :: get_surface_hessian => get_surface_hessian_drop
@@ -478,23 +486,10 @@ module moist_cavity_drop
       !> @param[in]    want_curvature Whether the curvature invariants are needed
       !> @param[in]    context        Calling routine, used to prefix the diagnostics
       !> @param[inout] abort          Shared failure latch of the parallel region
-      !> @param[out]   anchor         Anchor of the grid point
-      !> @param[out]   owner_idx      Owner sphere of the anchor
-      !> @param[out]   lambda_val     Lagrange multiplier of the projection
-      !> @param[out]   lsf1_r         Level-set gradient at the projected point
-      !> @param[out]   lsf2_rr        Level-set Hessian at the projected point
-      !> @param[inout] lsf3_rrr       Caller-owned third-derivative buffer
-      !> @param[out]   phi1_r         Objective gradient at the projected point
-      !> @param[inout] state          Seed state
-      !> @param[out]   kkt_fac        Factorized bordered KKT system
+      !> @param[inout] pt             Point scratch of the calling thread
       !> @param[out]   ok             Whether the point may be processed further
-      !> @param[inout] lsf4_rrrr      Caller-owned fourth-derivative buffer
-      !> @param[out]   kkt_rhs        Solved standard jet and anchor seeds
       module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
-                                            want_curvature, context, abort, anchor, &
-                                            owner_idx, lambda_val, lsf1_r, lsf2_rr, &
-                                            lsf3_rrr, phi1_r, state, kkt_fac, ok, &
-                                            lsf4_rrrr, kkt_rhs)
+                                            want_curvature, context, abort, pt, ok)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(drop_worker_slots_type), intent(inout) :: slots
@@ -503,17 +498,8 @@ module moist_cavity_drop
          logical, intent(in) :: want_curvature
          character(len=*), intent(in) :: context
          type(drop_abort_latch_type), intent(inout) :: abort
-         real(wp), intent(out) :: anchor(3)
-         integer, intent(out) :: owner_idx
-         real(wp), intent(out) :: lambda_val
-         real(wp), intent(out) :: lsf1_r(3), lsf2_rr(3, 3)
-         real(wp), intent(inout) :: lsf3_rrr(3, 3, 3)
-         real(wp), intent(out) :: phi1_r(3)
-         type(drop_seed_state_type), intent(inout) :: state
-         type(drop_kkt_factor_type), intent(out) :: kkt_fac
+         type(drop_point_scratch_type), intent(inout) :: pt
          logical, intent(out) :: ok
-         real(wp), intent(inout), optional :: lsf4_rrrr(3, 3, 3, 3)
-         real(wp), intent(out), optional :: kkt_rhs(4, 7)
       end subroutine drop_point_prologue
 
       !> Contract surface weights to per-grid LSF adjoint weights
@@ -560,16 +546,18 @@ module moist_cavity_drop
       !> [deriv/hessian_fixed.f90] Fixed-adjoint half of the surface Hessian
       !>
       !> Contracts the second derivative of the surface map against adjoints held
-      !> fixed, i.e. the `(dJ^T/dv) omega` term with `omega_v = 0`.
+      !> fixed, i.e. the `(dJ^T/dv) omega` term with `omega_v = 0`. Takes the
+      !> *folded* weights: `hessian.f90` folds once and drives both halves off
+      !> the same object.
       !>
       !> @param[in]    self    DROP cavity instance
-      !> @param[in]    acc     Accumulated surface-observable adjoints, held fixed
+      !> @param[in]    eff     Folded surface adjoints, held fixed
       !> @param[inout] hessian Nuclear-Hessian accumulator (3, nsph, 3, nsph)
       !> @param[out]   error   Error object
-      module subroutine get_surface_hessian_fixed_drop(self, acc, hessian, error)
+      module subroutine get_surface_hessian_fixed_drop(self, eff, hessian, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
-         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(drop_surface_weights_type), intent(in) :: eff
          real(wp), intent(inout) :: hessian(:, :, :, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_hessian_fixed_drop
@@ -596,16 +584,20 @@ module moist_cavity_drop
       !>
       !> The `J^T (d omega/dv)` term: runs the forward tangent, differentiates the
       !> weight folding, and contracts the moving adjoints against the primal map.
+      !> Needs both forms of the adjoints -- the raw channels the fold was built
+      !> from, and the primal fold it is differentiated around.
       !>
       !> @param[in]    self    DROP cavity instance
       !> @param[in]    acc     Raw surface adjoints, held fixed
+      !> @param[in]    eff     Folded surface adjoints of the base geometry
       !> @param[in]    dirs    Nuclear directions (3, nsph, ndir)
       !> @param[inout] hvp     Accumulator (3, nsph, ndir)
       !> @param[out]   error   Error object
-      module subroutine get_surface_hessian_response_drop(self, acc, dirs, hvp, error)
+      module subroutine get_surface_hessian_response_drop(self, acc, eff, dirs, hvp, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(drop_surface_weights_type), intent(in) :: eff
          real(wp), intent(in) :: dirs(:, :, :)
          real(wp), intent(inout) :: hvp(:, :, :)
          type(error_type), allocatable, intent(out) :: error

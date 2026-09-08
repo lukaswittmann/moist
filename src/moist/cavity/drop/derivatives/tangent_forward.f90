@@ -90,12 +90,10 @@
 !> independently, and it is only consistent if `d_wleb` is the complete tangent.
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
 !$ use omp_lib, only: omp_get_thread_num
-   use moist_cavity_drop_gaussian, only: iswig_workspace_type
-   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, seed_status_message, &
-      & drop_seed_result_type, apply_seed, seed_weight_tol, &
-      & next_branch_group, max_branch_group_size
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_result_type, apply_seed, &
+      & seed_weight_tol, next_branch_group, max_branch_group_size
    implicit none(type, external)
 
    !> Cartesian dimension
@@ -135,8 +133,10 @@ contains
       !> Per-thread failure on its way to the latch
       type(error_type), allocatable :: worker_error
 
-      !> Shared per-grid point sensitivity kernel state and its response
-      type(drop_seed_state_type) :: state
+      !> Per-thread state of the grid point being opened: the jets, the seed
+      !> state, the bordered factorization and the buffers they are read into
+      type(drop_point_scratch_type) :: pt
+      !> Linear response of one seed
       type(drop_seed_result_type) :: res
       !> Whether the shared prologue cleared the point for this traversal
       logical :: point_ok
@@ -144,30 +144,16 @@ contains
       !> Grid, direction, sphere and Cartesian indices
       integer :: igrid, idir, ndir, jj, knb
 
-      !> Anchor and owner sphere
-      real(wp) :: anchor(3)
-      integer :: owner_idx
-      !> Level-set jet at the projected point
-      real(wp) :: lsf1_r(3), lsf2_rr(3, 3)
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
-      !> Objective jet at the projected point
-      real(wp) :: phi1_r(3)
-      !> Lagrange multiplier of the projection
-      real(wp) :: lambda_val
-
       !> Directional nuclear tangents of the level-set jet at the *fixed* point
       real(wp) :: dlsf0
       real(wp), allocatable :: dlsf1_r(:, :), dlsf2_rr(:, :, :)
-      !> Bordered KKT right-hand sides, one column per direction
-      real(wp), allocatable :: kkt_rhs(:, :)
-      !> Factorization reused by every direction at this grid point
-      type(drop_kkt_factor_type) :: kkt_fac
+      !> Bordered KKT right-hand sides, one column per direction; this pass
+      !> builds its own batch rather than the shared 16-seed one
+      real(wp), allocatable :: dir_rhs(:, :)
       !> Induced motion of the projected point and of the multiplier
       real(wp) :: dr(3), dlambda
 
-      !> iSwiG neighbour cache and the sparse switching rows it feeds
-      type(iswig_workspace_type) :: iswig_work
-      real(wp), allocatable :: swi_rows(:, :)
+      !> Sparse switching rows of the owner sphere
       real(wp) :: swi_owner_row(3), swi_f0, swi_dxi, df_dir
 
       !> Tangent of the branch objective, `d(Phi)` per point and direction
@@ -185,8 +171,6 @@ contains
       real(wp) :: wleb_i, wbranch_i, dwleb_i, r_own
       !> Timer handle
       integer :: h_stan
-      !> Rendered grid index of a degenerate point
-      character(len=32) :: idx
 
       !* ------------------------------- Shape guards --------------------------------- *!
       if (size(dirs, 1) /= ndim .or. size(dirs, 2) /= self%nsph) then
@@ -224,24 +208,17 @@ contains
       call abort%reset()
 
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& idir, jj, knb, state, res, point_ok, &
-      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& phi1_r, lambda_val, &
-      !$omp& dlsf0, dlsf1_r, dlsf2_rr, kkt_rhs, kkt_fac, dr, dlambda, &
-      !$omp& iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, df_dir, &
+      !$omp& pt, point_ok, idir, jj, knb, res, &
+      !$omp& dlsf0, dlsf1_r, dlsf2_rr, dir_rhs, dr, dlambda, &
+      !$omp& swi_owner_row, swi_f0, swi_dxi, df_dir, &
       !$omp& worker_error)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
 
-      allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
+      call pt%init(self%nsph, self%iswig)
       allocate (dlsf1_r(3, ndir), source=0.0_wp)
       allocate (dlsf2_rr(3, 3, ndir), source=0.0_wp)
-      allocate (kkt_rhs(4, ndir), source=0.0_wp)
-      call iswig_work%init(self%iswig)
-      ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is bounded
-      ! by the atom count on either traversal, so this stays valid even if the
-      ! workspace has to grow itself.
-      allocate (swi_rows(3, self%nsph))
+      allocate (dir_rhs(4, ndir), source=0.0_wp)
 
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
@@ -253,9 +230,7 @@ contains
          ! right-hand side per nuclear direction, and it cannot be built before
          ! the level set's directional tangents below are known.
          call drop_point_prologue(self, slots, thread_slot, igrid, .false., &
-                                  "get_surface_tangent_drop", abort, anchor, &
-                                  owner_idx, lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
-                                  phi1_r, state, kkt_fac, point_ok)
+                                  "get_surface_tangent_drop", abort, pt, point_ok)
          if (.not. point_ok) cycle
 
          !* ----------------- Directional nuclear tangents of the jet ----------------- *!
@@ -271,15 +246,15 @@ contains
             ! Bordered right-hand side of the direction, with
             ! `d^2 phi/(dr dR_owner) = -alpha*I` (`objective_phi.f90`, `f2_r_rA`)
             ! and the anchor riding its owner rigidly.
-            kkt_rhs(1:3, idir) = self%param%phi_alpha*dirs(:, owner_idx, idir) &
-                                 + lambda_val*dlsf1_r(:, idir)
-            kkt_rhs(4, idir) = -dlsf0
+            dir_rhs(1:3, idir) = self%param%phi_alpha*dirs(:, pt%owner_idx, idir) &
+                                 + pt%lambda_val*dlsf1_r(:, idir)
+            dir_rhs(4, idir) = -dlsf0
          end do
 
          !* ------------------------ Bordered KKT sensitivities ----------------------- *!
          ! One batched solve on the factorization the prologue already built:
          ! every direction shares the 4x4 matrix of this grid point.
-         call kkt_fac%solve(kkt_rhs, "get_surface_tangent_drop", worker_error, igrid)
+         call pt%kkt_fac%solve(dir_rhs, "get_surface_tangent_drop", worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             cycle
@@ -287,10 +262,10 @@ contains
 
          !* ---------------------- Base Lebedev-weight response ----------------------- *!
          do idir = 1, ndir
-            dr = kkt_rhs(1:3, idir)
-            dlambda = kkt_rhs(4, idir)
+            dr = dir_rhs(1:3, idir)
+            dlambda = dir_rhs(4, idir)
 
-            call apply_seed(state, dlsf1_r(:, idir), dlsf2_rr(:, :, idir), dr, dlambda, res)
+            call apply_seed(pt%state, dlsf1_r(:, idir), dlsf2_rr(:, :, idir), dr, dlambda, res)
 
             ! Branch-frozen half of `d(wleb)`; stage 3 completes it. `res%dxi`
             ! is the width tangent of exactly this incomplete weight and is not
@@ -300,7 +275,7 @@ contains
             ! Tangent of the branch objective `Phi = 0.5 alpha |r* - anchor|^2`
             ! along the direction: the projected point moves by `dr`, the anchor
             ! rigidly with its owner.
-            dphi(igrid, idir) = dot_product(phi1_r, dr - dirs(:, owner_idx, idir))
+            dphi(igrid, idir) = dot_product(pt%phi1_r, dr - dirs(:, pt%owner_idx, idir))
          end do
 
          !* ------------------------- iSwiG switching channel ------------------------- *!
@@ -308,14 +283,14 @@ contains
          ! `anchor_xi0` depends on the owner radius and the raw Lebedev weight
          ! alone, so it carries no nuclear tangent and `swi_dxi` is unused.
          ! Parked in `d_a` until stage 3 turns it into the area tangent.
-         call self%iswig%swi_collect(anchor, owner_idx, self%anchor_xi0(igrid), &
-                                     swi_f0, iswig_work)
-         call self%iswig%swi1_rA_sparse(iswig_work, swi_rows, swi_owner_row, swi_dxi)
+         call self%iswig%swi_collect(pt%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
+                                     swi_f0, pt%iswig_work)
+         call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
          do idir = 1, ndir
-            df_dir = dot_product(swi_owner_row, dirs(:, owner_idx, idir))
-            do jj = 1, iswig_work%n_nb
-               knb = iswig_work%idx(jj)
-               df_dir = df_dir + dot_product(swi_rows(:, jj), dirs(:, knb, idir))
+            df_dir = dot_product(swi_owner_row, dirs(:, pt%owner_idx, idir))
+            do jj = 1, pt%iswig_work%n_nb
+               knb = pt%iswig_work%idx(jj)
+               df_dir = df_dir + dot_product(pt%swi_rows(:, jj), dirs(:, knb, idir))
             end do
             d_a(igrid, idir) = df_dir
          end do
@@ -323,22 +298,12 @@ contains
       end do
       !$omp end do
 
-      deallocate (lsf3_rrr, dlsf1_r, dlsf2_rr, kkt_rhs, swi_rows)
-      call iswig_work%destroy()
+      deallocate (dlsf1_r, dlsf2_rr, dir_rhs)
+      call pt%destroy()
       !$omp end parallel
 
       if (abort%requested) then
-         ! An LSF failure or a KKT failure arrives as a ready-made error; a
-         ! kernel degeneracy arrives as a status code that needs this routine's
-         ! name to become a diagnostic.
-         if (allocated(abort%error)) then
-            call move_alloc(abort%error, error)
-         else
-            write (idx, "(i0)") abort%igrid
-            call fatal_error(error, "get_surface_tangent_drop: "// &
-                             seed_status_message(abort%status)// &
-                             " at grid point "//trim(idx))
-         end if
+         call abort%raise("get_surface_tangent_drop", error)
          call self%ctx%timer%stop(h_stan)
          return
       end if

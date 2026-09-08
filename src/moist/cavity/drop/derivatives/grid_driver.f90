@@ -22,23 +22,27 @@
 !>     traversals ask for whatever their folded weights carry (`eff%have_wk`);
 !>     the response and forward-tangent halves know their curvature channel is
 !>     identically zero and ask for `.false.`
-!>   * `kkt_rhs`, the standard seed batch -- four level-set jet seeds and three
-!>     anchor seeds. Present for the three traversals that push the fixed
-!>     16-seed basis; absent for [[get_surface_tangent_drop]], whose right-hand
-!>     sides are one column per nuclear direction and cannot be built before
-!>     the level set's directional tangents are known. That caller keeps its
-!>     own solve and shares the factorization only
+!>   * `pt%kkt_rhs`, the standard seed batch -- four level-set jet seeds and
+!>     three anchor seeds. Allocated by the three traversals that push the
+!>     fixed 16-seed basis; unallocated for [[get_surface_tangent_drop]], whose
+!>     right-hand sides are one column per nuclear direction and cannot be
+!>     built before the level set's directional tangents are known. That caller
+!>     keeps its own solve and shares the factorization only
 !>
 !> `context` parameterises nothing about the computation: it is the name of the
 !> API entry point the caller was reached through, and it is what turns a
 !> singular bordered system at some grid point into a diagnostic the user can
 !> trace back to the call they made. Every traversal above passes its own name.
 !>
-!> `lsf3_rrr` and `lsf4_rrrr` stay caller-owned buffers rather than becoming
-!> locals here: they are allocated once per thread outside the grid loop, and
-!> an automatic array would move that allocation into the hot loop.
+!> Everything the prologue produces lands in the caller's
+!> [[drop_point_scratch_type]] rather than in an output argument list of its
+!> own. That is what lets a traversal name one variable in its `private(...)`
+!> clause instead of a dozen, and it is where the buffers that must outlive a
+!> single point -- `lsf3_rrr`, `lsf4_rrrr`, the iSwiG neighbour cache -- are
+!> allocated once per thread, outside the grid loop.
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_grid_driver
    use moist_cavity_drop_derivatives_kernel, only: build_seed_state, seed_state_ok
+   use moist_cavity_drop_derivatives_seeds, only: seed_standard_rhs
    implicit none(type, external)
 
 contains
@@ -50,10 +54,20 @@ contains
    !> degenerate, or the bordered system is singular. Every such exit has
    !> already recorded itself in `abort`, so the caller only has to `cycle`.
    !>
-   !> The outputs are exactly the quantities the callers still read after the
-   !> prologue. The point itself, the level-set value, the objective value and
-   !> the objective Hessian are consumed here and deliberately not handed back,
-   !> which is what lets the callers drop them from their `private(...)` lists.
+   !> `pt` is both the scratch the prologue works in and the only thing it hands
+   !> back: it carries exactly the quantities the callers still read afterwards.
+   !> The point itself, the level-set value, the objective value and the
+   !> objective Hessian are consumed here and deliberately not stored, because
+   !> nothing past the factorization asks for them.
+   !>
+   !> Two members of `pt` steer the prologue by their allocation status, both
+   !> settled once per thread at [[point_scratch_init]]: an allocated
+   !> `lsf4_rrrr` asks for the fourth level-set derivative, and an allocated
+   !> `kkt_rhs` asks for the standard seed batch to be solved.
+   !>
+   !> `pt` is `intent(inout)` and must stay so: `intent(out)` on a derived type
+   !> with allocatable components releases them on entry, which would free this
+   !> thread's buffers at every grid point.
    !>
    !> @param[in]    self           DROP cavity instance
    !> @param[inout] slots          Per-thread evaluator clones (shared)
@@ -62,23 +76,10 @@ contains
    !> @param[in]    want_curvature Whether the curvature invariants are needed
    !> @param[in]    context        Calling routine, used to prefix the diagnostics
    !> @param[inout] abort          Shared failure latch of the parallel region
-   !> @param[out]   anchor         Anchor of the grid point
-   !> @param[out]   owner_idx      Owner sphere of the anchor
-   !> @param[out]   lambda_val     Lagrange multiplier of the projection
-   !> @param[out]   lsf1_r         Level-set gradient at the projected point
-   !> @param[out]   lsf2_rr        Level-set Hessian at the projected point
-   !> @param[inout] lsf3_rrr       Caller-owned third-derivative buffer
-   !> @param[out]   phi1_r         Objective gradient at the projected point
-   !> @param[inout] state          Seed state
-   !> @param[out]   kkt_fac        Factorized bordered KKT system
+   !> @param[inout] pt             Point scratch of the calling thread
    !> @param[out]   ok             Whether the point may be processed further
-   !> @param[inout] lsf4_rrrr      Caller-owned fourth-derivative buffer
-   !> @param[out]   kkt_rhs        Solved standard jet and anchor seeds
    module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
-                                         want_curvature, context, abort, anchor, &
-                                         owner_idx, lambda_val, lsf1_r, lsf2_rr, &
-                                         lsf3_rrr, phi1_r, state, kkt_fac, ok, &
-                                         lsf4_rrrr, kkt_rhs)
+                                         want_curvature, context, abort, pt, ok)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Per-thread level-set clones and objectives
@@ -93,28 +94,10 @@ contains
       character(len=*), intent(in) :: context
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type), intent(inout) :: abort
-      !> Anchor of the grid point
-      real(wp), intent(out) :: anchor(3)
-      !> Owner sphere of the anchor
-      integer, intent(out) :: owner_idx
-      !> Lagrange multiplier of the projection
-      real(wp), intent(out) :: lambda_val
-      !> Level-set gradient and Hessian at the projected point
-      real(wp), intent(out) :: lsf1_r(3), lsf2_rr(3, 3)
-      !> Caller-owned third-derivative buffer
-      real(wp), intent(inout) :: lsf3_rrr(3, 3, 3)
-      !> Objective gradient at the projected point
-      real(wp), intent(out) :: phi1_r(3)
-      !> Shared per-grid point sensitivity kernel state
-      type(drop_seed_state_type), intent(inout) :: state
-      !> Factorization reused by every solve at this grid point
-      type(drop_kkt_factor_type), intent(out) :: kkt_fac
+      !> Point scratch of the calling thread
+      type(drop_point_scratch_type), intent(inout) :: pt
       !> Whether the point may be processed further
       logical, intent(out) :: ok
-      !> Caller-owned fourth-derivative buffer
-      real(wp), intent(inout), optional :: lsf4_rrrr(3, 3, 3, 3)
-      !> Standard batch of four jet seeds and three anchor seeds, already solved
-      real(wp), intent(out), optional :: kkt_rhs(4, 7)
 
       !> Projected point
       real(wp) :: point(3)
@@ -130,9 +113,9 @@ contains
       if (abort%requested) return
 
       point = self%xyz(:, igrid)
-      anchor = self%anchorxyz(:, igrid)
-      owner_idx = self%owner(igrid)
-      lambda_val = self%lambda0(igrid)
+      pt%anchor = self%anchorxyz(:, igrid)
+      pt%owner_idx = self%owner(igrid)
+      pt%lambda_val = self%lambda0(igrid)
 
       call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
 
@@ -145,17 +128,18 @@ contains
          return
       end if
 
-      call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
-      if (present(lsf4_rrrr)) call slots%lsf(thread_slot)%lsf%f4_rrrr(lsf4_rrrr)
-      call slots%phi(thread_slot)%f012_r(point, anchor, owner_idx, phi0, phi1_r, phi2_rr)
+      call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, pt%lsf1_r, pt%lsf2_rr, pt%lsf3_rrr)
+      if (allocated(pt%lsf4_rrrr)) call slots%lsf(thread_slot)%lsf%f4_rrrr(pt%lsf4_rrrr)
+      call slots%phi(thread_slot)%f012_r(point, pt%anchor, pt%owner_idx, phi0, &
+                                         pt%phi1_r, phi2_rr)
 
-      state%lsf1_r = lsf1_r
-      state%lsf2_rr = lsf2_rr
-      state%lsf3_rrr = lsf3_rrr
-      state%lambda_val = lambda_val
-      call fill_seed_state(self, igrid, want_curvature, state)
+      pt%state%lsf1_r = pt%lsf1_r
+      pt%state%lsf2_rr = pt%lsf2_rr
+      pt%state%lsf3_rrr = pt%lsf3_rrr
+      pt%state%lambda_val = pt%lambda_val
+      call fill_seed_state(self, igrid, want_curvature, pt%state)
 
-      call build_seed_state(state, self%f_crit, self%f_foc, self%f_wleb, &
+      call build_seed_state(pt%state, self%f_crit, self%f_foc, self%f_wleb, &
                             self%param%wleb_prune_level > 0, status)
       if (status /= seed_state_ok) then
          call abort%latch_status(status, igrid)
@@ -165,27 +149,21 @@ contains
       !* ------------------------ Bordered KKT sensitivities -------------------------- *!
       ! The matrix is direction free and seed free, so every traversal factors
       ! the same thing once per grid point.
-      call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, context, &
-                          worker_error, igrid)
+      call pt%kkt_fac%factor(phi2_rr - pt%lambda_val*pt%lsf2_rr, pt%lsf1_r, context, &
+                             worker_error, igrid)
       if (allocated(worker_error)) then
          call abort%latch_error(worker_error, igrid)
          return
       end if
 
-      if (present(kkt_rhs)) then
-         ! Columns 1-4 are the level-set value and gradient seeds; the nine
-         ! Hessian seeds have a zero right-hand side. Columns 5-7 are the
-         ! anchor seeds: moving the owner rigidly leaves the field untouched
-         ! and drives the system through -d^2 phi/dr dR_owner = +alpha*I.
-         kkt_rhs = 0.0_wp
-         kkt_rhs(4, 1) = -1.0_wp
-         kkt_rhs(1, 2) = lambda_val
-         kkt_rhs(2, 3) = lambda_val
-         kkt_rhs(3, 4) = lambda_val
-         kkt_rhs(1, 5) = self%param%phi_alpha
-         kkt_rhs(2, 6) = self%param%phi_alpha
-         kkt_rhs(3, 7) = self%param%phi_alpha
-         call kkt_fac%solve(kkt_rhs, context, worker_error, igrid)
+      if (allocated(pt%kkt_rhs)) then
+         ! Which column carries which seed is not decided here: `seeds.f90` owns
+         ! the layout through [[seed_rhs_column]], emits the right-hand sides
+         ! that go with it, and every consumer of the solved batch --
+         ! [[seed_jet_basis_apply]], [[seed_anchor_apply]], [[fill_seed_basis]]
+         ! -- reads it back through the same map.
+         call seed_standard_rhs(pt%lambda_val, self%param%phi_alpha, pt%kkt_rhs)
+         call pt%kkt_fac%solve(pt%kkt_rhs, context, worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             return

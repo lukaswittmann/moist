@@ -26,6 +26,13 @@
 !> per set. The single-sweep routines are thin compositions of the two halves,
 !> so there is exactly one copy of every floating-point chain
 !>
+!> The seed *layout* lives here too, and only here: [[jet_seed_index]] says
+!> which jet direction a slot carries, [[seed_rhs_column]] which column of the
+!> solved batch it occupies, and [[seed_standard_rhs]] emits that batch's
+!> right-hand sides. The grid driver, the two `_apply` halves and
+!> [[fill_seed_basis]] are all consumers, so no producer and no reader of a
+!> column can drift away from the others
+!>
 !> Everything here is `self`-free and takes plain arguments, so it can be
 !> called from a submodule of `moist_cavity_drop` and unit-tested without a
 !> cavity
@@ -36,7 +43,8 @@ module moist_cavity_drop_derivatives_seeds
    use moist_math_lapack_getrs, only: lapack_getrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
-      & drop_surface_weights_type, apply_seed, seed_status_message, seed_contribution
+      & drop_seed_result_tangent_type, drop_surface_weights_type, apply_seed, &
+      & seed_status_message, seed_contribution
 
    implicit none(type, external)
    private
@@ -44,13 +52,45 @@ module moist_cavity_drop_derivatives_seeds
    public :: drop_kkt_factor_type, seed_normal_channel, seed_jet_basis, seed_anchor
    public :: seed_jet_basis_apply, seed_jet_basis_contract
    public :: seed_anchor_apply, seed_anchor_contract
-   public :: jet_seed_index
+   public :: jet_seed_index, seed_rhs_column, seed_standard_rhs
+   public :: fill_seed_basis, scatter_jet_weight, seed_contribution_tangent
 
    !> Number of level-set jet directions: one value, three gradient, nine Hessian
    integer, parameter, public :: drop_n_jet_seeds = 13
 
    !> Number of anchor directions: the rigid motion of the owner sphere
    integer, parameter, public :: drop_n_anchor_seeds = 3
+
+   !> Seeds one grid point pushes through the kernel: the `drop_n_jet_seeds`
+   !> level-set jet directions of [[seed_jet_basis]] followed by the
+   !> `drop_n_anchor_seeds` anchor directions of [[seed_anchor]], in that order
+   !>
+   !> [[fill_seed_basis]] lays that order out and the second-order chain of
+   !> `hessian_fixed.f90` walks the seeds by this index, so the two agree by
+   !> construction rather than by two matching literals
+   integer, parameter, public :: drop_n_point_seeds = drop_n_jet_seeds + drop_n_anchor_seeds
+
+   !> Jet directions that move the projected point: the value direction and the
+   !> three gradient directions
+   !>
+   !> The nine Hessian directions leave the stationarity conditions alone --
+   !> those see only `S` and `grad S` -- so their right-hand side vanishes
+   !> identically and they occupy no column of the seed batch
+   integer, parameter, public :: drop_n_moving_jet_seeds = 1 + 3
+
+   !> Columns of the standard seed batch [[seed_standard_rhs]] emits: the moving
+   !> jet directions followed by the three anchor directions
+   integer, parameter, public :: drop_n_seed_columns = drop_n_moving_jet_seeds &
+                                                       + drop_n_anchor_seeds
+
+   !> Vanishing tangent of a basis seed
+   !>
+   !> Every seed [[fill_seed_basis]] emits is a constant matrix, so its own
+   !> derivative along a nuclear direction is zero and only the point motion it
+   !> induces survives; these are the arguments that carries into
+   !> [[apply_seed_tangent]]
+   real(wp), parameter, public :: seed_dzero1(3) = 0.0_wp
+   real(wp), parameter, public :: seed_dzero2(3, 3) = 0.0_wp
 
    !> Slot kinds of the jet-seed layout, as classified by [[jet_seed_index]]
    !>
@@ -447,6 +487,191 @@ contains
       end if
    end subroutine jet_seed_index
 
+   !> Column of the standard seed batch one point seed's solution occupies
+   !>
+   !> [[seed_standard_rhs]] emits the batch and every consumer reads it back
+   !> through this map, so the emitting and the reading side of a column cannot
+   !> drift apart -- the same contract [[jet_seed_index]] enforces on the jet
+   !> slots themselves, and what this routine is built on.
+   !>
+   !> The nine level-set Hessian directions have a vanishing right-hand side and
+   !> therefore no column at all: they report zero, which a caller reading a seed
+   !> by column has to take as "this seed moves neither the point nor the
+   !> multiplier". A slot outside the layout reports zero for the same reason.
+   !>
+   !> @param[in] ibasis Point-seed slot, `1 .. drop_n_point_seeds`
+   !> @return    icol   Batch column of the slot, or zero when it has none
+   pure function seed_rhs_column(ibasis) result(icol)
+      !> Point-seed slot
+      integer, intent(in) :: ibasis
+      !> Batch column of the slot
+      integer :: icol
+
+      !> Kind of the slot and its Cartesian indices
+      integer :: slot_kind, iaxis, jaxis
+
+      if (ibasis > drop_n_point_seeds) then
+         icol = 0
+         return
+      end if
+      if (ibasis > drop_n_jet_seeds) then
+         icol = drop_n_moving_jet_seeds + (ibasis - drop_n_jet_seeds)
+         return
+      end if
+
+      call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
+      select case (slot_kind)
+      case (drop_jet_seed_value)
+         icol = 1
+      case (drop_jet_seed_grad)
+         icol = 1 + iaxis
+      case default
+         icol = 0
+      end select
+   end function seed_rhs_column
+
+   !> Build the right-hand sides of the standard jet and anchor seed batch
+   !>
+   !> The batch every reverse traversal solves once per grid point, on the
+   !> factorization [[drop_kkt_factor]] built there. It is written here rather
+   !> than at the grid driver because the columns *are* the seed layout: which
+   !> column carries which direction is [[seed_rhs_column]]'s to say, and
+   !> [[fill_seed_basis]], [[seed_jet_basis_apply]] and [[seed_anchor_apply]]
+   !> read the solutions back through that same map.
+   !>
+   !> The two live channels are the level-set jet and the anchor:
+   !>
+   !>   * perturbing `S` by one unit drives the stationarity condition `S = 0`
+   !>     and lands on the bordered row alone;
+   !>   * perturbing a component of `grad S` drives the multiplier term of the
+   !>     Lagrangian and carries `lambda`;
+   !>   * moving the owner sphere rigidly leaves the level-set field untouched
+   !>     and reaches the system only through the objective's mixed derivative
+   !>     `-d^2 phi/(dr dR_owner) = +alpha I`.
+   !>
+   !> @param[in]  lambda_val Lagrange multiplier of the projection
+   !> @param[in]  phi_alpha  Quadratic coefficient of the projection objective
+   !> @param[out] kkt_rhs    Right-hand sides, `(4, drop_n_seed_columns)`
+   pure subroutine seed_standard_rhs(lambda_val, phi_alpha, kkt_rhs)
+      !> Lagrange multiplier of the projection
+      real(wp), intent(in) :: lambda_val
+      !> Quadratic coefficient of the projection objective
+      real(wp), intent(in) :: phi_alpha
+      !> Right-hand sides of the batch
+      real(wp), intent(out) :: kkt_rhs(4, drop_n_seed_columns)
+
+      !> Seed slot, its column, its kind and its Cartesian indices
+      integer :: ibasis, icol, slot_kind, iaxis, jaxis
+
+      kkt_rhs = 0.0_wp
+
+      do ibasis = 1, drop_n_jet_seeds
+         icol = seed_rhs_column(ibasis)
+         if (icol == 0) cycle
+         call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
+         if (slot_kind == drop_jet_seed_value) then
+            kkt_rhs(4, icol) = -1.0_wp
+         else
+            kkt_rhs(iaxis, icol) = lambda_val
+         end if
+      end do
+
+      do iaxis = 1, drop_n_anchor_seeds
+         icol = seed_rhs_column(drop_n_jet_seeds + iaxis)
+         kkt_rhs(iaxis, icol) = phi_alpha
+      end do
+   end subroutine seed_standard_rhs
+
+   !> Lay out the 16 basis seeds in the order the second-order chain reads them
+   !>
+   !> Slots 1-13 are the level-set jet directions of [[seed_jet_basis]] -- the
+   !> value, the three gradient components and the nine Hessian components, the
+   !> last of which are single-entry matrices and therefore asymmetric -- and
+   !> slots 14-16 the three anchor directions of [[seed_anchor]]. `x` collects
+   !> the induced point motion and multiplier change of every seed in the
+   !> `(4, nseed)` layout [[drop_kkt_solve_tangent]] expects; the nine Hessian
+   !> seeds move neither, because the stationarity conditions see only `S` and
+   !> `grad S`.
+   !>
+   !> Which jet slot carries which direction is not decided here:
+   !> [[jet_seed_index]] owns that layout and [[seed_rhs_column]] owns the map
+   !> onto the solved batch, so a change to the jet basis -- symmetrising the
+   !> Hessian seeds, say -- does not have to be repeated in any consumer.
+   !>
+   !> @param[in]  kkt      Solved KKT sensitivities, as [[seed_standard_rhs]] laid them out
+   !> @param[out] dlsf1_r  Gradient perturbation of each seed
+   !> @param[out] dlsf2_rr Hessian perturbation of each seed
+   !> @param[out] x        Induced point motion and multiplier change of each seed
+   pure subroutine fill_seed_basis(kkt, dlsf1_r, dlsf2_rr, x)
+      !> Solved KKT sensitivities
+      real(wp), intent(in) :: kkt(:, :)
+      !> Seed perturbations of the level-set jet
+      real(wp), intent(out) :: dlsf1_r(3, drop_n_point_seeds)
+      real(wp), intent(out) :: dlsf2_rr(3, 3, drop_n_point_seeds)
+      !> Induced point motion and multiplier change
+      real(wp), intent(out) :: x(4, drop_n_point_seeds)
+
+      !> Seed index, its column, its kind and its Cartesian indices
+      integer :: ibasis, icol, slot_kind, iaxis, jaxis
+
+      dlsf1_r = 0.0_wp
+      dlsf2_rr = 0.0_wp
+      x = 0.0_wp
+
+      do ibasis = 1, drop_n_point_seeds
+         icol = seed_rhs_column(ibasis)
+         if (icol > 0) x(:, ibasis) = kkt(1:4, icol)
+
+         ! An anchor seed perturbs no level-set jet component at all: it reaches
+         ! the system through the objective and is already fully described by
+         ! the point motion its column carries.
+         if (ibasis > drop_n_jet_seeds) cycle
+
+         call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
+         if (slot_kind == drop_jet_seed_hess) then
+            dlsf2_rr(iaxis, jaxis, ibasis) = 1.0_wp
+         else if (slot_kind == drop_jet_seed_grad) then
+            dlsf1_r(iaxis, ibasis) = 1.0_wp
+         end if
+      end do
+   end subroutine fill_seed_basis
+
+   !> Place one jet seed's contribution in the level-set adjoint weights
+   !>
+   !> The same layout [[fill_seed_basis]] writes, read back through the same
+   !> classifier: [[jet_seed_index]] says which of the value, gradient and
+   !> Hessian channels a slot belongs to, and this routine only places the
+   !> number. Anchor slots are not accepted -- they classify as
+   !> `drop_jet_seed_none` and land nowhere -- because their contribution
+   !> belongs to the owner's gradient row, not to a weight.
+   !>
+   !> @param[in]    ibasis Seed slot, `1 .. drop_n_jet_seeds`
+   !> @param[in]    contrib Contribution of that seed
+   !> @param[inout] w0     Level-set value adjoint
+   !> @param[inout] w1     Level-set gradient adjoint
+   !> @param[inout] w2     Level-set Hessian adjoint
+   pure subroutine scatter_jet_weight(ibasis, contrib, w0, w1, w2)
+      !> Seed slot
+      integer, intent(in) :: ibasis
+      !> Contribution of that seed
+      real(wp), intent(in) :: contrib
+      !> Level-set adjoints
+      real(wp), intent(inout) :: w0, w1(3), w2(3, 3)
+
+      !> Kind of the slot and its Cartesian indices
+      integer :: slot_kind, iaxis, jaxis
+
+      call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
+      select case (slot_kind)
+      case (drop_jet_seed_value)
+         w0 = w0 + contrib
+      case (drop_jet_seed_grad)
+         w1(iaxis) = w1(iaxis) + contrib
+      case (drop_jet_seed_hess)
+         w2(iaxis, jaxis) = w2(iaxis, jaxis) + contrib
+      end select
+   end subroutine scatter_jet_weight
+
    !> Push the 13 level-set jet directions through the kernel
    !>
    !> The per-point map is linear in its seed, so seeding each basis direction
@@ -467,7 +692,7 @@ contains
    !> @param[in]    eff       Folded surface adjoints
    !> @param[in]    igrid     Grid point
    !> @param[in]    phi1_r    Objective gradient at the projected point
-   !> @param[in]    kkt       Solved KKT sensitivities; columns 1-4 are the jet seeds
+   !> @param[in]    kkt       Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[in]    w_xyz_pt  Effective position adjoint from [[seed_normal_channel]]
    !> @param[inout] w_lsf0_pt Point-local level-set value adjoint
    !> @param[inout] w_lsf1_pt Point-local level-set gradient adjoint
@@ -515,7 +740,7 @@ contains
    !> agree by construction.
    !>
    !> @param[in]  state    Per-grid point forward state
-   !> @param[in]  kkt      Solved KKT sensitivities; columns 1-4 are the jet seeds
+   !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[out] res_seed Linear response of each seed, `(drop_n_jet_seeds)`
    !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
    subroutine seed_jet_basis_apply(state, kkt, res_seed, seed_x)
@@ -542,7 +767,7 @@ contains
             seed_x(:, ibasis) = 0.0_wp
          else
             if (slot_kind == drop_jet_seed_grad) dlsf1_r(iaxis) = 1.0_wp
-            seed_x(:, ibasis) = kkt(1:4, ibasis)
+            seed_x(:, ibasis) = kkt(1:4, seed_rhs_column(ibasis))
          end if
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, ibasis), &
@@ -622,7 +847,7 @@ contains
    !> @param[in]    eff        Folded surface adjoints
    !> @param[in]    igrid      Grid point
    !> @param[in]    phi1_r     Objective gradient at the projected point
-   !> @param[in]    kkt        Solved KKT sensitivities; columns 5-7 are the anchor seeds
+   !> @param[in]    kkt        Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[in]    w_xyz_pt   Effective position adjoint from [[seed_normal_channel]]
    !> @param[inout] grad_owner Nuclear-gradient accumulator of the owner sphere
    subroutine seed_anchor(state, eff, igrid, phi1_r, kkt, w_xyz_pt, grad_owner)
@@ -653,7 +878,7 @@ contains
    !> Apply half of [[seed_anchor]]: the three responses of one grid point
    !>
    !> @param[in]  state    Per-grid point forward state
-   !> @param[in]  kkt      Solved KKT sensitivities; columns 5-7 are the anchor seeds
+   !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
    !> @param[out] res_seed Linear response of each seed, `(drop_n_anchor_seeds)`
    !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
    subroutine seed_anchor_apply(state, kkt, res_seed, seed_x)
@@ -675,7 +900,7 @@ contains
       dlsf2_rr = 0.0_wp
 
       do iaxis = 1, drop_n_anchor_seeds
-         seed_x(:, iaxis) = kkt(1:4, 4 + iaxis)
+         seed_x(:, iaxis) = kkt(1:4, seed_rhs_column(drop_n_jet_seeds + iaxis))
 
          call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, iaxis), &
                          seed_x(4, iaxis), res_seed(iaxis))
@@ -723,5 +948,50 @@ contains
          grad_owner(iaxis) = grad_owner(iaxis) + contribution
       end do
    end subroutine seed_anchor_contract
+
+   !> Directional derivative of [[seed_contribution]]
+   !>
+   !> Term by term the product rule applied to that contraction, with the
+   !> surface adjoints themselves held fixed -- which is the whole premise of
+   !> the fixed-adjoint half of the Hessian, this routine's one caller. The
+   !> position adjoint still moves, because the normal fold inside it is built
+   !> from the level-set gradient at the projected point.
+   !>
+   !> It lives beside its primal rather than in that caller so that the seed
+   !> layout, its contraction and the contraction's tangent stay in one file.
+   !> The branch term is absent because a grid carrying a multi-branch anchor
+   !> group is refused at the public entry points in `hessian.f90` -- the only
+   !> route to this routine's caller -- and the switching term for the reason
+   !> [[seed_contribution]] gives.
+   !>
+   !> @param[in] eff       Folded surface adjoints
+   !> @param[in] igrid     Grid point
+   !> @param[in] w_xyz_pt  Effective position adjoint
+   !> @param[in] dw_xyz_pt Tangent of the effective position adjoint
+   !> @param[in] dr        Induced point motion of the seed
+   !> @param[in] ddr       Tangent of that point motion
+   !> @param[in] dres      Second-order response of the seed
+   !> @return              Tangent of the adjoint contribution
+   pure function seed_contribution_tangent(eff, igrid, w_xyz_pt, dw_xyz_pt, dr, ddr, dres) &
+      result(contribution)
+      !> Folded surface adjoints
+      type(drop_surface_weights_type), intent(in) :: eff
+      !> Grid point
+      integer, intent(in) :: igrid
+      !> Effective position adjoint and its tangent
+      real(wp), intent(in) :: w_xyz_pt(3), dw_xyz_pt(3)
+      !> Induced point motion and its tangent
+      real(wp), intent(in) :: dr(3), ddr(3)
+      !> Second-order response
+      type(drop_seed_result_tangent_type), intent(in) :: dres
+      !> Tangent of the adjoint contribution
+      real(wp) :: contribution
+
+      contribution = dot_product(dw_xyz_pt, dr) + dot_product(w_xyz_pt, ddr) &
+                     + eff%w_xi(igrid)*dres%dxi
+      if (eff%have_wk) then
+         contribution = contribution + eff%w_k1(igrid)*dres%dk1 + eff%w_k2(igrid)*dres%dk2
+      end if
+   end function seed_contribution_tangent
 
 end module moist_cavity_drop_derivatives_seeds
