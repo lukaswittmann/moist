@@ -93,9 +93,12 @@
 !> | **w_k2**| **2.6e-11** | **2.0e-10** |
 !>
 !> **The two bold rows are pre-fix and are kept as the record of how the defect
-!> was found.** They were four to six orders above the other six, which is what
-!> `hessian.md` recorded for the discriminant cancellation at `kernel.f90:489`
-!> -- this suite differences `get_surface_gradient`, which runs
+!> was found.** They were four to six orders above the other six -- the
+!> signature of the discriminant cancellation in `build_seed_state`, which used
+!> to form the principal-curvature gap as `sqrt(max(KM^2 - KG, 0))`: a
+!> difference of two quantities of size `KM^2`, so it loses all relative
+!> accuracy exactly where the two curvatures are close, and `apply_seed` then
+!> divides by it. This suite differences `get_surface_gradient`, which runs
 !> `build_seed_state`, so the seed path is the one it saw. Three things made it
 !> an independent confirmation rather than a restatement: the curvature
 !> asymmetry was `1/h` across **six decades** with no descending branch

@@ -7,7 +7,6 @@ srcs += files(
   'potential.f90',
   'nuclear.f90',
   'field_tangent.f90',
-  'iswig_scatter.f90',
   'hessian_fixed.f90',
   'tangent_forward.f90',
   'hessian_response.f90',

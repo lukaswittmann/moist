@@ -60,6 +60,17 @@
 !> accessor, and the only reason this routine has to materialize a
 !> `(3, 3, 3, 3, n_active)` tensor.
 !>
+!> Splitting the point from the direction
+!> --------------------------------------
+!> `f4_rrr_rA` takes no `v`: it is a function of the prepared point alone, and
+!> it is by a wide margin the most expensive accessor called here -- for SvdW
+!> it re-runs the fourth-order atom tensors and the third-order nuclear
+!> evaluation of every active atom. A caller sweeping a whole basis of nuclear
+!> directions at one point would therefore rebuild a bit-identical tensor once
+!> per direction, so the fill is [[drop_field_tangent_point]] and the
+!> direction-dependent remainder [[drop_field_tangent_dir]].
+!> [[drop_field_tangent]] is the two in a row, for a caller with one direction.
+!>
 !> Applicability
 !> -------------
 !> This is a primitive, not a driver: it neither reads cavity state nor
@@ -76,6 +87,7 @@ module moist_cavity_drop_derivatives_field_tangent
    private
 
    public :: drop_field_tangent
+   public :: drop_field_tangent_point, drop_field_tangent_dir
    public :: drop_field_tangent_work_type
 
    !> Spatial dimension
@@ -92,6 +104,14 @@ module moist_cavity_drop_derivatives_field_tangent
    type :: drop_field_tangent_work_type
       !> Active slots the buffers are currently sized for
       integer :: capacity = 0
+      !> Active slots `f4` holds a fill for; `-1` before the first fill
+      !>
+      !> Deliberately not a cache key. [[drop_field_tangent_point]] refills
+      !> unconditionally, because two different evaluation points can share an
+      !> active count and a fill keyed on that count would silently serve the
+      !> wrong tensor. It is read only to catch a direction half whose point
+      !> half never ran
+      integer :: f4_slots = -1
       !> `sum_B v_B . d^2S/(dR_A dR_B)` [3, capacity]
       real(wp), allocatable :: hvp1(:, :)
       !> `sum_B v_B . d^3S/(dr dR_A dR_B)` [3, 3, capacity]
@@ -168,6 +188,10 @@ contains
    !> order high enough for `f4_rrr_rA` (3 for SvdW, 4 for CFC); every accessor
    !> called here checks that itself and aborts if not.
    !>
+   !> This is the single-direction form, [[drop_field_tangent_point]] followed
+   !> by [[drop_field_tangent_dir]]. A caller sweeping a direction basis at one
+   !> point calls those two itself and pays for the point half once.
+   !>
    !> @param[in]    lsf  LSF instance, prepared at the evaluation point
    !> @param[in]    w0   Adjoint weight of the level-set value
    !> @param[in]    w1   Adjoint weights of the spatial gradient [3]
@@ -203,6 +227,84 @@ contains
       !> Tangent of the nuclear-gradient row
       real(wp), intent(inout) :: res(:, :)
 
+      call drop_field_tangent_point(lsf, work)
+      call drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, work, res)
+   end subroutine drop_field_tangent
+
+   !> Point half: the direction-free tensor the direction half contracts
+   !>
+   !> Fills `work%f4` with `d^4S/(dr^3 dR_A)` at whatever point `lsf` is
+   !> currently prepared at, and sizes the scratch to that point's active set.
+   !> Nothing here reads a direction, an adjoint or a point motion, which is
+   !> the whole point of the split -- see the module header.
+   !>
+   !> It must be called again after *every* re-preparation of the LSF, and
+   !> before the first [[drop_field_tangent_dir]] of that point. It is not
+   !> conditional on anything: refilling is what keeps the buffer from
+   !> outliving the point it was filled at.
+   !>
+   !> @param[in]    lsf  LSF instance, prepared at the evaluation point
+   !> @param[inout] work Scratch buffers, reused across points
+   subroutine drop_field_tangent_point(lsf, work)
+      !> LSF instance, prepared at the evaluation point
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Scratch buffers, reused across points
+      type(drop_field_tangent_work_type), intent(inout) :: work
+
+      !> Active slots of the prepared point
+      integer :: n_active
+
+      n_active = lsf%active_count()
+      work%f4_slots = n_active
+      if (n_active == 0) return
+
+      call work%ensure(n_active)
+      call lsf%f4_rrr_rA(work%f4)
+   end subroutine drop_field_tangent_point
+
+   !> Direction half: everything in the tangent that reads `v`, `dr` or a weight
+   !>
+   !> The body of [[drop_field_tangent]], less the `f4` fill, and with exactly
+   !> that routine's contract: see it for the derivation, the folding identity
+   !> and what `res` is. [[drop_field_tangent_point]] must have run at this
+   !> evaluation point first, which is checked rather than assumed -- a stale
+   !> `f4` would give a wrong tangent with nothing to see it.
+   !>
+   !> @param[in]    lsf  LSF instance, prepared at the evaluation point
+   !> @param[in]    w0   Adjoint weight of the level-set value
+   !> @param[in]    w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]    w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]    dw0  Tangent of `w0` along `v`
+   !> @param[in]    dw1  Tangent of `w1` along `v` [3]
+   !> @param[in]    dw2  Tangent of `w2` along `v` [3, 3]
+   !> @param[in]    dr   Induced motion of the evaluation point along `v` [3]
+   !> @param[in]    v    Nuclear displacement directions [3, ncenters]
+   !> @param[inout] work Scratch buffers, `f4` already filled at this point
+   !> @param[inout] res  Tangent of the nuclear-gradient row [3, >= n_active]
+   subroutine drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, work, res)
+      !> LSF instance, prepared at the evaluation point
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf
+      !> Adjoint weight of the level-set value
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+      !> Tangent of `w0` along `v`
+      real(wp), intent(in) :: dw0
+      !> Tangent of `w1` along `v`
+      real(wp), intent(in) :: dw1(3)
+      !> Tangent of `w2` along `v`
+      real(wp), intent(in) :: dw2(3, 3)
+      !> Induced motion of the evaluation point along `v`
+      real(wp), intent(in) :: dr(3)
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Scratch buffers, `f4` already filled at this point
+      type(drop_field_tangent_work_type), intent(inout) :: work
+      !> Tangent of the nuclear-gradient row
+      real(wp), intent(inout) :: res(:, :)
+
       !> Shifted weights of the folded `vjp_f1_rA` call
       real(wp) :: w1_fold(ndim), w2_fold(ndim, ndim)
       !> Row accumulator and hoisted point-motion component
@@ -214,7 +316,10 @@ contains
 
       n_active = lsf%active_count()
       if (n_active == 0) return
-      call work%ensure(n_active)
+      if (work%f4_slots /= n_active) then
+         error stop "moist DROP field tangent: drop_field_tangent_dir ran without a "// &
+            "drop_field_tangent_point at this evaluation point"
+      end if
 
       !* ---------------------- Weight tangents and folded motion --------------------- *!
 
@@ -238,10 +343,8 @@ contains
       !* ------------------------ Unfoldable point-motion term ------------------------ *!
 
       ! `w2_ab T3_abk dr_k` carries three spatial indices, one more than
-      ! `vjp_f1_rA` can absorb, so the full mixed fourth derivative is formed
-      ! and contracted here.
-      call lsf%f4_rrr_rA(work%f4)
-
+      ! `vjp_f1_rA` can absorb, so the full mixed fourth derivative is
+      ! contracted here. It was formed by the point half, once.
       do i = 1, n_active
          do s = 1, ndim
             acc = w0*work%hvp1(s, i)
@@ -264,6 +367,6 @@ contains
             res(s, i) = res(s, i) + acc
          end do
       end do
-   end subroutine drop_field_tangent
+   end subroutine drop_field_tangent_dir
 
 end module moist_cavity_drop_derivatives_field_tangent

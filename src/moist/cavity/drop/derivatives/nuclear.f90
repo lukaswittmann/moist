@@ -27,10 +27,10 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
 !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, seed_status_message, &
       & drop_surface_weights_type, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, seed_normal_channel, &
-      & seed_jet_basis, seed_anchor, degenerate_point_error
+      & seed_jet_basis, seed_anchor
    implicit none(type, external)
 
 contains
@@ -109,6 +109,8 @@ contains
       type(drop_surface_weights_type) :: eff
       !> Timer handle
       integer :: h_sgrad
+      !> Rendered grid index of a degenerate point
+      character(len=32) :: idx
 
       call check_surface_adjoint(self, acc, "get_surface_gradient_drop", error)
       if (allocated(error)) return
@@ -157,10 +159,10 @@ contains
          ! Point, jets, seed state and the solved jet and anchor seeds. Every
          ! failure path -- a latch already set, a refusing level set, a
          ! degenerate state, a singular bordered system -- has recorded itself.
-         call drop_point_prologue(self, slots, thread_slot, igrid, eff%have_wk, abort, &
-                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
-                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok, &
-                                  kkt_rhs=kkt_rhs)
+         call drop_point_prologue(self, slots, thread_slot, igrid, eff%have_wk, &
+                                  "get_surface_gradient_drop", abort, anchor, &
+                                  owner_idx, lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
+                                  phi1_r, state, kkt_fac, point_ok, kkt_rhs=kkt_rhs)
          if (.not. point_ok) cycle
 
          ! Outward-normal channel: the direct grad-S term rides on w_lsf1 and
@@ -224,7 +226,10 @@ contains
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else
-            call degenerate_point_error("get_surface_gradient_drop", abort%status, abort%igrid, error)
+            write (idx, "(i0)") abort%igrid
+            call fatal_error(error, "get_surface_gradient_drop: "// &
+                             seed_status_message(abort%status)// &
+                             " at grid point "//trim(idx))
          end if
          call self%ctx%timer%stop(h_sgrad)
          return

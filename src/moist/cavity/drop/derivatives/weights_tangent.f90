@@ -58,13 +58,15 @@
 !> no error and no obviously wrong answer. Directions are the easy axis --
 !> every direction is independent of every other. Contiguity of a group is
 !> guaranteed by the stable `counting_argsort` at `projection.f90:542-583`, not
-!> by anything this module checks.
+!> by anything this module checks; the shared walk is [[next_branch_group]].
 !>
 !> The primitive itself is serial over the whole grid, so a driver that calls
 !> it once per direction is already safe.
 !>
-!> TODO: with geometry-dependent radii (`radii.md`) the `w_f` fold gains a
-!>       `2 w_a R dR wleb` term, and this primitive then needs a `dradii`
+!> TODO: a radius model whose `R` follows the nuclear coordinates -- a nonzero
+!>       `f1_rA`, which neither shipped model has -- makes the area
+!>       `a = R^2 f wleb` carry an explicit `2R dR` factor. The `w_f` fold then
+!>       gains a `2 w_a R dR wleb` term and this primitive needs a `dradii`
 !>       argument for it. Nothing else here changes: the `w_xi` fold reaches
 !>       the radii only through `a`, `wleb` and `xi0`, whose `dR` content
 !>       arrives with the tangents the caller already supplies.
@@ -73,7 +75,7 @@ module moist_cavity_drop_derivatives_weights_tangent
    use mctc_env_accuracy, only: wp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
-      & seed_weight_tol, branch_point_adjoint
+      & seed_weight_tol, branch_point_adjoint, next_branch_group
 
    implicit none(type, external)
    private
@@ -292,7 +294,10 @@ contains
       real(wp), intent(out) :: dbranch_phi_adj(:)
 
       !> Grid extent and group bookkeeping
-      integer :: ngrid, igroup_start, igroup_end, group_size, m_branch, im_grid
+      integer :: ngrid, igroup_cursor, igroup_start, igroup_end, group_size
+      integer :: m_branch, im_grid
+      !> Whether a further anchor group exists
+      logical :: have_group
       !> Per-point branch adjoint and its tangent
       real(wp) :: adj_branch, dadj_branch
       !> Group reduction and its tangent
@@ -304,19 +309,11 @@ contains
       if (.not. any(branch_count > 1)) return
       if (sigma_phi <= seed_weight_tol) return
 
-      igroup_start = 1
-      do while (igroup_start <= ngrid)
-         if (branch_count(igroup_start) <= 1) then
-            igroup_start = igroup_start + 1
-            cycle
-         end if
-
-         ! Extend the group while anchor_id stays the same
-         igroup_end = igroup_start
-         do while (igroup_end < ngrid)
-            if (anchor_id(igroup_end + 1) /= anchor_id(igroup_start)) exit
-            igroup_end = igroup_end + 1
-         end do
+      igroup_cursor = 1
+      do
+         call next_branch_group(branch_count, anchor_id, igroup_cursor, &
+                                igroup_start, igroup_end, have_group)
+         if (.not. have_group) exit
          group_size = igroup_end - igroup_start + 1
 
          mean_adj_branch = 0.0_wp
@@ -346,8 +343,6 @@ contains
                -(dwbranch(im_grid)*(adj_branch - mean_adj_branch) &
                  + wbranch(im_grid)*(dadj_branch - dmean_adj_branch))/sigma_phi
          end do
-
-         igroup_start = igroup_end + 1
       end do
 
    end subroutine branch_phi_adj_tangent

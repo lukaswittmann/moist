@@ -14,6 +14,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
    use moist_math_linalg, only: eig_2x2_symmetric
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
+   use moist_cavity_drop_derivatives_kernel, only: next_branch_group, &
+      & max_branch_group_size
    implicit none(type, external)
 
 contains
@@ -182,8 +184,9 @@ contains
       ! Branch-weight post-pass state (serial, after main loop).
       ! Softmax weights_grad takes dphi in (nparam, nbranch) layout where
       ! nparam = 3 * nsph; we flatten (iatom, iaxis) -> (iatom - 1) * 3 + iaxis.
-      integer :: igroup_start, igroup_end, group_size, m_branch, im_grid
-      integer :: owner_m, k_param
+      integer :: igroup_cursor, igroup_start, igroup_end, group_size, m_branch, im_grid
+      integer :: owner_m, k_param, nbranch_max
+      logical :: have_group
       real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
       real(wp) :: area_fac_m, rn_m, dwleb_branch, da_branch, dv_branch
       real(wp) :: xi_fac_m
@@ -417,13 +420,15 @@ contains
          end do
 
          ! Single factorization + solve for all RHS
-         call kkt_fac%factor(H_lagrangian, lsf1_r, worker_error)
+         call kkt_fac%factor(H_lagrangian, lsf1_r, "compute_gradient_drop", &
+                             worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             !$omp cancel do
             cycle
          end if
-         call kkt_fac%solve(kkt_rhs_batch(:, 1:3*n_active), worker_error)
+         call kkt_fac%solve(kkt_rhs_batch(:, 1:3*n_active), "compute_gradient_drop", &
+                            worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             !$omp cancel do
@@ -986,26 +991,23 @@ contains
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
       if (self%ngrid > 0 .and. any(self%branch_count(1:self%ngrid) > 1)) then
-         allocate (branch_phi(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dphi(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
-         allocate (branch_weights(maxval(self%branch_count(1:self%ngrid))), source=0.0_wp)
-         allocate (branch_dweights(3*self%nsph, maxval(self%branch_count(1:self%ngrid))), &
-                   source=0.0_wp)
+         ! The scratch is indexed by the group's run length, so it is sized by
+         ! the largest run the walk below can produce and not by
+         ! maxval(branch_count) -- the per-point branch counter is a different
+         ! quantity that only happens to agree on a well-formed grid.
+         nbranch_max = max_branch_group_size(self%branch_count(1:self%ngrid), &
+                                             self%anchor_id(1:self%ngrid))
+         allocate (branch_phi(nbranch_max), source=0.0_wp)
+         allocate (branch_dphi(3*self%nsph, nbranch_max), source=0.0_wp)
+         allocate (branch_weights(nbranch_max), source=0.0_wp)
+         allocate (branch_dweights(3*self%nsph, nbranch_max), source=0.0_wp)
 
-         igroup_start = 1
-         do while (igroup_start <= self%ngrid)
-            if (self%branch_count(igroup_start) <= 1) then
-               igroup_start = igroup_start + 1
-               cycle
-            end if
-
-            ! Extend group while anchor_id stays the same.
-            igroup_end = igroup_start
-            do while (igroup_end < self%ngrid)
-               if (self%anchor_id(igroup_end + 1) /= self%anchor_id(igroup_start)) exit
-               igroup_end = igroup_end + 1
-            end do
+         igroup_cursor = 1
+         do
+            call next_branch_group(self%branch_count(1:self%ngrid), &
+                                   self%anchor_id(1:self%ngrid), igroup_cursor, &
+                                   igroup_start, igroup_end, have_group)
+            if (.not. have_group) exit
             group_size = igroup_end - igroup_start + 1
 
             ! Gather phi and dphi for every branch.
@@ -1089,8 +1091,6 @@ contains
                   end do
                end do
             end do
-
-            igroup_start = igroup_end + 1
          end do
 
          deallocate (branch_phi, branch_dphi, branch_weights, branch_dweights)

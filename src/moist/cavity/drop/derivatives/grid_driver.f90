@@ -29,6 +29,11 @@
 !>     the level set's directional tangents are known. That caller keeps its
 !>     own solve and shares the factorization only
 !>
+!> `context` parameterises nothing about the computation: it is the name of the
+!> API entry point the caller was reached through, and it is what turns a
+!> singular bordered system at some grid point into a diagnostic the user can
+!> trace back to the call they made. Every traversal above passes its own name.
+!>
 !> `lsf3_rrr` and `lsf4_rrrr` stay caller-owned buffers rather than becoming
 !> locals here: they are allocated once per thread outside the grid loop, and
 !> an automatic array would move that allocation into the hot loop.
@@ -55,6 +60,7 @@ contains
    !> @param[in]    thread_slot    Slot of the calling thread
    !> @param[in]    igrid          Grid point to prepare
    !> @param[in]    want_curvature Whether the curvature invariants are needed
+   !> @param[in]    context        Calling routine, used to prefix the diagnostics
    !> @param[inout] abort          Shared failure latch of the parallel region
    !> @param[out]   anchor         Anchor of the grid point
    !> @param[out]   owner_idx      Owner sphere of the anchor
@@ -69,9 +75,10 @@ contains
    !> @param[inout] lsf4_rrrr      Caller-owned fourth-derivative buffer
    !> @param[out]   kkt_rhs        Solved standard jet and anchor seeds
    module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
-                                         want_curvature, abort, anchor, owner_idx, &
-                                         lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
-                                         phi1_r, state, kkt_fac, ok, lsf4_rrrr, kkt_rhs)
+                                         want_curvature, context, abort, anchor, &
+                                         owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                         lsf3_rrr, phi1_r, state, kkt_fac, ok, &
+                                         lsf4_rrrr, kkt_rhs)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Per-thread level-set clones and objectives
@@ -82,6 +89,8 @@ contains
       integer, intent(in) :: igrid
       !> Whether the curvature invariants are needed
       logical, intent(in) :: want_curvature
+      !> Calling routine, so a failure names the entry point the user called
+      character(len=*), intent(in) :: context
       !> First failure seen anywhere in the parallel region
       type(drop_abort_latch_type), intent(inout) :: abort
       !> Anchor of the grid point
@@ -156,7 +165,8 @@ contains
       !* ------------------------ Bordered KKT sensitivities -------------------------- *!
       ! The matrix is direction free and seed free, so every traversal factors
       ! the same thing once per grid point.
-      call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, worker_error)
+      call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, context, &
+                          worker_error, igrid)
       if (allocated(worker_error)) then
          call abort%latch_error(worker_error, igrid)
          return
@@ -175,7 +185,7 @@ contains
          kkt_rhs(1, 5) = self%param%phi_alpha
          kkt_rhs(2, 6) = self%param%phi_alpha
          kkt_rhs(3, 7) = self%param%phi_alpha
-         call kkt_fac%solve(kkt_rhs, worker_error)
+         call kkt_fac%solve(kkt_rhs, context, worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             return

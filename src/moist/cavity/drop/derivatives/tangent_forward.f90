@@ -92,9 +92,10 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_seed_result_type, apply_seed, seed_weight_tol
-   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, degenerate_point_error
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, seed_status_message, &
+      & drop_seed_result_type, apply_seed, seed_weight_tol, &
+      & next_branch_group, max_branch_group_size
+   use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type
    implicit none(type, external)
 
    !> Cartesian dimension
@@ -175,12 +176,17 @@ contains
       real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
       real(wp), allocatable :: branch_weights(:), branch_dweights(:, :)
       !> Branch group bookkeeping
-      integer :: igroup_start, igroup_end, group_size, m_branch, im_grid, nbranch_max
+      integer :: igroup_cursor, igroup_start, igroup_end, group_size
+      integer :: m_branch, im_grid, nbranch_max
+      !> Whether a further anchor group exists
+      logical :: have_group
 
       !> Assembly scalars
       real(wp) :: wleb_i, wbranch_i, dwleb_i, r_own
       !> Timer handle
       integer :: h_stan
+      !> Rendered grid index of a degenerate point
+      character(len=32) :: idx
 
       !* ------------------------------- Shape guards --------------------------------- *!
       if (size(dirs, 1) /= ndim .or. size(dirs, 2) /= self%nsph) then
@@ -246,9 +252,10 @@ contains
          ! standard 16-seed batch is *not* requested: this pass has one
          ! right-hand side per nuclear direction, and it cannot be built before
          ! the level set's directional tangents below are known.
-         call drop_point_prologue(self, slots, thread_slot, igrid, .false., abort, &
-                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
-                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok)
+         call drop_point_prologue(self, slots, thread_slot, igrid, .false., &
+                                  "get_surface_tangent_drop", abort, anchor, &
+                                  owner_idx, lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
+                                  phi1_r, state, kkt_fac, point_ok)
          if (.not. point_ok) cycle
 
          !* ----------------- Directional nuclear tangents of the jet ----------------- *!
@@ -272,7 +279,7 @@ contains
          !* ------------------------ Bordered KKT sensitivities ----------------------- *!
          ! One batched solve on the factorization the prologue already built:
          ! every direction shares the 4x4 matrix of this grid point.
-         call kkt_fac%solve(kkt_rhs, worker_error)
+         call kkt_fac%solve(kkt_rhs, "get_surface_tangent_drop", worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
             cycle
@@ -327,8 +334,10 @@ contains
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else
-            call degenerate_point_error("get_surface_tangent_drop", abort%status, &
-                                        abort%igrid, error)
+            write (idx, "(i0)") abort%igrid
+            call fatal_error(error, "get_surface_tangent_drop: "// &
+                             seed_status_message(abort%status)// &
+                             " at grid point "//trim(idx))
          end if
          call self%ctx%timer%stop(h_stan)
          return
@@ -377,35 +386,34 @@ contains
 
       !> Differentiate the branch softmax over every contiguous anchor group
       !>
-      !> Mirrors the group walk of [[compute_branch_phi_adj]] and of
-      !> `forward.f90`'s branch post-pass: runs of equal `anchor_id` starting at
-      !> a point with `branch_count > 1`. The softmax primitive takes its
-      !> derivatives in `(nparam, nbranch)` layout, so passing `nparam = ndir`
-      !> yields every direction of the group from one call.
+      !> Walks the groups with the shared [[next_branch_group]], exactly as
+      !> [[compute_branch_phi_adj]] and `forward.f90`'s branch post-pass do:
+      !> runs of equal `anchor_id` starting at a point with `branch_count > 1`.
+      !> The softmax primitive takes its derivatives in `(nparam, nbranch)`
+      !> layout, so passing `nparam = ndir` yields every direction of the group
+      !> from one call.
+      !>
+      !> The scratch is sized by [[max_branch_group_size]] and not by
+      !> `maxval(branch_count)`: it is indexed by the group's run length, which
+      !> is what that function returns and what the walk below produces.
       subroutine branch_stage()
 
          if (.not. allocated(self%branch_count) .or. .not. allocated(self%anchor_id)) return
          if (.not. any(self%branch_count(1:self%ngrid) > 1)) return
 
-         nbranch_max = maxval(self%branch_count(1:self%ngrid))
+         nbranch_max = max_branch_group_size(self%branch_count(1:self%ngrid), &
+                                             self%anchor_id(1:self%ngrid))
          allocate (branch_phi(nbranch_max), source=0.0_wp)
          allocate (branch_dphi(ndir, nbranch_max), source=0.0_wp)
          allocate (branch_weights(nbranch_max), source=0.0_wp)
          allocate (branch_dweights(ndir, nbranch_max), source=0.0_wp)
 
-         igroup_start = 1
-         do while (igroup_start <= self%ngrid)
-            if (self%branch_count(igroup_start) <= 1) then
-               igroup_start = igroup_start + 1
-               cycle
-            end if
-
-            ! Extend the group while anchor_id stays the same
-            igroup_end = igroup_start
-            do while (igroup_end < self%ngrid)
-               if (self%anchor_id(igroup_end + 1) /= self%anchor_id(igroup_start)) exit
-               igroup_end = igroup_end + 1
-            end do
+         igroup_cursor = 1
+         do
+            call next_branch_group(self%branch_count(1:self%ngrid), &
+                                   self%anchor_id(1:self%ngrid), igroup_cursor, &
+                                   igroup_start, igroup_end, have_group)
+            if (.not. have_group) exit
             group_size = igroup_end - igroup_start + 1
 
             do m_branch = 1, group_size
@@ -423,8 +431,6 @@ contains
                im_grid = igroup_start + m_branch - 1
                d_wbranch(im_grid, :) = branch_dweights(:, m_branch)
             end do
-
-            igroup_start = igroup_end + 1
          end do
 
          deallocate (branch_phi, branch_dphi, branch_weights, branch_dweights)

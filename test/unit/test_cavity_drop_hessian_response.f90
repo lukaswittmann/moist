@@ -55,9 +55,11 @@
 !> | + w_xyz, w_n                   | 3.1e-10 abs / 7.5e-11 rel |
 !> | + w_k1, w_k2                   | 1.0e-08 abs / 8.3e-09 rel |
 !>
-!> The curvature row is the near-umbilic amplification of `hessian.md`
-!> (the `kernel.f90` discriminant, fixed 2026-09-07 -- this table is the
-!> pre-fix measurement) arriving by a different route than in
+!> The curvature row is the near-umbilic amplification of the `kernel.f90`
+!> discriminant: the principal-curvature gap used to be formed as
+!> `sqrt(max(KM^2 - KG, 0))`, a difference of two `KM^2`-sized quantities that
+!> `apply_seed` then divides by (fixed 2026-09-07, so this table is the pre-fix
+!> measurement). It arrives here by a different route than in
 !> `test_cavity_drop_hessian_fixed`: `res%dk1` is not merely noisy on this
 !> fixture, it is *large*, so `w_k1 res%dk1` dominates both gradients and the
 !> live-frozen difference loses the digits it dominates. Nothing in this half

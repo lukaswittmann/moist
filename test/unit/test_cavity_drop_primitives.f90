@@ -2498,14 +2498,14 @@ contains
          call lapack_getrs("n", 4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
                            4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
 
-         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         call kkt%factor(H_lagrangian, lsf1_r, "test_kkt_factor_matches_lu", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
             call test_failed(error, trim(message))
             return
          end if
-         call kkt%solve(rhs_fac, kkt_error)
+         call kkt%solve(rhs_fac, "test_kkt_factor_matches_lu", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": solve against valid factors failed: ", trim(kkt_error%message)
@@ -2548,14 +2548,14 @@ contains
          call lapack_gesv(4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
                           4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
 
-         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         call kkt%factor(H_lagrangian, lsf1_r, "test_kkt_factor_matches_gesv", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
             call test_failed(error, trim(message))
             return
          end if
-         call kkt%solve(rhs_fac, kkt_error)
+         call kkt%solve(rhs_fac, "test_kkt_factor_matches_gesv", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": solve against valid factors failed: ", trim(kkt_error%message)
@@ -2598,7 +2598,7 @@ contains
          call kkt_fixture(icase, H_lagrangian, lsf1_r, rhs_ref)
          rhs_split = rhs_ref
 
-         call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+         call kkt%factor(H_lagrangian, lsf1_r, "test_kkt_factor_reuse", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": factorization of a nonsingular fixture failed: ", trim(kkt_error%message)
@@ -2607,10 +2607,10 @@ contains
          end if
 
          ! One factorization, one batch -- the reference.
-         call kkt%solve(rhs_ref, kkt_error)
+         call kkt%solve(rhs_ref, "test_kkt_factor_reuse", kkt_error)
          ! The same factorization, reused across two later calls.
-         call kkt%solve(rhs_split(:, 1:4), kkt_error)
-         call kkt%solve(rhs_split(:, 5:kkt_nrhs), kkt_error)
+         call kkt%solve(rhs_split(:, 1:4), "test_kkt_factor_reuse", kkt_error)
+         call kkt%solve(rhs_split(:, 5:kkt_nrhs), "test_kkt_factor_reuse", kkt_error)
          if (allocated(kkt_error)) then
             write (message, "(a,i0,2a)") "KKT case ", icase, &
                ": a solve against valid factors failed: ", trim(kkt_error%message)
@@ -2649,7 +2649,7 @@ contains
       call lapack_gesv(4_lapack_ik, int(kkt_nrhs, lapack_ik), kkt_mat, &
                        4_lapack_ik, ipiv, rhs_ref, 4_lapack_ik, info_ref)
 
-      call kkt%factor(H_lagrangian, lsf1_r, kkt_error)
+      call kkt%factor(H_lagrangian, lsf1_r, "test_kkt_factor_singular", kkt_error)
 
       if (.not. allocated(kkt_error)) then
          call test_failed(error, &

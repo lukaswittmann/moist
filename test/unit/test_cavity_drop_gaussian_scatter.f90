@@ -1,8 +1,8 @@
-!> Tests for the sparse iSwiG row and block scatter
+!> Tests for the sparse iSwiG influence-set block scatter
 !>
 !> The scatters are pure index arithmetic over small arrays, so every check
 !> here is exact rather than a finite difference: each one compares the scatter
-!> against a dense reference built the obvious way -- fill a full `(3, nsph)` or
+!> against a dense reference built the obvious way -- fill a full
 !> `(3, nsph, 3, nsph)` array with one contribution, then reduce -- and the
 !> reference reduces in the *same* slot order the scatter writes in, so the two
 !> agree to the bit even where a repeated atom id makes a column accumulate.
@@ -21,7 +21,16 @@
 !>
 !> Every synthetic fixture is guarded by an anti-vacuity floor, because a test
 !> that runs a term without seeing it is worse than no test at all.
-module test_cavity_drop_iswig_scatter
+!>
+!> The synthetic fixtures pin the index arithmetic; [[test_real_iswig_data]]
+!> pins it to the convention [[iswig_swi_f2_rArB_block]] actually writes. That
+!> one needs a second, independent reading of the same point, and it gets it
+!> from the *other* producer: [[iswig_swi_f2_rArB_sparse]] is neighbour-only
+!> with the owner delivered apart, so [[rows_reference]] scatters it densely
+!> here and the two are compared after contracting the block against a nuclear
+!> direction. No production routine consumes that sparse-row convention, which
+!> is why the only implementation of it lives in this file.
+module test_cavity_drop_gaussian_scatter
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
@@ -29,13 +38,12 @@ module test_cavity_drop_iswig_scatter
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig, &
                                          iswig_workspace_type
-   use moist_cavity_drop_derivatives_iswig_scatter, only: scatter_iswig_rows, &
-                                                          scatter_iswig_block
+   use moist_cavity_drop_gaussian_scatter, only: scatter_iswig_block
 
    implicit none(type, external)
    private
 
-   public :: collect_cavity_drop_iswig_scatter
+   public :: collect_cavity_drop_gaussian_scatter
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
@@ -43,9 +51,6 @@ module test_cavity_drop_iswig_scatter
    !> Atoms in the synthetic fixtures; large enough that `1` and `nsph` are
    !> genuinely distinct boundary ids and that most columns stay untouched
    integer, parameter :: nsph_fix = 7
-
-   !> Neighbours in the synthetic sparse fixtures
-   integer, parameter :: n_nb_fix = 4
 
    !> Influence-set size of the synthetic block fixtures, `n_nb + 1`
    integer, parameter :: n_blk_fix = 5
@@ -89,18 +94,16 @@ module test_cavity_drop_iswig_scatter
 contains
 
    !> Collect the suite
-   subroutine collect_cavity_drop_iswig_scatter(testsuite)
+   subroutine collect_cavity_drop_gaussian_scatter(testsuite)
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-                  new_unittest("rows_scatter_matches_dense", test_rows_matches_dense), &
-                  new_unittest("rows_scatter_accumulates_aliases", test_rows_aliased), &
                   new_unittest("block_scatter_matches_dense", test_block_matches_dense), &
                   new_unittest("block_scatter_accumulates_aliases", test_block_aliased), &
                   new_unittest("scatter_real_iswig_data", test_real_iswig_data) &
                   ]
-   end subroutine collect_cavity_drop_iswig_scatter
+   end subroutine collect_cavity_drop_gaussian_scatter
 
    !* ================================================================================= *!
    !*                          Synthetic fixtures                                       *!
@@ -151,40 +154,6 @@ contains
 
    end function fill_value
 
-   !> Fill a compact row fixture and the accumulator it is scattered into
-   !>
-   !> @param[in]  seed      Fixture seed
-   !> @param[out] rows      Neighbour rows (3, n_nb_fix)
-   !> @param[out] owner_row Owner row (3)
-   !> @param[out] acc0      Nonzero pre-fill of the accumulator (3, nsph_fix)
-   pure subroutine fill_rows_fixture(seed, rows, owner_row, acc0)
-      !> Fixture seed
-      integer, intent(in) :: seed
-      !> Neighbour rows
-      real(wp), intent(out) :: rows(ndim, n_nb_fix)
-      !> Owner row
-      real(wp), intent(out) :: owner_row(ndim)
-      !> Nonzero pre-fill of the accumulator
-      real(wp), intent(out) :: acc0(ndim, nsph_fix)
-
-      integer :: jj, iaxis
-
-      do jj = 1, n_nb_fix
-         do iaxis = 1, ndim
-            rows(iaxis, jj) = fill_value(seed, iaxis + ndim*jj)
-         end do
-      end do
-      do iaxis = 1, ndim
-         owner_row(iaxis) = fill_value(seed + 5, iaxis)
-      end do
-      do jj = 1, nsph_fix
-         do iaxis = 1, ndim
-            acc0(iaxis, jj) = fill_value(seed + 11, iaxis + ndim*jj)
-         end do
-      end do
-
-   end subroutine fill_rows_fixture
-
    !> Fill a local-block fixture and the accumulator it is scattered into
    !>
    !> @param[in]  seed Fixture seed
@@ -230,12 +199,17 @@ contains
    !*                          Dense references                                         *!
    !* ================================================================================= *!
 
-   !> Dense reference for the compact row scatter
+   !> Dense reference scatter for the compact sparse-producer rows
    !>
-   !> One full `(3, nsph)` array per compact slot, reduced in slot order. This
-   !> is the route the production scatter exists to avoid, and reducing in the
-   !> same order the scatter writes in is what makes the comparison exact even
-   !> when a column receives several contributions.
+   !> One full `(3, nsph)` array per compact slot, reduced in slot order -- the
+   !> route a production scatter exists to avoid, which is exactly what makes it
+   !> a trustworthy reference.
+   !>
+   !> No production routine consumes the `(rows, owner_row)` convention of
+   !> [[iswig_swi_f1_rA_sparse]] and [[iswig_swi_f2_rArB_sparse]]; this is the
+   !> only implementation of it, and it exists so that
+   !> [[test_real_iswig_data]] can check [[scatter_iswig_block]] against the
+   !> *other* index convention rather than against itself.
    !>
    !> @param[in]  n_nb      Number of neighbours
    !> @param[in]  nb_idx    Neighbour atom ids
@@ -318,106 +292,6 @@ contains
       end do
 
    end subroutine block_reference
-
-   !* ================================================================================= *!
-   !*                          Compact row scatter                                      *!
-   !* ================================================================================= *!
-
-   !> Distinct ids, boundary ids and a pre-filled accumulator
-   !>
-   !> `nb_idx` spans atom `1` and atom `nsph` so an off-by-one in the scatter
-   !> would run off an end, and the accumulator is pre-filled so that a scatter
-   !> which assigned would lose the pre-fill.
-   subroutine test_rows_matches_dense(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Distinct ids, spanning both boundaries; owner outside the neighbour set
-      integer, parameter :: nb_idx(n_nb_fix) = [1, 3, 5, nsph_fix]
-      integer, parameter :: owner = 2
-
-      real(wp) :: rows(ndim, n_nb_fix), owner_row(ndim)
-      real(wp) :: acc0(ndim, nsph_fix), acc(ndim, nsph_fix), ref(ndim, nsph_fix)
-
-      call fill_rows_fixture(3, rows, owner_row, acc0)
-
-      call check_alive(error, maxval(abs(rows)), "neighbour rows")
-      if (allocated(error)) return
-      call check_alive(error, maxval(abs(owner_row)), "owner row")
-      if (allocated(error)) return
-      call check_alive(error, maxval(abs(acc0)), "accumulator pre-fill")
-      if (allocated(error)) return
-
-      call rows_reference(n_nb_fix, nb_idx, rows, owner, owner_row, weight_fix, acc0, ref)
-      call check_alive(error, maxval(abs(ref - acc0)), "row scatter contribution")
-      if (allocated(error)) return
-
-      acc(:, :) = acc0(:, :)
-      call scatter_iswig_rows(n_nb_fix, nb_idx, rows, owner, owner_row, weight_fix, acc)
-
-      call check_exact(error, maxval(abs(acc - ref)), "row scatter against dense reference")
-      if (allocated(error)) return
-
-      ! The pre-fill must still be in there: an assigning scatter would have
-      ! replaced every touched column instead of adding to it.
-      call check_exact(error, &
-                       maxval(abs(acc(:, owner) - (acc0(:, owner) + weight_fix*owner_row))), &
-                       "owner column adds to its pre-fill")
-      if (allocated(error)) return
-      call check_alive(error, maxval(abs(acc0(:, owner))), "owner column pre-fill")
-
-   end subroutine test_rows_matches_dense
-
-   !> Repeated ids, including the owner among the neighbours
-   !>
-   !> `nb_idx` names atom `6` twice and atom `6` is also the owner, so that
-   !> column takes three separate contributions. A scatter written as one
-   !> vector-subscripted section, or one that assigns, keeps only the last of
-   !> them; the explicit three-term check below is what distinguishes the two.
-   subroutine test_rows_aliased(error)
-      !> Error handle
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Atom 6 appears twice and is also the owner; both boundaries present
-      integer, parameter :: nb_idx(n_nb_fix) = [6, 1, 6, nsph_fix]
-      integer, parameter :: owner = 6
-
-      real(wp) :: rows(ndim, n_nb_fix), owner_row(ndim)
-      real(wp) :: acc0(ndim, nsph_fix), acc(ndim, nsph_fix), ref(ndim, nsph_fix)
-      real(wp) :: expect(ndim)
-
-      call fill_rows_fixture(41, rows, owner_row, acc0)
-
-      call check_alive(error, maxval(abs(rows)), "neighbour rows")
-      if (allocated(error)) return
-
-      call rows_reference(n_nb_fix, nb_idx, rows, owner, owner_row, weight_fix, acc0, ref)
-      call check_alive(error, maxval(abs(ref - acc0)), "row scatter contribution")
-      if (allocated(error)) return
-
-      acc(:, :) = acc0(:, :)
-      call scatter_iswig_rows(n_nb_fix, nb_idx, rows, owner, owner_row, weight_fix, acc)
-
-      call check_exact(error, maxval(abs(acc - ref)), "aliased row scatter against dense reference")
-      if (allocated(error)) return
-
-      ! Spelled out rather than left to the reference: the aliased column is the
-      ! sum of all three contributions on top of its pre-fill, in slot order.
-      expect(:) = acc0(:, owner)
-      expect(:) = expect(:) + weight_fix*rows(:, 1)
-      expect(:) = expect(:) + weight_fix*rows(:, 3)
-      expect(:) = expect(:) + weight_fix*owner_row(:)
-      call check_exact(error, maxval(abs(acc(:, owner) - expect)), "aliased column accumulates")
-      if (allocated(error)) return
-
-      ! ... and the sum is not any one of them, so overwriting cannot pass.
-      call check_alive(error, maxval(abs(weight_fix*rows(:, 1))), "first aliased contribution")
-      if (allocated(error)) return
-      call check_alive(error, maxval(abs(weight_fix*rows(:, 3))), "second aliased contribution")
-      if (allocated(error)) return
-      call check_alive(error, maxval(abs(weight_fix*owner_row)), "owner contribution")
-
-   end subroutine test_rows_aliased
 
    !* ================================================================================= *!
    !*                          Influence-set block scatter                              *!
@@ -533,8 +407,9 @@ contains
    !> The synthetic fixtures test the index arithmetic; this one tests that the
    !> arithmetic is wired to the conventions the producers actually use. The
    !> block scatter fills a dense `(3, nsph, 3, nsph)` Hessian, which is then
-   !> contracted with a nuclear direction and compared to the row scatter of
-   !> [[iswig_swi_f2_rArB_sparse]] for the same direction. The two disagree the
+   !> contracted with a nuclear direction and compared to the dense
+   !> [[rows_reference]] scatter of [[iswig_swi_f2_rArB_sparse]] for the same
+   !> direction. The two disagree the
    !> moment either scatter puts a slot on the wrong atom, because
    !> `swi2_rArB_block` is owner-first over `n_nb + 1` slots while
    !> `swi2_rArB_sparse` is neighbour-only over `n_nb` with the owner apart.
@@ -551,7 +426,7 @@ contains
       type(iswig_workspace_type) :: work
       real(wp), allocatable :: radii(:), v(:, :)
       real(wp), allocatable :: rows2(:, :), blk(:, :, :, :), mix(:, :)
-      real(wp), allocatable :: grad(:, :), hess(:, :, :, :), col(:, :)
+      real(wp), allocatable :: grad(:, :), grad0(:, :), hess(:, :, :, :), col(:, :)
       integer, allocatable :: idx(:)
       real(wp) :: pos(ndim), owner_row2(ndim), dxi2, d2xi, f_val, scale
       integer :: icase, owner, iatom, jatom, iaxis, n, nat, nprobe
@@ -569,10 +444,10 @@ contains
          call iswig%update(mol, radii, wleb_max=iswig_wleb_max)
          call work%init(iswig)
 
-         if (allocated(rows2)) deallocate (rows2, blk, mix, idx, grad, hess, col, v)
+         if (allocated(rows2)) deallocate (rows2, blk, mix, idx, grad, grad0, hess, col, v)
          allocate (rows2(ndim, nat), blk(ndim, nat + 1, ndim, nat + 1))
          allocate (mix(ndim, nat + 1), idx(nat + 1))
-         allocate (grad(ndim, nat), hess(ndim, nat, ndim, nat), col(ndim, nat))
+         allocate (grad(ndim, nat), grad0(ndim, nat), hess(ndim, nat, ndim, nat), col(ndim, nat))
          allocate (v(ndim, nat))
 
          do iatom = 1, nat
@@ -596,9 +471,9 @@ contains
             call scatter_iswig_block(n, idx, blk, weight, hess)
 
             call iswig%swi2_rArB_sparse(work, v, rows2, owner_row2, dxi2)
-            grad(:, :) = 0.0_wp
-            call scatter_iswig_rows(work%n_nb, work%idx, rows2, work%owner, &
-                                    owner_row2, weight, grad)
+            grad0(:, :) = 0.0_wp
+            call rows_reference(work%n_nb, work%idx, rows2, work%owner, &
+                                owner_row2, weight, grad0, grad)
 
             do iatom = 1, nat
                col(:, iatom) = 0.0_wp
@@ -732,4 +607,4 @@ contains
 
    end subroutine check_alive
 
-end module test_cavity_drop_iswig_scatter
+end module test_cavity_drop_gaussian_scatter

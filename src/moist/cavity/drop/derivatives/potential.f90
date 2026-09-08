@@ -198,9 +198,10 @@ contains
          kkt_rhs(1, 2) = lambda_val
          kkt_rhs(2, 3) = lambda_val
          kkt_rhs(3, 4) = lambda_val
-         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, error)
+         call kkt_fac%factor(phi2_rr - lambda_val*lsf2_rr, lsf1_r, &
+                             "contract_surface_lsf_weights", error, igrid)
          if (allocated(error)) return
-         call kkt_fac%solve(kkt_rhs, error)
+         call kkt_fac%solve(kkt_rhs, "contract_surface_lsf_weights", error, igrid)
          if (allocated(error)) return
 
          call seed_jet_basis(state, eff, igrid, phi1_r, kkt_rhs, w_xyz_local, &

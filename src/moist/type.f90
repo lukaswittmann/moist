@@ -90,6 +90,16 @@ module moist_type
       procedure :: get_surface_response => get_cavity_surface_response_default
       !> Contract accumulated surface-observable adjoints into the nuclear gradient
       procedure :: get_surface_gradient => get_cavity_surface_gradient_default
+      !> Contract fixed surface-observable adjoints into the nuclear Hessian
+      procedure :: get_surface_hessian_fixed => get_cavity_surface_hessian_fixed_default
+      !> Forward tangent of the surface map along nuclear directions
+      procedure :: get_surface_tangent => get_cavity_surface_tangent_default
+      !> Adjoint-response half of the surface Hessian
+      procedure :: get_surface_hessian_response => get_cavity_surface_hessian_response_default
+      !> Contract accumulated surface-observable adjoints into Hessian-vector products
+      procedure :: get_surface_hessian => get_cavity_surface_hessian_default
+      !> Dense nuclear Hessian of the cavity contribution
+      procedure :: get_hessian => get_cavity_hessian_default
       !> Write grid to XYZ file for visualization
       procedure :: write_xyz_debug => write_cavity_xyz_debug
       !> Write grid to CSV file for visualization
@@ -411,6 +421,141 @@ contains
       call fatal_error(error, "This cavity does not provide a reverse-mode surface gradient")
 
    end subroutine get_cavity_surface_gradient_default
+
+   !> Default fixed-adjoint surface-Hessian hook
+   !>
+   !> Cavities that do not implement the second derivative of the surface map
+   !> have no fixed-adjoint half to contribute. Returning silently here would
+   !> hand back a zero Hessian block, so this errors
+   !>
+   !> @param[in]    self    Cavity instance
+   !> @param[in]    acc     Surface-observable adjoints, unused
+   !> @param[inout] hessian Nuclear-Hessian accumulator, unchanged
+   !> @param[out]   error   Error handling
+   subroutine get_cavity_surface_hessian_fixed_default(self, acc, hessian, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_surface_hessian_fixed &
+         &(fixed-adjoint half of the surface Hessian)")
+
+   end subroutine get_cavity_surface_hessian_fixed_default
+
+   !> Default forward surface-tangent hook
+   !>
+   !> Cavities that do not implement the forward tangent of the surface map
+   !> cannot fill the tangent arrays. Returning silently here would hand back
+   !> undefined or zero tangents, so this errors
+   !>
+   !> @param[in]  self      Cavity instance
+   !> @param[in]  dirs      Nuclear directions, unused
+   !> @param[out] d_a       Tangent of the area element, unset
+   !> @param[out] d_wleb    Tangent of the final Lebedev weight, unset
+   !> @param[out] d_xi0     Tangent of the Gaussian width, unset
+   !> @param[out] d_wbranch Tangent of the softmax branch weight, unset
+   !> @param[out] error     Error handling
+   subroutine get_cavity_surface_tangent_default(self, dirs, d_a, d_wleb, d_xi0, &
+                                                 d_wbranch, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Tangents of the surface quantities
+      real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_surface_tangent &
+         &(forward tangent of the surface map)")
+
+   end subroutine get_cavity_surface_tangent_default
+
+   !> Default adjoint-response surface-Hessian hook
+   !>
+   !> Cavities that do not propagate moving adjoints have no `J^T (d omega/dv)`
+   !> half to contribute. Returning silently here would hand back a zero
+   !> Hessian-vector product, so this errors
+   !>
+   !> @param[in]    self  Cavity instance
+   !> @param[in]    acc   Surface-observable adjoints, unused
+   !> @param[in]    dirs  Nuclear directions, unused
+   !> @param[inout] hvp   Hessian-vector product accumulator, unchanged
+   !> @param[out]   error Error handling
+   subroutine get_cavity_surface_hessian_response_default(self, acc, dirs, hvp, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Hessian-vector product accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_surface_hessian_response &
+         &(adjoint-response half of the surface Hessian)")
+
+   end subroutine get_cavity_surface_hessian_response_default
+
+   !> Default reverse-mode surface Hessian-vector product hook
+   !>
+   !> Cavities that do not implement the surface-adjoint second-order
+   !> contraction must be reached through the forward path instead. Returning
+   !> silently here would hand back a zero Hessian-vector product, so this errors
+   !>
+   !> @param[in]    self  Cavity instance
+   !> @param[in]    acc   Surface-observable adjoints, unused
+   !> @param[in]    dirs  Nuclear directions, unused
+   !> @param[inout] hvp   Hessian-vector product accumulator, unchanged
+   !> @param[out]   error Error handling
+   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Hessian-vector product accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_surface_hessian &
+         &(reverse-mode surface Hessian-vector products)")
+
+   end subroutine get_cavity_surface_hessian_default
+
+   !> Default dense nuclear-Hessian hook
+   !>
+   !> Cavities without a second-order surface contraction cannot assemble the
+   !> dense block. Returning silently here would hand back a zero Hessian, so
+   !> this errors
+   !>
+   !> @param[in]    self    Cavity instance
+   !> @param[in]    acc     Surface-observable adjoints, unused
+   !> @param[inout] hessian Nuclear-Hessian accumulator, unchanged
+   !> @param[out]   error   Error handling
+   subroutine get_cavity_hessian_default(self, acc, hessian, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Surface-observable adjoints
+      type(cavity_surface_adjoint_type), intent(in) :: acc
+      !> Nuclear-Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_hessian &
+         &(dense nuclear Hessian of the cavity contribution)")
+
+   end subroutine get_cavity_hessian_default
 
    !> Default no-op direct trace-response hook
    !>

@@ -29,12 +29,20 @@
 !>
 !> and the second term is nothing but `get_surface_gradient_drop` run with
 !> `d(eff)` substituted for `eff`. That is what this routine does, seed for
-!> seed, and it is why it reuses [[seed_jet_basis]] and [[seed_anchor]]
-!> verbatim rather than restating their contractions.
+!> seed, and it is why it reuses the shipped jet and anchor bases verbatim
+!> rather than restating their contractions.
+!>
+!> It reuses them in halves, though, not whole. [[seed_jet_basis]] and
+!> [[seed_anchor]] each seed the kernel and contract the response in one sweep,
+!> which is right for a caller with one weight set per point; this one has
+!> `ndir` of them and the seeding depends on none. So the traversal calls
+!> [[seed_jet_basis_apply]] and [[seed_anchor_apply]] once per grid point and
+!> [[seed_jet_basis_contract]] and [[seed_anchor_contract]] once per direction,
+!> which is the same shape [[get_surface_hessian_fixed_drop]] already has.
 !>
 !> A consequence worth stating, because the second-order chain next door has to
 !> worry about it and this one does not: the traversal here is **first order in
-!> the seed chain**. It calls [[apply_seed]] (through the two seed routines) and
+!> the seed chain**. It calls [[apply_seed]] (through the two apply halves) and
 !> never [[apply_seed_tangent]], so the `PRECONDITION` on that routine -- the
 !> nine single-entry, asymmetric Hessian jet seeds whose individual tangents are
 !> wrong by order 100 % -- does not apply. The seeds still have to be read as a
@@ -45,7 +53,7 @@
 !>
 !> ## The three passes
 !>
-!>  1. **Forward tangent** -- [[get_surface_tangent_drop]] pushes every nuclear
+!>  1. **Forward tangent** -- [[get_surface_tangent_drop]] pushes each nuclear
 !>     direction through the per-point map and returns `d_a`, `d_wleb`, `d_xi0`
 !>     and `d_wbranch`, one column per direction.
 !>  2. **Weight tangent** -- [[prepare_surface_weights_tangent]] turns those
@@ -54,6 +62,13 @@
 !>     of the raw adjoints, so their tangent is identically zero and pass 2
 !>     deliberately does not emit them.
 !>  3. **Contraction** -- the gradient traversal, with `deff` in place of `eff`.
+!>
+!> All three run on a **block** of directions rather than on all of them at
+!> once, because passes 1 and 2 are the only part of this scheme whose memory
+!> grows with the direction count and nothing above bounds that count; see
+!> `hvp_chunk_dirs` for the bound, the price and why the common case pays
+!> nothing. Blocks are disjoint in the direction index and independent of each
+!> other, so the blocking is invisible in the result down to the last bit.
 !>
 !> Because pass 2 emits three channels and not seven, the `deff` objects this
 !> routine builds carry `w_xi`, `w_f` and `branch_phi_adj` and nothing else.
@@ -86,15 +101,47 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_response
 !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type
-   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, &
-      & drop_surface_weights_type, seed_weight_tol
+   use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, seed_status_message, &
+      & drop_seed_result_type, drop_surface_weights_type, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_factor_type, &
-      & seed_jet_basis, seed_anchor, degenerate_point_error
+      & seed_jet_basis_apply, seed_jet_basis_contract, &
+      & seed_anchor_apply, seed_anchor_contract, &
+      & drop_n_jet_seeds, drop_n_anchor_seeds
    use moist_cavity_drop_derivatives_weights_tangent, only: prepare_surface_weights_tangent
    implicit none(type, external)
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
+
+   !> Nuclear directions carried by one block of the traversal
+   !>
+   !> Passes 1 and 2 are per direction and materialize seven `(ngrid, ndir)`
+   !> grid arrays -- the four forward tangents `d_a`, `d_wleb`, `d_xi0`,
+   !> `d_wbranch` and the three moving channels of `deff` -- and the thread
+   !> accumulator adds a `(3, nsph, ndir, nthreads)` one. Nothing above this
+   !> submodule bounds `ndir`: [[get_hessian_drop]] asks for `3 nsph`
+   !> directions, so all eight grow *quadratically* in the system size and a
+   !> medium molecule runs out of memory rather than running slowly.
+   !>
+   !> The traversal is therefore blocked: directions are processed
+   !> `hvp_chunk_dirs` at a time and every array above is sized by the block
+   !> rather than by `ndir`, which bounds the working set at
+   !>
+   !>     bytes  =  8 C (7 ngrid + 3 nsph nthreads),    C = min(ndir, chunk)
+   !>
+   !> and so makes it linear in the system size instead of quadratic.
+   !>
+   !> The price is that each block re-traverses the grid, and with it the 16
+   !> direction-independent seeds of the point prologue:
+   !>
+   !>     apply_seed calls per grid point  =  16 ceil(ndir / C)
+   !>
+   !> against the `16 ndir` a per-direction seed chain would cost and the `16`
+   !> of an unblocked traversal. At the default every `ndir <= 192` -- every
+   !> Hessian-vector product of a system up to 64 atoms, and every explicit
+   !> direction set a caller is likely to hand in -- is a single block and pays
+   !> exactly `16`.
+   integer, parameter :: hvp_chunk_dirs = 192
 
 contains
 
@@ -132,6 +179,8 @@ contains
       type(drop_worker_slots_type) :: slots
       !> Per-thread accumulators, summed deterministically after the region
       real(wp), allocatable :: hvp_threads(:, :, :, :)
+      !> Accumulator as it was handed in, kept only while a block can still fail
+      real(wp), allocatable :: hvp_entry(:, :, :)
       !> Thread bookkeeping
       integer :: thread_slot, ithread
       !> First failure seen anywhere in the parallel region
@@ -145,6 +194,8 @@ contains
       !> Grid, direction, atom and active-slot indices
       integer :: igrid, idir, ndir, iatom, i, n_active
       integer, allocatable :: active_idx(:)
+      !> Direction block: its size, its bounds in `dirs` and its own extent
+      integer :: nchunk, ilo, ihi, nblk
 
       !> Anchor and owner sphere
       real(wp) :: anchor(3)
@@ -164,6 +215,11 @@ contains
       !> Factorization reused by every solve at this grid point
       type(drop_kkt_factor_type) :: kkt_fac
 
+      !> Linear responses of the 16 seeds, and their induced point motion
+      type(drop_seed_result_type) :: res_jet(drop_n_jet_seeds)
+      type(drop_seed_result_type) :: res_anchor(drop_n_anchor_seeds)
+      real(wp) :: x_jet(4, drop_n_jet_seeds), x_anchor(4, drop_n_anchor_seeds)
+
       !> Point-local level-set adjoint weights built from the 13 field seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
       !> Effective position adjoint seen by every seed; identically zero here
@@ -180,6 +236,8 @@ contains
       type(drop_surface_weights_type), allocatable :: deff(:)
       !> Timer handle
       integer :: h_shres
+      !> Rendered grid index of a degenerate point
+      character(len=32) :: idx
 
       !* ------------------------------- Shape guards --------------------------------- *!
       call check_surface_adjoint(self, acc, "get_surface_hessian_response_drop", error)
@@ -216,145 +274,201 @@ contains
                                        self%ctx%timer%current(), cat_gradient)
       call self%ctx%timer%start(h_shres)
 
-      !* --------------------- Passes 1 and 2: the moving weights --------------------- *!
+      !* ------------------------- Pass 1: the fixed weights -------------------------- *!
+      ! Direction free, so it is folded once and read by every block below.
       call prepare_surface_weights(self, acc, .true., eff)
-      call weight_tangents(self, acc, eff, dirs, deff, error)
-      if (allocated(error)) then
-         call self%ctx%timer%stop(h_shres)
-         return
-      end if
 
       !* -------------------------------- Thread setup -------------------------------- *!
       ! Order 3, as on the gradient path: the primal map is the one being
       ! contracted, so nothing above the third jet derivative is read.
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
-      allocate (hvp_threads(3, self%nsph, ndir, slots%nthreads), source=0.0_wp)
 
-      call abort%reset()
+      !* ------------------------------ Direction blocks ------------------------------ *!
+      ! See `hvp_chunk_dirs` for the memory bound and the recompute factor. A
+      ! direction set no larger than one block -- the common case -- takes a
+      ! single iteration and is exactly the unblocked traversal.
+      !
+      ! `hvp` is `intent(inout)` and this routine owes the caller an untouched
+      ! accumulator when anything fails, which a multi-block run can no longer
+      ! promise by construction: the reduction lands in `hvp` block by block, so
+      ! that a direction's column sees the same additions in the same order
+      ! whatever the blocking. A copy taken up front is what restores the
+      ! promise, and it is taken only when a second block can actually fail.
+      nchunk = min(ndir, hvp_chunk_dirs)
+      allocate (hvp_threads(3, self%nsph, nchunk, slots%nthreads))
+      if (nchunk < ndir) allocate (hvp_entry, source=hvp)
 
-      !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
-      !$omp& idir, iatom, i, n_active, active_idx, state, point_ok, &
-      !$omp& anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
-      !$omp& vjp_pt, phi1_r, lambda_val, &
-      !$omp& kkt_rhs, kkt_fac, &
-      !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, &
-      !$omp& iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, swi_live, &
-      !$omp& jj, knb)
-      thread_slot = 1
-!$    thread_slot = omp_get_thread_num() + 1
+      do ilo = 1, ndir, nchunk
+         ihi = min(ilo + nchunk - 1, ndir)
+         nblk = ihi - ilo + 1
 
-      allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
-      allocate (vjp_pt(3, self%nsph), source=0.0_wp)
-      allocate (active_idx(self%nsph))
-      call iswig_work%init(self%iswig)
-      ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is bounded
-      ! by the atom count on either traversal, so this stays valid even if the
-      ! workspace has to grow itself.
-      allocate (swi_rows(3, self%nsph))
-
-      !$omp do schedule(static, 8)
-      do igrid = 1, self%ngrid
-         !* -------------------------- Shared point prologue -------------------------- *!
-         ! Point, jets, seed state and the solved jet and anchor seeds -- the
-         ! latter direction independent, so solved once for the whole direction
-         ! loop. No curvature: `d(w_k1)` and `d(w_k2)` vanish identically
-         ! whatever the host put in `acc`, so this half never reads a curvature
-         ! response and asks [[fill_seed_state]] for none.
-         call drop_point_prologue(self, slots, thread_slot, igrid, .false., abort, &
-                                  anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
-                                  lsf3_rrr, phi1_r, state, kkt_fac, point_ok, &
-                                  kkt_rhs=kkt_rhs)
-         if (.not. point_ok) cycle
-
-         ! Outward-normal channel: `d(w_xyz)` and `d(w_n)` are identically zero
-         ! (`weights_tangent.f90`, module header -- a consumer of pass 2 "gains
-         ! the right to skip the normal and curvature channels of the tangent
-         ! contraction outright"), so the effective position adjoint every seed
-         ! sees is the zero vector and [[seed_normal_channel]] is not called.
-         w_xyz_local = 0.0_wp
-
-         !* --------------------- Direction-independent point data -------------------- *!
-         n_active = slots%lsf(thread_slot)%lsf%active_count()
-         do i = 1, n_active
-            active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
-         end do
-
-         ! The iSwiG rows depend on the geometry alone; only the scalar weight
-         ! in front of them is per direction. Collected once when any direction
-         ! carries a live switching tangent.
-         swi_live = .false.
-         do idir = 1, ndir
-            if (abs(deff(idir)%w_f(igrid)) > seed_weight_tol) swi_live = .true.
-         end do
-         if (swi_live) then
-            call self%iswig%swi_collect(anchor, owner_idx, self%anchor_xi0(igrid), &
-                                        swi_f0, iswig_work)
-            call self%iswig%swi1_rA_sparse(iswig_work, swi_rows, swi_owner_row, swi_dxi)
+         !* ---------------------- Pass 2: the moving weights ------------------------- *!
+         ! Serial over this block's directions, for the group-reduction reason
+         ! [[weight_tangents]] documents; `deff` is indexed `1 .. nblk`, and the
+         ! global direction index appears nowhere below this line.
+         call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), deff, error)
+         if (allocated(error)) then
+            if (allocated(hvp_entry)) hvp = hvp_entry
+            call self%ctx%timer%stop(h_shres)
+            return
          end if
 
-         !* ------------------------------ Direction loop ----------------------------- *!
-         do idir = 1, ndir
+         hvp_threads = 0.0_wp
+         call abort%reset()
 
-            !* --------------- Field seeds -> level-set adjoint tangents -------------- *!
-            w_lsf0_pt = 0.0_wp
-            w_lsf1_pt = 0.0_wp
-            w_lsf2_pt = 0.0_wp
-            call seed_jet_basis(state, deff(idir), igrid, phi1_r, kkt_rhs, w_xyz_local, &
-                                w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
+         !$omp parallel num_threads(slots%nthreads) default(shared) &
+         !$omp& private(thread_slot, igrid, idir, iatom, i, n_active, active_idx, &
+         !$omp& state, point_ok, anchor, owner_idx, lsf1_r, lsf2_rr, lsf3_rrr, &
+         !$omp& vjp_pt, phi1_r, lambda_val, kkt_rhs, kkt_fac, &
+         !$omp& res_jet, res_anchor, x_jet, x_anchor, &
+         !$omp& w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, w_xyz_local, &
+         !$omp& iswig_work, swi_rows, swi_owner_row, swi_f0, swi_dxi, swi_live, &
+         !$omp& jj, knb)
+         thread_slot = 1
+!$       thread_slot = omp_get_thread_num() + 1
 
-            !* ------------- Field channel: contract with nuclear partials ------------ *!
-            ! As on the gradient path, the level set contracts the jet indices
-            ! itself, so the mixed third derivative is never materialized.
-            call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, vjp_pt)
+         allocate (lsf3_rrr(3, 3, 3), source=0.0_wp)
+         allocate (vjp_pt(3, self%nsph), source=0.0_wp)
+         allocate (active_idx(self%nsph))
+         call iswig_work%init(self%iswig)
+         ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is
+         ! bounded by the atom count on either traversal, so this stays valid
+         ! even if the workspace has to grow itself.
+         allocate (swi_rows(3, self%nsph))
+
+         !$omp do schedule(static, 8)
+         do igrid = 1, self%ngrid
+            !* ------------------------- Shared point prologue ------------------------ *!
+            ! Point, jets, seed state and the bordered right-hand sides of the
+            ! jet and anchor seeds. No curvature: `d(w_k1)` and `d(w_k2)` vanish
+            ! identically whatever the host put in `acc`, so this half never
+            ! reads a curvature response and asks [[fill_seed_state]] for none.
+            call drop_point_prologue(self, slots, thread_slot, igrid, .false., &
+                                     "get_surface_hessian_response_drop", abort, &
+                                     anchor, owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                     lsf3_rrr, phi1_r, state, kkt_fac, point_ok, &
+                                     kkt_rhs=kkt_rhs)
+            if (.not. point_ok) cycle
+
+            ! Outward-normal channel: `d(w_xyz)` and `d(w_n)` are identically
+            ! zero (`weights_tangent.f90`, module header -- a consumer of pass 2
+            ! "gains the right to skip the normal and curvature channels of the
+            ! tangent contraction outright"), so the effective position adjoint
+            ! every seed sees is the zero vector and [[seed_normal_channel]] is
+            ! not called.
+            w_xyz_local = 0.0_wp
+
+            !* -------------------- Direction-independent point data ------------------ *!
+            ! The 16 seeds of [[seed_jet_basis]] and [[seed_anchor]], applied
+            ! once for the whole direction loop. Their construction and
+            ! [[apply_seed]] -- the eigen decomposition, the tangent frame, the
+            ! Jacobian -- read `state` and the bordered solve alone; a weight
+            ! set reaches only the contraction. So the direction loop below runs
+            ! the cheap half sixteen times and the expensive one not at all,
+            ! which is the shape [[get_surface_hessian_fixed_drop]] already has
+            ! and the reason this traversal costs 16 applies per grid point
+            ! rather than `16 ndir` of them.
+            call seed_jet_basis_apply(state, kkt_rhs, res_jet, x_jet)
+            call seed_anchor_apply(state, kkt_rhs, res_anchor, x_anchor)
+
+            n_active = slots%lsf(thread_slot)%lsf%active_count()
             do i = 1, n_active
-               iatom = active_idx(i)
-               hvp_threads(:, iatom, idir, thread_slot) = &
-                  hvp_threads(:, iatom, idir, thread_slot) + vjp_pt(:, i)
+               active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
             end do
 
-            !* ------------------------ Anchor channel (owner) ------------------------ *!
-            call seed_anchor(state, deff(idir), igrid, phi1_r, kkt_rhs, w_xyz_local, &
-                             hvp_threads(:, owner_idx, idir, thread_slot))
-
-            !* ----------------------- iSwig switching channel ------------------------ *!
-            if (abs(deff(idir)%w_f(igrid)) > seed_weight_tol) then
-               do jj = 1, iswig_work%n_nb
-                  knb = iswig_work%idx(jj)
-                  hvp_threads(:, knb, idir, thread_slot) = &
-                     hvp_threads(:, knb, idir, thread_slot) &
-                     + deff(idir)%w_f(igrid)*swi_rows(:, jj)
-               end do
-               hvp_threads(:, owner_idx, idir, thread_slot) = &
-                  hvp_threads(:, owner_idx, idir, thread_slot) &
-                  + deff(idir)%w_f(igrid)*swi_owner_row
+            ! The iSwiG rows depend on the geometry alone; only the scalar
+            ! weight in front of them is per direction. Collected once when any
+            ! direction carries a live switching tangent, so the scan stops at
+            ! the first one that does.
+            swi_live = .false.
+            do idir = 1, nblk
+               if (abs(deff(idir)%w_f(igrid)) > seed_weight_tol) then
+                  swi_live = .true.
+                  exit
+               end if
+            end do
+            if (swi_live) then
+               call self%iswig%swi_collect(anchor, owner_idx, self%anchor_xi0(igrid), &
+                                           swi_f0, iswig_work)
+               call self%iswig%swi1_rA_sparse(iswig_work, swi_rows, &
+                                              swi_owner_row, swi_dxi)
             end if
 
+            !* ---------------------------- Direction loop ---------------------------- *!
+            do idir = 1, nblk
+
+               !* ------------- Field seeds -> level-set adjoint tangents ------------- *!
+               w_lsf0_pt = 0.0_wp
+               w_lsf1_pt = 0.0_wp
+               w_lsf2_pt = 0.0_wp
+               call seed_jet_basis_contract(deff(idir), igrid, phi1_r, w_xyz_local, &
+                                            res_jet, x_jet, &
+                                            w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
+
+               !* ----------- Field channel: contract with nuclear partials ----------- *!
+               ! As on the gradient path, the level set contracts the jet
+               ! indices itself, so the mixed third derivative is never
+               ! materialized.
+               call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, &
+                                                         w_lsf2_pt, vjp_pt)
+               do i = 1, n_active
+                  iatom = active_idx(i)
+                  hvp_threads(:, iatom, idir, thread_slot) = &
+                     hvp_threads(:, iatom, idir, thread_slot) + vjp_pt(:, i)
+               end do
+
+               !* --------------------- Anchor channel (owner) ------------------------ *!
+               call seed_anchor_contract(deff(idir), igrid, phi1_r, w_xyz_local, &
+                                         res_anchor, x_anchor, &
+                                         hvp_threads(:, owner_idx, idir, thread_slot))
+
+               !* -------------------- iSwig switching channel ------------------------ *!
+               if (abs(deff(idir)%w_f(igrid)) > seed_weight_tol) then
+                  do jj = 1, iswig_work%n_nb
+                     knb = iswig_work%idx(jj)
+                     hvp_threads(:, knb, idir, thread_slot) = &
+                        hvp_threads(:, knb, idir, thread_slot) &
+                        + deff(idir)%w_f(igrid)*swi_rows(:, jj)
+                  end do
+                  hvp_threads(:, owner_idx, idir, thread_slot) = &
+                     hvp_threads(:, owner_idx, idir, thread_slot) &
+                     + deff(idir)%w_f(igrid)*swi_owner_row
+               end if
+
+            end do
+
+         end do
+         !$omp end do
+
+         deallocate (lsf3_rrr, vjp_pt, active_idx, swi_rows)
+         call iswig_work%destroy()
+         !$omp end parallel
+
+         if (abort%requested) then
+            ! An LSF failure or a KKT failure arrives as a ready-made error; a
+            ! kernel degeneracy arrives as a status code that needs this
+            ! routine's name to become a diagnostic.
+            if (allocated(abort%error)) then
+               call move_alloc(abort%error, error)
+            else
+               write (idx, "(i0)") abort%igrid
+               call fatal_error(error, "get_surface_hessian_response_drop: "// &
+                                seed_status_message(abort%status)// &
+                                " at grid point "//trim(idx))
+            end if
+            if (allocated(hvp_entry)) hvp = hvp_entry
+            call self%ctx%timer%stop(h_shres)
+            return
+         end if
+
+         ! Deterministic reduction: fixed thread order, independent of
+         ! scheduling. One block's columns at a time, and blocks are disjoint in
+         ! `idir`, so a direction sees exactly the same additions in the same
+         ! order however the blocking falls.
+         do ithread = 1, slots%nthreads
+            hvp(:, :, ilo:ihi) = hvp(:, :, ilo:ihi) + hvp_threads(:, :, 1:nblk, ithread)
          end do
 
-      end do
-      !$omp end do
-
-      deallocate (lsf3_rrr, vjp_pt, active_idx, swi_rows)
-      call iswig_work%destroy()
-      !$omp end parallel
-
-      if (abort%requested) then
-         ! An LSF failure or a KKT failure arrives as a ready-made error; a
-         ! kernel degeneracy arrives as a status code that needs this routine's
-         ! name to become a diagnostic.
-         if (allocated(abort%error)) then
-            call move_alloc(abort%error, error)
-         else
-            call degenerate_point_error("get_surface_hessian_response_drop", abort%status, &
-                                        abort%igrid, error)
-         end if
-         call self%ctx%timer%stop(h_shres)
-         return
-      end if
-
-      ! Deterministic reduction: fixed thread order, independent of scheduling
-      do ithread = 1, slots%nthreads
-         hvp = hvp + hvp_threads(:, :, :, ithread)
       end do
 
       call self%ctx%timer%stop(h_shres)
@@ -378,10 +492,15 @@ contains
    !> `deff(idir)` carries the three channels pass 2 emits and nothing else --
    !> see the module header for why the other five are absent rather than zero.
    !>
+   !> `dirs` is one *block* of the caller's direction set and both extents are
+   !> taken from it, so `deff` is indexed within the block and the seven
+   !> `(ngrid, ndir)` arrays this routine holds are block sized. That is where
+   !> the working set of the whole traversal is bounded; see `hvp_chunk_dirs`.
+   !>
    !> @param[in]  self  DROP cavity instance
    !> @param[in]  acc   Raw surface adjoints, held fixed
    !> @param[in]  eff   Folded weights, as [[prepare_surface_weights]] returned them
-   !> @param[in]  dirs  Nuclear directions `(3, nsph, ndir)`
+   !> @param[in]  dirs  Nuclear directions of one block, `(3, nsph, ndir)`
    !> @param[out] deff  Tangent of the folded weights, one element per direction
    !> @param[out] error Error object, allocated on failure
    subroutine weight_tangents(self, acc, eff, dirs, deff, error)

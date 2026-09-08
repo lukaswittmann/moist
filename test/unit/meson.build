@@ -24,7 +24,7 @@ tests = [
   'cavity_drop_primitives',
   'cavity_drop_kkt',
   'cavity_drop_field_tangent',
-  'cavity_drop_iswig_scatter',
+  'cavity_drop_gaussian_scatter',
   'cavity_drop_hessian_fixed',
   'cavity_drop_tangent_forward',
   'cavity_drop_hessian_response',

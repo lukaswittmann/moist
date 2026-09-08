@@ -19,6 +19,16 @@ module moist_cavity_drop_gaussian
    !> Erf argument threshold beyond which erf(x) = 1 within double precision (erf(6) = 1 - 2.2e-17)
    real(wp), parameter :: erf_cutoff = 6.0_wp
 
+   !> Relative slack on the owner-sphere precondition of [[iswig_swi_collect]]
+   !>
+   !> An anchor is built as `xyz(:, owner) + radii(owner)*u` with `|u| = 1`, so
+   !> `|pos - xyz(:, owner)|` reproduces `radii(owner)` only to a few ulp: the
+   !> unit vector is normalised to within an ulp and the difference inherits the
+   !> rounding of the addition. A relative `1e-12` is some three orders above
+   !> that noise, which keeps an on-sphere point from being demoted by round-off,
+   !> and it is relative because the radii span bohrs
+   real(wp), parameter :: own_radius_slack = 1.0e-12_wp
+
    !> iSwig switching function type
    type :: moist_cavity_drop_iswig
       !> Gaussian width parameter (swx)
@@ -308,8 +318,23 @@ contains
    !>   f = prod [1 - 0.5 * (erf(xi*(R_j+r_ij)) + erf(xi*(R_j-r_ij)))]
    !> and this is the single place its neighbour enumeration is written down
    !>
-   !> Both traversals are implemented: the sorted adjacency list with early exit, and
-   !> the `adj_list%n == 0` fallback over all atoms
+   !> Both traversals are implemented: the sorted adjacency list with early exit,
+   !> and the `adj_list%n == 0` fallback over all atoms
+   !>
+   !> PRECONDITION of the adjacency traversal: `pos` must lie inside the owner's
+   !> sphere. Everything distance-based on that path bounds the true
+   !> point-neighbour distance from below by `d_ij - radii(owner)`, and that
+   !> bound holds only for such a point:
+   !>
+   !>   1. the sorted early exit at `break_thresh`,
+   !>   2. the centre-distance pre-screen inside the loop, and
+   !>   3. the adjacency list itself, whose `cutoff_global` in
+   !>      [[iswig_build_neighbors]] is derived from the same inequality.
+   !>
+   !> Every shipped caller evaluates at a DROP anchor, which `fill_arrays` in
+   !> `drop/setup.f90` places on the owner's sphere and never moves, so the
+   !> precondition holds by construction. `swi0` and `swi1_rA` nevertheless take
+   !> an arbitrary `pos`, so it is checked below
    !>
    !> @param[in]    self  iSwig instance
    !> @param[in]    pos   Position of surface point (3, bohr)
@@ -342,6 +367,22 @@ contains
       have_adj = self%adj_list%n > 0
       rad_own = self%radii(owner)
 
+      ! Precondition guard, see the header. Outside the owner's sphere the whole
+      ! adjacency branch has to go - all three screens rest on the same lower
+      ! bound - so the point falls back to the unscreened all-atom traversal.
+      ! That is the reference the adjacency path optimises, so the answer is
+      ! right and only the screening is lost: O(nsph) for that point, and the
+      ! thread's workspace stays grown to `nsph` slots.
+      !
+      ! Hence no `error stop` (the idiom for contracts that cannot recover, see
+      ! `lsf_base_require_deriv`): a caller violating this is never told, and
+      ! the symptom is a slowdown, not a wrong number. `dif` is scratch.
+      if (have_adj) then
+         dif = pos(:) - self%xyz(:, owner)
+         have_adj = sqrt(dif(1)*dif(1) + dif(2)*dif(2) + dif(3)*dif(3)) &
+                    <= rad_own*(1.0_wp + own_radius_slack)
+      end if
+
       if (have_adj) then
          start = self%adj_list%inl(owner)
          count = self%adj_list%nnl(owner)
@@ -364,7 +405,8 @@ contains
 
             k = self%adj_list%nlat(start + ii)
 
-            ! Centre-distance pre-screen
+            ! Centre-distance pre-screen, valid under the owner-sphere
+            ! condition the guard above established before selecting this branch
             if (xi*(self%adj_list%dist(start + ii) - rad_own - self%radii(k)) &
                 > erf_cutoff) cycle
          else
@@ -457,6 +499,10 @@ contains
    !> Only the owner atom and its cached neighbours are nonzero, so the row is
    !> returned in the cache's compact index space: `rows(:, jj)` is the gradient
    !> w.r.t. atom `work%idx(jj)`, and `owner_row` the one w.r.t. the owner
+   !>
+   !> `dxi` is the partial at fixed geometry; every shipped consumer discards it
+   !> because [[iswig_xi0]] has no nuclear tangent today. See [[iswig_swi_f1_rA]]
+   !> for what geometry-dependent radii would make live
    !>
    !> @param[in]  self      iSwig instance
    !> @param[in]  work      Neighbour cache filled by [[iswig_swi_collect]]
@@ -569,15 +615,19 @@ contains
    !>
    !> Returns the whole `(3, n, 3, n)` position-position block of one surface
    !> point over its influence set - the owner atom and its cached neighbours -
-   !> together with the mixed width rows and the pure width curvature
+   !> and, on request, the mixed width rows and the pure width curvature
+   !>
+   !> The width outputs are optional because no shipped caller has a width chain
+   !> to hang them on; see [[iswig_swi_f1_rA]]. Left absent, their pass is
+   !> skipped outright rather than written into a buffer nobody reads
    !>
    !> @param[in]  self  iSwig instance; every input is read from `work`
    !> @param[in]  work  Neighbour cache filled by [[iswig_swi_collect]]
    !> @param[out] n     Influence-set size, `work%n_nb + 1`
    !> @param[out] idx   Atom ids of the influence set, owner first
    !> @param[out] blk   Second derivative w.r.t. the influence-set positions
-   !> @param[out] mix   Mixed position-width second derivative
-   !> @param[out] d2xi  Second derivative w.r.t. the Gaussian width
+   !> @param[out] mix   Mixed position-width second derivative; skipped if absent
+   !> @param[out] d2xi  Second derivative w.r.t. the Gaussian width; skipped if absent
    pure subroutine iswig_swi_f2_rArB_block(self, work, n, idx, blk, mix, d2xi)
       !> iSwig instance; every input is read from `work`
       class(moist_cavity_drop_iswig), intent(in) :: self
@@ -589,10 +639,10 @@ contains
       integer, intent(out) :: idx(:)
       !> d2f/dR_A dR_B over the influence set. Only (:, 1:n, :, 1:n) written
       real(wp), intent(out) :: blk(:, :, :, :)
-      !> d2f/dR_A dxi. Only (:, 1:n) written
-      real(wp), intent(out) :: mix(:, :)
-      !> d2f/dxi2
-      real(wp), intent(out) :: d2xi
+      !> d2f/dR_A dxi. Only (:, 1:n) written; not formed at all when absent
+      real(wp), intent(out), optional :: mix(:, :)
+      !> d2f/dxi2; not formed at all when absent
+      real(wp), intent(out), optional :: d2xi
 
       integer :: ii, jj, i, j, n_nb
       real(wp) :: cn(3, work%n_nb), fcn(3, work%n_nb)
@@ -682,19 +732,38 @@ contains
 
       ! Pass 5: the width rows, the same running negation. `dxi_L` multiplies
       ! the log-gradient, so a saturated neighbour - `a = dc = 0` bitwise -
-      ! contributes nothing here either.
-      mix(:, 1) = 0.0_wp
-      do jj = 1, n_nb
-         coeff = fval*(work%c(jj)*dxi_l + work%dc(jj))
-         mix(:, 1 + jj) = -coeff*work%nhat(:, jj)
-         mix(:, 1) = mix(:, 1) - mix(:, 1 + jj)
-      end do
+      ! contributes nothing here either. A caller that asked for neither width
+      ! output never enters the loop; the two sums it reduces stay in pass 1,
+      ! where they cost one add each per neighbour and share its traversal.
+      if (present(mix)) then
+         mix(:, 1) = 0.0_wp
+         do jj = 1, n_nb
+            coeff = fval*(work%c(jj)*dxi_l + work%dc(jj))
+            mix(:, 1 + jj) = -coeff*work%nhat(:, jj)
+            mix(:, 1) = mix(:, 1) - mix(:, 1 + jj)
+         end do
+      end if
 
-      d2xi = fval*(dxi_l*dxi_l + b_sum)
+      if (present(d2xi)) d2xi = fval*(dxi_l*dxi_l + b_sum)
 
    end subroutine iswig_swi_f2_rArB_block
 
    !> Dense gradient of the iSwig switching function w.r.t. atomic positions
+   !>
+   !> `grad` is the total nuclear derivative only while the Gaussian width is
+   !> geometry-independent, which [[iswig_xi0]] is today - so the width chain
+   !> rule this routine once folded on top of the geometric rows was removed as
+   !> dead weight
+   !>
+   !> Geometry-dependent radii give `R_owner` a `dR` and the term goes live
+   !> again. Reinstating it is one loop over the active atoms after the owner
+   !> row is added,
+   !>
+   !>   grad(:, iatom) = grad(:, iatom) + dxi_local*xi1_rA(:, iatom)
+   !>
+   !> with `xi1_rA` from [[iswig_xi1_rA]], screened by that routine's own
+   !> `active` mask. The same fold is owed wherever a consumer currently
+   !> discards `dxi` - [[iswig_swi_f1_rA_sparse]] assembles exactly that number
    !>
    !> @param[in]    self  iSwig instance
    !> @param[in]    pos   Position of surface point (3, bohr)

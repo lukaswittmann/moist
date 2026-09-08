@@ -245,7 +245,7 @@ contains
       call kkt_fixture(H0, g0, dH, dg, b0, db)
       K = bordered(H0, g0)
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "test_primal_well_conditioned", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
@@ -253,7 +253,7 @@ contains
       do i = 1, 4
          Kinv(i, i) = 1.0_wp
       end do
-      call fac%solve(Kinv, merr)
+      call fac%solve(Kinv, "test_primal_well_conditioned", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
@@ -272,7 +272,7 @@ contains
       if (allocated(error)) return
 
       rhs = b0
-      call fac%solve(rhs, merr)
+      call fac%solve(rhs, "test_primal_well_conditioned", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
@@ -303,22 +303,22 @@ contains
       dH_zero = 0.0_wp
       dg_zero = 0.0_wp
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "test_zero_tangent", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
       x = b0
-      call fac%solve(x, merr)
+      call fac%solve(x, "test_zero_tangent", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       reference = db
-      call fac%solve(reference, merr)
+      call fac%solve(reference, "test_zero_tangent", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       batch = db
-      call fac%solve_tangent(dH_zero, dg_zero, x, batch, merr)
+      call fac%solve_tangent(dH_zero, dg_zero, x, batch, "test_zero_tangent", merr)
       call promote(error, merr, "solve_tangent", failed)
       if (failed) return
 
@@ -353,12 +353,12 @@ contains
 
       call kkt_fixture(H0, g0, dH, dg, b0, db)
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "test_tangent_explicit_dk", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
       x = b0
-      call fac%solve(x, merr)
+      call fac%solve(x, "test_tangent_explicit_dk", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
       x_before = x
@@ -370,12 +370,12 @@ contains
             reference(:, icol) = db(:, icol) - matmul(dK, x(:, iseed))
          end do
       end do
-      call fac%solve(reference, merr)
+      call fac%solve(reference, "test_tangent_explicit_dk", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       batch = db
-      call fac%solve_tangent(dH, dg, x, batch, merr)
+      call fac%solve_tangent(dH, dg, x, batch, "test_tangent_explicit_dk", merr)
       call promote(error, merr, "solve_tangent", failed)
       if (failed) return
 
@@ -410,17 +410,17 @@ contains
 
       call kkt_fixture(H0, g0, dH, dg, b0, db)
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "test_batched_per_direction", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
       x = b0
-      call fac%solve(x, merr)
+      call fac%solve(x, "test_batched_per_direction", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       batch = db
-      call fac%solve_tangent(dH, dg, x, batch, merr)
+      call fac%solve_tangent(dH, dg, x, batch, "test_batched_per_direction", merr)
       call promote(error, merr, "solve_tangent", failed)
       if (failed) return
 
@@ -429,7 +429,7 @@ contains
          lo = (idir - 1)*nseed + 1
          hi = idir*nseed
          call fac%solve_tangent(dH(:, :, idir:idir), dg(:, idir:idir), x, &
-                                reference(:, lo:hi), merr)
+                                reference(:, lo:hi), "test_batched_per_direction", merr)
          call promote(error, merr, "solve_tangent", failed)
          if (failed) return
       end do
@@ -486,17 +486,17 @@ contains
 
       call kkt_fixture(H0, g0, dH, dg, b0, db)
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "run_tangent_fd", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
       x = b0
-      call fac%solve(x, merr)
+      call fac%solve(x, "run_tangent_fd", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       batch = db
-      call fac%solve_tangent(dH, dg, x, batch, merr)
+      call fac%solve_tangent(dH, dg, x, batch, "run_tangent_fd", merr)
       call promote(error, merr, "solve_tangent", failed)
       if (failed) return
 
@@ -512,11 +512,13 @@ contains
                   stencil(:, icol, ioff) = b0(:, iseed) + s_h*db(:, icol)
                end do
 
-               call fac_step%factor(H0 + s_h*dH(:, :, idir), g0 + s_h*dg(:, idir), merr)
+               call fac_step%factor(H0 + s_h*dH(:, :, idir), g0 + s_h*dg(:, idir), &
+                                    "run_tangent_fd", merr)
                call promote(error, merr, "displaced factor", failed)
                if (failed) return
                call fac_step%solve( &
-                  stencil(:, (idir - 1)*nseed + 1:idir*nseed, ioff), merr)
+                  stencil(:, (idir - 1)*nseed + 1:idir*nseed, ioff), &
+                  "run_tangent_fd", merr)
                call promote(error, merr, "displaced solve", failed)
                if (failed) return
             end do
@@ -551,17 +553,17 @@ contains
 
       call kkt_fixture(H0, g0, dH, dg, b0, db)
 
-      call fac%factor(H0, g0, merr)
+      call fac%factor(H0, g0, "test_shape_mismatch", merr)
       call promote(error, merr, "factor", failed)
       if (failed) return
 
       x = b0
-      call fac%solve(x, merr)
+      call fac%solve(x, "test_shape_mismatch", merr)
       call promote(error, merr, "solve", failed)
       if (failed) return
 
       short = db(:, 1:nseed*ndir - 1)
-      call fac%solve_tangent(dH, dg, x, short, merr)
+      call fac%solve_tangent(dH, dg, x, short, "test_shape_mismatch", merr)
       call check(error, allocated(merr), &
                  "A batch of "//to_string(nseed*ndir - 1)//" columns for "// &
                  to_string(nseed)//" seeds and "//to_string(ndir)// &

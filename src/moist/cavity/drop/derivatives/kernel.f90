@@ -34,6 +34,7 @@ module moist_cavity_drop_derivatives_kernel
    public :: drop_seed_result_tangent_type
    public :: build_seed_state, apply_seed, apply_seed_tangent, compute_branch_phi_adj
    public :: branch_point_adjoint, seed_contribution
+   public :: next_branch_group, max_branch_group_size
    public :: switched_eigenvalue_response, switched_eigenvalue_curvature
    public :: seed_status_message
    public :: seed_state_ok, seed_state_singular_gradient
@@ -1396,6 +1397,123 @@ contains
 
    end subroutine apply_seed_tangent
 
+   !* ====================== Contiguous anchor-group iterator ====================== *!
+
+   !> Advance to the next contiguous anchor group of the branch grid
+   !>
+   !> The single home of the group walk every branch pass runs: skip forward one
+   !> point at a time while `branch_count <= 1`, then extend the group while
+   !> `anchor_id` stays equal to the group's first point. Note that the two
+   !> conditions are *not* symmetric -- only the group's first point is gated on
+   !> `branch_count`, and a later point of the same `anchor_id` run joins the
+   !> group whatever its own `branch_count` is. Both halves are load-bearing and
+   !> are reproduced here exactly as the four call sites had them.
+   !>
+   !> Contiguity of a group is guaranteed by the stable `counting_argsort` at
+   !> `projection.f90:542-583`, not by anything this iterator checks: it only
+   !> ever groups points that are already adjacent, so a hypothetical split run
+   !> would be seen as two groups rather than silently merged.
+   !>
+   !> `found` is `.false.` once the grid is exhausted; `first`/`last` are then
+   !> set to an empty range (`last - first + 1 == 0`) rather than left undefined.
+   !>
+   !> Usage, with `cursor` initialised to 1 and never touched inside the body:
+   !>
+   !>     do
+   !>        call next_branch_group(branch_count, anchor_id, cursor, ifirst, ilast, found)
+   !>        if (.not. found) exit
+   !>        ...
+   !>     end do
+   !>
+   !> This is a subroutine and not the more natural `logical` function because
+   !> two of its callers are `pure` and a pure function may not take a
+   !> non-`intent(in)` dummy argument.
+   !>
+   !> @param[in]    branch_count Branches per grid point (ngrid); sets the extent
+   !> @param[in]    anchor_id    Anchor group id per grid point (ngrid)
+   !> @param[inout] cursor       Search position; advanced past the returned group
+   !> @param[out]   first        First grid point of the group
+   !> @param[out]   last         Last grid point of the group
+   !> @param[out]   found        `.false.` when no further group exists
+   pure subroutine next_branch_group(branch_count, anchor_id, cursor, first, last, found)
+      !> Branch bookkeeping per grid point
+      integer, intent(in) :: branch_count(:), anchor_id(:)
+      !> Search position, advanced past the group that is returned
+      integer, intent(inout) :: cursor
+      !> Bounds of the group
+      integer, intent(out) :: first, last
+      !> Whether a group was found
+      logical, intent(out) :: found
+
+      !> Grid extent
+      integer :: ngrid
+
+      found = .false.
+      first = 1
+      last = 0
+      ngrid = size(branch_count)
+
+      ! Skip singletons one point at a time; only the group's head is gated
+      do while (cursor <= ngrid)
+         if (branch_count(cursor) > 1) exit
+         cursor = cursor + 1
+      end do
+      if (cursor > ngrid) return
+
+      ! Extend the group while anchor_id stays the same
+      first = cursor
+      last = first
+      do while (last < ngrid)
+         if (anchor_id(last + 1) /= anchor_id(first)) exit
+         last = last + 1
+      end do
+
+      cursor = last + 1
+      found = .true.
+
+   end subroutine next_branch_group
+
+   !> Largest number of grid points any one contiguous anchor group holds
+   !>
+   !> The scratch bound for the two passes that gather a group into a
+   !> `(:, nbranch)` buffer -- `forward.f90`'s branch post-pass and
+   !> `tangent_forward.f90`'s `branch_stage`. Both index that buffer by the
+   !> group's *run length*, so `maxval(branch_count)` is the wrong bound: it is
+   !> a per-point branch counter, a different quantity that merely happens to
+   !> agree with the run length on a well-formed grid. Rather than assert the
+   !> agreement -- this module has no error channel, and a correct bound beats a
+   !> late abort -- the bound is taken from the same walk that consumes it, by
+   !> the same [[next_branch_group]] the caller loops over. The invariant is
+   !> then structural: no group the caller can see is wider than the maximum
+   !> group this returns.
+   !>
+   !> Returns zero when no multi-branch group exists, so a caller may also use
+   !> it as the "is there anything to do" test.
+   !>
+   !> @param[in] branch_count Branches per grid point (ngrid); sets the extent
+   !> @param[in] anchor_id    Anchor group id per grid point (ngrid)
+   !> @returns                Maximum group extent, zero when there is no group
+   pure function max_branch_group_size(branch_count, anchor_id) result(nmax)
+      !> Branch bookkeeping per grid point
+      integer, intent(in) :: branch_count(:), anchor_id(:)
+      !> Maximum group extent
+      integer :: nmax
+
+      !> Group walk bookkeeping
+      integer :: cursor, ifirst, ilast
+      !> Whether a further group exists
+      logical :: found
+
+      nmax = 0
+      cursor = 1
+      do
+         call next_branch_group(branch_count, anchor_id, cursor, ifirst, ilast, found)
+         if (.not. found) exit
+         nmax = max(nmax, ilast - ifirst + 1)
+      end do
+
+   end function max_branch_group_size
+
    !> Reverse pass over the branch-weight softmax
    !>
    !> Within an anchor group the Lebedev weight carries a softmax factor,
@@ -1403,8 +1521,8 @@ contains
    !> this pass converts the remaining width-induced adjoint `dL/dp_m` into
    !> `dL/dPhi_m`, which the seed loop then couples to the point motion.
    !>
-   !> Groups are runs of equal `anchor_id`; points with `branch_count <= 1`
-   !> carry no softmax factor and stay at zero.
+   !> Groups are walked with [[next_branch_group]]: runs of equal `anchor_id`;
+   !> points with `branch_count <= 1` carry no softmax factor and stay at zero.
    !>
    !> @param[in]  branch_count    Number of branches per grid point (ngrid)
    !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
@@ -1429,7 +1547,10 @@ contains
       real(wp), intent(out) :: branch_phi_adj(:)
 
       !> Grid extent and group bookkeeping
-      integer :: ngrid, igroup_start, igroup_end, group_size, m_branch, im_grid
+      integer :: ngrid, igroup_cursor, igroup_start, igroup_end, group_size
+      integer :: m_branch, im_grid
+      !> Whether a further anchor group exists
+      logical :: have_group
       !> Weight-adjoint scratch
       real(wp) :: adj_branch, mean_adj_branch
 
@@ -1439,19 +1560,11 @@ contains
       if (.not. any(branch_count > 1)) return
       if (sigma_phi <= seed_weight_tol) return
 
-      igroup_start = 1
-      do while (igroup_start <= ngrid)
-         if (branch_count(igroup_start) <= 1) then
-            igroup_start = igroup_start + 1
-            cycle
-         end if
-
-         ! Extend the group while anchor_id stays the same
-         igroup_end = igroup_start
-         do while (igroup_end < ngrid)
-            if (anchor_id(igroup_end + 1) /= anchor_id(igroup_start)) exit
-            igroup_end = igroup_end + 1
-         end do
+      igroup_cursor = 1
+      do
+         call next_branch_group(branch_count, anchor_id, igroup_cursor, &
+                                igroup_start, igroup_end, have_group)
+         if (.not. have_group) exit
          group_size = igroup_end - igroup_start + 1
 
          mean_adj_branch = 0.0_wp
@@ -1468,8 +1581,6 @@ contains
             branch_phi_adj(im_grid) = -wbranch(im_grid) &
                                       *(branch_phi_adj(im_grid) - mean_adj_branch)/sigma_phi
          end do
-
-         igroup_start = igroup_end + 1
       end do
 
    end subroutine compute_branch_phi_adj

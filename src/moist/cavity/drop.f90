@@ -476,6 +476,7 @@ module moist_cavity_drop
       !> @param[in]    thread_slot    Slot of the calling thread
       !> @param[in]    igrid          Grid point to prepare
       !> @param[in]    want_curvature Whether the curvature invariants are needed
+      !> @param[in]    context        Calling routine, used to prefix the diagnostics
       !> @param[inout] abort          Shared failure latch of the parallel region
       !> @param[out]   anchor         Anchor of the grid point
       !> @param[out]   owner_idx      Owner sphere of the anchor
@@ -490,15 +491,17 @@ module moist_cavity_drop
       !> @param[inout] lsf4_rrrr      Caller-owned fourth-derivative buffer
       !> @param[out]   kkt_rhs        Solved standard jet and anchor seeds
       module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
-                                            want_curvature, abort, anchor, owner_idx, &
-                                            lambda_val, lsf1_r, lsf2_rr, lsf3_rrr, &
-                                            phi1_r, state, kkt_fac, ok, lsf4_rrrr, kkt_rhs)
+                                            want_curvature, context, abort, anchor, &
+                                            owner_idx, lambda_val, lsf1_r, lsf2_rr, &
+                                            lsf3_rrr, phi1_r, state, kkt_fac, ok, &
+                                            lsf4_rrrr, kkt_rhs)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(drop_worker_slots_type), intent(inout) :: slots
          integer, intent(in) :: thread_slot
          integer, intent(in) :: igrid
          logical, intent(in) :: want_curvature
+         character(len=*), intent(in) :: context
          type(drop_abort_latch_type), intent(inout) :: abort
          real(wp), intent(out) :: anchor(3)
          integer, intent(out) :: owner_idx
