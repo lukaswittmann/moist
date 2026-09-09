@@ -37,7 +37,8 @@ module moist_cavity_drop
       & drop_point_scratch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
-   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
+   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient, &
+      & cat_hessian
    use moist_cavity_drop_request, only: drop_property_request, &
                                         drop_request_default, drop_request_diagnostics, drop_request_fine
 
@@ -87,7 +88,7 @@ module moist_cavity_drop
    !> direction-free rank-4 block is built and contracted, which also means the
    !> rank-4 form's memory -- the dense `(3, nsph, 3, nsph)` staging block and
    !> the per-thread sparse accumulators -- applies from that count on.
-   integer, parameter :: drop_hvp_per_dir_max = 12
+   integer, parameter :: drop_hvp_per_dir_max = 6
 
    !> Modes of the fixed-adjoint channel of the surface Hessian traversal
    !>

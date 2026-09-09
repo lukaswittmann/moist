@@ -50,19 +50,29 @@
 !>
 !>  * **`drop_fixed_rank4`** (the dense Hessian). The projected point depends
 !>    on the nuclei only through the level set's active atoms and through the
-!>    owner, so the chain is run for the `3 * |active union owner|` Cartesian
-!>    unit directions of that local set and the columns are accumulated into
-!>    the direction-free rank-4 block `(3, nsph, 3, nsph)`. One traversal serves
+!>    owner, so the columns of the `3 * |active union owner|` Cartesian unit
+!>    directions of that local set are formed and accumulated into the
+!>    direction-free rank-4 block `(3, nsph, 3, nsph)`. One traversal serves
 !>    every direction; the price is a per-thread accumulator, which is sparse
-!>    for the reason [[drop_hess_sparse_type]] gives. The jet tangent of a unit
-!>    direction is a *column* of the point's tensors ([[drop_field_jet_column]]),
-!>    and the explicit nuclear motion of every column is one block of the
-!>    level set, `vjp_f2_rArB`, formed once per point; the chain makes no LSF
-!>    call per direction. For SvdW that block is a rank-52 product of per-atom
-!>    quantities, `O(n_active)` kernel work and one `gemm`; a level set without
-!>    a factorised form inherits the column-by-column default and pays
-!>    `3 n_local` passes of `hvp_jet_rA` per point. What is left per direction
-!>    is the second-order chain itself, `O(1)` in the active count.
+!>    for the reason [[drop_hess_sparse_type]] gives. The chain is not run per
+!>    unit direction. Everything it reads of a direction is the jet tangent
+!>    `(dv0, dv1, dv2, dv3)` and the owner's displacement, it is linear in
+!>    that tuple, and `dv2` and `dv3` are symmetric in their spatial indices,
+!>    so the tuple lives in a 23-dimensional space: `1 + 3 + 6 + 10` jet
+!>    coordinates plus the three owner components. The chain is run once per
+!>    element of the symmetrised basis of that space ([[chain_basis_element]]),
+!>    giving `L (3 n_active + 3, 23)`; the coordinates of every unit direction
+!>    are a packed column of the point's tensors
+!>    ([[drop_field_jet_column_packed]]) plus a unit owner entry, `C (23,
+!>    3 n_local)`; and all columns of the point are `L C`, one `gemm`. The
+!>    explicit nuclear motion of every column is one block of the level set,
+!>    `vjp_f2_rArB`, also formed once per point and added to `L C` before the
+!>    scatter. For SvdW that block is a rank-52 product of per-atom quantities,
+!>    `O(n_active)` kernel work and one `gemm`; a level set without a
+!>    factorised form inherits the column-by-column default and pays
+!>    `3 n_local` passes of `hvp_jet_rA` per point. Per point the mode thus
+!>    costs 23 chains, a block, two small matrix products and the scatter,
+!>    whatever the size of the local set.
 !>
 !>  * **`drop_fixed_per_dir`** (Hessian-vector products). The chain is run once
 !>    per *supplied* direction, with the jet tangent formed by contracting the
@@ -183,8 +193,10 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       & seed_anchor_apply, seed_anchor_contract
    use moist_cavity_drop_derivatives_field_tangent, only: drop_field_tangent_point, &
       & drop_field_jet_point, drop_field_jet_contract, drop_field_jet_tangent, &
-      & drop_field_jet_column, drop_field_f4_fold, drop_field_tangent_dir, &
-      & drop_field_tangent_work_type
+      & drop_field_jet_column_packed, drop_field_f4_fold, drop_field_tangent_dir, &
+      & drop_field_tangent_work_type, drop_n_sym2, drop_n_sym3, drop_n_jet_coef, &
+      & drop_sym2_idx, drop_sym3_idx
+   use moist_math_blas, only: gemm
    use moist_cavity_drop_derivatives_weights_tangent, only: prepare_surface_weights_tangent
    use moist_cavity_drop_gaussian_scatter, only: scatter_iswig_block_indexed, &
       & contract_iswig_block
@@ -192,6 +204,11 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
+
+   !> Dimension of the space the fixed channel's chain is linear on: the
+   !> packed jet tangent of a direction and the owner's displacement; see
+   !> [[chain_basis_element]]
+   integer, parameter :: drop_n_chain_basis = drop_n_jet_coef + ndim
 
    !> Initial entry capacity and bucket count of a per-thread accumulator
    !>
@@ -324,6 +341,15 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       !> slots, `(3 n_active, 3 n_active)` with the Cartesian component fastest.
       !> Sized to the point, so the level set writes it in place
       real(wp), allocatable :: mblk(:, :)
+      !> The chain on the symmetrised basis, `(3 n_active + 3, 23)`: the field
+      !> rows of the active slots, Cartesian component fastest, then the three
+      !> anchor entries of the owner
+      real(wp), allocatable :: lmat(:, :)
+      !> Basis coordinates of every unit direction of the local set, `(23, 3 n_local)`
+      real(wp), allocatable :: cmat(:, :)
+      !> All columns of the point, `lmat * cmat` plus the explicit block, sized
+      !> exactly so the product lands in place
+      real(wp), allocatable :: oblk(:, :)
    end type drop_rank4_scratch_type
 
    !> The anchor's iSwiG neighbourhood as one point sees it
@@ -608,6 +634,10 @@ contains
 
       !> Jet tangent along the current direction at the frozen point
       real(wp) :: dv0, dv1(3), dv2(3, 3), dv3(3, 3, 3)
+      !> Displacement of the owner in a basis element, and the row count of the
+      !> point's column block
+      real(wp) :: vown(3)
+      integer :: nrow, ibasis
       !> Gradient column of the current direction: field row and owner entries
       real(wp), allocatable :: field_row(:, :)
       real(wp) :: anchor_row(3)
@@ -618,7 +648,7 @@ contains
 
       !> Grid, atom, axis, seed, slot and direction indices
       integer :: igrid, ient, i, iaxis
-      integer :: idir, dir_atom, dir_axis, dir_loc, ia, ib
+      integer :: idir, dir_axis, dir_loc, ia, ib
       integer :: jdir, idir_g, iatom, jj, knb
 
       !> Timer handle
@@ -654,22 +684,22 @@ contains
       if (fixed_mode == drop_fixed_per_dir) then
          if (want_response) then
             h_hess = self%ctx%timer%resolve("Surface Hessian (per direction)", &
-                                            self%ctx%timer%current(), cat_gradient)
+                                            self%ctx%timer%current(), cat_hessian)
          else
             h_hess = self%ctx%timer%resolve("Surface Hessian (fixed adjoint, per direction)", &
-                                            self%ctx%timer%current(), cat_gradient)
+                                            self%ctx%timer%current(), cat_hessian)
          end if
       else if (fixed_mode == drop_fixed_rank4) then
          if (want_response) then
             h_hess = self%ctx%timer%resolve("Surface Hessian (both halves)", &
-                                            self%ctx%timer%current(), cat_gradient)
+                                            self%ctx%timer%current(), cat_hessian)
          else
             h_hess = self%ctx%timer%resolve("Surface Hessian (fixed adjoint)", &
-                                            self%ctx%timer%current(), cat_gradient)
+                                            self%ctx%timer%current(), cat_hessian)
          end if
       else
          h_hess = self%ctx%timer%resolve("Surface Hessian (adjoint response)", &
-                                         self%ctx%timer%current(), cat_gradient)
+                                         self%ctx%timer%current(), cat_hessian)
       end if
       call self%ctx%timer%start(h_hess)
 
@@ -741,8 +771,8 @@ contains
 
          !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, &
          !$omp& igrid, pt, point_ok, seeds, pw, rw, sc, ft_work, r4, swi, &
-         !$omp& dv0, dv1, dv2, dv3, field_row, anchor_row, v_act, w_xyz_zero, &
-         !$omp& ient, i, iaxis, idir, dir_atom, dir_axis, dir_loc, ia, ib, &
+         !$omp& dv0, dv1, dv2, dv3, vown, nrow, ibasis, field_row, anchor_row, v_act, &
+         !$omp& w_xyz_zero, ient, i, iaxis, idir, dir_axis, dir_loc, ia, ib, &
          !$omp& jdir, idir_g, iatom, jj, knb, worker_error)
          thread_slot = 1
 !$       thread_slot = omp_get_thread_num() + 1
@@ -922,66 +952,97 @@ contains
                                                                  pw%w_lsf2, r4%mblk)
                end if
 
-               !* ------------------- One chain per basis direction ------------------- *!
-               do idir = 1, 3*r4%ndir_atom
-                  dir_loc = (idir - 1)/3 + 1
-                  dir_atom = r4%dir_atoms(dir_loc)
-                  dir_axis = mod(idir - 1, 3) + 1
-                  r4%vdir(dir_axis, dir_atom) = 1.0_wp
-
-                  ! The jet tangent along a unit direction is a column of the
-                  ! point's tensors when the atom is active. An owner outside
-                  ! the active set does not enter the level set, so its column
-                  ! is zero and only the anchor moves.
-                  if (dir_loc <= pt%n_active) then
-                     call drop_field_jet_column(ft_work, pt%n_active, dir_axis, dir_loc, &
-                                                dv0, dv1, dv2, dv3)
-                  else
-                     dv0 = 0.0_wp
-                     dv1 = 0.0_wp
-                     dv2 = 0.0_wp
-                     dv3 = 0.0_wp
+               !* ------------------ The chain on the symmetrised basis ------------------ *!
+               ! Once per basis element rather than once per unit direction;
+               ! the module header gives the linearity argument. Elements
+               ! `1 .. 20` are the packed jet classes with the owner at rest,
+               ! `21 .. 23` move the owner alone. An element's field row and
+               ! anchor entries form one column of `L`.
+               nrow = 3*pt%n_active + 3
+               if (allocated(r4%lmat)) then
+                  if (size(r4%lmat, 1) /= nrow .or. size(r4%oblk, 2) /= 3*r4%ndir_atom) then
+                     deallocate (r4%lmat, r4%cmat, r4%oblk)
                   end if
+               end if
+               if (.not. allocated(r4%lmat)) then
+                  allocate (r4%lmat(nrow, drop_n_chain_basis))
+                  allocate (r4%cmat(drop_n_chain_basis, 3*r4%ndir_atom))
+                  allocate (r4%oblk(nrow, 3*r4%ndir_atom))
+               end if
 
+               do ibasis = 1, drop_n_chain_basis
+                  call chain_basis_element(ibasis, dv0, dv1, dv2, dv3, vown)
+                  r4%vdir(:, pt%owner_idx) = vown
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, r4%vdir, dv0, dv1, dv2, dv3, &
                                              .false., context, sc, ft_work, field_row, &
                                              anchor_row, worker_error)
-                  r4%vdir(dir_axis, dir_atom) = 0.0_wp
+                  r4%vdir(:, pt%owner_idx) = 0.0_wp
                   if (allocated(worker_error)) then
                      call abort%latch_error(worker_error, igrid)
                      exit
                   end if
+                  do i = 1, pt%n_active
+                     r4%lmat(3*(i - 1) + 1:3*i, ibasis) = field_row(:, i)
+                  end do
+                  r4%lmat(nrow - 2:nrow, ibasis) = anchor_row
+               end do
+               ! A latched element abandons the whole point, the response
+               ! channel below included: the run is failing and nothing will be
+               ! reduced out of it.
+               if (abort%requested) cycle
 
-                  ! The explicit nuclear motion of this column, read off the
-                  ! point's block; an owner outside the active set has none
+               !* ----------------- Coordinates of every unit direction ------------------ *!
+               ! A unit direction of an active atom has the packed column of the
+               ! point's tensors as its jet coordinates; an owner outside the
+               ! active set does not enter the level set, so its column carries
+               ! its displacement alone. The active atoms come first in the
+               ! local set, so a direction's local index below `n_active` is
+               ! its slot.
+               do idir = 1, 3*r4%ndir_atom
+                  dir_loc = (idir - 1)/3 + 1
+                  dir_axis = mod(idir - 1, 3) + 1
                   if (dir_loc <= pt%n_active) then
-                     do i = 1, pt%n_active
-                        field_row(:, i) = field_row(:, i) &
-                           + r4%mblk(3*(i - 1) + 1:3*i, 3*(dir_loc - 1) + dir_axis)
-                     end do
+                     call drop_field_jet_column_packed(ft_work, pt%n_active, dir_axis, dir_loc, &
+                                                       r4%cmat(1:drop_n_jet_coef, idir))
+                  else
+                     r4%cmat(1:drop_n_jet_coef, idir) = 0.0_wp
                   end if
+                  r4%cmat(drop_n_jet_coef + 1:drop_n_chain_basis, idir) = 0.0_wp
+                  if (dir_loc == r4%owner_loc) then
+                     r4%cmat(drop_n_jet_coef + dir_axis, idir) = 1.0_wp
+                  end if
+               end do
 
-                  ! The anchor entries belong to the owner's row; the field row
-                  ! to the active atoms' rows. Both land in column
-                  ! `(dir_axis, dir_atom)` of the block.
+               !* ----------------------- All columns of the point ----------------------- *!
+               ! `L C`, then the explicit nuclear motion of the active columns
+               ! read off the point's block; an owner outside the active set
+               ! has none
+               call gemm(r4%lmat, r4%cmat, r4%oblk)
+               if (pt%n_active > 0) then
+                  r4%oblk(1:3*pt%n_active, 1:3*pt%n_active) = &
+                     r4%oblk(1:3*pt%n_active, 1:3*pt%n_active) + r4%mblk
+               end if
+
+               ! The anchor entries belong to the owner's row; the field rows to
+               ! the active atoms' rows. Both land in column `(dir_axis,
+               ! dir_atom)` of the block.
+               do idir = 1, 3*r4%ndir_atom
+                  dir_loc = (idir - 1)/3 + 1
+                  dir_axis = mod(idir - 1, 3) + 1
                   ient = r4%pair_ent(r4%owner_loc, dir_loc)
                   do iaxis = 1, 3
                      hess_threads(thread_slot)%blocks(iaxis, dir_axis, ient) = &
                         hess_threads(thread_slot)%blocks(iaxis, dir_axis, ient) &
-                        + anchor_row(iaxis)
+                        + r4%oblk(nrow - 3 + iaxis, idir)
                   end do
                   do i = 1, pt%n_active
                      ient = r4%pair_ent(i, dir_loc)
                      hess_threads(thread_slot)%blocks(:, dir_axis, ient) = &
                         hess_threads(thread_slot)%blocks(:, dir_axis, ient) &
-                        + field_row(:, i)
+                        + r4%oblk(3*(i - 1) + 1:3*i, idir)
                   end do
                end do
-               ! A latched direction abandons the whole point, the response
-               ! channel below included: the run is failing and nothing will be
-               ! reduced out of it.
-               if (abort%requested) cycle
 
                !* ---------------------- iSwiG switching channel ---------------------- *!
                ! `f_i` depends on the nuclear geometry alone and its adjoint is
@@ -1096,6 +1157,7 @@ contains
          if (fixed_rank4_here) then
             deallocate (r4%dir_atoms, r4%pair_ent, r4%vdir, swi%ent)
             if (allocated(r4%mblk)) deallocate (r4%mblk)
+            if (allocated(r4%lmat)) deallocate (r4%lmat, r4%cmat, r4%oblk)
          end if
          if (fixed_per_dir_here) deallocate (v_act)
          call pt%destroy()
@@ -1231,6 +1293,77 @@ contains
          call scatter_jet_weight(ibasis, contribution, pw%w_lsf0, pw%w_lsf1, pw%w_lsf2)
       end do
    end subroutine point_weights
+
+   !> One element of the symmetrised basis of the chain's direction inputs
+   !>
+   !> [[fixed_direction_chain]] reads a direction through five quantities, the
+   !> jet tangent `(dv0, dv1, dv2, dv3)` at the frozen point and the owner's
+   !> displacement, and is linear in the five together. `dv2` and `dv3` are
+   !> symmetric in their spatial indices, so that space has dimension
+   !> `1 + 3 + 6 + 10 + 3 = 23`, and its basis is enumerated here in the order
+   !> of [[drop_field_jet_column_packed]] followed by the three owner axes:
+   !>
+   !>     1        dv0 = 1
+   !>     2 .. 4   dv1 = e_a
+   !>     5 .. 10  dv2 = one at (a, b) and at (b, a),   a <= b
+   !>     11 .. 20 dv3 = one at every permutation of (a, b, c),   a <= b <= c
+   !>     21 .. 23 owner displacement e_a
+   !>
+   !> An element of a symmetric class holds a one at *every* index of the
+   !> class, which is what makes the packed coordinate of that class -- its
+   !> representative entry, read once -- the right coefficient: contracting the
+   !> chain's images of these elements with the packed coordinates of a
+   !> direction returns the chain of the direction's full, symmetric tangent.
+   !>
+   !> @param[in]  ibasis Basis element, `1 .. drop_n_chain_basis`
+   !> @param[out] dv0    Jet-value component
+   !> @param[out] dv1    Jet-gradient component [3]
+   !> @param[out] dv2    Jet-Hessian component [3, 3]
+   !> @param[out] dv3    Jet third-derivative component [3, 3, 3]
+   !> @param[out] vown   Owner displacement [3]
+   pure subroutine chain_basis_element(ibasis, dv0, dv1, dv2, dv3, vown)
+      !> Basis element
+      integer, intent(in) :: ibasis
+      !> Jet components of the element
+      real(wp), intent(out) :: dv0, dv1(3), dv2(3, 3), dv3(3, 3, 3)
+      !> Owner displacement of the element
+      real(wp), intent(out) :: vown(3)
+
+      !> Symmetry class and its representative indices
+      integer :: k, a, b, c
+
+      dv0 = 0.0_wp
+      dv1 = 0.0_wp
+      dv2 = 0.0_wp
+      dv3 = 0.0_wp
+      vown = 0.0_wp
+
+      if (ibasis == 1) then
+         dv0 = 1.0_wp
+      else if (ibasis <= 1 + ndim) then
+         dv1(ibasis - 1) = 1.0_wp
+      else if (ibasis <= 1 + ndim + drop_n_sym2) then
+         k = ibasis - 1 - ndim
+         a = drop_sym2_idx(1, k)
+         b = drop_sym2_idx(2, k)
+         dv2(a, b) = 1.0_wp
+         dv2(b, a) = 1.0_wp
+      else if (ibasis <= drop_n_jet_coef) then
+         k = ibasis - 1 - ndim - drop_n_sym2
+         a = drop_sym3_idx(1, k)
+         b = drop_sym3_idx(2, k)
+         c = drop_sym3_idx(3, k)
+         ! Assignments, not increments: a repeated index names one entry twice
+         dv3(a, b, c) = 1.0_wp
+         dv3(a, c, b) = 1.0_wp
+         dv3(b, a, c) = 1.0_wp
+         dv3(b, c, a) = 1.0_wp
+         dv3(c, a, b) = 1.0_wp
+         dv3(c, b, a) = 1.0_wp
+      else
+         vown(ibasis - drop_n_jet_coef) = 1.0_wp
+      end if
+   end subroutine chain_basis_element
 
    !> The second-order chain of the fixed channel along one nuclear direction
    !>

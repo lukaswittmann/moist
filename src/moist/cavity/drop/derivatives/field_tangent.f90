@@ -121,11 +121,30 @@ module moist_cavity_drop_derivatives_field_tangent
    public :: drop_field_tangent
    public :: drop_field_tangent_point, drop_field_f4_fold, drop_field_tangent_dir
    public :: drop_field_jet_point, drop_field_jet_contract
-   public :: drop_field_jet_tangent, drop_field_jet_column
+   public :: drop_field_jet_tangent, drop_field_jet_column, drop_field_jet_column_packed
    public :: drop_field_tangent_work_type
+   public :: drop_n_sym2, drop_n_sym3, drop_n_jet_coef, drop_sym2_idx, drop_sym3_idx
 
    !> Spatial dimension
    integer, parameter :: ndim = 3
+
+   !> Independent entries of a symmetric `(3, 3)` and a totally symmetric
+   !> `(3, 3, 3)` spatial tensor, and the packed jet-coefficient count
+   !> `1 + 3 + 6 + 10`
+   integer, parameter :: drop_n_sym2 = 6, drop_n_sym3 = 10
+   integer, parameter :: drop_n_jet_coef = 1 + ndim + drop_n_sym2 + drop_n_sym3
+
+   !> Representative index of every symmetry class, `a <= b` and `a <= b <= c`
+   !> in lexicographic order
+   !>
+   !> This is the one definition of the packed ordering: the packed column
+   !> reader below writes its coefficients in it, and a caller that builds the
+   !> matching symmetrised basis of directional jets reads the same tables.
+   integer, parameter :: drop_sym2_idx(2, drop_n_sym2) = reshape([ &
+      & 1, 1, 1, 2, 1, 3, 2, 2, 2, 3, 3, 3], [2, drop_n_sym2])
+   integer, parameter :: drop_sym3_idx(3, drop_n_sym3) = reshape([ &
+      & 1, 1, 1, 1, 1, 2, 1, 1, 3, 1, 2, 2, 1, 2, 3, &
+      & 1, 3, 3, 2, 2, 2, 2, 2, 3, 2, 3, 3, 3, 3, 3], [3, drop_n_sym3])
 
    !> Per-point jet tensors and scratch of the field contraction
    !>
@@ -489,6 +508,58 @@ contains
       dv2 = work%t2(:, :, s, i)
       if (present(dv3)) dv3 = work%f4(:, :, :, s, i)
    end subroutine drop_field_jet_column
+
+   !> The jet tangent of one unit direction, packed by spatial symmetry class
+   !>
+   !> [[drop_field_jet_column]] with the `(3, 3)` and `(3, 3, 3)` tangents
+   !> reduced to one entry per symmetry class, in the order of
+   !> [[drop_sym2_idx]] and [[drop_sym3_idx]]:
+   !>
+   !>     coef(1)      = dv0
+   !>     coef(2:4)    = dv1(a)
+   !>     coef(5:10)   = dv2(a, b),     a <= b
+   !>     coef(11:20)  = dv3(a, b, c),  a <= b <= c
+   !>
+   !> These are the coordinates of the jet tangent in the symmetrised basis
+   !> whose element for a class holds a one at *every* index permutation of
+   !> its representative, so a linear map of the jet tangent evaluated on that
+   !> basis and contracted with `coef` returns the map of the full tangent.
+   !> That reading is legitimate because `t2` and `f4` are symmetric in their
+   !> spatial indices -- exactly for the SvdW kernel, to round-off for CFC,
+   !> both pinned by the generators' symbolic checks -- so the representative
+   !> entry is the class. Reads `f4`, so it requires [[drop_field_tangent_point]].
+   !>
+   !> @param[in]  work     Scratch buffers, filled at this point
+   !> @param[in]  n_active Active slots of the prepared point
+   !> @param[in]  s        Cartesian axis of the direction
+   !> @param[in]  i        Active slot of the direction
+   !> @param[out] coef     Packed jet tangent [drop_n_jet_coef]
+   pure subroutine drop_field_jet_column_packed(work, n_active, s, i, coef)
+      !> Scratch buffers, filled at this point
+      type(drop_field_tangent_work_type), intent(in) :: work
+      !> Active slots of the prepared point
+      integer, intent(in) :: n_active
+      !> Cartesian axis and active slot of the direction
+      integer, intent(in) :: s, i
+      !> Packed jet tangent
+      real(wp), intent(out) :: coef(drop_n_jet_coef)
+
+      !> Symmetry class
+      integer :: k
+
+      call assert_jet_filled(work, n_active, "drop_field_jet_column_packed")
+      call assert_f4_filled(work, n_active, "drop_field_jet_column_packed")
+
+      coef(1) = work%t0(s, i)
+      coef(2:1 + ndim) = work%t1(:, s, i)
+      do k = 1, drop_n_sym2
+         coef(1 + ndim + k) = work%t2(drop_sym2_idx(1, k), drop_sym2_idx(2, k), s, i)
+      end do
+      do k = 1, drop_n_sym3
+         coef(1 + ndim + drop_n_sym2 + k) = work%f4(drop_sym3_idx(1, k), drop_sym3_idx(2, k), &
+                                                    drop_sym3_idx(3, k), s, i)
+      end do
+   end subroutine drop_field_jet_column_packed
 
    !* ================================================================================= *!
    !*                            Field-contraction tangent                              *!

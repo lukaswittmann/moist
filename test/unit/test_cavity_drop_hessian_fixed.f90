@@ -304,9 +304,14 @@ module test_cavity_drop_hessian_fixed
    !> covers its index orientation. The rank-4 side takes its explicit nuclear
    !> motion from the level set's `vjp_f2_rArB` block, the per-direction side
    !> from `hvp_jet_rA`, so for SvdW the two are also two different kernel
-   !> paths. Measured `1.3e-14 / 24.5` (SvdW) and `5.7e-14 / 38.1` (CFC)
-   !> absolute against `max |Hv|`, i.e. `5.2e-16` and `1.5e-15` relative;
-   !> asserted almost three decades above.
+   !> paths; and the rank-4 side runs the chain on the 23-element symmetrised
+   !> basis and reconstructs every column from packed jet coordinates, where
+   !> the per-direction side runs it on the direction itself. Measured
+   !> `1.1e-13 / 24.5` (SvdW) and `2.3e-12 / 38.1` (CFC) absolute against
+   !> `max |Hv|`, i.e. `4.4e-15` and `5.9e-14` relative. The CFC figure is the
+   !> larger because its jet tensors are symmetric in their spatial indices only
+   !> to round-off and the packed coordinates read one representative entry per
+   !> class; both sit more than a decade under the bound.
    real(wp), parameter :: PER_DIR_TOL = 1.0E-12_wp
 
 contains

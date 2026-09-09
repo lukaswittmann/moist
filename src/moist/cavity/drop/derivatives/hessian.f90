@@ -21,24 +21,24 @@
 !> The response half is intrinsically per direction. The fixed half is offered
 !> in two forms (see the traversal's header): the direction-free rank-4 block,
 !> whose explicit nuclear motion is one level-set block per grid point and
-!> whose second-order chain runs once per Cartesian unit direction of the
-!> point's local set, and the per-direction column, built from the supplied
-!> directions alone. Per grid point their costs are
+!> whose second-order chain runs on a fixed 23-element basis per point, and
+!> the per-direction column, built from the supplied directions alone. Per grid
+!> point their costs are
 !>
-!>     rank-4:         one `vjp_f2_rArB` block  +  3 n_local chains
+!>     rank-4:         one `vjp_f2_rArB` block + 23 chains + two matrix products
 !>     per direction:  ndir * (one `hvp_jet_rA` pass + one chain)
 !>
-!> and both channels' `O(n_active)` accessor passes dominate, so the crossover
-!> is a *number of directions*, not a fraction of the basis. Measured on the
+!> and the `O(n_active)` accessor passes dominate both, so the crossover is a
+!> *number of directions*, not a fraction of the basis. Measured on the
 !> polyalanine set (SvdW, 110-point Lebedev grids, one thread): the per-direction
-!> form costs 0.10 s (83 atoms) and 0.27 s (163 atoms) per direction against a
-!> rank-4 fixed half of 1.23 s and 4.15 s, so the two meet at 12 and 14
-!> directions. [[hvp_fixed_mode]] therefore runs per direction up to
+!> form costs 0.09-0.10 s (83 atoms) and 0.27-0.31 s (163 atoms) per direction
+!> against a rank-4 fixed half of 0.61 s and 2.15 s, so the two meet at about
+!> 5 and 7 directions. [[hvp_fixed_mode]] therefore runs per direction up to
 !> `drop_hvp_per_dir_max` directions and rank-4 beyond that: the rank-4 form is
 !> never worse than the dense path, and the per-direction form is never asked
 !> to do more than about one dense fixed half's worth of work. The bound is a
-!> constant because the quadratic terms of the rank-4 form (the block's matrix
-!> product and its scatter) are still small at these sizes; on much larger
+!> constant because the quadratic terms of the rank-4 form (the two matrix
+!> products and the scatter) are still small at these sizes; on much larger
 !> active sets the true crossover moves up and the rule errs towards rank-4,
 !> which is bounded, rather than towards the unbounded per-direction cost.
 !> Beyond the bound a Hessian-vector product also carries the rank-4 form's
