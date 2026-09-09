@@ -260,6 +260,8 @@ module moist_cavity_drop_lsf_cfc
       procedure, public :: tangent_f2_rr => lsf_tangent_f2_rr
       !> Directional nuclear derivative of the third spatial derivative
       procedure, public :: tangent_f3_rrr => lsf_tangent_f3_rrr
+      !> The four directional nuclear derivatives above in one pass
+      procedure, public :: tangent_jet => lsf_tangent_jet
       !> Nuclear Hessian-vector product
       procedure, public :: hvp_f1_rA => lsf_hvp_f1_rA
       !> Directional nuclear derivative of `f2_r_rA`
@@ -1768,6 +1770,49 @@ contains
                             tg0, tg1_r, tg2_rr, tg3_rrr, 3, t0, t1, t2, t3)
       res = t3
    end subroutine lsf_tangent_f3_rrr
+
+   !> Directional nuclear derivatives of the whole jet in one pass
+   !>
+   !> One pair sweep of [[tangent_tensors]] and one kernel evaluation give the
+   !> results the single accessors above return one at a time, each from its
+   !> own sweep. Level 3 with `dv3`, level 2 without.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  v    Nuclear displacement directions [3, ncenters]
+   !> @param[out] dv0  Directional derivative of the value
+   !> @param[out] dv1  Directional derivative of the spatial gradient [3]
+   !> @param[out] dv2  Directional derivative of the spatial Hessian [3, 3]
+   !> @param[out] dv3  Directional derivative of the third derivative [3, 3, 3]
+   subroutine lsf_tangent_jet(self, v, dv0, dv1, dv2, dv3)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_cfc_type), intent(in) :: self
+      !> Nuclear displacement directions
+      real(wp), intent(in) :: v(:, :)
+      !> Directional derivatives of the jet
+      real(wp), intent(out) :: dv0, dv1(3), dv2(3, 3)
+      real(wp), intent(out), optional :: dv3(3, 3, 3)
+
+      !> Direction-contracted pair tensors
+      real(wp) :: tg0, tg1_r(ndim), tg2_rr(ndim, ndim), tg3_rrr(ndim, ndim, ndim)
+      !> Third order, read only when asked for
+      real(wp) :: t3(ndim, ndim, ndim)
+      !> Kernel level
+      integer :: level
+
+      dv0 = 0.0_wp
+      dv1 = 0.0_wp
+      dv2 = 0.0_wp
+      if (present(dv3)) dv3 = 0.0_wp
+      if (self%n_active == 0) return
+      level = 2
+      if (present(dv3)) level = 3
+      call self%require_deriv(level, "tangent_jet")
+
+      call tangent_tensors(self, v, level, tg0, tg1_r, tg2_rr, tg3_rrr)
+      call cfc_tangent_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
+                            tg0, tg1_r, tg2_rr, tg3_rrr, level, dv0, dv1, dv2, t3)
+      if (present(dv3)) dv3 = t3
+   end subroutine lsf_tangent_jet
 
    !> Fill the per-atom Hessian-vector-product family (and its tangent ladder)
    !>

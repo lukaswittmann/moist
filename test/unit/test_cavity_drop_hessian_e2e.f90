@@ -427,9 +427,9 @@ module test_cavity_drop_hessian_e2e
    !> afterwards, with its chain run on the 23-element symmetrised basis and
    !> every column reconstructed from packed jet coordinates. Mathematically
    !> the same by linearity; numerically two different evaluations. Measured
-   !> `1.9e-15` (SvdW) and `1.5e-15` (CFC) relative against the `1e-13`
+   !> `1.7e-15` (SvdW) and `1.3e-15` (CFC) relative against the `1e-13`
    !> asserted. The same bound serves the mode boundary case of `run_hvp`,
-   !> where both sides are rank-4 and only the contraction differs: `3.4e-16` /
+   !> where both sides are rank-4 and only the contraction differs: `3.1e-16` /
    !> `5.4e-16` relative.
    real(wp), parameter :: HVP_GEN_TOL = 1.0E-13_wp
 

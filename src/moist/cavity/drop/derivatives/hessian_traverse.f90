@@ -78,11 +78,18 @@
 !>    per *supplied* direction, with the jet tangent formed by contracting the
 !>    same tensors with the direction ([[drop_field_jet_tangent]]), and the
 !>    column lands straight in the response channel's `(3, nsph, ndir)`
-!>    per-thread buffer, with the explicit nuclear motion of each direction from
-!>    `hvp_jet_rA`. Cost one `O(n_active)` accessor pass per direction and
-!>    point, against the rank-4 mode's per-point block and `3 n_local` chains,
-!>    so it is the right mode for a few directions and the wrong one for a
-!>    basis; `hessian.f90` makes that choice.
+!>    per-thread buffer. The explicit nuclear motion of the field row comes
+!>    from `hvp_jet_rA` per direction for one or two directions, and from the
+!>    weighted block applied to the whole set, `vjp_f2_rArB_apply`, once per
+!>    point from `drop_hvp_apply_min` directions on -- two direction-free
+!>    kernels per atom against one forward kernel per atom per direction. The
+!>    tensors are materialised here as well: measured against the level set's
+!>    contracted accessors per direction, they win even for a single direction,
+!>    because the reverse-mode row kernels cost about what the tensors do while
+!>    every further direction is a contraction. Cost one `O(n_active)` accessor
+!>    pass per direction and point plus the fills, against the rank-4 mode's
+!>    per-point block and 23 chains, so it is the right mode for a few
+!>    directions and the wrong one for a basis; `hessian.f90` makes that choice.
 !>
 !> Both modes read the same weights of the point, [[drop_point_weights_type]]:
 !> the normal fold and the 13 jet-seed contractions of the *fixed* adjoints.
@@ -643,6 +650,13 @@ contains
       real(wp) :: anchor_row(3)
       !> A direction restricted to the point's active slots
       real(wp), allocatable :: v_act(:, :)
+      !> Explicit nuclear motion of the field row for every direction of the
+      !> block, per-direction mode with a batch: the weighted block applied to
+      !> the directions
+      real(wp), allocatable :: xrow(:, :, :)
+      !> Whether the per-direction mode takes the explicit nuclear motion from
+      !> the applied block rather than from one `hvp_jet_rA` per direction
+      logical :: use_apply
       !> Effective position adjoint of the response channel; identically zero
       real(wp) :: w_xyz_zero(3)
 
@@ -742,6 +756,13 @@ contains
          ndir = 1
          nchunk = 1
       end if
+      ! The explicit nuclear motion of the per-direction mode: the applied block
+      ! pays two direction-free kernels per atom and then a cheap contraction per
+      ! direction, one `hvp_jet_rA` per direction pays one forward kernel per
+      ! atom per direction, so the block wins from three directions on. Keyed on
+      ! the whole set and never on a block, so a direction's column does not
+      ! depend on how the set was blocked.
+      use_apply = fixed_mode == drop_fixed_per_dir .and. ndir >= drop_hvp_apply_min
 
       do ilo = 1, ndir, nchunk
          ihi = min(ilo + nchunk - 1, ndir)
@@ -758,7 +779,8 @@ contains
             !* ------------------ Passes 1 and 2: the moving weights ------------------ *!
             ! Serial over this block's directions, for the group-reduction
             ! reason the module header documents; `deff` is indexed `1 .. nblk`.
-            call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), deff, error)
+            call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), &
+                                 fixed_mode == drop_fixed_per_dir, deff, error)
             if (allocated(error)) then
                if (allocated(hvp_entry)) hvp = hvp_entry
                call self%ctx%timer%stop(h_hess)
@@ -771,7 +793,7 @@ contains
 
          !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, &
          !$omp& igrid, pt, point_ok, seeds, pw, rw, sc, ft_work, r4, swi, &
-         !$omp& dv0, dv1, dv2, dv3, vown, nrow, ibasis, field_row, anchor_row, v_act, &
+         !$omp& dv0, dv1, dv2, dv3, vown, nrow, ibasis, field_row, anchor_row, v_act, xrow, &
          !$omp& w_xyz_zero, ient, i, iaxis, idir, dir_axis, dir_loc, ia, ib, &
          !$omp& jdir, idir_g, iatom, jj, knb, worker_error)
          thread_slot = 1
@@ -804,6 +826,7 @@ contains
          end if
          if (fixed_per_dir_here) then
             allocate (v_act(3, self%nsph), source=0.0_wp)
+            if (use_apply) allocate (xrow(3, self%nsph, nchunk))
          end if
 
          !$omp do schedule(static, 8)
@@ -842,8 +865,14 @@ contains
             ! Direction free, so formed once per point and read by every
             ! contraction below. The fills are unconditional on purpose: the
             ! buffers outlive the point, and a skipped fill would serve the
-            ! previous point's tensors. The fixed channel also needs the mixed
-            ! fourth derivative; the response channel does not.
+            ! previous point's tensors at the next; every reader checks the slot
+            ! markers and aborts on a buffer whose fill did not run at this
+            ! active count. The fixed channel also needs the mixed fourth
+            ! derivative; the response channel does not. Measured against the
+            ! alternative -- the level set's contracted accessors per direction
+            ! -- the materialised tensors win even for a single direction: the
+            ! reverse-mode kernels of the row cost about what the tensors do,
+            ! and every further direction is then a contraction.
             if (fixed_here) then
                call drop_field_tangent_point(slots%lsf(thread_slot)%lsf, ft_work)
             else
@@ -1064,6 +1093,18 @@ contains
             end if
 
             if (fixed_per_dir_here) then
+               !* ---------- Explicit nuclear motion of the block's directions ---------- *!
+               ! With a batch, the weighted block applied to every direction of
+               ! the block in one accessor call: direction-free per-atom work,
+               ! then one contraction per direction that does not depend on
+               ! which other directions share the block. With one or two
+               ! directions the chain takes it from `hvp_jet_rA` instead.
+               if (use_apply .and. pt%n_active > 0) then
+                  call slots%lsf(thread_slot)%lsf%vjp_f2_rArB_apply(pw%w_lsf0, pw%w_lsf1, &
+                                                                       pw%w_lsf2, dirs(:, :, ilo:ihi), &
+                                                                       xrow(:, :, 1:nblk))
+               end if
+
                !* ----------------- One chain per supplied direction ------------------ *!
                do jdir = 1, nblk
                   idir_g = ilo + jdir - 1
@@ -1079,11 +1120,16 @@ contains
 
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, dirs(:, :, idir_g), &
-                                             dv0, dv1, dv2, dv3, .true., context, sc, &
+                                             dv0, dv1, dv2, dv3, .not. use_apply, context, sc, &
                                              ft_work, field_row, anchor_row, worker_error)
                   if (allocated(worker_error)) then
                      call abort%latch_error(worker_error, igrid)
                      exit
+                  end if
+                  if (use_apply) then
+                     do i = 1, pt%n_active
+                        field_row(:, i) = field_row(:, i) + xrow(:, i, jdir)
+                     end do
                   end if
 
                   do i = 1, pt%n_active
@@ -1159,7 +1205,10 @@ contains
             if (allocated(r4%mblk)) deallocate (r4%mblk)
             if (allocated(r4%lmat)) deallocate (r4%lmat, r4%cmat, r4%oblk)
          end if
-         if (fixed_per_dir_here) deallocate (v_act)
+         if (fixed_per_dir_here) then
+            deallocate (v_act)
+            if (use_apply) deallocate (xrow)
+         end if
          call pt%destroy()
          !$omp end parallel
 
@@ -1571,10 +1620,14 @@ contains
    !> @param[in]  self  DROP cavity instance
    !> @param[in]  acc   Raw surface adjoints, held fixed
    !> @param[in]  eff   Folded weights, as [[prepare_surface_weights]] returned them
-   !> @param[in]  dirs  Nuclear directions of one block, `(3, nsph, ndir)`
-   !> @param[out] deff  Tangent of the folded weights, one element per direction
-   !> @param[out] error Error object, allocated on failure
-   subroutine weight_tangents(self, acc, eff, dirs, deff, error)
+   !> @param[in]  dirs       Nuclear directions of one block, `(3, nsph, ndir)`
+   !> @param[in]  contracted Pass 1 takes its jet tangents through the level set's
+   !>                        contracted accessor (the per-direction mode) rather
+   !>                        than off materialised tensors; keyed on the mode and
+   !>                        not on the block, so that blocking stays exact
+   !> @param[out] deff       Tangent of the folded weights, one element per direction
+   !> @param[out] error      Error object, allocated on failure
+   subroutine weight_tangents(self, acc, eff, dirs, contracted, deff, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Raw surface adjoints
@@ -1583,6 +1636,8 @@ contains
       type(drop_surface_weights_type), intent(in) :: eff
       !> Nuclear directions
       real(wp), intent(in) :: dirs(:, :, :)
+      !> Whether pass 1 uses the contracted accessor per direction
+      logical, intent(in) :: contracted
       !> Tangent of the folded weights, one element per direction
       type(drop_surface_weights_type), allocatable, intent(out) :: deff(:)
       !> Error handling
@@ -1601,7 +1656,8 @@ contains
       !* -------------------------- Pass 1: forward tangent --------------------------- *!
       allocate (d_a(ngrid, ndir), d_wleb(ngrid, ndir), d_xi0(ngrid, ndir), &
                 d_wbranch(ngrid, ndir))
-      call self%get_surface_tangent(dirs, d_a, d_wleb, d_xi0, d_wbranch, error)
+      call self%get_surface_tangent(dirs, d_a, d_wleb, d_xi0, d_wbranch, error, &
+                                    contracted=contracted)
       if (allocated(error)) return
 
       ! `compute_branch_phi_adj` is skipped by the primal when the cavity holds

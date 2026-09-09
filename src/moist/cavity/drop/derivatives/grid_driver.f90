@@ -128,6 +128,8 @@ contains
          call abort%latch_error(worker_error, igrid)
          return
       end if
+      ! Every nuclear accessor of the point below shares these
+      call slots%lsf(thread_slot)%lsf%cache_point_tensors()
 
       call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, pt%lsf1_r, pt%lsf2_rr, pt%lsf3_rrr)
       if (allocated(pt%lsf4_rrrr)) call slots%lsf(thread_slot)%lsf%f4_rrrr(pt%lsf4_rrrr)

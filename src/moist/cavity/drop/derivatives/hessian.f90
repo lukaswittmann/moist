@@ -25,15 +25,21 @@
 !> the per-direction column, built from the supplied directions alone. Per grid
 !> point their costs are
 !>
-!>     rank-4:         one `vjp_f2_rArB` block + 23 chains + two matrix products
-!>     per direction:  ndir * (one `hvp_jet_rA` pass + one chain)
+!>     rank-4:         the fills + one `vjp_f2_rArB` block + 23 chains
+!>                     + two matrix products
+!>     per direction:  the fills + the explicit motion (one `hvp_jet_rA` pass
+!>                     per direction below `drop_hvp_apply_min` directions, one
+!>                     applied block `vjp_f2_rArB_apply` from there on)
+!>                     + ndir chains and contractions
 !>
-!> and the `O(n_active)` accessor passes dominate both, so the crossover is a
+!> and the `O(n_active)` kernel passes dominate both, so the crossover is a
 !> *number of directions*, not a fraction of the basis. Measured on the
 !> polyalanine set (SvdW, 110-point Lebedev grids, one thread): the per-direction
-!> form costs 0.09-0.10 s (83 atoms) and 0.27-0.31 s (163 atoms) per direction
-!> against a rank-4 fixed half of 0.61 s and 2.15 s, so the two meet at about
-!> 5 and 7 directions. [[hvp_fixed_mode]] therefore runs per direction up to
+!> form costs about 0.13 s + 0.022 s per direction (83 atoms) and 0.75 s +
+!> 0.062 s per direction (163 atoms) -- the intercept is the point's fills and
+!> the applied block, the slope one chain and its contractions -- against a
+!> rank-4 fixed half of 0.52 s and 1.85 s, so the two meet at about 12 and 18
+!> directions. [[hvp_fixed_mode]] therefore runs per direction up to
 !> `drop_hvp_per_dir_max` directions and rank-4 beyond that: the rank-4 form is
 !> never worse than the dense path, and the per-direction form is never asked
 !> to do more than about one dense fixed half's worth of work. The bound is a

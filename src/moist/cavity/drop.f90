@@ -61,7 +61,7 @@ module moist_cavity_drop
    !> Hessian-vector product switches from the per-direction to the rank-4 form
    !> of its fixed channel, so a test that has to sit on that boundary sizes
    !> its direction set from the bound
-   public :: drop_hvp_per_dir_max
+   public :: drop_hvp_per_dir_max, drop_hvp_apply_min
 
    !> Nuclear directions carried by one block of the surface-Hessian traversal
    !>
@@ -88,7 +88,16 @@ module moist_cavity_drop
    !> direction-free rank-4 block is built and contracted, which also means the
    !> rank-4 form's memory -- the dense `(3, nsph, 3, nsph)` staging block and
    !> the per-thread sparse accumulators -- applies from that count on.
-   integer, parameter :: drop_hvp_per_dir_max = 6
+   integer, parameter :: drop_hvp_per_dir_max = 12
+
+   !> Directions from which the per-direction fixed channel takes the explicit
+   !> nuclear motion of its field rows from the weighted block applied to the
+   !> whole set (`vjp_f2_rArB_apply`, two direction-free kernels per atom and a
+   !> contraction per direction) rather than from one `hvp_jet_rA` per direction
+   !> (one forward kernel per atom per direction). Keyed on the whole direction
+   !> set, never on a block of it, so a direction's column does not depend on
+   !> the blocking.
+   integer, parameter :: drop_hvp_apply_min = 3
 
    !> Modes of the fixed-adjoint channel of the surface Hessian traversal
    !>
@@ -645,20 +654,24 @@ module moist_cavity_drop
 
       !> [deriv/tangent_forward.f90] Pass 1: forward tangent of the surface map
       !>
-      !> @param[in]  self      DROP cavity instance
-      !> @param[in]  dirs      Nuclear directions (3, nsph, ndir)
-      !> @param[out] d_a       Tangent of the area element (ngrid, ndir)
-      !> @param[out] d_wleb    Tangent of the final Lebedev weight (ngrid, ndir)
-      !> @param[out] d_xi0     Tangent of the Gaussian width (ngrid, ndir)
-      !> @param[out] d_wbranch Tangent of the softmax branch weight (ngrid, ndir)
-      !> @param[out] error     Error object
+      !> @param[in]  self       DROP cavity instance
+      !> @param[in]  dirs       Nuclear directions (3, nsph, ndir)
+      !> @param[out] d_a        Tangent of the area element (ngrid, ndir)
+      !> @param[out] d_wleb     Tangent of the final Lebedev weight (ngrid, ndir)
+      !> @param[out] d_xi0      Tangent of the Gaussian width (ngrid, ndir)
+      !> @param[out] d_wbranch  Tangent of the softmax branch weight (ngrid, ndir)
+      !> @param[out] error      Error object
+      !> @param[in]  contracted Take the level set's per-direction tangents through its
+      !>                        contracted accessor instead of materialising the mixed
+      !>                        tensors once per point; default `.false.`
       module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
-                                                 d_wbranch, error)
+                                                 d_wbranch, error, contracted)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          real(wp), intent(in) :: dirs(:, :, :)
          real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
          type(error_type), allocatable, intent(out) :: error
+         logical, intent(in), optional :: contracted
       end subroutine get_surface_tangent_drop
 
       !> [deriv/hessian_traverse.f90] Adjoint-response half of the surface Hessian

@@ -98,6 +98,17 @@ module test_cavity_drop_lsf
    real(wp), parameter :: HESSFREE_ABS = 1.0e-14_wp
    real(wp), parameter :: HESSFREE_REL = 1.0e-12_wp
 
+   !> Absolute tolerance of a block-level round-off comparison, as a fraction of
+   !> the largest entry of the block compared. Where two different evaluations
+   !> of one block meet -- the weighted own-atom kernel against the hvp family,
+   !> the applied block against the assembled one -- the deviation is round-off
+   !> of the block's scale, not of each entry. Measured: SvdW diagonal `1.1e-14`
+   !> on a block of scale `0.19` (`5.7e-14` of the scale); CFC applied block
+   !> `5.2e-13` on a scale of `1.78` (`2.9e-13` of the scale, the CFC kernels
+   !> being symmetric to about `1e-13` themselves). Asserted a decade above the
+   !> larger.
+   real(wp), parameter :: BLOCK_TOL = 1.0e-12_wp
+
    !> Poison written into every result buffer by the empty-active-list check.
    real(wp), parameter :: EMPTY_POISON = -1.0e30_wp
 
@@ -196,6 +207,10 @@ contains
                   new_unittest("cfc_hvp_jet_matches_parts", test_cfc_hvp_jet), &
                   new_unittest("svdw_vjp_f2_rarb_matches_hvp", test_svdw_vjp_f2_rArB), &
                   new_unittest("cfc_vjp_f2_rarb_matches_hvp", test_cfc_vjp_f2_rArB), &
+                  new_unittest("svdw_tangent_jet_matches_parts", test_svdw_tangent_jet), &
+                  new_unittest("cfc_tangent_jet_matches_parts", test_cfc_tangent_jet), &
+                  new_unittest("svdw_vjp_f2_rarb_apply_matches_block", test_svdw_vjp_f2_rArB_apply), &
+                  new_unittest("cfc_vjp_f2_rarb_apply_matches_block", test_cfc_vjp_f2_rArB_apply), &
                   new_unittest("svdw_radius_pairwise", test_svdw_radius_pairwise), &
                   new_unittest("cfc_radius_pairwise", test_cfc_radius_pairwise), &
                   new_unittest("svdw_empty_active", test_svdw_empty_active), &
@@ -2208,11 +2223,12 @@ contains
    !> The block is the nuclear Jacobian of the weighted row, so its column for
    !> `e_(t,B)` is `hvp_jet_rA` along that direction contracted with the same
    !> weights. SvdW assembles the block as a rank-52 product of per-atom
-   !> quantities and takes its diagonal from shifted atom tensors rather than
-   !> from `svdw_atom_tangent_eval`, so the two agree to round-off, not to the
-   !> bit, and the bound is `HESSFREE_*`. CFC inherits the generic
-   !> column-by-column default, which this pins in the same way. `w2` is
-   !> asymmetric on purpose: the contract sums all nine entries independently.
+   !> quantities and takes its diagonal from its own kernel,
+   !> `svdw_vjp_diag_eval`, so the two agree to round-off of the block's scale,
+   !> not to the bit: the bound is `BLOCK_TOL` of the largest entry. CFC
+   !> inherits the generic column-by-column default, which this pins in the
+   !> same way. `w2` is asymmetric on purpose: the contract sums all nine
+   !> entries independently.
    subroutine run_vjp_f2_rArB(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -2223,14 +2239,11 @@ contains
       real(wp), allocatable :: radii(:), points(:, :)
       real(wp), allocatable :: v(:, :), blk(:, :)
       real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
-      real(wp) :: w0, w1(ndim), w2(ndim, ndim), want
+      real(wp) :: w0, w1(ndim), w2(ndim, ndim), want, scale
       integer  :: icase, ipt, i, j, s_ax, t_ax, a, b, iblend, igamma, nblend, ngamma, n_active
       type(mctc_error), allocatable :: lsf_err
 
-      w0 = 0.73_wp
-      w1 = [-0.41_wp, 0.88_wp, 0.17_wp]
-      w2 = reshape([0.29_wp, 0.62_wp, -0.36_wp, -0.54_wp, 0.08_wp, 0.45_wp, &
-                    0.13_wp, -0.77_wp, 0.91_wp], [ndim, ndim])
+      call test_weights(w0, w1, w2)
 
       call svdw_sweep_sizes(kind, nblend, ngamma)
 
@@ -2256,6 +2269,7 @@ contains
                   n_active = lsf%active_count()
                   blk = huge(1.0_wp)
                   call lsf%vjp_f2_rArB(w0, w1, w2, blk)
+                  scale = maxval(abs(blk(1:ndim*n_active, 1:ndim*n_active)))
                   do j = 1, n_active
                      do t_ax = 1, ndim
                         v(t_ax, lsf%active_atom(j)) = 1.0_wp
@@ -2273,7 +2287,7 @@ contains
                                  end do
                               end do
                               call check(error, blk(ndim*(i - 1) + s_ax, ndim*(j - 1) + t_ax), &
-                                         want, thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                         want, thr_abs=BLOCK_TOL*scale, thr_rel=HESSFREE_REL, &
                                          message="vjp_f2_rArB disagrees with weighted hvp_jet_rA")
                               if (allocated(error)) return
                            end do
@@ -2287,6 +2301,217 @@ contains
          deallocate (v, blk, h1, h2, h3)
       end do
    end subroutine run_vjp_f2_rArB
+
+   !> The adjoint weights every reverse-mode consistency check uses
+   !>
+   !> `w2` is asymmetric and shares no entry with its transpose: the contracts
+   !> sum all nine entries independently, and a symmetric fixture could not tell
+   !> a full contraction from one that dropped half the off-diagonals and folded
+   !> a factor of two into the rest.
+   !>
+   !> @param[out] w0 Weight of the value
+   !> @param[out] w1 Weights of the spatial gradient
+   !> @param[out] w2 Weights of the spatial Hessian
+   subroutine test_weights(w0, w1, w2)
+      real(wp), intent(out) :: w0, w1(ndim), w2(ndim, ndim)
+
+      w0 = 0.73_wp
+      w1 = [-0.41_wp, 0.88_wp, 0.17_wp]
+      w2 = reshape([0.29_wp, 0.62_wp, -0.36_wp, -0.54_wp, 0.08_wp, 0.45_wp, &
+                    0.13_wp, -0.77_wp, 0.91_wp], [ndim, ndim])
+   end subroutine test_weights
+
+   !> SvdW dispatch of the one-pass tangent jet check.
+   subroutine test_svdw_tangent_jet(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent_jet(error, kind_svdw)
+   end subroutine test_svdw_tangent_jet
+
+   !> CFC dispatch of the one-pass tangent jet check.
+   subroutine test_cfc_tangent_jet(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_tangent_jet(error, kind_cfc)
+   end subroutine test_cfc_tangent_jet
+
+   !> `tangent_jet(v)` against `tangent_f0`, `tangent_f1_r`, `tangent_f2_rr` and
+   !> `tangent_f3_rrr`, with and without the optional third order.
+   !>
+   !> The one-pass accessor runs the kernel at level 3 (or 2 without `dv3`)
+   !> where each single accessor runs it at its own level, so the two agree to
+   !> round-off and the bound is `HESSFREE_*`, as for `hvp_jet_rA`.
+   subroutine run_tangent_jet(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: v(:, :), vrad(:)
+      real(wp) :: t0, t1(ndim), t2(ndim, ndim), t3(ndim, ndim, ndim)
+      real(wp) :: j0, j1(ndim), j2(ndim, ndim), j3(ndim, ndim, ndim)
+      real(wp) :: k0, k1(ndim), k2(ndim, ndim)
+      integer  :: icase, ipt, a, b, c, iblend, igamma, nblend, ngamma
+      type(mctc_error), allocatable :: lsf_err
+
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (v(ndim, mol%nat), vrad(mol%nat))
+         call joint_direction(mol%nat, v, vrad)
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  call lsf%prepare(points(:, ipt), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  call lsf%tangent_f0(v, t0)
+                  call lsf%tangent_f1_r(v, t1)
+                  call lsf%tangent_f2_rr(v, t2)
+                  call lsf%tangent_f3_rrr(v, t3)
+                  call lsf%tangent_jet(v, j0, j1, j2, j3)
+                  call lsf%tangent_jet(v, k0, k1, k2)
+                  call check(error, j0, t0, thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                             message="tangent_jet order 0 disagrees with tangent_f0")
+                  if (allocated(error)) return
+                  call check(error, k0, t0, thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                             message="tangent_jet (no dv3) order 0 disagrees with tangent_f0")
+                  if (allocated(error)) return
+                  do a = 1, ndim
+                     call check(error, j1(a), t1(a), thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                message="tangent_jet order 1 disagrees with tangent_f1_r")
+                     if (allocated(error)) return
+                     call check(error, k1(a), t1(a), thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                message="tangent_jet (no dv3) order 1 disagrees with tangent_f1_r")
+                     if (allocated(error)) return
+                     do b = 1, ndim
+                        call check(error, j2(a, b), t2(a, b), thr_abs=HESSFREE_ABS, &
+                                   thr_rel=HESSFREE_REL, &
+                                   message="tangent_jet order 2 disagrees with tangent_f2_rr")
+                        if (allocated(error)) return
+                        call check(error, k2(a, b), t2(a, b), thr_abs=HESSFREE_ABS, &
+                                   thr_rel=HESSFREE_REL, &
+                                   message="tangent_jet (no dv3) order 2 disagrees with tangent_f2_rr")
+                        if (allocated(error)) return
+                        do c = 1, ndim
+                           call check(error, j3(a, b, c), t3(a, b, c), thr_abs=HESSFREE_ABS, &
+                                      thr_rel=HESSFREE_REL, &
+                                      message="tangent_jet order 3 disagrees with tangent_f3_rrr")
+                           if (allocated(error)) return
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (v, vrad)
+      end do
+   end subroutine run_tangent_jet
+
+   !> SvdW dispatch of the applied-block check.
+   subroutine test_svdw_vjp_f2_rArB_apply(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_vjp_f2_rArB_apply(error, kind_svdw)
+   end subroutine test_svdw_vjp_f2_rArB_apply
+
+   !> CFC dispatch of the applied-block check.
+   subroutine test_cfc_vjp_f2_rArB_apply(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_vjp_f2_rArB_apply(error, kind_cfc)
+   end subroutine test_cfc_vjp_f2_rArB_apply
+
+   !> `vjp_f2_rArB_apply` against the block `vjp_f2_rArB` times each direction.
+   !>
+   !> Three general directions in one batch, with components on every atom so
+   !> that the active-slot gather of the block product is exercised. SvdW forms
+   !> the applied rows from the same two per-atom factors as the block but
+   !> contracts them in a different order, CFC's default is `hvp_jet_rA` per
+   !> direction against the block's per unit direction; both are round-off
+   !> bounds of the block's scale (`BLOCK_TOL`).
+   subroutine run_vjp_f2_rArB_apply(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      integer, parameter :: nd = 3
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: dirs(:, :, :), blk(:, :), res(:, :, :)
+      real(wp) :: w0, w1(ndim), w2(ndim, ndim), want, scale
+      integer  :: icase, ipt, i, j, jd, s_ax, t_ax, ia, iblend, igamma, nblend, ngamma, n_active
+      type(mctc_error), allocatable :: lsf_err
+
+      call test_weights(w0, w1, w2)
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (dirs(ndim, mol%nat, nd), blk(ndim*mol%nat, ndim*mol%nat))
+         allocate (res(ndim, mol%nat, nd))
+         do jd = 1, nd
+            do ia = 1, mol%nat
+               do t_ax = 1, ndim
+                  dirs(t_ax, ia, jd) = sin(0.7_wp*ia + 1.3_wp*t_ax + 2.1_wp*jd) &
+                                       + 0.3_wp*cos(0.4_wp*ia*t_ax - 0.8_wp*jd)
+               end do
+            end do
+         end do
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  call lsf%prepare(points(:, ipt), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  n_active = lsf%active_count()
+                  if (n_active == 0) cycle
+                  call lsf%vjp_f2_rArB(w0, w1, w2, blk)
+                  scale = maxval(abs(blk(1:ndim*n_active, 1:ndim*n_active)))
+                  res = huge(1.0_wp)
+                  call lsf%vjp_f2_rArB_apply(w0, w1, w2, dirs, res)
+                  do jd = 1, nd
+                     do i = 1, n_active
+                        do s_ax = 1, ndim
+                           want = 0.0_wp
+                           do j = 1, n_active
+                              do t_ax = 1, ndim
+                                 want = want + blk(ndim*(i - 1) + s_ax, ndim*(j - 1) + t_ax) &
+                                        *dirs(t_ax, lsf%active_atom(j), jd)
+                              end do
+                           end do
+                           call check(error, res(s_ax, i, jd), want, &
+                                      thr_abs=BLOCK_TOL*scale, thr_rel=HESSFREE_REL, &
+                                      message="vjp_f2_rArB_apply disagrees with the block times the direction")
+                           if (allocated(error)) return
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (dirs, blk, res)
+      end do
+   end subroutine run_vjp_f2_rArB_apply
 
    !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`.
    subroutine run_hvp_rA_joint_fd(error, kind)

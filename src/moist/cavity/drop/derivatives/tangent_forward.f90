@@ -22,11 +22,13 @@
 !>
 !> ## The three stages
 !>
-!>  1. **Grid loop (parallel).** Per point: the level-set jet, its mixed
-!>     nuclear tensors materialised once ([[drop_field_jet_point]]) and
-!>     contracted with every direction ([[drop_field_jet_tangent]]) -- one
-!>     `f3_rr_rA` call per point instead of three contracted accessors per
-!>     direction -- the bordered KKT solve for `(dr, dlambda)` batched over all
+!>  1. **Grid loop (parallel).** Per point: the level-set jet, its directional
+!>     nuclear tangents along every direction -- from the mixed nuclear tensors
+!>     materialised once ([[drop_field_jet_point]]) and contracted per direction
+!>     ([[drop_field_jet_tangent]]), or, when the caller asks for it because it
+!>     has a few directions, from the level set's contracted accessor
+!>     `tangent_jet` per direction -- the bordered KKT solve for `(dr, dlambda)`
+!>     batched over all
 !>     directions, [[apply_seed]] for the base Lebedev-weight motion, the
 !>     sparse iSwiG rows for `d(f)`, and the branch objective's tangent
 !>     `d(Phi)`. The tensors are active-slot indexed, so each direction is
@@ -118,8 +120,12 @@ contains
    !> @param[out] d_xi0     Tangent of the Gaussian width `(ngrid, ndir)`
    !> @param[out] d_wbranch Tangent of the branch weight `(ngrid, ndir)`
    !> @param[out] error     Error object, allocated on failure
+   !> @param[in]  contracted Take the jet tangents through the level set's
+   !>                        contracted accessor per direction rather than off
+   !>                        tensors materialised once per point; the caller's
+   !>                        choice, see below. Default `.false.`
    module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
-                                              d_wbranch, error)
+                                              d_wbranch, error, contracted)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Nuclear directions
@@ -128,6 +134,8 @@ contains
       real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Whether the jet tangents come from the contracted accessor
+      logical, intent(in), optional :: contracted
 
       !> Per-thread level-set clones and objectives
       type(drop_worker_slots_type) :: slots
@@ -148,6 +156,8 @@ contains
 
       !> Grid, direction, sphere, active-slot and Cartesian indices
       integer :: igrid, idir, ndir, jj, knb, i
+      !> Whether the jet tensors are materialised per point
+      logical :: materialise
 
       !> Mixed nuclear tensors of the level set at the point
       type(drop_field_tangent_work_type) :: ft_work
@@ -214,6 +224,18 @@ contains
       !* -------------------------------- Thread setup -------------------------------- *!
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
       allocate (dphi(self%ngrid, ndir), source=0.0_wp)
+      ! The jet tensors are materialised once per point and contracted with every
+      ! direction, or the level set's own contracted accessor runs per direction;
+      ! for a few directions the latter costs less than one fill, for many the
+      ! former. The choice is the caller's and deliberately not a function of
+      ! `ndir`: the Hessian traversal hands this routine one *block* of its
+      ! directions at a time, and a choice keyed on the block size would let a
+      ! direction's tangent depend on how the set happened to be blocked, by an
+      ! ulp, which the exact chunking guarantee of that traversal forbids. Its
+      ! per-direction mode asks for the contracted path; everything else, this
+      ! routine's direct callers included, materialises.
+      materialise = .true.
+      if (present(contracted)) materialise = .not. contracted
 
       call abort%reset()
 
@@ -254,13 +276,18 @@ contains
          do i = 1, pt%n_active
             pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
          end do
-         call drop_field_jet_point(slots%lsf(thread_slot)%lsf, ft_work)
+         if (materialise) call drop_field_jet_point(slots%lsf(thread_slot)%lsf, ft_work)
          do idir = 1, ndir
-            do i = 1, pt%n_active
-               v_act(:, i) = dirs(:, pt%active_idx(i), idir)
-            end do
-            call drop_field_jet_tangent(ft_work, pt%n_active, v_act, dlsf0, &
-                                        dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
+            if (materialise) then
+               do i = 1, pt%n_active
+                  v_act(:, i) = dirs(:, pt%active_idx(i), idir)
+               end do
+               call drop_field_jet_tangent(ft_work, pt%n_active, v_act, dlsf0, &
+                                           dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
+            else
+               call slots%lsf(thread_slot)%lsf%tangent_jet(dirs(:, :, idir), dlsf0, &
+                                                            dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
+            end if
 
             ! Bordered right-hand side of the direction, with
             ! `d^2 phi/(dr dR_owner) = -alpha*I` (`objective_phi.f90`, `f2_r_rA`)
