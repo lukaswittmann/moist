@@ -78,12 +78,20 @@
 !> is applied to the jet before the nuclear derivative is taken, which is why the
 !> routine is an order of magnitude smaller than the tensors it replaces.
 !>
+!> `svdw_hvp_vjp_eval` is the same contraction applied to `svdw_hvp_eval`, with
+!> the direction left open: it returns the weighted hvp row as a linear form in
+!> the contracted power sums `ws`.  One call per active atom, plus a matrix
+!> product of per-atom quantities, gives the weighted mixed nuclear block for
+!> *every* direction at once, where the row-per-direction spelling would call
+!> `svdw_hvp_eval` once per atom per direction.
+!>
 !> Every routine that returns a *stack* of derivative orders dispatches on
 !> `max_deriv`, so a low-order call never evaluates a high-order temporary.
 !> Out-of-range requests fall into the highest branch (over-compute) rather than
 !> silently returning zeros.  Results above `max_deriv` are left untouched, never
 !> zeroed: a caller must not read them.  The fully contracted `svdw_vjp_eval`
-!> returns one tensor at one order and therefore takes no `max_deriv` at all.
+!> and `svdw_hvp_vjp_eval` return their tensors at one order and therefore take
+!> no `max_deriv` at all.
 module moist_cavity_drop_lsf_svdw_kernel
    use mctc_env_accuracy, only: wp
    implicit none (type, external)
@@ -113,6 +121,7 @@ module moist_cavity_drop_lsf_svdw_kernel
    public :: svdw_radius_hvp_eval
    public :: svdw_vjp_eval
    public :: svdw_radius_vjp_eval
+   public :: svdw_hvp_vjp_eval
    public :: svdw_normalized_eval
 
    public :: svdw_powersums
@@ -24280,6 +24289,1413 @@ contains
          4))))
 
    end subroutine svdw_radius_vjp_eval
+
+   !> The weighted hvp row of one active atom as a linear form in `ws`.
+   !>
+   !> `svdw_hvp_eval` contracted against the adjoint weights (`w0`, `w1`, `w2`)
+   !> of one evaluation point is the row
+   !>
+   !>    row(s) = w0 hvp_f1_rA(s) + sum_a w1(a) hvp_f2_r_rA(a, s)
+   !>             + sum_a sum_b w2(a, b) hvp_f3_rr_rA(a, b, s) ,
+   !>
+   !> and it is *linear* in its direction inputs, the aggregate `ws{n}` and the
+   !> atom's own `aw{n}`, because a directional derivative is linear in the
+   !> direction.  This routine returns the coefficients of the `ws` half,
+   !>
+   !>    row(s) = sum_kind [ hvp_vjp_ws0(s, kind) ws0(kind)
+   !>                      + sum_a hvp_vjp_ws1(a, s, kind) ws1(a, kind)
+   !>                      + sum_a sum_b hvp_vjp_ws2(a, b, s, kind) ws2(a, b, kind) ]
+   !>             + row(s) evaluated by svdw_hvp_eval with ws = 0 ,
+   !>
+   !> valid for any symmetric `ws2`: the two orderings of a mixed index share one
+   !> coefficient, split evenly between them (an exact operation), so contracting
+   !> all nine entries counts the pair once.
+   !>
+   !> Why it exists.  A caller that needs the row for *many* directions at one
+   !> point -- the direction-free nuclear Hessian block, one column per Cartesian
+   !> unit direction of every active atom -- would otherwise call `svdw_hvp_eval`
+   !> once per direction per atom, O(n_active**2) kernel evaluations per point.
+   !> With `ws(v) = sum_B aw_B(v)` and `aw_B(e_t) = -bt{n+1}(.., t)` under the
+   !> contraction rule, the whole `ws` half of the block is one call per atom
+   !> followed by a rank-52 matrix product of per-atom quantities; only the
+   !> diagonal blocks, where `aw` is live, still go through `svdw_hvp_eval`.
+   !>
+   !> Reads the power sums and the atom's tensors to the same orders as
+   !> `svdw_hvp_eval` at `max_deriv = 2`, and takes no `max_deriv` of its own.
+   !>
+   !> @param[in]    blend_k      Blending sharpness k of u = exp(-(k/3) d)
+   !> @param[in]    s_1          One-body blending weight blend_1b
+   !> @param[in]    s_2          Two-body blending weight blend_2b
+   !> @param[in]    s_3          Three-body blending weight blend_3b
+   !> @param[in]    ps0          Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all
+   !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
+   !>                            4 = q)
+   !> @param[in]    ps1          Accumulated power-sum tensor d^1 p_kind / dr^1, summed over all
+   !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
+   !>                            4 = q)
+   !> @param[in]    ps2          Accumulated power-sum tensor d^2 p_kind / dr^2, summed over all
+   !>                            active atoms; last index selects the kind (1 = p1, 2 = p2, 3 = p3,
+   !>                            4 = q)
+   !> @param[in]    at0          Atom-A kind tensor d^0 u_A^m / dr^0 from svdw_atom_eval; last index
+   !>                            selects the kind
+   !> @param[in]    at1          Atom-A kind tensor d^1 u_A^m / dr^1 from svdw_atom_eval; last index
+   !>                            selects the kind
+   !> @param[in]    at2          Atom-A kind tensor d^2 u_A^m / dr^2 from svdw_atom_eval; last index
+   !>                            selects the kind
+   !> @param[in]    at3          Atom-A kind tensor d^3 u_A^m / dr^3 from svdw_atom_eval; last index
+   !>                            selects the kind
+   !> @param[in]    w0           Adjoint weight of the level-set value S
+   !> @param[in]    w1           Adjoint weights of the spatial gradient dS/dr
+   !> @param[in]    w2           Adjoint weights of the spatial Hessian d^2S/dr^2; a general 3x3,
+   !>                            contracted over all nine entries
+   !> @param[out]   hvp_vjp_ws0  d/d ws0 of the weighted hvp row; index order (nuclear s, kind)
+   !> @param[out]   hvp_vjp_ws1  d/d ws1 of the weighted hvp row; index order (spatial, nuclear s,
+   !>                            kind)
+   !> @param[out]   hvp_vjp_ws2  d/d ws2 of the weighted hvp row; index order (spatial, spatial,
+   !>                            nuclear s, kind), the symmetric pair's coefficient split evenly
+   !>                            over both orderings
+   pure subroutine svdw_hvp_vjp_eval(blend_k, s_1, s_2, s_3, ps0, ps1, ps2, at0, at1, at2, at3, &
+                                     w0, w1, w2, hvp_vjp_ws0, hvp_vjp_ws1, hvp_vjp_ws2)
+      !> Blending sharpness k of u = exp(-(k/3) d)
+      real(wp), intent(in) :: blend_k
+      !> One-body blending weight blend_1b
+      real(wp), intent(in) :: s_1
+      !> Two-body blending weight blend_2b
+      real(wp), intent(in) :: s_2
+      !> Three-body blending weight blend_3b
+      real(wp), intent(in) :: s_3
+      !> Accumulated power-sum tensor d^0 p_kind / dr^0, summed over all active atoms; last index
+      !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
+      real(wp), intent(in) :: ps0(nkind)
+      !> Accumulated power-sum tensor d^1 p_kind / dr^1, summed over all active atoms; last index
+      !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
+      real(wp), intent(in) :: ps1(3, nkind)
+      !> Accumulated power-sum tensor d^2 p_kind / dr^2, summed over all active atoms; last index
+      !> selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
+      real(wp), intent(in) :: ps2(3, 3, nkind)
+      !> Atom-A kind tensor d^0 u_A^m / dr^0 from svdw_atom_eval; last index selects the kind
+      real(wp), intent(in) :: at0(nkind)
+      !> Atom-A kind tensor d^1 u_A^m / dr^1 from svdw_atom_eval; last index selects the kind
+      real(wp), intent(in) :: at1(3, nkind)
+      !> Atom-A kind tensor d^2 u_A^m / dr^2 from svdw_atom_eval; last index selects the kind
+      real(wp), intent(in) :: at2(3, 3, nkind)
+      !> Atom-A kind tensor d^3 u_A^m / dr^3 from svdw_atom_eval; last index selects the kind
+      real(wp), intent(in) :: at3(3, 3, 3, nkind)
+      !> Adjoint weight of the level-set value S
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient dS/dr
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian d^2S/dr^2; a general 3x3, contracted over all nine
+      !> entries
+      real(wp), intent(in) :: w2(3, 3)
+      !> d/d ws0 of the weighted hvp row; index order (nuclear s, kind)
+      real(wp), intent(out) :: hvp_vjp_ws0(3, nkind)
+      !> d/d ws1 of the weighted hvp row; index order (spatial, nuclear s, kind)
+      real(wp), intent(out) :: hvp_vjp_ws1(3, 3, nkind)
+      !> d/d ws2 of the weighted hvp row; index order (spatial, spatial, nuclear s, kind), the
+      !> symmetric pair's coefficient split evenly over both orderings
+      real(wp), intent(out) :: hvp_vjp_ws2(3, 3, 3, nkind)
+
+      !> Assembled blending polynomial Z and its reciprocal
+      real(wp) :: Z, inv_Z
+      !> Common subexpressions of the contracted jet
+      real(wp) :: cs0, cs1, cs2, cs3, cs4, cs5, cs6, cs7, cs8, cs9, cs10, cs11, cs12, cs13, cs14
+      real(wp) :: cs15, cs16, cs17, cs18, cs19, cs20, cs21, cs22, cs23, cs24, cs25, cs26, cs27, cs28
+      real(wp) :: cs29, cs30, cs31, cs32, cs33, cs34, cs35, cs36, cs37, cs38, cs39, cs40, cs41, cs42
+      real(wp) :: cs43, cs44, cs45, cs46, cs47, cs48, cs49, cs50, cs51, cs52, cs53, cs54, cs55, cs56
+      real(wp) :: cs57, cs58, cs59, cs60, cs61, cs62, cs63, cs64, cs65, cs66, cs67, cs68, cs69, cs70
+      real(wp) :: cs71, cs72, cs73, cs74, cs75, cs76, cs77, cs78, cs79, cs80, cs81, cs82, cs83, cs84
+      real(wp) :: cs85, cs86, cs87, cs88, cs89, cs90, cs91, cs92, cs93, cs94, cs95, cs96, cs97, cs98
+      real(wp) :: cs99, cs100, cs101, cs102, cs103, cs104, cs105, cs106, cs107, cs108, cs109, cs110
+      real(wp) :: cs111, cs112, cs113, cs114, cs115, cs116, cs117, cs118, cs119, cs120, cs121, cs122
+      real(wp) :: cs123, cs124, cs125, cs126, cs127, cs128, cs129, cs130, cs131, cs132, cs133, cs134
+      real(wp) :: cs135, cs136, cs137, cs138, cs139, cs140, cs141, cs142, cs143, cs144, cs145, cs146
+      real(wp) :: cs147, cs148, cs149, cs150, cs151, cs152, cs153, cs154, cs155, cs156, cs157, cs158
+      real(wp) :: cs159, cs160, cs161, cs162, cs163, cs164, cs165, cs166, cs167, cs168, cs169, cs170
+      real(wp) :: cs171, cs172, cs173, cs174, cs175, cs176, cs177, cs178, cs179, cs180, cs181, cs182
+      real(wp) :: cs183, cs184, cs185, cs186, cs187, cs188, cs189, cs190, cs191, cs192, cs193, cs194
+      real(wp) :: cs195, cs196, cs197, cs198, cs199, cs200, cs201, cs202, cs203, cs204, cs205, cs206
+      real(wp) :: cs207, cs208, cs209, cs210, cs211, cs212, cs213, cs214, cs215, cs216, cs217, cs218
+      real(wp) :: cs219, cs220, cs221, cs222, cs223, cs224, cs225, cs226, cs227, cs228, cs229, cs230
+      real(wp) :: cs231, cs232, cs233, cs234, cs235, cs236, cs237, cs238, cs239, cs240, cs241, cs242
+      real(wp) :: cs243, cs244, cs245, cs246, cs247, cs248, cs249, cs250, cs251, cs252, cs253, cs254
+      real(wp) :: cs255, cs256, cs257, cs258, cs259, cs260, cs261, cs262, cs263, cs264, cs265, cs266
+      real(wp) :: cs267, cs268, cs269, cs270, cs271, cs272, cs273, cs274, cs275, cs276, cs277, cs278
+      real(wp) :: cs279, cs280, cs281, cs282, cs283, cs284, cs285, cs286, cs287, cs288, cs289, cs290
+      real(wp) :: cs291, cs292, cs293, cs294, cs295, cs296, cs297, cs298, cs299, cs300, cs301, cs302
+      real(wp) :: cs303, cs304, cs305, cs306, cs307, cs308, cs309, cs310, cs311, cs312, cs313, cs314
+      real(wp) :: cs315, cs316, cs317, cs318, cs319, cs320, cs321, cs322, cs323, cs324, cs325, cs326
+      real(wp) :: cs327, cs328, cs329, cs330, cs331, cs332, cs333, cs334, cs335, cs336, cs337, cs338
+      real(wp) :: cs339, cs340, cs341, cs342, cs343, cs344, cs345, cs346, cs347, cs348, cs349, cs350
+      real(wp) :: cs351, cs352, cs353, cs354, cs355, cs356, cs357, cs358, cs359, cs360, cs361, cs362
+      real(wp) :: cs363, cs364, cs365, cs366, cs367, cs368, cs369, cs370, cs371, cs372, cs373, cs374
+      real(wp) :: cs375, cs376, cs377, cs378, cs379, cs380, cs381, cs382, cs383, cs384, cs385, cs386
+      real(wp) :: cs387, cs388, cs389, cs390, cs391, cs392, cs393, cs394, cs395, cs396, cs397, cs398
+      real(wp) :: cs399, cs400, cs401, cs402, cs403, cs404, cs405, cs406, cs407, cs408, cs409, cs410
+      real(wp) :: cs411, cs412, cs413, cs414, cs415, cs416, cs417, cs418, cs419, cs420, cs421, cs422
+      real(wp) :: cs423, cs424, cs425, cs426, cs427, cs428, cs429, cs430, cs431, cs432, cs433, cs434
+      real(wp) :: cs435, cs436, cs437, cs438, cs439, cs440, cs441, cs442, cs443, cs444, cs445, cs446
+      real(wp) :: cs447, cs448, cs449, cs450, cs451, cs452, cs453, cs454, cs455, cs456, cs457, cs458
+      real(wp) :: cs459, cs460, cs461, cs462, cs463, cs464, cs465, cs466, cs467, cs468, cs469, cs470
+      real(wp) :: cs471, cs472, cs473, cs474, cs475, cs476, cs477, cs478, cs479, cs480, cs481, cs482
+      real(wp) :: cs483, cs484, cs485, cs486, cs487, cs488, cs489, cs490, cs491, cs492, cs493, cs494
+      real(wp) :: cs495, cs496, cs497, cs498, cs499, cs500, cs501, cs502, cs503, cs504, cs505, cs506
+      real(wp) :: cs507, cs508, cs509, cs510, cs511, cs512, cs513, cs514, cs515, cs516, cs517, cs518
+      real(wp) :: cs519, cs520, cs521, cs522, cs523, cs524, cs525, cs526, cs527, cs528, cs529, cs530
+      real(wp) :: cs531, cs532, cs533, cs534, cs535, cs536, cs537, cs538, cs539, cs540, cs541, cs542
+      real(wp) :: cs543, cs544, cs545, cs546, cs547, cs548, cs549, cs550, cs551, cs552, cs553, cs554
+      real(wp) :: cs555, cs556, cs557, cs558, cs559, cs560, cs561, cs562, cs563, cs564, cs565, cs566
+      real(wp) :: cs567, cs568, cs569, cs570, cs571, cs572, cs573, cs574, cs575, cs576, cs577, cs578
+      real(wp) :: cs579, cs580, cs581, cs582, cs583, cs584, cs585, cs586, cs587, cs588, cs589, cs590
+      real(wp) :: cs591, cs592, cs593, cs594, cs595, cs596, cs597, cs598, cs599, cs600, cs601, cs602
+      real(wp) :: cs603, cs604, cs605, cs606, cs607, cs608, cs609, cs610, cs611, cs612, cs613, cs614
+      real(wp) :: cs615, cs616, cs617, cs618, cs619, cs620, cs621, cs622, cs623, cs624, cs625
+      real(wp) :: t_hvp_vjp_ws2_p1_010, t_hvp_vjp_ws2_p1_011, t_hvp_vjp_ws2_p1_012
+      real(wp) :: t_hvp_vjp_ws2_p1_020, t_hvp_vjp_ws2_p1_021, t_hvp_vjp_ws2_p1_022
+      real(wp) :: t_hvp_vjp_ws2_p1_120, t_hvp_vjp_ws2_p1_121, t_hvp_vjp_ws2_p1_122
+      real(wp) :: t_hvp_vjp_ws2_p2_010, t_hvp_vjp_ws2_p2_011, t_hvp_vjp_ws2_p2_012
+      real(wp) :: t_hvp_vjp_ws2_p2_020, t_hvp_vjp_ws2_p2_021, t_hvp_vjp_ws2_p2_022
+      real(wp) :: t_hvp_vjp_ws2_p2_120, t_hvp_vjp_ws2_p2_121, t_hvp_vjp_ws2_p2_122
+      real(wp) :: t_hvp_vjp_ws2_p3_010, t_hvp_vjp_ws2_p3_011, t_hvp_vjp_ws2_p3_012
+      real(wp) :: t_hvp_vjp_ws2_p3_020, t_hvp_vjp_ws2_p3_021, t_hvp_vjp_ws2_p3_022
+      real(wp) :: t_hvp_vjp_ws2_p3_120, t_hvp_vjp_ws2_p3_121, t_hvp_vjp_ws2_p3_122
+      real(wp) :: t_hvp_vjp_ws2_q_010, t_hvp_vjp_ws2_q_011, t_hvp_vjp_ws2_q_012, t_hvp_vjp_ws2_q_020
+      real(wp) :: t_hvp_vjp_ws2_q_021, t_hvp_vjp_ws2_q_022, t_hvp_vjp_ws2_q_120, t_hvp_vjp_ws2_q_121
+      real(wp) :: t_hvp_vjp_ws2_q_122
+
+      Z = &
+         (1.0_wp/6.0_wp)*(ps0(1)*ps0(1)*ps0(1))*s_3 - 1.0_wp/2.0_wp*ps0(1)*ps0(2)*s_3 + ps0(3)*s_1 &
+         - 1.0_wp/2.0_wp*ps0(3)*s_2 + (1.0_wp/3.0_wp)*ps0(3)*s_3 + &
+         (1.0_wp/2.0_wp)*(ps0(4)*ps0(4))*s_2
+      inv_Z = 1.0_wp/Z
+      cs0 = (ps0(1)*ps0(1))
+      cs1 = 3.0_wp*cs0 - 3.0_wp*ps0(2)
+      cs2 = (1.0_wp/6.0_wp)*cs1
+      cs3 = cs2*s_3
+      cs4 = ps0(4)*s_2
+      cs5 = 1.0_wp/blend_k
+      cs6 = (inv_Z*inv_Z)
+      cs7 = cs5*cs6
+      cs8 = cs4*cs7
+      cs9 = cs8*w2(1, 1)
+      cs10 = cs3*cs9
+      cs11 = cs8*w2(2, 2)
+      cs12 = cs11*cs3
+      cs13 = cs8*w2(3, 3)
+      cs14 = cs13*cs3
+      cs15 = (1.0_wp/2.0_wp)*s_2
+      cs16 = (1.0_wp/3.0_wp)*s_3
+      cs17 = -cs15 + cs16 + s_1
+      cs18 = cs17*cs7
+      cs19 = cs18*w2(1, 1)
+      cs20 = cs19*cs3
+      cs21 = cs18*w2(2, 2)
+      cs22 = cs21*cs3
+      cs23 = cs18*w2(3, 3)
+      cs24 = cs23*cs3
+      cs25 = (1.0_wp/12.0_wp)*cs1
+      cs26 = cs7*(s_3*s_3)
+      cs27 = cs26*ps0(1)
+      cs28 = cs25*cs27
+      cs29 = -cs28*w2(1, 1) + (1.0_wp/2.0_wp)*cs5*inv_Z*s_3*w2(1, 1)
+      cs30 = -cs28*w2(2, 2) + (1.0_wp/2.0_wp)*cs5*inv_Z*s_3*w2(2, 2)
+      cs31 = -cs28*w2(3, 3) + (1.0_wp/2.0_wp)*cs5*inv_Z*s_3*w2(3, 3)
+      cs32 = cs8*w2(1, 2)
+      cs33 = cs8*w2(2, 1)
+      cs34 = cs32 + cs33
+      cs35 = cs3*cs34
+      cs36 = cs8*w2(1, 3)
+      cs37 = cs8*w2(3, 1)
+      cs38 = cs36 + cs37
+      cs39 = cs3*cs38
+      cs40 = cs8*w2(2, 3)
+      cs41 = cs8*w2(3, 2)
+      cs42 = cs40 + cs41
+      cs43 = cs3*cs42
+      cs44 = ps0(1)*s_3
+      cs45 = cs5*inv_Z
+      cs46 = cs44*cs45
+      cs47 = cs46*w2(1, 1)
+      cs48 = (cs1*cs1)*cs26
+      cs49 = (1.0_wp/36.0_wp)*cs48
+      cs50 = -cs47 + cs49*w2(1, 1)
+      cs51 = cs46*w2(2, 2)
+      cs52 = cs49*w2(2, 2) - cs51
+      cs53 = cs46*w2(3, 3)
+      cs54 = cs49*w2(3, 3) - cs53
+      cs55 = cs18*w2(1, 2)
+      cs56 = cs18*w2(2, 1)
+      cs57 = cs55 + cs56
+      cs58 = cs3*cs57
+      cs59 = cs18*w2(1, 3)
+      cs60 = cs18*w2(3, 1)
+      cs61 = cs59 + cs60
+      cs62 = cs3*cs61
+      cs63 = cs18*w2(2, 3)
+      cs64 = cs18*w2(3, 2)
+      cs65 = cs63 + cs64
+      cs66 = cs3*cs65
+      cs67 = (1.0_wp/2.0_wp)*cs44
+      cs68 = cs67*cs7
+      cs69 = -cs68*w2(1, 2) - cs68*w2(2, 1)
+      cs70 = (1.0_wp/2.0_wp)*s_3
+      cs71 = cs45*cs70
+      cs72 = cs71*w2(1, 2) + cs71*w2(2, 1)
+      cs73 = cs3*cs69 + cs72
+      cs74 = -cs68*w2(1, 3) - cs68*w2(3, 1)
+      cs75 = cs71*w2(1, 3) + cs71*w2(3, 1)
+      cs76 = cs3*cs74 + cs75
+      cs77 = -cs68*w2(2, 3) - cs68*w2(3, 2)
+      cs78 = cs71*w2(2, 3) + cs71*w2(3, 2)
+      cs79 = cs3*cs77 + cs78
+      cs80 = cs3*cs7
+      cs81 = cs80*w2(1, 2) + cs80*w2(2, 1)
+      cs82 = cs46*w2(1, 2) + cs46*w2(2, 1)
+      cs83 = (1.0_wp/6.0_wp)*cs1*cs81*s_3 - cs82
+      cs84 = cs80*w2(1, 3) + cs80*w2(3, 1)
+      cs85 = cs46*w2(1, 3) + cs46*w2(3, 1)
+      cs86 = (1.0_wp/6.0_wp)*cs1*cs84*s_3 - cs85
+      cs87 = cs80*w2(2, 3) + cs80*w2(3, 2)
+      cs88 = cs46*w2(2, 3) + cs46*w2(3, 2)
+      cs89 = (1.0_wp/6.0_wp)*cs1*cs87*s_3 - cs88
+      cs90 = ps1(2, 2)*s_3
+      cs91 = (1.0_wp/2.0_wp)*cs90
+      cs92 = cs17*ps1(2, 3) + cs3*ps1(2, 1) + cs4*ps1(2, 4) - cs91*ps0(1)
+      cs93 = (inv_Z*inv_Z*inv_Z)
+      cs94 = 2.0_wp*cs93
+      cs95 = cs5*cs94
+      cs96 = cs92*cs95
+      cs97 = -cs4*cs96 + cs5*cs6*ps1(2, 4)*s_2
+      cs98 = ps1(3, 2)*s_3
+      cs99 = (1.0_wp/2.0_wp)*cs98
+      cs100 = cs17*ps1(3, 3) + cs3*ps1(3, 1) + cs4*ps1(3, 4) - cs99*ps0(1)
+      cs101 = cs100*cs95
+      cs102 = -cs101*cs4 + cs5*cs6*ps1(3, 4)*s_2
+      cs103 = ps1(1, 2)*s_3
+      cs104 = (1.0_wp/2.0_wp)*cs103
+      cs105 = -cs104*ps0(1) + cs17*ps1(1, 3) + cs3*ps1(1, 1) + cs4*ps1(1, 4)
+      cs106 = cs5*cs93
+      cs107 = 4.0_wp*cs106
+      cs108 = cs105*cs107
+      cs109 = &
+         cs102*w2(1, 3) + cs102*w2(3, 1) + cs8*w1(1) + cs97*w2(1, 2) + cs97*w2(2, 1) + w2(1, &
+         1)*(-cs108*cs4 + 2.0_wp*cs5*cs6*ps1(1, 4)*s_2)
+      cs110 = cs44*ps1(1, 1)
+      cs111 = -cs103 + 2.0_wp*cs110
+      cs112 = cs111*w2(1, 1)
+      cs113 = cs44*ps1(2, 1)
+      cs114 = cs113 - cs91
+      cs115 = cs114*cs7
+      cs116 = cs115*cs4
+      cs117 = cs44*ps1(3, 1)
+      cs118 = cs117 - cs99
+      cs119 = cs118*cs7
+      cs120 = cs119*cs4
+      cs121 = cs116*w2(1, 2) + cs116*w2(2, 1) + cs120*w2(1, 3) + cs120*w2(3, 1)
+      cs122 = cs109*cs3 + cs112*cs8 + cs121
+      cs123 = cs105*cs95
+      cs124 = -cs123*cs4 + cs5*cs6*ps1(1, 4)*s_2
+      cs125 = cs107*cs92
+      cs126 = &
+         cs102*w2(2, 3) + cs102*w2(3, 2) + cs124*w2(1, 2) + cs124*w2(2, 1) + cs8*w1(2) + w2(2, &
+         2)*(-cs125*cs4 + 2.0_wp*cs5*cs6*ps1(2, 4)*s_2)
+      cs127 = 2.0_wp*cs113 - cs90
+      cs128 = cs127*w2(2, 2)
+      cs129 = -cs104 + cs110
+      cs130 = cs129*cs7
+      cs131 = cs130*cs4
+      cs132 = cs120*w2(2, 3) + cs120*w2(3, 2) + cs131*w2(1, 2) + cs131*w2(2, 1)
+      cs133 = cs126*cs3 + cs128*cs8 + cs132
+      cs134 = cs100*cs107
+      cs135 = &
+         cs124*w2(1, 3) + cs124*w2(3, 1) + cs8*w1(3) + cs97*w2(2, 3) + cs97*w2(3, 2) + w2(3, &
+         3)*(-cs134*cs4 + 2.0_wp*cs5*cs6*ps1(3, 4)*s_2)
+      cs136 = 2.0_wp*cs117 - cs98
+      cs137 = cs136*w2(3, 3)
+      cs138 = cs116*w2(2, 3) + cs116*w2(3, 2) + cs131*w2(1, 3) + cs131*w2(3, 1)
+      cs139 = cs135*cs3 + cs137*cs8 + cs138
+      cs140 = cs17*cs96
+      cs141 = cs101*cs17
+      cs142 = (2.0_wp/3.0_wp)*s_3
+      cs143 = cs142 + 2.0_wp*s_1 - s_2
+      cs144 = cs143*w2(1, 1)
+      cs145 = &
+         -cs123*cs144 - cs140*w2(1, 2) - cs140*w2(2, 1) - cs141*w2(1, 3) - cs141*w2(3, 1) + &
+         cs17*cs5*cs6*w1(1)
+      cs146 = cs115*cs17
+      cs147 = cs119*cs17
+      cs148 = cs146*w2(1, 2) + cs146*w2(2, 1) + cs147*w2(1, 3) + cs147*w2(3, 1)
+      cs149 = cs111*cs19 + cs145*cs3 + cs148
+      cs150 = cs123*cs17
+      cs151 = cs143*w2(2, 2)
+      cs152 = &
+         -cs141*w2(2, 3) - cs141*w2(3, 2) - cs150*w2(1, 2) - cs150*w2(2, 1) - cs151*cs96 + &
+         cs17*cs5*cs6*w1(2)
+      cs153 = cs130*cs17
+      cs154 = cs147*w2(2, 3) + cs147*w2(3, 2) + cs153*w2(1, 2) + cs153*w2(2, 1)
+      cs155 = cs127*cs21 + cs152*cs3 + cs154
+      cs156 = cs143*w2(3, 3)
+      cs157 = &
+         -cs101*cs156 - cs140*w2(2, 3) - cs140*w2(3, 2) - cs150*w2(1, 3) - cs150*w2(3, 1) + &
+         cs17*cs5*cs6*w1(3)
+      cs158 = cs146*w2(2, 3) + cs146*w2(3, 2) + cs153*w2(1, 3) + cs153*w2(3, 1)
+      cs159 = cs136*cs23 + cs157*cs3 + cs158
+      cs160 = cs7*s_3
+      cs161 = cs105*cs160
+      cs162 = cs7*cs70
+      cs163 = cs162*ps1(2, 1)
+      cs164 = cs106*cs44
+      cs165 = -cs163 + cs164*cs92
+      cs166 = cs162*ps1(3, 1)
+      cs167 = cs100*cs164 - cs166
+      cs168 = cs160*ps1(1, 1)
+      cs169 = &
+         cs165*w2(1, 2) + cs165*w2(2, 1) + cs167*w2(1, 3) + cs167*w2(3, 1) - cs68*w1(1) + w2(1, &
+         1)*(cs123*cs44 - cs168)
+      cs170 = cs71*w1(1)
+      cs171 = cs162*cs92
+      cs172 = -cs115*cs67 - cs171
+      cs173 = cs100*cs162
+      cs174 = -cs119*cs67 - cs173
+      cs175 = cs170 + cs172*w2(1, 2) + cs172*w2(2, 1) + cs174*w2(1, 3) + cs174*w2(3, 1)
+      cs176 = cs169*cs3 + cs175 + w2(1, 1)*(-cs111*cs68 - cs161)
+      cs177 = cs160*cs92
+      cs178 = cs162*ps1(1, 1)
+      cs179 = cs105*cs164 - cs178
+      cs180 = cs160*ps1(2, 1)
+      cs181 = &
+         cs167*w2(2, 3) + cs167*w2(3, 2) + cs179*w2(1, 2) + cs179*w2(2, 1) - cs68*w1(2) + w2(2, &
+         2)*(-cs180 + cs44*cs96)
+      cs182 = cs71*w1(2)
+      cs183 = cs105*cs162
+      cs184 = -cs130*cs67 - cs183
+      cs185 = cs174*w2(2, 3) + cs174*w2(3, 2) + cs182 + cs184*w2(1, 2) + cs184*w2(2, 1)
+      cs186 = cs181*cs3 + cs185 + w2(2, 2)*(-cs127*cs68 - cs177)
+      cs187 = cs100*cs160
+      cs188 = cs160*ps1(3, 1)
+      cs189 = &
+         cs165*w2(2, 3) + cs165*w2(3, 2) + cs179*w2(1, 3) + cs179*w2(3, 1) - cs68*w1(3) + w2(3, &
+         3)*(cs101*cs44 - cs188)
+      cs190 = cs71*w1(3)
+      cs191 = cs172*w2(2, 3) + cs172*w2(3, 2) + cs184*w2(1, 3) + cs184*w2(3, 1) + cs190
+      cs192 = cs189*cs3 + cs191 + w2(3, 3)*(-cs136*cs68 - cs187)
+      cs193 = cs45*s_3
+      cs194 = cs193*ps1(3, 1)
+      cs195 = cs44*cs7
+      cs196 = cs100*cs195
+      cs197 = -2.0_wp*cs194 + 2.0_wp*cs196
+      cs198 = -cs129*cs5*cs6
+      cs199 = cs1*cs106
+      cs200 = cs16*cs199
+      cs201 = -cs105*cs200 - cs198
+      cs202 = -cs114*cs5*cs6
+      cs203 = cs200*cs92
+      cs204 = -cs202 - cs203
+      cs205 = cs142*cs199
+      cs206 = cs7*cs99
+      cs207 = cs206 - cs5*cs6*ps0(1)*ps1(3, 1)*s_3
+      cs208 = &
+         cs201*w2(1, 3) + cs201*w2(3, 1) + cs204*w2(2, 3) + cs204*w2(3, 2) + cs80*w1(3) + w2(3, &
+         3)*(-cs100*cs205 + cs118*cs5*cs6 - cs207)
+      cs209 = cs193*ps1(1, 1)
+      cs210 = cs105*cs195
+      cs211 = cs130*cs3 - cs209 + cs210
+      cs212 = cs193*ps1(2, 1)
+      cs213 = cs195*cs92
+      cs214 = cs115*cs3 - cs212 + cs213
+      cs215 = cs211*w2(1, 3) + cs211*w2(3, 1) + cs214*w2(2, 3) + cs214*w2(3, 2) - cs46*w1(3)
+      cs216 = cs208*cs3 + cs215 + w2(3, 3)*(cs136*cs80 + cs197)
+      cs217 = -2.0_wp*cs212 + 2.0_wp*cs213
+      cs218 = -cs100*cs200 - cs207
+      cs219 = cs7*cs91
+      cs220 = cs219 - cs5*cs6*ps0(1)*ps1(2, 1)*s_3
+      cs221 = &
+         cs201*w2(1, 2) + cs201*w2(2, 1) + cs218*w2(2, 3) + cs218*w2(3, 2) + cs80*w1(2) + w2(2, &
+         2)*(-cs202 - cs205*cs92 - cs220)
+      cs222 = cs119*cs3 - cs194 + cs196
+      cs223 = cs211*w2(1, 2) + cs211*w2(2, 1) + cs222*w2(2, 3) + cs222*w2(3, 2) - cs46*w1(2)
+      cs224 = cs221*cs3 + cs223 + w2(2, 2)*(cs127*cs80 + cs217)
+      cs225 = -2.0_wp*cs209 + 2.0_wp*cs210
+      cs226 = -cs203 - cs220
+      cs227 = cs104*cs7
+      cs228 = &
+         cs218*w2(1, 3) + cs218*w2(3, 1) + cs226*w2(1, 2) + cs226*w2(2, 1) + cs80*w1(1) + w2(1, &
+         1)*(-cs105*cs205 - cs198 - cs227 + cs5*cs6*ps0(1)*ps1(1, 1)*s_3)
+      cs229 = cs214*w2(1, 2) + cs214*w2(2, 1) + cs222*w2(1, 3) + cs222*w2(3, 1) - cs46*w1(1)
+      cs230 = cs228*cs3 + cs229 + w2(1, 1)*(cs111*cs80 + cs225)
+      cs231 = cs7*s_2
+      cs232 = cs231*ps1(1, 4)
+      cs233 = cs231*ps1(2, 4)
+      cs234 = cs231*ps1(3, 4)
+      cs235 = ps1(1, 4)*s_2
+      cs236 = ps1(2, 4)*s_2
+      cs237 = ps1(3, 4)*s_2
+      cs238 = -cs123*cs236 - cs235*cs96 + cs5*cs6*ps2(1, 2, 4)*s_2
+      cs239 = -cs101*cs235 - cs123*cs237 + cs5*cs6*ps2(1, 3, 4)*s_2
+      cs240 = -cs101*cs236 - cs237*cs96 + cs5*cs6*ps2(2, 3, 4)*s_2
+      cs241 = &
+         cs232*w1(1) + cs233*w1(2) + cs234*w1(3) + cs238*w2(1, 2) + cs238*w2(2, 1) + cs239*w2(1, &
+         3) + cs239*w2(3, 1) + cs240*w2(2, 3) + cs240*w2(3, 2) + w2(1, 1)*(-cs108*cs235 + &
+         cs5*cs6*ps2(1, 1, 4)*s_2) + w2(2, 2)*(-cs125*cs236 + cs5*cs6*ps2(2, 2, 4)*s_2) + w2(3, &
+         3)*(-cs134*cs237 + cs5*cs6*ps2(3, 3, 4)*s_2)
+      cs242 = cs130*s_2
+      cs243 = cs115*cs235 + cs242*ps1(2, 4)
+      cs244 = cs119*cs235 + cs242*ps1(3, 4)
+      cs245 = cs115*cs237 + cs119*cs236
+      cs246 = &
+         cs243*w2(1, 2) + cs243*w2(2, 1) + cs244*w2(1, 3) + cs244*w2(3, 1) + cs245*w2(2, 3) + &
+         cs245*w2(3, 2)
+      cs247 = cs112*cs232 + cs128*cs233 + cs137*cs234 + cs241*cs3 + cs246
+      cs248 = cs106*ps1(1, 1)*s_3
+      cs249 = cs106*ps1(2, 1)
+      cs250 = cs105*s_3
+      cs251 = -cs162*ps2(1, 2, 1) + cs248*cs92 + cs249*cs250
+      cs252 = cs106*ps1(3, 1)
+      cs253 = cs100*cs248 - cs162*ps2(1, 3, 1) + cs250*cs252
+      cs254 = cs100*cs249*s_3 - cs162*ps2(2, 3, 1) + cs252*cs92*s_3
+      cs255 = &
+         -cs163*w1(2) - cs166*w1(3) - cs178*w1(1) + cs251*w2(1, 2) + cs251*w2(2, 1) + cs253*w2(1, &
+         3) + cs253*w2(3, 1) + cs254*w2(2, 3) + cs254*w2(3, 2) + w2(1, 1)*(cs123*ps1(1, 1)*s_3 - &
+         cs162*ps2(1, 1, 1)) + w2(2, 2)*(-cs162*ps2(2, 2, 1) + cs96*ps1(2, 1)*s_3) + w2(3, &
+         3)*(cs101*ps1(3, 1)*s_3 - cs162*ps2(3, 3, 1))
+      cs256 = cs70*ps1(1, 1)
+      cs257 = cs130*ps1(2, 1)
+      cs258 = -cs115*cs256 - cs257*cs70
+      cs259 = cs130*ps1(3, 1)
+      cs260 = -cs119*cs256 - cs259*cs70
+      cs261 = cs70*ps1(2, 1)
+      cs262 = cs115*ps1(3, 1)
+      cs263 = -cs119*cs261 - cs262*cs70
+      cs264 = cs5*w0
+      cs265 = cs105*w1(1)
+      cs266 = cs92*w1(2)
+      cs267 = cs100*w1(3)
+      cs268 = (ps1(1, 4)*ps1(1, 4))
+      cs269 = cs130*ps1(1, 1)
+      cs270 = (cs105*cs105)
+      cs271 = (ps1(2, 4)*ps1(2, 4))
+      cs272 = cs115*ps1(2, 1)
+      cs273 = (cs92*cs92)
+      cs274 = (ps1(3, 4)*ps1(3, 4))
+      cs275 = cs119*ps1(3, 1)
+      cs276 = (cs100*cs100)
+      cs277 = &
+         -cs123*cs92 + cs18*ps2(1, 2, 3) - cs219*ps1(1, 1) + cs233*ps1(1, 4) + cs257 - cs68*ps2(1, &
+         2, 2) + cs8*ps2(1, 2, 4) + cs80*ps2(1, 2, 1)
+      cs278 = &
+         -cs100*cs123 + cs18*ps2(1, 3, 3) - cs206*ps1(1, 1) + cs234*ps1(1, 4) + cs259 - &
+         cs68*ps2(1, 3, 2) + cs8*ps2(1, 3, 4) + cs80*ps2(1, 3, 1)
+      cs279 = &
+         -cs100*cs96 + cs18*ps2(2, 3, 3) - cs206*ps1(2, 1) + cs233*ps1(3, 4) + cs262 - cs68*ps2(2, &
+         3, 2) + cs8*ps2(2, 3, 4) + cs80*ps2(2, 3, 1)
+      cs280 = &
+         -cs264*inv_Z + cs265*cs7 + cs266*cs7 + cs267*cs7 + cs277*w2(1, 2) + cs277*w2(2, 1) + &
+         cs278*w2(1, 3) + cs278*w2(3, 1) + cs279*w2(2, 3) + cs279*w2(3, 2) + w2(1, 1)*(cs18*ps2(1, &
+         1, 3) - cs227*ps1(1, 1) + cs231*cs268 + cs269 - cs270*cs5*cs94 - cs68*ps2(1, 1, 2) + &
+         cs8*ps2(1, 1, 4) + cs80*ps2(1, 1, 1)) + w2(2, 2)*(cs18*ps2(2, 2, 3) - cs219*ps1(2, 1) + &
+         cs231*cs271 + cs272 - cs273*cs95 - cs68*ps2(2, 2, 2) + cs8*ps2(2, 2, 4) + cs80*ps2(2, 2, &
+         1)) + w2(3, 3)*(cs18*ps2(3, 3, 3) - cs206*ps1(3, 1) + cs231*cs274 + cs275 - cs276*cs95 - &
+         cs68*ps2(3, 3, 2) + cs8*ps2(3, 3, 4) + cs80*ps2(3, 3, 1))
+      cs281 = &
+         cs258*w2(1, 2) + cs258*w2(2, 1) + cs260*w2(1, 3) + cs260*w2(3, 1) + cs263*w2(2, 3) + &
+         cs263*w2(3, 2) - cs280*cs70
+      cs282 = -cs112*cs178 - cs128*cs163 - cs137*cs166 + cs255*cs3 + cs281
+      cs283 = -at1(1, 1)*cs3 + (1.0_wp/2.0_wp)*at1(1, 2)*ps0(1)*s_3 - at1(1, 3)*cs17 - at1(1, 4)*cs4
+      cs284 = cs4*cs95
+      cs285 = cs95*s_2
+      cs286 = cs17*cs95
+      cs287 = cs129*cs95
+      cs288 = (inv_Z*inv_Z*inv_Z*inv_Z)
+      cs289 = cs114*cs95
+      cs290 = cs285*ps1(1, 4)
+      cs291 = &
+         6.0_wp*cs105*cs288*cs5*cs92 - cs200*ps2(1, 2, 1) - cs284*ps2(1, 2, 4) - cs286*ps2(1, 2, &
+         3) - cs287*ps1(2, 1) - cs290*ps1(2, 4) + cs5*cs93*ps0(1)*ps2(1, 2, 2)*s_3 + &
+         cs5*cs93*ps1(1, 1)*ps1(2, 2)*s_3
+      cs292 = &
+         6.0_wp*cs100*cs105*cs288*cs5 - cs200*ps2(1, 3, 1) - cs284*ps2(1, 3, 4) - cs286*ps2(1, 3, &
+         3) - cs287*ps1(3, 1) - cs290*ps1(3, 4) + cs5*cs93*ps0(1)*ps2(1, 3, 2)*s_3 + &
+         cs5*cs93*ps1(1, 1)*ps1(3, 2)*s_3
+      cs293 = ps1(2, 4)*ps1(3, 4)
+      cs294 = &
+         6.0_wp*cs100*cs288*cs5*cs92 - cs200*ps2(2, 3, 1) - cs284*ps2(2, 3, 4) - cs285*cs293 - &
+         cs286*ps2(2, 3, 3) - cs289*ps1(3, 1) + cs5*cs93*ps0(1)*ps2(2, 3, 2)*s_3 + cs5*cs93*ps1(2, &
+         1)*ps1(3, 2)*s_3
+      cs295 = &
+         cs264*cs6 - cs265*cs95 - cs266*cs95 - cs267*cs95 + cs291*w2(1, 2) + cs291*w2(2, 1) + &
+         cs292*w2(1, 3) + cs292*w2(3, 1) + cs294*w2(2, 3) + cs294*w2(3, 2) + w2(1, &
+         1)*(-cs200*ps2(1, 1, 1) - cs268*cs285 + 6.0_wp*cs270*cs288*cs5 - cs284*ps2(1, 1, 4) - &
+         cs286*ps2(1, 1, 3) - cs287*ps1(1, 1) + cs5*cs93*ps0(1)*ps2(1, 1, 2)*s_3 + cs5*cs93*ps1(1, &
+         1)*ps1(1, 2)*s_3) + w2(2, 2)*(-cs200*ps2(2, 2, 1) - cs271*cs285 + 6.0_wp*cs273*cs288*cs5 &
+         - cs284*ps2(2, 2, 4) - cs286*ps2(2, 2, 3) - cs289*ps1(2, 1) + cs5*cs93*ps0(1)*ps2(2, 2, &
+         2)*s_3 + cs5*cs93*ps1(2, 1)*ps1(2, 2)*s_3) + w2(3, 3)*(-cs118*cs95*ps1(3, 1) - &
+         cs200*ps2(3, 3, 1) - cs274*cs285 + 6.0_wp*cs276*cs288*cs5 - cs284*ps2(3, 3, 4) - &
+         cs286*ps2(3, 3, 3) + cs5*cs93*ps0(1)*ps2(3, 3, 2)*s_3 + cs5*cs93*ps1(3, 1)*ps1(3, 2)*s_3)
+      cs296 = (ps1(1, 1)*ps1(1, 1))
+      cs297 = (ps1(2, 1)*ps1(2, 1))
+      cs298 = (ps1(3, 1)*ps1(3, 1))
+      cs299 = &
+         -cs114*cs123 - cs162*ps2(1, 2, 2) - cs287*cs92 + cs5*cs6*ps0(1)*ps2(1, 2, 1)*s_3 + &
+         cs5*cs6*ps1(1, 1)*ps1(2, 1)*s_3
+      cs300 = &
+         -cs100*cs287 - cs118*cs123 - cs162*ps2(1, 3, 2) + cs5*cs6*ps0(1)*ps2(1, 3, 1)*s_3 + &
+         cs5*cs6*ps1(1, 1)*ps1(3, 1)*s_3
+      cs301 = &
+         -cs101*cs114 - cs118*cs96 - cs162*ps2(2, 3, 2) + cs5*cs6*ps0(1)*ps2(2, 3, 1)*s_3 + &
+         cs5*cs6*ps1(2, 1)*ps1(3, 1)*s_3
+      cs302 = &
+         cs115*w1(2) + cs119*w1(3) + cs130*w1(1) + cs299*w2(1, 2) + cs299*w2(2, 1) + cs300*w2(1, &
+         3) + cs300*w2(3, 1) + cs301*w2(2, 3) + cs301*w2(3, 2) + w2(1, 1)*(-cs111*cs123 - &
+         cs162*ps2(1, 1, 2) + cs296*cs5*cs6*s_3 + cs5*cs6*ps0(1)*ps2(1, 1, 1)*s_3) + w2(2, &
+         2)*(-cs127*cs96 - cs162*ps2(2, 2, 2) + cs297*cs5*cs6*s_3 + cs5*cs6*ps0(1)*ps2(2, 2, &
+         1)*s_3) + w2(3, 3)*(-cs101*cs136 - cs162*ps2(3, 3, 2) + cs298*cs5*cs6*s_3 + &
+         cs5*cs6*ps0(1)*ps2(3, 3, 1)*s_3)
+      cs303 = cs295*cs3 + cs302
+      cs304 = 2.0_wp*cs130
+      cs305 = cs114*cs304 + cs161*ps1(2, 1) + cs168*cs92 - cs193*ps2(1, 2, 1)
+      cs306 = cs100*cs168 + cs118*cs304 + cs161*ps1(3, 1) - cs193*ps2(1, 3, 1)
+      cs307 = 2.0_wp*cs115
+      cs308 = cs100*cs180 + cs118*cs307 + cs177*ps1(3, 1) - cs193*ps2(2, 3, 1)
+      cs309 = &
+         -cs194*w1(3) - cs209*w1(1) - cs212*w1(2) + cs280*cs44 + cs3*cs302 + cs305*w2(1, 2) + &
+         cs305*w2(2, 1) + cs306*w2(1, 3) + cs306*w2(3, 1) + cs308*w2(2, 3) + cs308*w2(3, 2) + &
+         w2(1, 1)*(cs111*cs130 + 2.0_wp*cs161*ps1(1, 1) - cs193*ps2(1, 1, 1)) + w2(2, &
+         2)*(cs115*cs127 + 2.0_wp*cs177*ps1(2, 1) - cs193*ps2(2, 2, 1)) + w2(3, 3)*(cs119*cs136 + &
+         2.0_wp*cs187*ps1(3, 1) - cs193*ps2(3, 3, 1))
+      cs310 = -at1(2, 1)*cs3 + (1.0_wp/2.0_wp)*at1(2, 2)*ps0(1)*s_3 - at1(2, 3)*cs17 - at1(2, 4)*cs4
+      cs311 = -at1(3, 1)*cs3 + (1.0_wp/2.0_wp)*at1(3, 2)*ps0(1)*s_3 - at1(3, 3)*cs17 - at1(3, 4)*cs4
+      cs312 = cs0*cs26
+      cs313 = (1.0_wp/4.0_wp)*cs312
+      cs314 = cs313*w2(1, 1)
+      cs315 = cs313*w2(2, 2)
+      cs316 = cs313*w2(3, 3)
+      cs317 = -1.0_wp/2.0_wp*cs44*cs81 + cs72
+      cs318 = -1.0_wp/2.0_wp*cs44*cs84 + cs75
+      cs319 = -1.0_wp/2.0_wp*cs44*cs87 + cs78
+      cs320 = cs168*w2(1, 1)
+      cs321 = cs15*cs180
+      cs322 = cs321*ps0(4)
+      cs323 = cs15*cs188
+      cs324 = cs323*ps0(4)
+      cs325 = cs320*cs4 + cs322*w2(1, 2) + cs322*w2(2, 1) + cs324*w2(1, 3) + cs324*w2(3, 1)
+      cs326 = -cs109*cs67 - cs325
+      cs327 = cs180*w2(2, 2)
+      cs328 = cs15*cs168
+      cs329 = cs328*ps0(4)
+      cs330 = cs324*w2(2, 3) + cs324*w2(3, 2) + cs327*cs4 + cs329*w2(1, 2) + cs329*w2(2, 1)
+      cs331 = -cs126*cs67 - cs330
+      cs332 = cs188*w2(3, 3)
+      cs333 = cs322*w2(2, 3) + cs322*w2(3, 2) + cs329*w2(1, 3) + cs329*w2(3, 1) + cs332*cs4
+      cs334 = -cs135*cs67 - cs333
+      cs335 = cs26*ps1(1, 1)
+      cs336 = (1.0_wp/2.0_wp)*cs335
+      cs337 = (1.0_wp/4.0_wp)*w2(1, 2)
+      cs338 = cs26*ps1(2, 1)
+      cs339 = cs338*ps0(1)
+      cs340 = (1.0_wp/4.0_wp)*w2(2, 1)
+      cs341 = cs26*ps1(3, 1)
+      cs342 = cs341*ps0(1)
+      cs343 = (1.0_wp/4.0_wp)*cs342
+      cs344 = cs336*ps0(1)*w2(1, 1) + cs337*cs339 + cs339*cs340 + cs343*w2(1, 3) + cs343*w2(3, 1)
+      cs345 = -cs169*cs67 + cs344
+      cs346 = cs335*ps0(1)
+      cs347 = (1.0_wp/2.0_wp)*cs338
+      cs348 = cs337*cs346 + cs340*cs346 + cs343*w2(2, 3) + cs343*w2(3, 2) + cs347*ps0(1)*w2(2, 2)
+      cs349 = -cs181*cs67 + cs348
+      cs350 = (1.0_wp/4.0_wp)*cs346
+      cs351 = (1.0_wp/4.0_wp)*cs339
+      cs352 = &
+         (1.0_wp/2.0_wp)*cs342*w2(3, 3) + cs350*w2(1, 3) + cs350*w2(3, 1) + cs351*w2(2, 3) + &
+         cs351*w2(3, 2)
+      cs353 = -cs189*cs67 + cs352
+      cs354 = cs70*ps1(3, 1)
+      cs355 = cs261*cs55 + cs261*cs56 + cs354*cs59 + cs354*cs60
+      cs356 = -cs145*cs67 - cs17*cs320 - cs355
+      cs357 = cs256*cs55 + cs256*cs56 + cs354*cs63 + cs354*cs64
+      cs358 = -cs152*cs67 - cs17*cs327 - cs357
+      cs359 = cs256*cs59 + cs256*cs60 + cs261*cs63 + cs261*cs64
+      cs360 = -cs157*cs67 - cs17*cs332 - cs359
+      cs361 = -cs183 - cs25*cs335
+      cs362 = -cs171 - cs25*cs338
+      cs363 = &
+         cs190 + cs361*w2(1, 3) + cs361*w2(3, 1) + cs362*w2(2, 3) + cs362*w2(3, 2) + w2(3, &
+         3)*(-cs187 - cs2*cs341)
+      cs364 = -cs208*cs67 + cs363
+      cs365 = -cs173 - cs25*cs341
+      cs366 = &
+         cs182 + cs361*w2(1, 2) + cs361*w2(2, 1) + cs365*w2(2, 3) + cs365*w2(3, 2) + w2(2, &
+         2)*(-cs177 - cs2*cs338)
+      cs367 = -cs221*cs67 + cs366
+      cs368 = &
+         cs170 + cs362*w2(1, 2) + cs362*w2(2, 1) + cs365*w2(1, 3) + cs365*w2(3, 1) + w2(1, &
+         1)*(-cs161 - cs2*cs335)
+      cs369 = -cs228*cs67 + cs368
+      cs370 = cs336*ps1(2, 1)
+      cs371 = cs336*ps1(3, 1)
+      cs372 = cs347*ps1(3, 1)
+      cs373 = (1.0_wp/2.0_wp)*cs26
+      cs374 = cs373*w2(1, 1)
+      cs375 = cs373*w2(2, 2)
+      cs376 = cs373*w2(3, 3)
+      cs377 = &
+         -cs255*cs67 + cs296*cs374 + cs297*cs375 + cs298*cs376 + cs370*w2(1, 2) + cs370*w2(2, 1) + &
+         cs371*w2(1, 3) + cs371*w2(3, 1) + cs372*w2(2, 3) + cs372*w2(3, 2)
+      cs378 = cs15*ps1(1, 4)
+      cs379 = -cs180*cs378 - cs328*ps1(2, 4)
+      cs380 = -cs188*cs378 - cs328*ps1(3, 4)
+      cs381 = -cs321*ps1(3, 4) - cs323*ps1(2, 4)
+      cs382 = &
+         -cs235*cs320 - cs236*cs327 - cs237*cs332 + cs379*w2(1, 2) + cs379*w2(2, 1) + cs380*w2(1, &
+         3) + cs380*w2(3, 1) + cs381*w2(2, 3) + cs381*w2(3, 2)
+      cs383 = -cs241*cs67 + cs382
+      cs384 = cs255 - cs295*cs67
+      cs385 = -cs269*s_3*w2(1, 1) - cs272*s_3*w2(2, 2) - cs275*s_3*w2(3, 3) + cs281 - cs302*cs67
+      cs386 = (cs17*cs17)*cs7
+      cs387 = cs386*w2(1, 1)
+      cs388 = cs386*w2(2, 2)
+      cs389 = cs386*w2(3, 3)
+      cs390 = cs19*cs4
+      cs391 = cs21*cs4
+      cs392 = cs23*cs4
+      cs393 = cs17*cs34
+      cs394 = cs17*cs38
+      cs395 = cs17*cs42
+      cs396 = cs17*cs69
+      cs397 = cs17*cs74
+      cs398 = cs17*cs77
+      cs399 = cs17*cs57
+      cs400 = cs17*cs61
+      cs401 = cs17*cs65
+      cs402 = cs17*cs81
+      cs403 = cs17*cs84
+      cs404 = cs17*cs87
+      cs405 = cs145*cs17
+      cs406 = cs152*cs17
+      cs407 = cs157*cs17
+      cs408 = cs109*cs17
+      cs409 = cs126*cs17
+      cs410 = cs135*cs17
+      cs411 = cs169*cs17
+      cs412 = cs17*cs181
+      cs413 = cs17*cs189
+      cs414 = cs17*cs208
+      cs415 = cs17*cs221
+      cs416 = cs17*cs228
+      cs417 = cs17*cs255
+      cs418 = cs17*cs241
+      cs419 = cs17*cs302
+      cs420 = cs45*s_2
+      cs421 = cs420*w2(1, 1)
+      cs422 = cs7*(s_2*s_2)
+      cs423 = cs422*(ps0(4)*ps0(4))
+      cs424 = -cs421 + cs423*w2(1, 1)
+      cs425 = cs420*w2(2, 2)
+      cs426 = cs423*w2(2, 2) - cs425
+      cs427 = cs420*w2(3, 3)
+      cs428 = cs423*w2(3, 3) - cs427
+      cs429 = cs4*cs69
+      cs430 = cs4*cs74
+      cs431 = cs4*cs77
+      cs432 = cs4*cs57
+      cs433 = cs4*cs61
+      cs434 = cs4*cs65
+      cs435 = cs420*w2(1, 2) + cs420*w2(2, 1)
+      cs436 = cs34*ps0(4)*s_2 - cs435
+      cs437 = cs420*w2(1, 3) + cs420*w2(3, 1)
+      cs438 = cs38*ps0(4)*s_2 - cs437
+      cs439 = cs420*w2(2, 3) + cs420*w2(3, 2)
+      cs440 = cs42*ps0(4)*s_2 - cs439
+      cs441 = cs4*cs81
+      cs442 = cs4*cs84
+      cs443 = cs4*cs87
+      cs444 = cs232*w2(1, 1)
+      cs445 = ps1(2, 4)*w2(1, 2)
+      cs446 = cs15*cs195
+      cs447 = ps1(2, 4)*w2(2, 1)
+      cs448 = cs446*ps1(3, 4)
+      cs449 = cs44*cs444 + cs445*cs446 + cs446*cs447 + cs448*w2(1, 3) + cs448*w2(3, 1)
+      cs450 = cs169*ps0(4)*s_2 - cs449
+      cs451 = cs233*w2(2, 2)
+      cs452 = cs195*cs378
+      cs453 = cs44*cs451 + cs448*w2(2, 3) + cs448*w2(3, 2) + cs452*w2(1, 2) + cs452*w2(2, 1)
+      cs454 = cs181*ps0(4)*s_2 - cs453
+      cs455 = cs234*w2(3, 3)
+      cs456 = cs446*ps1(2, 4)
+      cs457 = cs44*cs455 + cs452*w2(1, 3) + cs452*w2(3, 1) + cs456*w2(2, 3) + cs456*w2(3, 2)
+      cs458 = cs189*ps0(4)*s_2 - cs457
+      cs459 = cs236*cs55 + cs236*cs56 + cs237*cs59 + cs237*cs60
+      cs460 = cs145*cs4 + 2.0_wp*cs19*cs235 + cs459
+      cs461 = cs235*cs55 + cs235*cs56 + cs237*cs63 + cs237*cs64
+      cs462 = cs152*cs4 + 2.0_wp*cs21*cs236 + cs461
+      cs463 = 2.0_wp*cs237
+      cs464 = cs235*cs59 + cs235*cs60 + cs236*cs63 + cs236*cs64
+      cs465 = cs157*cs4 + cs23*cs463 + cs464
+      cs466 = cs232*cs3
+      cs467 = cs233*cs3
+      cs468 = cs1*cs16
+      cs469 = cs455*cs468 + cs466*w2(1, 3) + cs466*w2(3, 1) + cs467*w2(2, 3) + cs467*w2(3, 2)
+      cs470 = cs208*cs4 + cs469
+      cs471 = cs234*cs3
+      cs472 = cs451*cs468 + cs466*w2(1, 2) + cs466*w2(2, 1) + cs471*w2(2, 3) + cs471*w2(3, 2)
+      cs473 = cs221*cs4 + cs472
+      cs474 = cs444*cs468 + cs467*w2(1, 2) + cs467*w2(2, 1) + cs471*w2(1, 3) + cs471*w2(3, 1)
+      cs475 = cs228*cs4 + cs474
+      cs476 = cs422*ps0(4)
+      cs477 = cs476*ps1(2, 4)
+      cs478 = cs231*cs92
+      cs479 = cs477 + cs478
+      cs480 = cs476*ps1(3, 4)
+      cs481 = cs100*cs231
+      cs482 = cs480 + cs481
+      cs483 = cs476*ps1(1, 4)
+      cs484 = cs105*cs231
+      cs485 = &
+         -cs420*w1(1) + cs479*w2(1, 2) + cs479*w2(2, 1) + cs482*w2(1, 3) + cs482*w2(3, 1) + w2(1, &
+         1)*(2.0_wp*cs483 + 2.0_wp*cs484)
+      cs486 = cs109*cs4 + cs485
+      cs487 = cs483 + cs484
+      cs488 = &
+         -cs420*w1(2) + cs482*w2(2, 3) + cs482*w2(3, 2) + cs487*w2(1, 2) + cs487*w2(2, 1) + w2(2, &
+         2)*(2.0_wp*cs477 + 2.0_wp*cs478)
+      cs489 = cs126*cs4 + cs488
+      cs490 = &
+         -cs420*w1(3) + cs479*w2(2, 3) + cs479*w2(3, 2) + cs487*w2(1, 3) + cs487*w2(3, 1) + w2(3, &
+         3)*(2.0_wp*cs480 + 2.0_wp*cs481)
+      cs491 = cs135*cs4 + cs490
+      cs492 = cs255*cs4 + cs382
+      cs493 = cs304*w2(1, 1)
+      cs494 = cs307*w2(2, 2)
+      cs495 = cs119*cs463*w2(3, 3) + cs235*cs493 + cs236*cs494 + cs246 + cs302*cs4
+      cs496 = cs241 + cs295*cs4
+      cs497 = 2.0_wp*cs422
+      cs498 = cs497*ps1(1, 4)
+      cs499 = cs498*ps1(3, 4)
+      cs500 = cs293*cs497
+      cs501 = &
+         cs241*cs4 + cs268*cs497*w2(1, 1) + cs271*cs497*w2(2, 2) + cs274*cs497*w2(3, 3) + &
+         cs280*s_2 + cs445*cs498 + cs447*cs498 + cs499*w2(1, 3) + cs499*w2(3, 1) + cs500*w2(2, 3) &
+         + cs500*w2(3, 2)
+      cs502 = cs229 + w2(1, 1)*(cs130*cs468 + cs225)
+      cs503 = -2.0_wp*cs46 + (1.0_wp/18.0_wp)*cs48
+      cs504 = cs503*w2(1, 1)
+      cs505 = -cs2*cs27 + cs5*inv_Z*s_3
+      cs506 = cs505*w2(1, 1)
+      cs507 = cs19*cs468
+      cs508 = cs468*cs9
+      cs509 = -cs46 + cs49
+      cs510 = cs509*w2(1, 2) + cs509*w2(2, 1)
+      cs511 = -cs28 + (1.0_wp/2.0_wp)*cs5*inv_Z*s_3
+      cs512 = cs511*w2(1, 2) + cs511*w2(2, 1)
+      cs513 = cs3*cs55 + cs3*cs56
+      cs514 = cs3*cs32 + cs3*cs33
+      cs515 = at2(1, 2, 1)*cs510 + at2(1, 2, 2)*cs512 + at2(1, 2, 3)*cs513 + at2(1, 2, 4)*cs514
+      cs516 = cs509*w2(1, 3) + cs509*w2(3, 1)
+      cs517 = cs511*w2(1, 3) + cs511*w2(3, 1)
+      cs518 = cs3*cs59 + cs3*cs60
+      cs519 = cs3*cs36 + cs3*cs37
+      cs520 = at2(1, 3, 1)*cs516 + at2(1, 3, 2)*cs517 + at2(1, 3, 3)*cs518 + at2(1, 3, 4)*cs519
+      cs521 = cs11*cs468
+      cs522 = cs21*cs468
+      cs523 = cs505*w2(2, 2)
+      cs524 = cs503*w2(2, 2)
+      cs525 = cs3*cs40 + cs3*cs41
+      cs526 = cs3*cs63 + cs3*cs64
+      cs527 = cs511*w2(2, 3) + cs511*w2(3, 2)
+      cs528 = cs509*w2(2, 3) + cs509*w2(3, 2)
+      cs529 = cs223 + w2(2, 2)*(cs115*cs468 + cs217)
+      cs530 = at2(2, 3, 1)*cs528 + at2(2, 3, 2)*cs527 + at2(2, 3, 3)*cs526 + at2(2, 3, 4)*cs525
+      cs531 = cs13*cs468
+      cs532 = cs23*cs468
+      cs533 = cs505*w2(3, 3)
+      cs534 = cs503*w2(3, 3)
+      cs535 = cs215 + w2(3, 3)*(cs119*cs468 + cs197)
+      cs536 = cs175 + w2(1, 1)*(-cs130*cs44 - cs161)
+      cs537 = -cs449
+      cs538 = cs0*cs374
+      cs539 = cs312*cs337 + cs313*w2(2, 1)
+      cs540 = -cs55*cs67 - cs56*cs67
+      cs541 = cs446*ps0(4)
+      cs542 = -cs541*w2(1, 2) - cs541*w2(2, 1)
+      cs543 = at2(1, 2, 1)*cs512 + at2(1, 2, 2)*cs539 + at2(1, 2, 3)*cs540 + at2(1, 2, 4)*cs542
+      cs544 = cs313*w2(1, 3) + cs313*w2(3, 1)
+      cs545 = -cs59*cs67 - cs60*cs67
+      cs546 = -cs541*w2(1, 3) - cs541*w2(3, 1)
+      cs547 = at2(1, 3, 1)*cs517 + at2(1, 3, 2)*cs544 + at2(1, 3, 3)*cs545 + at2(1, 3, 4)*cs546
+      cs548 = cs0*cs375
+      cs549 = -cs541*w2(2, 3) - cs541*w2(3, 2)
+      cs550 = cs313*w2(2, 3) + cs313*w2(3, 2)
+      cs551 = -cs63*cs67 - cs64*cs67
+      cs552 = -cs453
+      cs553 = cs185 + w2(2, 2)*(-cs115*cs44 - cs177)
+      cs554 = at2(2, 3, 1)*cs527 + at2(2, 3, 2)*cs550 + at2(2, 3, 3)*cs551 + at2(2, 3, 4)*cs549
+      cs555 = cs0*cs376
+      cs556 = -cs457
+      cs557 = cs191 + w2(3, 3)*(-cs119*cs44 - cs187)
+      cs558 = cs130*cs144 + cs148
+      cs559 = -cs144*cs178 - cs355
+      cs560 = cs144*cs232 + cs459
+      cs561 = cs143*cs19
+      cs562 = cs144*cs8
+      cs563 = cs144*cs80
+      cs564 = cs386*w2(1, 2) + cs386*w2(2, 1)
+      cs565 = cs4*cs55 + cs4*cs56
+      cs566 = at2(1, 2, 1)*cs513 + at2(1, 2, 2)*cs540 + at2(1, 2, 3)*cs564 + at2(1, 2, 4)*cs565
+      cs567 = cs386*w2(1, 3) + cs386*w2(3, 1)
+      cs568 = cs4*cs59 + cs4*cs60
+      cs569 = at2(1, 3, 1)*cs518 + at2(1, 3, 2)*cs545 + at2(1, 3, 3)*cs567 + at2(1, 3, 4)*cs568
+      cs570 = cs151*cs8
+      cs571 = cs143*cs21
+      cs572 = cs151*cs80
+      cs573 = cs386*w2(2, 3) + cs386*w2(3, 2)
+      cs574 = cs4*cs63 + cs4*cs64
+      cs575 = cs151*cs233 + cs461
+      cs576 = -cs151*cs163 - cs357
+      cs577 = cs115*cs151 + cs154
+      cs578 = at2(2, 3, 1)*cs526 + at2(2, 3, 2)*cs551 + at2(2, 3, 3)*cs573 + at2(2, 3, 4)*cs574
+      cs579 = cs156*cs8
+      cs580 = cs143*cs23
+      cs581 = cs156*cs80
+      cs582 = cs156*cs234 + cs464
+      cs583 = -cs156*cs166 - cs359
+      cs584 = cs119*cs156 + cs158
+      cs585 = cs121 + cs4*cs493
+      cs586 = -cs325
+      cs587 = -2.0_wp*cs420 + 2.0_wp*cs423
+      cs588 = cs587*w2(1, 1)
+      cs589 = 2.0_wp*cs390
+      cs590 = -cs420 + cs423
+      cs591 = cs590*w2(1, 2) + cs590*w2(2, 1)
+      cs592 = at2(1, 2, 1)*cs514 + at2(1, 2, 2)*cs542 + at2(1, 2, 3)*cs565 + at2(1, 2, 4)*cs591
+      cs593 = cs590*w2(1, 3) + cs590*w2(3, 1)
+      cs594 = at2(1, 3, 1)*cs519 + at2(1, 3, 2)*cs546 + at2(1, 3, 3)*cs568 + at2(1, 3, 4)*cs593
+      cs595 = 2.0_wp*cs391
+      cs596 = cs587*w2(2, 2)
+      cs597 = cs590*w2(2, 3) + cs590*w2(3, 2)
+      cs598 = -cs330
+      cs599 = cs132 + cs4*cs494
+      cs600 = at2(2, 3, 1)*cs525 + at2(2, 3, 2)*cs549 + at2(2, 3, 3)*cs574 + at2(2, 3, 4)*cs597
+      cs601 = 2.0_wp*cs392
+      cs602 = cs587*w2(3, 3)
+      cs603 = -cs333
+      cs604 = 2.0_wp*cs120*w2(3, 3) + cs138
+      cs605 = cs71*w2(1, 1)
+      cs606 = cs80*w2(1, 1)
+      cs607 = (1.0_wp/2.0_wp)*cs72
+      cs608 = -1.0_wp/2.0_wp*cs82
+      cs609 = (1.0_wp/2.0_wp)*cs75
+      cs610 = -1.0_wp/2.0_wp*cs85
+      cs611 = cs71*w2(2, 2)
+      cs612 = cs80*w2(2, 2)
+      cs613 = (1.0_wp/2.0_wp)*cs78
+      cs614 = -1.0_wp/2.0_wp*cs88
+      cs615 = cs71*w2(3, 3)
+      cs616 = cs80*w2(3, 3)
+      cs617 = cs68*w2(1, 1)
+      cs618 = cs68*w2(2, 2)
+      cs619 = cs68*w2(3, 3)
+      cs620 = (1.0_wp/2.0_wp)*cs57
+      cs621 = (1.0_wp/2.0_wp)*cs61
+      cs622 = (1.0_wp/2.0_wp)*cs65
+      cs623 = -1.0_wp/2.0_wp*cs435
+      cs624 = -1.0_wp/2.0_wp*cs437
+      cs625 = -1.0_wp/2.0_wp*cs439
+      hvp_vjp_ws0(1, 1) = &
+         -at1(1, 1)*cs309 - at2(1, 1, 1)*cs230 - at3(1, 1, 1, 1)*cs50 - at3(1, 1, 2, 1)*cs83 - &
+         at3(1, 1, 3, 1)*cs86 - at2(1, 2, 1)*cs224 - at3(1, 2, 2, 1)*cs52 - at3(1, 2, 3, 1)*cs89 - &
+         at2(1, 3, 1)*cs216 - at3(1, 3, 3, 1)*cs54 - at1(1, 2)*cs282 - at2(1, 1, 2)*cs176 - at3(1, &
+         1, 1, 2)*cs29 - at3(1, 1, 2, 2)*cs73 - at3(1, 1, 3, 2)*cs76 - at2(1, 2, 2)*cs186 - at3(1, &
+         2, 2, 2)*cs30 - at3(1, 2, 3, 2)*cs79 - at2(1, 3, 2)*cs192 - at3(1, 3, 3, 2)*cs31 - at2(1, &
+         1, 3)*cs149 - at3(1, 1, 1, 3)*cs20 - at3(1, 1, 2, 3)*cs58 - at3(1, 1, 3, 3)*cs62 - at2(1, &
+         2, 3)*cs155 - at3(1, 2, 2, 3)*cs22 - at3(1, 2, 3, 3)*cs66 - at2(1, 3, 3)*cs159 - at3(1, &
+         3, 3, 3)*cs24 - at1(1, 4)*cs247 - at2(1, 1, 4)*cs122 - at3(1, 1, 1, 4)*cs10 - at3(1, 1, &
+         2, 4)*cs35 - at3(1, 1, 3, 4)*cs39 - at2(1, 2, 4)*cs133 - at3(1, 2, 2, 4)*cs12 - at3(1, 2, &
+         3, 4)*cs43 - at2(1, 3, 4)*cs139 - at3(1, 3, 3, 4)*cs14 + cs283*cs303
+      hvp_vjp_ws0(2, 1) = &
+         -at3(1, 1, 2, 1)*cs50 - at2(1, 2, 1)*cs230 - at3(1, 2, 2, 1)*cs83 - at3(1, 2, 3, 1)*cs86 &
+         - at1(2, 1)*cs309 - at2(2, 2, 1)*cs224 - at3(2, 2, 2, 1)*cs52 - at3(2, 2, 3, 1)*cs89 - &
+         at2(2, 3, 1)*cs216 - at3(2, 3, 3, 1)*cs54 - at3(1, 1, 2, 2)*cs29 - at2(1, 2, 2)*cs176 - &
+         at3(1, 2, 2, 2)*cs73 - at3(1, 2, 3, 2)*cs76 - at1(2, 2)*cs282 - at2(2, 2, 2)*cs186 - &
+         at3(2, 2, 2, 2)*cs30 - at3(2, 2, 3, 2)*cs79 - at2(2, 3, 2)*cs192 - at3(2, 3, 3, 2)*cs31 - &
+         at3(1, 1, 2, 3)*cs20 - at2(1, 2, 3)*cs149 - at3(1, 2, 2, 3)*cs58 - at3(1, 2, 3, 3)*cs62 - &
+         at2(2, 2, 3)*cs155 - at3(2, 2, 2, 3)*cs22 - at3(2, 2, 3, 3)*cs66 - at2(2, 3, 3)*cs159 - &
+         at3(2, 3, 3, 3)*cs24 - at3(1, 1, 2, 4)*cs10 - at2(1, 2, 4)*cs122 - at3(1, 2, 2, 4)*cs35 - &
+         at3(1, 2, 3, 4)*cs39 - at1(2, 4)*cs247 - at2(2, 2, 4)*cs133 - at3(2, 2, 2, 4)*cs12 - &
+         at3(2, 2, 3, 4)*cs43 - at2(2, 3, 4)*cs139 - at3(2, 3, 3, 4)*cs14 + cs303*cs310
+      hvp_vjp_ws0(3, 1) = &
+         -at3(1, 1, 3, 1)*cs50 - at3(1, 2, 3, 1)*cs83 - at2(1, 3, 1)*cs230 - at3(1, 3, 3, 1)*cs86 &
+         - at3(2, 2, 3, 1)*cs52 - at2(2, 3, 1)*cs224 - at3(2, 3, 3, 1)*cs89 - at1(3, 1)*cs309 - &
+         at2(3, 3, 1)*cs216 - at3(3, 3, 3, 1)*cs54 - at3(1, 1, 3, 2)*cs29 - at3(1, 2, 3, 2)*cs73 - &
+         at2(1, 3, 2)*cs176 - at3(1, 3, 3, 2)*cs76 - at3(2, 2, 3, 2)*cs30 - at2(2, 3, 2)*cs186 - &
+         at3(2, 3, 3, 2)*cs79 - at1(3, 2)*cs282 - at2(3, 3, 2)*cs192 - at3(3, 3, 3, 2)*cs31 - &
+         at3(1, 1, 3, 3)*cs20 - at3(1, 2, 3, 3)*cs58 - at2(1, 3, 3)*cs149 - at3(1, 3, 3, 3)*cs62 - &
+         at3(2, 2, 3, 3)*cs22 - at2(2, 3, 3)*cs155 - at3(2, 3, 3, 3)*cs66 - at2(3, 3, 3)*cs159 - &
+         at3(3, 3, 3, 3)*cs24 - at3(1, 1, 3, 4)*cs10 - at3(1, 2, 3, 4)*cs35 - at2(1, 3, 4)*cs122 - &
+         at3(1, 3, 3, 4)*cs39 - at3(2, 2, 3, 4)*cs12 - at2(2, 3, 4)*cs133 - at3(2, 3, 3, 4)*cs43 - &
+         at1(3, 4)*cs247 - at2(3, 3, 4)*cs139 - at3(3, 3, 3, 4)*cs14 + cs303*cs311
+      hvp_vjp_ws0(1, 2) = &
+         -at1(1, 1)*cs385 - at2(1, 1, 1)*cs369 - at3(1, 1, 1, 1)*cs29 - at3(1, 1, 2, 1)*cs317 - &
+         at3(1, 1, 3, 1)*cs318 - at2(1, 2, 1)*cs367 - at3(1, 2, 2, 1)*cs30 - at3(1, 2, 3, 1)*cs319 &
+         - at2(1, 3, 1)*cs364 - at3(1, 3, 3, 1)*cs31 - at1(1, 2)*cs377 - at2(1, 1, 2)*cs345 - &
+         at3(1, 1, 1, 2)*cs314 + (1.0_wp/2.0_wp)*at3(1, 1, 2, 2)*cs69*ps0(1)*s_3 + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 3, 2)*cs74*ps0(1)*s_3 - at2(1, 2, 2)*cs349 - at3(1, 2, 2, &
+         2)*cs315 + (1.0_wp/2.0_wp)*at3(1, 2, 3, 2)*cs77*ps0(1)*s_3 - at2(1, 3, 2)*cs353 - at3(1, &
+         3, 3, 2)*cs316 - at2(1, 1, 3)*cs356 + (1.0_wp/2.0_wp)*at3(1, 1, 1, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) + (1.0_wp/2.0_wp)*at3(1, 1, 2, 3)*cs57*ps0(1)*s_3 + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 3, 3)*cs61*ps0(1)*s_3 - at2(1, 2, 3)*cs358 + &
+         (1.0_wp/2.0_wp)*at3(1, 2, 2, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) + (1.0_wp/2.0_wp)*at3(1, &
+         2, 3, 3)*cs65*ps0(1)*s_3 - at2(1, 3, 3)*cs360 + (1.0_wp/2.0_wp)*at3(1, 3, 3, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at1(1, 4)*cs383 - at2(1, 1, 4)*cs326 + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 1, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 2, 4)*cs34*ps0(1)*s_3 + (1.0_wp/2.0_wp)*at3(1, 1, 3, &
+         4)*cs38*ps0(1)*s_3 - at2(1, 2, 4)*cs331 + (1.0_wp/2.0_wp)*at3(1, 2, 2, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) + (1.0_wp/2.0_wp)*at3(1, 2, 3, &
+         4)*cs42*ps0(1)*s_3 - at2(1, 3, 4)*cs334 + (1.0_wp/2.0_wp)*at3(1, 3, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + cs283*cs384
+      hvp_vjp_ws0(2, 2) = &
+         -at3(1, 1, 2, 1)*cs29 - at2(1, 2, 1)*cs369 - at3(1, 2, 2, 1)*cs317 - at3(1, 2, 3, &
+         1)*cs318 - at1(2, 1)*cs385 - at2(2, 2, 1)*cs367 - at3(2, 2, 2, 1)*cs30 - at3(2, 2, 3, &
+         1)*cs319 - at2(2, 3, 1)*cs364 - at3(2, 3, 3, 1)*cs31 - at3(1, 1, 2, 2)*cs314 - at2(1, 2, &
+         2)*cs345 + (1.0_wp/2.0_wp)*at3(1, 2, 2, 2)*cs69*ps0(1)*s_3 + (1.0_wp/2.0_wp)*at3(1, 2, 3, &
+         2)*cs74*ps0(1)*s_3 - at1(2, 2)*cs377 - at2(2, 2, 2)*cs349 - at3(2, 2, 2, 2)*cs315 + &
+         (1.0_wp/2.0_wp)*at3(2, 2, 3, 2)*cs77*ps0(1)*s_3 - at2(2, 3, 2)*cs353 - at3(2, 3, 3, &
+         2)*cs316 + (1.0_wp/2.0_wp)*at3(1, 1, 2, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(1, 2, &
+         3)*cs356 + (1.0_wp/2.0_wp)*at3(1, 2, 2, 3)*cs57*ps0(1)*s_3 + (1.0_wp/2.0_wp)*at3(1, 2, 3, &
+         3)*cs61*ps0(1)*s_3 - at2(2, 2, 3)*cs358 + (1.0_wp/2.0_wp)*at3(2, 2, 2, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) + (1.0_wp/2.0_wp)*at3(2, 2, 3, 3)*cs65*ps0(1)*s_3 - &
+         at2(2, 3, 3)*cs360 + (1.0_wp/2.0_wp)*at3(2, 3, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 2, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at2(1, 2, &
+         4)*cs326 + (1.0_wp/2.0_wp)*at3(1, 2, 2, 4)*cs34*ps0(1)*s_3 + (1.0_wp/2.0_wp)*at3(1, 2, 3, &
+         4)*cs38*ps0(1)*s_3 - at1(2, 4)*cs383 - at2(2, 2, 4)*cs331 + (1.0_wp/2.0_wp)*at3(2, 2, 2, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) + (1.0_wp/2.0_wp)*at3(2, 2, 3, &
+         4)*cs42*ps0(1)*s_3 - at2(2, 3, 4)*cs334 + (1.0_wp/2.0_wp)*at3(2, 3, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + cs310*cs384
+      hvp_vjp_ws0(3, 2) = &
+         -at3(1, 1, 3, 1)*cs29 - at3(1, 2, 3, 1)*cs317 - at2(1, 3, 1)*cs369 - at3(1, 3, 3, &
+         1)*cs318 - at3(2, 2, 3, 1)*cs30 - at2(2, 3, 1)*cs367 - at3(2, 3, 3, 1)*cs319 - at1(3, &
+         1)*cs385 - at2(3, 3, 1)*cs364 - at3(3, 3, 3, 1)*cs31 - at3(1, 1, 3, 2)*cs314 + &
+         (1.0_wp/2.0_wp)*at3(1, 2, 3, 2)*cs69*ps0(1)*s_3 - at2(1, 3, 2)*cs345 + &
+         (1.0_wp/2.0_wp)*at3(1, 3, 3, 2)*cs74*ps0(1)*s_3 - at3(2, 2, 3, 2)*cs315 - at2(2, 3, &
+         2)*cs349 + (1.0_wp/2.0_wp)*at3(2, 3, 3, 2)*cs77*ps0(1)*s_3 - at1(3, 2)*cs377 - at2(3, 3, &
+         2)*cs353 - at3(3, 3, 3, 2)*cs316 + (1.0_wp/2.0_wp)*at3(1, 1, 3, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) + (1.0_wp/2.0_wp)*at3(1, 2, 3, 3)*cs57*ps0(1)*s_3 - &
+         at2(1, 3, 3)*cs356 + (1.0_wp/2.0_wp)*at3(1, 3, 3, 3)*cs61*ps0(1)*s_3 + &
+         (1.0_wp/2.0_wp)*at3(2, 2, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at2(2, 3, 3)*cs358 + &
+         (1.0_wp/2.0_wp)*at3(2, 3, 3, 3)*cs65*ps0(1)*s_3 - at2(3, 3, 3)*cs360 + &
+         (1.0_wp/2.0_wp)*at3(3, 3, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) + (1.0_wp/2.0_wp)*at3(1, &
+         1, 3, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) + (1.0_wp/2.0_wp)*at3(1, 2, 3, &
+         4)*cs34*ps0(1)*s_3 - at2(1, 3, 4)*cs326 + (1.0_wp/2.0_wp)*at3(1, 3, 3, 4)*cs38*ps0(1)*s_3 &
+         + (1.0_wp/2.0_wp)*at3(2, 2, 3, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at2(2, 3, &
+         4)*cs331 + (1.0_wp/2.0_wp)*at3(2, 3, 3, 4)*cs42*ps0(1)*s_3 - at1(3, 4)*cs383 - at2(3, 3, &
+         4)*cs334 + (1.0_wp/2.0_wp)*at3(3, 3, 3, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + &
+         cs311*cs384
+      hvp_vjp_ws0(1, 3) = &
+         -at1(1, 1)*cs419 - at2(1, 1, 1)*cs416 - at3(1, 1, 1, 1)*cs20 - at3(1, 1, 2, 1)*cs402 - &
+         at3(1, 1, 3, 1)*cs403 - at2(1, 2, 1)*cs415 - at3(1, 2, 2, 1)*cs22 - at3(1, 2, 3, 1)*cs404 &
+         - at2(1, 3, 1)*cs414 - at3(1, 3, 3, 1)*cs24 - at1(1, 2)*cs417 - at2(1, 1, 2)*cs411 + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 1, 2)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at3(1, 1, 2, 2)*cs396 &
+         - at3(1, 1, 3, 2)*cs397 - at2(1, 2, 2)*cs412 + (1.0_wp/2.0_wp)*at3(1, 2, 2, &
+         2)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at3(1, 2, 3, 2)*cs398 - at2(1, 3, 2)*cs413 + &
+         (1.0_wp/2.0_wp)*at3(1, 3, 3, 2)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at2(1, 1, 3)*cs405 - &
+         at3(1, 1, 1, 3)*cs387 - at3(1, 1, 2, 3)*cs399 - at3(1, 1, 3, 3)*cs400 - at2(1, 2, &
+         3)*cs406 - at3(1, 2, 2, 3)*cs388 - at3(1, 2, 3, 3)*cs401 - at2(1, 3, 3)*cs407 - at3(1, 3, &
+         3, 3)*cs389 - at1(1, 4)*cs418 - at2(1, 1, 4)*cs408 - at3(1, 1, 1, 4)*cs390 - at3(1, 1, 2, &
+         4)*cs393 - at3(1, 1, 3, 4)*cs394 - at2(1, 2, 4)*cs409 - at3(1, 2, 2, 4)*cs391 - at3(1, 2, &
+         3, 4)*cs395 - at2(1, 3, 4)*cs410 - at3(1, 3, 3, 4)*cs392 + cs17*cs283*cs295
+      hvp_vjp_ws0(2, 3) = &
+         -at3(1, 1, 2, 1)*cs20 - at2(1, 2, 1)*cs416 - at3(1, 2, 2, 1)*cs402 - at3(1, 2, 3, &
+         1)*cs403 - at1(2, 1)*cs419 - at2(2, 2, 1)*cs415 - at3(2, 2, 2, 1)*cs22 - at3(2, 2, 3, &
+         1)*cs404 - at2(2, 3, 1)*cs414 - at3(2, 3, 3, 1)*cs24 + (1.0_wp/2.0_wp)*at3(1, 1, 2, &
+         2)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(1, 2, 2)*cs411 - at3(1, 2, 2, 2)*cs396 - at3(1, &
+         2, 3, 2)*cs397 - at1(2, 2)*cs417 - at2(2, 2, 2)*cs412 + (1.0_wp/2.0_wp)*at3(2, 2, 2, &
+         2)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at3(2, 2, 3, 2)*cs398 - at2(2, 3, 2)*cs413 + &
+         (1.0_wp/2.0_wp)*at3(2, 3, 3, 2)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at3(1, 1, 2, 3)*cs387 &
+         - at2(1, 2, 3)*cs405 - at3(1, 2, 2, 3)*cs399 - at3(1, 2, 3, 3)*cs400 - at2(2, 2, 3)*cs406 &
+         - at3(2, 2, 2, 3)*cs388 - at3(2, 2, 3, 3)*cs401 - at2(2, 3, 3)*cs407 - at3(2, 3, 3, &
+         3)*cs389 - at3(1, 1, 2, 4)*cs390 - at2(1, 2, 4)*cs408 - at3(1, 2, 2, 4)*cs393 - at3(1, 2, &
+         3, 4)*cs394 - at1(2, 4)*cs418 - at2(2, 2, 4)*cs409 - at3(2, 2, 2, 4)*cs391 - at3(2, 2, 3, &
+         4)*cs395 - at2(2, 3, 4)*cs410 - at3(2, 3, 3, 4)*cs392 + cs17*cs295*cs310
+      hvp_vjp_ws0(3, 3) = &
+         -at3(1, 1, 3, 1)*cs20 - at3(1, 2, 3, 1)*cs402 - at2(1, 3, 1)*cs416 - at3(1, 3, 3, &
+         1)*cs403 - at3(2, 2, 3, 1)*cs22 - at2(2, 3, 1)*cs415 - at3(2, 3, 3, 1)*cs404 - at1(3, &
+         1)*cs419 - at2(3, 3, 1)*cs414 - at3(3, 3, 3, 1)*cs24 + (1.0_wp/2.0_wp)*at3(1, 1, 3, &
+         2)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at3(1, 2, 3, 2)*cs396 - at2(1, 3, 2)*cs411 - at3(1, &
+         3, 3, 2)*cs397 + (1.0_wp/2.0_wp)*at3(2, 2, 3, 2)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - &
+         at2(2, 3, 2)*cs412 - at3(2, 3, 3, 2)*cs398 - at1(3, 2)*cs417 - at2(3, 3, 2)*cs413 + &
+         (1.0_wp/2.0_wp)*at3(3, 3, 3, 2)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at3(1, 1, 3, 3)*cs387 &
+         - at3(1, 2, 3, 3)*cs399 - at2(1, 3, 3)*cs405 - at3(1, 3, 3, 3)*cs400 - at3(2, 2, 3, &
+         3)*cs388 - at2(2, 3, 3)*cs406 - at3(2, 3, 3, 3)*cs401 - at2(3, 3, 3)*cs407 - at3(3, 3, 3, &
+         3)*cs389 - at3(1, 1, 3, 4)*cs390 - at3(1, 2, 3, 4)*cs393 - at2(1, 3, 4)*cs408 - at3(1, 3, &
+         3, 4)*cs394 - at3(2, 2, 3, 4)*cs391 - at2(2, 3, 4)*cs409 - at3(2, 3, 3, 4)*cs395 - at1(3, &
+         4)*cs418 - at2(3, 3, 4)*cs410 - at3(3, 3, 3, 4)*cs392 + cs17*cs295*cs311
+      hvp_vjp_ws0(1, 4) = &
+         -at1(1, 1)*cs495 - at2(1, 1, 1)*cs475 - at3(1, 1, 1, 1)*cs10 - at3(1, 1, 2, 1)*cs441 - &
+         at3(1, 1, 3, 1)*cs442 - at2(1, 2, 1)*cs473 - at3(1, 2, 2, 1)*cs12 - at3(1, 2, 3, 1)*cs443 &
+         - at2(1, 3, 1)*cs470 - at3(1, 3, 3, 1)*cs14 - at1(1, 2)*cs492 - at2(1, 1, 2)*cs450 + &
+         (1.0_wp/2.0_wp)*at3(1, 1, 1, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at3(1, 1, 2, &
+         2)*cs429 - at3(1, 1, 3, 2)*cs430 - at2(1, 2, 2)*cs454 + (1.0_wp/2.0_wp)*at3(1, 2, 2, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at3(1, 2, 3, 2)*cs431 - at2(1, 3, 2)*cs458 + &
+         (1.0_wp/2.0_wp)*at3(1, 3, 3, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at2(1, 1, &
+         3)*cs460 - at3(1, 1, 1, 3)*cs390 - at3(1, 1, 2, 3)*cs432 - at3(1, 1, 3, 3)*cs433 - at2(1, &
+         2, 3)*cs462 - at3(1, 2, 2, 3)*cs391 - at3(1, 2, 3, 3)*cs434 - at2(1, 3, 3)*cs465 - at3(1, &
+         3, 3, 3)*cs392 - at1(1, 4)*cs501 - at2(1, 1, 4)*cs486 - at3(1, 1, 1, 4)*cs424 - at3(1, 1, &
+         2, 4)*cs436 - at3(1, 1, 3, 4)*cs438 - at2(1, 2, 4)*cs489 - at3(1, 2, 2, 4)*cs426 - at3(1, &
+         2, 3, 4)*cs440 - at2(1, 3, 4)*cs491 - at3(1, 3, 3, 4)*cs428 + cs283*cs496
+      hvp_vjp_ws0(2, 4) = &
+         -at3(1, 1, 2, 1)*cs10 - at2(1, 2, 1)*cs475 - at3(1, 2, 2, 1)*cs441 - at3(1, 2, 3, &
+         1)*cs442 - at1(2, 1)*cs495 - at2(2, 2, 1)*cs473 - at3(2, 2, 2, 1)*cs12 - at3(2, 2, 3, &
+         1)*cs443 - at2(2, 3, 1)*cs470 - at3(2, 3, 3, 1)*cs14 + (1.0_wp/2.0_wp)*at3(1, 1, 2, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at2(1, 2, 2)*cs450 - at3(1, 2, 2, 2)*cs429 - &
+         at3(1, 2, 3, 2)*cs430 - at1(2, 2)*cs492 - at2(2, 2, 2)*cs454 + (1.0_wp/2.0_wp)*at3(2, 2, &
+         2, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at3(2, 2, 3, 2)*cs431 - at2(2, 3, 2)*cs458 &
+         + (1.0_wp/2.0_wp)*at3(2, 3, 3, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at3(1, 1, 2, &
+         3)*cs390 - at2(1, 2, 3)*cs460 - at3(1, 2, 2, 3)*cs432 - at3(1, 2, 3, 3)*cs433 - at2(2, 2, &
+         3)*cs462 - at3(2, 2, 2, 3)*cs391 - at3(2, 2, 3, 3)*cs434 - at2(2, 3, 3)*cs465 - at3(2, 3, &
+         3, 3)*cs392 - at3(1, 1, 2, 4)*cs424 - at2(1, 2, 4)*cs486 - at3(1, 2, 2, 4)*cs436 - at3(1, &
+         2, 3, 4)*cs438 - at1(2, 4)*cs501 - at2(2, 2, 4)*cs489 - at3(2, 2, 2, 4)*cs426 - at3(2, 2, &
+         3, 4)*cs440 - at2(2, 3, 4)*cs491 - at3(2, 3, 3, 4)*cs428 + cs310*cs496
+      hvp_vjp_ws0(3, 4) = &
+         -at3(1, 1, 3, 1)*cs10 - at3(1, 2, 3, 1)*cs441 - at2(1, 3, 1)*cs475 - at3(1, 3, 3, &
+         1)*cs442 - at3(2, 2, 3, 1)*cs12 - at2(2, 3, 1)*cs473 - at3(2, 3, 3, 1)*cs443 - at1(3, &
+         1)*cs495 - at2(3, 3, 1)*cs470 - at3(3, 3, 3, 1)*cs14 + (1.0_wp/2.0_wp)*at3(1, 1, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at3(1, 2, 3, 2)*cs429 - at2(1, 3, 2)*cs450 - &
+         at3(1, 3, 3, 2)*cs430 + (1.0_wp/2.0_wp)*at3(2, 2, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at2(2, 3, 2)*cs454 - at3(2, 3, 3, 2)*cs431 - &
+         at1(3, 2)*cs492 - at2(3, 3, 2)*cs458 + (1.0_wp/2.0_wp)*at3(3, 3, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at3(1, 1, 3, 3)*cs390 - at3(1, 2, 3, 3)*cs432 &
+         - at2(1, 3, 3)*cs460 - at3(1, 3, 3, 3)*cs433 - at3(2, 2, 3, 3)*cs391 - at2(2, 3, 3)*cs462 &
+         - at3(2, 3, 3, 3)*cs434 - at2(3, 3, 3)*cs465 - at3(3, 3, 3, 3)*cs392 - at3(1, 1, 3, &
+         4)*cs424 - at3(1, 2, 3, 4)*cs436 - at2(1, 3, 4)*cs486 - at3(1, 3, 3, 4)*cs438 - at3(2, 2, &
+         3, 4)*cs426 - at2(2, 3, 4)*cs489 - at3(2, 3, 3, 4)*cs440 - at1(3, 4)*cs501 - at2(3, 3, &
+         4)*cs491 - at3(3, 3, 3, 4)*cs428 + cs311*cs496
+      hvp_vjp_ws1(1, 1, 1) = &
+         -at1(1, 1)*cs502 - at2(1, 1, 1)*cs504 - at1(1, 2)*cs368 - at2(1, 1, 2)*cs506 - at2(1, 1, &
+         3)*cs507 - at1(1, 4)*cs474 - at2(1, 1, 4)*cs508 + cs228*cs283 - cs515 - cs520
+      hvp_vjp_ws1(1, 2, 1) = &
+         -at2(1, 2, 1)*cs504 - at1(2, 1)*cs502 - at2(2, 2, 1)*cs510 - at2(2, 3, 1)*cs516 - at2(1, &
+         2, 2)*cs506 - at1(2, 2)*cs368 - at2(2, 2, 2)*cs512 - at2(2, 3, 2)*cs517 - at2(1, 2, &
+         3)*cs507 - at2(2, 2, 3)*cs513 - at2(2, 3, 3)*cs518 - at2(1, 2, 4)*cs508 - at1(2, 4)*cs474 &
+         - at2(2, 2, 4)*cs514 - at2(2, 3, 4)*cs519 + cs228*cs310
+      hvp_vjp_ws1(1, 3, 1) = &
+         -at2(1, 3, 1)*cs504 - at2(2, 3, 1)*cs510 - at1(3, 1)*cs502 - at2(3, 3, 1)*cs516 - at2(1, &
+         3, 2)*cs506 - at2(2, 3, 2)*cs512 - at1(3, 2)*cs368 - at2(3, 3, 2)*cs517 - at2(1, 3, &
+         3)*cs507 - at2(2, 3, 3)*cs513 - at2(3, 3, 3)*cs518 - at2(1, 3, 4)*cs508 - at2(2, 3, &
+         4)*cs514 - at1(3, 4)*cs474 - at2(3, 3, 4)*cs519 + cs228*cs311
+      hvp_vjp_ws1(2, 1, 1) = &
+         -at1(1, 1)*cs529 - at2(1, 1, 1)*cs510 - at2(1, 2, 1)*cs524 - at2(1, 3, 1)*cs528 - at1(1, &
+         2)*cs366 - at2(1, 1, 2)*cs512 - at2(1, 2, 2)*cs523 - at2(1, 3, 2)*cs527 - at2(1, 1, &
+         3)*cs513 - at2(1, 2, 3)*cs522 - at2(1, 3, 3)*cs526 - at1(1, 4)*cs472 - at2(1, 1, 4)*cs514 &
+         - at2(1, 2, 4)*cs521 - at2(1, 3, 4)*cs525 + cs221*cs283
+      hvp_vjp_ws1(2, 2, 1) = &
+         -at1(2, 1)*cs529 - at2(2, 2, 1)*cs524 - at1(2, 2)*cs366 - at2(2, 2, 2)*cs523 - at2(2, 2, &
+         3)*cs522 - at1(2, 4)*cs472 - at2(2, 2, 4)*cs521 + cs221*cs310 - cs515 - cs530
+      hvp_vjp_ws1(2, 3, 1) = &
+         -at2(1, 3, 1)*cs510 - at2(2, 3, 1)*cs524 - at1(3, 1)*cs529 - at2(3, 3, 1)*cs528 - at2(1, &
+         3, 2)*cs512 - at2(2, 3, 2)*cs523 - at1(3, 2)*cs366 - at2(3, 3, 2)*cs527 - at2(1, 3, &
+         3)*cs513 - at2(2, 3, 3)*cs522 - at2(3, 3, 3)*cs526 - at2(1, 3, 4)*cs514 - at2(2, 3, &
+         4)*cs521 - at1(3, 4)*cs472 - at2(3, 3, 4)*cs525 + cs221*cs311
+      hvp_vjp_ws1(3, 1, 1) = &
+         -at1(1, 1)*cs535 - at2(1, 1, 1)*cs516 - at2(1, 2, 1)*cs528 - at2(1, 3, 1)*cs534 - at1(1, &
+         2)*cs363 - at2(1, 1, 2)*cs517 - at2(1, 2, 2)*cs527 - at2(1, 3, 2)*cs533 - at2(1, 1, &
+         3)*cs518 - at2(1, 2, 3)*cs526 - at2(1, 3, 3)*cs532 - at1(1, 4)*cs469 - at2(1, 1, 4)*cs519 &
+         - at2(1, 2, 4)*cs525 - at2(1, 3, 4)*cs531 + cs208*cs283
+      hvp_vjp_ws1(3, 2, 1) = &
+         -at2(1, 2, 1)*cs516 - at1(2, 1)*cs535 - at2(2, 2, 1)*cs528 - at2(2, 3, 1)*cs534 - at2(1, &
+         2, 2)*cs517 - at1(2, 2)*cs363 - at2(2, 2, 2)*cs527 - at2(2, 3, 2)*cs533 - at2(1, 2, &
+         3)*cs518 - at2(2, 2, 3)*cs526 - at2(2, 3, 3)*cs532 - at2(1, 2, 4)*cs519 - at1(2, 4)*cs469 &
+         - at2(2, 2, 4)*cs525 - at2(2, 3, 4)*cs531 + cs208*cs310
+      hvp_vjp_ws1(3, 3, 1) = &
+         -at1(3, 1)*cs535 - at2(3, 3, 1)*cs534 - at1(3, 2)*cs363 - at2(3, 3, 2)*cs533 - at2(3, 3, &
+         3)*cs532 - at1(3, 4)*cs469 - at2(3, 3, 4)*cs531 + cs208*cs311 - cs520 - cs530
+      hvp_vjp_ws1(1, 1, 2) = &
+         -at1(1, 1)*cs536 - at2(1, 1, 1)*cs506 - at1(1, 2)*cs344 - at2(1, 1, 2)*cs538 + at2(1, 1, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at1(1, 4)*cs537 + at2(1, 1, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) + cs169*cs283 - cs543 - cs547
+      hvp_vjp_ws1(1, 2, 2) = &
+         -at2(1, 2, 1)*cs506 - at1(2, 1)*cs536 - at2(2, 2, 1)*cs512 - at2(2, 3, 1)*cs517 - at2(1, &
+         2, 2)*cs538 - at1(2, 2)*cs344 - at2(2, 2, 2)*cs539 - at2(2, 3, 2)*cs544 + at2(1, 2, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(2, 2, 3)*cs540 - at2(2, 3, 3)*cs545 + at2(1, 2, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at1(2, 4)*cs537 - at2(2, 2, 4)*cs542 - at2(2, &
+         3, 4)*cs546 + cs169*cs310
+      hvp_vjp_ws1(1, 3, 2) = &
+         -at2(1, 3, 1)*cs506 - at2(2, 3, 1)*cs512 - at1(3, 1)*cs536 - at2(3, 3, 1)*cs517 - at2(1, &
+         3, 2)*cs538 - at2(2, 3, 2)*cs539 - at1(3, 2)*cs344 - at2(3, 3, 2)*cs544 + at2(1, 3, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(2, 3, 3)*cs540 - at2(3, 3, 3)*cs545 + at2(1, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at2(2, 3, 4)*cs542 - at1(3, 4)*cs537 - at2(3, &
+         3, 4)*cs546 + cs169*cs311
+      hvp_vjp_ws1(2, 1, 2) = &
+         -at1(1, 1)*cs553 - at2(1, 1, 1)*cs512 - at2(1, 2, 1)*cs523 - at2(1, 3, 1)*cs527 - at1(1, &
+         2)*cs348 - at2(1, 1, 2)*cs539 - at2(1, 2, 2)*cs548 - at2(1, 3, 2)*cs550 - at2(1, 1, &
+         3)*cs540 + at2(1, 2, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at2(1, 3, 3)*cs551 - at1(1, &
+         4)*cs552 - at2(1, 1, 4)*cs542 + at2(1, 2, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - &
+         at2(1, 3, 4)*cs549 + cs181*cs283
+      hvp_vjp_ws1(2, 2, 2) = &
+         -at1(2, 1)*cs553 - at2(2, 2, 1)*cs523 - at1(2, 2)*cs348 - at2(2, 2, 2)*cs548 + at2(2, 2, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at1(2, 4)*cs552 + at2(2, 2, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) + cs181*cs310 - cs543 - cs554
+      hvp_vjp_ws1(2, 3, 2) = &
+         -at2(1, 3, 1)*cs512 - at2(2, 3, 1)*cs523 - at1(3, 1)*cs553 - at2(3, 3, 1)*cs527 - at2(1, &
+         3, 2)*cs539 - at2(2, 3, 2)*cs548 - at1(3, 2)*cs348 - at2(3, 3, 2)*cs550 - at2(1, 3, &
+         3)*cs540 + at2(2, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at2(3, 3, 3)*cs551 - at2(1, 3, &
+         4)*cs542 + at2(2, 3, 4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at1(3, 4)*cs552 - at2(3, &
+         3, 4)*cs549 + cs181*cs311
+      hvp_vjp_ws1(3, 1, 2) = &
+         -at1(1, 1)*cs557 - at2(1, 1, 1)*cs517 - at2(1, 2, 1)*cs527 - at2(1, 3, 1)*cs533 - at1(1, &
+         2)*cs352 - at2(1, 1, 2)*cs544 - at2(1, 2, 2)*cs550 - at2(1, 3, 2)*cs555 - at2(1, 1, &
+         3)*cs545 - at2(1, 2, 3)*cs551 + at2(1, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at1(1, &
+         4)*cs556 - at2(1, 1, 4)*cs546 - at2(1, 2, 4)*cs549 + at2(1, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + cs189*cs283
+      hvp_vjp_ws1(3, 2, 2) = &
+         -at2(1, 2, 1)*cs517 - at1(2, 1)*cs557 - at2(2, 2, 1)*cs527 - at2(2, 3, 1)*cs533 - at2(1, &
+         2, 2)*cs544 - at1(2, 2)*cs352 - at2(2, 2, 2)*cs550 - at2(2, 3, 2)*cs555 - at2(1, 2, &
+         3)*cs545 - at2(2, 2, 3)*cs551 + at2(2, 3, 3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at2(1, 2, &
+         4)*cs546 - at1(2, 4)*cs556 - at2(2, 2, 4)*cs549 + at2(2, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + cs189*cs310
+      hvp_vjp_ws1(3, 3, 2) = &
+         -at1(3, 1)*cs557 - at2(3, 3, 1)*cs533 - at1(3, 2)*cs352 - at2(3, 3, 2)*cs555 + at2(3, 3, &
+         3)*cs17*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at1(3, 4)*cs556 + at2(3, 3, &
+         4)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) + cs189*cs311 - cs547 - cs554
+      hvp_vjp_ws1(1, 1, 3) = &
+         -at1(1, 1)*cs558 - at2(1, 1, 1)*cs563 - at1(1, 2)*cs559 + (1.0_wp/2.0_wp)*at2(1, 1, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(1, 1, 3)*cs561 - at1(1, 4)*cs560 - at2(1, 1, &
+         4)*cs562 + cs145*cs283 - cs566 - cs569
+      hvp_vjp_ws1(1, 2, 3) = &
+         -at2(1, 2, 1)*cs563 - at1(2, 1)*cs558 - at2(2, 2, 1)*cs513 - at2(2, 3, 1)*cs518 + &
+         (1.0_wp/2.0_wp)*at2(1, 2, 2)*cs143*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at1(2, 2)*cs559 - at2(2, &
+         2, 2)*cs540 - at2(2, 3, 2)*cs545 - at2(1, 2, 3)*cs561 - at2(2, 2, 3)*cs564 - at2(2, 3, &
+         3)*cs567 - at2(1, 2, 4)*cs562 - at1(2, 4)*cs560 - at2(2, 2, 4)*cs565 - at2(2, 3, 4)*cs568 &
+         + cs145*cs310
+      hvp_vjp_ws1(1, 3, 3) = &
+         -at2(1, 3, 1)*cs563 - at2(2, 3, 1)*cs513 - at1(3, 1)*cs558 - at2(3, 3, 1)*cs518 + &
+         (1.0_wp/2.0_wp)*at2(1, 3, 2)*cs143*cs5*cs6*ps0(1)*s_3*w2(1, 1) - at2(2, 3, 2)*cs540 - &
+         at1(3, 2)*cs559 - at2(3, 3, 2)*cs545 - at2(1, 3, 3)*cs561 - at2(2, 3, 3)*cs564 - at2(3, &
+         3, 3)*cs567 - at2(1, 3, 4)*cs562 - at2(2, 3, 4)*cs565 - at1(3, 4)*cs560 - at2(3, 3, &
+         4)*cs568 + cs145*cs311
+      hvp_vjp_ws1(2, 1, 3) = &
+         -at1(1, 1)*cs577 - at2(1, 1, 1)*cs513 - at2(1, 2, 1)*cs572 - at2(1, 3, 1)*cs526 - at1(1, &
+         2)*cs576 - at2(1, 1, 2)*cs540 + (1.0_wp/2.0_wp)*at2(1, 2, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at2(1, 3, 2)*cs551 - at2(1, 1, 3)*cs564 - at2(1, &
+         2, 3)*cs571 - at2(1, 3, 3)*cs573 - at1(1, 4)*cs575 - at2(1, 1, 4)*cs565 - at2(1, 2, &
+         4)*cs570 - at2(1, 3, 4)*cs574 + cs152*cs283
+      hvp_vjp_ws1(2, 2, 3) = &
+         -at1(2, 1)*cs577 - at2(2, 2, 1)*cs572 - at1(2, 2)*cs576 + (1.0_wp/2.0_wp)*at2(2, 2, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at2(2, 2, 3)*cs571 - at1(2, 4)*cs575 - at2(2, 2, &
+         4)*cs570 + cs152*cs310 - cs566 - cs578
+      hvp_vjp_ws1(2, 3, 3) = &
+         -at2(1, 3, 1)*cs513 - at2(2, 3, 1)*cs572 - at1(3, 1)*cs577 - at2(3, 3, 1)*cs526 - at2(1, &
+         3, 2)*cs540 + (1.0_wp/2.0_wp)*at2(2, 3, 2)*cs143*cs5*cs6*ps0(1)*s_3*w2(2, 2) - at1(3, &
+         2)*cs576 - at2(3, 3, 2)*cs551 - at2(1, 3, 3)*cs564 - at2(2, 3, 3)*cs571 - at2(3, 3, &
+         3)*cs573 - at2(1, 3, 4)*cs565 - at2(2, 3, 4)*cs570 - at1(3, 4)*cs575 - at2(3, 3, 4)*cs574 &
+         + cs152*cs311
+      hvp_vjp_ws1(3, 1, 3) = &
+         -at1(1, 1)*cs584 - at2(1, 1, 1)*cs518 - at2(1, 2, 1)*cs526 - at2(1, 3, 1)*cs581 - at1(1, &
+         2)*cs583 - at2(1, 1, 2)*cs545 - at2(1, 2, 2)*cs551 + (1.0_wp/2.0_wp)*at2(1, 3, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at2(1, 1, 3)*cs567 - at2(1, 2, 3)*cs573 - at2(1, &
+         3, 3)*cs580 - at1(1, 4)*cs582 - at2(1, 1, 4)*cs568 - at2(1, 2, 4)*cs574 - at2(1, 3, &
+         4)*cs579 + cs157*cs283
+      hvp_vjp_ws1(3, 2, 3) = &
+         -at2(1, 2, 1)*cs518 - at1(2, 1)*cs584 - at2(2, 2, 1)*cs526 - at2(2, 3, 1)*cs581 - at2(1, &
+         2, 2)*cs545 - at1(2, 2)*cs583 - at2(2, 2, 2)*cs551 + (1.0_wp/2.0_wp)*at2(2, 3, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at2(1, 2, 3)*cs567 - at2(2, 2, 3)*cs573 - at2(2, &
+         3, 3)*cs580 - at2(1, 2, 4)*cs568 - at1(2, 4)*cs582 - at2(2, 2, 4)*cs574 - at2(2, 3, &
+         4)*cs579 + cs157*cs310
+      hvp_vjp_ws1(3, 3, 3) = &
+         -at1(3, 1)*cs584 - at2(3, 3, 1)*cs581 - at1(3, 2)*cs583 + (1.0_wp/2.0_wp)*at2(3, 3, &
+         2)*cs143*cs5*cs6*ps0(1)*s_3*w2(3, 3) - at2(3, 3, 3)*cs580 - at1(3, 4)*cs582 - at2(3, 3, &
+         4)*cs579 + cs157*cs311 - cs569 - cs578
+      hvp_vjp_ws1(1, 1, 4) = &
+         -at1(1, 1)*cs585 - at2(1, 1, 1)*cs508 - at1(1, 2)*cs586 + at2(1, 1, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at2(1, 1, 3)*cs589 - at1(1, 4)*cs485 - at2(1, &
+         1, 4)*cs588 + cs109*cs283 - cs592 - cs594
+      hvp_vjp_ws1(1, 2, 4) = &
+         -at2(1, 2, 1)*cs508 - at1(2, 1)*cs585 - at2(2, 2, 1)*cs514 - at2(2, 3, 1)*cs519 + at2(1, &
+         2, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at1(2, 2)*cs586 - at2(2, 2, 2)*cs542 - &
+         at2(2, 3, 2)*cs546 - at2(1, 2, 3)*cs589 - at2(2, 2, 3)*cs565 - at2(2, 3, 3)*cs568 - &
+         at2(1, 2, 4)*cs588 - at1(2, 4)*cs485 - at2(2, 2, 4)*cs591 - at2(2, 3, 4)*cs593 + &
+         cs109*cs310
+      hvp_vjp_ws1(1, 3, 4) = &
+         -at2(1, 3, 1)*cs508 - at2(2, 3, 1)*cs514 - at1(3, 1)*cs585 - at2(3, 3, 1)*cs519 + at2(1, &
+         3, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(1, 1) - at2(2, 3, 2)*cs542 - at1(3, 2)*cs586 - &
+         at2(3, 3, 2)*cs546 - at2(1, 3, 3)*cs589 - at2(2, 3, 3)*cs565 - at2(3, 3, 3)*cs568 - &
+         at2(1, 3, 4)*cs588 - at2(2, 3, 4)*cs591 - at1(3, 4)*cs485 - at2(3, 3, 4)*cs593 + &
+         cs109*cs311
+      hvp_vjp_ws1(2, 1, 4) = &
+         -at1(1, 1)*cs599 - at2(1, 1, 1)*cs514 - at2(1, 2, 1)*cs521 - at2(1, 3, 1)*cs525 - at1(1, &
+         2)*cs598 - at2(1, 1, 2)*cs542 + at2(1, 2, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - &
+         at2(1, 3, 2)*cs549 - at2(1, 1, 3)*cs565 - at2(1, 2, 3)*cs595 - at2(1, 3, 3)*cs574 - &
+         at1(1, 4)*cs488 - at2(1, 1, 4)*cs591 - at2(1, 2, 4)*cs596 - at2(1, 3, 4)*cs597 + &
+         cs126*cs283
+      hvp_vjp_ws1(2, 2, 4) = &
+         -at1(2, 1)*cs599 - at2(2, 2, 1)*cs521 - at1(2, 2)*cs598 + at2(2, 2, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at2(2, 2, 3)*cs595 - at1(2, 4)*cs488 - at2(2, &
+         2, 4)*cs596 + cs126*cs310 - cs592 - cs600
+      hvp_vjp_ws1(2, 3, 4) = &
+         -at2(1, 3, 1)*cs514 - at2(2, 3, 1)*cs521 - at1(3, 1)*cs599 - at2(3, 3, 1)*cs525 - at2(1, &
+         3, 2)*cs542 + at2(2, 3, 2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(2, 2) - at1(3, 2)*cs598 - &
+         at2(3, 3, 2)*cs549 - at2(1, 3, 3)*cs565 - at2(2, 3, 3)*cs595 - at2(3, 3, 3)*cs574 - &
+         at2(1, 3, 4)*cs591 - at2(2, 3, 4)*cs596 - at1(3, 4)*cs488 - at2(3, 3, 4)*cs597 + &
+         cs126*cs311
+      hvp_vjp_ws1(3, 1, 4) = &
+         -at1(1, 1)*cs604 - at2(1, 1, 1)*cs519 - at2(1, 2, 1)*cs525 - at2(1, 3, 1)*cs531 - at1(1, &
+         2)*cs603 - at2(1, 1, 2)*cs546 - at2(1, 2, 2)*cs549 + at2(1, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at2(1, 1, 3)*cs568 - at2(1, 2, 3)*cs574 - &
+         at2(1, 3, 3)*cs601 - at1(1, 4)*cs490 - at2(1, 1, 4)*cs593 - at2(1, 2, 4)*cs597 - at2(1, &
+         3, 4)*cs602 + cs135*cs283
+      hvp_vjp_ws1(3, 2, 4) = &
+         -at2(1, 2, 1)*cs519 - at1(2, 1)*cs604 - at2(2, 2, 1)*cs525 - at2(2, 3, 1)*cs531 - at2(1, &
+         2, 2)*cs546 - at1(2, 2)*cs603 - at2(2, 2, 2)*cs549 + at2(2, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at2(1, 2, 3)*cs568 - at2(2, 2, 3)*cs574 - &
+         at2(2, 3, 3)*cs601 - at2(1, 2, 4)*cs593 - at1(2, 4)*cs490 - at2(2, 2, 4)*cs597 - at2(2, &
+         3, 4)*cs602 + cs135*cs310
+      hvp_vjp_ws1(3, 3, 4) = &
+         -at1(3, 1)*cs604 - at2(3, 3, 1)*cs531 - at1(3, 2)*cs603 + at2(3, 3, &
+         2)*cs5*cs6*ps0(1)*ps0(4)*s_2*s_3*w2(3, 3) - at2(3, 3, 3)*cs601 - at1(3, 4)*cs490 - at2(3, &
+         3, 4)*cs602 + cs135*cs311 - cs594 - cs600
+      hvp_vjp_ws2(1, 1, 1, 1) = at1(1, 1)*cs47 - at1(1, 2)*cs605 + cs283*cs606
+      hvp_vjp_ws2(1, 1, 2, 1) = at1(2, 1)*cs47 - at1(2, 2)*cs605 + cs310*cs606
+      hvp_vjp_ws2(1, 1, 3, 1) = at1(3, 1)*cs47 - at1(3, 2)*cs605 + cs311*cs606
+      t_hvp_vjp_ws2_p1_010 = -at1(1, 1)*cs608 - at1(1, 2)*cs607 + (1.0_wp/2.0_wp)*cs283*cs81
+      hvp_vjp_ws2(1, 2, 1, 1) = t_hvp_vjp_ws2_p1_010
+      hvp_vjp_ws2(2, 1, 1, 1) = t_hvp_vjp_ws2_p1_010
+      t_hvp_vjp_ws2_p1_011 = -at1(2, 1)*cs608 - at1(2, 2)*cs607 + (1.0_wp/2.0_wp)*cs310*cs81
+      hvp_vjp_ws2(1, 2, 2, 1) = t_hvp_vjp_ws2_p1_011
+      hvp_vjp_ws2(2, 1, 2, 1) = t_hvp_vjp_ws2_p1_011
+      t_hvp_vjp_ws2_p1_012 = -at1(3, 1)*cs608 - at1(3, 2)*cs607 + (1.0_wp/2.0_wp)*cs311*cs81
+      hvp_vjp_ws2(1, 2, 3, 1) = t_hvp_vjp_ws2_p1_012
+      hvp_vjp_ws2(2, 1, 3, 1) = t_hvp_vjp_ws2_p1_012
+      t_hvp_vjp_ws2_p1_020 = -at1(1, 1)*cs610 - at1(1, 2)*cs609 + (1.0_wp/2.0_wp)*cs283*cs84
+      hvp_vjp_ws2(1, 3, 1, 1) = t_hvp_vjp_ws2_p1_020
+      hvp_vjp_ws2(3, 1, 1, 1) = t_hvp_vjp_ws2_p1_020
+      t_hvp_vjp_ws2_p1_021 = -at1(2, 1)*cs610 - at1(2, 2)*cs609 + (1.0_wp/2.0_wp)*cs310*cs84
+      hvp_vjp_ws2(1, 3, 2, 1) = t_hvp_vjp_ws2_p1_021
+      hvp_vjp_ws2(3, 1, 2, 1) = t_hvp_vjp_ws2_p1_021
+      t_hvp_vjp_ws2_p1_022 = -at1(3, 1)*cs610 - at1(3, 2)*cs609 + (1.0_wp/2.0_wp)*cs311*cs84
+      hvp_vjp_ws2(1, 3, 3, 1) = t_hvp_vjp_ws2_p1_022
+      hvp_vjp_ws2(3, 1, 3, 1) = t_hvp_vjp_ws2_p1_022
+      hvp_vjp_ws2(2, 2, 1, 1) = at1(1, 1)*cs51 - at1(1, 2)*cs611 + cs283*cs612
+      hvp_vjp_ws2(2, 2, 2, 1) = at1(2, 1)*cs51 - at1(2, 2)*cs611 + cs310*cs612
+      hvp_vjp_ws2(2, 2, 3, 1) = at1(3, 1)*cs51 - at1(3, 2)*cs611 + cs311*cs612
+      t_hvp_vjp_ws2_p1_120 = -at1(1, 1)*cs614 - at1(1, 2)*cs613 + (1.0_wp/2.0_wp)*cs283*cs87
+      hvp_vjp_ws2(2, 3, 1, 1) = t_hvp_vjp_ws2_p1_120
+      hvp_vjp_ws2(3, 2, 1, 1) = t_hvp_vjp_ws2_p1_120
+      t_hvp_vjp_ws2_p1_121 = -at1(2, 1)*cs614 - at1(2, 2)*cs613 + (1.0_wp/2.0_wp)*cs310*cs87
+      hvp_vjp_ws2(2, 3, 2, 1) = t_hvp_vjp_ws2_p1_121
+      hvp_vjp_ws2(3, 2, 2, 1) = t_hvp_vjp_ws2_p1_121
+      t_hvp_vjp_ws2_p1_122 = -at1(3, 1)*cs614 - at1(3, 2)*cs613 + (1.0_wp/2.0_wp)*cs311*cs87
+      hvp_vjp_ws2(2, 3, 3, 1) = t_hvp_vjp_ws2_p1_122
+      hvp_vjp_ws2(3, 2, 3, 1) = t_hvp_vjp_ws2_p1_122
+      hvp_vjp_ws2(3, 3, 1, 1) = at1(1, 1)*cs53 - at1(1, 2)*cs615 + cs283*cs616
+      hvp_vjp_ws2(3, 3, 2, 1) = at1(2, 1)*cs53 - at1(2, 2)*cs615 + cs310*cs616
+      hvp_vjp_ws2(3, 3, 3, 1) = at1(3, 1)*cs53 - at1(3, 2)*cs615 + cs311*cs616
+      hvp_vjp_ws2(1, 1, 1, 2) = -at1(1, 1)*cs605 - cs283*cs617
+      hvp_vjp_ws2(1, 1, 2, 2) = -at1(2, 1)*cs605 - cs310*cs617
+      hvp_vjp_ws2(1, 1, 3, 2) = -at1(3, 1)*cs605 - cs311*cs617
+      t_hvp_vjp_ws2_p2_010 = -at1(1, 1)*cs607 + (1.0_wp/2.0_wp)*cs283*cs69
+      hvp_vjp_ws2(1, 2, 1, 2) = t_hvp_vjp_ws2_p2_010
+      hvp_vjp_ws2(2, 1, 1, 2) = t_hvp_vjp_ws2_p2_010
+      t_hvp_vjp_ws2_p2_011 = -at1(2, 1)*cs607 + (1.0_wp/2.0_wp)*cs310*cs69
+      hvp_vjp_ws2(1, 2, 2, 2) = t_hvp_vjp_ws2_p2_011
+      hvp_vjp_ws2(2, 1, 2, 2) = t_hvp_vjp_ws2_p2_011
+      t_hvp_vjp_ws2_p2_012 = -at1(3, 1)*cs607 + (1.0_wp/2.0_wp)*cs311*cs69
+      hvp_vjp_ws2(1, 2, 3, 2) = t_hvp_vjp_ws2_p2_012
+      hvp_vjp_ws2(2, 1, 3, 2) = t_hvp_vjp_ws2_p2_012
+      t_hvp_vjp_ws2_p2_020 = -at1(1, 1)*cs609 + (1.0_wp/2.0_wp)*cs283*cs74
+      hvp_vjp_ws2(1, 3, 1, 2) = t_hvp_vjp_ws2_p2_020
+      hvp_vjp_ws2(3, 1, 1, 2) = t_hvp_vjp_ws2_p2_020
+      t_hvp_vjp_ws2_p2_021 = -at1(2, 1)*cs609 + (1.0_wp/2.0_wp)*cs310*cs74
+      hvp_vjp_ws2(1, 3, 2, 2) = t_hvp_vjp_ws2_p2_021
+      hvp_vjp_ws2(3, 1, 2, 2) = t_hvp_vjp_ws2_p2_021
+      t_hvp_vjp_ws2_p2_022 = -at1(3, 1)*cs609 + (1.0_wp/2.0_wp)*cs311*cs74
+      hvp_vjp_ws2(1, 3, 3, 2) = t_hvp_vjp_ws2_p2_022
+      hvp_vjp_ws2(3, 1, 3, 2) = t_hvp_vjp_ws2_p2_022
+      hvp_vjp_ws2(2, 2, 1, 2) = -at1(1, 1)*cs611 - cs283*cs618
+      hvp_vjp_ws2(2, 2, 2, 2) = -at1(2, 1)*cs611 - cs310*cs618
+      hvp_vjp_ws2(2, 2, 3, 2) = -at1(3, 1)*cs611 - cs311*cs618
+      t_hvp_vjp_ws2_p2_120 = -at1(1, 1)*cs613 + (1.0_wp/2.0_wp)*cs283*cs77
+      hvp_vjp_ws2(2, 3, 1, 2) = t_hvp_vjp_ws2_p2_120
+      hvp_vjp_ws2(3, 2, 1, 2) = t_hvp_vjp_ws2_p2_120
+      t_hvp_vjp_ws2_p2_121 = -at1(2, 1)*cs613 + (1.0_wp/2.0_wp)*cs310*cs77
+      hvp_vjp_ws2(2, 3, 2, 2) = t_hvp_vjp_ws2_p2_121
+      hvp_vjp_ws2(3, 2, 2, 2) = t_hvp_vjp_ws2_p2_121
+      t_hvp_vjp_ws2_p2_122 = -at1(3, 1)*cs613 + (1.0_wp/2.0_wp)*cs311*cs77
+      hvp_vjp_ws2(2, 3, 3, 2) = t_hvp_vjp_ws2_p2_122
+      hvp_vjp_ws2(3, 2, 3, 2) = t_hvp_vjp_ws2_p2_122
+      hvp_vjp_ws2(3, 3, 1, 2) = -at1(1, 1)*cs615 - cs283*cs619
+      hvp_vjp_ws2(3, 3, 2, 2) = -at1(2, 1)*cs615 - cs310*cs619
+      hvp_vjp_ws2(3, 3, 3, 2) = -at1(3, 1)*cs615 - cs311*cs619
+      hvp_vjp_ws2(1, 1, 1, 3) = cs19*cs283
+      hvp_vjp_ws2(1, 1, 2, 3) = cs19*cs310
+      hvp_vjp_ws2(1, 1, 3, 3) = cs19*cs311
+      t_hvp_vjp_ws2_p3_010 = cs283*cs620
+      hvp_vjp_ws2(1, 2, 1, 3) = t_hvp_vjp_ws2_p3_010
+      hvp_vjp_ws2(2, 1, 1, 3) = t_hvp_vjp_ws2_p3_010
+      t_hvp_vjp_ws2_p3_011 = cs310*cs620
+      hvp_vjp_ws2(1, 2, 2, 3) = t_hvp_vjp_ws2_p3_011
+      hvp_vjp_ws2(2, 1, 2, 3) = t_hvp_vjp_ws2_p3_011
+      t_hvp_vjp_ws2_p3_012 = cs311*cs620
+      hvp_vjp_ws2(1, 2, 3, 3) = t_hvp_vjp_ws2_p3_012
+      hvp_vjp_ws2(2, 1, 3, 3) = t_hvp_vjp_ws2_p3_012
+      t_hvp_vjp_ws2_p3_020 = cs283*cs621
+      hvp_vjp_ws2(1, 3, 1, 3) = t_hvp_vjp_ws2_p3_020
+      hvp_vjp_ws2(3, 1, 1, 3) = t_hvp_vjp_ws2_p3_020
+      t_hvp_vjp_ws2_p3_021 = cs310*cs621
+      hvp_vjp_ws2(1, 3, 2, 3) = t_hvp_vjp_ws2_p3_021
+      hvp_vjp_ws2(3, 1, 2, 3) = t_hvp_vjp_ws2_p3_021
+      t_hvp_vjp_ws2_p3_022 = cs311*cs621
+      hvp_vjp_ws2(1, 3, 3, 3) = t_hvp_vjp_ws2_p3_022
+      hvp_vjp_ws2(3, 1, 3, 3) = t_hvp_vjp_ws2_p3_022
+      hvp_vjp_ws2(2, 2, 1, 3) = cs21*cs283
+      hvp_vjp_ws2(2, 2, 2, 3) = cs21*cs310
+      hvp_vjp_ws2(2, 2, 3, 3) = cs21*cs311
+      t_hvp_vjp_ws2_p3_120 = cs283*cs622
+      hvp_vjp_ws2(2, 3, 1, 3) = t_hvp_vjp_ws2_p3_120
+      hvp_vjp_ws2(3, 2, 1, 3) = t_hvp_vjp_ws2_p3_120
+      t_hvp_vjp_ws2_p3_121 = cs310*cs622
+      hvp_vjp_ws2(2, 3, 2, 3) = t_hvp_vjp_ws2_p3_121
+      hvp_vjp_ws2(3, 2, 2, 3) = t_hvp_vjp_ws2_p3_121
+      t_hvp_vjp_ws2_p3_122 = cs311*cs622
+      hvp_vjp_ws2(2, 3, 3, 3) = t_hvp_vjp_ws2_p3_122
+      hvp_vjp_ws2(3, 2, 3, 3) = t_hvp_vjp_ws2_p3_122
+      hvp_vjp_ws2(3, 3, 1, 3) = cs23*cs283
+      hvp_vjp_ws2(3, 3, 2, 3) = cs23*cs310
+      hvp_vjp_ws2(3, 3, 3, 3) = cs23*cs311
+      hvp_vjp_ws2(1, 1, 1, 4) = at1(1, 4)*cs421 + cs283*cs9
+      hvp_vjp_ws2(1, 1, 2, 4) = at1(2, 4)*cs421 + cs310*cs9
+      hvp_vjp_ws2(1, 1, 3, 4) = at1(3, 4)*cs421 + cs311*cs9
+      t_hvp_vjp_ws2_q_010 = -at1(1, 4)*cs623 + (1.0_wp/2.0_wp)*cs283*cs34
+      hvp_vjp_ws2(1, 2, 1, 4) = t_hvp_vjp_ws2_q_010
+      hvp_vjp_ws2(2, 1, 1, 4) = t_hvp_vjp_ws2_q_010
+      t_hvp_vjp_ws2_q_011 = -at1(2, 4)*cs623 + (1.0_wp/2.0_wp)*cs310*cs34
+      hvp_vjp_ws2(1, 2, 2, 4) = t_hvp_vjp_ws2_q_011
+      hvp_vjp_ws2(2, 1, 2, 4) = t_hvp_vjp_ws2_q_011
+      t_hvp_vjp_ws2_q_012 = -at1(3, 4)*cs623 + (1.0_wp/2.0_wp)*cs311*cs34
+      hvp_vjp_ws2(1, 2, 3, 4) = t_hvp_vjp_ws2_q_012
+      hvp_vjp_ws2(2, 1, 3, 4) = t_hvp_vjp_ws2_q_012
+      t_hvp_vjp_ws2_q_020 = -at1(1, 4)*cs624 + (1.0_wp/2.0_wp)*cs283*cs38
+      hvp_vjp_ws2(1, 3, 1, 4) = t_hvp_vjp_ws2_q_020
+      hvp_vjp_ws2(3, 1, 1, 4) = t_hvp_vjp_ws2_q_020
+      t_hvp_vjp_ws2_q_021 = -at1(2, 4)*cs624 + (1.0_wp/2.0_wp)*cs310*cs38
+      hvp_vjp_ws2(1, 3, 2, 4) = t_hvp_vjp_ws2_q_021
+      hvp_vjp_ws2(3, 1, 2, 4) = t_hvp_vjp_ws2_q_021
+      t_hvp_vjp_ws2_q_022 = -at1(3, 4)*cs624 + (1.0_wp/2.0_wp)*cs311*cs38
+      hvp_vjp_ws2(1, 3, 3, 4) = t_hvp_vjp_ws2_q_022
+      hvp_vjp_ws2(3, 1, 3, 4) = t_hvp_vjp_ws2_q_022
+      hvp_vjp_ws2(2, 2, 1, 4) = at1(1, 4)*cs425 + cs11*cs283
+      hvp_vjp_ws2(2, 2, 2, 4) = at1(2, 4)*cs425 + cs11*cs310
+      hvp_vjp_ws2(2, 2, 3, 4) = at1(3, 4)*cs425 + cs11*cs311
+      t_hvp_vjp_ws2_q_120 = -at1(1, 4)*cs625 + (1.0_wp/2.0_wp)*cs283*cs42
+      hvp_vjp_ws2(2, 3, 1, 4) = t_hvp_vjp_ws2_q_120
+      hvp_vjp_ws2(3, 2, 1, 4) = t_hvp_vjp_ws2_q_120
+      t_hvp_vjp_ws2_q_121 = -at1(2, 4)*cs625 + (1.0_wp/2.0_wp)*cs310*cs42
+      hvp_vjp_ws2(2, 3, 2, 4) = t_hvp_vjp_ws2_q_121
+      hvp_vjp_ws2(3, 2, 2, 4) = t_hvp_vjp_ws2_q_121
+      t_hvp_vjp_ws2_q_122 = -at1(3, 4)*cs625 + (1.0_wp/2.0_wp)*cs311*cs42
+      hvp_vjp_ws2(2, 3, 3, 4) = t_hvp_vjp_ws2_q_122
+      hvp_vjp_ws2(3, 2, 3, 4) = t_hvp_vjp_ws2_q_122
+      hvp_vjp_ws2(3, 3, 1, 4) = at1(1, 4)*cs427 + cs13*cs283
+      hvp_vjp_ws2(3, 3, 2, 4) = at1(2, 4)*cs427 + cs13*cs310
+      hvp_vjp_ws2(3, 3, 3, 4) = at1(3, 4)*cs427 + cs13*cs311
+
+   end subroutine svdw_hvp_vjp_eval
 
    !> Normalized level set S/||grad S|| and its nuclear gradient, for one atom.
    !>

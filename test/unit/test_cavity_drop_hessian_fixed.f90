@@ -301,9 +301,12 @@ module test_cavity_drop_hessian_fixed
    !> numerically two summation orders, so this is a round-off bound and not a
    !> finite-difference one; the switching block is contracted by yet another
    !> routine on the per-direction side, so the live `w_f` of `all_channels()`
-   !> covers its index orientation. Measured `1.4e-14 / 24.5` (SvdW) and
-   !> `7.1e-14 / 38.1` (CFC) absolute against `max |Hv|`, i.e. `5.6e-16` and
-   !> `1.9e-15` relative; asserted almost three decades above.
+   !> covers its index orientation. The rank-4 side takes its explicit nuclear
+   !> motion from the level set's `vjp_f2_rArB` block, the per-direction side
+   !> from `hvp_jet_rA`, so for SvdW the two are also two different kernel
+   !> paths. Measured `1.3e-14 / 24.5` (SvdW) and `5.7e-14 / 38.1` (CFC)
+   !> absolute against `max |Hv|`, i.e. `5.2e-16` and `1.5e-15` relative;
+   !> asserted almost three decades above.
    real(wp), parameter :: PER_DIR_TOL = 1.0E-12_wp
 
 contains

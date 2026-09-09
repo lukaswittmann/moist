@@ -56,6 +56,11 @@ module moist_cavity_drop
    !> boundary sizes its direction set from the bound rather than from a literal
    !> that would silently stop crossing it if the bound were ever raised
    public :: drop_hvp_chunk_dirs
+   !> Exposed for the derivative test suites: the direction count at which a
+   !> Hessian-vector product switches from the per-direction to the rank-4 form
+   !> of its fixed channel, so a test that has to sit on that boundary sizes
+   !> its direction set from the bound
+   public :: drop_hvp_per_dir_max
 
    !> Nuclear directions carried by one block of the surface-Hessian traversal
    !>
@@ -73,6 +78,16 @@ module moist_cavity_drop
    !> header of `derivatives/hessian_traverse.f90` for what the blocking then
    !> costs, and for the gate that keeps the direction-free half out of it.
    integer, parameter :: drop_hvp_chunk_dirs = 192
+
+   !> Most directions a Hessian-vector product runs its fixed channel per direction for
+   !>
+   !> The measured crossover between the two forms of the fixed channel, see the
+   !> header of `derivatives/hessian.f90`: up to this many directions the
+   !> second-order chain is run once per supplied direction, beyond it the
+   !> direction-free rank-4 block is built and contracted, which also means the
+   !> rank-4 form's memory -- the dense `(3, nsph, 3, nsph)` staging block and
+   !> the per-thread sparse accumulators -- applies from that count on.
+   integer, parameter :: drop_hvp_per_dir_max = 12
 
    !> Modes of the fixed-adjoint channel of the surface Hessian traversal
    !>

@@ -194,6 +194,8 @@ contains
                   new_unittest("cfc_hvp_ra_joint_fd", test_cfc_hvp_rA_joint_fd), &
                   new_unittest("svdw_hvp_jet_matches_parts", test_svdw_hvp_jet), &
                   new_unittest("cfc_hvp_jet_matches_parts", test_cfc_hvp_jet), &
+                  new_unittest("svdw_vjp_f2_rarb_matches_hvp", test_svdw_vjp_f2_rArB), &
+                  new_unittest("cfc_vjp_f2_rarb_matches_hvp", test_cfc_vjp_f2_rArB), &
                   new_unittest("svdw_radius_pairwise", test_svdw_radius_pairwise), &
                   new_unittest("cfc_radius_pairwise", test_cfc_radius_pairwise), &
                   new_unittest("svdw_empty_active", test_svdw_empty_active), &
@@ -2188,6 +2190,103 @@ contains
          deallocate (v, vrad, h1, h2, h3, j1, j2, j3)
       end do
    end subroutine run_hvp_jet
+
+   !> SvdW dispatch of the weighted mixed nuclear Hessian block check.
+   subroutine test_svdw_vjp_f2_rArB(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_vjp_f2_rArB(error, kind_svdw)
+   end subroutine test_svdw_vjp_f2_rArB
+
+   !> CFC dispatch of the weighted mixed nuclear Hessian block check.
+   subroutine test_cfc_vjp_f2_rArB(error)
+      type(error_type), allocatable, intent(out) :: error
+      call run_vjp_f2_rArB(error, kind_cfc)
+   end subroutine test_cfc_vjp_f2_rArB
+
+   !> `vjp_f2_rArB` against the weighted `hvp_jet_rA` along every unit direction.
+   !>
+   !> The block is the nuclear Jacobian of the weighted row, so its column for
+   !> `e_(t,B)` is `hvp_jet_rA` along that direction contracted with the same
+   !> weights. SvdW assembles the block as a rank-52 product of per-atom
+   !> quantities and takes its diagonal from shifted atom tensors rather than
+   !> from `svdw_atom_tangent_eval`, so the two agree to round-off, not to the
+   !> bit, and the bound is `HESSFREE_*`. CFC inherits the generic
+   !> column-by-column default, which this pins in the same way. `w2` is
+   !> asymmetric on purpose: the contract sums all nine entries independently.
+   subroutine run_vjp_f2_rArB(error, kind)
+      type(error_type), allocatable, intent(out) :: error
+      character(len=*), intent(in) :: kind
+
+      type(structure_type), allocatable :: mols(:)
+      type(structure_type) :: mol
+      class(moist_cavity_drop_lsf_type), allocatable :: lsf
+      real(wp), allocatable :: radii(:), points(:, :)
+      real(wp), allocatable :: v(:, :), blk(:, :)
+      real(wp), allocatable :: h1(:, :), h2(:, :, :), h3(:, :, :, :)
+      real(wp) :: w0, w1(ndim), w2(ndim, ndim), want
+      integer  :: icase, ipt, i, j, s_ax, t_ax, a, b, iblend, igamma, nblend, ngamma, n_active
+      type(mctc_error), allocatable :: lsf_err
+
+      w0 = 0.73_wp
+      w1 = [-0.41_wp, 0.88_wp, 0.17_wp]
+      w2 = reshape([0.29_wp, 0.62_wp, -0.36_wp, -0.54_wp, 0.08_wp, 0.45_wp, &
+                    0.13_wp, -0.77_wp, 0.91_wp], [ndim, ndim])
+
+      call svdw_sweep_sizes(kind, nblend, ngamma)
+
+      call get_test_structures(mols)
+      do icase = 1, size(mols)
+         mol = mols(icase)
+         call get_test_radii(mol, radii)
+         call get_test_points(mol, points, fd_points(kind))
+         allocate (v(ndim, mol%nat), source=0.0_wp)
+         allocate (blk(ndim*mol%nat, ndim*mol%nat))
+         allocate (h1(ndim, mol%nat), h2(ndim, ndim, mol%nat), h3(ndim, ndim, ndim, mol%nat))
+         do iblend = 1, nblend
+            do igamma = 1, ngamma
+               call init_lsf(lsf, mol, radii, 3, kind, &
+                             blend_k=svdw_sweep_blend(kind, iblend), &
+                             blend_3b=svdw_sweep_gamma(kind, igamma))
+               do ipt = 1, size(points, 2)
+                  call lsf%prepare(points(:, ipt), lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF prepare failed: "//lsf_err%message)
+                     return
+                  end if
+                  n_active = lsf%active_count()
+                  blk = huge(1.0_wp)
+                  call lsf%vjp_f2_rArB(w0, w1, w2, blk)
+                  do j = 1, n_active
+                     do t_ax = 1, ndim
+                        v(t_ax, lsf%active_atom(j)) = 1.0_wp
+                        call lsf%hvp_jet_rA(v, h1, h2, h3)
+                        v(t_ax, lsf%active_atom(j)) = 0.0_wp
+                        do i = 1, n_active
+                           do s_ax = 1, ndim
+                              want = w0*h1(s_ax, i)
+                              do a = 1, ndim
+                                 want = want + w1(a)*h2(a, s_ax, i)
+                              end do
+                              do b = 1, ndim
+                                 do a = 1, ndim
+                                    want = want + w2(a, b)*h3(a, b, s_ax, i)
+                                 end do
+                              end do
+                              call check(error, blk(ndim*(i - 1) + s_ax, ndim*(j - 1) + t_ax), &
+                                         want, thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
+                                         message="vjp_f2_rArB disagrees with weighted hvp_jet_rA")
+                              if (allocated(error)) return
+                           end do
+                        end do
+                     end do
+                  end do
+               end do
+               deallocate (lsf)
+            end do
+         end do
+         deallocate (v, blk, h1, h2, h3)
+      end do
+   end subroutine run_vjp_f2_rArB
 
    !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`.
    subroutine run_hvp_rA_joint_fd(error, kind)

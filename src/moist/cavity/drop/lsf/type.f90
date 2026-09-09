@@ -292,6 +292,10 @@ module moist_cavity_drop_lsf_base
       !> the value/gradient/Hessian jet contracted against per-point adjoint
       !> weights over the spatial indices
       procedure :: vjp_f1_rA => lsf_base_vjp_f1_rA
+      !> Nuclear Jacobian of that jet-contracted row: the adjoint-weighted mixed
+      !> nuclear Hessian block over the active atoms, in its generic
+      !> column-by-column form
+      procedure :: vjp_f2_rArB => lsf_base_vjp_f2_rArB
       !> Jet-contracted radius vector-Jacobian product: the radius gradient of
       !> that same jet contracted against the same per-point adjoint weights
       procedure :: vjp_f1_rad => lsf_base_vjp_f1_rad
@@ -1142,6 +1146,77 @@ contains
       error stop "moist DROP LSF: Chosen level set does not support "// &
          "vjp_f1_rA derivative"
    end subroutine lsf_base_vjp_f1_rA
+
+   !> Adjoint-weighted mixed nuclear Hessian block, generic form
+   !>
+   !> The nuclear Jacobian of the row [[lsf_base_vjp_f1_rA]] describes,
+   !>
+   !>     res(3(i-1)+s, 3(j-1)+t) = d/dR_(t,B) [ w0 * lsf1_rA(s, i)
+   !>                                          + sum_a w1(a) * lsf2_r_rA(a, s, i)
+   !>                                          + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, s, i) ]
+   !>
+   !> for active slots `i, j = 1 .. active_count()`, `B = active_atom(j)`. The
+   !> Cartesian component is the fast index of both the row and the column, so
+   !> the leading `(3 n_active, 3 n_active)` square of `res` is the block in the
+   !> orientation of the cavity's `(3, nsph, 3, nsph)` Hessian. Entries beyond
+   !> that square are left untouched, and nothing is written when the active
+   !> list is empty. `w2` is a general 3x3, contracted over all nine entries.
+   !>
+   !> This default forms the block column by column: the column of the unit
+   !> direction `e_(t,B)` is `hvp_jet_rA` along that direction contracted with
+   !> the weights exactly as the row is -- `3 n_active` passes of an
+   !> `O(n_active)` accessor. It is correct for every level set that offers
+   !> `hvp_jet_rA` and is what such a level set inherits; a level set whose
+   !> mixed Hessian factorises over per-atom quantities overrides it with an
+   !> `O(n_active)` form (SvdW). A level set without `hvp_jet_rA` aborts inside
+   !> that accessor.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Weighted mixed nuclear Hessian block [>= 3 n_active, >= 3 n_active]
+   subroutine lsf_base_vjp_f2_rArB(self, w0, w1, w2, res)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(out) :: res(:, :)
+
+      !> Unit direction over all centers, and the HVP family along it
+      real(wp), allocatable :: v(:, :), hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
+      !> Weighted entry of one column
+      real(wp) :: acc
+      !> Active count and slots, Cartesian components, spatial axes
+      integer :: n, i, j, s, t, a, b
+
+      n = self%active_count()
+      if (n == 0) return
+
+      allocate (v(3, self%ncenters), source=0.0_wp)
+      allocate (hvp1(3, n), hvp2(3, 3, n), hvp3(3, 3, 3, n))
+      do j = 1, n
+         do t = 1, 3
+            v(t, self%active_atom(j)) = 1.0_wp
+            call self%hvp_jet_rA(v, hvp1, hvp2, hvp3)
+            v(t, self%active_atom(j)) = 0.0_wp
+            do i = 1, n
+               do s = 1, 3
+                  acc = w0*hvp1(s, i)
+                  do a = 1, 3
+                     acc = acc + w1(a)*hvp2(a, s, i)
+                  end do
+                  do b = 1, 3
+                     do a = 1, 3
+                        acc = acc + w2(a, b)*hvp3(a, b, s, i)
+                     end do
+                  end do
+                  res(3*(i - 1) + s, 3*(j - 1) + t) = acc
+               end do
+            end do
+         end do
+      end do
+   end subroutine lsf_base_vjp_f2_rArB
 
    !> Erroring default of the jet-contracted radius vector-Jacobian product
    !>

@@ -186,7 +186,8 @@ module test_cavity_drop_hessian_e2e
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_cavity_drop, only: cavity_type_drop, drop_hvp_chunk_dirs, prepare_surface_weights
+   use moist_cavity_drop, only: cavity_type_drop, drop_hvp_chunk_dirs, drop_hvp_per_dir_max, &
+                                prepare_surface_weights
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
@@ -379,10 +380,10 @@ module test_cavity_drop_hessian_e2e
    !> Bound on `get_surface_hessian` against `get_hessian` on the unit directions
    !>
    !> Exact, and measured exact on both level sets. Any set of at least `3 nsph`
-   !> directions -- the full Cartesian basis here -- is run by
-   !> `get_surface_hessian` in the rank-4 mode of the fixed channel, the mode
-   !> `get_hessian` uses, so both form the same block and the same response
-   !> columns. The dense path
+   !> directions -- the full Cartesian basis here -- or of more than
+   !> `drop_hvp_per_dir_max` is run by `get_surface_hessian` in the rank-4 mode
+   !> of the fixed channel, the mode `get_hessian` uses, so both form the same
+   !> block and the same response columns. The dense path
    !> adds the fixed half's column directly, `h + r`; the HVP path forms
    !> `r + sum_c h_c v_c` with `v` a Cartesian unit vector, so every term but
    !> one is an exact `0 * h_c` and the surviving one an exact `1 * h_c`. The
@@ -417,15 +418,17 @@ module test_cavity_drop_hessian_e2e
    !> Bound on `get_surface_hessian` against the dense block contracted with a
    !> general direction, relative to the magnitude of that contraction
    !>
-   !> Not exact, and since the fixed channel gained its per-direction mode the
-   !> real cross-check of the two fixed-channel code paths: a direction set
-   !> short of a full basis runs the second-order chain along the supplied
-   !> directions, the dense block runs it along every point's Cartesian unit
-   !> directions and is contracted afterwards. Mathematically the same by
-   !> linearity of the chain; numerically two summation orders. Measured
-   !> `1.9e-15` (SvdW) and `1.1e-15` (CFC) relative against the `1e-13`
-   !> asserted. (Before the per-direction mode both paths shared the block and
-   !> the comparison measured one ulp, `3.3e-16` / `2.2e-16`.)
+   !> Not exact, and the real cross-check of the two fixed-channel code paths:
+   !> a set of two directions runs the second-order chain along the supplied
+   !> directions with the explicit nuclear motion from `hvp_jet_rA`, the dense
+   !> block runs the chain along every point's Cartesian unit directions with
+   !> the explicit motion from the level set's `vjp_f2_rArB` block -- for SvdW
+   !> a factorised product of per-atom quantities -- and is contracted
+   !> afterwards. Mathematically the same by linearity; numerically two
+   !> different evaluations. Measured `1.8e-15` (SvdW) and `1.5e-15` (CFC)
+   !> relative against the `1e-13` asserted. The same bound serves the mode
+   !> boundary case of `run_hvp`, where both sides are rank-4 and only the
+   !> contraction differs: `3.5e-16` / `3.3e-16` relative.
    real(wp), parameter :: HVP_GEN_TOL = 1.0E-13_wp
 
 contains
@@ -1041,7 +1044,15 @@ contains
    !>     differ in order and in operand magnitude, so this is a round-off level
    !>     agreement rather than an exact one -- and it is also the only check
    !>     that the response half really is linear in the direction, which the
-   !>     unit-direction case cannot see;
+   !>     unit-direction case cannot see. Two directions run the fixed channel
+   !>     per direction, so this is the cross-check of that mode against the
+   !>     rank-4 block;
+   !>  2b. the same with one direction more than `drop_hvp_per_dir_max`, a
+   !>     count above the per-direction bound (and, on this three-atom fixture,
+   !>     above the basis as well): `get_surface_hessian` builds the rank-4
+   !>     block itself and contracts it against general, non-unit directions --
+   !>     the composition neither the unit case nor the two-direction case
+   !>     reaches;
    !>  3. the same general-direction products against the numerical reference
    !>     contracted with the same directions, at the smooth class's own bound.
    !>
@@ -1062,6 +1073,7 @@ contains
 
       logical :: mask(NCHAN)
       real(wp), allocatable :: dense(:, :, :, :), unit_dirs(:, :, :), gen_dirs(:, :, :)
+      real(wp), allocatable :: bnd_dirs(:, :, :), hvp_bnd(:, :, :), contracted_bnd(:, :, :)
       real(wp), allocatable :: hvp_unit(:, :, :), hvp_gen(:, :, :), contracted(:, :, :)
       real(wp), allocatable :: h3(:, :, :, :, :), h5(:, :, :, :, :)
       logical, allocatable :: num_mask(:, :)
@@ -1157,6 +1169,49 @@ contains
                           " for "//label//": worst deviation "//to_string(worst)// &
                           " at atom "//to_string(bad_atom)//" axis "//to_string(bad_axis)// &
                           ", direction "//to_string(bad_dir))
+         return
+      end if
+
+      !* ------------ 2b. the mode boundary: rank-4 against general directions ------------ *!
+      call build_directions(nsph, bnd_dirs, drop_hvp_per_dir_max + 1)
+      allocate (hvp_bnd(ndim, nsph, size(bnd_dirs, 3)), source=0.0_wp)
+      call analytic_hvp(cavity, mask, bnd_dirs, hvp_bnd, label, error)
+      if (allocated(error)) return
+
+      allocate (contracted_bnd(ndim, nsph, size(bnd_dirs, 3)), source=0.0_wp)
+      do idir = 1, size(bnd_dirs, 3)
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               contracted_bnd(:, :, idir) = contracted_bnd(:, :, idir) &
+                                            + dense(:, :, iaxis, iatom)*bnd_dirs(iaxis, iatom, idir)
+            end do
+         end do
+      end do
+
+      worst = 0.0_wp
+      bad_dir = 0
+      bad_atom = 0
+      bad_axis = 0
+      do idir = 1, size(bnd_dirs, 3)
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               diff = abs(hvp_bnd(iaxis, iatom, idir) - contracted_bnd(iaxis, iatom, idir))
+               if (diff > worst) then
+                  worst = diff
+                  bad_dir = idir
+                  bad_atom = iatom
+                  bad_axis = iaxis
+               end if
+            end do
+         end do
+      end do
+      if (E2E_VERBOSE) write (*, '(a,1x,a,2es12.3)') "HVP-BND", label, worst, &
+         worst/max(maxval(abs(contracted_bnd)), tiny(1.0_wp))
+      if (worst > HVP_GEN_TOL*max(maxval(abs(contracted_bnd)), 1.0_wp)) then
+         call test_failed(error, "the HVP path at the mode boundary and the contracted"// &
+                          " dense block disagree for "//label//": worst deviation "// &
+                          to_string(worst)//" at atom "//to_string(bad_atom)//" axis "// &
+                          to_string(bad_axis)//", direction "//to_string(bad_dir))
          return
       end if
 
@@ -1806,25 +1861,41 @@ contains
    !>
    !> Neither a Cartesian axis nor a translation, so a product that dropped one
    !> atom or one axis is visible, and dense enough that every column of the
-   !> block contributes to every component of the product.
+   !> block contributes to every component of the product. The first two are
+   !> the pair every caller used before a count could be asked for; the rest
+   !> follow a third formula that keeps one direction from being a multiple of
+   !> another.
    !>
-   !> @param[in]  nsph Number of spheres
-   !> @param[out] dirs Directions `(3, nsph, 2)`
-   subroutine build_directions(nsph, dirs)
+   !> @param[in]  nsph  Number of spheres
+   !> @param[out] dirs  Directions `(3, nsph, count)`
+   !> @param[in]  count Directions to build (default 2)
+   subroutine build_directions(nsph, dirs, count)
       !> Number of spheres
       integer, intent(in) :: nsph
       !> Directions
       real(wp), allocatable, intent(out) :: dirs(:, :, :)
+      !> Directions to build
+      integer, intent(in), optional :: count
 
-      integer :: iatom, iaxis
+      integer :: iatom, iaxis, idir, ndir
 
-      allocate (dirs(ndim, nsph, 2))
+      ndir = 2
+      if (present(count)) ndir = count
+      allocate (dirs(ndim, nsph, ndir))
       do iatom = 1, nsph
          do iaxis = 1, ndim
             dirs(iaxis, iatom, 1) = 0.30_wp*sin(1.7_wp*real(iaxis, wp) &
                                                 + 0.9_wp*real(iatom, wp))
-            dirs(iaxis, iatom, 2) = 0.25_wp*cos(0.6_wp*real(iaxis, wp) &
-                                                *real(iatom + 1, wp)) - 0.10_wp
+            if (ndir >= 2) then
+               dirs(iaxis, iatom, 2) = 0.25_wp*cos(0.6_wp*real(iaxis, wp) &
+                                                   *real(iatom + 1, wp)) - 0.10_wp
+            end if
+            do idir = 3, ndir
+               dirs(iaxis, iatom, idir) = 0.20_wp*sin(0.37_wp*real(idir, wp) &
+                                                      + 1.3_wp*real(iaxis, wp) &
+                                                      + 0.71_wp*real(iatom*idir, wp)) &
+                                          + 0.05_wp*real(mod(idir + iaxis, 3) - 1, wp)
+            end do
          end do
       end do
    end subroutine build_directions

@@ -20,22 +20,30 @@
 !>
 !> The response half is intrinsically per direction. The fixed half is offered
 !> in two forms (see the traversal's header): the direction-free rank-4 block,
-!> built from `3 n_local` Cartesian unit directions at every grid point, and
-!> the per-direction column, built from the supplied directions alone. Their
-!> costs are
+!> whose explicit nuclear motion is one level-set block per grid point and
+!> whose second-order chain runs once per Cartesian unit direction of the
+!> point's local set, and the per-direction column, built from the supplied
+!> directions alone. Per grid point their costs are
 !>
-!>     rank-4:         ngrid * 3 n_local * n_active
-!>     per direction:  ngrid * ndir      * n_active
+!>     rank-4:         one `vjp_f2_rArB` block  +  3 n_local chains
+!>     per direction:  ndir * (one `hvp_jet_rA` pass + one chain)
 !>
-!> so the per-direction form wins whenever fewer directions than the local
-!> basis are asked for, and the rank-4 form whenever the whole basis is. The
-!> crossover `ndir ~ 3 * mean(n_local)` is not known before the grid is walked
-!> -- the cavity stores no per-point active counts -- but `3 nsph` is its upper
-!> bound, and that is the rule [[hvp_fixed_mode]] applies: a direction set
-!> short of a full Cartesian basis runs per direction, a full one runs rank-4
-!> and is contracted. The rule is never worse than the dense path, is exact
-!> where every atom is active, and is one pure function so that a sharper
-!> estimate can replace it.
+!> and both channels' `O(n_active)` accessor passes dominate, so the crossover
+!> is a *number of directions*, not a fraction of the basis. Measured on the
+!> polyalanine set (SvdW, 110-point Lebedev grids, one thread): the per-direction
+!> form costs 0.10 s (83 atoms) and 0.27 s (163 atoms) per direction against a
+!> rank-4 fixed half of 1.23 s and 4.15 s, so the two meet at 12 and 14
+!> directions. [[hvp_fixed_mode]] therefore runs per direction up to
+!> `drop_hvp_per_dir_max` directions and rank-4 beyond that: the rank-4 form is
+!> never worse than the dense path, and the per-direction form is never asked
+!> to do more than about one dense fixed half's worth of work. The bound is a
+!> constant because the quadratic terms of the rank-4 form (the block's matrix
+!> product and its scatter) are still small at these sizes; on much larger
+!> active sets the true crossover moves up and the rule errs towards rank-4,
+!> which is bounded, rather than towards the unbounded per-direction cost.
+!> Beyond the bound a Hessian-vector product also carries the rank-4 form's
+!> memory: the dense `(3, nsph, 3, nsph)` staging block below and the
+!> traversal's per-thread sparse accumulators.
 !>
 !> [[get_hessian_drop]] asks for the rank-4 form with all `3 nsph` unit
 !> directions handed to the response half **in one batch**: the traversal
@@ -233,8 +241,9 @@ contains
 
    !> Form of the fixed channel for a Hessian-vector product of `ndir` directions
    !>
-   !> Per direction short of a full Cartesian basis, rank-4 at or beyond one;
-   !> the module header has the cost model and why `3 nsph` is the bound used.
+   !> Per direction up to `drop_hvp_per_dir_max` directions and short of a full
+   !> Cartesian basis, rank-4 otherwise; the module header has the cost model
+   !> and the measurements the bound comes from.
    !>
    !> @param[in] ndir Directions asked for
    !> @param[in] nsph Spheres of the cavity
@@ -247,7 +256,7 @@ contains
       !> Form of the fixed channel
       integer :: mode
 
-      if (ndir < ndim*nsph) then
+      if (ndir <= drop_hvp_per_dir_max .and. ndir < ndim*nsph) then
          mode = drop_fixed_per_dir
       else
          mode = drop_fixed_rank4

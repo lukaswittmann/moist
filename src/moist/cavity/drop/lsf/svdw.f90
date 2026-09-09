@@ -68,6 +68,7 @@ module moist_cavity_drop_lsf_svdw
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_sorted
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_math_blas, only: gemm
    use moist_cavity_drop_lsf_svdw_kernel, only: nkind, &
                                                 svdw_atom_eval, svdw_atom_tangent_eval, &
                                                 svdw_spatial_eval, svdw_nuclear_eval, &
@@ -78,6 +79,7 @@ module moist_cavity_drop_lsf_svdw
                                                 svdw_nucrad_eval, svdw_nucrad_diag_eval, &
                                                 svdw_tangent_eval, svdw_hvp_eval, &
                                                 svdw_vjp_eval, svdw_radius_vjp_eval, &
+                                                svdw_hvp_vjp_eval, &
                                                 svdw_normalized_eval, svdw_powersums
    implicit none (type, external)
    private
@@ -214,6 +216,9 @@ module moist_cavity_drop_lsf_svdw
       procedure, public :: hvp_f3_rr_rad => lsf_hvp_f3_rr_rad
       !> Jet-contracted nuclear gradient (reverse mode)
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
+      !> Nuclear Jacobian of the jet-contracted row as a rank-52 product of
+      !> per-atom quantities
+      procedure, public :: vjp_f2_rArB => lsf_vjp_f2_rArB
       !> Jet-contracted radius gradient (reverse mode)
       procedure, public :: vjp_f1_rad => lsf_vjp_f1_rad
       !> Exact radial offset where the SvdW weight equals `screening_threshold`
@@ -2067,6 +2072,169 @@ contains
          res(:, ia) = vjp_f1_rA
       end do
    end subroutine lsf_vjp_f1_rA
+
+   !* ================================================================================= *!
+   !*                   Adjoint-weighted mixed nuclear Hessian block                    *!
+   !* ================================================================================= *!
+
+   !> Adjoint-weighted mixed nuclear Hessian block, active-indexed in both nuclei
+   !>
+   !> The nuclear Jacobian of [[lsf_vjp_f1_rA]]: for active slots `i` (atom A)
+   !> and `j` (atom B),
+   !>
+   !>    res(3(i-1)+s, 3(j-1)+t) = d/dR_(t,B) [ w0 lsf1_rA + w1 . lsf2_r_rA
+   !>                                          + w2 : lsf3_rr_rA ](s, i) ,
+   !>
+   !> the Cartesian component fastest on both sides. This is the block the
+   !> direction-free surface Hessian contracts once per grid point, and where a
+   !> per-direction spelling stops scaling: [[lsf_hvp_jet_rA]] along each of the
+   !> `3 n_active` unit directions is `3 n_active^2` kernel evaluations.
+   !>
+   !> The power-sum form does better. Every A-B coupling of the blend passes
+   !> through the aggregate tensors, so the weighted row of atom A along a
+   !> direction `v` is a *linear form* in the direction-contracted power sums
+   !> `ws(v) = sum_B aw_B(v)`, plus the atom's own `aw_A(v)` half; and for the
+   !> unit direction `e_(t,B)` the argument of that form is a column of atom B's
+   !> own tensors, `aw{n}(e_t) = -at{n+1}(.., t)`. Off the diagonal the block is
+   !> therefore
+   !>
+   !>    res = G V ,   G(3 n, 52): the form's coefficients, one `svdw_hvp_vjp_eval`
+   !>                              per atom
+   !>                  V(52, 3 n): the shifted kind tensors of the column atoms
+   !>
+   !> with `52 = nkind (1 + 3 + 9)` -- a rank-52 product of per-atom quantities,
+   !> `O(n_active)` kernel work and one BLAS `gemm`. On the diagonal the atom's
+   !> own `aw` is live, and a direction that moves this atom alone has `ws = aw`;
+   !> those `3 x 3` blocks are `svdw_hvp_eval` along the atom's three unit
+   !> directions, weighted, and overwrite the product's diagonal.
+   !>
+   !> `res` sized exactly `(3 n_active, 3 n_active)` receives the product in
+   !> place; a larger buffer receives it through a packed copy of the leading
+   !> square. The two factors and the diagonal are allocated per call, sized
+   !> `(2 x 52 + 3) x 3 n_active` doubles, against a result of `9 n_active^2`:
+   !> this accessor is called once per grid point, not once per direction.
+   !>
+   !> @param[in]  self LSF instance
+   !> @param[in]  w0   Adjoint weight of the level-set value
+   !> @param[in]  w1   Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2   Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[out] res  Weighted mixed nuclear Hessian block [>= 3 n_act, >= 3 n_act]
+   subroutine lsf_vjp_f2_rArB(self, w0, w1, w2, res)
+      !> LSF instance
+      class(moist_cavity_drop_lsf_svdw_type), intent(in) :: self
+      !> Adjoint weight of the level-set value
+      real(wp), intent(in) :: w0
+      !> Adjoint weights of the spatial gradient
+      real(wp), intent(in) :: w1(3)
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+      !> Weighted mixed nuclear Hessian block
+      real(wp), intent(out) :: res(:, :)
+
+      !> Components of the linear form: every kind's `ws0`, `ws1` and `ws2`
+      integer, parameter :: nform = nkind*(1 + ndim + ndim*ndim)
+
+      !> Blending weights
+      real(wp) :: s_1, s_2, s_3
+      !> Per-atom kind tensors
+      real(wp) :: at0(nkind), at1(ndim, nkind), at2(ndim, ndim, nkind)
+      real(wp) :: at3(ndim, ndim, ndim, nkind), at4(ndim, ndim, ndim, ndim, nkind)
+      !> Coefficients of the weighted row in `ws0`, `ws1` and `ws2`
+      real(wp) :: gw0(ndim, nkind), gw1(ndim, ndim, nkind), gw2(ndim, ndim, ndim, nkind)
+      !> The atom's own contracted tensors along one of its unit directions
+      real(wp) :: aw0(nkind), aw1(ndim, nkind), aw2(ndim, ndim, nkind)
+      real(wp) :: aw3(ndim, ndim, ndim, nkind)
+      !> Kernel outputs of one atom along one of its unit directions
+      real(wp) :: h1(ndim), h2(ndim, ndim), h3(ndim, ndim, ndim)
+      !> Factors of the off-diagonal product, and the diagonal blocks
+      real(wp), allocatable :: gmat(:, :), vmat(:, :), diag(:, :, :)
+      !> Weighted entry of a diagonal block
+      real(wp) :: acc
+      !> Active count and index, Cartesian components, spatial axes, kind,
+      !> matrix row and column, form component
+      integer :: n, ia, s, t, a, b, k, row, col, iform
+
+      if (self%n_active == 0) return
+      call self%require_deriv(2, "vjp_f2_rArB")
+
+      n = self%n_active
+      call svdw_weights(self, s_1, s_2, s_3)
+      allocate (gmat(ndim*n, nform), vmat(nform, ndim*n), diag(ndim, ndim, n))
+
+      do ia = 1, n
+         call atom_tensors(self, ia, 4, at0, at1, at2, at3, at4)
+
+         !* ---------------- Rows of this atom: the form's coefficients ---------------- *!
+         call svdw_hvp_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                                self%ps0, self%ps1, self%ps2, at0, at1, at2, at3, &
+                                w0, w1, w2, gw0, gw1, gw2)
+         do s = 1, ndim
+            row = ndim*(ia - 1) + s
+            iform = 0
+            do k = 1, nkind
+               iform = iform + 1
+               gmat(row, iform) = gw0(s, k)
+               do a = 1, ndim
+                  iform = iform + 1
+                  gmat(row, iform) = gw1(a, s, k)
+               end do
+               do b = 1, ndim
+                  do a = 1, ndim
+                     iform = iform + 1
+                     gmat(row, iform) = gw2(a, b, s, k)
+                  end do
+               end do
+            end do
+         end do
+
+         !* -------- Columns of this atom: `ws(e_t) = aw(e_t) = -at{n+1}(.., t)` -------- *!
+         do t = 1, ndim
+            col = ndim*(ia - 1) + t
+            iform = 0
+            do k = 1, nkind
+               iform = iform + 1
+               vmat(iform, col) = -at1(t, k)
+               do a = 1, ndim
+                  iform = iform + 1
+                  vmat(iform, col) = -at2(a, t, k)
+               end do
+               do b = 1, ndim
+                  do a = 1, ndim
+                     iform = iform + 1
+                     vmat(iform, col) = -at3(a, b, t, k)
+                  end do
+               end do
+            end do
+
+            !* ------------- Diagonal block: the atom moved along e_t alone ------------- *!
+            aw0 = -at1(t, :)
+            aw1 = -at2(:, t, :)
+            aw2 = -at3(:, :, t, :)
+            aw3 = -at4(:, :, :, t, :)
+            call svdw_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
+                               self%ps0, self%ps1, self%ps2, aw0, aw1, aw2, &
+                               at0, at1, at2, at3, aw0, aw1, aw2, aw3, 2, h1, h2, h3)
+            do s = 1, ndim
+               acc = w0*h1(s)
+               do a = 1, ndim
+                  acc = acc + w1(a)*h2(a, s)
+               end do
+               do b = 1, ndim
+                  do a = 1, ndim
+                     acc = acc + w2(a, b)*h3(a, b, s)
+                  end do
+               end do
+               diag(s, t, ia) = acc
+            end do
+         end do
+      end do
+
+      call gemm(gmat, vmat, res(1:ndim*n, 1:ndim*n))
+
+      do ia = 1, n
+         res(ndim*(ia - 1) + 1:ndim*ia, ndim*(ia - 1) + 1:ndim*ia) = diag(:, :, ia)
+      end do
+   end subroutine lsf_vjp_f2_rArB
 
    !> Adjoint-weighted radius gradient, active-indexed
    !>

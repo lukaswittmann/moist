@@ -46,7 +46,10 @@
 !>
 !> The explicit halves are the nuclear Hessian-vector family the LSF returns
 !> in one pass as `hvp_jet_rA`; the fourth-order spatial tensor `T3` is
-!> `f4_rrr_rA`.
+!> `f4_rrr_rA`. Weighted, the explicit halves of *every* direction at a point
+!> are the columns of one matrix, the level set's `vjp_f2_rArB`; a caller
+!> holding that block tells [[drop_field_tangent_dir]] to leave the explicit
+!> term out and adds its column itself.
 !>
 !> The folding identity
 !> --------------------
@@ -73,7 +76,10 @@
 !> The third point-motion term does *not* fold. The row stops at two spatial
 !> indices, and `w2_ab T3(a,b,k) dr_k` needs three, so it goes through
 !> `f4_rrr_rA` directly. That is the one reason this module holds a
-!> `(3, 3, 3, 3, n_active)` tensor.
+!> `(3, 3, 3, 3, n_active)` tensor. Its weights `w2` belong to the point, not
+!> to the direction, so [[drop_field_f4_fold]] contracts them in once per
+!> point and every direction reads `dr_k f4w(k, s, i)`: three numbers per slot
+!> instead of twenty-seven.
 !>
 !> Splitting the point from the direction
 !> --------------------------------------
@@ -83,10 +89,12 @@
 !> third-order nuclear evaluation of every active atom. A caller sweeping a
 !> whole basis of nuclear directions at one point would rebuild bit-identical
 !> tensors once per direction, so the fills are [[drop_field_tangent_point]]
-!> (both tensors) and [[drop_field_jet_point]] (the jet alone, for a caller
-!> that never reads a fourth derivative), and the direction-dependent remainder
-!> is [[drop_field_tangent_dir]]. [[drop_field_tangent]] is the two in a row,
-!> for a caller with one direction.
+!> (both tensors), [[drop_field_jet_point]] (the jet alone, for a caller that
+!> never reads a fourth derivative) and [[drop_field_f4_fold]] (the weighted
+!> fourth derivative, once the point's weights are known), and the
+!> direction-dependent remainder is [[drop_field_tangent_dir]].
+!> [[drop_field_tangent]] is the fills and the direction in a row, for a
+!> caller with one direction.
 !>
 !> **The fills are unconditional.** The buffers are reused across grid points,
 !> so a fill skipped at one point would serve the previous point's tensors at
@@ -111,7 +119,7 @@ module moist_cavity_drop_derivatives_field_tangent
    private
 
    public :: drop_field_tangent
-   public :: drop_field_tangent_point, drop_field_tangent_dir
+   public :: drop_field_tangent_point, drop_field_f4_fold, drop_field_tangent_dir
    public :: drop_field_jet_point, drop_field_jet_contract
    public :: drop_field_jet_tangent, drop_field_jet_column
    public :: drop_field_tangent_work_type
@@ -139,6 +147,8 @@ module moist_cavity_drop_derivatives_field_tangent
       integer :: jet_slots = -1
       !> Active slots `f4` holds a fill for; `-1` before the first fill
       integer :: f4_slots = -1
+      !> Active slots `f4w` holds a fold for; `-1` before the first fold
+      integer :: f4w_slots = -1
       !> `dS/dR_A` [3, capacity]
       real(wp), allocatable :: t0(:, :)
       !> `d^2S/(dr dR_A)` [3, 3, capacity]
@@ -153,6 +163,9 @@ module moist_cavity_drop_derivatives_field_tangent
       real(wp), allocatable :: hvp3(:, :, :, :)
       !> `d^4S/(dr^3 dR_A)` [3, 3, 3, 3, capacity]
       real(wp), allocatable :: f4(:, :, :, :, :)
+      !> `sum_ab w2(a, b) d^4S/(dr_a dr_b dr_k dR_A)`, the point's Hessian weights
+      !> folded into `f4`; index order `(k, s, i)` [3, 3, capacity]
+      real(wp), allocatable :: f4w(:, :, :)
    contains
       !> Grow the buffers to hold at least `n` active slots
       procedure :: ensure => field_tangent_work_ensure
@@ -187,6 +200,7 @@ contains
       if (allocated(self%hvp2)) deallocate (self%hvp2)
       if (allocated(self%hvp3)) deallocate (self%hvp3)
       if (allocated(self%f4)) deallocate (self%f4)
+      if (allocated(self%f4w)) deallocate (self%f4w)
 
       allocate (self%t0(ndim, n))
       allocate (self%t1(ndim, ndim, n))
@@ -195,6 +209,7 @@ contains
       allocate (self%hvp2(ndim, ndim, n))
       allocate (self%hvp3(ndim, ndim, ndim, n))
       allocate (self%f4(ndim, ndim, ndim, ndim, n))
+      allocate (self%f4w(ndim, ndim, n))
       self%capacity = n
    end subroutine field_tangent_work_ensure
 
@@ -257,6 +272,52 @@ contains
 
       call lsf%f4_rrr_rA(work%f4)
    end subroutine drop_field_tangent_point
+
+   !> Fold the point's Hessian weights into the mixed fourth derivative
+   !>
+   !> `f4w(k, s, i) = sum_ab w2(a, b) f4(a, b, k, s, i)`: the one point-motion
+   !> term the row cannot absorb (see the module header), contracted with the
+   !> weights once so that every direction at the point reads three numbers per
+   !> slot instead of twenty-seven. The weights are a property of the point and
+   !> of the adjoint held fixed, not of a direction, which is what makes this a
+   !> point-half fill. It reads `f4`, so it follows [[drop_field_tangent_point]],
+   !> and it obeys the same unconditional-refill rule with one addition: a new
+   !> weight set at the same point needs a new fold.
+   !>
+   !> @param[inout] work     Scratch buffers, `f4` filled at this point
+   !> @param[in]    n_active Active slots of the prepared point
+   !> @param[in]    w2       Adjoint weights of the spatial Hessian [3, 3]
+   pure subroutine drop_field_f4_fold(work, n_active, w2)
+      !> Scratch buffers, `f4` filled at this point
+      type(drop_field_tangent_work_type), intent(inout) :: work
+      !> Active slots of the prepared point
+      integer, intent(in) :: n_active
+      !> Adjoint weights of the spatial Hessian
+      real(wp), intent(in) :: w2(3, 3)
+
+      !> Fold accumulator
+      real(wp) :: acc
+      !> Active slot, nuclear axis and spatial axes
+      integer :: i, s, k, a, b
+
+      work%f4w_slots = n_active
+      if (n_active == 0) return
+      call assert_f4_filled(work, n_active, "drop_field_f4_fold")
+
+      do i = 1, n_active
+         do s = 1, ndim
+            do k = 1, ndim
+               acc = 0.0_wp
+               do b = 1, ndim
+                  do a = 1, ndim
+                     acc = acc + w2(a, b)*work%f4(a, b, k, s, i)
+                  end do
+               end do
+               work%f4w(k, s, i) = acc
+            end do
+         end do
+      end do
+   end subroutine drop_field_f4_fold
 
    !* ================================================================================= *!
    !*                          Readings of the jet tensors                              *!
@@ -453,9 +514,10 @@ contains
    !> driver, the buffer is one point's row and the caller owns the scatter-add
    !> into the per-atom accumulator via `active_atom(i)`.
    !>
-   !> This is the single-direction form, [[drop_field_tangent_point]] followed
-   !> by [[drop_field_tangent_dir]]. A caller sweeping a direction basis at one
-   !> point calls those two itself and pays for the point half once.
+   !> This is the single-direction form: [[drop_field_tangent_point]] and
+   !> [[drop_field_f4_fold]] followed by [[drop_field_tangent_dir]]. A caller
+   !> sweeping a direction basis at one point calls those itself and pays for
+   !> the point half once.
    !>
    !> @param[in]    lsf  LSF instance, prepared at the evaluation point
    !> @param[in]    w0   Adjoint weight of the level-set value
@@ -493,7 +555,8 @@ contains
       real(wp), intent(inout) :: res(:, :)
 
       call drop_field_tangent_point(lsf, work)
-      call drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, work, res)
+      call drop_field_f4_fold(work, lsf%active_count(), w2)
+      call drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, .true., work, res)
    end subroutine drop_field_tangent
 
    !> Direction half: everything in the tangent that reads `v`, `dr` or a weight
@@ -506,20 +569,24 @@ contains
    !>
    !> The one LSF call left in here is `hvp_jet_rA`, the explicit nuclear
    !> motion: it is the only piece of the tangent that is not a reading of a
-   !> direction-free tensor of the point.
+   !> direction-free tensor of the point. A caller that holds the weighted
+   !> explicit term for its whole direction set at once -- the columns of the
+   !> level set's `vjp_f2_rArB` -- passes `explicit = .false.`, gets the rest of
+   !> the tangent, and adds that column itself; `v` is then not read.
    !>
-   !> @param[in]    lsf  LSF instance, prepared at the evaluation point
-   !> @param[in]    w0   Adjoint weight of the level-set value
-   !> @param[in]    w1   Adjoint weights of the spatial gradient [3]
-   !> @param[in]    w2   Adjoint weights of the spatial Hessian [3, 3]
-   !> @param[in]    dw0  Tangent of `w0` along `v`
-   !> @param[in]    dw1  Tangent of `w1` along `v` [3]
-   !> @param[in]    dw2  Tangent of `w2` along `v` [3, 3]
-   !> @param[in]    dr   Induced motion of the evaluation point along `v` [3]
-   !> @param[in]    v    Nuclear displacement directions [3, ncenters]
-   !> @param[inout] work Scratch buffers, filled at this point
-   !> @param[inout] res  Tangent of the nuclear-gradient row [3, >= n_active]
-   subroutine drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, work, res)
+   !> @param[in]    lsf      LSF instance, prepared at the evaluation point
+   !> @param[in]    w0       Adjoint weight of the level-set value
+   !> @param[in]    w1       Adjoint weights of the spatial gradient [3]
+   !> @param[in]    w2       Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]    dw0      Tangent of `w0` along `v`
+   !> @param[in]    dw1      Tangent of `w1` along `v` [3]
+   !> @param[in]    dw2      Tangent of `w2` along `v` [3, 3]
+   !> @param[in]    dr       Induced motion of the evaluation point along `v` [3]
+   !> @param[in]    v        Nuclear displacement directions [3, ncenters]
+   !> @param[in]    explicit Include the explicit nuclear-motion term, `hvp_jet_rA` along `v`
+   !> @param[inout] work     Scratch buffers, filled and folded at this point
+   !> @param[inout] res      Tangent of the nuclear-gradient row [3, >= n_active]
+   subroutine drop_field_tangent_dir(lsf, w0, w1, w2, dw0, dw1, dw2, dr, v, explicit, work, res)
       !> LSF instance, prepared at the evaluation point
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       !> Adjoint weight of the level-set value
@@ -538,15 +605,17 @@ contains
       real(wp), intent(in) :: dr(3)
       !> Nuclear displacement directions
       real(wp), intent(in) :: v(:, :)
-      !> Scratch buffers, filled at this point
+      !> Whether the explicit nuclear-motion term is included
+      logical, intent(in) :: explicit
+      !> Scratch buffers, filled and folded at this point
       type(drop_field_tangent_work_type), intent(inout) :: work
       !> Tangent of the nuclear-gradient row
       real(wp), intent(inout) :: res(:, :)
 
       !> Shifted weights of the folded contraction
       real(wp) :: w1_fold(ndim), w2_fold(ndim, ndim)
-      !> Row accumulator and hoisted point-motion component
-      real(wp) :: acc, drk
+      !> Row accumulator
+      real(wp) :: acc
       !> Active slot, nuclear axis and spatial axes
       integer :: i, s, a, b, k
       !> Active slots of the prepared point
@@ -555,7 +624,7 @@ contains
       n_active = lsf%active_count()
       if (n_active == 0) return
       call assert_jet_filled(work, n_active, "drop_field_tangent_dir")
-      call assert_f4_filled(work, n_active, "drop_field_tangent_dir")
+      call assert_f4w_filled(work, n_active, "drop_field_tangent_dir")
 
       !* ---------------------- Weight tangents and folded motion --------------------- *!
 
@@ -573,31 +642,34 @@ contains
 
       !* --------------------------- Explicit nuclear motion -------------------------- *!
 
-      call lsf%hvp_jet_rA(v, work%hvp1, work%hvp2, work%hvp3)
+      if (explicit) then
+         call lsf%hvp_jet_rA(v, work%hvp1, work%hvp2, work%hvp3)
+         do i = 1, n_active
+            do s = 1, ndim
+               acc = w0*work%hvp1(s, i)
+               do a = 1, ndim
+                  acc = acc + w1(a)*work%hvp2(a, s, i)
+               end do
+               do b = 1, ndim
+                  do a = 1, ndim
+                     acc = acc + w2(a, b)*work%hvp3(a, b, s, i)
+                  end do
+               end do
+               res(s, i) = res(s, i) + acc
+            end do
+         end do
+      end if
 
       !* ------------------------ Unfoldable point-motion term ------------------------ *!
 
       ! `w2_ab T3_abk dr_k` carries three spatial indices, one more than the
-      ! row can absorb, so the full mixed fourth derivative is contracted here.
-      ! It was formed by the point half, once.
+      ! row can absorb; the weights were folded into the mixed fourth
+      ! derivative by the point half, once, and the direction reads the fold.
       do i = 1, n_active
          do s = 1, ndim
-            acc = w0*work%hvp1(s, i)
-            do a = 1, ndim
-               acc = acc + w1(a)*work%hvp2(a, s, i)
-            end do
-            do b = 1, ndim
-               do a = 1, ndim
-                  acc = acc + w2(a, b)*work%hvp3(a, b, s, i)
-               end do
-            end do
+            acc = 0.0_wp
             do k = 1, ndim
-               drk = dr(k)
-               do b = 1, ndim
-                  do a = 1, ndim
-                     acc = acc + w2(a, b)*drk*work%f4(a, b, k, s, i)
-                  end do
-               end do
+               acc = acc + dr(k)*work%f4w(k, s, i)
             end do
             res(s, i) = res(s, i) + acc
          end do
@@ -645,5 +717,24 @@ contains
             "drop_field_tangent_point at this evaluation point"
       end if
    end subroutine assert_f4_filled
+
+   !> Abort on an `f4w` buffer whose fold did not run at this active count
+   !>
+   !> @param[in] work     Scratch buffers
+   !> @param[in] n_active Active slots the reader is about to assume
+   !> @param[in] caller   Reader named in the diagnostic
+   pure subroutine assert_f4w_filled(work, n_active, caller)
+      !> Scratch buffers
+      type(drop_field_tangent_work_type), intent(in) :: work
+      !> Active slots the reader is about to assume
+      integer, intent(in) :: n_active
+      !> Reader named in the diagnostic
+      character(len=*), intent(in) :: caller
+
+      if (work%f4w_slots /= n_active) then
+         error stop "moist DROP field tangent: "//caller//" ran without a "// &
+            "drop_field_f4_fold at this evaluation point"
+      end if
+   end subroutine assert_f4w_filled
 
 end module moist_cavity_drop_derivatives_field_tangent

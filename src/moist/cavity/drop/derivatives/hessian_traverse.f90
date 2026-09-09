@@ -56,17 +56,23 @@
 !>    every direction; the price is a per-thread accumulator, which is sparse
 !>    for the reason [[drop_hess_sparse_type]] gives. The jet tangent of a unit
 !>    direction is a *column* of the point's tensors ([[drop_field_jet_column]]),
-!>    so the only LSF call the chain makes per direction is the one genuinely
-!>    directional accessor, `hvp_jet_rA`.
+!>    and the explicit nuclear motion of every column is one block of the
+!>    level set, `vjp_f2_rArB`, formed once per point; the chain makes no LSF
+!>    call per direction. For SvdW that block is a rank-52 product of per-atom
+!>    quantities, `O(n_active)` kernel work and one `gemm`; a level set without
+!>    a factorised form inherits the column-by-column default and pays
+!>    `3 n_local` passes of `hvp_jet_rA` per point. What is left per direction
+!>    is the second-order chain itself, `O(1)` in the active count.
 !>
 !>  * **`drop_fixed_per_dir`** (Hessian-vector products). The chain is run once
 !>    per *supplied* direction, with the jet tangent formed by contracting the
 !>    same tensors with the direction ([[drop_field_jet_tangent]]), and the
 !>    column lands straight in the response channel's `(3, nsph, ndir)`
-!>    per-thread buffer. Cost `ngrid * ndir * n_active` against the rank-4 mode's
-!>    `ngrid * 3 n_local * n_active`, so it is the right mode whenever fewer
-!>    directions than the local basis are asked for; `hessian.f90` makes that
-!>    choice.
+!>    per-thread buffer, with the explicit nuclear motion of each direction from
+!>    `hvp_jet_rA`. Cost one `O(n_active)` accessor pass per direction and
+!>    point, against the rank-4 mode's per-point block and `3 n_local` chains,
+!>    so it is the right mode for a few directions and the wrong one for a
+!>    basis; `hessian.f90` makes that choice.
 !>
 !> Both modes read the same weights of the point, [[drop_point_weights_type]]:
 !> the normal fold and the 13 jet-seed contractions of the *fixed* adjoints.
@@ -177,7 +183,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       & seed_anchor_apply, seed_anchor_contract
    use moist_cavity_drop_derivatives_field_tangent, only: drop_field_tangent_point, &
       & drop_field_jet_point, drop_field_jet_contract, drop_field_jet_tangent, &
-      & drop_field_jet_column, drop_field_tangent_dir, drop_field_tangent_work_type
+      & drop_field_jet_column, drop_field_f4_fold, drop_field_tangent_dir, &
+      & drop_field_tangent_work_type
    use moist_cavity_drop_derivatives_weights_tangent, only: prepare_surface_weights_tangent
    use moist_cavity_drop_gaussian_scatter, only: scatter_iswig_block_indexed, &
       & contract_iswig_block
@@ -313,6 +320,10 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       integer, allocatable :: pair_ent(:, :)
       !> The current Cartesian unit direction, molecule sized and otherwise zero
       real(wp), allocatable :: vdir(:, :)
+      !> Weighted mixed nuclear Hessian block of the point over its active
+      !> slots, `(3 n_active, 3 n_active)` with the Cartesian component fastest.
+      !> Sized to the point, so the level set writes it in place
+      real(wp), allocatable :: mblk(:, :)
    end type drop_rank4_scratch_type
 
    !> The anchor's iSwiG neighbourhood as one point sees it
@@ -853,6 +864,9 @@ contains
             !* ======================== Fixed-adjoint channel ========================= *!
             if (fixed_here) then
                call point_weights(pt, eff, igrid, seeds, pw)
+               ! The Hessian weights fold into the mixed fourth derivative once
+               ! per point; every direction then reads three numbers per slot
+               call drop_field_f4_fold(ft_work, pt%n_active, pw%w_lsf2)
             end if
 
             if (fixed_rank4_here) then
@@ -891,6 +905,23 @@ contains
                   end do
                end do
 
+               !* --------------- Explicit nuclear motion of every column -------------- *!
+               ! The weighted mixed nuclear Hessian block of the level set over
+               ! the active slots: the explicit half of every column of this
+               ! point in one accessor call, where the chain would call
+               ! `hvp_jet_rA` once per column. Sized to the point rather than
+               ! grown, so the level set's product lands in it without a copy.
+               if (pt%n_active > 0) then
+                  if (allocated(r4%mblk)) then
+                     if (size(r4%mblk, 1) /= 3*pt%n_active) deallocate (r4%mblk)
+                  end if
+                  if (.not. allocated(r4%mblk)) then
+                     allocate (r4%mblk(3*pt%n_active, 3*pt%n_active))
+                  end if
+                  call slots%lsf(thread_slot)%lsf%vjp_f2_rArB(pw%w_lsf0, pw%w_lsf1, &
+                                                                 pw%w_lsf2, r4%mblk)
+               end if
+
                !* ------------------- One chain per basis direction ------------------- *!
                do idir = 1, 3*r4%ndir_atom
                   dir_loc = (idir - 1)/3 + 1
@@ -914,12 +945,21 @@ contains
 
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, r4%vdir, dv0, dv1, dv2, dv3, &
-                                             context, sc, ft_work, field_row, anchor_row, &
-                                             worker_error)
+                                             .false., context, sc, ft_work, field_row, &
+                                             anchor_row, worker_error)
                   r4%vdir(dir_axis, dir_atom) = 0.0_wp
                   if (allocated(worker_error)) then
                      call abort%latch_error(worker_error, igrid)
                      exit
+                  end if
+
+                  ! The explicit nuclear motion of this column, read off the
+                  ! point's block; an owner outside the active set has none
+                  if (dir_loc <= pt%n_active) then
+                     do i = 1, pt%n_active
+                        field_row(:, i) = field_row(:, i) &
+                           + r4%mblk(3*(i - 1) + 1:3*i, 3*(dir_loc - 1) + dir_axis)
+                     end do
                   end if
 
                   ! The anchor entries belong to the owner's row; the field row
@@ -978,8 +1018,8 @@ contains
 
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, dirs(:, :, idir_g), &
-                                             dv0, dv1, dv2, dv3, context, sc, ft_work, &
-                                             field_row, anchor_row, worker_error)
+                                             dv0, dv1, dv2, dv3, .true., context, sc, &
+                                             ft_work, field_row, anchor_row, worker_error)
                   if (allocated(worker_error)) then
                      call abort%latch_error(worker_error, igrid)
                      exit
@@ -1053,7 +1093,10 @@ contains
          !$omp end do
 
          if (fixed_here) deallocate (field_row, swi%blk, swi%idx)
-         if (fixed_rank4_here) deallocate (r4%dir_atoms, r4%pair_ent, r4%vdir, swi%ent)
+         if (fixed_rank4_here) then
+            deallocate (r4%dir_atoms, r4%pair_ent, r4%vdir, swi%ent)
+            if (allocated(r4%mblk)) deallocate (r4%mblk)
+         end if
          if (fixed_per_dir_here) deallocate (v_act)
          call pt%destroy()
          !$omp end parallel
@@ -1231,14 +1274,16 @@ contains
    !> @param[in]    dv1          Jet tangent of the gradient
    !> @param[in]    dv2          Jet tangent of the Hessian
    !> @param[in]    dv3          Jet tangent of the third derivative
+   !> @param[in]    explicit     Include the explicit nuclear motion of the field row through
+   !>                            `hvp_jet_rA`; `.false.` when the caller adds it from a block
    !> @param[in]    context      Calling routine, used to prefix the diagnostics
    !> @param[inout] sc           Per-direction temporaries
-   !> @param[inout] ft_work      Jet tensors of the point, both fills run
+   !> @param[inout] ft_work      Jet tensors of the point, fills and fold run
    !> @param[inout] field_row    Field row of the column `(3, >= n_active)`
    !> @param[out]   anchor_row   Owner entries of the column
    !> @param[out]   worker_error Failure of the bordered solves, if any
    subroutine fixed_direction_chain(self, lsf, pt, eff, igrid, seeds, pw, v, &
-                                    dv0, dv1, dv2, dv3, context, sc, ft_work, &
+                                    dv0, dv1, dv2, dv3, explicit, context, sc, ft_work, &
                                     field_row, anchor_row, worker_error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
@@ -1258,6 +1303,8 @@ contains
       real(wp), intent(in) :: v(:, :)
       !> Jet tangent along `v` at the frozen point
       real(wp), intent(in) :: dv0, dv1(3), dv2(3, 3), dv3(3, 3, 3)
+      !> Whether the field row includes the explicit nuclear motion
+      logical, intent(in) :: explicit
       !> Calling routine
       character(len=*), intent(in) :: context
       !> Per-direction temporaries
@@ -1360,7 +1407,7 @@ contains
       if (pt%n_active > 0) then
          call drop_field_tangent_dir(lsf, pw%w_lsf0, pw%w_lsf1, pw%w_lsf2, &
                                      sc%dw_lsf0, sc%dw_lsf1, sc%dw_lsf2, sc%dr_v, v, &
-                                     ft_work, field_row)
+                                     explicit, ft_work, field_row)
       end if
 
    end subroutine fixed_direction_chain
