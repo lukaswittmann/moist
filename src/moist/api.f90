@@ -1620,6 +1620,137 @@ contains
 
    end subroutine general_model_get_gradient_api
 
+!> Return the general-model dense nuclear Hessian.
+   subroutine general_model_get_hessian_api(verror, vmodel, nat, c_hessian) &
+         & bind(C, name=namespace//"general_model_get_hessian")
+      !> Error and model handles
+      type(c_ptr), value :: verror, vmodel
+      !> Number of atoms
+      integer(c_int), value :: nat
+      !> Output Hessian, Fortran (3, nat, 3, nat)
+      type(c_ptr), value :: c_hessian
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Decoded model wrapper
+      type(vp_model), pointer :: model
+      !> Output view
+      real(c_double), pointer :: hessian(:, :, :, :)
+      !> Fortran Hessian
+      real(wp), allocatable :: local(:, :, :, :)
+      !> Model error
+      type(error_type), allocatable :: model_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+
+      if (.not. c_associated(vmodel) .or. .not. c_associated(c_hessian)) then
+         call api_error(error%ptr, "general_model_get_hessian", "Null pointer provided")
+         return
+      end if
+      call c_f_pointer(vmodel, model)
+      if (.not. allocated(model%ptr)) then
+         call api_error(error%ptr, "general_model_get_hessian", "Model is not initialized")
+         return
+      end if
+
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         if (.not. general%updated .or. nat /= general%cavity%nsph) then
+            call api_error(error%ptr, "general_model_get_hessian", &
+                           "Atom count does not match the updated general-model cavity")
+            return
+         end if
+      class default
+         call api_error(error%ptr, "general_model_get_hessian", &
+                        "Model is not a general solvation model")
+         return
+      end select
+
+      call c_f_pointer(c_hessian, hessian, [3, int(nat), 3, int(nat)])
+      allocate (local(3, int(nat), 3, int(nat)), source=0.0_wp)
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         call general%get_hessian(model%coupling, local, model_error)
+      class default
+         call fatal_error(model_error, "Model is not a general solvation model")
+      end select
+      if (allocated(model_error)) then
+         call api_error(error%ptr, "general_model_get_hessian", model_error%message)
+         return
+      end if
+      hessian = real(local, c_double)
+
+   end subroutine general_model_get_hessian_api
+
+!> Return general-model nuclear Hessian-vector products along supplied directions.
+   subroutine general_model_get_hvp_api(verror, vmodel, nat, ndir, c_dirs, c_hvp) &
+         & bind(C, name=namespace//"general_model_get_hvp")
+      !> Error and model handles
+      type(c_ptr), value :: verror, vmodel
+      !> Number of atoms and of directions
+      integer(c_int), value :: nat, ndir
+      !> Input directions and output products, both Fortran (3, nat, ndir)
+      type(c_ptr), value :: c_dirs, c_hvp
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Decoded model wrapper
+      type(vp_model), pointer :: model
+      !> Input and output views
+      real(c_double), pointer :: dirs(:, :, :), hvp(:, :, :)
+      !> Fortran directions and products
+      real(wp), allocatable :: local_dirs(:, :, :), local(:, :, :)
+      !> Model error
+      type(error_type), allocatable :: model_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+
+      if (.not. c_associated(vmodel) .or. .not. c_associated(c_dirs) .or. &
+          .not. c_associated(c_hvp)) then
+         call api_error(error%ptr, "general_model_get_hvp", "Null pointer provided")
+         return
+      end if
+      call c_f_pointer(vmodel, model)
+      if (.not. allocated(model%ptr)) then
+         call api_error(error%ptr, "general_model_get_hvp", "Model is not initialized")
+         return
+      end if
+      if (ndir < 1) then
+         call api_error(error%ptr, "general_model_get_hvp", "No direction supplied")
+         return
+      end if
+
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         if (.not. general%updated .or. nat /= general%cavity%nsph) then
+            call api_error(error%ptr, "general_model_get_hvp", &
+                           "Atom count does not match the updated general-model cavity")
+            return
+         end if
+      class default
+         call api_error(error%ptr, "general_model_get_hvp", &
+                        "Model is not a general solvation model")
+         return
+      end select
+
+      call c_f_pointer(c_dirs, dirs, [3, int(nat), int(ndir)])
+      call c_f_pointer(c_hvp, hvp, [3, int(nat), int(ndir)])
+      allocate (local_dirs(3, int(nat), int(ndir)), source=real(dirs, wp))
+      allocate (local(3, int(nat), int(ndir)), source=0.0_wp)
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         call general%get_hvp(model%coupling, local_dirs, local, model_error)
+      class default
+         call fatal_error(model_error, "Model is not a general solvation model")
+      end select
+      if (allocated(model_error)) then
+         call api_error(error%ptr, "general_model_get_hvp", model_error%message)
+         return
+      end if
+      hvp = real(local, c_double)
+
+   end subroutine general_model_get_hvp_api
+
 !> Decode the optional master tolerance handed to a DROP cavity constructor.
 !> A null pointer selects the compiled DROP default, so every entry point can
 !> forward one unconditional `tolerance=` argument to `new_cavity_drop` instead

@@ -7,6 +7,7 @@ module moist_type
    use moist_radius_type, only: radius_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_channels, only: coupling_type, response_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
@@ -17,6 +18,8 @@ module moist_type
    public :: cavity_type
    public :: list_cavity_fields_base
    public :: cavity_surface_adjoint_type
+   public :: cavity_surface_tangent_type
+   public :: surface_adjoint_response_type
    public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
    public :: write_cavity_xyz_debug
@@ -94,6 +97,8 @@ module moist_type
       procedure :: get_surface_hessian => get_cavity_surface_hessian_default
       !> Dense nuclear Hessian of the cavity contribution
       procedure :: get_hessian => get_cavity_hessian_default
+      !> Directional tangents of the surface observables along nuclear directions
+      procedure :: get_surface_tangent => get_cavity_surface_tangent_default
       !> Write grid to XYZ file for visualization
       procedure :: write_xyz_debug => write_cavity_xyz_debug
       !> Write grid to CSV file for visualization
@@ -124,6 +129,61 @@ module moist_type
 
    end interface
 
+   !> Second-order surface channel of a model: the response of its surface
+   !> adjoints along nuclear directions
+   !>
+   !> The reverse-mode nuclear gradient is `J^T omega` with `omega` the surface
+   !> adjoints a model accumulates and `J` the cavity's Jacobian. Its
+   !> directional derivative needs, besides the cavity's own second-order term
+   !> at frozen `omega`, the response of the adjoints themselves,
+   !>
+   !>     omega_v = (d omega/d Gamma) (J v) + (d omega/d R) v,
+   !>
+   !> which only the model can form, and only once the cavity has produced the
+   !> surface tangent `J v`. The cavity's Hessian traversal therefore calls
+   !> back into an object of this type once per block of directions, after its
+   !> forward tangent pass and before its contraction: the object receives the
+   !> tangent of every surface observable for the block and returns one
+   !> surface-adjoint set per direction, which the cavity folds into the same
+   !> reverse contraction that serves the gradient. Nuclear-Hessian columns
+   !> that do not flow through the surface at all are added to `hvp_direct`.
+   type, abstract :: surface_adjoint_response_type
+   contains
+      !> Form the adjoint response of one block of directions
+      procedure(apply_surface_adjoint_response), deferred :: apply
+   end type surface_adjoint_response_type
+
+   abstract interface
+
+      !> Form the adjoint response of one block of nuclear directions
+      !>
+      !> `dacc` holds one zero-initialised accumulator per direction of the
+      !> block, sized for the cavity's grid, and the implementation *adds* its
+      !> response into them; `hvp_direct` is the block's column accumulator of
+      !> the non-surface terms and is likewise added to.
+      !>
+      !> @param[inout] self       Response object
+      !> @param[in]    cavity     Cavity the tangent was taken on
+      !> @param[in]    dirs       Nuclear directions of the block (3, nsph, nblk)
+      !> @param[in]    tangent    Surface tangent of the block, every channel (ngrid, nblk)
+      !> @param[inout] dacc       Surface-adjoint response per direction (nblk)
+      !> @param[inout] hvp_direct Non-surface Hessian columns of the block (3, nsph, nblk)
+      !> @param[out]   error      Error handling
+      subroutine apply_surface_adjoint_response(self, cavity, dirs, tangent, dacc, &
+                                                hvp_direct, error)
+         import :: surface_adjoint_response_type, cavity_type, cavity_surface_tangent_type, &
+            & cavity_surface_adjoint_type, wp, error_type
+         class(surface_adjoint_response_type), intent(inout) :: self
+         class(cavity_type), intent(in) :: cavity
+         real(wp), intent(in) :: dirs(:, :, :)
+         type(cavity_surface_tangent_type), intent(in) :: tangent
+         type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+         real(wp), intent(inout) :: hvp_direct(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine apply_surface_adjoint_response
+
+   end interface
+
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
@@ -136,6 +196,10 @@ module moist_type
       procedure(get_model_energy), deferred :: get_energy
       procedure(get_model_response), deferred :: get_response
       procedure(get_model_gradient), deferred :: get_gradient
+      !> Dense nuclear Hessian of the solvation energy
+      procedure :: get_hessian => get_model_hessian_default
+      !> Nuclear Hessian-vector products of the solvation energy
+      procedure :: get_hvp => get_model_hvp_default
 
    end type solvation_model_type
 
@@ -227,6 +291,11 @@ module moist_type
       procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
       !> Accumulate nuclear-gradient terms that do not flow through the surface
       procedure :: get_direct_gradient => get_component_direct_gradient_default
+      !> Accumulate the response of the gradient's surface adjoints along
+      !> nuclear directions, the second-order surface channel of the Hessian
+      procedure :: get_hessian_surface_weights => get_component_hessian_surface_weights_default
+      !> Accumulate nuclear-Hessian columns that do not flow through the surface
+      procedure :: get_direct_hessian => get_component_direct_hessian_default
 
    end type solvation_model_component_type
 
@@ -422,12 +491,13 @@ contains
    !> contraction must be reached through the forward path instead. Returning
    !> silently here would hand back a zero Hessian-vector product, so this errors
    !>
-   !> @param[in]    self  Cavity instance
-   !> @param[in]    acc   Surface-observable adjoints, unused
-   !> @param[in]    dirs  Nuclear directions, unused
-   !> @param[inout] hvp   Hessian-vector product accumulator, unchanged
-   !> @param[out]   error Error handling
-   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error)
+   !> @param[in]    self    Cavity instance
+   !> @param[in]    acc     Surface-observable adjoints, unused
+   !> @param[in]    dirs    Nuclear directions, unused
+   !> @param[inout] hvp     Hessian-vector product accumulator, unchanged
+   !> @param[out]   error   Error handling
+   !> @param[inout] omega_v Surface-adjoint response of the model, unused
+   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error, omega_v)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
@@ -438,6 +508,8 @@ contains
       real(wp), intent(inout) :: hvp(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       call fatal_error(error, "This cavity does not provide get_surface_hessian &
          &(reverse-mode surface Hessian-vector products)")
@@ -454,7 +526,8 @@ contains
    !> @param[in]    acc     Surface-observable adjoints, unused
    !> @param[inout] hessian Nuclear-Hessian accumulator, unchanged
    !> @param[out]   error   Error handling
-   subroutine get_cavity_hessian_default(self, acc, hessian, error)
+   !> @param[inout] omega_v Surface-adjoint response of the model, unused
+   subroutine get_cavity_hessian_default(self, acc, hessian, error, omega_v)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
@@ -463,11 +536,39 @@ contains
       real(wp), intent(inout) :: hessian(:, :, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       call fatal_error(error, "This cavity does not provide get_hessian &
          &(dense nuclear Hessian of the cavity contribution)")
 
    end subroutine get_cavity_hessian_default
+
+   !> Default forward-mode surface tangent hook
+   !>
+   !> The second-order surface channel of a model differentiates its surface
+   !> weights along the tangent of the observables; a cavity that cannot
+   !> supply that tangent cannot serve a model Hessian. Returning silently
+   !> here would hand back a zero tangent, so this errors
+   !>
+   !> @param[in]    self    Cavity instance
+   !> @param[in]    dirs    Nuclear directions, unused
+   !> @param[inout] tangent Surface tangent, unchanged
+   !> @param[out]   error   Error handling
+   subroutine get_cavity_surface_tangent_default(self, dirs, tangent, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent
+      type(cavity_surface_tangent_type), intent(inout) :: tangent
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This cavity does not provide get_surface_tangent &
+         &(forward-mode tangent of the surface observables)")
+
+   end subroutine get_cavity_surface_tangent_default
 
    !> Default no-op direct trace-response hook
    !>
@@ -590,6 +691,127 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
    end subroutine get_component_direct_gradient_default
+
+   !> Default second-order surface hook: refuse
+   !>
+   !> The nuclear Hessian of a component's energy needs the response of its
+   !> gradient-path surface adjoints along the cavity's surface tangent,
+   !> `d(omega)/d(Gamma) . (J v)` plus any explicit nuclear dependence of
+   !> `omega`. Nothing generic can form that, and returning silently would
+   !> hand back the frozen-adjoint Hessian in place of the true one, so a
+   !> component that has not implemented it is refused by name.
+   !>
+   !> @param[inout] self     Solvation component
+   !> @param[in]    coupling Wavefunction data
+   !> @param[in]    cavity   Cavity data
+   !> @param[in]    dirs     Nuclear directions of the block (3, nsph, nblk)
+   !> @param[in]    tangent  Surface tangent of the block, every channel
+   !> @param[inout] dacc     Surface-adjoint response per direction, unchanged
+   !> @param[out]   error    Error object
+   subroutine get_component_hessian_surface_weights_default(self, coupling, cavity, dirs, &
+                                                            tangent, dacc, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity data
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions of the block
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Surface-adjoint response per direction
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (allocated(self%name)) then
+         call fatal_error(error, "Component "//self%name//" provides no second-order"// &
+                          " surface weights (nuclear Hessian)")
+      else
+         call fatal_error(error, "Component provides no second-order surface weights"// &
+                          " (nuclear Hessian)")
+      end if
+
+   end subroutine get_component_hessian_surface_weights_default
+
+   !> Default no-op hook for nuclear-Hessian columns outside the surface
+   !>
+   !> The second-order counterpart of [[get_component_direct_gradient_default]]:
+   !> the directional derivative of a component's non-surface gradient terms,
+   !> which for an energy that reaches the nuclei through the surface alone is
+   !> genuinely absent. A component with a direct gradient term overrides
+   !> both hooks together.
+   !>
+   !> @param[inout] self     Solvation component
+   !> @param[in]    coupling Wavefunction data
+   !> @param[in]    cavity   Cavity data
+   !> @param[in]    dirs     Nuclear directions of the block (3, nsph, nblk)
+   !> @param[in]    tangent  Surface tangent of the block, every channel
+   !> @param[inout] hvp      Hessian columns of the block (3, nsph, nblk), unchanged
+   !> @param[out]   error    Error object
+   subroutine get_component_direct_hessian_default(self, coupling, cavity, dirs, tangent, &
+                                                   hvp, error)
+      !> Solvation component
+      class(solvation_model_component_type), intent(inout) :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity data
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions of the block
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Hessian columns of the block
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+   end subroutine get_component_direct_hessian_default
+
+   !> Default dense nuclear-Hessian hook of a model: refuse
+   !>
+   !> @param[inout] self     Solvation model
+   !> @param[in]    coupling Wavefunction data
+   !> @param[inout] hessian  Nuclear-Hessian accumulator (3, nat, 3, nat), unchanged
+   !> @param[out]   error    Error object
+   subroutine get_model_hessian_default(self, coupling, hessian, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in), target :: coupling
+      !> Nuclear-Hessian accumulator
+      real(wp), intent(inout) :: hessian(:, :, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model does not provide a nuclear Hessian")
+
+   end subroutine get_model_hessian_default
+
+   !> Default nuclear Hessian-vector product hook of a model: refuse
+   !>
+   !> @param[inout] self     Solvation model
+   !> @param[in]    coupling Wavefunction data
+   !> @param[in]    dirs     Nuclear directions (3, nat, ndir)
+   !> @param[inout] hvp      Hessian-vector accumulator (3, nat, ndir), unchanged
+   !> @param[out]   error    Error object
+   subroutine get_model_hvp_default(self, coupling, dirs, hvp, error)
+      !> Solvation model
+      class(solvation_model_type), intent(inout), target :: self
+      !> Wavefunction data
+      class(coupling_type), intent(in), target :: coupling
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Hessian-vector accumulator
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "This solvation model does not provide nuclear"// &
+                       " Hessian-vector products")
+
+   end subroutine get_model_hvp_default
 
    !> Write grid points to an XYZ file as helium atoms (debug visualization)
    subroutine write_cavity_xyz_debug(self, filename, error)

@@ -7,7 +7,7 @@ module moist_model_component_pcm_solvers
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs
-   use moist_math_blas, only: dot, gemv
+   use moist_math_blas, only: dot, gemv, gemm
    implicit none (type, external)
    private
 
@@ -15,6 +15,9 @@ module moist_model_component_pcm_solvers
    public :: solve_pcm_cholesky
    public :: solve_pcm_iterative
    public :: solve_pcm_inversion
+   public :: factorize_pcm_lu, solve_pcm_lu_factored
+   public :: factorize_pcm_cholesky, solve_pcm_cholesky_factored
+   public :: invert_pcm_matrix, apply_pcm_inverse
 
 contains
 
@@ -165,6 +168,185 @@ contains
       call gemv(amat_inv, rhs, q)
 
    end subroutine solve_pcm_inversion
+
+   !> LU-factorize the PCM matrix once, for repeated multi-column solves
+   !>
+   !> The factor and the pivots are what [[solve_pcm_lu_factored]] consumes.
+   !> This is the same DGETRF the single-column [[solve_pcm_lu]] runs; it is
+   !> kept apart so that the charge solve of the energy path is never routed
+   !> through a cache.
+   !>
+   !> @param[in]  amat   System matrix (ngrid, ngrid)
+   !> @param[out] factor LU factor (ngrid, ngrid)
+   !> @param[out] ipiv   Pivot indices (ngrid)
+   !> @param[out] error  Error handling
+   !> @param[in]  unit   Output unit for the diagnostics; defaults to standard output
+   subroutine factorize_pcm_lu(amat, factor, ipiv, error, unit)
+      !> System matrix (ngrid, ngrid)
+      real(wp), intent(in) :: amat(:, :)
+      !> LU factor
+      real(wp), allocatable, intent(out) :: factor(:, :)
+      !> Pivot indices
+      integer, allocatable, intent(out) :: ipiv(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Output unit for the diagnostics; defaults to standard output
+      integer, intent(in), optional :: unit
+
+      integer :: n, info, iunit
+
+      iunit = output_unit
+      if (present(unit)) iunit = unit
+
+      n = size(amat, 1)
+      allocate (factor(n, n), ipiv(n))
+      factor = amat
+      call getrf(factor, ipiv, info)
+      if (info /= 0) then
+         write (iunit, "(A,I0)") "[factorize_pcm_lu] LAPACK getrf failed with info = ", info
+         write (iunit, "(A,I0)") "[factorize_pcm_lu] Matrix size n = ", n
+         call fatal_error(error, "[factorize_pcm_lu] LAPACK getrf failed")
+         return
+      end if
+
+   end subroutine factorize_pcm_lu
+
+   !> Solve several right-hand sides against an LU factor
+   !>
+   !> @param[in]  factor LU factor from [[factorize_pcm_lu]]
+   !> @param[in]  ipiv   Pivot indices from [[factorize_pcm_lu]]
+   !> @param[in]  rhs    Right-hand sides (ngrid, nrhs)
+   !> @param[out] sol    Solutions (ngrid, nrhs)
+   !> @param[out] error  Error handling
+   subroutine solve_pcm_lu_factored(factor, ipiv, rhs, sol, error)
+      !> LU factor
+      real(wp), intent(in) :: factor(:, :)
+      !> Pivot indices
+      integer, intent(in) :: ipiv(:)
+      !> Right-hand sides
+      real(wp), intent(in) :: rhs(:, :)
+      !> Solutions
+      real(wp), intent(out) :: sol(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: info
+
+      sol = rhs
+      call getrs(factor, sol, ipiv, info)
+      if (info /= 0) then
+         call fatal_error(error, "[solve_pcm_lu_factored] LAPACK getrs failed")
+         return
+      end if
+
+   end subroutine solve_pcm_lu_factored
+
+   !> Cholesky-factorize the PCM matrix once, for repeated multi-column solves
+   !>
+   !> @param[in]  amat   System matrix (ngrid, ngrid), symmetric positive definite
+   !> @param[out] factor Lower Cholesky factor (ngrid, ngrid)
+   !> @param[out] error  Error handling
+   subroutine factorize_pcm_cholesky(amat, factor, error)
+      !> System matrix (ngrid, ngrid)
+      real(wp), intent(in) :: amat(:, :)
+      !> Lower Cholesky factor
+      real(wp), allocatable, intent(out) :: factor(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: n, info
+
+      n = size(amat, 1)
+      allocate (factor(n, n))
+      factor = amat
+      call potrf(factor, info, uplo="l")
+      if (info /= 0) then
+         if (info > 0) then
+            call fatal_error(error, "[factorize_pcm_cholesky] Matrix not positive definite")
+         else
+            call fatal_error(error, "[factorize_pcm_cholesky] LAPACK potrf failed")
+         end if
+         return
+      end if
+
+   end subroutine factorize_pcm_cholesky
+
+   !> Solve several right-hand sides against a Cholesky factor
+   !>
+   !> @param[in]  factor Lower Cholesky factor from [[factorize_pcm_cholesky]]
+   !> @param[in]  rhs    Right-hand sides (ngrid, nrhs)
+   !> @param[out] sol    Solutions (ngrid, nrhs)
+   !> @param[out] error  Error handling
+   subroutine solve_pcm_cholesky_factored(factor, rhs, sol, error)
+      !> Lower Cholesky factor
+      real(wp), intent(in) :: factor(:, :)
+      !> Right-hand sides
+      real(wp), intent(in) :: rhs(:, :)
+      !> Solutions
+      real(wp), intent(out) :: sol(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: info
+
+      sol = rhs
+      call potrs(factor, sol, info, uplo="l")
+      if (info /= 0) then
+         call fatal_error(error, "[solve_pcm_cholesky_factored] LAPACK potrs failed")
+         return
+      end if
+
+   end subroutine solve_pcm_cholesky_factored
+
+   !> Invert the PCM matrix once, for repeated multi-column products
+   !>
+   !> @param[in]  amat   System matrix (ngrid, ngrid)
+   !> @param[out] ainv   Inverse matrix (ngrid, ngrid)
+   !> @param[out] error  Error handling
+   subroutine invert_pcm_matrix(amat, ainv, error)
+      !> System matrix (ngrid, ngrid)
+      real(wp), intent(in) :: amat(:, :)
+      !> Inverse matrix
+      real(wp), allocatable, intent(out) :: ainv(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: n, info
+      integer, allocatable :: ipiv(:)
+
+      n = size(amat, 1)
+      allocate (ainv(n, n), ipiv(n))
+      ainv = amat
+      call getrf(ainv, ipiv, info)
+      if (info /= 0) then
+         call fatal_error(error, "[invert_pcm_matrix] LAPACK getrf failed")
+         return
+      end if
+      call getri(ainv, ipiv, info=info)
+      if (info /= 0) then
+         call fatal_error(error, "[invert_pcm_matrix] LAPACK getri failed")
+         return
+      end if
+
+   end subroutine invert_pcm_matrix
+
+   !> Apply the inverse matrix to several right-hand sides
+   !>
+   !> @param[in]  ainv Inverse matrix from [[invert_pcm_matrix]]
+   !> @param[in]  rhs  Right-hand sides (ngrid, nrhs)
+   !> @param[out] sol  Solutions (ngrid, nrhs)
+   subroutine apply_pcm_inverse(ainv, rhs, sol)
+      !> Inverse matrix
+      real(wp), intent(in) :: ainv(:, :)
+      !> Right-hand sides
+      real(wp), intent(in) :: rhs(:, :)
+      !> Solutions
+      real(wp), intent(out) :: sol(:, :)
+
+      sol = 0.0_wp
+      call gemm(ainv, rhs, sol)
+
+   end subroutine apply_pcm_inverse
 
    !> Solve PCM system via preconditioned Conjugate Gradient
    subroutine solve_pcm_iterative(amat, rhs, q, tol, maxiter, error)

@@ -458,6 +458,84 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
     assert not result.gradient.flags.writeable
 
 
+def test_pv_model_hessian_differentiates_the_gradient(diatomic) -> None:
+    """The native Hessian is the derivative of the native gradient.
+
+    PV on a DROP surface is the one component with a complete second-order
+    surface channel.  The dense block must be symmetric, the per-direction
+    products must be its columns, and a central difference of the gradient
+    along one nuclear coordinate must reproduce one column.
+    """
+    pressure = 2.5
+    structure = diatomic()
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(pressure)])
+    result = model.evaluate(structure)
+
+    hessian = result.hessian
+    natoms = len(structure)
+    assert hessian.shape == (3, natoms, 3, natoms)
+    assert not hessian.flags.writeable
+    flat = hessian.reshape(3 * natoms, 3 * natoms, order="F")
+    scale = np.max(np.abs(flat))
+    assert scale > 1.0e-3
+    assert np.max(np.abs(flat - flat.T)) <= 1.0e-11 * scale
+
+    unit = np.zeros((3, natoms, 3 * natoms), order="F")
+    for column in range(3 * natoms):
+        unit[column % 3, column // 3, column] = 1.0
+    products = model.hvp(unit)
+    assert products.shape == (3, natoms, 3 * natoms)
+    assert np.array_equal(products.reshape(3 * natoms, 3 * natoms, order="F"), flat)
+
+    # Central difference of the gradient along z of the second atom
+    step = 1.0e-3
+    positions = structure.positions.copy()
+    reference = np.zeros((3, natoms))
+    for offset, weight in ((-2, 1.0), (-1, -8.0), (1, 8.0), (2, -1.0)):
+        displaced = positions.copy()
+        displaced[1, 2] += offset * step
+        model.update(Structure(structure.numbers, displaced))
+        reference += weight * model.gradient() / (12.0 * step)
+    assert np.max(np.abs(hessian[:, :, 2, 1] - reference)) <= 1.0e-7 * scale
+
+
+def test_model_hessian_refuses_a_component_without_second_order(diatomic) -> None:
+    structure = diatomic()
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
+    coupling = ArrayCoupling(
+        structure,
+        electrostatics=lambda cavity, _trace: Electrostatics(
+            np.zeros(cavity.ngrid),
+            qefield=np.zeros((3, cavity.ngrid), order="F"),
+        ),
+    )
+    result = model.evaluate(coupling=coupling)
+    assert result.gradient.shape == (3, len(structure))
+
+    with raises(RuntimeError, match="second-order"):
+        model.hessian()
+    with raises(RuntimeError, match="second-order"):
+        result.hessian
+
+
+def test_evaluation_hessian_refuses_a_coupling_with_gradient_terms(diatomic) -> None:
+    structure = diatomic()
+
+    class CouplingWithNuclearTerms(ArrayCoupling):
+        def gradient(self, cavity, response, model_gradient):
+            return model_gradient() + 1.0
+
+    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(2.5)])
+    result = model.evaluate(coupling=CouplingWithNuclearTerms(structure))
+    assert result.gradient.shape == (3, len(structure))
+
+    with raises(NotImplementedError, match="second-order coupling hook"):
+        result.hessian
+    # The model block alone stays reachable, and is what the plain coupling gets
+    plain = model.evaluate(structure)
+    assert plain.hessian.shape == (3, len(structure), 3, len(structure))
+
+
 def test_solvation_model_is_the_canonical_constructor(diatomic) -> None:
     structure = diatomic()
     coupling = ArrayCoupling(structure)

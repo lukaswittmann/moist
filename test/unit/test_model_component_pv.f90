@@ -4,6 +4,8 @@
 !>   * the energy is `p * V`, with `V` the enclosed cavity volume
 !>   * the nuclear gradient is `p * dV/dR`
 !>   * the surface adjoints are `p *` the cavity volume adjoints
+!>   * the response of those adjoints along a surface tangent is their
+!>     directional derivative
 module test_model_component_pv
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -14,6 +16,7 @@ module test_model_component_pv
    use moist_channels, only: coupling_type, response_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
@@ -49,6 +52,7 @@ contains
          & new_unittest("pv_sphere_volume", test_pv_sphere_volume), &
          & new_unittest("pv_nuclear_gradient", test_pv_nuclear_gradient), &
          & new_unittest("pv_surface_weights", test_pv_surface_weights), &
+         & new_unittest("pv_hessian_surface_weights", test_pv_hessian_surface_weights), &
          & new_unittest("pv_zero_pressure_short_circuit", test_pv_short_circuit), &
          & new_unittest("pv_lifecycle_guards", test_pv_guards) &
          & ]
@@ -488,6 +492,148 @@ contains
       end function pv_surface_energy
 
    end subroutine test_pv_surface_weights
+
+!> The response of the volume adjoints along a surface tangent
+!>
+!> `get_hessian_surface_weights` must return the directional derivative of
+!> `get_surface_weights` along `(d_a, d_r, d_n)`. The reference differences
+!> the shipped weights on the synthetic surface displaced along a prescribed
+!> tangent, two directions in one batch. The weights are bilinear in the
+!> observables, so a five-point stencil is exact to round-off and the bound is
+!> tight. The width and switching tangents are set nonzero on purpose: the
+!> volume adjoint does not read them, so their response must be exactly zero.
+!>
+!> @param[out] error Error handling
+   subroutine test_pv_hessian_surface_weights(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+
+      !> Dummy structure; PV only stores it
+      type(structure_type) :: mol
+      !> Synthetic DROP surface carrying the volume adjoint fields
+      type(cavity_type_drop) :: cavity, trial
+      !> Component under test
+      type(solvation_model_component_pv) :: pv_component
+      !> Host coupling data, never read by PV
+      type(coupling_type) :: coupling
+      !> Prescribed surface tangent and the analytic response
+      type(cavity_surface_tangent_type) :: tangent
+      type(cavity_surface_adjoint_type), allocatable :: dacc(:)
+      !> Differenced weights of one stencil point and their accumulation
+      type(cavity_surface_adjoint_type) :: w_disp, fd
+      !> Radial normal field of the fixture
+      real(wp) :: normals(3, ngrid_sw)
+      !> Dummy molecular geometry and unused directions
+      real(wp) :: xyz_mol(3, 1), dirs(3, 1, 2)
+      !> Grid point, direction and stencil indices
+      integer :: igrid, idir, ioff, iaxis
+      !> Worst deviation
+      real(wp) :: dev
+
+      !> Pressure of the component under test
+      real(wp), parameter :: pressure = 2.5_wp
+      !> Central-difference step and stencil
+      real(wp), parameter :: step = 1.0e-3_wp
+      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
+      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+      !> Agreement bound; the weights are bilinear, so this is round-off only
+      real(wp), parameter :: tol = 1.0e-10_wp
+
+      normals = fixture_radial_normals()
+      xyz_mol(:, 1) = 0.0_wp
+      call new (mol, [1], xyz_mol)
+      dirs = 0.0_wp
+
+      cavity%ngrid = ngrid_sw
+      cavity%nsph = 1
+      allocate (cavity%a, source=sw_areas)
+      allocate (cavity%xi0, source=sw_xis)
+      allocate (cavity%f, source=sw_fs)
+      allocate (cavity%xyz, source=sw_xyz)
+      allocate (cavity%normal0, source=normals)
+      allocate (cavity%total_volume)
+      cavity%total_volume = 1.0_wp
+
+      call new_component_pv(pv_component, pressure)
+      call pv_component%update(mol, cavity, err)
+      if (allocated(err)) then
+         call test_failed(error, "PV update failed: "//err%message)
+         return
+      end if
+
+      ! A dense, reproducible tangent on every channel the volume reads, and
+      ! on two it does not
+      call tangent%init(ngrid_sw, 2, .false.)
+      do idir = 1, 2
+         do igrid = 1, ngrid_sw
+            tangent%d_a(igrid, idir) = 0.3_wp*sin(0.7_wp*igrid + 1.1_wp*idir)
+            tangent%d_xi(igrid, idir) = 0.2_wp*cos(0.5_wp*igrid + idir)
+            tangent%d_f(igrid, idir) = 0.1_wp*sin(0.9_wp*igrid - idir)
+            do iaxis = 1, 3
+               tangent%d_xyz(iaxis, igrid, idir) = 0.4_wp*cos(0.3_wp*igrid + 0.8_wp*iaxis + idir)
+               tangent%d_n(iaxis, igrid, idir) = 0.25_wp*sin(0.6_wp*igrid + 1.3_wp*iaxis - idir)
+            end do
+         end do
+      end do
+
+      allocate (dacc(2))
+      do idir = 1, 2
+         call dacc(idir)%init(ngrid_sw)
+      end do
+      call pv_component%get_hessian_surface_weights(coupling, cavity, dirs, tangent, dacc, err)
+      if (allocated(err)) then
+         call test_failed(error, "PV second-order surface weights failed: "//err%message)
+         return
+      end if
+
+      do idir = 1, 2
+         call fd%init(ngrid_sw)
+         do ioff = 1, size(OFFSET)
+            trial = cavity
+            trial%a = cavity%a + real(OFFSET(ioff), wp)*step*tangent%d_a(:, idir)
+            trial%xi0 = cavity%xi0 + real(OFFSET(ioff), wp)*step*tangent%d_xi(:, idir)
+            trial%f = cavity%f + real(OFFSET(ioff), wp)*step*tangent%d_f(:, idir)
+            trial%xyz = cavity%xyz + real(OFFSET(ioff), wp)*step*tangent%d_xyz(:, :, idir)
+            trial%normal0 = cavity%normal0 + real(OFFSET(ioff), wp)*step*tangent%d_n(:, :, idir)
+            call w_disp%init(ngrid_sw)
+            call pv_component%get_surface_weights(coupling, trial, w_disp, err)
+            if (allocated(err)) then
+               call test_failed(error, "PV surface weights on the displaced surface failed: "// &
+                  & err%message)
+               return
+            end if
+            fd%w_a = fd%w_a + COEFF(ioff)*w_disp%w_a/step
+            fd%w_xyz = fd%w_xyz + COEFF(ioff)*w_disp%w_xyz/step
+            fd%w_n = fd%w_n + COEFF(ioff)*w_disp%w_n/step
+            fd%w_xi = fd%w_xi + COEFF(ioff)*w_disp%w_xi/step
+            fd%w_f = fd%w_f + COEFF(ioff)*w_disp%w_f/step
+         end do
+
+         if (maxval(abs(fd%w_a)) <= 1.0e-3_wp .or. maxval(abs(fd%w_xyz)) <= 1.0e-3_wp .or. &
+            & maxval(abs(fd%w_n)) <= 1.0e-3_wp) then
+            call test_failed(error, "PV adjoint response reference is vacuous")
+            return
+         end if
+
+         dev = max(maxval(abs(dacc(idir)%w_a - fd%w_a)), &
+            & maxval(abs(dacc(idir)%w_xyz - fd%w_xyz)), &
+            & maxval(abs(dacc(idir)%w_n - fd%w_n)))
+         call check(error, dev, 0.0_wp, thr=tol, &
+            & message="PV adjoint response differs from the differenced surface weights")
+         if (allocated(error)) return
+
+         ! Channels the volume never reads must stay exactly zero, in the
+         ! response and in the reference
+         call check(error, max(maxval(abs(dacc(idir)%w_xi)), maxval(abs(dacc(idir)%w_f)), &
+            & maxval(abs(dacc(idir)%w_w)), maxval(abs(dacc(idir)%w_k1)), &
+            & maxval(abs(dacc(idir)%w_k2))), 0.0_wp, thr=0.0_wp, &
+            & message="PV adjoint response wrote to a channel the volume does not read")
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_pv_hessian_surface_weights
 
 !> A zero pressure must short-circuit before the cavity is asked for anything.
 !> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,

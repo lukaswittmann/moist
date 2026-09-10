@@ -28,6 +28,7 @@ program tester
    use test_cavity_drop_tangent_forward, only: collect_cavity_drop_tangent_forward
    use test_cavity_drop_hessian_response, only: collect_cavity_drop_hessian_response
    use test_cavity_drop_hessian_e2e, only: collect_cavity_drop_hessian_e2e
+   use test_cavity_drop_hessian_omega, only: collect_cavity_drop_hessian_omega
    use test_cavity_drop_weights_tangent, only: collect_cavity_drop_weights_tangent
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
@@ -50,9 +51,12 @@ program tester
    use test_model_component_pcm_amat_adjoint, only: collect_model_component_pcm_amat_adjoint
    use test_model_component_pcm_electrostatics, only: collect_model_component_pcm_electrostatics
    use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
+   use test_model_component_pcm_amat_hessian, only: collect_model_component_pcm_amat_hessian
+   use test_model_component_pcm_hessian, only: collect_model_component_pcm_hessian
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_general, only: collect_model_general
+   use test_model_general_hessian, only: collect_model_general_hessian
 
    implicit none(type, external)
 
@@ -88,6 +92,7 @@ program tester
       & new_testsuite("cavity_drop_tangent_forward", collect_cavity_drop_tangent_forward), &
       & new_testsuite("cavity_drop_hessian_response", collect_cavity_drop_hessian_response), &
       & new_testsuite("cavity_drop_hessian_e2e", collect_cavity_drop_hessian_e2e), &
+      & new_testsuite("cavity_drop_hessian_omega", collect_cavity_drop_hessian_omega), &
       & new_testsuite("cavity_drop_weights_tangent", collect_cavity_drop_weights_tangent), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
@@ -110,9 +115,13 @@ program tester
       & new_testsuite("model_component_pcm_electrostatics", &
          collect_model_component_pcm_electrostatics), &
       & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
+      & new_testsuite("model_component_pcm_amat_hessian", &
+         collect_model_component_pcm_amat_hessian), &
+      & new_testsuite("model_component_pcm_hessian", collect_model_component_pcm_hessian), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
-      & new_testsuite("model_general", collect_model_general) &
+      & new_testsuite("model_general", collect_model_general), &
+      & new_testsuite("model_general_hessian", collect_model_general_hessian) &
       & ]
 
 #ifdef WITH_HDF5

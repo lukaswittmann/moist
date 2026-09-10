@@ -18,6 +18,7 @@
 /// signature is unchanged but the meaning of its arguments is not.
 #define moist_API_SUFFIX__V_0_5
 #define moist_API_SUFFIX__V_0_6
+#define moist_API_SUFFIX__V_0_7
 
 /*
  * ARRAY LAYOUT CONVENTION -- read this before allocating
@@ -450,6 +451,36 @@ moist_general_model_get_gradient(moist_error /* error */,
                                  moist_model /* model */,
                                  int /* natoms */,
                                  double* /* gradient: Fortran (3,natoms) */) moist_API_SUFFIX__V_0_6;
+
+/// Return the dense nuclear Hessian of all model components.
+///
+/// The derivative of moist_general_model_get_gradient() at fixed host coupling
+/// data: the cavity's second derivatives, the geometry dependence of its
+/// weight fold and every component's own surface-adjoint response are
+/// differentiated together.  Electronic (coupled-perturbed) terms are the
+/// host's.  A component without a second-order surface channel is refused by
+/// name rather than contributing a frozen-adjoint block.
+///
+/// V_0_7 CONTRACT: new in this release.
+moist_API_ENTRY void moist_API_CALL
+moist_general_model_get_hessian(moist_error /* error */,
+                                moist_model /* model */,
+                                int /* natoms */,
+                                double* /* hessian: Fortran (3,natoms,3,natoms) */) moist_API_SUFFIX__V_0_7;
+
+/// Return nuclear Hessian-vector products of all model components.
+///
+/// One column of moist_general_model_get_hessian() per supplied direction,
+/// without assembling the dense block; the same contract otherwise.
+///
+/// V_0_7 CONTRACT: new in this release.
+moist_API_ENTRY void moist_API_CALL
+moist_general_model_get_hvp(moist_error /* error */,
+                            moist_model /* model */,
+                            int /* natoms */,
+                            int /* ndir */,
+                            const double* /* dirs: Fortran (3,natoms,ndir) */,
+                            double* /* hvp: Fortran (3,natoms,ndir) */) moist_API_SUFFIX__V_0_7;
 
 /// Update a solvation model with a molecular structure
 moist_API_ENTRY void moist_API_CALL

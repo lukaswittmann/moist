@@ -699,6 +699,43 @@ def general_model_get_gradient(model: ModelHandle, natoms: int) -> np.ndarray:
     return gradient
 
 
+def general_model_get_hessian(model: ModelHandle, natoms: int) -> np.ndarray:
+    """Return the dense nuclear Hessian with shape (3, natoms, 3, natoms)."""
+
+    hessian = np.zeros((3, natoms, 3, natoms), dtype=np.float64, order="F")
+    error_check(lib.moist_general_model_get_hessian)(
+        model.handle,
+        int(natoms),
+        _cast("double*", hessian),
+    )
+    return hessian
+
+
+def general_model_get_hvp(model: ModelHandle, natoms: int, dirs: np.ndarray) -> np.ndarray:
+    """Return nuclear Hessian-vector products, one per direction.
+
+    ``dirs`` has shape (3, natoms, ndir); the result has the same shape.
+    """
+
+    dirs = np.asfortranarray(dirs, dtype=np.float64)
+    if dirs.ndim != 3 or dirs.shape[0] != 3 or dirs.shape[1] != natoms:
+        raise ValueError(
+            f"dirs must have shape (3, {natoms}, ndir), got {dirs.shape}"
+        )
+    ndir = dirs.shape[2]
+    if ndir < 1:
+        raise ValueError("dirs must carry at least one direction")
+    hvp = np.zeros((3, natoms, ndir), dtype=np.float64, order="F")
+    error_check(lib.moist_general_model_get_hvp)(
+        model.handle,
+        int(natoms),
+        int(ndir),
+        _cast("const double*", dirs),
+        _cast("double*", hvp),
+    )
+    return hvp
+
+
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
     return error_check(lib.moist_update_cavity)(
         cavity.handle,
