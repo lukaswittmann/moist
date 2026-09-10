@@ -108,10 +108,13 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
 
 contains
 
-   !> Forward tangent of the DROP surface map along a set of nuclear directions
+   !> Forward tangent of the four grid scalars the weight fold reads
    !>
-   !> Every output is `(ngrid, ndir)` and is written in full: column `idir`
-   !> holds the directional derivative along `dirs(:, :, idir)`.
+   !> The DROP-internal form of pass 1. Every output is `(ngrid, ndir)` and is
+   !> written in full: column `idir` holds the directional derivative along
+   !> `dirs(:, :, idir)`. A thin wrapper over [[drop_surface_tangent_core]]
+   !> that keeps the branch-weight tangent, which the generic
+   !> [[cavity_surface_tangent_type]] has no channel for.
    !>
    !> @param[in]  self      DROP cavity instance (must hold a projected grid)
    !> @param[in]  dirs      Nuclear directions `(3, nsph, ndir)`
@@ -123,7 +126,7 @@ contains
    !> @param[in]  contracted Take the jet tangents through the level set's
    !>                        contracted accessor per direction rather than off
    !>                        tensors materialised once per point; the caller's
-   !>                        choice, see below. Default `.false.`
+   !>                        choice, see the core. Default `.false.`
    module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
                                               d_wbranch, error, contracted)
       !> DROP cavity instance
@@ -136,6 +139,100 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Whether the jet tangents come from the contracted accessor
       logical, intent(in), optional :: contracted
+
+      !> Every channel of the tangent; only three are copied out
+      type(cavity_surface_tangent_type) :: tangent
+      !> Direction count
+      integer :: ndir
+
+      if (size(dirs, 1) /= ndim .or. size(dirs, 2) /= self%nsph) then
+         call fatal_error(error, "get_surface_tangent_drop: dirs must be (3, nsph, ndir)")
+         return
+      end if
+      ndir = size(dirs, 3)
+      if (ndir <= 0) then
+         call fatal_error(error, "get_surface_tangent_drop: no direction supplied")
+         return
+      end if
+      if (size(d_a, 1) /= self%ngrid .or. size(d_a, 2) /= ndir .or. &
+          size(d_wleb, 1) /= self%ngrid .or. size(d_wleb, 2) /= ndir .or. &
+          size(d_xi0, 1) /= self%ngrid .or. size(d_xi0, 2) /= ndir .or. &
+          size(d_wbranch, 1) /= self%ngrid .or. size(d_wbranch, 2) /= ndir) then
+         call fatal_error(error, "get_surface_tangent_drop: every output must be"// &
+                          " (ngrid, ndir)")
+         return
+      end if
+
+      call tangent%init(self%ngrid, ndir, .false.)
+      call drop_surface_tangent_core(self, dirs, .false., tangent, error, &
+                                     d_wbranch=d_wbranch, contracted=contracted)
+      if (allocated(error)) return
+      d_a = tangent%d_a
+      d_wleb = tangent%d_w
+      d_xi0 = tangent%d_xi
+
+   end subroutine get_surface_tangent_drop
+
+   !> Forward tangent of every surface observable along a set of nuclear directions
+   !>
+   !> @param[in]    self    DROP cavity instance (must hold a projected grid)
+   !> @param[in]    dirs    Nuclear directions `(3, nsph, ndir)`
+   !> @param[inout] tangent Surface tangent, initialised for `(ngrid, ndir)`
+   !> @param[out]   error   Error object, allocated on failure
+   module subroutine get_surface_tangent_full_drop(self, dirs, tangent, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent
+      type(cavity_surface_tangent_type), intent(inout) :: tangent
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      call drop_surface_tangent_core(self, dirs, tangent%have_curvature, tangent, error)
+
+   end subroutine get_surface_tangent_full_drop
+
+   !> Forward tangent of the DROP surface map along a set of nuclear directions
+   !>
+   !> Every channel of `tangent` is written in full: column `idir` holds the
+   !> directional derivative along `dirs(:, :, idir)`. The curvature channels
+   !> are filled only when `want_curvature` is set, which puts the curvature
+   !> invariants into the seed state of every point; without it they are left
+   !> zero and `tangent%have_curvature` says so. `d_wbranch`, when present,
+   !> receives the softmax branch-weight tangent, which the generic tangent
+   !> has no channel for and which pass 2 of the Hessian reads on its own.
+   !>
+   !> @param[in]    self           DROP cavity instance (must hold a projected grid)
+   !> @param[in]    dirs           Nuclear directions `(3, nsph, ndir)`
+   !> @param[in]    want_curvature Fill the curvature channels
+   !> @param[inout] tangent        Surface tangent, initialised for `(ngrid, ndir)`
+   !> @param[out]   error          Error object, allocated on failure
+   !> @param[out]   d_wbranch      Tangent of the branch weight `(ngrid, ndir)`
+   !> @param[in]    contracted     Take the jet tangents through the level set's
+   !>                              contracted accessor per direction rather than
+   !>                              off tensors materialised once per point; the
+   !>                              caller's choice, see below. Default `.false.`
+   module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
+                                               error, d_wbranch, contracted)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Whether the curvature channels are filled
+      logical, intent(in) :: want_curvature
+      !> Surface tangent
+      type(cavity_surface_tangent_type), intent(inout) :: tangent
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Tangent of the softmax branch weight
+      real(wp), intent(out), optional :: d_wbranch(:, :)
+      !> Whether the jet tangents come from the contracted accessor
+      logical, intent(in), optional :: contracted
+
+      !> Branch-weight tangent, kept whether or not the caller asked for it:
+      !> the assembly below reads it for every point
+      real(wp), allocatable :: dwb(:, :)
 
       !> Per-thread level-set clones and objectives
       type(drop_worker_slots_type) :: slots
@@ -202,20 +299,35 @@ contains
          call fatal_error(error, "get_surface_tangent_drop: no direction supplied")
          return
       end if
-      if (size(d_a, 1) /= self%ngrid .or. size(d_a, 2) /= ndir .or. &
-          size(d_wleb, 1) /= self%ngrid .or. size(d_wleb, 2) /= ndir .or. &
-          size(d_xi0, 1) /= self%ngrid .or. size(d_xi0, 2) /= ndir .or. &
-          size(d_wbranch, 1) /= self%ngrid .or. size(d_wbranch, 2) /= ndir) then
-         call fatal_error(error, "get_surface_tangent_drop: every output must be"// &
-                          " (ngrid, ndir)")
+      if (.not. tangent%is_initialized()) then
+         call fatal_error(error, "get_surface_tangent_drop: tangent is not initialized")
          return
       end if
+      if (size(tangent%d_a, 1) /= self%ngrid .or. size(tangent%d_a, 2) /= ndir) then
+         call fatal_error(error, "get_surface_tangent_drop: tangent must be initialized"// &
+                          " for (ngrid, ndir)")
+         return
+      end if
+      if (present(d_wbranch)) then
+         if (size(d_wbranch, 1) /= self%ngrid .or. size(d_wbranch, 2) /= ndir) then
+            call fatal_error(error, "get_surface_tangent_drop: d_wbranch must be"// &
+                             " (ngrid, ndir)")
+            return
+         end if
+         d_wbranch = 0.0_wp
+      end if
 
-      d_a = 0.0_wp
-      d_wleb = 0.0_wp
-      d_xi0 = 0.0_wp
-      d_wbranch = 0.0_wp
+      tangent%d_xi = 0.0_wp
+      tangent%d_f = 0.0_wp
+      tangent%d_a = 0.0_wp
+      tangent%d_w = 0.0_wp
+      tangent%d_xyz = 0.0_wp
+      tangent%d_n = 0.0_wp
+      tangent%d_k1 = 0.0_wp
+      tangent%d_k2 = 0.0_wp
+      tangent%have_curvature = want_curvature
       if (self%ngrid <= 0) return
+      allocate (dwb(self%ngrid, ndir), source=0.0_wp)
 
       h_stan = self%ctx%timer%resolve("Surface tangent", self%ctx%timer%current(), &
                                       cat_gradient)
@@ -262,7 +374,7 @@ contains
          ! standard 16-seed batch is *not* requested: this pass has one
          ! right-hand side per nuclear direction, and it cannot be built before
          ! the level set's directional tangents below are known.
-         call drop_point_prologue(self, slots, thread_slot, igrid, .false., &
+         call drop_point_prologue(self, slots, thread_slot, igrid, want_curvature, &
                                   "get_surface_tangent_drop", abort, pt, point_ok)
          if (.not. point_ok) cycle
 
@@ -311,12 +423,23 @@ contains
             dr = dir_rhs(1:3, idir)
             dlambda = dir_rhs(4, idir)
 
+            ! The projected point moves with the bordered solve
+            tangent%d_xyz(:, igrid, idir) = dr
+
             call apply_seed(pt%state, dlsf1_r(:, idir), dlsf2_rr(:, :, idir), dr, dlambda, res)
 
             ! Branch-frozen half of `d(wleb)`; stage 3 completes it. `res%dxi`
             ! is the width tangent of exactly this incomplete weight and is not
             ! read at all.
-            d_wleb(igrid, idir) = res%dwleb
+            tangent%d_w(igrid, idir) = res%dwleb
+
+            ! The outward normal `grad S/|grad S|` at the moving point, and the
+            ! principal curvatures when the seed state carries them
+            tangent%d_n(:, igrid, idir) = res%dn_surf
+            if (want_curvature) then
+               tangent%d_k1(igrid, idir) = res%dk1
+               tangent%d_k2(igrid, idir) = res%dk2
+            end if
 
             ! Tangent of the branch objective `Phi = 0.5 alpha |r* - anchor|^2`
             ! along the direction: the projected point moves by `dr`, the anchor
@@ -328,7 +451,6 @@ contains
          ! `f` is evaluated at the anchor with the anchor width, and
          ! `anchor_xi0` depends on the owner radius and the raw Lebedev weight
          ! alone, so it carries no nuclear tangent and `swi_dxi` is unused.
-         ! Parked in `d_a` until stage 3 turns it into the area tangent.
          call self%iswig%swi_collect(pt%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
                                      swi_f0, pt%iswig_work)
          call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
@@ -338,7 +460,7 @@ contains
                knb = pt%iswig_work%idx(jj)
                df_dir = df_dir + dot_product(pt%swi_rows(:, jj), dirs(:, knb, idir))
             end do
-            d_a(igrid, idir) = df_dir
+            tangent%d_f(igrid, idir) = df_dir
          end do
 
       end do
@@ -372,24 +494,25 @@ contains
             ! motion is added back here. `wleb/wbranch` is the pre-branch weight
             ! the softmax multiplies, formed the way `forward.f90`'s branch
             ! post-pass and `compute_branch_phi_adj` both form it.
-            dwleb_i = d_wleb(igrid, idir)
+            dwleb_i = tangent%d_w(igrid, idir)
             if (wbranch_i > tiny(1.0_wp)) then
-               dwleb_i = dwleb_i + (wleb_i/wbranch_i)*d_wbranch(igrid, idir)
+               dwleb_i = dwleb_i + (wleb_i/wbranch_i)*dwb(igrid, idir)
             end if
-            d_wleb(igrid, idir) = dwleb_i
+            tangent%d_w(igrid, idir) = dwleb_i
 
             ! xi0 = swx/(R sqrt(wleb)); same guard as `apply_seed` and `iswig_xi0`
             if (wleb_i > seed_weight_tol) then
-               d_xi0(igrid, idir) = -0.5_wp*self%xi0(igrid)*dwleb_i/wleb_i
+               tangent%d_xi(igrid, idir) = -0.5_wp*self%xi0(igrid)*dwleb_i/wleb_i
             else
-               d_xi0(igrid, idir) = 0.0_wp
+               tangent%d_xi(igrid, idir) = 0.0_wp
             end if
 
-            ! a = R^2 f wleb, with `d_a` still holding the parked `d(f)`
-            d_a(igrid, idir) = r_own*r_own &
-                               *(wleb_i*d_a(igrid, idir) + self%f(igrid)*dwleb_i)
+            ! a = R^2 f wleb, with `f` the iSwiG switching factor
+            tangent%d_a(igrid, idir) = r_own*r_own &
+                                       *(wleb_i*tangent%d_f(igrid, idir) + self%f(igrid)*dwleb_i)
          end do
       end do
+      if (present(d_wbranch)) d_wbranch = dwb
 
       call self%ctx%timer%stop(h_stan)
 
@@ -440,7 +563,7 @@ contains
 
             do m_branch = 1, group_size
                im_grid = igroup_start + m_branch - 1
-               d_wbranch(im_grid, :) = branch_dweights(:, m_branch)
+               dwb(im_grid, :) = branch_dweights(:, m_branch)
             end do
          end do
 
@@ -448,6 +571,6 @@ contains
 
       end subroutine branch_stage
 
-   end subroutine get_surface_tangent_drop
+   end subroutine drop_surface_tangent_core
 
 end submodule moist_cavity_drop_derivatives_tangent_forward

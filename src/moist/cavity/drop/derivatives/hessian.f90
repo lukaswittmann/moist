@@ -107,12 +107,17 @@ contains
    !> result is *added* to `hvp`, and the accumulator is left untouched when
    !> anything fails -- both halves are formed in local buffers first.
    !>
-   !> @param[in]    self  DROP cavity instance (must hold a projected grid)
-   !> @param[in]    acc   Accumulated surface-observable adjoints
-   !> @param[in]    dirs  Nuclear directions `(3, nsph, ndir)`
-   !> @param[inout] hvp   Hessian-vector accumulator `(3, nsph, ndir)`
-   !> @param[out]   error Error object, allocated on failure
-   module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error)
+   !> With `omega_v` present the model's adjoint response is folded into the
+   !> traversal's response channel, block by block, so the columns are those
+   !> of the full model Hessian; without it they are the frozen-adjoint ones.
+   !>
+   !> @param[in]    self    DROP cavity instance (must hold a projected grid)
+   !> @param[in]    acc     Accumulated surface-observable adjoints
+   !> @param[in]    dirs    Nuclear directions `(3, nsph, ndir)`
+   !> @param[inout] hvp     Hessian-vector accumulator `(3, nsph, ndir)`
+   !> @param[out]   error   Error object, allocated on failure
+   !> @param[inout] omega_v Surface-adjoint response of the model, optional
+   module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -123,6 +128,8 @@ contains
       real(wp), intent(inout) :: hvp(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       !> Direction-free fixed half (rank-4 form only), and the staged columns
       real(wp), allocatable :: hess_fixed(:, :, :, :), total(:, :, :)
@@ -148,12 +155,12 @@ contains
       if (fixed_mode == drop_fixed_per_dir) then
          ! Both channels land their columns in `total` directly
          call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
-                                     total, error)
+                                     total, error, omega_v=omega_v)
          if (allocated(error)) return
       else
          allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
          call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
-                                     total, error, hess_fixed=hess_fixed)
+                                     total, error, hess_fixed=hess_fixed, omega_v=omega_v)
          if (allocated(error)) return
 
          !* -------------------------- Contract the fixed half ------------------------ *!
@@ -187,7 +194,8 @@ contains
    !> @param[in]    acc     Accumulated surface-observable adjoints
    !> @param[inout] hessian Nuclear-Hessian accumulator `(3, nsph, 3, nsph)`
    !> @param[out]   error   Error object, allocated on failure
-   module subroutine get_hessian_drop(self, acc, hessian, error)
+   !> @param[inout] omega_v Surface-adjoint response of the model, optional
+   module subroutine get_hessian_drop(self, acc, hessian, error, omega_v)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -196,6 +204,8 @@ contains
       real(wp), intent(inout) :: hessian(:, :, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       !> Cartesian unit directions, one per nuclear degree of freedom
       real(wp), allocatable :: dirs(:, :, :)
@@ -229,7 +239,7 @@ contains
       allocate (resp(ndim, self%nsph, ndir), source=0.0_wp)
 
       call surface_hessian_halves(self, acc, dirs, drop_fixed_rank4, "get_hessian_drop", &
-                                  resp, error, hess_fixed=hess_fixed)
+                                  resp, error, hess_fixed=hess_fixed, omega_v=omega_v)
       if (allocated(error)) return
 
       do iatom = 1, self%nsph
@@ -292,8 +302,9 @@ contains
    !> @param[inout] columns    Per-direction half or halves `(3, nsph, ndir)`
    !> @param[out]   error      Error object, allocated on failure
    !> @param[inout] hess_fixed Rank-4 fixed half `(3, nsph, 3, nsph)`
+   !> @param[inout] omega_v    Surface-adjoint response of the model, optional
    subroutine surface_hessian_halves(self, acc, dirs, fixed_mode, context, columns, error, &
-                                     hess_fixed)
+                                     hess_fixed, omega_v)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -310,6 +321,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Rank-4 fixed half
       real(wp), intent(inout), optional :: hess_fixed(:, :, :, :)
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       !> Folded surface adjoints of the base geometry, read by both channels
       type(drop_surface_weights_type) :: eff
@@ -327,10 +340,11 @@ contains
       if (fixed_mode == drop_fixed_rank4) then
          call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
                                     acc=acc, dirs=dirs, hess_fixed=hess_fixed, hvp=columns, &
-                                    error=error)
+                                    error=error, omega_v=omega_v)
       else
          call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
-                                    acc=acc, dirs=dirs, hvp=columns, error=error)
+                                    acc=acc, dirs=dirs, hvp=columns, error=error, &
+                                    omega_v=omega_v)
       end if
    end subroutine surface_hessian_halves
 

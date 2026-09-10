@@ -123,6 +123,22 @@
 !>     **serially, one call per direction**, because
 !>     [[branch_phi_adj_tangent]] reduces over contiguous anchor groups and a
 !>     group split across threads would corrupt that reduction silently.
+!>  2b. **Model adjoint response** -- only with an `omega_v` object. The raw
+!>     adjoints are then *not* fixed: the model differentiates them along the
+!>     block's directions from the full surface tangent of pass 1 (every
+!>     channel, [[drop_surface_tangent_core]]) and returns one raw adjoint set
+!>     per direction. [[prepare_surface_weights]] is linear in the raw
+!>     adjoints, so folding each set at the base geometry and adding it to
+!>     `d(eff)` is exact by the product rule. From here on `d(eff)` may carry
+!>     every channel, and the contraction below runs the normal fold
+!>     ([[seed_normal_channel]]) on it exactly as the gradient does; the
+!>     curvature channel needs the prologue's curvature invariants, which are
+!>     configured from the *primal* `eff` before any block, so a response that
+!>     carries curvature weights the primal does not is refused. The callback
+!>     runs serially between the passes, outside the parallel region, and any
+!>     non-surface Hessian columns it adds are staged in a block-local buffer
+!>     and reduced with the block, so a failing block still leaves `hvp`
+!>     untouched.
 !>  3. **Contraction** -- the grid loop below: the 13 jet contractions of
 !>     `deff(jdir)` give a weight set, [[drop_field_jet_contract]] turns it into
 !>     the field row off the point's jet tensors, and the anchor and switching
@@ -135,10 +151,14 @@
 !>
 !> ## Direction blocks
 !>
-!> Passes 1 and 2 materialise seven `(ngrid, ndir)` grid arrays and the column
+!> Passes 1 and 2 materialise the full surface tangent (12 doubles per point
+!> and direction), the branch-weight tangent and the three moving channels of
+!> the fold, 16 in all, and a model response adds its raw per-direction
+!> adjoints and the five copied channels of their fold, 36 in all; the column
 !> accumulator is `(3, nsph, ndir, nthreads)`; nothing above this submodule
 !> bounds `ndir`. The traversal is therefore blocked over directions -- see
-!> `drop_hvp_chunk_dirs` -- and **the whole grid is re-traversed per block**.
+!> `drop_hvp_chunk_dirs` and the `block_bytes` cap below -- and **the whole
+!> grid is re-traversed per block**.
 !> Two invariants follow:
 !>
 !>  * the rank-4 fixed channel is direction free and accumulates **in the first
@@ -211,6 +231,17 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
 
    !> Cartesian dimension
    integer, parameter :: ndim = 3
+
+   !> Memory bound of one direction block of the response channel, and the
+   !> working set it is measured against, per grid point and direction: the
+   !> full surface tangent (12 doubles), the branch-weight tangent (1) and the
+   !> three moving channels of the fold (3); a model adjoint response adds its
+   !> raw per-direction adjoints (12) and the copied channels of their fold
+   !> (8). `drop_hvp_chunk_dirs` stays the upper bound; this cap only shortens
+   !> a block on a large grid, and blocked and unblocked runs agree to the bit
+   integer(int64), parameter :: block_bytes = 512_int64*1024_int64*1024_int64
+   integer(int64), parameter :: block_doubles_plain = 16_int64
+   integer(int64), parameter :: block_doubles_omega = 36_int64
 
    !> Dimension of the space the fixed channel's chain is linear on: the
    !> packed jet tangent of a direction and the owner's displacement; see
@@ -571,8 +602,10 @@ contains
    !> @param[inout] hess_fixed     Rank-4 fixed-adjoint accumulator `(3, nsph, 3, nsph)`
    !> @param[inout] hvp            Column accumulator `(3, nsph, ndir)`
    !> @param[out]   error          Error object, allocated on failure
+   !> @param[inout] omega_v        Surface-adjoint response of the model; needs the
+   !>                              response channel
    module subroutine drop_hessian_traverse(self, eff, fixed_mode, want_response, context, &
-                                           acc, dirs, hess_fixed, hvp, error)
+                                           acc, dirs, hess_fixed, hvp, error, omega_v)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Folded surface adjoints, as [[prepare_surface_weights]] returned them
@@ -593,9 +626,16 @@ contains
       real(wp), intent(inout), optional :: hvp(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
 
       !> Per-thread level-set clones and objectives
       type(drop_worker_slots_type) :: slots
+      !> Whether the raw adjoints move through a model response
+      logical :: have_omega
+      !> Non-surface columns of the model response for one block, staged
+      !> outside `hvp` so that a failing block leaves the accumulator untouched
+      real(wp), allocatable :: hvp_direct(:, :, :)
       !> Per-thread rank-4 buffers, summed deterministically after the region
       type(drop_hess_sparse_type), allocatable :: hess_threads(:)
       !> Per-thread column buffers, summed deterministically after the region
@@ -691,6 +731,12 @@ contains
                           " adjoints, a direction set and an accumulator")
          return
       end if
+      have_omega = present(omega_v)
+      if (have_omega .and. .not. want_response) then
+         call fatal_error(error, context//": a model adjoint response needs the response"// &
+                          " Hessian channel")
+         return
+      end if
       if (self%ngrid <= 0) return
 
       want_cols = want_response .or. fixed_mode == drop_fixed_per_dir
@@ -750,8 +796,21 @@ contains
       if (want_cols) then
          ndir = size(dirs, 3)
          nchunk = min(ndir, drop_hvp_chunk_dirs)
+         ! Shorten the block on a large grid so that its per-direction working
+         ! set stays under `block_bytes`; see the module constants. A
+         ! memory-only choice: blocked and unblocked runs agree to the bit.
+         if (want_response) then
+            if (have_omega) then
+               nchunk = min(nchunk, max(1, int(block_bytes/ &
+                                               (8_int64*block_doubles_omega*int(self%ngrid, int64)))))
+            else
+               nchunk = min(nchunk, max(1, int(block_bytes/ &
+                                               (8_int64*block_doubles_plain*int(self%ngrid, int64)))))
+            end if
+         end if
          allocate (hvp_threads(ndim, self%nsph, nchunk, slots%nthreads))
          if (nchunk < ndir) allocate (hvp_entry, source=hvp)
+         if (have_omega) allocate (hvp_direct(ndim, self%nsph, nchunk))
       else
          ndir = 1
          nchunk = 1
@@ -779,8 +838,10 @@ contains
             !* ------------------ Passes 1 and 2: the moving weights ------------------ *!
             ! Serial over this block's directions, for the group-reduction
             ! reason the module header documents; `deff` is indexed `1 .. nblk`.
+            if (have_omega) hvp_direct = 0.0_wp
             call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), &
-                                 fixed_mode == drop_fixed_per_dir, deff, error)
+                                 fixed_mode == drop_fixed_per_dir, want_curvature, context, &
+                                 deff, error, omega_v=omega_v, hvp_direct=hvp_direct)
             if (allocated(error)) then
                if (allocated(hvp_entry)) hvp = hvp_entry
                call self%ctx%timer%stop(h_hess)
@@ -1159,7 +1220,17 @@ contains
                   rw%w_lsf0 = 0.0_wp
                   rw%w_lsf1 = 0.0_wp
                   rw%w_lsf2 = 0.0_wp
-                  call seed_jet_basis_contract(deff(jdir), igrid, pt%phi1_r, w_xyz_zero, &
+                  ! With a model response the moving adjoints carry a position
+                  ! and a normal channel, and the normal fold runs on them as
+                  ! it does on the gradient path; without one both are the
+                  ! identically zero copies the header describes.
+                  if (have_omega) then
+                     call seed_normal_channel(pt%state, deff(jdir), igrid, pt%lsf2_rr, &
+                                              rw%w_lsf1, rw%w_xyz)
+                  else
+                     rw%w_xyz = w_xyz_zero
+                  end if
+                  call seed_jet_basis_contract(deff(jdir), igrid, pt%phi1_r, rw%w_xyz, &
                                                seeds%res(1:drop_n_jet_seeds), &
                                                seeds%x(:, 1:drop_n_jet_seeds), &
                                                rw%w_lsf0, rw%w_lsf1, rw%w_lsf2)
@@ -1175,7 +1246,7 @@ contains
                   end do
 
                   !* --------------------- Anchor channel (owner) --------------------- *!
-                  call seed_anchor_contract(deff(jdir), igrid, pt%phi1_r, w_xyz_zero, &
+                  call seed_anchor_contract(deff(jdir), igrid, pt%phi1_r, rw%w_xyz, &
                                             seeds%res(drop_n_jet_seeds + 1:), &
                                             seeds%x(:, drop_n_jet_seeds + 1:), &
                                             hvp_threads(:, pt%owner_idx, jdir, thread_slot))
@@ -1235,6 +1306,7 @@ contains
                hvp(:, :, ilo:ihi) = hvp(:, :, ilo:ihi) + hvp_threads(:, :, 1:nblk, ithread)
             end do
          end if
+         if (have_omega) hvp(:, :, ilo:ihi) = hvp(:, :, ilo:ihi) + hvp_direct(:, :, 1:nblk)
 
       end do
 
@@ -1625,9 +1697,17 @@ contains
    !>                        contracted accessor (the per-direction mode) rather
    !>                        than off materialised tensors; keyed on the mode and
    !>                        not on the block, so that blocking stays exact
+   !> @param[in]  want_curvature Whether the traversal's prologue carries the
+   !>                            curvature invariants; a model response with
+   !>                            curvature weights needs them
+   !> @param[in]  context    Calling routine, used to prefix the diagnostics
    !> @param[out] deff       Tangent of the folded weights, one element per direction
    !> @param[out] error      Error object, allocated on failure
-   subroutine weight_tangents(self, acc, eff, dirs, contracted, deff, error)
+   !> @param[inout] omega_v  Surface-adjoint response of the model, optional
+   !> @param[inout] hvp_direct Non-surface columns of the model response, added to;
+   !>                          required with `omega_v`
+   subroutine weight_tangents(self, acc, eff, dirs, contracted, want_curvature, context, &
+                              deff, error, omega_v, hvp_direct)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Raw surface adjoints
@@ -1638,13 +1718,28 @@ contains
       real(wp), intent(in) :: dirs(:, :, :)
       !> Whether pass 1 uses the contracted accessor per direction
       logical, intent(in) :: contracted
+      !> Whether the prologue carries the curvature invariants
+      logical, intent(in) :: want_curvature
+      !> Calling routine
+      character(len=*), intent(in) :: context
       !> Tangent of the folded weights, one element per direction
       type(drop_surface_weights_type), allocatable, intent(out) :: deff(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Surface-adjoint response of the model
+      class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Non-surface columns of the model response
+      real(wp), intent(inout), optional :: hvp_direct(:, :, :)
 
-      !> Directional tangents of the four grid scalars pass 2 consumes
-      real(wp), allocatable :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
+      !> Every channel of the surface tangent; pass 2 reads three of them, a
+      !> model response all of them
+      type(cavity_surface_tangent_type) :: tangent
+      !> Directional tangent of the branch weight
+      real(wp), allocatable :: d_wbranch(:, :)
+      !> Raw adjoint response of the model, one accumulator per direction, and
+      !> the fold of one of them
+      type(cavity_surface_adjoint_type), allocatable :: dacc(:)
+      type(drop_surface_weights_type) :: eff_v
       !> Branch bookkeeping, defaulted when the cavity carries none
       integer, allocatable :: branch_count(:), anchor_id(:)
       !> Grid extent and direction index
@@ -1654,10 +1749,14 @@ contains
       ndir = size(dirs, 3)
 
       !* -------------------------- Pass 1: forward tangent --------------------------- *!
-      allocate (d_a(ngrid, ndir), d_wleb(ngrid, ndir), d_xi0(ngrid, ndir), &
-                d_wbranch(ngrid, ndir))
-      call self%get_surface_tangent(dirs, d_a, d_wleb, d_xi0, d_wbranch, error, &
-                                    contracted=contracted)
+      ! The curvature channels are requested only for a model response, and
+      ! only when the primal adjoints carry curvature weights: that is the
+      ! configuration the prologue of the contraction walk runs with, and a
+      ! response that needs more is refused below rather than served a zero.
+      call tangent%init(ngrid, ndir, present(omega_v) .and. want_curvature)
+      allocate (d_wbranch(ngrid, ndir))
+      call drop_surface_tangent_core(self, dirs, tangent%have_curvature, tangent, error, &
+                                     d_wbranch=d_wbranch, contracted=contracted)
       if (allocated(error)) return
 
       ! `compute_branch_phi_adj` is skipped by the primal when the cavity holds
@@ -1682,11 +1781,55 @@ contains
                                               self%radii, self%owner(1:ngrid), &
                                               branch_count, anchor_id, &
                                               self%branch_weight%s, &
-                                              d_a(:, idir), d_wleb(:, idir), &
-                                              d_xi0(:, idir), d_wbranch(:, idir), &
+                                              tangent%d_a(:, idir), tangent%d_w(:, idir), &
+                                              tangent%d_xi(:, idir), d_wbranch(:, idir), &
                                               deff(idir)%w_xi, deff(idir)%w_f, &
                                               deff(idir)%branch_phi_adj, error)
          if (allocated(error)) return
+      end do
+      if (.not. present(omega_v)) return
+
+      !* ---------------------- Pass 2b: model adjoint response ---------------------- *!
+      if (.not. present(hvp_direct)) then
+         call fatal_error(error, context//": a model adjoint response needs a buffer for"// &
+                          " its non-surface columns")
+         return
+      end if
+      allocate (dacc(ndir))
+      do idir = 1, ndir
+         call dacc(idir)%init(ngrid)
+      end do
+      call omega_v%apply(self, dirs, tangent, dacc, hvp_direct(:, :, 1:ndir), error)
+      if (allocated(error)) return
+      deallocate (tangent%d_xi, tangent%d_f, tangent%d_a, tangent%d_w, tangent%d_xyz, &
+                  tangent%d_n, tangent%d_k1, tangent%d_k2)
+
+      ! The fold is linear in the raw adjoints, so the response folded at the
+      ! base geometry adds to the tangent of the fold of the fixed adjoints;
+      ! the copied channels come over whole, they had no tangent before.
+      do idir = 1, ndir
+         call check_surface_adjoint(self, dacc(idir), context//" (adjoint response)", error)
+         if (allocated(error)) return
+         call prepare_surface_weights(self, dacc(idir), .true., eff_v)
+         if (eff_v%have_wk .and. .not. want_curvature) then
+            call fatal_error(error, context//": the model's adjoint response carries"// &
+                             " curvature weights but its adjoints do not; the traversal"// &
+                             " was configured without curvature")
+            return
+         end if
+         deff(idir)%w_xi = deff(idir)%w_xi + eff_v%w_xi
+         deff(idir)%w_f = deff(idir)%w_f + eff_v%w_f
+         deff(idir)%branch_phi_adj = deff(idir)%branch_phi_adj + eff_v%branch_phi_adj
+         call move_alloc(eff_v%w_xyz, deff(idir)%w_xyz)
+         call move_alloc(eff_v%w_n, deff(idir)%w_n)
+         call move_alloc(eff_v%w_k1, deff(idir)%w_k1)
+         call move_alloc(eff_v%w_k2, deff(idir)%w_k2)
+         deff(idir)%have_wn = eff_v%have_wn
+         deff(idir)%have_wk = eff_v%have_wk
+         ! Release the raw response as soon as it is folded; the block's peak
+         ! is what the chunk size was chosen against
+         deallocate (dacc(idir)%w_xi, dacc(idir)%w_f, dacc(idir)%w_a, dacc(idir)%w_w, &
+                     dacc(idir)%w_xyz, dacc(idir)%w_n, dacc(idir)%w_k1, dacc(idir)%w_k2)
       end do
 
    end subroutine weight_tangents

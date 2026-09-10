@@ -70,6 +70,7 @@ module test_cavity_drop_tangent_forward
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_drop_gaussian, only: iswig_workspace_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
                            LSF_SVDW, LSF_CFC, FIX_PLAIN, FIX_CROSS
@@ -88,6 +89,35 @@ module test_cavity_drop_tangent_forward
    !> Output channels, in the order [[compare_channels]] walks them
    integer, parameter :: CH_A = 1, CH_WLEB = 2, CH_XI = 3, CH_WBRANCH = 4
    integer, parameter :: NCHAN = 4
+
+   !> Channels of the generic tangent beyond the four scalars: the three
+   !> components of the point position, the three of the normal, the switching
+   !> factor and the two principal curvatures
+   integer, parameter :: FCH_XYZ = 1, FCH_N = 4, FCH_F = 7, FCH_K1 = 8, FCH_K2 = 9
+   integer, parameter :: NFCHAN = 9
+
+   !> Below this a full-tangent channel carries no information
+   real(wp), parameter :: FULL_VACUITY_THR(NFCHAN) = &
+                          [1.0E-2_wp, 1.0E-2_wp, 1.0E-2_wp, 1.0E-2_wp, 1.0E-2_wp, 1.0E-2_wp, &
+                           1.0E-3_wp, 1.0E-2_wp, 1.0E-2_wp]
+
+   !> Finite-difference bounds of the full-tangent channels
+   !>
+   !> The point, normal and switching channels sit on the same round-off floor
+   !> as the four scalars and meet the `1e-10` target: measured over both
+   !> steps and directions, the worst absolute deviation is `1.1e-11` (point),
+   !> `3.2e-11` (normal) and `9.4e-11` (switching factor). The curvature
+   !> channels read the level-set Hessian at the moving point, and its
+   !> principal invariants carry a few more digits of the projection's `1e-14`
+   !> noise into the `1/h` quotient: `6.9e-12` on SvdW but `2.2e-10` on CFC,
+   !> so the curvature bound sits a factor of five above the worst measurement
+   !> rather than at the project target.
+   real(wp), parameter :: FULL_FD_ABS(NFCHAN) = &
+                          [1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, &
+                           1.0E-10_wp, 1.0E-10_wp, 1.0E-9_wp, 1.0E-9_wp]
+   real(wp), parameter :: FULL_FD_REL(NFCHAN) = &
+                          [1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, 1.0E-10_wp, &
+                           1.0E-10_wp, 1.0E-10_wp, 1.0E-9_wp, 1.0E-9_wp]
 
    !> Softmax temperature of the branching fixture
    real(wp), parameter :: CROSS_BRANCH_S = 0.5_wp
@@ -172,6 +202,8 @@ contains
                   new_unittest("svdw_plain_fd", test_svdw_plain), &
                   new_unittest("cfc_plain_fd", test_cfc_plain), &
                   new_unittest("svdw_cross_branching_fd", test_svdw_cross), &
+                  new_unittest("full_tangent_fd_svdw", test_full_svdw), &
+                  new_unittest("full_tangent_fd_cfc", test_full_cfc), &
                   new_unittest("width_identity", test_width_identity), &
                   new_unittest("area_identity", test_area_identity), &
                   new_unittest("single_branch_wbranch_is_zero", test_single_branch), &
@@ -216,6 +248,278 @@ contains
       call run_tangent_fd(FIX_CROSS, LSF_SVDW, "svdw/cross", error)
    end subroutine test_svdw_cross
 
+   !> The generic tangent on SvdW
+   !>
+   !> @param[out] error Error handle
+   subroutine test_full_svdw(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_full_tangent_fd(FIX_PLAIN, LSF_SVDW, "svdw/plain/full", error)
+   end subroutine test_full_svdw
+
+   !> The generic tangent on CFC
+   !>
+   !> @param[out] error Error handle
+   subroutine test_full_cfc(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_full_tangent_fd(FIX_PLAIN, LSF_CFC, "cfc/plain/full", error)
+   end subroutine test_full_cfc
+
+   !> Central-difference the primal surface against the generic tangent
+   !>
+   !> Covers the channels the four-scalar accessor does not export -- the
+   !> point, the normal, the switching factor and the principal curvatures --
+   !> and asserts that the three scalars both accessors carry agree exactly,
+   !> so the wrapper cannot drift from the core.
+   !>
+   !> @param[in]  fix_kind Geometry of the fixture
+   !> @param[in]  lsf_kind Level-set model
+   !> @param[in]  label    Human-readable case description
+   !> @param[out] error    Error handle
+   subroutine run_full_tangent_fd(fix_kind, lsf_kind, label, error)
+      !> Geometry of the fixture
+      integer, intent(in) :: fix_kind
+      !> Level-set model
+      integer, intent(in) :: lsf_kind
+      !> Case description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(mctc_error), allocatable :: cav_error
+      type(structure_type) :: mol
+
+      !> The generic tangent and the four-scalar one
+      type(cavity_surface_tangent_type) :: tangent
+      real(wp), allocatable :: tan_out(:, :, :)
+      !> Analytic full channels of one direction and their differenced reference
+      real(wp), allocatable :: full(:, :), fd(:, :)
+      !> Nuclear directions
+      real(wp), allocatable :: dirs(:, :, :)
+      !> Grid extent, direction, step and channel indices
+      integer :: ngrid, idir, istep, ich
+
+      call drop_fixture_geometry(fix_kind, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                  cross_branch_s=CROSS_BRANCH_S, want_fine=.true.)
+      if (allocated(error)) return
+      if (.not. allocated(cavity%k1) .or. .not. allocated(cavity%k2)) then
+         call test_failed(error, "fixture carries no curvature ("//label//")")
+         return
+      end if
+
+      ngrid = cavity%ngrid
+      call build_directions(cavity%nsph, dirs)
+
+      call tangent%init(ngrid, NDIR, .true.)
+      call cavity%get_surface_tangent(dirs, tangent, cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "full surface tangent failed ("//label//"): "// &
+                          cav_error%message)
+         return
+      end if
+      if (.not. tangent%have_curvature) then
+         call test_failed(error, "curvature request was dropped ("//label//")")
+         return
+      end if
+
+      ! The three scalars both accessors carry must agree to the bit
+      call tangent_of(cavity, dirs, tan_out, error)
+      if (allocated(error)) return
+      if (maxval(abs(tan_out(:, :, CH_A) - tangent%d_a)) /= 0.0_wp .or. &
+          maxval(abs(tan_out(:, :, CH_WLEB) - tangent%d_w)) /= 0.0_wp .or. &
+          maxval(abs(tan_out(:, :, CH_XI) - tangent%d_xi)) /= 0.0_wp) then
+         call test_failed(error, "scalar and full tangent accessors disagree ("//label//")")
+         return
+      end if
+
+      allocate (full(ngrid, NFCHAN), fd(ngrid, NFCHAN))
+      do istep = 1, size(FD_STEPS)
+         do idir = 1, NDIR
+            full(:, FCH_XYZ:FCH_XYZ + 2) = transpose(tangent%d_xyz(:, :, idir))
+            full(:, FCH_N:FCH_N + 2) = transpose(tangent%d_n(:, :, idir))
+            full(:, FCH_F) = tangent%d_f(:, idir)
+            full(:, FCH_K1) = tangent%d_k1(:, idir)
+            full(:, FCH_K2) = tangent%d_k2(:, idir)
+            if (istep == 1) then
+               do ich = 1, NFCHAN
+                  if (maxval(abs(full(:, ich))) <= FULL_VACUITY_THR(ich)) then
+                     call test_failed(error, "full tangent channel "// &
+                                      trim(full_channel_name(ich))//" is vacuous ("// &
+                                      label//"), max "//to_string(maxval(abs(full(:, ich)))))
+                     return
+                  end if
+               end do
+            end if
+            call fd_primal_full(mol, cavity, fix_kind, lsf_kind, dirs(:, :, idir), &
+                                FD_STEPS(istep), fd, label, error)
+            if (allocated(error)) return
+            call compare_full_channels(full, fd, FD_STEPS(istep), idir, label, error)
+            if (allocated(error)) return
+         end do
+      end do
+
+   end subroutine run_full_tangent_fd
+
+   !> Five-point central difference of the point, normal, switching factor and curvatures
+   !>
+   !> @param[in]  mol      Base structure
+   !> @param[in]  ref_cav  Base cavity, for the grid comparison
+   !> @param[in]  fix_kind Geometry of the fixture
+   !> @param[in]  lsf_kind Level-set model
+   !> @param[in]  vdir     Nuclear direction `(3, nsph)`
+   !> @param[in]  step     Central-difference step
+   !> @param[out] fd       Differenced primal `(ngrid, NFCHAN)`
+   !> @param[in]  label    Human-readable case description
+   !> @param[out] error    Error handle
+   subroutine fd_primal_full(mol, ref_cav, fix_kind, lsf_kind, vdir, step, fd, label, error)
+      !> Base structure
+      type(structure_type), intent(in) :: mol
+      !> Base cavity
+      type(cavity_type_drop), intent(in) :: ref_cav
+      !> Geometry of the fixture
+      integer, intent(in) :: fix_kind
+      !> Level-set model
+      integer, intent(in) :: lsf_kind
+      !> Nuclear direction
+      real(wp), intent(in) :: vdir(:, :)
+      !> Central-difference step
+      real(wp), intent(in) :: step
+      !> Differenced primal
+      real(wp), intent(out) :: fd(:, :)
+      !> Case description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Five-point central stencil of the first derivative
+      integer, parameter :: OFFSET(4) = [-2, -1, 1, 2]
+      real(wp), parameter :: COEFF(4) = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/12.0_wp
+
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol_disp
+      integer :: iside, ngrid
+      real(wp) :: c
+      character(len=32) :: side
+
+      fd = 0.0_wp
+      ngrid = ref_cav%ngrid
+
+      do iside = 1, size(OFFSET)
+         write (side, "(a, i0, a, es9.2, a)") "offset ", OFFSET(iside), " (h = ", step, ")"
+
+         mol_disp = mol
+         mol_disp%xyz = mol%xyz + real(OFFSET(iside), wp)*step*vdir
+
+         call build_drop_test_cavity(cavity, ctx, mol_disp, fix_kind, lsf_kind, error, &
+                                     cross_branch_s=CROSS_BRANCH_S, want_fine=.true.)
+         if (allocated(error)) return
+
+         call assert_grid_match(ref_cav, cavity, label//" "//trim(side), error)
+         if (allocated(error)) return
+
+         c = COEFF(iside)/step
+         fd(:, FCH_XYZ:FCH_XYZ + 2) = fd(:, FCH_XYZ:FCH_XYZ + 2) &
+                                      + c*transpose(cavity%xyz(:, 1:ngrid))
+         fd(:, FCH_N:FCH_N + 2) = fd(:, FCH_N:FCH_N + 2) &
+                                  + c*transpose(cavity%normal0(:, 1:ngrid))
+         fd(:, FCH_F) = fd(:, FCH_F) + c*cavity%f(1:ngrid)
+         fd(:, FCH_K1) = fd(:, FCH_K1) + c*cavity%k1(1:ngrid)
+         fd(:, FCH_K2) = fd(:, FCH_K2) + c*cavity%k2(1:ngrid)
+
+         deallocate (cavity)
+      end do
+
+   end subroutine fd_primal_full
+
+   !> Compare one direction's generic tangent against the differenced primal
+   !>
+   !> @param[in]  full   Analytic channels of this direction `(ngrid, NFCHAN)`
+   !> @param[in]  fd     Differenced primal `(ngrid, NFCHAN)`
+   !> @param[in]  step   Central-difference step behind `fd`
+   !> @param[in]  idir   Direction index, for the diagnostic
+   !> @param[in]  label  Human-readable case description
+   !> @param[out] error  Error handle
+   subroutine compare_full_channels(full, fd, step, idir, label, error)
+      !> Analytic channels of this direction
+      real(wp), intent(in) :: full(:, :)
+      !> Differenced primal
+      real(wp), intent(in) :: fd(:, :)
+      !> Central-difference step
+      real(wp), intent(in) :: step
+      !> Direction index
+      integer, intent(in) :: idir
+      !> Case description
+      character(len=*), intent(in) :: label
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      integer :: ich, igrid, iworst
+      real(wp) :: diff, ref, worst_abs, worst_rel
+      logical :: failed
+
+      do ich = 1, NFCHAN
+         failed = .false.
+         worst_abs = 0.0_wp
+         worst_rel = 0.0_wp
+         iworst = 0
+         do igrid = 1, size(fd, 1)
+            ref = fd(igrid, ich)
+            diff = abs(full(igrid, ich) - ref)
+            if (diff > FULL_FD_ABS(ich) .and. diff > FULL_FD_REL(ich)*abs(ref)) then
+               failed = .true.
+               if (diff > worst_abs) then
+                  worst_abs = diff
+                  worst_rel = diff/max(abs(ref), tiny(1.0_wp))
+                  iworst = igrid
+               end if
+            end if
+         end do
+
+         if (failed) then
+            call test_failed(error, "full tangent mismatch for "//label//" "// &
+                             trim(full_channel_name(ich))//", direction "// &
+                             to_string(idir)//" (h = "//to_string(step)// &
+                             "): worst deviation "//to_string(worst_abs)// &
+                             " absolute, "//to_string(worst_rel)//" relative, at"// &
+                             " grid point "//to_string(iworst)//": analytic "// &
+                             to_string(full(iworst, ich))//" finite difference "// &
+                             to_string(fd(iworst, ich)))
+            return
+         end if
+      end do
+
+   end subroutine compare_full_channels
+
+   !> Name of a full-tangent channel, for diagnostics
+   !>
+   !> @param[in] ich Channel index
+   pure function full_channel_name(ich) result(name)
+      !> Channel index
+      integer, intent(in) :: ich
+      !> Channel name
+      character(len=8) :: name
+
+      select case (ich)
+      case (FCH_XYZ); name = "d_x"
+      case (FCH_XYZ + 1); name = "d_y"
+      case (FCH_XYZ + 2); name = "d_z"
+      case (FCH_N); name = "d_nx"
+      case (FCH_N + 1); name = "d_ny"
+      case (FCH_N + 2); name = "d_nz"
+      case (FCH_F); name = "d_f"
+      case (FCH_K1); name = "d_k1"
+      case (FCH_K2); name = "d_k2"
+      case default; name = "?"
+      end select
+   end function full_channel_name
+
    !> Central-difference the primal surface against the analytic tangent
    !>
    !> @param[in]  fix_kind Geometry of the fixture
@@ -258,7 +562,7 @@ contains
       call build_directions(cavity%nsph, dirs)
 
       allocate (tan_out(ngrid, NDIR, NCHAN), source=0.0_wp)
-      call cavity%get_surface_tangent(dirs, tan_out(:, :, CH_A), tan_out(:, :, CH_WLEB), &
+      call cavity%get_surface_scalar_tangent(dirs, tan_out(:, :, CH_A), tan_out(:, :, CH_WLEB), &
                                       tan_out(:, :, CH_XI), tan_out(:, :, CH_WBRANCH), &
                                       cav_error)
       if (allocated(cav_error)) then
@@ -619,7 +923,7 @@ contains
 
       ! Wrong number of spheres in `dirs`
       allocate (dirs(ndim, cavity%nsph + 1, NDIR), source=0.1_wp)
-      call cavity%get_surface_tangent(dirs, o1, o2, o3, o4, cav_error)
+      call cavity%get_surface_scalar_tangent(dirs, o1, o2, o3, o4, cav_error)
       if (.not. allocated(cav_error)) then
          call test_failed(error, "a mis-shaped direction array was accepted")
          return
@@ -630,7 +934,7 @@ contains
       allocate (dirs(ndim, cavity%nsph, NDIR), source=0.1_wp)
       deallocate (o4)
       allocate (o4(ngrid, NDIR - 1))
-      call cavity%get_surface_tangent(dirs, o1, o2, o3, o4, cav_error)
+      call cavity%get_surface_scalar_tangent(dirs, o1, o2, o3, o4, cav_error)
       if (.not. allocated(cav_error)) then
          call test_failed(error, "a mis-shaped output array was accepted")
          return
@@ -814,7 +1118,7 @@ contains
       type(mctc_error), allocatable :: cav_error
 
       allocate (tan_out(cavity%ngrid, NDIR, NCHAN), source=0.0_wp)
-      call cavity%get_surface_tangent(dirs, tan_out(:, :, CH_A), tan_out(:, :, CH_WLEB), &
+      call cavity%get_surface_scalar_tangent(dirs, tan_out(:, :, CH_A), tan_out(:, :, CH_WLEB), &
                                       tan_out(:, :, CH_XI), tan_out(:, :, CH_WBRANCH), &
                                       cav_error)
       if (allocated(cav_error)) then
