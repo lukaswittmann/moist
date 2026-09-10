@@ -2,7 +2,9 @@
 !>
 !> Matrix assembly and derivative contractions are implemented in
 !> [[moist_model_component_pcm_amat_assembly]] and
-!> [[moist_model_component_pcm_amat_adjoint]] submodules
+!> [[moist_model_component_pcm_amat_adjoint]] submodules; the second-order
+!> contractions the nuclear Hessian needs live in
+!> [[moist_model_component_pcm_amat_hessian]]
 !> Generated pair mathematics in [[moist_model_component_pcm_amat_kernel]]
 module moist_model_component_pcm_amat
    use mctc_env, only: wp, error_type
@@ -13,6 +15,8 @@ module moist_model_component_pcm_amat
    public :: assemble_pcm_amat_with_gradient
    public :: pcm_amat_surface_weights
    public :: pcm_amat_nuclear_gradient
+   public :: pcm_amat_tangent_apply
+   public :: pcm_amat_surface_weights_response
 
    !> Floor applied to squared separations
    real(wp), parameter :: r2_floor = 1.0e-200_wp
@@ -125,6 +129,58 @@ module moist_model_component_pcm_amat
          real(wp), intent(out) :: grad_rA(:, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine pcm_amat_nuclear_gradient
+
+      !> Apply the matrix moved along a batch of surface tangents to the charges
+      !>
+      !> @param[in]  xi     Gaussian widths
+      !> @param[in]  f      Gaussian switching factors
+      !> @param[in]  xyz    Surface positions
+      !> @param[in]  q      Charges the moved matrix is applied to
+      !> @param[in]  d_xi   Width tangents (ngrid, ndir)
+      !> @param[in]  d_f    Switching-factor tangents (ngrid, ndir)
+      !> @param[in]  d_xyz  Position tangents (3, ngrid, ndir)
+      !> @param[out] daq    Moved matrix applied to the charges (ngrid, ndir)
+      !> @param[out] error  Error handling
+      module subroutine pcm_amat_tangent_apply(xi, f, xyz, q, d_xi, d_f, d_xyz, daq, error)
+         implicit none(type, external)
+         real(wp), intent(in) :: xi(:)
+         real(wp), intent(in) :: f(:)
+         real(wp), intent(in) :: xyz(:, :)
+         real(wp), intent(in) :: q(:)
+         real(wp), intent(in) :: d_xi(:, :), d_f(:, :)
+         real(wp), intent(in) :: d_xyz(:, :, :)
+         real(wp), intent(out) :: daq(:, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine pcm_amat_tangent_apply
+
+      !> Response of the surface-variable weights along a batch of surface tangents
+      !>
+      !> @param[in]  xi      Gaussian widths
+      !> @param[in]  f       Gaussian switching factors
+      !> @param[in]  xyz     Surface positions
+      !> @param[in]  q       Charges
+      !> @param[in]  dq      Charge response per direction (ngrid, ndir)
+      !> @param[in]  d_xi    Width tangents (ngrid, ndir)
+      !> @param[in]  d_f     Switching-factor tangents (ngrid, ndir)
+      !> @param[in]  d_xyz   Position tangents (3, ngrid, ndir)
+      !> @param[out] dw_xi   Width-weight response (ngrid, ndir)
+      !> @param[out] dw_f    Switching-factor-weight response (ngrid, ndir)
+      !> @param[out] dw_xyz  Position-weight response (3, ngrid, ndir)
+      !> @param[out] error   Error handling
+      module subroutine pcm_amat_surface_weights_response(xi, f, xyz, q, dq, d_xi, d_f, d_xyz, &
+                                                          dw_xi, dw_f, dw_xyz, error)
+         implicit none(type, external)
+         real(wp), intent(in) :: xi(:)
+         real(wp), intent(in) :: f(:)
+         real(wp), intent(in) :: xyz(:, :)
+         real(wp), intent(in) :: q(:)
+         real(wp), intent(in) :: dq(:, :)
+         real(wp), intent(in) :: d_xi(:, :), d_f(:, :)
+         real(wp), intent(in) :: d_xyz(:, :, :)
+         real(wp), intent(out) :: dw_xi(:, :), dw_f(:, :)
+         real(wp), intent(out) :: dw_xyz(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine pcm_amat_surface_weights_response
 
    end interface
 

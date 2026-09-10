@@ -18,6 +18,9 @@ module moist_driver
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
    use moist_type, only: cavity_type, solvation_model_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use moist_utils_timer, only: cat_hessian
    use moist_channels, only: coupling_type
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
@@ -287,6 +290,12 @@ contains
             ! Print results; with no unit the cavity follows its own context
             call cavity%print()
 
+            ! Dense nuclear Hessian of the total area if asked for
+            if (config%hess) then
+               call compute_cavity_area_hessian(cavity, ctx, 'hessian', error)
+               if (allocated(error)) return
+            end if
+
             ! Write cavity files (xyz, csv, pqr) only when --dump is given.
             ! Marching cubes has no grid points to dump; it already wrote its
             ! triangle mesh (cavity.obj/cavity.pqr) during update.
@@ -362,6 +371,92 @@ contains
       end subroutine report_run_timings
 
    end subroutine run_main
+
+   !> Dense nuclear Hessian of the total cavity surface area
+   !>
+   !> The total area is `sum(a)` over the grid, linear in the per-point areas, so
+   !> a unit area adjoint on every point is the exact observable adjoint and
+   !> `cavity%get_hessian` returns d2A/dR dR directly. Prints a compact summary
+   !> (dimension, largest element, symmetry defect, trace) and writes the full
+   !> matrix to `filename`.
+   !>
+   !> File format: `3 nsph` lines of `3 nsph` values each (es24.16). Row
+   !> `3 (A-1) + alpha` differentiates with respect to Cartesian component
+   !> `alpha` of atom `A`; the columns follow the same atom-major order.
+   !>
+   !> @param[in]    cavity   Updated cavity
+   !> @param[inout] ctx      Shared run context (timer and output unit)
+   !> @param[in]    filename Output file for the matrix
+   !> @param[out]   error    Error handling
+   subroutine compute_cavity_area_hessian(cavity, ctx, filename, error)
+      class(cavity_type), intent(in) :: cavity
+      type(moist_context_type), intent(inout), target :: ctx
+      character(len=*), intent(in) :: filename
+      type(error_type), allocatable, intent(out) :: error
+
+      type(cavity_surface_adjoint_type) :: acc
+      type(prettyprinter) :: pp
+      real(wp), allocatable :: ones(:), hessian(:, :, :, :), hmat(:, :)
+      real(wp) :: hmax, defect, trace
+      integer :: ndof, i, unit, stat
+      !> Timer stack depth at entry; error paths unwind back to it
+      integer :: d0
+
+      d0 = ctx%timer%current_depth()
+      call ctx%timer%start("Hessian", category=cat_hessian)
+      if (ctx%verbosity > 1) write (ctx%unit, "(a)") "[Info] Computing area Hessian ..."
+
+      ! Unit area adjoint on every surface point
+      call acc%init(cavity%ngrid)
+      allocate (ones(cavity%ngrid), source=1.0_wp)
+      call acc%add_surface_weights(error, w_a=ones)
+      if (allocated(error)) then
+         call ctx%timer%unwind(d0)
+         return
+      end if
+
+      allocate (hessian(3, cavity%nsph, 3, cavity%nsph), source=0.0_wp)
+      call cavity%get_hessian(acc, hessian, error)
+      if (allocated(error)) then
+         call ctx%timer%unwind(d0)
+         return
+      end if
+      call ctx%timer%stop("Hessian")
+
+      ! (alpha, A, beta, B) -> (3 (A-1) + alpha, 3 (B-1) + beta)
+      ndof = 3*cavity%nsph
+      allocate (hmat(ndof, ndof))
+      hmat = reshape(hessian, [ndof, ndof])
+      hmax = maxval(abs(hmat))
+      defect = maxval(abs(hmat - transpose(hmat)))
+      trace = 0.0_wp
+      do i = 1, ndof
+         trace = trace + hmat(i, i)
+      end do
+
+      pp = new_prettyprinter(unit=ctx%unit, fmt_len=20)
+      call pp%push("Hessian:")
+      call pp%kv("Observable", "total area")
+      call pp%kv("Dimension", ndof)
+      call pp%kv("Max |H|", hmax, fmt='es20.8')
+      call pp%kv("Symmetry defect", defect, fmt='es20.8')
+      call pp%kv("Trace", trace, fmt='es20.8')
+      call pp%pop()
+      call pp%blank()
+
+      open (newunit=unit, file=filename, status='replace', action='write', iostat=stat)
+      if (stat /= 0) then
+         call fatal_error(error, "Could not open '"//trim(filename)//"' for writing")
+         return
+      end if
+      do i = 1, ndof
+         write (unit, '(*(es24.16))') hmat(i, :)
+      end do
+      close (unit)
+
+      write (ctx%unit, "(a,1x,a)") "[Info] Wrote area Hessian to", trim(filename)
+
+   end subroutine compute_cavity_area_hessian
 
    !> Construct a marching-cubes cavity, wiring up mesh export when --dump is set
    !>

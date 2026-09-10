@@ -725,7 +725,7 @@ contains
       if (allocated(lsf_priv)) deallocate (lsf_priv)
       allocate (lsf_priv, source=lsf)
       call lsf_priv%set_max_deriv(0)
-      !$omp do collapse(3) schedule(dynamic)
+      !$omp do collapse(2) schedule(dynamic)
       do iz = 0, nz
          do iy = 0, ny
             do ix = 0, nx
@@ -829,7 +829,7 @@ contains
          loc_buf%n = 0
       end if
 
-      !$omp do collapse(3) schedule(dynamic)
+      !$omp do collapse(2) schedule(dynamic)
       do iz = 1, nz
          do iy = 1, ny
             do ix = 1, nx

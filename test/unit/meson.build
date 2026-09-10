@@ -22,6 +22,15 @@ tests = [
   'math_trig',
   'math_grid',
   'cavity_drop_primitives',
+  'cavity_drop_kkt',
+  'cavity_drop_field_tangent',
+  'cavity_drop_gaussian_scatter',
+  'cavity_drop_hessian_fixed',
+  'cavity_drop_tangent_forward',
+  'cavity_drop_hessian_response',
+  'cavity_drop_hessian_e2e',
+  'cavity_drop_hessian_omega',
+  'cavity_drop_weights_tangent',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
   'cavity_drop_lsf_golden',
@@ -40,9 +49,12 @@ tests = [
   'model_component_pcm_amat_adjoint',
   'model_component_pcm_electrostatics',
   'model_component_pcm_cpcm',
+  'model_component_pcm_amat_hessian',
+  'model_component_pcm_hessian',
   'model_component_gostshyp',
   'model_component_pv',
   'model_general',
+  'model_general_hessian',
 ]
 if use_hdf5
   tests += 'utils_hdf5'

@@ -8,11 +8,14 @@ module moist_model_component_pcm_type
    use moist_type, only: solvation_model_component_type, cavity_type
    use moist_channels, only: response_type, coupling_type, require_channel
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
-      & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
+      & pcm_amat_surface_weights, pcm_amat_nuclear_gradient, &
+      & pcm_amat_tangent_apply, pcm_amat_surface_weights_response
    use moist_model_component_pcm_electrostatics, only: &
-      & pcm_electrostatic_nuclear_gradient, pcm_electrostatic_surface_weights
-   use moist_utils_timer, only: cat_setup, cat_energy, cat_solve
+      & pcm_electrostatic_nuclear_gradient, pcm_electrostatic_surface_weights, &
+      & pcm_electrostatic_potential_tangent, pcm_electrostatic_surface_weights_response
+   use moist_utils_timer, only: cat_setup, cat_energy, cat_solve, cat_hessian
    implicit none (type, external)
    private
 
@@ -86,6 +89,25 @@ module moist_model_component_pcm_type
       !> Whether self%q holds the charges belonging to the current matrix and phi
       logical :: charges_valid = .false.
 
+      !> Factorization (or inverse) of the current matrix for the second-order
+      !> solves, built on first use by [[pcm_ensure_factorization]] and dropped
+      !> with the matrix. The energy path never reads it.
+      real(wp), allocatable :: amat_factor(:, :)
+
+      !> Pivot indices of the LU factor
+      integer, allocatable :: amat_ipiv(:)
+
+      !> Whether amat_factor belongs to the current matrix
+      logical :: factor_valid = .false.
+
+      !> Non-surface Hessian columns of the last direction block (3, nat, nblk),
+      !> formed alongside the surface response and handed out by
+      !> [[pcm_component_get_direct_hessian]]
+      real(wp), allocatable :: hessian_direct_block(:, :, :)
+
+      !> The directions the stashed block belongs to (3, nat, nblk)
+      real(wp), allocatable :: hessian_dirs_block(:, :, :)
+
    contains
 
       !> Update PCM component: assembles matrix and prepares for charge solution
@@ -111,6 +133,18 @@ module moist_model_component_pcm_type
 
       !> Nuclear gradient contributions that bypass the cavity surface
       procedure :: get_direct_gradient => pcm_component_get_direct_gradient
+
+      !> Response of the gradient-path surface adjoints along nuclear directions
+      procedure :: get_hessian_surface_weights => pcm_component_get_hessian_surface_weights
+
+      !> Nuclear-Hessian columns that bypass the cavity surface
+      procedure :: get_direct_hessian => pcm_component_get_direct_hessian
+
+      !> Factorize the current matrix for the second-order solves
+      procedure :: ensure_factorization => pcm_ensure_factorization
+
+      !> Solve several right-hand sides against the cached factorization
+      procedure :: solve_factored => pcm_solve_factored
 
       !> Resolve the electronic field and moving point charges
       procedure :: electrostatic_sources => pcm_component_electrostatic_sources
@@ -159,6 +193,14 @@ contains
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM setup", category=cat_setup)
+
+      ! A new geometry means a new matrix: whatever was factorized belongs to
+      ! the old one, and so does any stashed Hessian block
+      self%factor_valid = .false.
+      if (allocated(self%amat_factor)) deallocate (self%amat_factor)
+      if (allocated(self%amat_ipiv)) deallocate (self%amat_ipiv)
+      if (allocated(self%hessian_direct_block)) deallocate (self%hessian_direct_block)
+      if (allocated(self%hessian_dirs_block)) deallocate (self%hessian_dirs_block)
 
       ! Store references (the cavity is owned by the orchestrating model)
       self%mol_solu = mol
@@ -642,6 +684,11 @@ contains
       integer :: ngrid
       real(wp) :: prefactor
 
+      ! The Hessian builds this accumulator before any energy or direct-gradient
+      ! call has had the chance to solve for the charges
+      call self%ensure_charges(coupling, cavity, error)
+      if (allocated(error)) return
+
       ngrid = cavity%ngrid
       if (self%feps == 0.0_wp) return
 
@@ -730,6 +777,372 @@ contains
       gradient = gradient + grad_direct
 
    end subroutine pcm_component_get_direct_gradient
+
+   !> Response of the gradient-path surface adjoints along a block of directions
+   !>
+   !> The adjoints of [[pcm_component_get_gradient_surface_weights]] depend on
+   !> the geometry through the surface observables `Gamma = (xi, f, r)`, through
+   !> the nuclei `R` in the point-charge potential, and through the surface
+   !> charges `q(Gamma, R)`. Along a direction `v` with surface tangent
+   !> `Gamma_v` the charges move by
+   !>
+   !>    dq_v = -A^{-1} [ (dA . Gamma_v) q + f(eps) dphi_v ],
+   !>
+   !> and the adjoints by
+   !>
+   !>    d omega_A   = 1/(2 f(eps)) [ (d2(q^T A q)/dGamma2) Gamma_v + 2 w(dq_v, q) ]
+   !>    d omega_el  = -dq_v,i E_i - q_i sum_k s_k T_ik (d_i - v_k)
+   !>
+   !> the host width channel being fixed host data with no response. The
+   !> direct term of [[pcm_component_get_direct_gradient]] responds in the same
+   !> sweep and is stashed for [[pcm_component_get_direct_hessian]].
+   !>
+   !> Available for the point-charge potential source only: with an external
+   !> potential the response of the host's potential and electronic field along
+   !> a direction is host data that the coupling does not carry yet.
+   !>
+   !> @param[inout] self     PCM component instance
+   !> @param[in]    coupling QM coupling data
+   !> @param[in]    cavity   Cavity the tangent was taken on
+   !> @param[in]    dirs     Nuclear directions of the block (3, nat, nblk)
+   !> @param[in]    tangent  Surface tangent of the block
+   !> @param[inout] dacc     Surface-adjoint response per direction (nblk)
+   !> @param[out]   error    Error handling
+   subroutine pcm_component_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, &
+                                                        dacc, error)
+      !> PCM component instance
+      class(solvation_model_component_pcm), intent(inout) :: self
+      !> QM coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Cavity the tangent was taken on
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions of the block
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Surface-adjoint response per direction
+      type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Electronic field (unused here) and moving point charges
+      real(wp), allocatable :: qefield(:, :), source_charge(:)
+      !> Potential response, moved matrix applied to the charges, and the
+      !> charge response, all per direction
+      real(wp), allocatable :: dphi(:, :), rhs(:, :), dq(:, :)
+      !> A-matrix adjoint responses and the electrostatic position response
+      real(wp), allocatable :: dw_xi(:, :), dw_f(:, :), dw_xyz(:, :, :), dw_xyz_el(:, :, :)
+      !> Direct-gradient response of the block
+      real(wp), allocatable :: dgrad(:, :, :)
+      !> Extents and the direction index
+      integer :: nat, ngrid, ndir, idir
+      !> The 1/(2 f(eps)) response prefactor
+      real(wp) :: prefactor
+      !> Timer depth on entry, restored on every early return
+      integer :: d0
+
+      nat = self%mol_solu%nat
+      ngrid = cavity%ngrid
+      ndir = size(dirs, 3)
+
+      if (self%phi_source /= potential_source%charges) then
+         call fatal_error(error, "Component "//self%name//" provides no second-order surface"// &
+            & " weights (nuclear Hessian) with an external potential source: the response"// &
+            & " of the host potential and electronic field is not part of the coupling")
+         return
+      end if
+      if (size(dirs, 1) /= 3 .or. size(dirs, 2) /= nat .or. ndir < 1) then
+         call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+            & "directions must be (3, nat, nblk)")
+         return
+      end if
+      if (cavity%nsph /= nat) then
+         call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+            & "cavity sphere count does not match the solute")
+         return
+      end if
+      if (.not. tangent%is_initialized()) then
+         call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+            & "surface tangent is not initialized")
+         return
+      end if
+      if (size(tangent%d_xi, 1) /= ngrid .or. tangent%ndir() /= ndir .or. size(dacc) /= ndir) then
+         call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+            & "surface tangent or response batch shape mismatch")
+         return
+      end if
+      if (.not. allocated(cavity%xi0) .or. .not. allocated(cavity%f) .or. &
+          .not. allocated(cavity%xyz)) then
+         call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+            & "cavity does not provide a Gaussian PCM surface")
+         return
+      end if
+
+      call self%ensure_charges(coupling, cavity, error)
+      if (allocated(error)) return
+
+      ! eps == 1: q == 0 and stays so; the direct block is zero as well
+      allocate (dgrad(3, nat, ndir), source=0.0_wp)
+      if (self%feps == 0.0_wp) then
+         call stash_direct_block(self, dirs, dgrad)
+         return
+      end if
+
+      d0 = self%ctx%timer%current_depth()
+      call self%ctx%timer%start("PCM Hessian response", category=cat_hessian)
+
+      call self%electrostatic_sources(coupling, ngrid, qefield, source_charge, error)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      ! Charge response: the matrix moved along the tangent applied to the
+      ! charges, plus the moved potential, solved against the cached factor
+      allocate (dphi(ngrid, ndir), rhs(ngrid, ndir), dq(ngrid, ndir))
+      call self%ctx%timer%start("Moved potential")
+      call pcm_electrostatic_potential_tangent(cavity%xyz, self%mol_solu%xyz, source_charge, &
+         & tangent%d_xyz, dirs, dphi, error)
+      call self%ctx%timer%stop("Moved potential")
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      call self%ctx%timer%start("Moved matrix")
+      call pcm_amat_tangent_apply(cavity%xi0, cavity%f, cavity%xyz, self%q, tangent%d_xi, &
+         & tangent%d_f, tangent%d_xyz, rhs, error)
+      call self%ctx%timer%stop("Moved matrix")
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      rhs = rhs + self%feps*dphi
+      call self%ctx%timer%start("Factorization")
+      call self%ensure_factorization(error)
+      call self%ctx%timer%stop("Factorization")
+      if (.not. allocated(error)) call self%solve_factored(rhs, dq, error)
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+      dq = -dq
+
+      ! A-matrix channel
+      allocate (dw_xi(ngrid, ndir), dw_f(ngrid, ndir), dw_xyz(3, ngrid, ndir))
+      call self%ctx%timer%start("Matrix adjoint response")
+      call pcm_amat_surface_weights_response(cavity%xi0, cavity%f, cavity%xyz, self%q, dq, &
+         & tangent%d_xi, tangent%d_f, tangent%d_xyz, dw_xi, dw_f, dw_xyz, error)
+      call self%ctx%timer%stop("Matrix adjoint response")
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      ! Electrostatic channel and the direct term
+      allocate (dw_xyz_el(3, ngrid, ndir))
+      call self%ctx%timer%start("Electrostatic response")
+      call pcm_electrostatic_surface_weights_response(cavity%xyz, self%mol_solu%xyz, self%q, &
+         & dq, source_charge, tangent%d_xyz, dirs, dw_xyz_el, dgrad, error)
+      call self%ctx%timer%stop("Electrostatic response")
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      prefactor = 0.5_wp/self%feps
+      do idir = 1, ndir
+         call dacc(idir)%add_surface_weights(error, w_xi=prefactor*dw_xi(:, idir), &
+            & w_f=prefactor*dw_f(:, idir), &
+            & w_xyz=prefactor*dw_xyz(:, :, idir) + dw_xyz_el(:, :, idir))
+         if (allocated(error)) then
+            call self%ctx%timer%unwind(d0)
+            return
+         end if
+      end do
+
+      call stash_direct_block(self, dirs, dgrad)
+
+      call self%ctx%timer%stop("PCM Hessian response")
+
+   end subroutine pcm_component_get_hessian_surface_weights
+
+   !> Keep the direct Hessian columns of a block for [[pcm_component_get_direct_hessian]]
+   !>
+   !> @param[inout] self  PCM component instance
+   !> @param[in]    dirs  Directions of the block
+   !> @param[in]    dgrad Direct columns of the block
+   subroutine stash_direct_block(self, dirs, dgrad)
+      !> PCM component instance
+      class(solvation_model_component_pcm), intent(inout) :: self
+      !> Directions of the block
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Direct columns of the block
+      real(wp), intent(in) :: dgrad(:, :, :)
+
+      if (allocated(self%hessian_direct_block)) deallocate (self%hessian_direct_block)
+      if (allocated(self%hessian_dirs_block)) deallocate (self%hessian_dirs_block)
+      allocate (self%hessian_direct_block, source=dgrad)
+      allocate (self%hessian_dirs_block, source=dirs)
+
+   end subroutine stash_direct_block
+
+   !> Nuclear-Hessian columns of the PCM electrostatics that bypass the surface
+   !>
+   !> The directional derivative of [[pcm_component_get_direct_gradient]] is
+   !> formed by [[pcm_component_get_hessian_surface_weights]] in the same sweep
+   !> as the surface response and stashed for the block; this hook hands it out
+   !> and refuses a block it was not formed for.
+   !>
+   !> @param[inout] self     PCM component instance
+   !> @param[in]    coupling QM coupling data, unused
+   !> @param[in]    cavity   Live cavity, unused
+   !> @param[in]    dirs     Nuclear directions of the block (3, nat, nblk)
+   !> @param[in]    tangent  Surface tangent of the block, unused
+   !> @param[inout] hvp      Hessian columns of the block (3, nat, nblk)
+   !> @param[out]   error    Error handling
+   subroutine pcm_component_get_direct_hessian(self, coupling, cavity, dirs, tangent, hvp, error)
+      !> PCM component instance
+      class(solvation_model_component_pcm), intent(inout) :: self
+      !> QM coupling data
+      class(coupling_type), intent(in) :: coupling
+      !> Live cavity
+      class(cavity_type), intent(in) :: cavity
+      !> Nuclear directions of the block
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Surface tangent of the block
+      type(cavity_surface_tangent_type), intent(in) :: tangent
+      !> Hessian columns of the block
+      real(wp), intent(inout) :: hvp(:, :, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. allocated(self%hessian_direct_block) .or. &
+          .not. allocated(self%hessian_dirs_block)) then
+         call fatal_error(error, "[pcm_component_get_direct_hessian] no direct block is"// &
+            & " stashed - get_hessian_surface_weights must run first on the same block")
+         return
+      end if
+      if (any(shape(self%hessian_dirs_block) /= shape(dirs))) then
+         call fatal_error(error, "[pcm_component_get_direct_hessian] the stashed direct"// &
+            & " block belongs to a block of another shape")
+         return
+      end if
+      if (any(self%hessian_dirs_block /= dirs)) then
+         call fatal_error(error, "[pcm_component_get_direct_hessian] the stashed direct"// &
+            & " block belongs to other directions")
+         return
+      end if
+      if (any(shape(hvp) /= shape(dirs))) then
+         call fatal_error(error, "[pcm_component_get_direct_hessian] hvp shape mismatch")
+         return
+      end if
+
+      hvp = hvp + self%hessian_direct_block
+
+   end subroutine pcm_component_get_direct_hessian
+
+   !> Factorize the current matrix for the second-order solves, once per matrix
+   !>
+   !> Dispatches on the component's solver like [[pcm_solve_system]]: LU and
+   !> Cholesky keep their factor, the inversion solver keeps the inverse, and
+   !> the iterative solver keeps nothing and solves column by column.
+   !>
+   !> @param[inout] self  PCM component instance
+   !> @param[out]   error Error handling
+   subroutine pcm_ensure_factorization(self, error)
+      use moist_model_component_pcm_solvers, only: factorize_pcm_lu, factorize_pcm_cholesky, &
+         & invert_pcm_matrix
+      !> PCM component instance
+      class(solvation_model_component_pcm), intent(inout) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (self%factor_valid) return
+      if (.not. allocated(self%amat)) then
+         call fatal_error(error, "[pcm_ensure_factorization] PCM matrix not allocated")
+         return
+      end if
+      if (allocated(self%amat_factor)) deallocate (self%amat_factor)
+      if (allocated(self%amat_ipiv)) deallocate (self%amat_ipiv)
+
+      select case (self%solver)
+      case (solver_type%lu)
+         call factorize_pcm_lu(self%amat, self%amat_factor, self%amat_ipiv, error, &
+            & unit=self%ctx%unit)
+      case (solver_type%cholesky)
+         call factorize_pcm_cholesky(self%amat, self%amat_factor, error)
+      case (solver_type%inversion)
+         call invert_pcm_matrix(self%amat, self%amat_factor, error)
+      case (solver_type%iterative)
+         ! Nothing to keep: the iterative solver works on the matrix itself
+      case default
+         call fatal_error(error, "[pcm_ensure_factorization] Unknown solver type")
+         return
+      end select
+      if (allocated(error)) return
+      self%factor_valid = .true.
+
+   end subroutine pcm_ensure_factorization
+
+   !> Solve several right-hand sides against the cached factorization
+   !>
+   !> @param[in]  self  PCM component with a valid factorization
+   !> @param[in]  rhs   Right-hand sides (ngrid, nrhs)
+   !> @param[out] sol   Solutions (ngrid, nrhs)
+   !> @param[out] error Error handling
+   subroutine pcm_solve_factored(self, rhs, sol, error)
+      use moist_model_component_pcm_solvers, only: solve_pcm_lu_factored, &
+         & solve_pcm_cholesky_factored, apply_pcm_inverse, solve_pcm_iterative
+      !> PCM component with a valid factorization
+      class(solvation_model_component_pcm), intent(in) :: self
+      !> Right-hand sides
+      real(wp), intent(in) :: rhs(:, :)
+      !> Solutions
+      real(wp), intent(out) :: sol(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Column index
+      integer :: icol
+      !> Timer depth on entry, restored on every early return
+      integer :: d0
+
+      if (.not. self%factor_valid) then
+         call fatal_error(error, "[pcm_solve_factored] matrix is not factorized")
+         return
+      end if
+      if (size(rhs, 1) /= size(self%amat, 1) .or. any(shape(sol) /= shape(rhs))) then
+         call fatal_error(error, "[pcm_solve_factored] right-hand side shape mismatch")
+         return
+      end if
+
+      d0 = self%ctx%timer%current_depth()
+      call self%ctx%timer%start("PCM response solve", category=cat_solve)
+
+      select case (self%solver)
+      case (solver_type%lu)
+         call solve_pcm_lu_factored(self%amat_factor, self%amat_ipiv, rhs, sol, error)
+      case (solver_type%cholesky)
+         call solve_pcm_cholesky_factored(self%amat_factor, rhs, sol, error)
+      case (solver_type%inversion)
+         call apply_pcm_inverse(self%amat_factor, rhs, sol)
+      case (solver_type%iterative)
+         do icol = 1, size(rhs, 2)
+            call solve_pcm_iterative(self%amat, rhs(:, icol), sol(:, icol), self%solver_tol, &
+               & self%solver_maxiter, error)
+            if (allocated(error)) exit
+         end do
+      case default
+         call fatal_error(error, "[pcm_solve_factored] Unknown solver type")
+      end select
+      if (allocated(error)) then
+         call self%ctx%timer%unwind(d0)
+         return
+      end if
+
+      call self%ctx%timer%stop("PCM response solve")
+
+   end subroutine pcm_solve_factored
 
    !> Contract the current PCM charges to Gaussian-surface A-matrix weights
    !>
@@ -967,6 +1380,7 @@ contains
       if (allocated(self%amat)) deallocate (self%amat)
       allocate (self%amat, source=amat)
       self%charges_valid = .false.
+      self%factor_valid = .false.
 
    end subroutine pcm_set_external_matrix
 

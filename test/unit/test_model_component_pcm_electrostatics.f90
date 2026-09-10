@@ -3,7 +3,10 @@ module test_model_component_pcm_electrostatics
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
-   use moist_model_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient
+   use moist_model_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
+                                                        pcm_electrostatic_surface_weights, &
+                                                        pcm_electrostatic_potential_tangent, &
+                                                        pcm_electrostatic_surface_weights_response
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
                            fd4_scalar, fd4_offsets
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -26,9 +29,173 @@ contains
       testsuite = [ &
                   new_unittest("nuclear_gradient_vs_fd", test_nuclear_gradient_vs_fd), &
                   new_unittest("channels_isolated", test_channels_isolated), &
-                  new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes) &
+                  new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes), &
+                  new_unittest("potential_tangent_vs_fd", test_potential_tangent_vs_fd), &
+                  new_unittest("surface_weights_response_vs_fd", &
+                               test_surface_weights_response_vs_fd) &
                   ]
    end subroutine collect_model_component_pcm_electrostatics
+
+   !> A synthetic surface over a sampled structure, with surface charges, a
+   !> charge response, surface tangents and nuclear directions, deterministic
+   !>
+   !> @param[out] xyz    Surface positions (3, ngrid)
+   !> @param[out] sphxyz Nuclear positions (3, nsph)
+   !> @param[out] za     Nuclear charges (nsph)
+   !> @param[out] q      Surface charges (ngrid)
+   !> @param[out] dq     Surface-charge response (ngrid, ndir)
+   !> @param[out] d_xyz  Surface-position tangents (3, ngrid, ndir)
+   !> @param[out] dirs   Nuclear directions (3, nsph, ndir)
+   subroutine second_order_fixture(xyz, sphxyz, za, q, dq, d_xyz, dirs)
+      real(wp), allocatable, intent(out) :: xyz(:, :), sphxyz(:, :), za(:), q(:)
+      real(wp), allocatable, intent(out) :: dq(:, :), d_xyz(:, :, :), dirs(:, :, :)
+
+      integer, parameter :: n_surface = 12, ndir = 2
+      type(structure_type), allocatable :: mols(:)
+      integer :: i, iatom, iaxis, v, ngrid, nsph
+
+      call get_test_structures(mols, nmol)
+      call center_at_origin(mols(1))
+      nsph = mols(1)%nat
+      allocate (sphxyz, source=mols(1)%xyz)
+      call get_test_points(mols(1), xyz, n_surface)
+      ngrid = size(xyz, 2)
+
+      allocate (za(nsph), dirs(3, nsph, ndir))
+      do iatom = 1, nsph
+         za(iatom) = real(mols(1)%num(mols(1)%id(iatom)), wp)
+         do v = 1, ndir
+            do iaxis = 1, 3
+               dirs(iaxis, iatom, v) = 0.5_wp + 0.4_wp*sin(0.37_wp*iaxis + 0.61_wp*iatom + 1.1_wp*v)
+            end do
+         end do
+      end do
+      allocate (q(ngrid), dq(ngrid, ndir), d_xyz(3, ngrid, ndir))
+      do i = 1, ngrid
+         q(i) = 0.1_wp*sin(0.9_wp*real(i, wp)) - 0.02_wp
+         do v = 1, ndir
+            dq(i, v) = 0.05_wp*cos(0.4_wp*real(i, wp) + real(v, wp))
+            do iaxis = 1, 3
+               d_xyz(iaxis, i, v) = 0.3_wp*cos(0.3_wp*real(i, wp) + 0.8_wp*real(iaxis, wp) + real(v, wp))
+            end do
+         end do
+      end do
+
+   end subroutine second_order_fixture
+
+   !> Point-charge potential at the surface, `phi_i = sum_k za_k / |r_i - R_k|`
+   pure function point_charge_potential(xyz, sphxyz, za) result(phi)
+      real(wp), intent(in) :: xyz(:, :), sphxyz(:, :), za(:)
+      real(wp) :: phi(size(xyz, 2))
+      integer :: i, k
+
+      phi = 0.0_wp
+      do i = 1, size(xyz, 2)
+         do k = 1, size(za)
+            phi(i) = phi(i) + za(k)/norm2(xyz(:, i) - sphxyz(:, k))
+         end do
+      end do
+   end function point_charge_potential
+
+   !> The moved point-charge potential against differenced potentials
+   subroutine test_potential_tangent_vs_fd(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: xyz(:, :), sphxyz(:, :), za(:), q(:), dq(:, :)
+      real(wp), allocatable :: d_xyz(:, :, :), dirs(:, :, :)
+      real(wp), allocatable :: dphi(:, :), vals(:, :), fd(:)
+      real(wp) :: s
+      integer :: ngrid, ndir, v, k
+      real(wp), parameter :: step = 1.0e-3_wp
+      character(len=64) :: context
+
+      call second_order_fixture(xyz, sphxyz, za, q, dq, d_xyz, dirs)
+      ngrid = size(xyz, 2)
+      ndir = size(dirs, 3)
+
+      allocate (dphi(ngrid, ndir), vals(4, ngrid), fd(ngrid))
+      call pcm_electrostatic_potential_tangent(xyz, sphxyz, za, d_xyz, dirs, dphi, err)
+      if (allocated(err)) then
+         call test_failed(error, "potential tangent failed: "//err%message)
+         return
+      end if
+
+      do v = 1, ndir
+         do k = 1, 4
+            s = fd4_offsets(k)*step
+            vals(k, :) = point_charge_potential(xyz + s*d_xyz(:, :, v), sphxyz + s*dirs(:, :, v), za)
+         end do
+         fd = fd4_scalar(vals(1, :), vals(2, :), vals(3, :), vals(4, :), step)
+         call check(error, maxval(abs(fd)) > 1.0e-4_wp, more="differenced potential is vacuous")
+         if (allocated(error)) return
+         write (context, "(a,i0)") "potential tangent, direction ", v
+         call check(error, maxval(abs(dphi(:, v) - fd)), 0.0_wp, &
+                    thr=fd_atol + fd_rtol*maxval(abs(fd)), more=trim(context))
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_potential_tangent_vs_fd
+
+   !> The adjoint and direct-gradient responses against differenced weights
+   subroutine test_surface_weights_response_vs_fd(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: xyz(:, :), sphxyz(:, :), za(:), q(:), dq(:, :)
+      real(wp), allocatable :: d_xyz(:, :, :), dirs(:, :, :), qefield(:, :)
+      real(wp), allocatable :: dw_xyz(:, :, :), dgrad(:, :, :)
+      real(wp), allocatable :: w_xyz(:, :, :), grad(:, :, :), fd_w(:, :), fd_g(:, :)
+      real(wp) :: s
+      integer :: ngrid, nsph, ndir, v, k
+      real(wp), parameter :: step = 1.0e-3_wp
+      character(len=64) :: context
+
+      call second_order_fixture(xyz, sphxyz, za, q, dq, d_xyz, dirs)
+      ngrid = size(xyz, 2)
+      nsph = size(za)
+      ndir = size(dirs, 3)
+      ! The electronic field is host data and is held fixed by both routes
+      allocate (qefield(3, ngrid), source=0.0_wp)
+
+      allocate (dw_xyz(3, ngrid, ndir), dgrad(3, nsph, ndir))
+      call pcm_electrostatic_surface_weights_response(xyz, sphxyz, q, dq, za, d_xyz, dirs, &
+                                                      dw_xyz, dgrad, err)
+      if (allocated(err)) then
+         call test_failed(error, "adjoint response failed: "//err%message)
+         return
+      end if
+
+      allocate (w_xyz(4, 3, ngrid), grad(4, 3, nsph), fd_w(3, ngrid), fd_g(3, nsph))
+      do v = 1, ndir
+         do k = 1, 4
+            s = fd4_offsets(k)*step
+            call pcm_electrostatic_surface_weights(xyz + s*d_xyz(:, :, v), &
+                                                   sphxyz + s*dirs(:, :, v), q + s*dq(:, v), &
+                                                   qefield, za, w_xyz(k, :, :), grad(k, :, :), err)
+            if (allocated(err)) then
+               call test_failed(error, "perturbed adjoint failed: "//err%message)
+               return
+            end if
+         end do
+         fd_w = fd4_scalar(w_xyz(1, :, :), w_xyz(2, :, :), w_xyz(3, :, :), w_xyz(4, :, :), step)
+         fd_g = fd4_scalar(grad(1, :, :), grad(2, :, :), grad(3, :, :), grad(4, :, :), step)
+         call check(error, min(maxval(abs(fd_w)), maxval(abs(fd_g))) > 1.0e-4_wp, &
+                    more="differenced adjoint is vacuous")
+         if (allocated(error)) return
+         write (context, "(a,i0)") "surface-position adjoint response, direction ", v
+         call check(error, maxval(abs(dw_xyz(:, :, v) - fd_w)), 0.0_wp, &
+                    thr=fd_atol + fd_rtol*maxval(abs(fd_w)), more=trim(context))
+         if (allocated(error)) return
+         write (context, "(a,i0)") "direct-gradient response, direction ", v
+         call check(error, maxval(abs(dgrad(:, :, v) - fd_g)), 0.0_wp, &
+                    thr=fd_atol + fd_rtol*maxval(abs(fd_g)), more=trim(context))
+         if (allocated(error)) return
+      end do
+
+   end subroutine test_surface_weights_response_vs_fd
 
    !> Check the nuclear/electronic field contraction by finite differences
    subroutine test_nuclear_gradient_vs_fd(error)

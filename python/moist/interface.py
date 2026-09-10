@@ -1180,6 +1180,7 @@ class Evaluation:
         "_epoch",
         "_coupling",
         "_gradient",
+        "_hessian",
         "_cavity_result",
         "_energy",
         "_response_result",
@@ -1201,6 +1202,7 @@ class Evaluation:
         self._epoch = epoch
         self._coupling = coupling
         self._gradient: Optional[np.ndarray] = None
+        self._hessian: Optional[np.ndarray] = None
         self._cavity_result = cavity
         self._energy = float(energy)
         self._response_result = response
@@ -1253,6 +1255,32 @@ class Evaluation:
                 )
             )
         return self._gradient
+
+    @property
+    def hessian(self) -> np.ndarray:
+        """The native nuclear Hessian of the model at fixed host data.
+
+        Lazy, like :attr:`gradient`, and bound to the same evaluation epoch.
+        Couplings contribute no second-order terms yet, so this is the model
+        Hessian alone; components without a second-order channel raise.
+        """
+        if self._hessian is None:
+            if self._model.epoch != self._epoch:
+                raise RuntimeError(
+                    "This evaluation was superseded; request its Hessian before "
+                    "evaluating the model again"
+                )
+            # A coupling that composes its own nuclear terms into the gradient
+            # would need a second-order counterpart here; returning the model
+            # block alone would be an incomplete Hessian presented as complete.
+            if type(self._coupling).gradient is not SolvationCoupling.gradient:
+                raise NotImplementedError(
+                    f"{type(self._coupling).__name__} adds its own nuclear gradient "
+                    "terms and no second-order coupling hook exists yet; use "
+                    "SolvationModel.hessian() for the model block alone"
+                )
+            self._hessian = _immutable_array(self._model.hessian())
+        return self._hessian
 
 
 # -----------------------------------------------------------------------------
@@ -1350,6 +1378,29 @@ class SolvationModel:
                 f"natoms={natoms} does not match the updated structure ({self._natoms})"
             )
         return self.gradient()
+
+    def hessian(self) -> np.ndarray:
+        """Return the native dense nuclear Hessian, shape (3, natoms, 3, natoms).
+
+        The derivative of :meth:`gradient` at fixed host coupling data.  Every
+        component must provide its second-order surface channel; one that does
+        not is refused by name rather than contributing a frozen-adjoint block.
+        """
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        return library.general_model_get_hessian(self._model, self._natoms)
+
+    def hvp(self, dirs: np.ndarray) -> np.ndarray:
+        """Return nuclear Hessian-vector products along ``dirs``.
+
+        ``dirs`` has shape (3, natoms, ndir); one column of :meth:`hessian` is
+        returned per direction, without assembling the dense block.
+        """
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        return library.general_model_get_hvp(self._model, self._natoms, dirs)
 
     @property
     def cavity(self) -> Cavity:

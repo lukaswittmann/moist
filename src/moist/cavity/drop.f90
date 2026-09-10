@@ -9,9 +9,10 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base
+   use moist_type, only: cavity_type, list_cavity_fields_base, surface_adjoint_response_type
    use moist_channels, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
@@ -33,9 +34,12 @@ module moist_cavity_drop
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_branching, only: branch_weight_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_surface_weights_type
+   use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
+      & drop_point_scratch_type
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
-   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
+   use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient, &
+      & cat_hessian
    use moist_cavity_drop_request, only: drop_property_request, &
                                         drop_request_default, drop_request_diagnostics, drop_request_fine
 
@@ -46,6 +50,70 @@ module moist_cavity_drop
    public :: new_cavity_drop
    public :: drop_property_request
    public :: drop_request_default, drop_request_diagnostics, drop_request_fine
+   !> Exposed for the derivative test suites: the two internal Hessian halves
+   !> take the *folded* weights, and this is the only thing that produces them
+   public :: prepare_surface_weights
+   !> Exposed for the derivative test suites: the direction-block size the
+   !> surface-Hessian traversal chunks at, so a test that has to cross a block
+   !> boundary sizes its direction set from the bound rather than from a literal
+   !> that would silently stop crossing it if the bound were ever raised
+   public :: drop_hvp_chunk_dirs
+   !> Exposed for the derivative test suites: the direction count at which a
+   !> Hessian-vector product switches from the per-direction to the rank-4 form
+   !> of its fixed channel, so a test that has to sit on that boundary sizes
+   !> its direction set from the bound
+   public :: drop_hvp_per_dir_max, drop_hvp_apply_min
+
+   !> Nuclear directions carried by one block of the surface-Hessian traversal
+   !>
+   !> The adjoint-response half is per direction and materializes, per grid
+   !> point and direction, the full surface tangent, the branch-weight tangent
+   !> and the moving channels of the weight fold -- 16 doubles, 36 with a model
+   !> adjoint response -- plus a `(3, nsph, ndir, nthreads)` accumulator.
+   !> Nothing above [[get_hessian_drop]] bounds `ndir` -- it asks for `3 nsph`
+   !> directions -- so all of it would grow *quadratically* in the system size
+   !> and a medium molecule would run out of memory rather than run slowly.
+   !>
+   !> Blocking bounds the working set at `8 C (16 ngrid + 3 nsph nthreads)` bytes
+   !> with `C = min(ndir, chunk)`, and the price is that each block re-traverses
+   !> the grid. At this value every `ndir <= 192` -- every Hessian-vector product
+   !> of a system up to 64 atoms, and every explicit direction set a caller is
+   !> likely to hand in -- is a single block and pays nothing at all. On a
+   !> large grid the traversal shortens the block further to a byte cap (see
+   !> `derivatives/hessian_traverse.f90`); see its header for what the blocking
+   !> then costs, and for the gate that keeps the direction-free half out of it.
+   integer, parameter :: drop_hvp_chunk_dirs = 192
+
+   !> Most directions a Hessian-vector product runs its fixed channel per direction for
+   !>
+   !> The measured crossover between the two forms of the fixed channel, see the
+   !> header of `derivatives/hessian.f90`: up to this many directions the
+   !> second-order chain is run once per supplied direction, beyond it the
+   !> direction-free rank-4 block is built and contracted, which also means the
+   !> rank-4 form's memory -- the dense `(3, nsph, 3, nsph)` staging block and
+   !> the per-thread sparse accumulators -- applies from that count on.
+   integer, parameter :: drop_hvp_per_dir_max = 12
+
+   !> Directions from which the per-direction fixed channel takes the explicit
+   !> nuclear motion of its field rows from the weighted block applied to the
+   !> whole set (`vjp_f2_rArB_apply`, two direction-free kernels per atom and a
+   !> contraction per direction) rather than from one `hvp_jet_rA` per direction
+   !> (one forward kernel per atom per direction). Keyed on the whole direction
+   !> set, never on a block of it, so a direction's column does not depend on
+   !> the blocking.
+   integer, parameter :: drop_hvp_apply_min = 3
+
+   !> Modes of the fixed-adjoint channel of the surface Hessian traversal
+   !>
+   !> `drop_fixed_rank4` accumulates the direction-free `(3, nsph, 3, nsph)`
+   !> block from the `3 * n_local` Cartesian unit directions of every point's
+   !> active set; `drop_fixed_per_dir` runs the same chain once per *supplied*
+   !> direction and lands gradient columns. Cost `ngrid * 3 n_local * n_active`
+   !> against `ngrid * ndir * n_active`; see `derivatives/hessian_traverse.f90`.
+   public :: drop_fixed_none, drop_fixed_rank4, drop_fixed_per_dir
+   integer, parameter :: drop_fixed_none = 0
+   integer, parameter :: drop_fixed_rank4 = 1
+   integer, parameter :: drop_fixed_per_dir = 2
 
    !> DROP cavity type
    type, extends(cavity_type) :: cavity_type_drop
@@ -231,6 +299,27 @@ module moist_cavity_drop
       procedure :: get_surface_response => get_surface_response_drop
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
+      !> Internal: fixed-adjoint half of the surface Hessian, on folded weights
+      !>
+      !> This and the two below are DROP-specific rather than part of the
+      !> generic cavity API: they trade in `drop_surface_weights_type`, and
+      !> they are the halves `get_surface_hessian` composes, not entry points
+      !> a host would reach for
+      procedure :: get_surface_hessian_fixed => get_surface_hessian_fixed_drop
+      !> Internal: the same half along supplied directions, one column each
+      procedure :: get_surface_hessian_fixed_dirs => get_surface_hessian_fixed_dirs_drop
+      !> Internal: forward tangent of the four grid scalars the Hessian's weight
+      !> fold reads (pass 1), including the branch weight the generic tangent
+      !> does not carry
+      procedure :: get_surface_scalar_tangent => get_surface_tangent_drop
+      !> Forward tangent of every surface observable along nuclear directions
+      procedure :: get_surface_tangent => get_surface_tangent_full_drop
+      !> Internal: adjoint-response half of the surface Hessian (J^T omega_v)
+      procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
+      !> Public: surface Hessian-vector products (both halves)
+      procedure :: get_surface_hessian => get_surface_hessian_drop
+      !> Public: dense nuclear Hessian of the cavity contribution
+      procedure :: get_hessian => get_hessian_drop
 
       !> Compute all needed cavity gradients
       procedure :: compute_gradient_drop
@@ -284,7 +373,7 @@ module moist_cavity_drop
    interface
 
       !* ============================================================================== *!
-      !*               Internal DROP routines (should not be used outside)               *!
+      !*               Internal DROP routines (should not be used outside)              *!
       !* ============================================================================== *!
 
       !> [projection.f90] Compute the next capacity for projection work arrays
@@ -456,6 +545,32 @@ module moist_cavity_drop
          type(drop_seed_state_type), intent(inout) :: state
       end subroutine fill_seed_state
 
+      !> [deriv/grid_driver.f90] Shared per-grid-point prologue of the DROP
+      !> derivative traversals
+      !>
+      !> @param[in]    self           DROP cavity instance
+      !> @param[inout] slots          Per-thread evaluator clones (shared)
+      !> @param[in]    thread_slot    Slot of the calling thread
+      !> @param[in]    igrid          Grid point to prepare
+      !> @param[in]    want_curvature Whether the curvature invariants are needed
+      !> @param[in]    context        Calling routine, used to prefix the diagnostics
+      !> @param[inout] abort          Shared failure latch of the parallel region
+      !> @param[inout] pt             Point scratch of the calling thread
+      !> @param[out]   ok             Whether the point may be processed further
+      module subroutine drop_point_prologue(self, slots, thread_slot, igrid, &
+                                            want_curvature, context, abort, pt, ok)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_worker_slots_type), intent(inout) :: slots
+         integer, intent(in) :: thread_slot
+         integer, intent(in) :: igrid
+         logical, intent(in) :: want_curvature
+         character(len=*), intent(in) :: context
+         type(drop_abort_latch_type), intent(inout) :: abort
+         type(drop_point_scratch_type), intent(inout) :: pt
+         logical, intent(out) :: ok
+      end subroutine drop_point_prologue
+
       !> Contract surface weights to per-grid LSF adjoint weights
       !>
       !> @param[in]  self       DROP cavity instance
@@ -496,6 +611,217 @@ module moist_cavity_drop
          real(wp), intent(inout) :: gradient(:, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine get_surface_gradient_drop
+
+      !> [deriv/hessian_traverse.f90] Fixed-adjoint half of the surface Hessian
+      !>
+      !> Contracts the second derivative of the surface map against adjoints held
+      !> fixed, i.e. the `(dJ^T/dv) omega` term with `omega_v = 0`. Takes the
+      !> *folded* weights: `hessian.f90` folds once and drives both halves off
+      !> the same object.
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    eff     Folded surface adjoints, held fixed
+      !> @param[inout] hessian Nuclear-Hessian accumulator (3, nsph, 3, nsph)
+      !> @param[out]   error   Error object
+      module subroutine get_surface_hessian_fixed_drop(self, eff, hessian, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_fixed_drop
+
+      !> [deriv/hessian_traverse.f90] Per-direction fixed-adjoint half of the surface Hessian
+      !>
+      !> The rank-4 half above contracted with `dirs`, computed as one pass of
+      !> the second-order chain per direction rather than as the block.
+      !>
+      !> @param[in]    self  DROP cavity instance
+      !> @param[in]    eff   Folded surface adjoints, held fixed
+      !> @param[in]    dirs  Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hvp   Accumulator (3, nsph, ndir)
+      !> @param[out]   error Error object
+      module subroutine get_surface_hessian_fixed_dirs_drop(self, eff, dirs, hvp, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_fixed_dirs_drop
+
+      !> [deriv/hessian_traverse.f90] Refuse a mis-shaped direction set or column accumulator
+      module subroutine check_direction_set(self, dirs, hvp, context, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(in) :: hvp(:, :, :)
+         character(len=*), intent(in) :: context
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine check_direction_set
+
+      !> [deriv/tangent_forward.f90] Pass 1: forward tangent of the surface map
+      !>
+      !> @param[in]  self       DROP cavity instance
+      !> @param[in]  dirs       Nuclear directions (3, nsph, ndir)
+      !> @param[out] d_a        Tangent of the area element (ngrid, ndir)
+      !> @param[out] d_wleb     Tangent of the final Lebedev weight (ngrid, ndir)
+      !> @param[out] d_xi0      Tangent of the Gaussian width (ngrid, ndir)
+      !> @param[out] d_wbranch  Tangent of the softmax branch weight (ngrid, ndir)
+      !> @param[out] error      Error object
+      !> @param[in]  contracted Take the level set's per-direction tangents through its
+      !>                        contracted accessor instead of materialising the mixed
+      !>                        tensors once per point; default `.false.`
+      module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
+                                                 d_wbranch, error, contracted)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
+         type(error_type), allocatable, intent(out) :: error
+         logical, intent(in), optional :: contracted
+      end subroutine get_surface_tangent_drop
+
+      !> [deriv/tangent_forward.f90] Forward tangent of every surface observable
+      !>
+      !> The generic form of pass 1: fills a [[cavity_surface_tangent_type]]
+      !> the caller initialised for this grid and direction batch. The
+      !> curvature channels are filled only when the tangent was initialised
+      !> with `want_curvature`.
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    dirs    Nuclear directions (3, nsph, ndir)
+      !> @param[inout] tangent Surface tangent, initialised for (ngrid, ndir)
+      !> @param[out]   error   Error object
+      module subroutine get_surface_tangent_full_drop(self, dirs, tangent, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         type(cavity_surface_tangent_type), intent(inout) :: tangent
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_tangent_full_drop
+
+      !> [deriv/tangent_forward.f90] Shared core of the two tangent accessors
+      !>
+      !> Fills every channel of `tangent` and, when asked, the softmax branch
+      !> weight tangent, which is DROP-internal and has no generic channel.
+      !>
+      !> @param[in]    self           DROP cavity instance
+      !> @param[in]    dirs           Nuclear directions (3, nsph, ndir)
+      !> @param[in]    want_curvature Fill the curvature channels
+      !> @param[inout] tangent        Surface tangent, initialised for (ngrid, ndir)
+      !> @param[out]   error          Error object
+      !> @param[out]   d_wbranch      Tangent of the softmax branch weight (ngrid, ndir)
+      !> @param[in]    contracted     See [[get_surface_tangent_drop]]
+      module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
+                                                  error, d_wbranch, contracted)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         logical, intent(in) :: want_curvature
+         type(cavity_surface_tangent_type), intent(inout) :: tangent
+         type(error_type), allocatable, intent(out) :: error
+         real(wp), intent(out), optional :: d_wbranch(:, :)
+         logical, intent(in), optional :: contracted
+      end subroutine drop_surface_tangent_core
+
+      !> [deriv/hessian_traverse.f90] Adjoint-response half of the surface Hessian
+      !>
+      !> The `J^T (d omega/dv)` term: runs the forward tangent, differentiates the
+      !> weight folding, and contracts the moving adjoints against the primal map.
+      !> Needs both forms of the adjoints -- the raw channels the fold was built
+      !> from, and the primal fold it is differentiated around.
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    acc     Raw surface adjoints, held fixed
+      !> @param[in]    eff     Folded surface adjoints of the base geometry
+      !> @param[in]    dirs    Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hvp     Accumulator (3, nsph, ndir)
+      !> @param[out]   error   Error object
+      module subroutine get_surface_hessian_response_drop(self, acc, eff, dirs, hvp, error)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         type(drop_surface_weights_type), intent(in) :: eff
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine get_surface_hessian_response_drop
+
+      !> [deriv/hessian_traverse.f90] Both halves of the surface Hessian, one traversal
+      !>
+      !> The primitive the halves above are thin wrappers over, and the only
+      !> way to get them out of a single walk of the grid: the point prologue,
+      !> the 16 basis seeds and the point's jet tensors are shared.
+      !>
+      !> `fixed_mode` is one of `drop_fixed_none`, `drop_fixed_rank4` and
+      !> `drop_fixed_per_dir`. `hess_fixed` belongs to the rank-4 fixed
+      !> channel, `dirs` and `hvp` to every per-direction channel, `acc` to the
+      !> response channel; each must be present when its channel is enabled.
+      !>
+      !> @param[in]    self          DROP cavity instance
+      !> @param[in]    eff           Folded surface adjoints of the base geometry
+      !> @param[in]    fixed_mode    Which form of `(dJ^T/dv) omega` to accumulate, if any
+      !> @param[in]    want_response Accumulate `J^T (d omega/dv)`
+      !> @param[in]    context       Calling routine, used to prefix the diagnostics
+      !> @param[in]    acc           Raw surface adjoints
+      !> @param[in]    dirs          Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hess_fixed    Rank-4 fixed-adjoint accumulator (3, nsph, 3, nsph)
+      !> @param[inout] hvp           Column accumulator (3, nsph, ndir)
+      !> @param[out]   error         Error object
+      module subroutine drop_hessian_traverse(self, eff, fixed_mode, want_response, &
+                                              context, acc, dirs, hess_fixed, hvp, error, &
+                                              omega_v)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(drop_surface_weights_type), intent(in) :: eff
+         integer, intent(in) :: fixed_mode
+         logical, intent(in) :: want_response
+         character(len=*), intent(in) :: context
+         type(cavity_surface_adjoint_type), intent(in), optional :: acc
+         real(wp), intent(in), optional :: dirs(:, :, :)
+         real(wp), intent(inout), optional :: hess_fixed(:, :, :, :)
+         real(wp), intent(inout), optional :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      end subroutine drop_hessian_traverse
+
+      !> [deriv/hessian.f90] Surface Hessian-vector products
+      !>
+      !> Sums the fixed-adjoint and adjoint-response halves, running the fixed
+      !> one per direction unless a full basis is asked for.
+      !>
+      !> @param[in]    self  DROP cavity instance
+      !> @param[in]    acc   Accumulated surface-observable adjoints
+      !> @param[in]    dirs  Nuclear directions (3, nsph, ndir)
+      !> @param[inout] hvp     Accumulator (3, nsph, ndir)
+      !> @param[out]   error   Error object
+      !> @param[inout] omega_v Surface-adjoint response of the model, optional
+      module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: hvp(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      end subroutine get_surface_hessian_drop
+
+      !> [deriv/hessian.f90] Dense nuclear Hessian of the cavity contribution
+      !>
+      !> @param[in]    self    DROP cavity instance
+      !> @param[in]    acc     Accumulated surface-observable adjoints
+      !> @param[inout] hessian Accumulator (3, nsph, 3, nsph)
+      !> @param[out]   error   Error object
+      !> @param[inout] omega_v Surface-adjoint response of the model, optional
+      module subroutine get_hessian_drop(self, acc, hessian, error, omega_v)
+         implicit none (type, external)
+         class(cavity_type_drop), intent(in) :: self
+         type(cavity_surface_adjoint_type), intent(in) :: acc
+         real(wp), intent(inout) :: hessian(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+         class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      end subroutine get_hessian_drop
 
    end interface
 

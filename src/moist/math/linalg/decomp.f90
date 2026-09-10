@@ -9,6 +9,12 @@ module moist_math_linalg_decomp
 
    public :: mat3x3_inv
    public :: eig_2x2_symmetric
+   public :: eig_2x2_offdiag_tol
+
+   !> Off-diagonal magnitude below which [[eig_2x2_symmetric]] abandons the
+   !> `v = [b, lambda - a]` construction and returns a canonical basis vector
+   !> instead
+   real(wp), parameter :: eig_2x2_offdiag_tol = 1.0e-14_wp
 
 contains
 
@@ -152,7 +158,7 @@ contains
       ! First row: (a - lambda)*v1 + b*v2 = 0  =>  v2 = -(a - lambda)*v1 / b
       ! Then normalize. Handle special cases when b ~= 0 (diagonal matrix)
 
-      if (abs(b) > 1.0e-14_wp) then
+      if (abs(b) > eig_2x2_offdiag_tol) then
          ! Non-diagonal case: use standard formula
          ! For lambda_min:
          v_min(1) = b
