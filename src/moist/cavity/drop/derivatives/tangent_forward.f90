@@ -98,7 +98,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
       & drop_point_scratch_type
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_result_type, apply_seed, &
-      & seed_weight_tol, next_branch_group, max_branch_group_size
+      & seed_weight_tol, next_branch_group, max_branch_group_size, drop_n_host_jet, &
+      & add_host_jet
    use moist_cavity_drop_derivatives_field_tangent, only: drop_field_tangent_work_type, &
       & drop_field_jet_point, drop_field_jet_tangent
    implicit none(type, external)
@@ -213,8 +214,13 @@ contains
    !>                              contracted accessor per direction rather than
    !>                              off tensors materialised once per point; the
    !>                              caller's choice, see below. Default `.false.`
+   !> @param[in]    host_jets      Partial tangents of the level-set jet along
+   !>                              every direction at the fixed points, from the
+   !>                              second-order host exchange, `(40, ngrid, ndir)`
+   !>                              packed by spatial order; added to the level
+   !>                              set's own nuclear tangents. Optional
    module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
-                                               error, d_wbranch, contracted)
+                                               error, d_wbranch, contracted, host_jets)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Nuclear directions
@@ -229,6 +235,11 @@ contains
       real(wp), intent(out), optional :: d_wbranch(:, :)
       !> Whether the jet tangents come from the contracted accessor
       logical, intent(in), optional :: contracted
+      !> Partial jet tangents of the host along every direction
+      real(wp), intent(in), optional :: host_jets(:, :, :)
+
+      !> Whether the host's jet tangents are folded in
+      logical :: have_jets
 
       !> Branch-weight tangent, kept whether or not the caller asked for it:
       !> the assembly below reads it for every point
@@ -317,14 +328,7 @@ contains
          d_wbranch = 0.0_wp
       end if
 
-      tangent%d_xi = 0.0_wp
-      tangent%d_f = 0.0_wp
-      tangent%d_a = 0.0_wp
-      tangent%d_w = 0.0_wp
-      tangent%d_xyz = 0.0_wp
-      tangent%d_n = 0.0_wp
-      tangent%d_k1 = 0.0_wp
-      tangent%d_k2 = 0.0_wp
+      call tangent%zero()
       tangent%have_curvature = want_curvature
       if (self%ngrid <= 0) return
       allocate (dwb(self%ngrid, ndir), source=0.0_wp)
@@ -348,6 +352,16 @@ contains
       ! routine's direct callers included, materialises.
       materialise = .true.
       if (present(contracted)) materialise = .not. contracted
+      have_jets = .false.
+      if (present(host_jets)) then
+         if (any(shape(host_jets) /= [drop_n_host_jet, self%ngrid, ndir])) then
+            call fatal_error(error, "get_surface_tangent_drop: host jet tangents must be"// &
+                             " (40, ngrid, ndir)")
+            call self%ctx%timer%stop(h_stan)
+            return
+         end if
+         have_jets = .true.
+      end if
 
       call abort%reset()
 
@@ -382,12 +396,8 @@ contains
          ! `sum_B v_B . d(jet)/dR_B` at the fixed point, for every direction, as
          ! contractions of the point's mixed nuclear tensors. The tensors are
          ! formed once per point and unconditionally -- the buffer outlives the
-         ! point -- and each direction is gathered onto the active slots first,
-         ! which is the one place this routine touches the slot index space.
-         pt%n_active = slots%lsf(thread_slot)%lsf%active_count()
-         do i = 1, pt%n_active
-            pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
-         end do
+         ! point -- and each direction is gathered onto the active slots the
+         ! prologue established.
          if (materialise) call drop_field_jet_point(slots%lsf(thread_slot)%lsf, ft_work)
          do idir = 1, ndir
             if (materialise) then
@@ -396,16 +406,28 @@ contains
                end do
                call drop_field_jet_tangent(ft_work, pt%n_active, v_act, dlsf0, &
                                            dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
-            else
+            else if (pt%n_active > 0) then
                call slots%lsf(thread_slot)%lsf%tangent_jet(dirs(:, :, idir), dlsf0, &
                                                             dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
+            else
+               ! A level set without active atoms has no nuclear partials of
+               ! its own, and its contracted accessor is the erroring default
+               dlsf0 = 0.0_wp
+               dlsf1_r(:, idir) = 0.0_wp
+               dlsf2_rr(:, :, idir) = 0.0_wp
+            end if
+            ! The host's partial tangents ride on top of the level set's own:
+            ! for a host-defined level set they are the whole tangent
+            if (have_jets) then
+               call add_host_jet(host_jets(:, igrid, idir), dlsf0, dlsf1_r(:, idir), &
+                                 dlsf2_rr(:, :, idir))
             end if
 
             ! Bordered right-hand side of the direction, with
             ! `d^2 phi/(dr dR_owner) = -alpha*I` (`objective_phi.f90`, `f2_r_rA`)
             ! and the anchor riding its owner rigidly.
             dir_rhs(1:3, idir) = self%param%phi_alpha*dirs(:, pt%owner_idx, idir) &
-                                 + pt%lambda_val*dlsf1_r(:, idir)
+                                 + pt%state%lambda_val*dlsf1_r(:, idir)
             dir_rhs(4, idir) = -dlsf0
          end do
 
@@ -451,7 +473,7 @@ contains
          ! `f` is evaluated at the anchor with the anchor width, and
          ! `anchor_xi0` depends on the owner radius and the raw Lebedev weight
          ! alone, so it carries no nuclear tangent and `swi_dxi` is unused.
-         call self%iswig%swi_collect(pt%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
+         call self%iswig%swi_collect(pt%state%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
                                      swi_f0, pt%iswig_work)
          call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
          do idir = 1, ndir

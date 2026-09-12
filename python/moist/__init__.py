@@ -16,6 +16,7 @@ from .interface import (
     CavitySnapshot,
     CavitySnapshotDROP,
     CouplingChannel,
+    CouplingTangent,
     CouplingTransaction,
     Electrostatics,
     Evaluation,
@@ -23,6 +24,7 @@ from .interface import (
     GostshypResponse,
     LsfResponse,
     Response,
+    ResponseTangent,
     GeneralSolvationModel,
     GostshypMoments,
     IsodensitySource,
@@ -37,7 +39,12 @@ from .interface import (
     Structure,
 )
 
+from .second_order import CoupledResponse, HostDerivatives, SecondOrderTransaction
+
 __all__ = [
+    "CoupledResponse",
+    "HostDerivatives",
+    "SecondOrderTransaction",
     "AnchorGradient",
     "ArrayCoupling",
     "CPCMSolver",
@@ -58,6 +65,8 @@ __all__ = [
     "GostshypResponse",
     "LsfResponse",
     "Response",
+    "ResponseTangent",
+    "CouplingTangent",
     "GeneralSolvationModel",
     "GostshypMoments",
     "IsodensitySource",

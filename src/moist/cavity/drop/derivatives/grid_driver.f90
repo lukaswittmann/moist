@@ -1,12 +1,13 @@
 !> Per-grid-point prologue shared by the DROP derivative traversals
 !>
-!> Three routines walk the projected grid inside an OpenMP region and open every
-!> point the same way:
+!> Four routines walk the projected grid and open every point the same way,
+!> three of them inside an OpenMP region:
 !>
 !> * [[get_surface_gradient_drop]]  (`nuclear.f90`)
 !> * [[drop_hessian_traverse]]      (`hessian_traverse.f90`), which carries both
 !>   halves of the surface Hessian as two channels of one traversal
 !> * [[get_surface_tangent_drop]]   (`tangent_forward.f90`)
+!> * the potential-weight walk of `potential.f90`, serially on one slot
 !>
 !> The common opening is: honour the abort latch, read the point, its anchor,
 !> its owner sphere and its multiplier, `prepare` the thread's level set there,
@@ -109,14 +110,18 @@ contains
       integer :: status
       !> Failure on its way to the latch
       type(error_type), allocatable :: worker_error
+      !> Active-atom counter
+      integer :: i
 
       ok = .false.
       if (abort%requested) return
 
       point = self%xyz(:, igrid)
-      pt%anchor = self%anchorxyz(:, igrid)
       pt%owner_idx = self%owner(igrid)
-      pt%lambda_val = self%lambda0(igrid)
+      ! The cavity-owned inputs of the seed state, the anchor among them, need
+      ! no level-set evaluation and go in first; the jet below completes it.
+      call fill_seed_state(self, igrid, want_curvature, pt%state)
+      pt%state%lambda_val = self%lambda0(igrid)
 
       call slots%lsf(thread_slot)%lsf%prepare(point, worker_error)
 
@@ -130,17 +135,19 @@ contains
       end if
       ! Every nuclear accessor of the point below shares these
       call slots%lsf(thread_slot)%lsf%cache_point_tensors()
+      ! The active atoms of the level set at this point: every nuclear channel
+      ! indexes its rows by them, and this is the one place the slot index
+      ! space is established for the traversals.
+      pt%n_active = slots%lsf(thread_slot)%lsf%active_count()
+      do i = 1, pt%n_active
+         pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
+      end do
 
-      call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, pt%lsf1_r, pt%lsf2_rr, pt%lsf3_rrr)
+      call slots%lsf(thread_slot)%lsf%f3_rrr(lsf0, pt%state%lsf1_r, pt%state%lsf2_rr, &
+                                             pt%state%lsf3_rrr)
       if (allocated(pt%lsf4_rrrr)) call slots%lsf(thread_slot)%lsf%f4_rrrr(pt%lsf4_rrrr)
-      call slots%phi(thread_slot)%f012_r(point, pt%anchor, pt%owner_idx, phi0, &
+      call slots%phi(thread_slot)%f012_r(point, pt%state%anchor, pt%owner_idx, phi0, &
                                          pt%phi1_r, phi2_rr)
-
-      pt%state%lsf1_r = pt%lsf1_r
-      pt%state%lsf2_rr = pt%lsf2_rr
-      pt%state%lsf3_rrr = pt%lsf3_rrr
-      pt%state%lambda_val = pt%lambda_val
-      call fill_seed_state(self, igrid, want_curvature, pt%state)
 
       call build_seed_state(pt%state, self%f_crit, self%f_foc, self%f_wleb, &
                             self%param%wleb_prune_level > 0, status)
@@ -152,8 +159,8 @@ contains
       !* ------------------------ Bordered KKT sensitivities -------------------------- *!
       ! The matrix is direction free and seed free, so every traversal factors
       ! the same thing once per grid point.
-      call pt%kkt_fac%factor(phi2_rr - pt%lambda_val*pt%lsf2_rr, pt%lsf1_r, context, &
-                             worker_error, igrid)
+      call pt%kkt_fac%factor(phi2_rr - pt%state%lambda_val*pt%state%lsf2_rr, &
+                             pt%state%lsf1_r, context, worker_error, igrid)
       if (allocated(worker_error)) then
          call abort%latch_error(worker_error, igrid)
          return
@@ -165,7 +172,7 @@ contains
          ! that go with it, and every consumer of the solved batch --
          ! [[seed_jet_basis_apply]], [[seed_anchor_apply]], [[fill_seed_basis]]
          ! -- reads it back through the same map.
-         call seed_standard_rhs(pt%lambda_val, self%param%phi_alpha, pt%kkt_rhs)
+         call seed_standard_rhs(pt%state%lambda_val, self%param%phi_alpha, pt%kkt_rhs)
          call pt%kkt_fac%solve(pt%kkt_rhs, context, worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)

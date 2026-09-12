@@ -192,6 +192,109 @@ For a self-consistent calculation, :func:`~moist.pyscf.solvated_rhf` wraps the w
    mf = solvated_rhf(mol, epsilon=80.0, nleb=194)
    print(mf.e_tot)
 
+Analytic SCF Hessians
+---------------------
+
+The converged solvated RHF object provides the total analytic nuclear Hessian:
+
+.. code-block:: python
+
+   mol = gto.M(atom="O 0 0 -0.3893; H 0.7629 0 0.1947; H -0.7991 0.0953 0.2223",
+               basis="sto-3g", unit="Angstrom")
+   mf = solvated_rhf(mol, epsilon=80.0, nleb=50, tolerance=1.0e-13)
+   hessian = mf.Hessian().kernel()   # (natoms, natoms, 3, 3), E_h / a_0^2
+
+This includes the analytic AO derivatives, motion of the density-defined DROP
+surface, PCM charge response, and solvent contributions to both the
+coupled-perturbed SCF right-hand side and response kernel. The native DROP and
+PCM second-derivative kernels are reused through host-parameter derivative
+interfaces. No finite differences enter the analytic result.
+
+There are two backends, selected by ``mf.Hessian(method)``. Both give the same
+Hessian; they differ in what the host and moist exchange to get it.
+
+``"directional"`` is the protocol the Fortran, C and Python layers share. moist
+differentiates along a batch of directions and the host answers for its own
+data along the same directions, so nothing quadratic in the number of density
+variables is ever formed and the coupled-perturbed kernel is applied direction
+by direction. A direction has a nuclear part moist sees and a host-private part
+-- here a density-matrix direction -- that it never does, so one call serves
+the RR, RP, PR and PP blocks alike.
+
+Per block of directions moist asks the host for two things, through
+:class:`~moist.interface.CouplingTangent`:
+
+``level_set_tangent(first, dirs, xyz)``
+   partial tangents of the scaled level set and its spatial derivatives to
+   third order at the fixed surface points, ``(40, ngrid, nblk)``. Requested
+   only when the level set is the host's, which for an isodensity cavity it
+   is; moist's own level set reports no nuclear partials there, so a Hessian
+   asked for without this is refused rather than served an unphysical zero.
+``field_tangent(first, dirs, xyz, d_xyz)``
+   the electronic potential and field at the *moving* points, in the
+   ``qefield`` convention. Requested only by an electrostatic component whose
+   potential the host supplies; moist forms the nuclear halves itself.
+
+and hands back a :class:`~moist.interface.ResponseTangent` per direction: the
+tangents of the surface charges and of the surface points, and the
+gradient-path level-set adjoint weights with their tangents. The host completes
+the Hessian columns and the Fock-matrix tangents from those, exactly as it
+completes a gradient and a Fock matrix from a
+:class:`~moist.interface.Response`. ``evaluation.hvp_coupled(dirs, tangent)``
+is the entry point, ``moist.hessian.solvent_hvp`` the PySCF completion around
+it, and ``moist_general_model_get_hvp_coupled()`` the same protocol in C with
+the two callbacks as function pointers.
+
+``"dense"`` is the reference backend. It requests a model-owned response from
+``evaluation.linearize()``, containing ``nuclear`` (explicit RR derivatives),
+``mixed`` (RP derivatives) and ``density_response(direction)`` (the PP action
+in independent host density coordinates). PCM charge relaxation is included in
+these quantities; electronic relaxation is handled by PySCF's CPHF solver.
+Responses own their data and remain valid after the model is evaluated again.
+Linearizing a superseded evaluation raises an error.
+
+Components implement ``second_order(transaction)`` and cavities provide their
+own surface derivatives. The PySCF Hessian adapter does not inspect component
+types, dielectric constants, or PCM matrices. CPCM, COSMO, and sums of those
+components currently implement the coupled second-order capability. Components
+without that capability, including PV and GOSTSHYP, raise an explicit error.
+
+Use a model factory to select components consistently for SCF and Hessians:
+
+.. code-block:: python
+
+   def model_factory(host):
+       return SolvationModel(
+           CavityDROPIsodensity(host, nleb=50, tolerance=1.0e-13),
+           [ModelComponentCOSMO(80.0)],
+       )
+
+   mf = solvated_rhf(mol, model_factory=model_factory)
+   hessian = mf.Hessian("directional").kernel()
+
+The dense backend in :mod:`moist.second_order` stores dense surface second
+partials for single-branch isodensity DROP. Its storage grows quadratically with
+the number of independent AO density-matrix elements, so it is intended for small
+systems; the directional backend has no such term. The charge-response part is
+applied in factored form without assembling its PP block. Both backends support
+conventional real, closed-shell, all-electron RHF and single-branch DROP
+projections. PV has a second-order channel on the directional path only.
+The native ``model.hessian()`` remains a fixed-host model derivative; the total
+relaxed SCF Hessian is obtained from ``mf.Hessian()``.
+
+``test_hessian_directional.py`` pins the directional protocol: the completed
+nuclear columns and Fock tangents against central differences of the analytic
+gradient and Fock matrix along a mixed nuclear/density direction, every channel
+of the response tangent against differences of the quantity it claims to move,
+the total SCF Hessian against the dense backend, and one configuration against
+finite differences of reconverged SCF gradients. Run it with ``meson test -C
+build pyscf_hessian_directional``.
+
+``test_hessian.py`` compares all Hessian entries with central differences of
+analytic gradients, reconverging SCF at every displaced geometry. It also checks
+the gas-phase and vacuum limits and the mixed nuclear/density and pure density
+response blocks. Run it with ``meson test -C build pyscf_hessian``.
+
 Isodensity ρ-DROP + GOSTSHYP
 ----------------------------
 

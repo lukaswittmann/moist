@@ -30,8 +30,9 @@
 !>   * [[drop_field_jet_tangent]] -- the directional nuclear derivative of the
 !>     jet at the frozen point, `sum_i v_i . T_k(.., i)`, which is what the
 !>     `tangent_f0 / f1_r / f2_rr / f3_rrr` accessors compute;
-!>   * [[drop_field_jet_column]] -- the same for a Cartesian unit direction,
-!>     which is a single column of the buffer.
+!>   * [[drop_field_jet_column_packed]] -- the same for a Cartesian unit
+!>     direction, which is a single column of the buffer, packed by spatial
+!>     symmetry class.
 !>
 !> Directional derivative of the row
 !> ---------------------------------
@@ -113,7 +114,7 @@
 !> `f3_rr_rA` only, which every DROP level set provides.
 module moist_cavity_drop_derivatives_field_tangent
    use mctc_env_accuracy, only: wp
-   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
+   use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_jet_row_entry
 
    implicit none(type, external)
    private
@@ -121,7 +122,7 @@ module moist_cavity_drop_derivatives_field_tangent
    public :: drop_field_tangent
    public :: drop_field_tangent_point, drop_field_f4_fold, drop_field_tangent_dir
    public :: drop_field_jet_point, drop_field_jet_contract
-   public :: drop_field_jet_tangent, drop_field_jet_column, drop_field_jet_column_packed
+   public :: drop_field_jet_tangent, drop_field_jet_column_packed
    public :: drop_field_tangent_work_type
    public :: drop_n_sym2, drop_n_sym3, drop_n_jet_coef, drop_sym2_idx, drop_sym3_idx
 
@@ -370,26 +371,16 @@ contains
       !> Weighted nuclear-gradient row
       real(wp), intent(inout) :: res(:, :)
 
-      !> Row accumulator
-      real(wp) :: acc
-      !> Active slot, nuclear axis and spatial axes
-      integer :: i, s, a, b
+      !> Active slot and nuclear axis
+      integer :: i, s
 
       if (n_active == 0) return
       call assert_jet_filled(work, n_active, "drop_field_jet_contract")
 
       do i = 1, n_active
          do s = 1, ndim
-            acc = w0*work%t0(s, i)
-            do a = 1, ndim
-               acc = acc + w1(a)*work%t1(a, s, i)
-            end do
-            do b = 1, ndim
-               do a = 1, ndim
-                  acc = acc + w2(a, b)*work%t2(a, b, s, i)
-               end do
-            end do
-            res(s, i) = acc
+            res(s, i) = lsf_jet_row_entry(w0, w1, w2, work%t0(s, i), work%t1(:, s, i), &
+                                          work%t2(:, :, s, i))
          end do
       end do
    end subroutine drop_field_jet_contract
@@ -471,48 +462,11 @@ contains
       end do
    end subroutine drop_field_jet_tangent
 
-   !> The jet tangent along the Cartesian unit direction of one active slot
-   !>
-   !> [[drop_field_jet_tangent]] for `v_act = e_(s, i)`, which is a single
-   !> column of every buffer. Same fill requirements: `dv3` reads `f4`.
-   !>
-   !> @param[in]  work     Scratch buffers, filled at this point
-   !> @param[in]  n_active Active slots of the prepared point
-   !> @param[in]  s        Cartesian axis of the direction
-   !> @param[in]  i        Active slot of the direction
-   !> @param[out] dv0      Directional derivative of the value
-   !> @param[out] dv1      Directional derivative of the spatial gradient [3]
-   !> @param[out] dv2      Directional derivative of the spatial Hessian [3, 3]
-   !> @param[out] dv3      Directional derivative of the third derivative [3, 3, 3]
-   pure subroutine drop_field_jet_column(work, n_active, s, i, dv0, dv1, dv2, dv3)
-      !> Scratch buffers, filled at this point
-      type(drop_field_tangent_work_type), intent(in) :: work
-      !> Active slots of the prepared point
-      integer, intent(in) :: n_active
-      !> Cartesian axis and active slot of the direction
-      integer, intent(in) :: s, i
-      !> Directional derivative of the value
-      real(wp), intent(out) :: dv0
-      !> Directional derivative of the spatial gradient
-      real(wp), intent(out) :: dv1(3)
-      !> Directional derivative of the spatial Hessian
-      real(wp), intent(out) :: dv2(3, 3)
-      !> Directional derivative of the third spatial derivative
-      real(wp), intent(out), optional :: dv3(3, 3, 3)
-
-      call assert_jet_filled(work, n_active, "drop_field_jet_column")
-      if (present(dv3)) call assert_f4_filled(work, n_active, "drop_field_jet_column")
-
-      dv0 = work%t0(s, i)
-      dv1 = work%t1(:, s, i)
-      dv2 = work%t2(:, :, s, i)
-      if (present(dv3)) dv3 = work%f4(:, :, :, s, i)
-   end subroutine drop_field_jet_column
-
    !> The jet tangent of one unit direction, packed by spatial symmetry class
    !>
-   !> [[drop_field_jet_column]] with the `(3, 3)` and `(3, 3, 3)` tangents
-   !> reduced to one entry per symmetry class, in the order of
+   !> The jet tangent `(dv0, dv1, dv2, dv3)` of the unit direction `e_(s,i)`,
+   !> which is one column of the buffer, with the `(3, 3)` and `(3, 3, 3)`
+   !> tangents reduced to one entry per symmetry class, in the order of
    !> [[drop_sym2_idx]] and [[drop_sym3_idx]]:
    !>
    !>     coef(1)      = dv0
@@ -717,16 +671,8 @@ contains
          call lsf%hvp_jet_rA(v, work%hvp1, work%hvp2, work%hvp3)
          do i = 1, n_active
             do s = 1, ndim
-               acc = w0*work%hvp1(s, i)
-               do a = 1, ndim
-                  acc = acc + w1(a)*work%hvp2(a, s, i)
-               end do
-               do b = 1, ndim
-                  do a = 1, ndim
-                     acc = acc + w2(a, b)*work%hvp3(a, b, s, i)
-                  end do
-               end do
-               res(s, i) = res(s, i) + acc
+               res(s, i) = res(s, i) + lsf_jet_row_entry(w0, w1, w2, work%hvp1(s, i), &
+                                                         work%hvp2(:, s, i), work%hvp3(:, :, s, i))
             end do
          end do
       end if

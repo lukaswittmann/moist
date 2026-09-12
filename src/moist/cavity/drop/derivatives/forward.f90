@@ -1126,7 +1126,7 @@ contains
    !> @param[out] s1_rA      This atom's dS/dR_A [3]
    !> @param[out] s2_r_rA    This atom's d^2S/(dr dR_A) [3, 3]
    !> @param[out] s3_rr_rA   This atom's d^3S/(dr^2 dR_A) [3, 3, 3]
-   pure subroutine gather_lsf_partials(islot,&
+   pure subroutine gather_lsf_partials(islot, &
                                        lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
                                        s1_rA, s2_r_rA, s3_rr_rA)
       !> LSF active slot, or zero

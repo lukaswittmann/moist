@@ -184,7 +184,7 @@ contains
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
-         call seed_normal_channel(pt%state, eff, igrid, pt%lsf2_rr, w_lsf1_pt, w_xyz_local)
+         call seed_normal_channel(pt%state, eff, igrid, pt%state%lsf2_rr, w_lsf1_pt, w_xyz_local)
 
          ! The 13 jet seeds share the point's one factorization. Only the value
          ! (column 1) and the three gradient directions (columns 2-4) move the

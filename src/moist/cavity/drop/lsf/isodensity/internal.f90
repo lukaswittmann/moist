@@ -113,6 +113,15 @@ contains
       self%candidate_space = lsf_candidate_space_user
 
       self%radius_dependent = .false.
+      ! The level set is a functional of the host's density matrix, so its
+      ! tangents along a nuclear or density direction are host data exactly as
+      ! for the callback twin: this LSF reports no nuclear partials of its own
+      ! (`vjp_f1_rA` and `f3_rr_rA` are identically zero, and the host completes
+      ! that chain from the level-set weights of the response), and the second
+      ! order needs the host exchange to supply the jet tangents. Without the
+      ! flag the nuclear Hessian would neither refuse nor consume a supplied
+      ! exchange, and would silently drop the whole surface-motion term.
+      self%host_defined = .true.
 
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
       if (allocated(error)) return

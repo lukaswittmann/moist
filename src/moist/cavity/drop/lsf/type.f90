@@ -84,6 +84,7 @@ module moist_cavity_drop_lsf_base
    public :: moist_cavity_drop_lsf_type
    public :: lsf_thread_slot
    public :: lsf_base_update
+   public :: lsf_jet_row_entry
    public :: lsf_candidate_space_undeclared
    public :: lsf_candidate_space_user
    public :: lsf_candidate_space_sorted
@@ -154,6 +155,16 @@ module moist_cavity_drop_lsf_base
 
       !> LSF dependency on atomic radii
       logical :: radius_dependent = .true.
+
+      !> Whether the level set is the host's function rather than moist's
+      !>
+      !> A host-defined level set (the isodensity callback) reports zero
+      !> nuclear partials and no active atoms: the host completes the nuclear
+      !> chain itself. The second-order host exchange keys on this flag to ask
+      !> the host for the level set's tangents along the directions of a
+      !> Hessian; a level set moist owns carries its own partials and is never
+      !> asked. Set by the concrete constructor.
+      logical :: host_defined = .false.
 
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
@@ -1070,15 +1081,18 @@ contains
          "hvp_f3_rr_rA derivative"
    end subroutine lsf_base_hvp_f3_rr_rA
 
-   !> Erroring default of the one-pass nuclear Hessian-vector family
+   !> Composing default of the one-pass nuclear Hessian-vector family
    !>
    !> `hvp_jet_rA` returns what `hvp_f1_rA`, `hvp_f2_r_rA` and `hvp_f3_rr_rA`
-   !> return, for the same nuclear direction, from a single sweep of the active
-   !> atoms: the direction-contracted power sums and the per-atom tensors are
-   !> shared by the three orders, so a caller that wants all of them -- the
-   !> field tangent of the cavity Hessian -- pays for them once. Nuclear only:
-   !> the joint position/radius contraction keeps the three separate accessors
-   !> and their `vrad`.
+   !> return, for the same nuclear direction. A level set that shares the
+   !> direction-contracted power sums and the per-atom tensors between the
+   !> three orders overrides this with a single sweep of the active atoms
+   !> (SvdW, CFC); the default composes the three accessors, exactly as
+   !> [[lsf_base_tangent_jet]] does, so a level set that implements them
+   !> separately inherits a working -- if slower -- jet. A level set without
+   !> them aborts inside the first accessor. Nuclear only: the joint
+   !> position/radius contraction keeps the three separate accessors and their
+   !> `vrad`.
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
@@ -1092,12 +1106,49 @@ contains
       real(wp), intent(out) :: hvp2(:, :, :)
       real(wp), intent(out) :: hvp3(:, :, :, :)
 
-      hvp1 = 0.0_wp*size(v, 2)*self%ncenters
-      hvp2 = 0.0_wp
-      hvp3 = 0.0_wp
-      error stop "moist DROP LSF: Chosen level set does not support "// &
-         "hvp_jet_rA derivative"
+      call self%hvp_f1_rA(v, hvp1)
+      call self%hvp_f2_r_rA(v, hvp2)
+      call self%hvp_f3_rr_rA(v, hvp3)
    end subroutine lsf_base_hvp_jet_rA
+
+   !> One entry of a jet-weighted nuclear row
+   !>
+   !> The contraction every nuclear row of the derivative traversals is built
+   !> from: `w0 t0 + sum_a w1(a) t1(a) + sum_{a,b} w2(a, b) t2(a, b)`, for one
+   !> Cartesian component of one active atom, with `t0`, `t1`, `t2` the
+   !> matching entries of the mixed derivatives `dS/dR`, `d^2S/(dr dR)` and
+   !> `d^3S/(dr^2 dR)` (or of any of their directional tangents). The
+   !> accumulation order -- value, then the gradient axis, then the Hessian
+   !> with the first axis fast -- is fixed here so that every caller sums
+   !> identically.
+   !>
+   !> @param[in]  w0 Adjoint weight of the value
+   !> @param[in]  w1 Adjoint weights of the spatial gradient [3]
+   !> @param[in]  w2 Adjoint weights of the spatial Hessian [3, 3]
+   !> @param[in]  t0 Value-order entry
+   !> @param[in]  t1 Gradient-order entries [3]
+   !> @param[in]  t2 Hessian-order entries [3, 3]
+   pure function lsf_jet_row_entry(w0, w1, w2, t0, t1, t2) result(acc)
+      real(wp), intent(in) :: w0
+      real(wp), intent(in) :: w1(3)
+      real(wp), intent(in) :: w2(3, 3)
+      real(wp), intent(in) :: t0
+      real(wp), intent(in) :: t1(3)
+      real(wp), intent(in) :: t2(3, 3)
+      real(wp) :: acc
+
+      integer :: a, b
+
+      acc = w0*t0
+      do a = 1, 3
+         acc = acc + w1(a)*t1(a)
+      end do
+      do b = 1, 3
+         do a = 1, 3
+            acc = acc + w2(a, b)*t2(a, b)
+         end do
+      end do
+   end function lsf_jet_row_entry
 
    !* ================================================================================= *!
    !*                      Radius row of the joint Hessian-vector product               *!
@@ -1241,10 +1292,8 @@ contains
 
       !> The HVP family along one direction
       real(wp), allocatable :: hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
-      !> Weighted entry
-      real(wp) :: acc
-      !> Active count and slot, direction, Cartesian component, spatial axes
-      integer :: n, i, j, s, a, b
+      !> Active count and slot, direction, Cartesian component
+      integer :: n, i, j, s
 
       n = self%active_count()
       if (n == 0) return
@@ -1254,16 +1303,8 @@ contains
          call self%hvp_jet_rA(dirs(:, :, j), hvp1, hvp2, hvp3)
          do i = 1, n
             do s = 1, 3
-               acc = w0*hvp1(s, i)
-               do a = 1, 3
-                  acc = acc + w1(a)*hvp2(a, s, i)
-               end do
-               do b = 1, 3
-                  do a = 1, 3
-                     acc = acc + w2(a, b)*hvp3(a, b, s, i)
-                  end do
-               end do
-               res(s, i, j) = acc
+               res(s, i, j) = lsf_jet_row_entry(w0, w1, w2, hvp1(s, i), hvp2(:, s, i), &
+                                                hvp3(:, :, s, i))
             end do
          end do
       end do
@@ -1307,10 +1348,8 @@ contains
 
       !> Unit direction over all centers, and the HVP family along it
       real(wp), allocatable :: v(:, :), hvp1(:, :), hvp2(:, :, :), hvp3(:, :, :, :)
-      !> Weighted entry of one column
-      real(wp) :: acc
-      !> Active count and slots, Cartesian components, spatial axes
-      integer :: n, i, j, s, t, a, b
+      !> Active count and slots, Cartesian components
+      integer :: n, i, j, s, t
 
       n = self%active_count()
       if (n == 0) return
@@ -1324,16 +1363,8 @@ contains
             v(t, self%active_atom(j)) = 0.0_wp
             do i = 1, n
                do s = 1, 3
-                  acc = w0*hvp1(s, i)
-                  do a = 1, 3
-                     acc = acc + w1(a)*hvp2(a, s, i)
-                  end do
-                  do b = 1, 3
-                     do a = 1, 3
-                        acc = acc + w2(a, b)*hvp3(a, b, s, i)
-                     end do
-                  end do
-                  res(3*(i - 1) + s, 3*(j - 1) + t) = acc
+                  res(3*(i - 1) + s, 3*(j - 1) + t) = &
+                     lsf_jet_row_entry(w0, w1, w2, hvp1(s, i), hvp2(:, s, i), hvp3(:, :, s, i))
                end do
             end do
          end do

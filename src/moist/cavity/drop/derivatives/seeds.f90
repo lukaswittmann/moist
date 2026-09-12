@@ -43,9 +43,9 @@ module moist_cavity_drop_derivatives_seeds
    use moist_math_lapack_getrs, only: lapack_getrs
    use moist_math_lapack_kinds, only: lapack_ik
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
-      & drop_seed_state_tangent_type, drop_seed_result_tangent_type, &
+      & drop_seed_state_tangent_type, &
       & drop_surface_weights_type, apply_seed, &
-      & seed_status_message, seed_contribution
+      & seed_contribution
 
    implicit none(type, external)
    private
@@ -183,11 +183,6 @@ contains
 
       !> LAPACK status
       integer(lapack_ik) :: info
-      !> Rendered status; fixed length, so the message build is thread safe
-      character(len=32) :: status
-      !> Rendered grid index and its message suffix; fixed length, for the same reason
-      character(len=32) :: idx
-      character(len=48) :: at_point
 
       self%lu = 0.0_wp
       self%lu(1:3, 1:3) = H_lagrangian
@@ -196,16 +191,49 @@ contains
 
       call lapack_getrf(4_lapack_ik, 4_lapack_ik, self%lu, 4_lapack_ik, self%ipiv, info)
       if (info /= 0_lapack_ik) then
-         write (status, "(i0)") info
-         at_point = ""
-         if (present(igrid)) then
-            write (idx, "(i0)") igrid
-            at_point = " at grid point "//trim(idx)
-         end if
-         call fatal_error(error, context//": Bordered KKT sensitivity matrix is singular"// &
-                          " (getrf status "//trim(status)//")"//trim(at_point))
+         call kkt_report(context, "Bordered KKT sensitivity matrix is singular", "getrf", &
+                         info, error, igrid)
       end if
    end subroutine drop_kkt_factor
+
+   !> Turn a LAPACK status of the bordered system into an error object
+   !>
+   !> The message is built from fixed-length renderings so that it is thread
+   !> safe inside the traversals' parallel regions.
+   !>
+   !> @param[in]  context Calling routine, used to prefix the diagnostic
+   !> @param[in]  what    What failed, in words
+   !> @param[in]  routine LAPACK routine that reported the status
+   !> @param[in]  info    LAPACK status
+   !> @param[out] error   Error object
+   !> @param[in]  igrid   Grid point being processed, when the caller has one
+   subroutine kkt_report(context, what, routine, info, error, igrid)
+      !> Calling routine
+      character(len=*), intent(in) :: context
+      !> What failed, and which LAPACK routine said so
+      character(len=*), intent(in) :: what, routine
+      !> LAPACK status
+      integer(lapack_ik), intent(in) :: info
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Failing grid point, when the caller has one
+      integer, intent(in), optional :: igrid
+
+      !> Rendered status; fixed length, so the message build is thread safe
+      character(len=32) :: status
+      !> Rendered grid index and its message suffix; fixed length, for the same reason
+      character(len=32) :: idx
+      character(len=48) :: at_point
+
+      write (status, "(i0)") info
+      at_point = ""
+      if (present(igrid)) then
+         write (idx, "(i0)") igrid
+         at_point = " at grid point "//trim(idx)
+      end if
+      call fatal_error(error, context//": "//what//" ("//routine//" status "// &
+                       trim(status)//")"//trim(at_point))
+   end subroutine kkt_report
 
    !> Solve a right-hand side batch with the stored factors
    !>
@@ -235,23 +263,12 @@ contains
 
       !> LAPACK status
       integer(lapack_ik) :: info
-      !> Rendered status; fixed length, so the message build is thread safe
-      character(len=32) :: status
-      !> Rendered grid index and its message suffix; fixed length, for the same reason
-      character(len=32) :: idx
-      character(len=48) :: at_point
 
       call lapack_getrs("n", 4_lapack_ik, int(size(rhs, 2), lapack_ik), self%lu, &
                         4_lapack_ik, self%ipiv, rhs, 4_lapack_ik, info)
       if (info /= 0_lapack_ik) then
-         write (status, "(i0)") info
-         at_point = ""
-         if (present(igrid)) then
-            write (idx, "(i0)") igrid
-            at_point = " at grid point "//trim(idx)
-         end if
-         call fatal_error(error, context//": Bordered KKT sensitivity solve failed"// &
-                          " (getrs status "//trim(status)//")"//trim(at_point))
+         call kkt_report(context, "Bordered KKT sensitivity solve failed", "getrs", &
+                         info, error, igrid)
       end if
    end subroutine drop_kkt_apply
 
@@ -326,9 +343,7 @@ contains
       integer :: idir, iseed, icol, iaxis
       !> LAPACK status
       integer(lapack_ik) :: info
-      !> Rendered status; fixed length, so the message build is thread safe
-      character(len=32) :: status
-      !> Rendered shapes; fixed length, for the same reason
+      !> Rendered shapes; fixed length, so the message build is thread safe
       character(len=64) :: shapes
       !> Rendered grid index and its message suffix; fixed length, for the same reason
       character(len=32) :: idx
@@ -376,14 +391,8 @@ contains
       call lapack_getrs("n", 4_lapack_ik, int(size(rhs, 2), lapack_ik), self%lu, &
                         4_lapack_ik, self%ipiv, rhs, 4_lapack_ik, info)
       if (info /= 0_lapack_ik) then
-         write (status, "(i0)") info
-         at_point = ""
-         if (present(igrid)) then
-            write (idx, "(i0)") igrid
-            at_point = " at grid point "//trim(idx)
-         end if
-         call fatal_error(error, context//": Tangent KKT sensitivity solve failed"// &
-                          " (getrs status "//trim(status)//")"//trim(at_point))
+         call kkt_report(context, "Tangent KKT sensitivity solve failed", "getrs", &
+                         info, error, igrid)
       end if
    end subroutine drop_kkt_solve_tangent
 
@@ -811,8 +820,8 @@ contains
    !> @param[inout] w_lsf0_pt Point-local level-set value adjoint
    !> @param[inout] w_lsf1_pt Point-local level-set gradient adjoint
    !> @param[inout] w_lsf2_pt Point-local level-set Hessian adjoint
-   subroutine seed_jet_basis_contract(eff, igrid, phi1_r, w_xyz_pt, res_seed, seed_x, &
-                                      w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
+   pure subroutine seed_jet_basis_contract(eff, igrid, phi1_r, w_xyz_pt, res_seed, seed_x, &
+                                           w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
       !> Folded surface adjoints
       type(drop_surface_weights_type), intent(in) :: eff
       !> Grid point
@@ -830,26 +839,16 @@ contains
 
       !> Adjoint contribution of one seed
       real(wp) :: contribution
-      !> Seed index, its kind and its Cartesian indices
-      integer :: ibasis, slot_kind, iaxis, jaxis
+      !> Seed index
+      integer :: ibasis
 
       do ibasis = 1, drop_n_jet_seeds
-         call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
-
          ! A field seed leaves the anchor alone, so no rigid-motion shift; the
          ! switching factor is an anchor-only iSwiG overlap and is absent for
          ! the same reason. See [[seed_contribution]].
          contribution = seed_contribution(eff, igrid, w_xyz_pt, seed_x(1:3, ibasis), &
                                           res_seed(ibasis), phi1_r)
-
-         select case (slot_kind)
-         case (drop_jet_seed_value)
-            w_lsf0_pt = w_lsf0_pt + contribution
-         case (drop_jet_seed_grad)
-            w_lsf1_pt(iaxis) = w_lsf1_pt(iaxis) + contribution
-         case (drop_jet_seed_hess)
-            w_lsf2_pt(iaxis, jaxis) = w_lsf2_pt(iaxis, jaxis) + contribution
-         end select
+         call scatter_jet_weight(ibasis, contribution, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
       end do
    end subroutine seed_jet_basis_contract
 
@@ -1015,7 +1014,7 @@ contains
       !> Induced point motion and its tangent
       real(wp), intent(in) :: dr(3), ddr(3)
       !> Second-order response
-      type(drop_seed_result_tangent_type), intent(in) :: dres
+      type(drop_seed_result_type), intent(in) :: dres
       !> Tangent of the adjoint contribution
       real(wp) :: contribution
 

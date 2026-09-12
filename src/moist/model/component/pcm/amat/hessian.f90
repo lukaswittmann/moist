@@ -85,7 +85,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       !> Surface-point, direction and axis indices with their extents
-      integer :: i, j, v, iaxis, ngrid, ndir
+      integer :: i, j, v, ngrid, ndir
       !> Row-point width, position, saturation bound and charge of the column point
       real(wp) :: xi_i, xyz_i(3), bound_i, q_j
       !> Pair displacement and squared separation
@@ -120,14 +120,8 @@ contains
 
       ! Direction-major layout: the inner loop runs over the directions of one
       ! pair, so the tangents of a point must be contiguous over the batch
-      allocate (dxi_t(ndir, ngrid), df_t(ndir, ngrid), dxyz_t(ndir, 3, ngrid), daq_t(ndir, ngrid))
-      do i = 1, ngrid
-         dxi_t(:, i) = d_xi(i, :)
-         df_t(:, i) = d_f(i, :)
-         do iaxis = 1, 3
-            dxyz_t(:, iaxis, i) = d_xyz(iaxis, i, :)
-         end do
-      end do
+      allocate (daq_t(ndir, ngrid))
+      call to_direction_major(d_xi, d_f, d_xyz, dxi_t, df_t, dxyz_t)
 
       !$omp parallel default(none) &
       !$omp shared(xi, f, xyz, q, bound, dxi_t, df_t, dxyz_t, daq_t, ngrid, ndir) &
@@ -276,15 +270,11 @@ contains
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
 
-      allocate (dxi_t(ndir, ngrid), df_t(ndir, ngrid), dxyz_t(ndir, 3, ngrid), dq_t(ndir, ngrid))
+      allocate (dq_t(ndir, ngrid))
       allocate (dw_xi_t(ndir, ngrid), dw_f_t(ndir, ngrid), dw_xyz_t(ndir, 3, ngrid))
+      call to_direction_major(d_xi, d_f, d_xyz, dxi_t, df_t, dxyz_t)
       do i = 1, ngrid
-         dxi_t(:, i) = d_xi(i, :)
-         df_t(:, i) = d_f(i, :)
          dq_t(:, i) = dq(i, :)
-         do iaxis = 1, 3
-            dxyz_t(:, iaxis, i) = d_xyz(iaxis, i, :)
-         end do
       end do
 
       !$omp parallel default(none) &
@@ -373,5 +363,38 @@ contains
          end do
       end do
    end subroutine pcm_amat_surface_weights_response
+
+   !> Direction-major copies of a tangent batch
+   !>
+   !> The pair loops run over the directions of one pair innermost, so the
+   !> tangents of a point must be contiguous over the batch: `(ndir, ngrid)`
+   !> and `(ndir, 3, ngrid)` rather than the caller's `(ngrid, ndir)` and
+   !> `(3, ngrid, ndir)`.
+   !>
+   !> @param[in]  d_xi   Width tangents (ngrid, ndir)
+   !> @param[in]  d_f    Switching-factor tangents (ngrid, ndir)
+   !> @param[in]  d_xyz  Position tangents (3, ngrid, ndir)
+   !> @param[out] dxi_t  Width tangents (ndir, ngrid)
+   !> @param[out] df_t   Switching-factor tangents (ndir, ngrid)
+   !> @param[out] dxyz_t Position tangents (ndir, 3, ngrid)
+   subroutine to_direction_major(d_xi, d_f, d_xyz, dxi_t, df_t, dxyz_t)
+      !> Tangents in the caller's layout
+      real(wp), intent(in) :: d_xi(:, :), d_f(:, :), d_xyz(:, :, :)
+      !> Direction-major copies
+      real(wp), allocatable, intent(out) :: dxi_t(:, :), df_t(:, :), dxyz_t(:, :, :)
+
+      integer :: i, iaxis, ngrid, ndir
+
+      ngrid = size(d_xi, 1)
+      ndir = size(d_xi, 2)
+      allocate (dxi_t(ndir, ngrid), df_t(ndir, ngrid), dxyz_t(ndir, 3, ngrid))
+      do i = 1, ngrid
+         dxi_t(:, i) = d_xi(i, :)
+         df_t(:, i) = d_f(i, :)
+         do iaxis = 1, 3
+            dxyz_t(:, iaxis, i) = d_xyz(iaxis, i, :)
+         end do
+      end do
+   end subroutine to_direction_major
 
 end submodule moist_model_component_pcm_amat_hessian

@@ -17,6 +17,7 @@ module moist_channels
    public :: coupling_channel_type, response_channel_type
    public :: electrostatic_coupling_type, gostshyp_coupling_type
    public :: electrostatic_response_type, lsf_response_type, gostshyp_response_type
+   public :: response_tangent_type
    public :: require_channel
 
    !> Assert that a host-supplied coupling channel is present and correctly shaped
@@ -186,6 +187,48 @@ module moist_channels
       procedure :: clear => clear_gostshyp_response
    end type gostshyp_response_type
 
+   !> Directional tangents of the response, one column per direction
+   !>
+   !> The forward-mode dual of [[response_type]] for the second-order host
+   !> exchange: where the response carries what the host contracts to complete
+   !> a gradient or a Fock matrix, this carries the directional derivative of
+   !> every one of those quantities along a batch of directions, plus the
+   !> motion of the surface points the host needs to move its own operators.
+   !> A model fills it through its Hessian entry points; the host contracts
+   !> it, exactly as it contracts the response, to complete the Hessian
+   !> columns or the Fock-matrix tangents of the same directions.
+   !>
+   !> The level-set weights are the *gradient-path* adjoints the model's
+   !> Hessian differentiates, at the base geometry and along every direction,
+   !> so that a host completes the level-set chain from one consistent pair
+   !> and never has to assume the potential-path weights coincide with them.
+   !> They are filled only when asked for at [[init_response_tangent]]: they
+   !> force the cavity's per-direction second-order chain, which a host with a
+   !> density-independent level set has no use for.
+   type :: response_tangent_type
+      !> Tangent of the surface charge `dq_i/dv` (ngrid, ndir)
+      real(wp), allocatable :: surface_charge(:, :)
+      !> Tangent of the surface positions `dr_i/dv` (3, ngrid, ndir)
+      real(wp), allocatable :: xyz(:, :, :)
+      !> Level-set adjoint weights the gradient contracts, at the base geometry:
+      !> value (ngrid), gradient (3, ngrid) and Hessian (3, 3, ngrid)
+      real(wp), allocatable :: w_value(:), w_gradient(:, :), w_hessian(:, :, :)
+      !> Their tangents along every direction: (ngrid, ndir), (3, ngrid, ndir)
+      !> and (3, 3, ngrid, ndir)
+      real(wp), allocatable :: dw_value(:, :), dw_gradient(:, :, :), dw_hessian(:, :, :, :)
+   contains
+      !> Allocate every requested channel to zero for a grid and a direction batch
+      procedure :: init => init_response_tangent
+      !> Release every channel
+      procedure :: clear => clear_response_tangent
+      !> Whether the level-set channels were requested
+      procedure :: want_lsf => response_tangent_want_lsf
+      !> Whether the container is initialised for a grid and a direction batch
+      procedure :: is_initialized => response_tangent_is_initialized
+      !> Number of directions of the batch, zero when uninitialised
+      procedure :: ndir => response_tangent_ndir
+   end type response_tangent_type
+
    !> Solvation response handed back to the host for one coupling step
    !>
    !> A channel left unallocated means the model has no contribution to it,
@@ -254,6 +297,98 @@ contains
       call self%gostshyp%clear()
 
    end subroutine clear_response
+
+   !> Allocate every requested channel of a response tangent to zero
+   !>
+   !> @param[inout] self     Response tangent
+   !> @param[in]    ngrid    Number of surface grid points
+   !> @param[in]    ndir     Number of directions of the batch
+   !> @param[in]    want_lsf Whether the level-set weight channels are requested
+   subroutine init_response_tangent(self, ngrid, ndir, want_lsf)
+      !> Response tangent
+      class(response_tangent_type), intent(inout) :: self
+      !> Number of surface grid points
+      integer, intent(in) :: ngrid
+      !> Number of directions of the batch
+      integer, intent(in) :: ndir
+      !> Whether the level-set weight channels are requested
+      logical, intent(in) :: want_lsf
+
+      call self%clear()
+      allocate (self%surface_charge(ngrid, ndir), source=0.0_wp)
+      allocate (self%xyz(3, ngrid, ndir), source=0.0_wp)
+      if (want_lsf) then
+         allocate (self%w_value(ngrid), source=0.0_wp)
+         allocate (self%w_gradient(3, ngrid), source=0.0_wp)
+         allocate (self%w_hessian(3, 3, ngrid), source=0.0_wp)
+         allocate (self%dw_value(ngrid, ndir), source=0.0_wp)
+         allocate (self%dw_gradient(3, ngrid, ndir), source=0.0_wp)
+         allocate (self%dw_hessian(3, 3, ngrid, ndir), source=0.0_wp)
+      end if
+
+   end subroutine init_response_tangent
+
+   !> Release every channel of a response tangent
+   subroutine clear_response_tangent(self)
+      !> Response tangent to clear
+      class(response_tangent_type), intent(inout) :: self
+
+      if (allocated(self%surface_charge)) deallocate (self%surface_charge)
+      if (allocated(self%xyz)) deallocate (self%xyz)
+      if (allocated(self%w_value)) deallocate (self%w_value)
+      if (allocated(self%w_gradient)) deallocate (self%w_gradient)
+      if (allocated(self%w_hessian)) deallocate (self%w_hessian)
+      if (allocated(self%dw_value)) deallocate (self%dw_value)
+      if (allocated(self%dw_gradient)) deallocate (self%dw_gradient)
+      if (allocated(self%dw_hessian)) deallocate (self%dw_hessian)
+
+   end subroutine clear_response_tangent
+
+   !> Whether the level-set weight channels were requested
+   pure logical function response_tangent_want_lsf(self) result(want)
+      !> Response tangent
+      class(response_tangent_type), intent(in) :: self
+
+      want = allocated(self%dw_value)
+   end function response_tangent_want_lsf
+
+   !> Whether the container is initialised for a grid and a direction batch
+   !>
+   !> @param[in] self  Response tangent
+   !> @param[in] ngrid Expected number of surface grid points
+   !> @param[in] ndir  Expected number of directions
+   pure logical function response_tangent_is_initialized(self, ngrid, ndir) result(ok)
+      !> Response tangent
+      class(response_tangent_type), intent(in) :: self
+      !> Expected grid and direction extents
+      integer, intent(in) :: ngrid, ndir
+
+      ok = allocated(self%surface_charge) .and. allocated(self%xyz)
+      if (.not. ok) return
+      ok = all(shape(self%surface_charge) == [ngrid, ndir]) .and. &
+           all(shape(self%xyz) == [3, ngrid, ndir])
+      if (.not. ok) return
+      if (allocated(self%dw_value)) then
+         ok = allocated(self%w_value) .and. allocated(self%w_gradient) .and. &
+              allocated(self%w_hessian) .and. allocated(self%dw_gradient) .and. &
+              allocated(self%dw_hessian)
+         if (.not. ok) return
+         ok = size(self%w_value) == ngrid .and. all(shape(self%w_gradient) == [3, ngrid]) .and. &
+              all(shape(self%w_hessian) == [3, 3, ngrid]) .and. &
+              all(shape(self%dw_value) == [ngrid, ndir]) .and. &
+              all(shape(self%dw_gradient) == [3, ngrid, ndir]) .and. &
+              all(shape(self%dw_hessian) == [3, 3, ngrid, ndir])
+      end if
+   end function response_tangent_is_initialized
+
+   !> Number of directions of the batch, zero when uninitialised
+   pure integer function response_tangent_ndir(self) result(ndir)
+      !> Response tangent
+      class(response_tangent_type), intent(in) :: self
+
+      ndir = 0
+      if (allocated(self%surface_charge)) ndir = size(self%surface_charge, 2)
+   end function response_tangent_ndir
 
    !> Clear the electrostatic response
    subroutine clear_electrostatic_response(self)

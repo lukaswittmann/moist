@@ -55,6 +55,7 @@ tests = [
   'model_component_pv',
   'model_general',
   'model_general_hessian',
+  'model_general_hessian_coupled',
 ]
 if use_hdf5
   tests += 'utils_hdf5'

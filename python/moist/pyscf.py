@@ -194,7 +194,28 @@ class PySCFHost:
                         + t[i2[a][c], i1[b]]
                         + t[i2[b][c], i1[a]]
                     )
-        return rho, drho, d2rho, d3rho
+        if order < 4:
+            return rho, drho, d2rho, d3rho
+
+        # Leibniz over four indices: the (4,0) split, the four (3,1) splits
+        # and the three (2,2) splits, each with its mirror image folded into
+        # the factor of two by the symmetry of t
+        d4rho = np.empty((3, 3, 3, 3))
+        for a in range(3):
+            for b in range(3):
+                for c in range(3):
+                    for d in range(3):
+                        d4rho[a, b, c, d] = 2.0 * (
+                            t[_component_index((a, b, c, d)), 0]
+                            + t[_component_index((a, b, c)), i1[d]]
+                            + t[_component_index((a, b, d)), i1[c]]
+                            + t[_component_index((a, c, d)), i1[b]]
+                            + t[_component_index((b, c, d)), i1[a]]
+                            + t[i2[a][b], i2[c][d]]
+                            + t[i2[a][c], i2[b][d]]
+                            + t[i2[a][d], i2[b][c]]
+                        )
+        return rho, drho, d2rho, d3rho, d4rho
 
     def make_cavity(self, **kwargs) -> CavityDROPIsodensity:
         """Deprecated compatibility factory for ``CavityDROPIsodensity(self)``."""
@@ -507,6 +528,10 @@ class PySCFCoupling(SolvationCoupling):
         # The isodensity callback runs during model.update(), before prepare().
         self.host.dm = self.density_matrix
 
+    def second_order(self):
+        from .hessian import _DensityDerivatives
+        return _DensityDerivatives(self.host, self.density_matrix)
+
     def _set_gostshyp_response(self, response) -> None:
         """Select host response state for a deprecated all-in-one wrapper."""
         self._gostshyp = response
@@ -586,34 +611,64 @@ class PySCFCoupling(SolvationCoupling):
 
 def solvated_rhf(
     mol,
-    epsilon: float,
+    epsilon: Optional[float] = None,
     *,
+    model_factory=None,
     rho_iso: float = DEFAULT_RHO_ISO,
     scale: float = 1000.0,
     conv_tol: float = 1e-13,
     conv_tol_grad: float = 1e-9,
+    max_cycle: Optional[int] = None,
     **cavity_kwargs,
 ):
-    """Restricted Hartree-Fock in a CPCM isodensity cavity, solved to self-consistency.
+    """Restricted Hartree-Fock with a self-consistent solvation model.
+
+    Supply ``epsilon`` for the default CPCM/isodensity DROP model, or
+    ``model_factory(host)`` returning a SolvationModel. The same factory is
+    used for SCF and Hessian evaluation; the host does not inspect components.
 
     The surface follows the density, so the cavity is rebuilt from scratch on
     every SCF iteration.  Because :meth:`PySCFHost.fock` is the exact
     derivative of the solvation energy, the SCF remains a stationary-point
     search for ``E_HF + E_solv`` and the converged density is variational.
 
-    Returns the converged PySCF mean-field object.
+    Returns the converged PySCF mean-field object. ``mf.Hessian().kernel()``
+    evaluates its total analytic Hessian, including the solvent contribution
+    to coupled-perturbed SCF. The dense Hessian implementation currently
+    requires a single-branch DROP projection; see :mod:`moist.hessian`.
     """
     from pyscf import lib, scf
 
     host = PySCFHost(mol, rho_iso=rho_iso, scale=scale)
+    if model_factory is None:
+        if epsilon is None:
+            raise TypeError("Supply epsilon or model_factory")
+
+        def model_factory(host):
+            return SolvationModel(
+                CavityDROPIsodensity(host, **cavity_kwargs), [ModelComponentCPCM(epsilon)]
+            )
+    elif epsilon is not None or cavity_kwargs:
+        raise TypeError("model_factory owns component and cavity settings; omit epsilon and cavity options")
 
     class _SolvatedRHF(scf.hf.RHF):
         """RHF carrying the solvation response as a tagged extra potential."""
 
+        def Hessian(self, method="dense"):
+            """The total analytic Hessian; ``method`` selects the solvent path.
+
+            ``"dense"`` assembles the solvent response in the full host
+            parameter space, ``"directional"`` runs the single directional
+            protocol shared with the Fortran and C layers; see
+            :func:`moist.hessian.rhf_hessian`.
+            """
+            from .hessian import rhf_hessian
+
+            model = model_factory(host)
+            return rhf_hessian(self, model, host, method=method)
+
         def _solvent(self, dm):
-            model = SolvationModel(
-                CavityDROPIsodensity(host, **cavity_kwargs), [ModelComponentCPCM(epsilon)]
-            )
+            model = model_factory(host)
             result = model.evaluate(coupling=host.coupling(dm))
             return result.energy, result.fock
 
@@ -644,5 +699,10 @@ def solvated_rhf(
     # at machine precision, and the converged energy is unchanged either way.
     mean_field.conv_tol = conv_tol
     mean_field.conv_tol_grad = conv_tol_grad
+    # PySCF's default of 50 iterations is not enough for every system these
+    # tolerances are asked of -- a minimal-basis anion needs a few hundred --
+    # and the driver owns the kernel call, so the cap has to be reachable here.
+    if max_cycle is not None:
+        mean_field.max_cycle = max_cycle
     mean_field.kernel()
     return mean_field

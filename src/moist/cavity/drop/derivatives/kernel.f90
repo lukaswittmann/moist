@@ -17,9 +17,6 @@
 !>
 !> Degeneracy is reported: [[build_seed_state]] returns a status code and
 !> leaves the fatal-versus-skip decision to the caller
-!>
-!> TODO: Refactor types so that a clear intent in/out structure is visible
-!>       this way, we will not have the risk of corruption during the run
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric, &
@@ -31,12 +28,13 @@ module moist_cavity_drop_derivatives_kernel
 
    public :: drop_seed_state_type, drop_seed_result_type, drop_surface_weights_type
    public :: drop_seed_state_tangent_type, drop_seed_input_tangent_type
-   public :: drop_seed_result_tangent_type
+
    public :: build_seed_state, apply_seed, apply_seed_tangent, compute_branch_phi_adj
    public :: branch_point_adjoint, seed_contribution
    public :: next_branch_group, max_branch_group_size
    public :: switched_eigenvalue_response, switched_eigenvalue_curvature
    public :: seed_status_message
+   public :: drop_n_host_jet, add_host_jet
    public :: seed_state_ok, seed_state_singular_gradient
    public :: seed_state_singular_bmat, seed_state_singular_jacobian
    public :: seed_weight_tol, seed_det_b_guard, seed_curv_disc_guard
@@ -49,6 +47,12 @@ module moist_cavity_drop_derivatives_kernel
    integer, parameter :: seed_state_singular_bmat = 2
    !> Closest-point Jacobian `J` vanished
    integer, parameter :: seed_state_singular_jacobian = 3
+
+   !> Length of one host jet tangent: the level set and its spatial
+   !> derivatives to third order as full Cartesian tensors, `1 + 3 + 9 + 27`,
+   !> packed by order in Fortran order; the packing of the second-order host
+   !> exchange, see `coupling_tangent_type`
+   integer, parameter :: drop_n_host_jet = 40
 
    !> Magnitude below which a weight or a norm counts as zero
    real(wp), parameter :: seed_weight_tol = 1.0e-30_wp
@@ -158,6 +162,11 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of the principal curvatures (zero unless `want_curvature`)
       real(wp) :: dk1 = 0.0_wp, dk2 = 0.0_wp
    end type drop_seed_result_type
+   ! The second-order response of [[apply_seed_tangent]] is the same type: its
+   ! `dg` is the directional derivative of `res%dg` along the second direction,
+   ! not a new quantity. Every component is default initialised, for the same
+   ! reason as in [[drop_seed_state_tangent_type]]: the `want_curvature` early
+   ! return in [[apply_seed_tangent]] leaves the curvature pair untouched.
 
    !> Tangent of the derived block of [[drop_seed_state_type]] along one seed
    !>
@@ -282,21 +291,6 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: danchor_wleb0 = 0.0_wp, dcpjac_scal0 = 0.0_wp, dw_f0 = 0.0_wp
       real(wp) :: dwbranch = 0.0_wp, dwleb = 0.0_wp, dxi0 = 0.0_wp
    end type drop_seed_input_tangent_type
-
-   !> Tangent of [[drop_seed_result_type]] along a second direction
-   !>
-   !> Field names mirror [[drop_seed_result_type]] exactly: `dres%dg` is the
-   !> directional derivative of `res%dg`, not a new quantity. Every component is
-   !> default initialised, for the same reason as in
-   !> [[drop_seed_state_tangent_type]]: the `want_curvature` early return in
-   !> [[apply_seed_tangent]] leaves the curvature pair untouched
-   type :: drop_seed_result_tangent_type
-      real(wp) :: dg(3) = 0.0_wp, dH(3, 3) = 0.0_wp
-      real(wp) :: dn_surf(3) = 0.0_wp, d_gnorm = 0.0_wp
-      real(wp) :: dJ = 0.0_wp, dw_f = 0.0_wp
-      real(wp) :: dwleb = 0.0_wp, dxi = 0.0_wp
-      real(wp) :: dk1 = 0.0_wp, dk2 = 0.0_wp
-   end type drop_seed_result_tangent_type
 
    !> Surface adjoints reduced to the channels the seed loop actually reads
    !>
@@ -1028,32 +1022,27 @@ contains
    !> `d_v(lsf3_rrr)` enters only through `dres%dH`. `lsf4_rrrr` is the driver's
    !> concern and does not appear here.
    !>
-   !> `dlsf1_r` and `dlsf2_rr` are deliberately unused, and the compiler warns
-   !> about both. [[apply_seed]] is *linear* in the seed, so differentiating a
-   !> term `c(p) * b` gives `dc * b + c * db`: a seed component survives here
-   !> only if its coefficient is state dependent. Those two enter with the
+   !> The seed's own `dlsf1_r` and `dlsf2_rr` are not arguments, and nothing
+   !> is missing: [[apply_seed]] is *linear* in the seed, so differentiating a
+   !> term `c(p) * b` gives `dc * b + c * db`, and a seed component survives
+   !> here only if its coefficient is state dependent. Those two enter with the
    !> identity as coefficient, so only their own tangents `ddlsf1_r`/`ddlsf2_rr`
    !> appear, while `dr` and `dlambda` survive through `lsf2_rr` and `lsf3_rrr`.
-   !> They are kept so the call site mirrors [[apply_seed]] argument for
-   !> argument; nothing is missing.
    !>
    !> @param[in]  state      Per-grid point forward state from [[build_seed_state]]
    !> @param[in]  dstate_v   Tangent of the derived state along the second direction
    !> @param[in]  dinp_v     Tangent of the state inputs along the second direction
    !> @param[in]  res_v      Response of the second direction
-   !> @param[in]  dlsf1_r    Seed perturbation of `grad S` at fixed `r`
-   !> @param[in]  dlsf2_rr   Seed perturbation of `grad^2 S` at fixed `r`
    !> @param[in]  dr         Induced motion of the projected point
    !> @param[in]  dlambda    Induced change of the Lagrange multiplier
-   !> @param[in]  ddlsf1_r   Second-direction tangent of `dlsf1_r`
-   !> @param[in]  ddlsf2_rr  Second-direction tangent of `dlsf2_rr`
+   !> @param[in]  ddlsf1_r   Second-direction tangent of the seed's `grad S` perturbation
+   !> @param[in]  ddlsf2_rr  Second-direction tangent of the seed's `grad^2 S` perturbation
    !> @param[in]  ddr        Second-direction tangent of `dr`
    !> @param[in]  ddlambda   Second-direction tangent of `dlambda`
    !> @param[in]  res_b      Response of seed `b`, from [[apply_seed]]
    !> @param[in]  dstate_b   State tangent of seed `b`, from [[apply_seed]]
    !> @param[out] dres       Second-order response
-   pure subroutine apply_seed_tangent(state, dstate_v, dinp_v, res_v, &
-                                      dlsf1_r, dlsf2_rr, dr, dlambda, &
+   pure subroutine apply_seed_tangent(state, dstate_v, dinp_v, res_v, dr, dlambda, &
                                       ddlsf1_r, ddlsf2_rr, ddr, ddlambda, &
                                       res_b, dstate_b, dres)
       !> Per-grid point forward state
@@ -1064,15 +1053,15 @@ contains
       type(drop_seed_input_tangent_type), intent(in) :: dinp_v
       !> Response of the `v` direction, carrying `dn_surf`, `d_gnorm` and `dH`
       type(drop_seed_result_type), intent(in) :: res_v
-      !> The seed `b` being differentiated
-      real(wp), intent(in) :: dlsf1_r(3), dlsf2_rr(3, 3), dr(3), dlambda
+      !> The seed `b` being differentiated: its induced point motion and multiplier change
+      real(wp), intent(in) :: dr(3), dlambda
       !> Tangent of that seed along `v`
       real(wp), intent(in) :: ddlsf1_r(3), ddlsf2_rr(3, 3), ddr(3), ddlambda
       !> Response and state tangent of seed `b`, from [[apply_seed]]
       type(drop_seed_result_type), intent(in) :: res_b
       type(drop_seed_state_tangent_type), intent(in) :: dstate_b
       !> Second-order response
-      type(drop_seed_result_tangent_type), intent(out) :: dres
+      type(drop_seed_result_type), intent(out) :: dres
 
       !> Second-order sensitivity of the tangent-restricted KKT matrix
       real(wp) :: ddA(3, 3)
@@ -1722,6 +1711,30 @@ contains
       end if
 
    end function seed_contribution
+
+   !> Add one host jet tangent onto a directional tangent of the jet
+   !>
+   !> The host's partial tangent along a direction at the fixed point rides on
+   !> top of the level set's own nuclear tangent; the third order is read only
+   !> where the second-order chain asks for it.
+   !>
+   !> @param[in]    jet Host jet tangent, `drop_n_host_jet` entries
+   !> @param[inout] dv0 Tangent of the value
+   !> @param[inout] dv1 Tangent of the gradient
+   !> @param[inout] dv2 Tangent of the Hessian
+   !> @param[inout] dv3 Tangent of the third derivative, optional
+   pure subroutine add_host_jet(jet, dv0, dv1, dv2, dv3)
+      !> Host jet tangent
+      real(wp), intent(in) :: jet(:)
+      !> Tangents of the jet along the direction
+      real(wp), intent(inout) :: dv0, dv1(3), dv2(3, 3)
+      real(wp), intent(inout), optional :: dv3(3, 3, 3)
+
+      dv0 = dv0 + jet(1)
+      dv1 = dv1 + jet(2:4)
+      dv2 = dv2 + reshape(jet(5:13), [3, 3])
+      if (present(dv3)) dv3 = dv3 + reshape(jet(14:40), [3, 3, 3])
+   end subroutine add_host_jet
 
    !> Render a degeneracy status as a diagnostic message
    !>

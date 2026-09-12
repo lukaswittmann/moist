@@ -57,6 +57,7 @@ program tester
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_general, only: collect_model_general
    use test_model_general_hessian, only: collect_model_general_hessian
+   use test_model_general_hessian_coupled, only: collect_model_general_hessian_coupled
 
    implicit none(type, external)
 
@@ -121,7 +122,9 @@ program tester
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
       & new_testsuite("model_general", collect_model_general), &
-      & new_testsuite("model_general_hessian", collect_model_general_hessian) &
+      & new_testsuite("model_general_hessian", collect_model_general_hessian), &
+      & new_testsuite("model_general_hessian_coupled", &
+         collect_model_general_hessian_coupled) &
       & ]
 
 #ifdef WITH_HDF5

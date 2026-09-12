@@ -30,6 +30,8 @@ module moist_cavity_surface_adjoint
       procedure :: init => init_surface_adjoint
       !> Reset every allocated surface-adjoint channel to zero
       procedure :: zero => zero_surface_adjoint
+      !> Release every surface-adjoint channel
+      procedure :: destroy => destroy_surface_adjoint
       !> Add any supplied surface-adjoint channels
       procedure :: add_surface_weights
       !> Report whether every channel is allocated with consistent shapes
@@ -48,14 +50,7 @@ contains
       !> Number of surface grid points
       integer, intent(in) :: ngrid
 
-      if (allocated(self%w_xi)) deallocate (self%w_xi)
-      if (allocated(self%w_f)) deallocate (self%w_f)
-      if (allocated(self%w_a)) deallocate (self%w_a)
-      if (allocated(self%w_w)) deallocate (self%w_w)
-      if (allocated(self%w_xyz)) deallocate (self%w_xyz)
-      if (allocated(self%w_n)) deallocate (self%w_n)
-      if (allocated(self%w_k1)) deallocate (self%w_k1)
-      if (allocated(self%w_k2)) deallocate (self%w_k2)
+      call self%destroy()
 
       allocate (self%w_xi(ngrid), source=0.0_wp)
       allocate (self%w_f(ngrid), source=0.0_wp)
@@ -85,6 +80,24 @@ contains
       if (allocated(self%w_k2)) self%w_k2 = 0.0_wp
 
    end subroutine zero_surface_adjoint
+
+   !> Release every surface-adjoint channel
+   !>
+   !> @param[inout] self  Surface-adjoint accumulator
+   subroutine destroy_surface_adjoint(self)
+      !> Surface-adjoint accumulator
+      class(cavity_surface_adjoint_type), intent(inout) :: self
+
+      if (allocated(self%w_xi)) deallocate (self%w_xi)
+      if (allocated(self%w_f)) deallocate (self%w_f)
+      if (allocated(self%w_a)) deallocate (self%w_a)
+      if (allocated(self%w_w)) deallocate (self%w_w)
+      if (allocated(self%w_xyz)) deallocate (self%w_xyz)
+      if (allocated(self%w_n)) deallocate (self%w_n)
+      if (allocated(self%w_k1)) deallocate (self%w_k1)
+      if (allocated(self%w_k2)) deallocate (self%w_k2)
+
+   end subroutine destroy_surface_adjoint
 
    !> Add any supplied weights to an initialized surface-adjoint accumulator
    !>

@@ -25,12 +25,15 @@ module moist_api
    use iso_c_binding
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
-   use moist_type, only: cavity_type, solvation_model_type, solvation_model_component_type
-   use moist_channels, only: coupling_type, response_type
+   use moist_type, only: cavity_type, solvation_model_type, solvation_model_component_type, &
+      & coupling_tangent_type
+   use moist_channels, only: coupling_type, response_type, response_tangent_type
+   use moist_output_format, only: format_string
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
                                              assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
                                              pcm_amat_nuclear_gradient
+   use moist_model_component_pcm_amat, only: pcm_amat_tangent_apply, pcm_amat_surface_weights_response
    use moist_model_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
    use moist_model_component_pcm_type, only: potential_source
@@ -101,6 +104,62 @@ module moist_api
       type(coupling_type) :: coupling
    end type vp_model
 
+   !> Second-order host exchange over the C ABI
+   !>
+   !> The two deferred calls of [[coupling_tangent_type]] as function pointers
+   !> with one context, the shape of every other host callback of this API.
+   !> A missing pointer is reported as an error by the call that needed it,
+   !> so a host that never asks for the exchange a call would make can leave
+   !> it NULL.
+   type, extends(coupling_tangent_type) :: c_coupling_tangent_type
+      !> Level-set jet tangent callback, or NULL
+      type(c_funptr) :: level_set_ptr = c_null_funptr
+      !> Field tangent callback, or NULL
+      type(c_funptr) :: field_ptr = c_null_funptr
+      !> User context passed back on every call
+      type(c_ptr) :: context = c_null_ptr
+   contains
+      procedure :: level_set_tangent => c_coupling_level_set_tangent
+      procedure :: field_tangent => c_coupling_field_tangent
+   end type c_coupling_tangent_type
+
+   abstract interface
+      !> C callback for the host's level-set jet tangents along a block
+      !>
+      !> `first` is zero-based on the C side. See `moist_level_set_tangent_callback`
+      !> in the header for the contract.
+      function level_set_tangent_callback(context, first, nblk, nat, ngrid, dirs, xyz, jets) &
+         result(status) bind(C)
+         import :: c_ptr, c_int, c_double
+         implicit none (type, external)
+         type(c_ptr), value :: context
+         integer(c_int), value :: first, nblk, nat, ngrid
+         real(c_double), intent(in) :: dirs(3, nat, nblk)
+         real(c_double), intent(in) :: xyz(3, ngrid)
+         real(c_double), intent(out) :: jets(40, ngrid, nblk)
+         integer(c_int) :: status
+      end function level_set_tangent_callback
+
+      !> C callback for the host's electronic potential and field tangents
+      !>
+      !> `first` is zero-based on the C side. See `moist_field_tangent_callback`
+      !> in the header for the contract.
+      function field_tangent_callback(context, first, nblk, nat, ngrid, dirs, xyz, d_xyz, &
+                                      efield, dphi, defield) result(status) bind(C)
+         import :: c_ptr, c_int, c_double
+         implicit none (type, external)
+         type(c_ptr), value :: context
+         integer(c_int), value :: first, nblk, nat, ngrid
+         real(c_double), intent(in) :: dirs(3, nat, nblk)
+         real(c_double), intent(in) :: xyz(3, ngrid)
+         real(c_double), intent(in) :: d_xyz(3, ngrid, nblk)
+         real(c_double), intent(out) :: efield(3, ngrid)
+         real(c_double), intent(out) :: dphi(ngrid, nblk)
+         real(c_double), intent(out) :: defield(3, ngrid, nblk)
+         integer(c_int) :: status
+      end function field_tangent_callback
+   end interface
+
    type :: vp_component
       !> Run context owned by this handle until the component is copied into a
       !> model; `solvation_model_general%add_component` re-points the copy at the
@@ -165,15 +224,110 @@ module moist_api
    public :: compute_anchor_gradient_api
    public :: get_anchor_gradient_api
    public :: get_cavity_gradient_api
+   public :: general_model_get_hvp_coupled_api
    public :: get_amat_gradient_api
    public :: contract_amat1_q1q2_rA_api
    public :: contract_amat1_q1q2_surface_weights_api
+   public :: drop_host_point_derivatives_api, pcm_amat_host_derivatives_api
    public :: contract_surface_lsf_weights_api, contract_surface_lsf_weights_extended_api
    public :: contract_nuc_elec_qefield_rA_api
    public :: print_header_api, print_header_api_short, print_header_api_ascii, print_version_api
    public :: print_build_header_api
 
 contains
+
+   !> Arbitrary host-parameter derivatives of one DROP surface point (zero-based index).
+   subroutine drop_host_point_derivatives_api(verror, vcav, igrid, nat, ndir, c_dirs, &
+      & c_jet, c_jet1, c_jet2, c_d1, c_d2) bind(C, name=namespace//'drop_host_point_derivatives')
+      type(c_ptr), value :: verror, vcav, c_dirs, c_jet, c_jet1, c_jet2, c_d1, c_d2
+      integer(c_int), value :: igrid, nat, ndir
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      real(c_double), pointer :: dirs(:, :, :), jet(:), jet1(:, :), jet2(:, :, :), d1(:, :), d2(:, :, :)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (.not. c_associated(vcav) .or. .not. c_associated(c_dirs) .or. &
+          .not. c_associated(c_jet) .or. .not. c_associated(c_jet1) .or. &
+          .not. c_associated(c_jet2) .or. .not. c_associated(c_d1) .or. .not. c_associated(c_d2)) then
+         call api_error(error%ptr, 'drop_host_point_derivatives', 'Null pointer provided')
+         return
+      end if
+      call c_f_pointer(vcav, cav)
+      if (.not. associated(cav%ptr) .or. nat < 1 .or. ndir < 1) then
+         call api_error(error%ptr, 'drop_host_point_derivatives', 'Invalid cavity or dimensions')
+         return
+      end if
+      select type (cavity => cav%ptr)
+      type is (cavity_type_drop)
+         if (nat /= cavity%nsph .or. cavity%ngrid < 1) then
+            call api_error(error%ptr, 'drop_host_point_derivatives', 'Cavity must be updated and match nat')
+            return
+         end if
+         call c_f_pointer(c_dirs, dirs, [3, nat, ndir])
+         call c_f_pointer(c_jet, jet, [121])
+         call c_f_pointer(c_jet1, jet1, [40, ndir])
+         call c_f_pointer(c_jet2, jet2, [13, ndir, ndir])
+         call c_f_pointer(c_d1, d1, [5, ndir])
+         call c_f_pointer(c_d2, d2, [5, ndir, ndir])
+         call cavity%host_point_derivatives(igrid + 1, dirs, jet, jet1, jet2, d1, d2, error%ptr)
+      class default
+         call api_error(error%ptr, 'drop_host_point_derivatives', 'A DROP cavity is required')
+      end select
+   end subroutine drop_host_point_derivatives_api
+
+   !> Native PCM matrix derivatives along a host-supplied surface path.
+   !> Surface components are (x,y,z,xi,f). Return A_p q and q^T A_pq q.
+   subroutine pcm_amat_host_derivatives_api(verror, vcav, ng, ndir, c_q, c_d1, c_d2, c_aq1, c_a2) &
+      & bind(C, name=namespace//'pcm_amat_host_derivatives')
+      type(c_ptr), value :: verror, vcav, c_q, c_d1, c_d2, c_aq1, c_a2
+      integer(c_int), value :: ng, ndir
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      real(c_double), pointer :: q(:), d1(:, :, :), d2(:, :, :, :), aq1(:, :), a2(:, :)
+      real(wp), allocatable :: wx(:), wf(:), wr(:, :), dwx(:, :), dwf(:, :), dwr(:, :, :), dq(:, :)
+      integer :: p, v
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (.not. c_associated(vcav) .or. .not. c_associated(c_q) .or. &
+          .not. c_associated(c_d1) .or. .not. c_associated(c_d2) .or. &
+          .not. c_associated(c_aq1) .or. .not. c_associated(c_a2)) then
+         call api_error(error%ptr, 'pcm_amat_host_derivatives', 'Null pointer provided')
+         return
+      end if
+      call c_f_pointer(vcav, cav)
+      if (.not. associated(cav%ptr) .or. ng < 1 .or. ndir < 1) then
+         call api_error(error%ptr, 'pcm_amat_host_derivatives', 'Invalid cavity or dimensions')
+         return
+      end if
+      associate (cavity => cav%ptr)
+         if (ng /= cavity%ngrid .or. .not. allocated(cavity%xi0) .or. .not. allocated(cavity%f)) then
+            call api_error(error%ptr, 'pcm_amat_host_derivatives', 'Gaussian cavity must match ng')
+            return
+         end if
+         call c_f_pointer(c_q, q, [ng])
+         call c_f_pointer(c_d1, d1, [5, ng, ndir])
+         call c_f_pointer(c_d2, d2, [5, ng, ndir, ndir])
+         call c_f_pointer(c_aq1, aq1, [ng, ndir])
+         call c_f_pointer(c_a2, a2, [ndir, ndir])
+         allocate (wx(ng), wf(ng), wr(3, ng), dwx(ng, ndir), dwf(ng, ndir), dwr(3, ng, ndir))
+         allocate (dq(ng, ndir), source=0.0_wp)
+         call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, q, q, wx, wf, wr, error%ptr)
+         if (allocated(error%ptr)) return
+         call pcm_amat_tangent_apply(cavity%xi0, cavity%f, cavity%xyz, q, &
+            & d1(4, :, :), d1(5, :, :), d1(1:3, :, :), aq1, error%ptr)
+         if (allocated(error%ptr)) return
+         call pcm_amat_surface_weights_response(cavity%xi0, cavity%f, cavity%xyz, q, dq, &
+            & d1(4, :, :), d1(5, :, :), d1(1:3, :, :), dwx, dwf, dwr, error%ptr)
+         if (allocated(error%ptr)) return
+         do v = 1, ndir
+            do p = 1, ndir
+               a2(p, v) = sum(wx*d2(4, :, p, v)) + sum(wf*d2(5, :, p, v)) &
+                  & + sum(wr*d2(1:3, :, p, v)) + sum(dwx(:, v)*d1(4, :, p)) &
+                  & + sum(dwf(:, v)*d1(5, :, p)) + sum(dwr(:, :, v)*d1(1:3, :, p))
+            end do
+         end do
+      end associate
+   end subroutine pcm_amat_host_derivatives_api
 
 !> API error helper - creates consistent error messages with routine context
    subroutine api_error(error, routine, msg)
@@ -1750,6 +1904,218 @@ contains
       hvp = real(local, c_double)
 
    end subroutine general_model_get_hvp_api
+
+!> Return general-model nuclear Hessian-vector products with the second-order
+!> host exchange: host tangents in, the response tangent out.
+   subroutine general_model_get_hvp_coupled_api(verror, vmodel, nat, ngrid, ndir, c_dirs, &
+         & level_set_cb, field_cb, context, c_hvp, c_dq, c_dxyz, c_w0, c_w1, c_w2, &
+         & c_dw0, c_dw1, c_dw2) bind(C, name=namespace//"general_model_get_hvp_coupled")
+      !> Error and model handles
+      type(c_ptr), value :: verror, vmodel
+      !> Number of atoms, surface points and directions
+      integer(c_int), value :: nat, ngrid, ndir
+      !> Input directions, Fortran (3, nat, ndir)
+      type(c_ptr), value :: c_dirs
+      !> Host callbacks, either or both may be NULL, and their context
+      type(c_funptr), value :: level_set_cb, field_cb
+      type(c_ptr), value :: context
+      !> Output products, Fortran (3, nat, ndir)
+      type(c_ptr), value :: c_hvp
+      !> Response tangent outputs, each NULL when not wanted: the surface-charge
+      !> tangent (ngrid, ndir), the position tangent (3, ngrid, ndir), the base
+      !> level-set weights (ngrid), (3, ngrid), (3, 3, ngrid) and their tangents
+      !> (ngrid, ndir), (3, ngrid, ndir), (3, 3, ngrid, ndir)
+      type(c_ptr), value :: c_dq, c_dxyz, c_w0, c_w1, c_w2, c_dw0, c_dw1, c_dw2
+      !> Decoded error wrapper
+      type(vp_error), pointer :: error
+      !> Decoded model wrapper
+      type(vp_model), pointer :: model
+      !> Input and output views
+      real(c_double), pointer :: dirs(:, :, :), hvp(:, :, :)
+      real(c_double), pointer :: dq(:, :), dxyz(:, :, :), w0(:), w1(:, :), w2(:, :, :)
+      real(c_double), pointer :: dw0(:, :), dw1(:, :, :), dw2(:, :, :, :)
+      !> Fortran directions and products
+      real(wp), allocatable :: local_dirs(:, :, :), local(:, :, :)
+      !> The host exchange and the response tangent
+      type(c_coupling_tangent_type), target :: host
+      type(response_tangent_type), target :: rt
+      !> Whether a host callback was supplied and whether the level-set
+      !> channels are wanted
+      logical :: have_host, want_lsf
+      !> Model error
+      type(error_type), allocatable :: model_error
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+
+      if (.not. c_associated(vmodel) .or. .not. c_associated(c_dirs) .or. &
+          .not. c_associated(c_hvp)) then
+         call api_error(error%ptr, "general_model_get_hvp_coupled", "Null pointer provided")
+         return
+      end if
+      call c_f_pointer(vmodel, model)
+      if (.not. allocated(model%ptr)) then
+         call api_error(error%ptr, "general_model_get_hvp_coupled", "Model is not initialized")
+         return
+      end if
+      if (ndir < 1) then
+         call api_error(error%ptr, "general_model_get_hvp_coupled", "No direction supplied")
+         return
+      end if
+      want_lsf = c_associated(c_dw0) .or. c_associated(c_dw1) .or. c_associated(c_dw2) .or. &
+                 c_associated(c_w0) .or. c_associated(c_w1) .or. c_associated(c_w2)
+      if (want_lsf .and. .not. (c_associated(c_dw0) .and. c_associated(c_dw1) .and. &
+                                c_associated(c_dw2) .and. c_associated(c_w0) .and. &
+                                c_associated(c_w1) .and. c_associated(c_w2))) then
+         call api_error(error%ptr, "general_model_get_hvp_coupled", &
+                        "The level-set weight channels are requested together or not at all")
+         return
+      end if
+
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         if (.not. general%updated .or. nat /= general%cavity%nsph) then
+            call api_error(error%ptr, "general_model_get_hvp_coupled", &
+                           "Atom count does not match the updated general-model cavity")
+            return
+         end if
+         if (ngrid /= general%cavity%ngrid) then
+            call api_error(error%ptr, "general_model_get_hvp_coupled", &
+                           "Grid size does not match the updated general-model cavity")
+            return
+         end if
+      class default
+         call api_error(error%ptr, "general_model_get_hvp_coupled", &
+                        "Model is not a general solvation model")
+         return
+      end select
+
+      call c_f_pointer(c_dirs, dirs, [3, int(nat), int(ndir)])
+      call c_f_pointer(c_hvp, hvp, [3, int(nat), int(ndir)])
+      allocate (local_dirs(3, int(nat), int(ndir)), source=real(dirs, wp))
+      allocate (local(3, int(nat), int(ndir)), source=0.0_wp)
+      call rt%init(int(ngrid), int(ndir), want_lsf)
+
+      have_host = c_associated(level_set_cb) .or. c_associated(field_cb)
+      host%level_set_ptr = level_set_cb
+      host%field_ptr = field_cb
+      host%context = context
+
+      select type (general => model%ptr)
+      type is (solvation_model_general)
+         if (have_host) then
+            call general%get_hvp(model%coupling, local_dirs, local, model_error, host=host, rt=rt)
+         else
+            call general%get_hvp(model%coupling, local_dirs, local, model_error, rt=rt)
+         end if
+      class default
+         call fatal_error(model_error, "Model is not a general solvation model")
+      end select
+      if (allocated(model_error)) then
+         call api_error(error%ptr, "general_model_get_hvp_coupled", model_error%message)
+         return
+      end if
+      hvp = real(local, c_double)
+
+      if (c_associated(c_dq)) then
+         call c_f_pointer(c_dq, dq, [int(ngrid), int(ndir)])
+         dq = real(rt%surface_charge, c_double)
+      end if
+      if (c_associated(c_dxyz)) then
+         call c_f_pointer(c_dxyz, dxyz, [3, int(ngrid), int(ndir)])
+         dxyz = real(rt%xyz, c_double)
+      end if
+      if (want_lsf) then
+         call c_f_pointer(c_w0, w0, [int(ngrid)])
+         call c_f_pointer(c_w1, w1, [3, int(ngrid)])
+         call c_f_pointer(c_w2, w2, [3, 3, int(ngrid)])
+         call c_f_pointer(c_dw0, dw0, [int(ngrid), int(ndir)])
+         call c_f_pointer(c_dw1, dw1, [3, int(ngrid), int(ndir)])
+         call c_f_pointer(c_dw2, dw2, [3, 3, int(ngrid), int(ndir)])
+         w0 = real(rt%w_value, c_double)
+         w1 = real(rt%w_gradient, c_double)
+         w2 = real(rt%w_hessian, c_double)
+         dw0 = real(rt%dw_value, c_double)
+         dw1 = real(rt%dw_gradient, c_double)
+         dw2 = real(rt%dw_hessian, c_double)
+      end if
+
+   end subroutine general_model_get_hvp_coupled_api
+
+!> The host's level-set jet tangents through the C callback
+   subroutine c_coupling_level_set_tangent(self, first, dirs, xyz, jets, error)
+      class(c_coupling_tangent_type), intent(inout) :: self
+      integer, intent(in) :: first
+      real(wp), intent(in) :: dirs(:, :, :)
+      real(wp), intent(in) :: xyz(:, :)
+      real(wp), intent(out) :: jets(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      procedure(level_set_tangent_callback), pointer :: callback
+      real(c_double), allocatable :: c_dirs(:, :, :), c_xyz(:, :), c_jets(:, :, :)
+      integer(c_int) :: status
+
+      if (.not. c_associated(self%level_set_ptr)) then
+         call fatal_error(error, "The second-order host exchange needs the level-set tangent"// &
+                          " callback: the cavity's level set is the host's")
+         return
+      end if
+      call c_f_procpointer(self%level_set_ptr, callback)
+      allocate (c_dirs(size(dirs, 1), size(dirs, 2), size(dirs, 3)), source=real(dirs, c_double))
+      allocate (c_xyz(size(xyz, 1), size(xyz, 2)), source=real(xyz, c_double))
+      allocate (c_jets(size(jets, 1), size(jets, 2), size(jets, 3)), source=0.0_c_double)
+      status = callback(self%context, int(first - 1, c_int), int(size(dirs, 3), c_int), &
+                        int(size(dirs, 2), c_int), int(size(xyz, 2), c_int), c_dirs, c_xyz, c_jets)
+      if (status /= 0_c_int) then
+         call fatal_error(error, "The host's level-set tangent callback failed with status "// &
+                          format_string(int(status), "(i0)"))
+         return
+      end if
+      jets = real(c_jets, wp)
+   end subroutine c_coupling_level_set_tangent
+
+!> The host's potential and field tangents through the C callback
+   subroutine c_coupling_field_tangent(self, first, dirs, xyz, d_xyz, efield, dphi, defield, error)
+      class(c_coupling_tangent_type), intent(inout) :: self
+      integer, intent(in) :: first
+      real(wp), intent(in) :: dirs(:, :, :)
+      real(wp), intent(in) :: xyz(:, :)
+      real(wp), intent(in) :: d_xyz(:, :, :)
+      real(wp), intent(out) :: efield(:, :)
+      real(wp), intent(out) :: dphi(:, :)
+      real(wp), intent(out) :: defield(:, :, :)
+      type(error_type), allocatable, intent(out) :: error
+
+      procedure(field_tangent_callback), pointer :: callback
+      real(c_double), allocatable :: c_dirs(:, :, :), c_xyz(:, :), c_dxyz(:, :, :)
+      real(c_double), allocatable :: c_efield(:, :), c_dphi(:, :), c_defield(:, :, :)
+      integer(c_int) :: status
+
+      if (.not. c_associated(self%field_ptr)) then
+         call fatal_error(error, "The second-order host exchange needs the field tangent"// &
+                          " callback: a component reads the host potential")
+         return
+      end if
+      call c_f_procpointer(self%field_ptr, callback)
+      allocate (c_dirs(size(dirs, 1), size(dirs, 2), size(dirs, 3)), source=real(dirs, c_double))
+      allocate (c_xyz(size(xyz, 1), size(xyz, 2)), source=real(xyz, c_double))
+      allocate (c_dxyz(size(d_xyz, 1), size(d_xyz, 2), size(d_xyz, 3)), &
+                source=real(d_xyz, c_double))
+      allocate (c_efield(3, size(xyz, 2)), source=0.0_c_double)
+      allocate (c_dphi(size(xyz, 2), size(dirs, 3)), source=0.0_c_double)
+      allocate (c_defield(3, size(xyz, 2), size(dirs, 3)), source=0.0_c_double)
+      status = callback(self%context, int(first - 1, c_int), int(size(dirs, 3), c_int), &
+                        int(size(dirs, 2), c_int), int(size(xyz, 2), c_int), c_dirs, c_xyz, &
+                        c_dxyz, c_efield, c_dphi, c_defield)
+      if (status /= 0_c_int) then
+         call fatal_error(error, "The host's field tangent callback failed with status "// &
+                          format_string(int(status), "(i0)"))
+         return
+      end if
+      efield = real(c_efield, wp)
+      dphi = real(c_dphi, wp)
+      defield = real(c_defield, wp)
+   end subroutine c_coupling_field_tangent
 
 !> Decode the optional master tolerance handed to a DROP cavity constructor.
 !> A null pointer selects the compiled DROP default, so every entry point can

@@ -9,8 +9,9 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base, surface_adjoint_response_type
-   use moist_channels, only: response_type
+   use moist_type, only: cavity_type, list_cavity_fields_base, surface_adjoint_response_type, &
+      & coupling_tangent_type
+   use moist_channels, only: response_type, response_tangent_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
    use moist_cavity_fields, only: cavity_field_query_type
@@ -314,6 +315,8 @@ module moist_cavity_drop
       procedure :: get_surface_scalar_tangent => get_surface_tangent_drop
       !> Forward tangent of every surface observable along nuclear directions
       procedure :: get_surface_tangent => get_surface_tangent_full_drop
+      !> Host-parameter derivatives of one projected Gaussian surface point
+      procedure :: host_point_derivatives => drop_host_point_derivatives
       !> Internal: adjoint-response half of the surface Hessian (J^T omega_v)
       procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
       !> Public: surface Hessian-vector products (both halves)
@@ -371,6 +374,18 @@ module moist_cavity_drop
    end type cavity_type_drop
 
    interface
+      !> Host jets are partial derivatives at the fixed projected point.
+      !> Full Cartesian tensors are packed by spatial order in Fortran order:
+      !> jet(121) through order 4, jet1(40,ndir) through order 3,
+      !> jet2(13,ndir,ndir) through order 2. All are derivatives of S, not rho.
+      !> Outputs contain (x,y,z,xi,f), with no density or orbital assumptions.
+      module subroutine drop_host_point_derivatives(self, igrid, dirs, jet, jet1, jet2, d1, d2, error)
+         class(cavity_type_drop), intent(in) :: self
+         integer, intent(in) :: igrid
+         real(wp), intent(in) :: dirs(:, :, :), jet(:), jet1(:, :), jet2(:, :, :)
+         real(wp), intent(out) :: d1(:, :), d2(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine drop_host_point_derivatives
 
       !* ============================================================================== *!
       !*               Internal DROP routines (should not be used outside)              *!
@@ -714,7 +729,7 @@ module moist_cavity_drop
       !> @param[out]   d_wbranch      Tangent of the softmax branch weight (ngrid, ndir)
       !> @param[in]    contracted     See [[get_surface_tangent_drop]]
       module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
-                                                  error, d_wbranch, contracted)
+                                                  error, d_wbranch, contracted, host_jets)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          real(wp), intent(in) :: dirs(:, :, :)
@@ -723,6 +738,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
          real(wp), intent(out), optional :: d_wbranch(:, :)
          logical, intent(in), optional :: contracted
+         real(wp), intent(in), optional :: host_jets(:, :, :)
       end subroutine drop_surface_tangent_core
 
       !> [deriv/hessian_traverse.f90] Adjoint-response half of the surface Hessian
@@ -771,7 +787,7 @@ module moist_cavity_drop
       !> @param[out]   error         Error object
       module subroutine drop_hessian_traverse(self, eff, fixed_mode, want_response, &
                                               context, acc, dirs, hess_fixed, hvp, error, &
-                                              omega_v)
+                                              omega_v, host, rt)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(drop_surface_weights_type), intent(in) :: eff
@@ -784,6 +800,8 @@ module moist_cavity_drop
          real(wp), intent(inout), optional :: hvp(:, :, :)
          type(error_type), allocatable, intent(out) :: error
          class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         class(coupling_tangent_type), intent(inout), optional :: host
+         type(response_tangent_type), intent(inout), optional :: rt
       end subroutine drop_hessian_traverse
 
       !> [deriv/hessian.f90] Surface Hessian-vector products
@@ -797,7 +815,9 @@ module moist_cavity_drop
       !> @param[inout] hvp     Accumulator (3, nsph, ndir)
       !> @param[out]   error   Error object
       !> @param[inout] omega_v Surface-adjoint response of the model, optional
-      module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v)
+      !> @param[inout] host    Second-order host exchange, optional
+      !> @param[inout] rt      Response tangent of the direction set, optional
+      module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v, host, rt)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
@@ -805,6 +825,8 @@ module moist_cavity_drop
          real(wp), intent(inout) :: hvp(:, :, :)
          type(error_type), allocatable, intent(out) :: error
          class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         class(coupling_tangent_type), intent(inout), optional :: host
+         type(response_tangent_type), intent(inout), optional :: rt
       end subroutine get_surface_hessian_drop
 
       !> [deriv/hessian.f90] Dense nuclear Hessian of the cavity contribution
@@ -814,13 +836,17 @@ module moist_cavity_drop
       !> @param[inout] hessian Accumulator (3, nsph, 3, nsph)
       !> @param[out]   error   Error object
       !> @param[inout] omega_v Surface-adjoint response of the model, optional
-      module subroutine get_hessian_drop(self, acc, hessian, error, omega_v)
+      !> @param[inout] host    Second-order host exchange, optional
+      !> @param[inout] rt      Response tangent of the Cartesian basis, optional
+      module subroutine get_hessian_drop(self, acc, hessian, error, omega_v, host, rt)
          implicit none (type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          real(wp), intent(inout) :: hessian(:, :, :, :)
          type(error_type), allocatable, intent(out) :: error
          class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+         class(coupling_tangent_type), intent(inout), optional :: host
+         type(response_tangent_type), intent(inout), optional :: rt
       end subroutine get_hessian_drop
 
    end interface

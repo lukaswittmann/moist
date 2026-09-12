@@ -8,7 +8,7 @@ module moist_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
-   use moist_channels, only: coupling_type, response_type
+   use moist_channels, only: coupling_type, response_type, response_tangent_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
@@ -20,6 +20,7 @@ module moist_type
    public :: cavity_surface_adjoint_type
    public :: cavity_surface_tangent_type
    public :: surface_adjoint_response_type
+   public :: coupling_tangent_type, hessian_block_type, response_tangent_type
    public :: solvation_model_type, solvation_model_component_type
    public :: solver_base_type
    public :: write_cavity_xyz_debug
@@ -162,6 +163,12 @@ module moist_type
       !> response into them; `hvp_direct` is the block's column accumulator of
       !> the non-surface terms and is likewise added to.
       !>
+      !> With the second-order host exchange on, `first` is the global index
+      !> of the block's first direction and `rt` the response tangent of the
+      !> whole direction set, into which the model deposits the per-direction
+      !> quantities the host completes its Hessian from (the surface-charge
+      !> tangent); the cavity fills the rest of `rt` itself.
+      !>
       !> @param[inout] self       Response object
       !> @param[in]    cavity     Cavity the tangent was taken on
       !> @param[in]    dirs       Nuclear directions of the block (3, nsph, nblk)
@@ -169,10 +176,12 @@ module moist_type
       !> @param[inout] dacc       Surface-adjoint response per direction (nblk)
       !> @param[inout] hvp_direct Non-surface Hessian columns of the block (3, nsph, nblk)
       !> @param[out]   error      Error handling
+      !> @param[in]    first      Global index of the block's first direction, optional
+      !> @param[inout] rt         Response tangent of the whole direction set, optional
       subroutine apply_surface_adjoint_response(self, cavity, dirs, tangent, dacc, &
-                                                hvp_direct, error)
+                                                hvp_direct, error, first, rt)
          import :: surface_adjoint_response_type, cavity_type, cavity_surface_tangent_type, &
-            & cavity_surface_adjoint_type, wp, error_type
+            & cavity_surface_adjoint_type, response_tangent_type, wp, error_type
          class(surface_adjoint_response_type), intent(inout) :: self
          class(cavity_type), intent(in) :: cavity
          real(wp), intent(in) :: dirs(:, :, :)
@@ -180,9 +189,130 @@ module moist_type
          type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
          real(wp), intent(inout) :: hvp_direct(:, :, :)
          type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: first
+         type(response_tangent_type), intent(inout), optional :: rt
       end subroutine apply_surface_adjoint_response
 
    end interface
+
+   !> Second-order host exchange: what the host supplies along directions
+   !>
+   !> The counterpart of the coupling for the nuclear Hessian and for the
+   !> host's own response solve. A direction of the model's Hessian entry
+   !> points has a nuclear part, `dirs(:, :, idir)`, which moist sees, and may
+   !> carry a host-private part -- a density direction, say -- which moist
+   !> never sees. Where the host's data enter the surface map and the
+   !> electrostatics, moist therefore asks the host for their tangents along
+   !> every direction of a block, identified by global direction index:
+   !>
+   !>   * before the surface tangent pass, the partial tangents of the level
+   !>     set's spatial jet at the *fixed* surface points, for a level set the
+   !>     host defines (the isodensity callback), see `level_set_tangent`;
+   !>   * after it, the tangent of the host's electronic potential and field
+   !>     at the *moving* points, for a PCM component whose potential the host
+   !>     supplies, see `field_tangent`.
+   !>
+   !> Both are the electronic halves only: what moist forms itself from the
+   !> nuclei -- the point-charge potential, the level set's own nuclear
+   !> partials -- it also differentiates itself. A host implements the object
+   !> once and serves Hessian columns, Hessian-vector products and the Fock
+   !> tangents of its response solve with it; the C API wraps the two calls as
+   !> function pointers and the Python layer as one protocol object.
+   type, abstract :: coupling_tangent_type
+   contains
+      !> Partial tangents of the level-set jet at the fixed surface points
+      procedure(coupling_level_set_tangent), deferred :: level_set_tangent
+      !> Tangents of the host's electronic potential and field at the moving points
+      procedure(coupling_field_tangent), deferred :: field_tangent
+   end type coupling_tangent_type
+
+   abstract interface
+
+      !> Partial tangents of the scaled level set's spatial jet along a block
+      !>
+      !> `jets(:, i, j)` holds, for surface point `i` and direction `j` of the
+      !> block, the partial derivative along the direction -- the nuclear part
+      !> through the host's own centres and the host-private part -- of the
+      !> level set and its spatial derivatives to third order at the fixed
+      !> point, packed by spatial order as full Cartesian tensors in Fortran
+      !> order: `1 + 3 + 9 + 27 = 40` entries. The tangents are of the level
+      !> set moist projects on, `S`, in moist's sign and scale, and not of the
+      !> host's bare density.
+      !>
+      !> @param[inout] self  Host tangent object
+      !> @param[in]    first Global index of the block's first direction
+      !> @param[in]    dirs  Nuclear directions of the block (3, nat, nblk)
+      !> @param[in]    xyz   Surface points (3, ngrid)
+      !> @param[out]   jets  Jet tangents (40, ngrid, nblk)
+      !> @param[out]   error Error handling
+      subroutine coupling_level_set_tangent(self, first, dirs, xyz, jets, error)
+         import :: coupling_tangent_type, wp, error_type
+         class(coupling_tangent_type), intent(inout) :: self
+         integer, intent(in) :: first
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(in) :: xyz(:, :)
+         real(wp), intent(out) :: jets(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine coupling_level_set_tangent
+
+      !> Tangents of the host's electronic potential and field along a block
+      !>
+      !> The *electronic* half only, as `qefield` is on the gradient path:
+      !> moist forms the nuclear half itself. `efield` is `qefield` without
+      !> the charge weight, `grad phi_el(r_i)` and not negated, at the base
+      !> geometry; `dphi` and `defield` are the total tangents along each
+      !> direction at the moving points, `d/dv phi_el(r_i(v))` including the
+      !> motion `d_xyz` of the points, which the cavity has just formed and
+      !> hands over here.
+      !>
+      !> @param[inout] self    Host tangent object
+      !> @param[in]    first   Global index of the block's first direction
+      !> @param[in]    dirs    Nuclear directions of the block (3, nat, nblk)
+      !> @param[in]    xyz     Surface points (3, ngrid)
+      !> @param[in]    d_xyz   Tangent of the surface points (3, ngrid, nblk)
+      !> @param[out]   efield  Electronic field at the base geometry (3, ngrid)
+      !> @param[out]   dphi    Tangent of the electronic potential (ngrid, nblk)
+      !> @param[out]   defield Tangent of the electronic field (3, ngrid, nblk)
+      !> @param[out]   error   Error handling
+      subroutine coupling_field_tangent(self, first, dirs, xyz, d_xyz, efield, dphi, &
+                                        defield, error)
+         import :: coupling_tangent_type, wp, error_type
+         class(coupling_tangent_type), intent(inout) :: self
+         integer, intent(in) :: first
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(in) :: xyz(:, :)
+         real(wp), intent(in) :: d_xyz(:, :, :)
+         real(wp), intent(out) :: efield(:, :)
+         real(wp), intent(out) :: dphi(:, :)
+         real(wp), intent(out) :: defield(:, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine coupling_field_tangent
+
+   end interface
+
+   !> Per-block context of the second-order exchange, handed to the components
+   !>
+   !> Built by the model's adjoint response once per direction block, before
+   !> it walks its components: the block's place in the direction set, the
+   !> host's field tangents when a [[coupling_tangent_type]] is present, and
+   !> the accumulator into which an electrostatic component deposits the
+   !> tangent of its surface charges when a response tangent was asked for.
+   type :: hessian_block_type
+      !> Global index of the block's first direction
+      integer :: first = 1
+      !> Whether the host's field tangents below are present
+      logical :: have_field = .false.
+      !> Unweighted electronic field at the base geometry (3, ngrid)
+      real(wp), allocatable :: efield(:, :)
+      !> Tangent of the electronic potential at the moving points (ngrid, nblk)
+      real(wp), allocatable :: dphi(:, :)
+      !> Tangent of the electronic field at the moving points (3, ngrid, nblk)
+      real(wp), allocatable :: defield(:, :, :)
+      !> Surface-charge tangent accumulator (ngrid, nblk); allocated when the
+      !> caller asked for a response tangent, added to by every electrostatic
+      !> component
+      real(wp), allocatable :: dq(:, :)
+   end type hessian_block_type
 
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
@@ -296,6 +426,8 @@ module moist_type
       procedure :: get_hessian_surface_weights => get_component_hessian_surface_weights_default
       !> Accumulate nuclear-Hessian columns that do not flow through the surface
       procedure :: get_direct_hessian => get_component_direct_hessian_default
+      !> Whether the second-order surface channel reads the host's field tangents
+      procedure :: needs_field_tangent => component_needs_field_tangent_default
 
    end type solvation_model_component_type
 
@@ -497,7 +629,9 @@ contains
    !> @param[inout] hvp     Hessian-vector product accumulator, unchanged
    !> @param[out]   error   Error handling
    !> @param[inout] omega_v Surface-adjoint response of the model, unused
-   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error, omega_v)
+   !> @param[inout] host    Second-order host exchange, unused
+   !> @param[inout] rt      Response tangent of the direction set, unused
+   subroutine get_cavity_surface_hessian_default(self, acc, dirs, hvp, error, omega_v, host, rt)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
@@ -510,6 +644,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional :: host
+      !> Response tangent of the direction set
+      type(response_tangent_type), intent(inout), optional :: rt
 
       call fatal_error(error, "This cavity does not provide get_surface_hessian &
          &(reverse-mode surface Hessian-vector products)")
@@ -527,7 +665,9 @@ contains
    !> @param[inout] hessian Nuclear-Hessian accumulator, unchanged
    !> @param[out]   error   Error handling
    !> @param[inout] omega_v Surface-adjoint response of the model, unused
-   subroutine get_cavity_hessian_default(self, acc, hessian, error, omega_v)
+   !> @param[inout] host    Second-order host exchange, unused
+   !> @param[inout] rt      Response tangent of the Cartesian basis, unused
+   subroutine get_cavity_hessian_default(self, acc, hessian, error, omega_v, host, rt)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Surface-observable adjoints
@@ -538,6 +678,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional :: host
+      !> Response tangent of the Cartesian basis
+      type(response_tangent_type), intent(inout), optional :: rt
 
       call fatal_error(error, "This cavity does not provide get_hessian &
          &(dense nuclear Hessian of the cavity contribution)")
@@ -708,8 +852,9 @@ contains
    !> @param[in]    tangent  Surface tangent of the block, every channel
    !> @param[inout] dacc     Surface-adjoint response per direction, unchanged
    !> @param[out]   error    Error object
+   !> @param[inout] block    Per-block context of the second-order exchange, unused
    subroutine get_component_hessian_surface_weights_default(self, coupling, cavity, dirs, &
-                                                            tangent, dacc, error)
+                                                            tangent, dacc, error, block)
       !> Solvation component
       class(solvation_model_component_type), intent(inout) :: self
       !> Wavefunction data
@@ -724,6 +869,8 @@ contains
       type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Per-block context of the second-order exchange
+      type(hessian_block_type), intent(inout), optional :: block
 
       if (allocated(self%name)) then
          call fatal_error(error, "Component "//self%name//" provides no second-order"// &
@@ -734,6 +881,21 @@ contains
       end if
 
    end subroutine get_component_hessian_surface_weights_default
+
+   !> Default: the second-order surface channel reads no host field tangents
+   !>
+   !> A component whose gradient-path adjoints depend on a host-supplied
+   !> potential overrides this, so that the model fetches the host's field
+   !> tangents for a block only when something will read them.
+   !>
+   !> @param[in] self Solvation component
+   pure logical function component_needs_field_tangent_default(self) result(needs)
+      !> Solvation component
+      class(solvation_model_component_type), intent(in) :: self
+
+      needs = .false.
+      if (allocated(self%name)) needs = .false.
+   end function component_needs_field_tangent_default
 
    !> Default no-op hook for nuclear-Hessian columns outside the surface
    !>
@@ -775,7 +937,9 @@ contains
    !> @param[in]    coupling Wavefunction data
    !> @param[inout] hessian  Nuclear-Hessian accumulator (3, nat, 3, nat), unchanged
    !> @param[out]   error    Error object
-   subroutine get_model_hessian_default(self, coupling, hessian, error)
+   !> @param[inout] host     Second-order host exchange, unused
+   !> @param[inout] rt       Response tangent of the Cartesian basis, unused
+   subroutine get_model_hessian_default(self, coupling, hessian, error, host, rt)
       !> Solvation model
       class(solvation_model_type), intent(inout), target :: self
       !> Wavefunction data
@@ -784,6 +948,10 @@ contains
       real(wp), intent(inout) :: hessian(:, :, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional, target :: host
+      !> Response tangent of the Cartesian basis
+      type(response_tangent_type), intent(inout), optional, target :: rt
 
       call fatal_error(error, "This solvation model does not provide a nuclear Hessian")
 
@@ -796,7 +964,9 @@ contains
    !> @param[in]    dirs     Nuclear directions (3, nat, ndir)
    !> @param[inout] hvp      Hessian-vector accumulator (3, nat, ndir), unchanged
    !> @param[out]   error    Error object
-   subroutine get_model_hvp_default(self, coupling, dirs, hvp, error)
+   !> @param[inout] host     Second-order host exchange, unused
+   !> @param[inout] rt       Response tangent of the direction set, unused
+   subroutine get_model_hvp_default(self, coupling, dirs, hvp, error, host, rt)
       !> Solvation model
       class(solvation_model_type), intent(inout), target :: self
       !> Wavefunction data
@@ -807,6 +977,10 @@ contains
       real(wp), intent(inout) :: hvp(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional, target :: host
+      !> Response tangent of the direction set
+      type(response_tangent_type), intent(inout), optional, target :: rt
 
       call fatal_error(error, "This solvation model does not provide nuclear"// &
                        " Hessian-vector products")

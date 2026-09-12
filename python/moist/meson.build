@@ -51,10 +51,14 @@ pysrcs = files(
   '__init__.py',
   'conftest.py',
   'gostshyp.py',
+  'hessian.py',
+  'second_order.py',
   'interface.py',
   'library.py',
   'pyscf.py',
   'test_gostshyp.py',
+  'test_hessian.py',
+  'test_hessian_directional.py',
   'test_interface.py',
   'test_library.py',
   'test_pyscf.py',
@@ -72,10 +76,14 @@ foreach name : [
   '__init__.py',
   'conftest.py',
   'gostshyp.py',
+  'hessian.py',
+  'second_order.py',
   'interface.py',
   'library.py',
   'pyscf.py',
   'test_gostshyp.py',
+  'test_hessian.py',
+  'test_hessian_directional.py',
   'test_interface.py',
   'test_library.py',
   'test_pyscf.py',
@@ -91,7 +99,7 @@ test(
     'cffi',
     'numpy',
     'pytest',
-    'pyscf:dft,grad,gto,scf',
+    'pyscf:dft,grad,gto,hessian,scf',
   ],
   suite: 'python',
   timeout: 60,
@@ -109,6 +117,30 @@ bindings_srcs = [
   meson.current_build_dir() / 'test_library.py',
 ]
 coupling_src = meson.current_build_dir() / 'test_pyscf.py'
+
+test(
+  'pyscf_hessian',
+  python,
+  args: pytest_args + [meson.current_build_dir() / 'test_hessian.py'],
+  depends: moist_pyext,
+  env: coupling_env,
+  suite: 'python',
+  # Four-point finite-difference references cost twice the gradients a
+  # two-point rule does: about four minutes here.
+  timeout: 1200,
+)
+
+test(
+  'pyscf_hessian_directional',
+  python,
+  args: pytest_args + [meson.current_build_dir() / 'test_hessian_directional.py'],
+  depends: moist_pyext,
+  env: coupling_env,
+  suite: 'python',
+  # Three end-to-end cases reconverge a solvated SCF per displacement: about
+  # four minutes here, so the cap leaves room for a slower machine.
+  timeout: 1800,
+)
 
 # The CFFI bindings and the Python object model
 test(

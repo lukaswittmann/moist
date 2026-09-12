@@ -71,8 +71,6 @@ module moist_cavity_drop_gaussian
       integer :: capacity = 0
       !> Owner atom the cache was filled for
       integer :: owner = 0
-      !> Gaussian width the cache was filled for
-      real(wp) :: xi = 0.0_wp
       !> Switching function value at the cached point
       real(wp) :: f_val = 1.0_wp
       !> Contributing neighbours cached
@@ -395,7 +393,6 @@ contains
       if (want_rows) then
          call work%reserve(count)
          work%owner = owner
-         work%xi = xi
       end if
 
       do ii = 1, count

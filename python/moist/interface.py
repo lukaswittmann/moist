@@ -18,6 +18,7 @@ import numpy as np
 
 from . import library
 from .library import CavityField
+from .second_order import CoupledResponse, HostDerivatives, SecondOrderTransaction
 
 
 # -----------------------------------------------------------------------------
@@ -45,6 +46,71 @@ class _ImmutableArrayValue:
 
     def __post_init__(self) -> None:
         _freeze_result_arrays(self)
+
+
+class CouplingTangent(Protocol):
+    """Host side of the second-order exchange, along a batch of directions.
+
+    A direction of :meth:`SolvationModel.hvp_coupled` has a nuclear part,
+    ``dirs[:, :, idir]``, which moist sees, and may carry a host-private part
+    (a density direction) which moist never sees; the host keeps that part
+    itself and identifies directions by their global index. Both methods
+    receive one *block* of the direction set, ``first`` being the zero-based
+    global index of its first direction.
+
+    ``level_set_tangent(first, dirs, xyz)``
+        Partial tangents of the scaled level set moist projects on and of its
+        spatial derivatives to third order at the fixed surface points
+        ``xyz`` ``(3, ngrid)``, shape ``(40, ngrid, nblk)``: per point and
+        direction the value (1), gradient (3), Hessian (9) and third
+        derivative (27) as full Cartesian tensors in Fortran order, packed by
+        order. Includes the host's own centres moving along the nuclear part.
+        Asked for only when the level set is the host's (an isodensity
+        callback cavity); may be absent otherwise.
+    ``field_tangent(first, dirs, xyz, d_xyz)``
+        The electronic half of the potential, in the ``qefield`` convention:
+        ``efield`` ``(3, ngrid)`` is ``grad phi_el(r_i)`` at the base geometry,
+        ``dphi`` ``(ngrid, nblk)`` and ``defield`` ``(3, ngrid, nblk)`` the
+        total tangents of ``phi_el`` and ``grad phi_el`` at the *moving* points
+        ``r_i + d_xyz``. Asked for only by an electrostatic component on a
+        host-supplied potential; may be absent otherwise.
+    """
+
+    def level_set_tangent(self, first: int, dirs: np.ndarray, xyz: np.ndarray) -> np.ndarray: ...
+
+    def field_tangent(
+        self, first: int, dirs: np.ndarray, xyz: np.ndarray, d_xyz: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]: ...
+
+
+@dataclass(frozen=True)
+class ResponseTangent(_ImmutableArrayValue):
+    """Directional tangents of the response, one column per direction.
+
+    What a host completes its Hessian columns and Fock-matrix tangents from,
+    as it completes a gradient and a Fock matrix from a :class:`Response`:
+
+    ``surface_charge``
+        ``(ngrid, ndir)`` tangent of the surface charges.
+    ``xyz``
+        ``(3, ngrid, ndir)`` tangent of the surface points.
+    ``w_value``, ``w_gradient``, ``w_hessian``
+        ``(ngrid,)``, ``(3, ngrid)``, ``(3, 3, ngrid)`` gradient-path level-set
+        adjoint weights at the base geometry, and
+    ``dw_value``, ``dw_gradient``, ``dw_hessian``
+        ``(ngrid, ndir)``, ``(3, ngrid, ndir)``, ``(3, 3, ngrid, ndir)`` their
+        tangents. ``None`` unless the level-set channels were requested; the
+        Hessian weights are symmetrised.
+    """
+
+    surface_charge: np.ndarray
+    xyz: np.ndarray
+    w_value: Optional[np.ndarray] = None
+    w_gradient: Optional[np.ndarray] = None
+    w_hessian: Optional[np.ndarray] = None
+    dw_value: Optional[np.ndarray] = None
+    dw_gradient: Optional[np.ndarray] = None
+    dw_hessian: Optional[np.ndarray] = None
 
 
 @dataclass(frozen=True)
@@ -439,6 +505,12 @@ class Cavity(ABC):
         self._updated = False
         self._snapshot_cache: Optional[CavitySnapshot] = None
 
+    def parameter_surface_derivatives(self, parameters):
+        """Return first/second surface derivatives in host parameter coordinates."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not provide coupled surface derivatives"
+        )
+
     def _as_handle(self) -> library.CavityHandle:
         return self._handle
 
@@ -662,6 +734,33 @@ class _CavityDROPBase(Cavity):
         """Compute the anchor-only nuclear derivatives."""
         self._require_updated()
         library.compute_anchor_gradient(self._handle)
+
+    def parameter_surface_derivatives(self, parameters):
+        if not self.density_dependent:
+            raise NotImplementedError("Coupled DROP derivatives require a density-defined level set")
+        coords = self.snapshot().xyz.T
+        n = parameters.n
+        first = np.empty((5, len(coords), n), order="F")
+        second = np.empty((5, len(coords), n, n), order="F")
+        for i, jets in enumerate(parameters.level_set_jets(coords)):
+            first[:, i], second[:, i] = self.host_point_derivatives(i, parameters.dirs, *jets)
+        return first, second
+
+    def host_point_derivatives(self, igrid, dirs, jet, jet1, jet2):
+        """Differentiate one projected point along arbitrary host parameters.
+
+        Jets contain derivatives of the scaled level set at the fixed point:
+        spatial orders 0..4, parameter/spatial orders 1/0..3 and 2/0..2,
+        packed as full Cartesian tensors in Fortran order. Returned arrays
+        have shape (5, ndir) and (5, ndir, ndir) for (x,y,z,xi,f).
+        """
+        self._require_updated()
+        return library.drop_host_point_derivatives(self._handle, igrid, dirs, jet, jet1, jet2)
+
+    def amat_host_derivatives(self, q, d1, d2):
+        """Return A_p q and q^T A_pq q for supplied surface derivatives."""
+        self._require_updated()
+        return library.pcm_amat_host_derivatives(self._handle, q, d1, d2)
 
     def get_anchor_gradient(self) -> AnchorGradient:
         """Return the anchor-channel nuclear derivatives in native grid order."""
@@ -937,6 +1036,18 @@ class SolvationModelComponent:
     def __init__(self, handle: library.ComponentHandle) -> None:
         self._handle = handle
 
+    def second_order(self, transaction: SecondOrderTransaction):
+        """Contribute relaxed parameter derivatives to a model linearization.
+
+        Return ``(direct, factors)`` representing the parameter Hessian
+        ``direct - sum(left.T @ right for left, right in factors)``.
+        Components may use the transaction's shared surface and host data;
+        the host adapter never dispatches on the component type.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not provide coupled second derivatives"
+        )
+
     def _as_handle(self) -> library.ComponentHandle:
         return self._handle
 
@@ -981,6 +1092,9 @@ class _ModelComponentPCMBase(SolvationModelComponent):
         self._solver = solver_value
         super().__init__(constructor(self._epsilon, int(self._solver)))
 
+    def second_order(self, transaction: SecondOrderTransaction):
+        return transaction.pcm(self._dielectric_factor())
+
     @property
     def epsilon(self) -> float:
         return self._epsilon
@@ -1000,6 +1114,9 @@ class ModelComponentCPCM(_ModelComponentPCMBase):
     ) -> None:
         super().__init__(epsilon, solver, library.new_cpcm_component)
 
+    def _dielectric_factor(self):
+        return 1.0 - 1.0 / self.epsilon
+
 
 class ModelComponentCOSMO(_ModelComponentPCMBase):
     """Conductor-like screening-model component."""
@@ -1010,6 +1127,9 @@ class ModelComponentCOSMO(_ModelComponentPCMBase):
         solver: str | int | PCMSolver = PCMSolver.CHOLESKY,
     ) -> None:
         super().__init__(epsilon, solver, library.new_cosmo_component)
+
+    def _dielectric_factor(self):
+        return (1.0 - 1.0 / self.epsilon) / (1.0 + 0.5 / self.epsilon)
 
 
 class ModelComponentPV(SolvationModelComponent):
@@ -1059,6 +1179,12 @@ class SolvationCoupling(ABC):
     @abstractmethod
     def prepare(self, transaction: CouplingTransaction) -> None:
         """Supply host data through one model-owned coupling transaction."""
+
+    def second_order(self) -> HostDerivatives:
+        """Supply analytic host parameter derivatives for model linearization."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not provide second-order host derivatives"
+        )
 
     def fock(
         self,
@@ -1256,13 +1382,50 @@ class Evaluation:
             )
         return self._gradient
 
+    def hvp_coupled(
+        self,
+        dirs: np.ndarray,
+        tangent: Optional[CouplingTangent] = None,
+        *,
+        level_set: Optional[bool] = None,
+    ) -> tuple[np.ndarray, ResponseTangent]:
+        """Coupled Hessian-vector products at this evaluation.
+
+        :meth:`SolvationModel.hvp_coupled` bound to the evaluation's coupling
+        and epoch: the coupling is re-activated so a host-defined level set
+        reads the density this evaluation was made with.
+        """
+        if self._model.epoch != self._epoch:
+            raise RuntimeError("This evaluation was superseded; differentiate before evaluating again")
+        self._coupling.activate()
+        return self._model.hvp_coupled(dirs, tangent, level_set=level_set)
+
+    def linearize(
+        self, parameters: Optional[HostDerivatives] = None, *, max_memory: float = 4000
+    ) -> CoupledResponse:
+        """Return relaxed solvent RR, RP and PP response at this evaluation.
+
+        By default the evaluation's coupling supplies ``parameters``. An
+        explicit provider supplies host derivatives in coordinates ordered as
+        nuclear Cartesian coordinates followed by independent density variables.
+        Internal solvent variables are relaxed; the host density is held fixed.
+        The returned response owns its arrays and survives subsequent evaluations.
+        """
+        if self._model.epoch != self._epoch:
+            raise RuntimeError("This evaluation was superseded; linearize before evaluating again")
+        self._coupling.activate()
+        if parameters is None:
+            parameters = self._coupling.second_order()
+        transaction = SecondOrderTransaction(self._model, parameters, max_memory)
+        return transaction.assemble()
+
     @property
     def hessian(self) -> np.ndarray:
         """The native nuclear Hessian of the model at fixed host data.
 
         Lazy, like :attr:`gradient`, and bound to the same evaluation epoch.
-        Couplings contribute no second-order terms yet, so this is the model
-        Hessian alone; components without a second-order channel raise.
+        This property remains the fixed-host model Hessian. Use ``linearize``
+        for coupled second derivatives and the host solver for SCF relaxation.
         """
         if self._hessian is None:
             if self._model.epoch != self._epoch:
@@ -1276,8 +1439,8 @@ class Evaluation:
             if type(self._coupling).gradient is not SolvationCoupling.gradient:
                 raise NotImplementedError(
                     f"{type(self._coupling).__name__} adds its own nuclear gradient "
-                    "terms and no second-order coupling hook exists yet; use "
-                    "SolvationModel.hessian() for the model block alone"
+                    "terms; use Evaluation.linearize() for coupled derivatives "
+                    "or SolvationModel.hessian() for the fixed-host model block"
                 )
             self._hessian = _immutable_array(self._model.hessian())
         return self._hessian
@@ -1401,6 +1564,33 @@ class SolvationModel:
         if self._natoms is None:
             raise RuntimeError("Model has no updated structure to differentiate")
         return library.general_model_get_hvp(self._model, self._natoms, dirs)
+
+    def hvp_coupled(
+        self,
+        dirs: np.ndarray,
+        tangent: Optional[CouplingTangent] = None,
+        *,
+        level_set: Optional[bool] = None,
+    ) -> tuple[np.ndarray, ResponseTangent]:
+        """Hessian-vector products with the second-order host exchange.
+
+        The single protocol of the coupled Hessian: the host's tangents along
+        ``dirs`` enter through ``tangent`` (see :class:`CouplingTangent`) and
+        the :class:`ResponseTangent` comes back per direction. moist's part of
+        the products is returned; the host adds the terms that run through its
+        own basis, formed from the response tangent. ``level_set`` asks for the
+        level-set weight channels and defaults to whether the cavity is
+        density defined.
+        """
+        self._require_updated()
+        if self._natoms is None:
+            raise RuntimeError("Model has no updated structure to differentiate")
+        if level_set is None:
+            level_set = bool(self._cavity.density_dependent)
+        hvp, groups = library.general_model_get_hvp_coupled(
+            self._model, self._natoms, self._cavity.ngrid, dirs, tangent, level_set=level_set
+        )
+        return hvp, ResponseTangent(**groups)
 
     @property
     def cavity(self) -> Cavity:

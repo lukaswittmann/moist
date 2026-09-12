@@ -4,8 +4,8 @@ module moist_model_general
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_type, only: solvation_model_type, solvation_model_component_type, cavity_type, &
-      & surface_adjoint_response_type
-   use moist_channels, only: coupling_type, response_type
+      & surface_adjoint_response_type, coupling_tangent_type, hessian_block_type
+   use moist_channels, only: coupling_type, response_type, response_tangent_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
 
@@ -32,6 +32,8 @@ module moist_model_general
       type(solvation_component_slot), pointer :: components(:) => null()
       !> Host coupling data, borrowed likewise
       class(coupling_type), pointer :: coupling => null()
+      !> Second-order host exchange, borrowed likewise; null without one
+      class(coupling_tangent_type), pointer :: host => null()
    contains
       procedure :: apply => general_adjoint_response_apply
    end type general_adjoint_response_type
@@ -239,14 +241,17 @@ contains
       type(cavity_surface_adjoint_type) :: acc
       !> Component index
       integer :: i
+      type(coupling_type) :: component_data
 
       call require_updated(self, error)
       if (allocated(error)) return
       call acc%init(self%cavity%ngrid)
       do i = 1, size(self%components)
-         call self%components(i)%item%get_response(coupling, self%cavity, local, error)
+         call component_host_data(self, coupling, i, component_data, error)
          if (allocated(error)) return
-         call self%components(i)%item%get_surface_weights(coupling, self%cavity, acc, error)
+         call self%components(i)%item%get_response(component_data, self%cavity, local, error)
+         if (allocated(error)) return
+         call self%components(i)%item%get_surface_weights(component_data, self%cavity, acc, error)
          if (allocated(error)) return
       end do
       call self%cavity%get_surface_response(acc, local, error)
@@ -275,6 +280,7 @@ contains
       real(wp), allocatable :: local(:, :)
       !> Component index
       integer :: i
+      type(coupling_type) :: component_data
 
       call require_updated(self, error)
       if (allocated(error)) return
@@ -292,10 +298,12 @@ contains
 
             call acc%init(self%cavity%ngrid)
             do i = 1, size(self%components)
-               call self%components(i)%item%get_direct_gradient(coupling, self%cavity, &
+               call component_host_data(self, coupling, i, component_data, error)
+               if (allocated(error)) return
+               call self%components(i)%item%get_direct_gradient(component_data, self%cavity, &
                                                                 local, error)
                if (allocated(error)) return
-               call self%components(i)%item%get_gradient_surface_weights(coupling, &
+               call self%components(i)%item%get_gradient_surface_weights(component_data, &
                                                                          self%cavity, acc, error)
                if (allocated(error)) return
             end do
@@ -304,7 +312,9 @@ contains
          end block
       else
          do i = 1, size(self%components)
-            call self%components(i)%item%get_gradient(coupling, self%cavity, local, error)
+            call component_host_data(self, coupling, i, component_data, error)
+            if (allocated(error)) return
+            call self%components(i)%item%get_gradient(component_data, self%cavity, local, error)
             if (allocated(error)) return
          end do
       end if
@@ -312,6 +322,51 @@ contains
       gradient = gradient + local
 
    end subroutine general_get_gradient
+
+   !> Apportion charge-weighted host fields to the component's trace response.
+   !> The host supplies fields contracted with the total surface charge. Passing
+   !> these unchanged to every component would count the host contribution more
+   !> than once. Unweighted potentials and other coupling channels are unchanged.
+   subroutine component_host_data(self, coupling, index, data, error)
+      class(solvation_model_general), intent(inout) :: self
+      class(coupling_type), intent(in) :: coupling
+      integer, intent(in) :: index
+      type(coupling_type), intent(out) :: data
+      type(error_type), allocatable, intent(out) :: error
+      type(response_type) :: total, part
+      real(wp), allocatable :: share(:)
+      integer :: k
+
+      data = coupling
+      if (size(self%components) == 1) return
+      if (.not. allocated(coupling%electrostatics%phi)) return
+      call self%get_trace_response(coupling, total, error)
+      if (allocated(error)) return
+      if (.not. allocated(total%electrostatics%surface_charge)) return
+      call self%components(index)%item%get_trace_response(coupling, self%cavity, part, error)
+      if (allocated(error)) return
+      allocate (share(self%cavity%ngrid), source=0.0_wp)
+      if (allocated(part%electrostatics%surface_charge)) then
+         do k = 1, size(share)
+            if (total%electrostatics%surface_charge(k) /= 0.0_wp) then
+               share(k) = part%electrostatics%surface_charge(k)/total%electrostatics%surface_charge(k)
+            else if (part%electrostatics%surface_charge(k) /= 0.0_wp) then
+               call fatal_error(error, "Cancelling component charges require component-resolved host fields")
+               return
+            end if
+         end do
+      end if
+      if (allocated(data%electrostatics%w_xi)) &
+         & data%electrostatics%w_xi = data%electrostatics%w_xi*share
+      if (allocated(data%electrostatics%w_f)) &
+         & data%electrostatics%w_f = data%electrostatics%w_f*share
+      if (allocated(data%electrostatics%w_xyz)) &
+         & data%electrostatics%w_xyz = data%electrostatics%w_xyz*spread(share, 1, 3)
+      if (allocated(data%electrostatics%w_normal)) &
+         & data%electrostatics%w_normal = data%electrostatics%w_normal*spread(share, 1, 3)
+      if (allocated(data%electrostatics%qefield)) &
+         & data%electrostatics%qefield = data%electrostatics%qefield*spread(share, 1, 3)
+   end subroutine component_host_data
 
    !> Dense nuclear Hessian of every component
    !>
@@ -321,11 +376,20 @@ contains
    !> [[general_adjoint_response_type]]. The result is *added* to `hessian`, and
    !> the accumulator is left untouched when anything fails.
    !>
+   !> With a second-order host exchange the columns are those of the coupled
+   !> Hessian at fixed host data *including* the host's own tangents along the
+   !> Cartesian unit directions (the level set's and the potential's
+   !> electronic halves), and the response tangent `rt` -- initialised by the
+   !> caller for `3 nat` directions -- receives what the host completes the
+   !> rest of the columns from; see [[response_tangent_type]].
+   !>
    !> @param[inout] self     General model
    !> @param[in]    coupling Host coupling data
    !> @param[inout] hessian  Nuclear-Hessian accumulator (3, nat, 3, nat)
    !> @param[out]   error    Error handling
-   subroutine general_get_hessian(self, coupling, hessian, error)
+   !> @param[inout] host     Second-order host exchange, optional
+   !> @param[inout] rt       Response tangent of the Cartesian basis, optional
+   subroutine general_get_hessian(self, coupling, hessian, error, host, rt)
       !> General model
       class(solvation_model_general), intent(inout), target :: self
       !> Host coupling data
@@ -334,6 +398,10 @@ contains
       real(wp), intent(inout) :: hessian(:, :, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional, target :: host
+      !> Response tangent of the Cartesian basis
+      type(response_tangent_type), intent(inout), optional, target :: rt
 
       !> Transactional local Hessian
       real(wp), allocatable :: local(:, :, :, :)
@@ -347,14 +415,17 @@ contains
          call fatal_error(error, "General-model Hessian shape mismatch")
          return
       end if
+      call prepare_response_tangent(self, 3*self%cavity%nsph, error, rt)
+      if (allocated(error)) return
 
       call gradient_surface_weights(self, coupling, acc, error)
       if (allocated(error)) return
       omega%components => self%components
       omega%coupling => coupling
+      if (present(host)) omega%host => host
 
       allocate (local(3, self%cavity%nsph, 3, self%cavity%nsph), source=0.0_wp)
-      call self%cavity%get_hessian(acc, local, error, omega_v=omega)
+      call self%cavity%get_hessian(acc, local, error, omega_v=omega, host=host, rt=rt)
       if (allocated(error)) return
 
       hessian = hessian + local
@@ -369,12 +440,21 @@ contains
    !> *added* to `hvp`, and the accumulator is left untouched when anything
    !> fails.
    !>
+   !> With a second-order host exchange a direction may carry a host-private
+   !> part besides its nuclear part `dirs(:, :, idir)`, which the host
+   !> supplies the tangents of along the way; see [[coupling_tangent_type]].
+   !> The response tangent `rt`, initialised by the caller for `ndir`
+   !> directions, receives per direction what the host completes the columns
+   !> and the Fock-matrix tangents from; see [[response_tangent_type]].
+   !>
    !> @param[inout] self     General model
    !> @param[in]    coupling Host coupling data
    !> @param[in]    dirs     Nuclear directions (3, nat, ndir)
    !> @param[inout] hvp      Hessian-vector accumulator (3, nat, ndir)
    !> @param[out]   error    Error handling
-   subroutine general_get_hvp(self, coupling, dirs, hvp, error)
+   !> @param[inout] host     Second-order host exchange, optional
+   !> @param[inout] rt       Response tangent of the direction set, optional
+   subroutine general_get_hvp(self, coupling, dirs, hvp, error, host, rt)
       !> General model
       class(solvation_model_general), intent(inout), target :: self
       !> Host coupling data
@@ -385,6 +465,10 @@ contains
       real(wp), intent(inout) :: hvp(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional, target :: host
+      !> Response tangent of the direction set
+      type(response_tangent_type), intent(inout), optional, target :: rt
 
       !> Transactional local columns
       real(wp), allocatable :: local(:, :, :)
@@ -402,25 +486,82 @@ contains
          call fatal_error(error, "General-model Hessian-vector product shape mismatch")
          return
       end if
+      call prepare_response_tangent(self, size(dirs, 3), error, rt)
+      if (allocated(error)) return
 
       call gradient_surface_weights(self, coupling, acc, error)
       if (allocated(error)) return
       omega%components => self%components
       omega%coupling => coupling
+      if (present(host)) omega%host => host
 
       allocate (local, mold=hvp)
       local = 0.0_wp
-      call self%cavity%get_surface_hessian(acc, dirs, local, error, omega_v=omega)
+      call self%cavity%get_surface_hessian(acc, dirs, local, error, omega_v=omega, &
+                                           host=host, rt=rt)
       if (allocated(error)) return
 
       hvp = hvp + local
 
    end subroutine general_get_hvp
 
+   !> Check and zero a caller-initialised response tangent
+   !>
+   !> The caller decides at [[init_response_tangent]] which channels it wants,
+   !> because the level-set channels force the cavity's per-direction chain;
+   !> the model only checks the extents and starts every channel from zero,
+   !> so a container reused across calls never accumulates.
+   !>
+   !> @param[in]    self  General model
+   !> @param[in]    ndir  Directions of the call
+   !> @param[out]   error Error handling
+   !> @param[inout] rt    Response tangent, optional
+   subroutine prepare_response_tangent(self, ndir, error, rt)
+      !> General model
+      class(solvation_model_general), intent(in) :: self
+      !> Directions of the call
+      integer, intent(in) :: ndir
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Response tangent
+      type(response_tangent_type), intent(inout), optional :: rt
+
+      if (.not. present(rt)) return
+      if (.not. rt%is_initialized(self%cavity%ngrid, ndir)) then
+         call fatal_error(error, "General-model response tangent is not initialised for"// &
+                          " the cavity grid and the direction set")
+         return
+      end if
+      rt%surface_charge = 0.0_wp
+      rt%xyz = 0.0_wp
+      if (rt%want_lsf()) then
+         rt%w_value = 0.0_wp
+         rt%w_gradient = 0.0_wp
+         rt%w_hessian = 0.0_wp
+         rt%dw_value = 0.0_wp
+         rt%dw_gradient = 0.0_wp
+         rt%dw_hessian = 0.0_wp
+      end if
+
+   end subroutine prepare_response_tangent
+
    !> The surface adjoints the nuclear gradient contracts, from every component
    !>
    !> The Hessian differentiates exactly this accumulation, so it is built by
-   !> the same hooks the reverse-mode gradient uses and by no others.
+   !> the same hooks the reverse-mode gradient uses, on the same per-component
+   !> host data [[component_host_data]] apportions for it, and by no others.
+   !> Apportioning here is what keeps the Hessian the derivative of the
+   !> gradient for a model of several electrostatic components: the host's
+   !> charge-weighted fields carry the *total* charge, so a component reading
+   !> them whole would count the host's contribution once per component, in
+   !> the accumulator as it would in the gradient.
+   !>
+   !> The second-order channel of a component is *not* served apportioned data
+   !> and does not need it. An apportioned field is `share_k * (q grad phi)`,
+   !> which is `q_k grad phi` exactly, and that is what the channel forms
+   !> itself from the component's own charges and the unweighted field of the
+   !> second-order host exchange -- so the two halves stay consistent without
+   !> the response of the apportioning ever being needed.
    !>
    !> @param[inout] self     General model
    !> @param[in]    coupling Host coupling data
@@ -436,12 +577,16 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      !> Host data apportioned to one component
+      type(coupling_type) :: component_data
       !> Component index
       integer :: i
 
       call acc%init(self%cavity%ngrid)
       do i = 1, size(self%components)
-         call self%components(i)%item%get_gradient_surface_weights(coupling, self%cavity, &
+         call component_host_data(self, coupling, i, component_data, error)
+         if (allocated(error)) return
+         call self%components(i)%item%get_gradient_surface_weights(component_data, self%cavity, &
                                                                    acc, error)
          if (allocated(error)) return
       end do
@@ -480,8 +625,10 @@ contains
    !> @param[inout] dacc       Surface-adjoint response per direction (nblk)
    !> @param[inout] hvp_direct Non-surface Hessian columns of the block
    !> @param[out]   error      Error handling
+   !> @param[in]    first      Global index of the block's first direction, optional
+   !> @param[inout] rt         Response tangent of the whole direction set, optional
    subroutine general_adjoint_response_apply(self, cavity, dirs, tangent, dacc, hvp_direct, &
-                                             error)
+                                             error, first, rt)
       !> Response object
       class(general_adjoint_response_type), intent(inout) :: self
       !> Cavity the tangent was taken on
@@ -496,23 +643,55 @@ contains
       real(wp), intent(inout) :: hvp_direct(:, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Global index of the block's first direction
+      integer, intent(in), optional :: first
+      !> Response tangent of the whole direction set
+      type(response_tangent_type), intent(inout), optional :: rt
 
-      !> Component index
-      integer :: i
+      !> Per-block context of the second-order exchange
+      type(hessian_block_type) :: block
+      !> Whether any component reads the host's field tangents
+      logical :: want_field
+      !> Grid and block extents, component index
+      integer :: ngrid, nblk, i
 
       if (.not. associated(self%components) .or. .not. associated(self%coupling)) then
          call fatal_error(error, "General-model adjoint response was not bound to a model")
          return
       end if
+      ngrid = cavity%ngrid
+      nblk = size(dirs, 3)
+      if (present(first)) block%first = first
+
+      ! The charge tangent is deposited by the electrostatic components and
+      ! handed out per block; the host's field tangents are fetched once per
+      ! block, and only when a component actually reads them
+      if (present(rt)) allocate (block%dq(ngrid, nblk), source=0.0_wp)
+      if (associated(self%host)) then
+         want_field = .false.
+         do i = 1, size(self%components)
+            want_field = want_field .or. self%components(i)%item%needs_field_tangent()
+         end do
+         if (want_field) then
+            allocate (block%efield(3, ngrid), block%dphi(ngrid, nblk), block%defield(3, ngrid, nblk))
+            call self%host%field_tangent(block%first, dirs, cavity%xyz(:, 1:ngrid), tangent%d_xyz, &
+                                         block%efield, block%dphi, block%defield, error)
+            if (allocated(error)) return
+            block%have_field = .true.
+         end if
+      end if
 
       do i = 1, size(self%components)
          call self%components(i)%item%get_hessian_surface_weights(self%coupling, cavity, dirs, &
-                                                                  tangent, dacc, error)
+                                                                  tangent, dacc, error, &
+                                                                  block=block)
          if (allocated(error)) return
          call self%components(i)%item%get_direct_hessian(self%coupling, cavity, dirs, tangent, &
                                                          hvp_direct, error)
          if (allocated(error)) return
       end do
+
+      if (present(rt)) rt%surface_charge(:, block%first:block%first + nblk - 1) = block%dq
 
    end subroutine general_adjoint_response_apply
 

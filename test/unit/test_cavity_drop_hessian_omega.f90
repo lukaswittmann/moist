@@ -45,7 +45,7 @@ module test_cavity_drop_hessian_omega
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use testdrive, only: new_unittest, unittest_type, error_type, to_string, test_failed
-   use moist_type, only: cavity_type, surface_adjoint_response_type
+   use moist_type, only: cavity_type, surface_adjoint_response_type, response_tangent_type
    use moist_cavity_drop, only: cavity_type_drop, drop_hvp_per_dir_max
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
@@ -132,7 +132,8 @@ contains
    !* ================================================================================= *!
 
    !> Adjoint response of the volume functional along a block of directions
-   subroutine volume_response_apply(self, cavity, dirs, tangent, dacc, hvp_direct, error)
+   subroutine volume_response_apply(self, cavity, dirs, tangent, dacc, hvp_direct, error, &
+                                    first, rt)
       !> Response object
       class(volume_response_type), intent(inout) :: self
       !> Cavity the tangent was taken on
@@ -147,6 +148,9 @@ contains
       real(wp), intent(inout) :: hvp_direct(:, :, :)
       !> Error handling
       type(mctc_error), allocatable, intent(out) :: error
+      !> Block offset and response tangent of the host exchange, unused
+      integer, intent(in), optional :: first
+      type(response_tangent_type), intent(inout), optional :: rt
 
       real(wp), allocatable :: dw_a(:), dw_xyz(:, :), dw_n(:, :), dw_k1(:)
       real(wp) :: third

@@ -44,6 +44,10 @@ module moist_cavity_surface_tangent
    contains
       !> Allocate every channel to zero for a grid and a direction batch
       procedure :: init => init_surface_tangent
+      !> Reset every allocated channel to zero
+      procedure :: zero => zero_surface_tangent
+      !> Release every channel
+      procedure :: destroy => destroy_surface_tangent
       !> Report whether every channel is allocated with consistent shapes
       procedure :: is_initialized => surface_tangent_is_initialized
       !> Number of directions of the batch, zero when uninitialized
@@ -68,14 +72,7 @@ contains
       !> Whether the curvature channels are to be filled
       logical, intent(in) :: want_curvature
 
-      if (allocated(self%d_xi)) deallocate (self%d_xi)
-      if (allocated(self%d_f)) deallocate (self%d_f)
-      if (allocated(self%d_a)) deallocate (self%d_a)
-      if (allocated(self%d_w)) deallocate (self%d_w)
-      if (allocated(self%d_xyz)) deallocate (self%d_xyz)
-      if (allocated(self%d_n)) deallocate (self%d_n)
-      if (allocated(self%d_k1)) deallocate (self%d_k1)
-      if (allocated(self%d_k2)) deallocate (self%d_k2)
+      call self%destroy()
 
       allocate (self%d_xi(ngrid, ndir), source=0.0_wp)
       allocate (self%d_f(ngrid, ndir), source=0.0_wp)
@@ -88,6 +85,46 @@ contains
       self%have_curvature = want_curvature
 
    end subroutine init_surface_tangent
+
+   !> Reset every allocated channel to zero
+   !>
+   !> The single place the channel list is spelled out for a reset, so a
+   !> traversal that reuses a tangent cannot miss one.
+   !>
+   !> @param[inout] self Surface tangent
+   subroutine zero_surface_tangent(self)
+      !> Surface tangent
+      class(cavity_surface_tangent_type), intent(inout) :: self
+
+      if (allocated(self%d_xi)) self%d_xi = 0.0_wp
+      if (allocated(self%d_f)) self%d_f = 0.0_wp
+      if (allocated(self%d_a)) self%d_a = 0.0_wp
+      if (allocated(self%d_w)) self%d_w = 0.0_wp
+      if (allocated(self%d_xyz)) self%d_xyz = 0.0_wp
+      if (allocated(self%d_n)) self%d_n = 0.0_wp
+      if (allocated(self%d_k1)) self%d_k1 = 0.0_wp
+      if (allocated(self%d_k2)) self%d_k2 = 0.0_wp
+
+   end subroutine zero_surface_tangent
+
+   !> Release every channel
+   !>
+   !> @param[inout] self Surface tangent
+   subroutine destroy_surface_tangent(self)
+      !> Surface tangent
+      class(cavity_surface_tangent_type), intent(inout) :: self
+
+      if (allocated(self%d_xi)) deallocate (self%d_xi)
+      if (allocated(self%d_f)) deallocate (self%d_f)
+      if (allocated(self%d_a)) deallocate (self%d_a)
+      if (allocated(self%d_w)) deallocate (self%d_w)
+      if (allocated(self%d_xyz)) deallocate (self%d_xyz)
+      if (allocated(self%d_n)) deallocate (self%d_n)
+      if (allocated(self%d_k1)) deallocate (self%d_k1)
+      if (allocated(self%d_k2)) deallocate (self%d_k2)
+      self%have_curvature = .false.
+
+   end subroutine destroy_surface_tangent
 
    !> Check whether every channel has been allocated consistently
    !>

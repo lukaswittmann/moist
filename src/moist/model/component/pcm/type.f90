@@ -5,7 +5,7 @@ module moist_model_component_pcm_type
    use mctc_env, only: wp, fatal_error
    use mctc_env_error, only: error_type
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_type, only: solvation_model_component_type, cavity_type, hessian_block_type
    use moist_channels, only: response_type, coupling_type, require_channel
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
@@ -139,6 +139,8 @@ module moist_model_component_pcm_type
 
       !> Nuclear-Hessian columns that bypass the cavity surface
       procedure :: get_direct_hessian => pcm_component_get_direct_hessian
+      !> Whether the second-order channel reads the host's field tangents
+      procedure :: needs_field_tangent => pcm_needs_field_tangent
 
       !> Factorize the current matrix for the second-order solves
       procedure :: ensure_factorization => pcm_ensure_factorization
@@ -797,9 +799,12 @@ contains
    !> direct term of [[pcm_component_get_direct_gradient]] responds in the same
    !> sweep and is stashed for [[pcm_component_get_direct_hessian]].
    !>
-   !> Available for the point-charge potential source only: with an external
-   !> potential the response of the host's potential and electronic field along
-   !> a direction is host data that the coupling does not carry yet.
+   !> With an external potential source the response of the host's potential
+   !> and electronic field along a direction is host data: it arrives through
+   !> the block context of the second-order host exchange (`block%dphi`,
+   !> `block%efield`, `block%defield`, the electronic halves at the moving
+   !> points), the nuclear halves being formed here as in the point-charge
+   !> case. Without that exchange an external source is refused by name.
    !>
    !> @param[inout] self     PCM component instance
    !> @param[in]    coupling QM coupling data
@@ -809,7 +814,7 @@ contains
    !> @param[inout] dacc     Surface-adjoint response per direction (nblk)
    !> @param[out]   error    Error handling
    subroutine pcm_component_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, &
-                                                        dacc, error)
+                                                        dacc, error, block)
       !> PCM component instance
       class(solvation_model_component_pcm), intent(inout) :: self
       !> QM coupling data
@@ -824,6 +829,8 @@ contains
       type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Per-block context of the second-order exchange
+      type(hessian_block_type), intent(inout), optional :: block
 
       !> Electronic field (unused here) and moving point charges
       real(wp), allocatable :: qefield(:, :), source_charge(:)
@@ -840,16 +847,38 @@ contains
       real(wp) :: prefactor
       !> Timer depth on entry, restored on every early return
       integer :: d0
+      !> Whether the host's field tangents are read
+      logical :: host_field
+      !> Grid point index of the electronic fold
+      integer :: igrid
 
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid
       ndir = size(dirs, 3)
 
-      if (self%phi_source /= potential_source%charges) then
-         call fatal_error(error, "Component "//self%name//" provides no second-order surface"// &
-            & " weights (nuclear Hessian) with an external potential source: the response"// &
-            & " of the host potential and electronic field is not part of the coupling")
-         return
+      host_field = self%phi_source /= potential_source%charges
+      if (host_field) then
+         if (.not. present(block)) then
+            call fatal_error(error, "Component "//self%name//" provides no second-order"// &
+               & " surface weights (nuclear Hessian) with an external potential source"// &
+               & " unless a host tangent supplies the response of the host potential"// &
+               & " and electronic field")
+            return
+         end if
+         if (.not. block%have_field) then
+            call fatal_error(error, "Component "//self%name//" provides no second-order"// &
+               & " surface weights (nuclear Hessian) with an external potential source"// &
+               & " unless a host tangent supplies the response of the host potential"// &
+               & " and electronic field")
+            return
+         end if
+         if (size(block%dphi, 1) /= ngrid .or. size(block%dphi, 2) /= ndir .or. &
+             size(block%efield, 1) /= 3 .or. size(block%efield, 2) /= ngrid .or. &
+             any(shape(block%defield) /= [3, ngrid, ndir])) then
+            call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
+               & "host field tangent shape mismatch")
+            return
+         end if
       end if
       if (size(dirs, 1) /= 3 .or. size(dirs, 2) /= nat .or. ndir < 1) then
          call fatal_error(error, "[pcm_component_get_hessian_surface_weights] "// &
@@ -908,6 +937,9 @@ contains
          call self%ctx%timer%unwind(d0)
          return
       end if
+      ! The host's potential moves with the density and with the points; its
+      ! tangent comes complete from the exchange
+      if (host_field) dphi = dphi + block%dphi
       call self%ctx%timer%start("Moved matrix")
       call pcm_amat_tangent_apply(cavity%xi0, cavity%f, cavity%xyz, self%q, tangent%d_xi, &
          & tangent%d_f, tangent%d_xyz, rhs, error)
@@ -926,6 +958,11 @@ contains
          return
       end if
       dq = -dq
+      ! The charge tangent is what the host completes its Fock-matrix and
+      ! Hessian columns from; every electrostatic component adds its own
+      if (present(block)) then
+         if (allocated(block%dq)) block%dq = block%dq + dq
+      end if
 
       ! A-matrix channel
       allocate (dw_xi(ngrid, ndir), dw_f(ngrid, ndir), dw_xyz(3, ngrid, ndir))
@@ -948,12 +985,27 @@ contains
          call self%ctx%timer%unwind(d0)
          return
       end if
+      ! The electronic half of the position adjoint, `q_i grad phi_el(r_i)` on
+      ! the gradient path, moves with the charges and with the host's field
+      if (host_field) then
+         do idir = 1, ndir
+            do igrid = 1, ngrid
+               dw_xyz_el(:, igrid, idir) = dw_xyz_el(:, igrid, idir) &
+                                           + dq(igrid, idir)*block%efield(:, igrid) &
+                                           + self%q(igrid)*block%defield(:, igrid, idir)
+            end do
+         end do
+      end if
 
+      ! Scaled in place and the electrostatic channel folded in, so the adds
+      ! below pass contiguous slices rather than per-direction array temporaries
       prefactor = 0.5_wp/self%feps
+      dw_xi = prefactor*dw_xi
+      dw_f = prefactor*dw_f
+      dw_xyz_el = prefactor*dw_xyz + dw_xyz_el
       do idir = 1, ndir
-         call dacc(idir)%add_surface_weights(error, w_xi=prefactor*dw_xi(:, idir), &
-            & w_f=prefactor*dw_f(:, idir), &
-            & w_xyz=prefactor*dw_xyz(:, :, idir) + dw_xyz_el(:, :, idir))
+         call dacc(idir)%add_surface_weights(error, w_xi=dw_xi(:, idir), &
+            & w_f=dw_f(:, idir), w_xyz=dw_xyz_el(:, :, idir))
          if (allocated(error)) then
             call self%ctx%timer%unwind(d0)
             return
@@ -965,6 +1017,19 @@ contains
       call self%ctx%timer%stop("PCM Hessian response")
 
    end subroutine pcm_component_get_hessian_surface_weights
+
+   !> Whether the second-order channel reads the host's field tangents
+   !>
+   !> Only with an external potential source: the point-charge source is
+   !> moist's own and is differentiated here.
+   !>
+   !> @param[in] self PCM component instance
+   pure logical function pcm_needs_field_tangent(self) result(needs)
+      !> PCM component instance
+      class(solvation_model_component_pcm), intent(in) :: self
+
+      needs = self%phi_source /= potential_source%charges
+   end function pcm_needs_field_tangent
 
    !> Keep the direct Hessian columns of a block for [[pcm_component_get_direct_hessian]]
    !>

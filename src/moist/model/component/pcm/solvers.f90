@@ -35,43 +35,21 @@ contains
       !> Output unit for the diagnostics; defaults to standard output
       integer, intent(in), optional :: unit
 
-      integer :: n, info
+      integer :: n
       integer, allocatable :: ipiv(:)
-      real(wp), allocatable :: amat_copy(:, :), q_mat(:, :)
-      integer :: iunit
+      real(wp), allocatable :: factor(:, :), rhs_mat(:, :), q_mat(:, :)
 
-      iunit = output_unit
-      if (present(unit)) iunit = unit
+      ! The one-column case of the factor-then-solve pair: the same DGETRF on
+      ! a copy and the same DGETRS on an (n, 1) right-hand side, so the energy
+      ! path and the multi-column Hessian path run one code.
+      call factorize_pcm_lu(amat, factor, ipiv, error, unit)
+      if (allocated(error)) return
 
       n = size(amat, 1)
-      ! Copy matrix (LAPACK overwrites input)
-      allocate (amat_copy(n, n))
-      amat_copy = amat
-
-      ! Reshape RHS into 2D matrix for getrs (n, 1)
-      allocate (q_mat(n, 1))
-      q_mat(:, 1) = rhs
-
-      ! Allocate pivot indices
-      allocate (ipiv(n))
-
-      ! LU factorization
-      call getrf(amat_copy, ipiv, info)
-      if (info /= 0) then
-         write (iunit, "(A,I0)") "[solve_pcm_lu] LAPACK getrf failed with info = ", info
-         write (iunit, "(A,I0)") "[solve_pcm_lu] Matrix size n = ", n
-         call fatal_error(error, "[solve_pcm_lu] LAPACK getrf failed")
-         return
-      end if
-
-      ! Solve using factorization (getrs expects 2D matrix)
-      call getrs(amat_copy, q_mat, ipiv, info)
-      if (info /= 0) then
-         call fatal_error(error, "[solve_pcm_lu] LAPACK getrs failed")
-         return
-      end if
-
-      ! Extract solution from 2D matrix
+      allocate (rhs_mat(n, 1), q_mat(n, 1))
+      rhs_mat(:, 1) = rhs
+      call solve_pcm_lu_factored(factor, ipiv, rhs_mat, q_mat, error)
+      if (allocated(error)) return
       q = q_mat(:, 1)
 
    end subroutine solve_pcm_lu
@@ -89,38 +67,18 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: n, info
-      real(wp), allocatable :: amat_copy(:, :), q_mat(:, :)
+      integer :: n
+      real(wp), allocatable :: factor(:, :), rhs_mat(:, :), q_mat(:, :)
+
+      ! One-column case of the factor-then-solve pair, as for LU
+      call factorize_pcm_cholesky(amat, factor, error)
+      if (allocated(error)) return
 
       n = size(amat, 1)
-
-      ! Copy matrix (LAPACK overwrites input)
-      allocate (amat_copy(n, n))
-      amat_copy = amat
-
-      ! Reshape RHS into 2D matrix for potrs (n, 1)
-      allocate (q_mat(n, 1))
-      q_mat(:, 1) = rhs
-
-      ! Cholesky factorization: A = L*L^T (lower triangular)
-      call potrf(amat_copy, info, uplo="l")
-      if (info /= 0) then
-         if (info > 0) then
-            call fatal_error(error, "[solve_pcm_cholesky] Matrix not positive definite")
-         else
-            call fatal_error(error, "[solve_pcm_cholesky] LAPACK potrf failed")
-         end if
-         return
-      end if
-
-      ! Solve using factorization (potrs expects 2D matrix)
-      call potrs(amat_copy, q_mat, info, uplo="l")
-      if (info /= 0) then
-         call fatal_error(error, "[solve_pcm_cholesky] LAPACK potrs failed")
-         return
-      end if
-
-      ! Extract solution from 2D matrix
+      allocate (rhs_mat(n, 1), q_mat(n, 1))
+      rhs_mat(:, 1) = rhs
+      call solve_pcm_cholesky_factored(factor, rhs_mat, q_mat, error)
+      if (allocated(error)) return
       q = q_mat(:, 1)
 
    end subroutine solve_pcm_cholesky
@@ -137,44 +95,23 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: n, info
-      integer, allocatable :: ipiv(:)
       real(wp), allocatable :: amat_inv(:, :)
 
-      n = size(amat, 1)
+      call invert_pcm_matrix(amat, amat_inv, error)
+      if (allocated(error)) return
 
-      ! Copy matrix for inversion
-      allocate (amat_inv(n, n))
-      amat_inv = amat
-
-      ! Allocate pivot indices
-      allocate (ipiv(n))
-
-      ! LU factorization
-      call getrf(amat_inv, ipiv, info)
-      if (info /= 0) then
-         call fatal_error(error, "[solve_pcm_inversion] LAPACK getrf failed")
-         return
-      end if
-
-      ! Compute inverse
-      call getri(amat_inv, ipiv, info=info)
-      if (info /= 0) then
-         call fatal_error(error, "[solve_pcm_inversion] LAPACK getri failed")
-         return
-      end if
-
-      ! Multiply: q = A^(-1) * rhs
+      ! Multiply: q = A^(-1) * rhs. Kept as a gemv rather than routed through
+      ! [[apply_pcm_inverse]]'s gemm: the two BLAS kernels are not guaranteed
+      ! to round identically on a single column.
       call gemv(amat_inv, rhs, q)
 
    end subroutine solve_pcm_inversion
 
    !> LU-factorize the PCM matrix once, for repeated multi-column solves
    !>
-   !> The factor and the pivots are what [[solve_pcm_lu_factored]] consumes.
-   !> This is the same DGETRF the single-column [[solve_pcm_lu]] runs; it is
-   !> kept apart so that the charge solve of the energy path is never routed
-   !> through a cache.
+   !> The factor and the pivots are what [[solve_pcm_lu_factored]] consumes;
+   !> the single-column [[solve_pcm_lu]] is the pair on an `(n, 1)` right-hand
+   !> side.
    !>
    !> @param[in]  amat   System matrix (ngrid, ngrid)
    !> @param[out] factor LU factor (ngrid, ngrid)

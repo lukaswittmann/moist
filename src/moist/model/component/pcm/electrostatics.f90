@@ -9,6 +9,11 @@ module moist_model_component_pcm_electrostatics
    public :: pcm_electrostatic_potential_tangent
    public :: pcm_electrostatic_surface_weights_response
 
+   !> Squared-distance threshold below which a surface point and a source
+   !> coincide and the pair is skipped. One module constant on purpose: the
+   !> gradient, the tangent and the response routines must agree on it.
+   real(wp), parameter :: r2tol = 1.0e-30_wp
+
 contains
 
    !> Split the electrostatic surface coupling into adjoint and direct parts
@@ -49,8 +54,6 @@ contains
       integer :: i, katom, ngrid, nsph
       !> Surface charge, displacement data, and nuclear field
       real(wp) :: qi, rvec(3), r2, inv_r3, enuc(3)
-      !> Squared-distance threshold for coincident sources
-      real(wp), parameter :: r2tol = 1.0e-30_wp
 
       grad_rA = 0.0_wp
       w_xyz = 0.0_wp
@@ -120,8 +123,6 @@ contains
       integer :: i, katom, idir, ngrid, nsph, ndir
       !> Displacement data and the scaled field of one source
       real(wp) :: rvec(3), r2, inv_r3, g(3)
-      !> Squared-distance threshold for coincident sources
-      real(wp), parameter :: r2tol = 1.0e-30_wp
 
       dphi = 0.0_wp
       ngrid = size(xyz, 2)
@@ -203,8 +204,6 @@ contains
       real(wp) :: qi, rvec(3), r2, inv_r3, inv_r5, g(3), enuc(3)
       !> Relative motion of the pair and the field response `T (d - v)`
       real(wp) :: rel(3), tv(3)
-      !> Squared-distance threshold for coincident sources
-      real(wp), parameter :: r2tol = 1.0e-30_wp
 
       dw_xyz = 0.0_wp
       dgrad_rA = 0.0_wp
@@ -302,8 +301,6 @@ contains
       integer :: i, iatom, katom, ngrid, nsph
       !> Surface charge, displacement data, nuclear field, and chain-rule field
       real(wp) :: qi, rvec(3), r2, inv_r3, enuc(3), chain(3)
-      !> Squared-distance threshold for coincident sources
-      real(wp), parameter :: r2tol = 1.0e-30_wp
       !> Tmp reduction target; explicit shape
       real(wp) :: acc(3, size(za))
 

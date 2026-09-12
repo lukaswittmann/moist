@@ -20,7 +20,6 @@ module test_cavity_drop_primitives
                                                    drop_seed_result_type, &
                                                    drop_seed_state_tangent_type, &
                                                    drop_seed_input_tangent_type, &
-                                                   drop_seed_result_tangent_type, &
                                                    build_seed_state, apply_seed, &
                                                    apply_seed_tangent, &
                                                    switched_eigenvalue_response, &
@@ -3852,7 +3851,7 @@ contains
       !> Step size
       real(wp), intent(in) :: h
       !> Finite-difference reference
-      type(drop_seed_result_tangent_type), intent(out) :: fd
+      type(drop_seed_result_type), intent(out) :: fd
 
       fd%dg = fd4_scalar(rs(1)%dg, rs(2)%dg, rs(3)%dg, rs(4)%dg, h)
       fd%dH = fd4_scalar(rs(1)%dH, rs(2)%dH, rs(3)%dH, rs(4)%dH, h)
@@ -3883,7 +3882,7 @@ contains
       !> Fixture and step description
       character(len=*), intent(in) :: tag
       !> Central-difference reference
-      type(drop_seed_result_tangent_type), intent(in) :: fd
+      type(drop_seed_result_type), intent(in) :: fd
       !> Whether the curvature block is requested
       logical, intent(in) :: want_curvature
 
@@ -3911,7 +3910,7 @@ contains
       end if
    end subroutine check_seed_result_live
 
-   !> Compare every component of `drop_seed_result_tangent_type` against the
+   !> Compare every component of `drop_seed_result_type` against the
    !> central difference of the corresponding response channel
    !>
    !> @param[inout] error  Error handle
@@ -3924,7 +3923,7 @@ contains
       !> Fixture and step description
       character(len=*), intent(in) :: tag
       !> Analytic result tangent and its central-difference reference
-      type(drop_seed_result_tangent_type), intent(in) :: dres, fd
+      type(drop_seed_result_type), intent(in) :: dres, fd
 
       call check_seed_fd_vec(error, tag, "dg", dres%dg, fd%dg)
       call check_seed_fd_mat(error, tag, "dH", dres%dH, fd%dH)
@@ -3947,7 +3946,7 @@ contains
    !> all four seed components by their own tangent -- rebuilds the state at each
    !> end, calls `apply_seed` exactly there, and compares
    !> `(res_b(+h) - res_b(-h))/(2h)` against every component of
-   !> `drop_seed_result_tangent_type`. This is a first central difference, not a
+   !> `drop_seed_result_type`. This is a first central difference, not a
    !> nested one: `res_b(t)` is exact at every `t`.
    !>
    !> @param[out] error           Error handle
@@ -3964,7 +3963,7 @@ contains
       type(drop_seed_result_type) :: res_b, res_v, rs(4)
       type(drop_seed_state_tangent_type) :: dstate_b, dstate_v
       type(drop_seed_input_tangent_type) :: dinp_v
-      type(drop_seed_result_tangent_type) :: dres, fd
+      type(drop_seed_result_type) :: dres, fd
       real(wp) :: dlsf1_r(ndim), dlsf2_rr(ndim, ndim), dr(ndim), dlambda
       real(wp) :: ddlsf1_r(ndim), ddlsf2_rr(ndim, ndim), ddr(ndim), ddlambda
       real(wp) :: dlsf1_r_v(ndim), dlsf2_rr_v(ndim, ndim), dr_v(ndim), dlambda_v
@@ -4006,8 +4005,7 @@ contains
       dinp_v%dw_f0 = res_v%dw_f
 
       call apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res_b, dstate_b)
-      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, &
-                              dlsf1_r, dlsf2_rr, dr, dlambda, &
+      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, dr, dlambda, &
                               ddlsf1_r, ddlsf2_rr, ddr, ddlambda, &
                               res_b, dstate_b, dres)
 
@@ -4063,9 +4061,9 @@ contains
    !> Sum two result tangents component by component
    pure subroutine seed_result_tangent_add(a, b, c)
       !> Terms
-      type(drop_seed_result_tangent_type), intent(in) :: a, b
+      type(drop_seed_result_type), intent(in) :: a, b
       !> Sum
-      type(drop_seed_result_tangent_type), intent(out) :: c
+      type(drop_seed_result_type), intent(out) :: c
 
       c%dg = a%dg + b%dg
       c%dH = a%dH + b%dH
@@ -4086,7 +4084,7 @@ contains
       !> Fixture description
       character(len=*), intent(in) :: tag
       !> Quantities that must agree
-      type(drop_seed_result_tangent_type), intent(in) :: got, want
+      type(drop_seed_result_type), intent(in) :: got, want
 
       call check_seed_lin_vec(error, tag, "dg", got%dg, want%dg)
       call check_seed_lin_mat(error, tag, "dH", got%dH, want%dH)
@@ -4189,7 +4187,7 @@ contains
       type(drop_seed_result_type) :: res_v, res_ij, res_ji, res_sym, rs(4)
       type(drop_seed_state_tangent_type) :: dstate_v, dstate_ij, dstate_ji, dstate_sym
       type(drop_seed_input_tangent_type) :: dinp_v
-      type(drop_seed_result_tangent_type) :: dres_ij, dres_ji, dres_sym, dres_pair, fd
+      type(drop_seed_result_type) :: dres_ij, dres_ji, dres_sym, dres_pair, fd
       real(wp) :: e_ij(ndim, ndim), e_ji(ndim, ndim), e_sym(ndim, ndim)
       real(wp) :: zero_r(ndim), zero_m(ndim, ndim)
       real(wp) :: dlsf1_r_v(ndim), dlsf2_rr_v(ndim, ndim), dr_v(ndim), dlambda_v
@@ -4233,16 +4231,13 @@ contains
       call apply_seed(state, zero_r, e_ji, zero_r, 0.0_wp, res_ji, dstate_ji)
       call apply_seed(state, zero_r, e_sym, zero_r, 0.0_wp, res_sym, dstate_sym)
 
-      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, &
-                              zero_r, e_ij, zero_r, 0.0_wp, &
+      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, zero_r, 0.0_wp, &
                               zero_r, zero_m, zero_r, 0.0_wp, &
                               res_ij, dstate_ij, dres_ij)
-      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, &
-                              zero_r, e_ji, zero_r, 0.0_wp, &
+      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, zero_r, 0.0_wp, &
                               zero_r, zero_m, zero_r, 0.0_wp, &
                               res_ji, dstate_ji, dres_ji)
-      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, &
-                              zero_r, e_sym, zero_r, 0.0_wp, &
+      call apply_seed_tangent(state, dstate_v, dinp_v, res_v, zero_r, 0.0_wp, &
                               zero_r, zero_m, zero_r, 0.0_wp, &
                               res_sym, dstate_sym, dres_sym)
 

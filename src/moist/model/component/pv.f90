@@ -2,7 +2,7 @@
 module moist_model_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_type, only: solvation_model_component_type, cavity_type, hessian_block_type
    use moist_channels, only: coupling_type, response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_surface_tangent, only: cavity_surface_tangent_type
@@ -180,7 +180,8 @@ contains
    !> @param[in]    tangent  Surface tangent of the block
    !> @param[inout] dacc     Surface-adjoint response per direction
    !> @param[out]   error    Error handling
-   subroutine pv_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, dacc, error)
+   subroutine pv_get_hessian_surface_weights(self, coupling, cavity, dirs, tangent, dacc, error, &
+                                             block)
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
@@ -195,6 +196,8 @@ contains
       type(cavity_surface_adjoint_type), intent(inout) :: dacc(:)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Per-block context of the second-order exchange, unused
+      type(hessian_block_type), intent(inout), optional :: block
 
       !> Pressure-scaled responses of the area, position and normal adjoints
       real(wp), allocatable :: dw_a(:), dw_xyz(:, :), dw_n(:, :)

@@ -19,6 +19,7 @@
 #define moist_API_SUFFIX__V_0_5
 #define moist_API_SUFFIX__V_0_6
 #define moist_API_SUFFIX__V_0_7
+#define moist_API_SUFFIX__V_0_8
 
 /*
  * ARRAY LAYOUT CONVENTION -- read this before allocating
@@ -108,14 +109,22 @@ typedef struct _moist_radii* moist_radii;
 /// set itself as S = scale * (rho_iso - rho), with rho_iso and scale supplied to
 /// moist_new_drop_cavity_isodensity_callback(), which is what puts S in the DROP
 /// sign convention (interior negative, exterior positive).
-/// The `d2rho` and `d3rho` pointers are optional: they are NULL when
+/// The `d2rho`, `d3rho` and `d4rho` pointers are optional: they are NULL when
 /// the cavity does not need that derivative order (e.g. the value+gradient-only
 /// projection phase), and a NULL pointer means the callback should skip
 /// computing that derivative, not merely skip writing it.  Dereferencing a NULL
-/// `d2rho`/`d3rho` is a host bug, so branch on them before writing.
-/// `d2rho` and `d3rho` follow the Fortran layout convention above; both are
-/// symmetric under any index permutation, so the storage order is immaterial
-/// in practice.
+/// `d2rho`/`d3rho`/`d4rho` is a host bug, so branch on them before writing.
+/// They follow the Fortran layout convention above; all are symmetric under
+/// any index permutation, so the storage order is immaterial in practice.
+///
+/// V_0_8 CONTRACT.  One trailing argument was added: `d4rho`, the fourth
+/// spatial derivative of the density (Fortran (3,3,3,3), or NULL).  It is
+/// requested only by the nuclear Hessian entry points
+/// (moist_general_model_get_hessian(), moist_general_model_get_hvp() and the
+/// coupled variant), never during a cavity build, so a host that never asks
+/// for a Hessian may accept the argument and ignore it.  A V_0_7 callback no
+/// longer type-checks against this typedef; porting it is adding the argument
+/// and branching on it like the other two.
 ///
 /// RETURN VALUE -- the failure channel.  Return 0 after writing every requested
 /// buffer.  Return any nonzero value to report that the evaluation failed; the
@@ -156,7 +165,8 @@ typedef int (*moist_isodensity_lsf_callback)(void* /* context */,
                                              double* /* rho */,
                                              double* /* drho[3] */,
                                              double* /* d2rho: Fortran (3,3), or NULL */,
-                                             double* /* d3rho: Fortran (3,3,3), or NULL */);
+                                             double* /* d3rho: Fortran (3,3,3), or NULL */,
+                                             double* /* d4rho: Fortran (3,3,3,3), or NULL */);
 
 /*
  * Type generic macro for convenience
@@ -481,6 +491,106 @@ moist_general_model_get_hvp(moist_error /* error */,
                             int /* ndir */,
                             const double* /* dirs: Fortran (3,natoms,ndir) */,
                             double* /* hvp: Fortran (3,natoms,ndir) */) moist_API_SUFFIX__V_0_7;
+
+/// Second-order host exchange, host side: the level-set jet tangents.
+///
+/// A direction of moist_general_model_get_hvp_coupled() has a nuclear part,
+/// `dirs`, which moist sees, and may carry a host-private part (a density
+/// direction) which moist never sees; directions are identified by their
+/// global index, `first` (zero-based) being the block's first. For a
+/// host-defined level set (the isodensity callback) moist asks, once per
+/// block and before its surface tangent pass, for the partial tangents of
+/// the *scaled level set* S -- moist's sign and scale, not the bare density
+/// -- and of its spatial derivatives to third order at the fixed surface
+/// points, `jets(40, ngrid, nblk)`: per point and direction the value (1),
+/// the gradient (3), the Hessian (9) and the third derivative (27) as full
+/// Cartesian tensors in Fortran order, packed by order. The nuclear part of
+/// the tangent (the host's own centres moving) belongs here too: moist's
+/// level set reports no nuclear partials for a host-defined density.
+///
+/// Return 0 on success; any nonzero status fails the enclosing call.
+///
+/// V_0_8 CONTRACT: new in this release.
+typedef int (*moist_level_set_tangent_callback)(void* /* context */,
+                                                int /* first, zero-based */,
+                                                int /* nblk */,
+                                                int /* natoms */,
+                                                int /* ngrid */,
+                                                const double* /* dirs: Fortran (3,natoms,nblk) */,
+                                                const double* /* xyz: Fortran (3,ngrid) */,
+                                                double* /* jets: Fortran (40,ngrid,nblk) */);
+
+/// Second-order host exchange, host side: the potential and field tangents.
+///
+/// Asked for once per block, after the surface tangent pass, by a PCM
+/// component whose potential the host supplies (an external source). The
+/// *electronic* half only, in the convention of `qefield` on the gradient
+/// path: `efield(3, ngrid)` is `grad phi_el(r_i)` at the base geometry, and
+/// `dphi(ngrid, nblk)`, `defield(3, ngrid, nblk)` are the total tangents of
+/// `phi_el(r_i(v))` and `grad phi_el(r_i(v))` along each direction *at the
+/// moving points*, i.e. including the motion `d_xyz` of the points, which
+/// moist has just formed and hands over here. moist forms the nuclear halves
+/// itself.
+///
+/// Return 0 on success; any nonzero status fails the enclosing call.
+///
+/// V_0_8 CONTRACT: new in this release.
+typedef int (*moist_field_tangent_callback)(void* /* context */,
+                                            int /* first, zero-based */,
+                                            int /* nblk */,
+                                            int /* natoms */,
+                                            int /* ngrid */,
+                                            const double* /* dirs: Fortran (3,natoms,nblk) */,
+                                            const double* /* xyz: Fortran (3,ngrid) */,
+                                            const double* /* d_xyz: Fortran (3,ngrid,nblk) */,
+                                            double* /* efield: Fortran (3,ngrid) */,
+                                            double* /* dphi: Fortran (ngrid,nblk) */,
+                                            double* /* defield: Fortran (3,ngrid,nblk) */);
+
+/// Nuclear Hessian-vector products with the second-order host exchange.
+///
+/// moist_general_model_get_hvp() with the host in the loop: the host's
+/// tangents along the directions enter through the two callbacks (either may
+/// be NULL when no component or level set of the model will ask for it), and
+/// the response tangent comes back per direction -- what the host completes
+/// its own Hessian columns and Fock-matrix tangents from, exactly as it
+/// completes a gradient and a Fock matrix from the response:
+///
+///   * `dq(ngrid, ndir)`: tangent of the surface charges;
+///   * `d_xyz(3, ngrid, ndir)`: tangent of the surface points;
+///   * `w_value(ngrid)`, `w_gradient(3, ngrid)`, `w_hessian(3, 3, ngrid)`: the
+///     level-set adjoint weights the gradient contracts, at the base geometry,
+///     and `dw_value(ngrid, ndir)`, `dw_gradient(3, ngrid, ndir)`,
+///     `dw_hessian(3, 3, ngrid, ndir)`: their tangents. The Hessian weights
+///     are symmetrised. These six are requested together (all non-NULL) or
+///     not at all (all NULL); requesting them runs the cavity's per-direction
+///     second-order chain, which a density-independent level set has no use
+///     for. `dq` and `d_xyz` may each be NULL when not wanted.
+///
+/// `hvp` holds moist's own part of the columns: the host adds the terms that
+/// run through its basis (the tangents of its level-set and potential
+/// completions), formed from the response tangent.
+///
+/// V_0_8 CONTRACT: new in this release.
+moist_API_ENTRY void moist_API_CALL
+moist_general_model_get_hvp_coupled(moist_error /* error */,
+                                    moist_model /* model */,
+                                    int /* natoms */,
+                                    int /* ngrid */,
+                                    int /* ndir */,
+                                    const double* /* dirs: Fortran (3,natoms,ndir) */,
+                                    moist_level_set_tangent_callback /* level_set, or NULL */,
+                                    moist_field_tangent_callback /* field, or NULL */,
+                                    void* /* context */,
+                                    double* /* hvp: Fortran (3,natoms,ndir) */,
+                                    double* /* dq: Fortran (ngrid,ndir), or NULL */,
+                                    double* /* d_xyz: Fortran (3,ngrid,ndir), or NULL */,
+                                    double* /* w_value: (ngrid), or NULL */,
+                                    double* /* w_gradient: Fortran (3,ngrid), or NULL */,
+                                    double* /* w_hessian: Fortran (3,3,ngrid), or NULL */,
+                                    double* /* dw_value: Fortran (ngrid,ndir), or NULL */,
+                                    double* /* dw_gradient: Fortran (3,ngrid,ndir), or NULL */,
+                                    double* /* dw_hessian: Fortran (3,3,ngrid,ndir), or NULL */) moist_API_SUFFIX__V_0_8;
 
 /// Update a solvation model with a molecular structure
 moist_API_ENTRY void moist_API_CALL
@@ -996,6 +1106,29 @@ moist_contract_amat1_q1q2_surface_weights(moist_error /* error */,
                                           double* /* w_xi[ngrid] */,
                                           double* /* w_f[ngrid] */,
                                           double* /* w_xyz: Fortran (3,ngrid) */) moist_API_SUFFIX__V_0_5;
+
+/// Analytic host-parameter derivatives of one single-branch DROP surface point.
+/// igrid is zero-based. Jets are derivatives of the scaled level set S at the
+/// fixed projected point, packed by spatial order with full Cartesian tensors
+/// in Fortran order. Nuclear directions may be zero for electronic parameters.
+/// Output components are (x,y,z,xi,f). All capacities must match the cavity.
+moist_API_ENTRY void moist_API_CALL
+moist_drop_host_point_derivatives(moist_error, moist_cavity,
+    int /* igrid */, int /* nat */, int /* ndir */,
+    const double* /* dirs: (3,nat,ndir) */,
+    const double* /* jet: (121), spatial orders 0..4 */,
+    const double* /* jet1: (40,ndir), spatial orders 0..3 */,
+    const double* /* jet2: (13,ndir,ndir), spatial orders 0..2 */,
+    double* /* d1: (5,ndir) */, double* /* d2: (5,ndir,ndir) */) moist_API_SUFFIX__V_0_7;
+
+/// Gaussian PCM derivatives along the supplied surface path (x,y,z,xi,f).
+/// Returns A_p q and q^T A_pq q, with q held fixed in both contractions.
+moist_API_ENTRY void moist_API_CALL
+moist_pcm_amat_host_derivatives(moist_error, moist_cavity,
+    int /* ngrid */, int /* ndir */, const double* /* q: (ngrid) */,
+    const double* /* d1: (5,ngrid,ndir) */,
+    const double* /* d2: (5,ngrid,ndir,ndir) */,
+    double* /* aq1: (ngrid,ndir) */, double* /* a2: (ndir,ndir) */) moist_API_SUFFIX__V_0_7;
 
 /// Contract DROP surface weights to per-grid LSF adjoint weights (DROP-specific)
 /// Includes the projected-coordinate response from w_xyz and the electronic

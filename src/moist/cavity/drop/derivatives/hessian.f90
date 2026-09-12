@@ -116,8 +116,21 @@ contains
    !> @param[in]    dirs    Nuclear directions `(3, nsph, ndir)`
    !> @param[inout] hvp     Hessian-vector accumulator `(3, nsph, ndir)`
    !> @param[out]   error   Error object, allocated on failure
+   !> With `host` or a response tangent asking for level-set weights, the
+   !> fixed half runs per direction whatever the count: the host's jet
+   !> tangents are not contractions of the point's tensors with the direction,
+   !> which the rank-4 form's chain basis assumes, and the weight tangents are
+   !> formed by the per-direction chain alone.
+   !>
+   !> @param[in]    self    DROP cavity instance (must hold a projected grid)
+   !> @param[in]    acc     Accumulated surface-observable adjoints
+   !> @param[in]    dirs    Nuclear directions `(3, nsph, ndir)`
+   !> @param[inout] hvp     Hessian-vector accumulator `(3, nsph, ndir)`
+   !> @param[out]   error   Error object, allocated on failure
    !> @param[inout] omega_v Surface-adjoint response of the model, optional
-   module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v)
+   !> @param[inout] host    Second-order host exchange, optional
+   !> @param[inout] rt      Response tangent of the direction set, optional
+   module subroutine get_surface_hessian_drop(self, acc, dirs, hvp, error, omega_v, host, rt)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -130,6 +143,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional :: host
+      !> Response tangent of the direction set
+      type(response_tangent_type), intent(inout), optional :: rt
 
       !> Direction-free fixed half (rank-4 form only), and the staged columns
       real(wp), allocatable :: hess_fixed(:, :, :, :), total(:, :, :)
@@ -145,22 +162,26 @@ contains
       if (allocated(error)) return
       call check_direction_set(self, dirs, hvp, "get_surface_hessian_drop", error)
       if (allocated(error)) return
+      call check_host_exchange(self, dirs, "get_surface_hessian_drop", error, omega_v, host, rt)
+      if (allocated(error)) return
       if (self%ngrid <= 0) return
       ndir = size(dirs, 3)
 
       !* --------------------------------- Both halves -------------------------------- *!
       fixed_mode = hvp_fixed_mode(ndir, self%nsph)
+      if (host_exchange_per_dir(host, rt)) fixed_mode = drop_fixed_per_dir
       allocate (total(ndim, self%nsph, ndir), source=0.0_wp)
 
       if (fixed_mode == drop_fixed_per_dir) then
          ! Both channels land their columns in `total` directly
          call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
-                                     total, error, omega_v=omega_v)
+                                     total, error, omega_v=omega_v, host=host, rt=rt)
          if (allocated(error)) return
       else
          allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
          call surface_hessian_halves(self, acc, dirs, fixed_mode, "get_surface_hessian_drop", &
-                                     total, error, hess_fixed=hess_fixed, omega_v=omega_v)
+                                     total, error, hess_fixed=hess_fixed, omega_v=omega_v, &
+                                     rt=rt)
          if (allocated(error)) return
 
          !* -------------------------- Contract the fixed half ------------------------ *!
@@ -195,7 +216,9 @@ contains
    !> @param[inout] hessian Nuclear-Hessian accumulator `(3, nsph, 3, nsph)`
    !> @param[out]   error   Error object, allocated on failure
    !> @param[inout] omega_v Surface-adjoint response of the model, optional
-   module subroutine get_hessian_drop(self, acc, hessian, error, omega_v)
+   !> @param[inout] host    Second-order host exchange, optional
+   !> @param[inout] rt      Response tangent of the Cartesian basis, optional
+   module subroutine get_hessian_drop(self, acc, hessian, error, omega_v, host, rt)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -206,6 +229,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional :: host
+      !> Response tangent of the Cartesian basis
+      type(response_tangent_type), intent(inout), optional :: rt
 
       !> Cartesian unit directions, one per nuclear degree of freedom
       real(wp), allocatable :: dirs(:, :, :)
@@ -233,13 +260,30 @@ contains
             dirs(iaxis, iatom, ndim*(iatom - 1) + iaxis) = 1.0_wp
          end do
       end do
+      call check_host_exchange(self, dirs, "get_hessian_drop", error, omega_v, host, rt)
+      if (allocated(error)) return
 
       !* --------------------------------- Both halves -------------------------------- *!
-      allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
       allocate (resp(ndim, self%nsph, ndir), source=0.0_wp)
 
+      if (host_exchange_per_dir(host, rt)) then
+         ! The host exchange runs the fixed half per direction; both halves
+         ! of every unit direction land in `resp`, the columns of the block
+         call surface_hessian_halves(self, acc, dirs, drop_fixed_per_dir, "get_hessian_drop", &
+                                     resp, error, omega_v=omega_v, host=host, rt=rt)
+         if (allocated(error)) return
+         do iatom = 1, self%nsph
+            do iaxis = 1, ndim
+               idir = ndim*(iatom - 1) + iaxis
+               hessian(:, :, iaxis, iatom) = hessian(:, :, iaxis, iatom) + resp(:, :, idir)
+            end do
+         end do
+         return
+      end if
+
+      allocate (hess_fixed(ndim, self%nsph, ndim, self%nsph), source=0.0_wp)
       call surface_hessian_halves(self, acc, dirs, drop_fixed_rank4, "get_hessian_drop", &
-                                  resp, error, hess_fixed=hess_fixed, omega_v=omega_v)
+                                  resp, error, hess_fixed=hess_fixed, omega_v=omega_v, rt=rt)
       if (allocated(error)) return
 
       do iatom = 1, self%nsph
@@ -250,6 +294,60 @@ contains
          end do
       end do
    end subroutine get_hessian_drop
+
+   !> Whether the second-order host exchange forces the per-direction fixed half
+   !>
+   !> A host's jet tangents are not contractions of the point's tensors with
+   !> the direction, and the level-set weight tangents of a response tangent
+   !> exist only in the per-direction chain; either rules the rank-4 form out.
+   !>
+   !> @param[in] host Second-order host exchange, optional
+   !> @param[in] rt   Response tangent, optional
+   logical function host_exchange_per_dir(host, rt) result(per_dir)
+      class(coupling_tangent_type), intent(in), optional :: host
+      type(response_tangent_type), intent(in), optional :: rt
+
+      per_dir = present(host)
+      if (present(rt)) per_dir = per_dir .or. rt%want_lsf()
+   end function host_exchange_per_dir
+
+   !> Check the second-order host exchange against the direction set
+   !>
+   !> A response tangent must be initialised for this grid and direction set,
+   !> and both the host and the tangent need the model's adjoint response,
+   !> because that is what carries the host's field tangents to the components
+   !> and their charge tangents back.
+   !>
+   !> @param[in]  self    DROP cavity instance
+   !> @param[in]  dirs    Nuclear directions `(3, nsph, ndir)`
+   !> @param[in]  context Calling routine, used to prefix the diagnostics
+   !> @param[out] error   Error object, allocated on a mismatch
+   !> @param[in]  omega_v Surface-adjoint response of the model, optional
+   !> @param[in]  host    Second-order host exchange, optional
+   !> @param[in]  rt      Response tangent, optional
+   subroutine check_host_exchange(self, dirs, context, error, omega_v, host, rt)
+      class(cavity_type_drop), intent(in) :: self
+      real(wp), intent(in) :: dirs(:, :, :)
+      character(len=*), intent(in) :: context
+      type(error_type), allocatable, intent(out) :: error
+      class(surface_adjoint_response_type), intent(in), optional :: omega_v
+      class(coupling_tangent_type), intent(in), optional :: host
+      type(response_tangent_type), intent(in), optional :: rt
+
+      if (.not. (present(host) .or. present(rt))) return
+      if (.not. present(omega_v)) then
+         call fatal_error(error, context//": the second-order host exchange needs the"// &
+                          " model's adjoint response")
+         return
+      end if
+      if (present(rt)) then
+         if (.not. rt%is_initialized(self%ngrid, size(dirs, 3))) then
+            call fatal_error(error, context//": the response tangent is not initialised"// &
+                             " for this grid and direction set")
+            return
+         end if
+      end if
+   end subroutine check_host_exchange
 
    !* ================================================================================= *!
    !*                              Composition of the halves                            *!
@@ -303,8 +401,10 @@ contains
    !> @param[out]   error      Error object, allocated on failure
    !> @param[inout] hess_fixed Rank-4 fixed half `(3, nsph, 3, nsph)`
    !> @param[inout] omega_v    Surface-adjoint response of the model, optional
+   !> @param[inout] host       Second-order host exchange, optional
+   !> @param[inout] rt         Response tangent of the direction set, optional
    subroutine surface_hessian_halves(self, acc, dirs, fixed_mode, context, columns, error, &
-                                     hess_fixed, omega_v)
+                                     hess_fixed, omega_v, host, rt)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
@@ -323,6 +423,10 @@ contains
       real(wp), intent(inout), optional :: hess_fixed(:, :, :, :)
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
+      !> Second-order host exchange
+      class(coupling_tangent_type), intent(inout), optional :: host
+      !> Response tangent of the direction set
+      type(response_tangent_type), intent(inout), optional :: rt
 
       !> Folded surface adjoints of the base geometry, read by both channels
       type(drop_surface_weights_type) :: eff
@@ -337,15 +441,11 @@ contains
       ! `Phi . (d eff/dv)`: the fold is what moves there, so it needs the raw
       ! channels as well as the primal `eff`. Hence both objects go in, and one
       ! traversal serves the two.
-      if (fixed_mode == drop_fixed_rank4) then
-         call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
-                                    acc=acc, dirs=dirs, hess_fixed=hess_fixed, hvp=columns, &
-                                    error=error, omega_v=omega_v)
-      else
-         call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
-                                    acc=acc, dirs=dirs, hvp=columns, error=error, &
-                                    omega_v=omega_v)
-      end if
+      ! `hess_fixed` is present exactly in rank-4 mode, and an absent optional
+      ! passes through as absent.
+      call drop_hessian_traverse(self, eff, fixed_mode, .true., context, &
+                                 acc=acc, dirs=dirs, hess_fixed=hess_fixed, hvp=columns, &
+                                 error=error, omega_v=omega_v, host=host, rt=rt)
    end subroutine surface_hessian_halves
 
    !* ================================================================================= *!

@@ -309,21 +309,22 @@ def new_drop_cavity_isodensity_callback(
     Two callback forms are accepted:
 
     * ``callback(point, order)`` -- ``point`` is a single point in Bohr and
-      ``order`` is the highest derivative moist needs (1, 2 or 3). moist passes
-      NULL Hessian/third-derivative buffers when it does not need them, so a
-      callback in this form can skip *computing* the expensive high-order
-      derivatives during the value+gradient-only projection phase.
-    * ``callback(point)`` -- the original form. It always computes everything,
-      which is correct but slower.
+      ``order`` is the highest derivative moist needs (1 to 4). moist passes
+      NULL buffers for the orders it does not need, so a callback in this form
+      can skip *computing* the expensive high-order derivatives during the
+      value+gradient-only projection phase. Order 4 is asked for by the nuclear
+      Hessian alone.
+    * ``callback(point)`` -- the original form. It always computes everything
+      it returns, which is correct but slower.
 
     The form is detected from the callback's signature; pass ``pass_order``
     explicitly to override that when introspection cannot decide (builtins,
     ``*args``, :func:`functools.partial` over a C callable).
 
-    Either form must return ``(rho, drho[, d2rho[, d3rho]])`` or an object with
-    ``rho``, ``drho`` and optional ``d2rho``/``d3rho`` attributes. The returned
-    CFFI callback must be kept alive by the caller for at least as long as the
-    cavity handle.
+    Either form must return ``(rho, drho[, d2rho[, d3rho[, d4rho]]])`` or an
+    object with ``rho``, ``drho`` and optional ``d2rho``/``d3rho``/``d4rho``
+    attributes. The returned CFFI callback must be kept alive by the caller for
+    at least as long as the cavity handle.
 
     ``tolerance`` overrides the master numerical tolerance (``None`` keeps the
     compiled DROP default).
@@ -342,13 +343,14 @@ def new_drop_cavity_isodensity_callback(
     state = CallbackState()
 
     @ffi.callback("moist_isodensity_lsf_callback")
-    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr):
+    def c_callback(context, point_ptr, rho_ptr, drho_ptr, d2rho_ptr, d3rho_ptr, d4rho_ptr):
         want_hess = d2rho_ptr != ffi.NULL
         want_third = d3rho_ptr != ffi.NULL
+        want_fourth = d4rho_ptr != ffi.NULL
         try:
             point = np.frombuffer(ffi.buffer(point_ptr, 24), dtype=np.float64)
             if pass_order:
-                order = 3 if want_third else (2 if want_hess else 1)
+                order = 4 if want_fourth else (3 if want_third else (2 if want_hess else 1))
                 result = callback(point, order)
             else:
                 result = callback(point)
@@ -358,10 +360,12 @@ def new_drop_cavity_isodensity_callback(
                 drho = result.drho
                 d2rho = getattr(result, "d2rho", None)
                 d3rho = getattr(result, "d3rho", None)
+                d4rho = getattr(result, "d4rho", None)
             else:
                 rho, drho = result[0], result[1]
                 d2rho = result[2] if len(result) > 2 else None
                 d3rho = result[3] if len(result) > 3 else None
+                d4rho = result[4] if len(result) > 4 else None
 
             drho = np.asarray(drho, dtype=np.float64)
             if drho.shape != (3,):
@@ -389,6 +393,19 @@ def new_drop_cavity_isodensity_callback(
                         "Isodensity callback third derivative must have shape (3, 3, 3)"
                     )
                 np.frombuffer(ffi.buffer(d3rho_ptr, 216), dtype=np.float64)[:] = d3rho.ravel(
+                    order="F"
+                )
+            if want_fourth:
+                if d4rho is None:
+                    raise ValueError(
+                        "Isodensity callback did not return the requested fourth derivative"
+                    )
+                d4rho = np.asarray(d4rho, dtype=np.float64)
+                if d4rho.shape != (3, 3, 3, 3):
+                    raise ValueError(
+                        "Isodensity callback fourth derivative must have shape (3, 3, 3, 3)"
+                    )
+                np.frombuffer(ffi.buffer(d4rho_ptr, 648), dtype=np.float64)[:] = d4rho.ravel(
                     order="F"
                 )
         except BaseException as exc:
@@ -734,6 +751,153 @@ def general_model_get_hvp(model: ModelHandle, natoms: int, dirs: np.ndarray) -> 
         _cast("double*", hvp),
     )
     return hvp
+
+
+def general_model_get_hvp_coupled(
+    model: ModelHandle,
+    natoms: int,
+    ngrid: int,
+    dirs: np.ndarray,
+    tangent=None,
+    *,
+    level_set: bool = False,
+) -> tuple[np.ndarray, dict]:
+    """Hessian-vector products with the second-order host exchange.
+
+    ``dirs`` has shape (3, natoms, ndir). ``tangent`` is the host's side of the
+    exchange, an object with ``level_set_tangent(first, dirs, xyz)`` returning
+    the jet tangents ``(40, ngrid, nblk)`` and ``field_tangent(first, dirs,
+    xyz, d_xyz)`` returning ``(efield, dphi, defield)``; either method may be
+    absent when nothing in the model asks for it, and ``first`` is the
+    zero-based global index of the block's first direction. See ``moist.h``
+    for the two contracts.
+
+    Returns moist's part of the products, shape (3, natoms, ndir), and the
+    response tangent as a dict of Fortran-ordered arrays: ``surface_charge``
+    (ngrid, ndir), ``xyz`` (3, ngrid, ndir) and, with ``level_set``, the base
+    level-set weights ``w_value``, ``w_gradient``, ``w_hessian`` and their
+    tangents ``dw_value``, ``dw_gradient``, ``dw_hessian``.
+
+    An exception raised inside a host callback aborts the call and is re-raised
+    here with its own traceback.
+    """
+
+    dirs = np.asfortranarray(dirs, dtype=np.float64)
+    if dirs.ndim != 3 or dirs.shape[0] != 3 or dirs.shape[1] != natoms:
+        raise ValueError(f"dirs must have shape (3, {natoms}, ndir), got {dirs.shape}")
+    ndir = dirs.shape[2]
+    if ndir < 1:
+        raise ValueError("dirs must carry at least one direction")
+    natoms = int(natoms)
+    ngrid = int(ngrid)
+
+    state = CallbackState()
+    keep_alive = []
+    level_set_cb = ffi.NULL
+    field_cb = ffi.NULL
+
+    def view(ptr, shape):
+        count = int(np.prod(shape))
+        return np.frombuffer(ffi.buffer(ptr, 8 * count), dtype=np.float64).reshape(
+            shape, order="F"
+        )
+
+    if tangent is not None and hasattr(tangent, "level_set_tangent"):
+
+        @ffi.callback("moist_level_set_tangent_callback")
+        def c_level_set(context, first, nblk, nat, ng, dirs_ptr, xyz_ptr, jets_ptr):
+            try:
+                block = view(dirs_ptr, (3, nat, nblk))
+                xyz = view(xyz_ptr, (3, ng))
+                jets = np.asarray(
+                    tangent.level_set_tangent(int(first), block, xyz), dtype=np.float64
+                )
+                if jets.shape != (40, ng, nblk):
+                    raise ValueError(
+                        f"level_set_tangent must return shape (40, {ng}, {nblk}), got {jets.shape}"
+                    )
+                view(jets_ptr, (40, ng, nblk))[...] = jets
+            except BaseException as exc:
+                state.record(exc)
+                return 1
+            return 0
+
+        level_set_cb = c_level_set
+        keep_alive.append(c_level_set)
+
+    if tangent is not None and hasattr(tangent, "field_tangent"):
+
+        @ffi.callback("moist_field_tangent_callback")
+        def c_field(context, first, nblk, nat, ng, dirs_ptr, xyz_ptr, dxyz_ptr,
+                    efield_ptr, dphi_ptr, defield_ptr):
+            try:
+                block = view(dirs_ptr, (3, nat, nblk))
+                xyz = view(xyz_ptr, (3, ng))
+                d_xyz = view(dxyz_ptr, (3, ng, nblk))
+                efield, dphi, defield = tangent.field_tangent(int(first), block, xyz, d_xyz)
+                efield = np.asarray(efield, dtype=np.float64)
+                dphi = np.asarray(dphi, dtype=np.float64)
+                defield = np.asarray(defield, dtype=np.float64)
+                if efield.shape != (3, ng) or dphi.shape != (ng, nblk) or defield.shape != (3, ng, nblk):
+                    raise ValueError(
+                        "field_tangent must return efield (3, ngrid), dphi (ngrid, nblk) and "
+                        f"defield (3, ngrid, nblk); got {efield.shape}, {dphi.shape}, {defield.shape}"
+                    )
+                view(efield_ptr, (3, ng))[...] = efield
+                view(dphi_ptr, (ng, nblk))[...] = dphi
+                view(defield_ptr, (3, ng, nblk))[...] = defield
+            except BaseException as exc:
+                state.record(exc)
+                return 1
+            return 0
+
+        field_cb = c_field
+        keep_alive.append(c_field)
+
+    hvp = np.zeros((3, natoms, ndir), dtype=np.float64, order="F")
+    out = {
+        "surface_charge": np.zeros((ngrid, ndir), dtype=np.float64, order="F"),
+        "xyz": np.zeros((3, ngrid, ndir), dtype=np.float64, order="F"),
+    }
+    if level_set:
+        out["w_value"] = np.zeros(ngrid, dtype=np.float64, order="F")
+        out["w_gradient"] = np.zeros((3, ngrid), dtype=np.float64, order="F")
+        out["w_hessian"] = np.zeros((3, 3, ngrid), dtype=np.float64, order="F")
+        out["dw_value"] = np.zeros((ngrid, ndir), dtype=np.float64, order="F")
+        out["dw_gradient"] = np.zeros((3, ngrid, ndir), dtype=np.float64, order="F")
+        out["dw_hessian"] = np.zeros((3, 3, ngrid, ndir), dtype=np.float64, order="F")
+
+    def maybe(name):
+        return _cast("double*", out[name]) if name in out else ffi.NULL
+
+    try:
+        error_check(lib.moist_general_model_get_hvp_coupled)(
+            model.handle,
+            natoms,
+            ngrid,
+            int(ndir),
+            _cast("const double*", dirs),
+            level_set_cb,
+            field_cb,
+            ffi.NULL,
+            _cast("double*", hvp),
+            maybe("surface_charge"),
+            maybe("xyz"),
+            maybe("w_value"),
+            maybe("w_gradient"),
+            maybe("w_hessian"),
+            maybe("dw_value"),
+            maybe("dw_gradient"),
+            maybe("dw_hessian"),
+        )
+    except Exception:
+        # A host callback that raised is the real cause; moist's error only
+        # says that the callback failed
+        state.raise_if_failed()
+        raise
+    finally:
+        del keep_alive
+    return hvp, out
 
 
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
@@ -1099,6 +1263,43 @@ def contract_amat1_q1q2_surface_weights(
         _cast("double*", w_xyz),
     )
     return w_xi, w_f, w_xyz
+
+
+def drop_host_point_derivatives(cavity, igrid, dirs, jet, jet1, jet2):
+    """Native derivatives of (x,y,z,xi,f) for one DROP point; see moist.h."""
+    ngrid, nat = get_cavity_sizes(cavity)
+    dirs, jet, jet1, jet2 = [
+        np.asfortranarray(x, dtype=np.float64) for x in (dirs, jet, jet1, jet2)
+    ]
+    if dirs.ndim != 3 or dirs.shape[:2] != (3, nat) or dirs.shape[2] < 1:
+        raise ValueError("dirs must have shape (3, natoms, ndir) with ndir > 0")
+    n = dirs.shape[2]
+    if not 0 <= igrid < ngrid or jet.shape != (121,) or jet1.shape != (40, n) or jet2.shape != (13, n, n):
+        raise ValueError("invalid point index or host jet shapes")
+    d1 = np.empty((5, n), order="F")
+    d2 = np.empty((5, n, n), order="F")
+    error_check(lib.moist_drop_host_point_derivatives)(
+        cavity.handle, int(igrid), nat, n,
+        *[_cast("double*", x) for x in (dirs, jet, jet1, jet2, d1, d2)],
+    )
+    return d1, d2
+
+
+def pcm_amat_host_derivatives(cavity, q, d1, d2):
+    """Return A_p q and q^T A_pq q along a host-supplied surface path."""
+    ng, _ = get_cavity_sizes(cavity)
+    q, d1, d2 = [np.asfortranarray(x, dtype=np.float64) for x in (q, d1, d2)]
+    if d1.ndim != 3 or d1.shape[:2] != (5, ng) or d1.shape[2] < 1:
+        raise ValueError("d1 must have shape (5, ngrid, ndir) with ndir > 0")
+    n = d1.shape[2]
+    if q.shape != (ng,) or d2.shape != (5, ng, n, n):
+        raise ValueError("inconsistent charge or surface Hessian shape")
+    aq1 = np.empty((ng, n), order="F")
+    a2 = np.empty((n, n), order="F")
+    error_check(lib.moist_pcm_amat_host_derivatives)(
+        cavity.handle, ng, n, *[_cast("double*", x) for x in (q, d1, d2, aq1, a2)]
+    )
+    return aq1, a2
 
 
 def contract_surface_lsf_weights(

@@ -10,5 +10,6 @@ srcs += files(
   'tangent_forward.f90',
   'hessian_traverse.f90',
   'hessian.f90',
+  'host.f90',
   'weights_tangent.f90',
 )

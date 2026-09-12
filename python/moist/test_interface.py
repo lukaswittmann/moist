@@ -529,7 +529,7 @@ def test_evaluation_hessian_refuses_a_coupling_with_gradient_terms(diatomic) -> 
     result = model.evaluate(coupling=CouplingWithNuclearTerms(structure))
     assert result.gradient.shape == (3, len(structure))
 
-    with raises(NotImplementedError, match="second-order coupling hook"):
+    with raises(NotImplementedError, match="Evaluation.linearize"):
         result.hessian
     # The model block alone stays reachable, and is what the plain coupling gets
     plain = model.evaluate(structure)

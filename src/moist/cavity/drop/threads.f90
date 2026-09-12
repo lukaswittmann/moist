@@ -117,24 +117,19 @@ module moist_cavity_drop_threads
    !> this project cannot reliably copy a `class(...)` allocatable, and an
    !> OpenMP `private` copy is exactly that operation.
    type :: drop_point_scratch_type
-      !> Anchor of the grid point
-      real(wp) :: anchor(3) = 0.0_wp
       !> Owner sphere of the anchor
       integer :: owner_idx = 0
-      !> Lagrange multiplier of the projection
-      real(wp) :: lambda_val = 0.0_wp
-      !> Level-set gradient and Hessian at the projected point
-      real(wp) :: lsf1_r(3) = 0.0_wp, lsf2_rr(3, 3) = 0.0_wp
       !> Objective gradient at the projected point
       real(wp) :: phi1_r(3) = 0.0_wp
-      !> Per-grid point sensitivity kernel state
+      !> Per-grid point sensitivity kernel state. The anchor, the multiplier
+      !> and the level-set jet up to third order live here and nowhere else:
+      !> the prologue writes them straight into the state, and every traversal
+      !> reads them back from it.
       type(drop_seed_state_type) :: state
       !> Factorization reused by every solve at this grid point
       type(drop_kkt_factor_type) :: kkt_fac
       !> Solved standard batch of jet and anchor seeds; requested member
       real(wp), allocatable :: kkt_rhs(:, :)
-      !> Third-derivative buffer of the level set
-      real(wp), allocatable :: lsf3_rrr(:, :, :)
       !> Fourth-derivative buffer of the level set; requested member
       real(wp), allocatable :: lsf4_rrrr(:, :, :, :)
       !> Active atoms of the level set at this point, and how many there are
@@ -254,7 +249,6 @@ contains
       !> Whether a jet-contracted nuclear row buffer is needed
       logical, intent(in), optional :: want_vjp
 
-      allocate (self%lsf3_rrr(3, 3, 3), source=0.0_wp)
       allocate (self%active_idx(nsph))
       call self%iswig_work%init(iswig)
       ! Sized to `nsph` rather than to the workspace capacity: `n_nb` is bounded
@@ -283,7 +277,6 @@ contains
       class(drop_point_scratch_type), intent(inout) :: self
 
       if (allocated(self%kkt_rhs)) deallocate (self%kkt_rhs)
-      if (allocated(self%lsf3_rrr)) deallocate (self%lsf3_rrr)
       if (allocated(self%lsf4_rrrr)) deallocate (self%lsf4_rrrr)
       if (allocated(self%active_idx)) deallocate (self%active_idx)
       if (allocated(self%vjp_pt)) deallocate (self%vjp_pt)

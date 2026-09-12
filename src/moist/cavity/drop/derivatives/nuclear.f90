@@ -137,7 +137,7 @@ contains
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
-         call seed_normal_channel(pt%state, eff, igrid, pt%lsf2_rr, w_lsf1_pt, w_xyz_local)
+         call seed_normal_channel(pt%state, eff, igrid, pt%state%lsf2_rr, w_lsf1_pt, w_xyz_local)
 
          !* -------------------- Field seeds -> level-set adjoints -------------------- *!
          call seed_jet_basis(pt%state, eff, igrid, pt%phi1_r, pt%kkt_rhs, w_xyz_local, &
@@ -148,10 +148,6 @@ contains
          ! nuclear-gradient row already weighted by (w_lsf0, w_lsf1, w_lsf2), so
          ! the (3, 3, 3, n_active) mixed third derivative the weights used to be
          ! folded against is never materialized -- neither here nor in the kernel.
-         pt%n_active = slots%lsf(thread_slot)%lsf%active_count()
-         do i = 1, pt%n_active
-            pt%active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
-         end do
          call slots%lsf(thread_slot)%lsf%vjp_f1_rA(w_lsf0_pt, w_lsf1_pt, w_lsf2_pt, pt%vjp_pt)
          do i = 1, pt%n_active
             iatom = pt%active_idx(i)
@@ -166,7 +162,7 @@ contains
          !* ------------------------- iSwig switching channel ------------------------- *!
          ! f_i depends on the nuclear geometry alone; only the owner atom and neighbours are nonzero
          if (abs(eff%w_f(igrid)) > seed_weight_tol) then
-            call self%iswig%swi_collect(pt%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
+            call self%iswig%swi_collect(pt%state%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
                                         swi_f0, pt%iswig_work)
             call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
             do jj = 1, pt%iswig_work%n_nb
