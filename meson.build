@@ -2,7 +2,7 @@ project(
   'moist',
   'fortran',
   version: '0.6.0-alpha.1',
-  license: 'LGPL-3.0-or-later',
+  license: 'MPL-2.0',
   meson_version: '>=0.57',
   default_options: [
     'buildtype=debugoptimized',
@@ -47,8 +47,7 @@ subdir('app')
 
 # Package the license files
 moist_lic = files(
-  'COPYING',
-  'COPYING.LESSER',
+  'LICENSE',
   'THIRD_PARTY_LICENSES.md',
 )
 

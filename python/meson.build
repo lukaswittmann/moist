@@ -4,7 +4,7 @@ project(
   'moist',
   'c',
   version: '0.6.0a1',
-  license: 'LGPL-3.0-or-later',
+  license: 'MPL-2.0',
   meson_version: '>=0.55',
   default_options: [
     'buildtype=debugoptimized',

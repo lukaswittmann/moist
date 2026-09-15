@@ -2,7 +2,7 @@ MOIST Documentation
 ===================
 
 .. image:: https://img.shields.io/github/license/lukaswittmann/moist
-   :target: https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER
+   :target: https://github.com/lukaswittmann/moist/blob/main/LICENSE
    :alt: License
 
 .. image:: https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases

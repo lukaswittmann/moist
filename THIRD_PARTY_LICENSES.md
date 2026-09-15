@@ -1,13 +1,12 @@
 # Third-party code and licenses
 
-`moist` is distributed under the **LGPL-3.0-or-later** license (see `COPYING` and
-`COPYING.LESSER`). It incorporates third-party code under other, compatible licenses.
+`moist` is distributed under the **MPL-2.0** license (see `LICENSE`). It incorporates
+third-party code under other licenses.
 This file documents that code, its origin, and the applicable license, as required by
 those licenses (in particular the BSD source- and binary-redistribution clauses).
 
-All third-party components below are under licenses compatible with `moist`'s
-LGPL-3.0-or-later license (BSD-2-Clause, BSD-3-Clause, MIT, Apache-2.0, or LGPL-3.0).
-Each component remains under its own terms; its license is listed alongside it below.
+Each third-party component remains under its own terms; its license is listed alongside
+it below.
 
 ## Vendored code (copied into the source tree and locally modified)
 
@@ -43,8 +42,8 @@ files in-tree (unmodified upstream). Listed here for completeness.
 
 ## Notes
 
-- BSD-3-Clause and BSD-2-Clause are GPL/LGPL-compatible; they permit redistribution with
-  or without modification provided the copyright notice, conditions, and disclaimer are
-  retained (source) and reproduced in accompanying materials (binary). This file, shipped
-  with source and binary distributions, satisfies the binary-redistribution clause.
+- BSD-3-Clause and BSD-2-Clause permit redistribution with or without modification
+  provided the copyright notice, conditions, and disclaimer are retained (source) and
+  reproduced in accompanying materials (binary). This file, shipped with source and
+  binary distributions, satisfies the binary-redistribution clause.
 - Names of upstream authors/contributors are not used to endorse or promote `moist`.

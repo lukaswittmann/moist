@@ -1,6 +1,6 @@
 name = "moist"
 version = "0.6.0"
-license = "LGPL-3.0-or-later"
+license = "MPL-2.0"
 maintainer = ["@lukaswittmann"]
 author = ["Lukas Wittmann"]
 description = "Modular and Open-source Implicit Solvation Toolkit"

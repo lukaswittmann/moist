@@ -2,7 +2,7 @@
   
   # MOIST - *The Modular and Open-source Implicit Solvation Toolkit*
 
-  [![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/COPYING.LESSER) 
+  [![License](https://img.shields.io/github/license/lukaswittmann/moist)](https://github.com/lukaswittmann/moist/blob/main/LICENSE)
   [![Version](https://img.shields.io/github/v/release/lukaswittmann/moist?include_prereleases)](https://github.com/lukaswittmann/moist/releases/latest)
   [![Build](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml/badge.svg?branch=main)](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml)
   [![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
@@ -183,7 +183,7 @@ moist <subcommand> [options] <input>
 Run `moist --help` to list all subcommands, or `moist <subcommand> --help`
 (for example `moist cavity drop svdw --help`) for the options of a specific
 command. `moist --version`, `moist --citation`, and `moist --license` print the
-version, the relevant literature references, and the full license text.
+version, the relevant literature references, and the license notice.
 
 ### Constructing a cavity
 
@@ -280,10 +280,10 @@ export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
 
 ## License
 
-`moist` is free software released under the **LGPL-3.0-or-later** license (see [`COPYING`](COPYING) and [`COPYING.LESSER`](COPYING.LESSER)).
+`moist` is free software released under the **MPL-2.0** license (see [`LICENSE`](LICENSE)).
 
-It also bundles third-party code under compatible permissive (BSD / MIT) and LGPL-3.0 licenses.
-The full inventory, with origins and license texts, is in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
+It also bundles third-party code under separate licenses. The full inventory, with
+origins and license texts, is in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
 
 ## Acknowledgements
 
