@@ -1,20 +1,17 @@
 # Third-party code and licenses
 
-`moist` is distributed under the **LGPL-3.0-or-later** license (see `COPYING` and
-`COPYING.LESSER`). It incorporates third-party code under other, compatible licenses.
+`moist` is distributed under the **MPL-2.0** license (see `LICENSE`). It incorporates
+third-party code under other licenses.
 This file documents that code, its origin, and the applicable license, as required by
 those licenses (in particular the BSD source- and binary-redistribution clauses).
 
-All third-party components below are under licenses compatible with `moist`'s
-LGPL-3.0-or-later license (BSD-2-Clause, BSD-3-Clause, MIT, Apache-2.0, or LGPL-3.0).
-Each component remains under its own terms; its license is listed alongside it below.
+Each third-party component remains under its own terms; its license is listed alongside
+it below.
 
 ## Vendored code (copied into the source tree and locally modified)
 
 These numerical components were copied from upstream repositories — primarily by
 Jacob Williams (https://github.com/jacobwilliams) — and then modified for use in `moist`.
-Because they were modified they are not consumed as upstream submodules / Meson wraps.
-The verbatim upstream license text accompanies each component at the path shown.
 
 | Component | Path in `moist` | Upstream repository | Original author(s) | License | License file |
 |---|---|---|---|---|---|
@@ -25,7 +22,6 @@ The verbatim upstream license text accompanies each component at the path shown.
 | LSQR | `src/moist/math/linalg/lsqr/` | jacobwilliams/LSQR (tag 1.1.0) | M. Saunders (SOL, Stanford); modern Fortran by J. Williams | BSD-3-Clause (+ CPL-1.0 original, + LAPACK BSD) | `src/moist/math/linalg/lsqr/LICENSE` |
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
-| NumDiff | `src/moist/math/numdiff/` | jacobwilliams/NumDiff | J. Williams; DSM kernel from MINPACK (University of Chicago / Argonne) | BSD-3-Clause (+ MINPACK notice) | `src/moist/math/numdiff/LICENSE` |
 
 ## Bundled subprojects
 
@@ -43,8 +39,8 @@ files in-tree (unmodified upstream). Listed here for completeness.
 
 ## Notes
 
-- BSD-3-Clause and BSD-2-Clause are GPL/LGPL-compatible; they permit redistribution with
-  or without modification provided the copyright notice, conditions, and disclaimer are
-  retained (source) and reproduced in accompanying materials (binary). This file, shipped
-  with source and binary distributions, satisfies the binary-redistribution clause.
+- BSD-3-Clause and BSD-2-Clause permit redistribution with or without modification
+  provided the copyright notice, conditions, and disclaimer are retained (source) and
+  reproduced in accompanying materials (binary). This file, shipped with source and
+  binary distributions, satisfies the binary-redistribution clause.
 - Names of upstream authors/contributors are not used to endorse or promote `moist`.

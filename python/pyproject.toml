@@ -13,7 +13,7 @@ version = "0.6.0a1"
 authors = [{"name" = "Lukas Wittmann"}]
 description = "Python API for MOIST"
 readme = "README.rst"
-license.text = "LGPL-3.0-or-later"
+license.text = "MPL-2.0"
 urls.repository = "https://github.com/lukaswittmann/moist"
 urls.homepage = "https://readthedocs.org/projects/moist"
 classifiers = [

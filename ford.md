@@ -4,7 +4,7 @@ summary: >
   components, CLI tools, and bindings for implicit solvation models.
 project_url: https://github.com/lukaswittmann/moist
 github: lukaswittmann/moist
-license: LGPL-3.0-or-later
+license: MPL-2.0
 authors:
   - Lukas Wittmann
 output_dir: docs/ford
