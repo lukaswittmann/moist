@@ -12,8 +12,6 @@ it below.
 
 These numerical components were copied from upstream repositories — primarily by
 Jacob Williams (https://github.com/jacobwilliams) — and then modified for use in `moist`.
-Because they were modified they are not consumed as upstream submodules / Meson wraps.
-The verbatim upstream license text accompanies each component at the path shown.
 
 | Component | Path in `moist` | Upstream repository | Original author(s) | License | License file |
 |---|---|---|---|---|---|
@@ -24,7 +22,6 @@ The verbatim upstream license text accompanies each component at the path shown.
 | LSQR | `src/moist/math/linalg/lsqr/` | jacobwilliams/LSQR (tag 1.1.0) | M. Saunders (SOL, Stanford); modern Fortran by J. Williams | BSD-3-Clause (+ CPL-1.0 original, + LAPACK BSD) | `src/moist/math/linalg/lsqr/LICENSE` |
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
-| NumDiff | `src/moist/math/numdiff/` | jacobwilliams/NumDiff | J. Williams; DSM kernel from MINPACK (University of Chicago / Argonne) | BSD-3-Clause (+ MINPACK notice) | `src/moist/math/numdiff/LICENSE` |
 
 ## Bundled subprojects
 

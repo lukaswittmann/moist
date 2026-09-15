@@ -290,6 +290,6 @@ origins and license texts, is in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSE
 `moist` builds on numerical software from several authors, gratefully acknowledged:
 
 - **Jaś Kachnowicz** for help with the solvent properties and geometries.
-- **Jacob Williams** ([jacobwilliams](https://github.com/jacobwilliams)) for modern Fortran implementations of various solvers and packages (SLSQP, L-BFGS-B, NLESolver, fmin, LSQR, LSMR, LUSOL, NumDiff).
+- **Jacob Williams** ([jacobwilliams](https://github.com/jacobwilliams)) for modern Fortran implementations of various solvers and packages (SLSQP, L-BFGS-B, NLESolver, fmin, LSQR, LSMR, LUSOL).
 
 These components retain their original copyright notices and licenses; the full texts accompany each component in the source tree and are catalogued in [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
