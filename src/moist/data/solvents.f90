@@ -22,7 +22,7 @@ module moist_data_solvents
 
    private
 
-   !> Solvent and solute properties and molecular structures.
+   !> Solvent and solute properties and molecular structures
    type :: solvation_system_type
 
       integer :: solvent_id
@@ -51,8 +51,8 @@ module moist_data_solvents
       real(wp) :: solvent_packing_fraction    ! Packing fraction of the solvent
 
       !> Solute properties (that do *not* depend on the geometry)
-      real(wp) :: solute_molar_mass_si ! Molar mass of solute in kg/mol.
-      real(wp) :: solute_mass_au       ! Mass of solute in atomic units (AU).
+      real(wp) :: solute_molar_mass_si ! Molar mass of solute in kg/mol
+      real(wp) :: solute_mass_au       ! Mass of solute in atomic units (AU)
 
       !> Solvent geometry
       type(structure_type), allocatable :: solv_mol ! Geometry of the solvent molecule

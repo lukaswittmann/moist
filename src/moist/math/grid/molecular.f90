@@ -1,4 +1,4 @@
-!> Atom-centered molecular integration grid.
+!> Atom-centered molecular integration grid
 !>
 !> Combines Chebyshev-2 radial quadrature (`moist_math_grid_radial`),
 !> Lebedev angular grids (`moist_math_grid_lebedev`), and Becke fuzzy-cell
@@ -10,15 +10,15 @@
 !> Two public constructors are provided:
 !>
 !>   `new_molecular_grid(self, mol, error)`
-!>        Per-element default sizes (literature Pople-style defaults).
+!>        Per-element default sizes (literature Pople-style defaults)
 !>
 !>   `new_molecular_grid_uniform(self, mol, nrad, nang, error, rmin, rmax)`
 !>        Uniform `(nrad, nang)` per atom; `nang` is the RAW Lebedev point
-!>        count (6, 14, 26, ..., 5810). Optional `rmin`/`rmax` clamp the
-!>        radial shells in bohr.
+!>        count (6, 14, 26, ..., 5810); optional `rmin`/`rmax` clamp the
+!>        radial shells in bohr
 !>
-!> Units: all lengths are in bohr. Covalent radii come from
-!> `moist_data_atomicrad` which stores them already in bohr.
+!> Units: all lengths are in bohr; covalent radii come from
+!> `moist_data_atomicrad` which stores them already in bohr
 module moist_math_grid_molecular
    use iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -38,11 +38,11 @@ module moist_math_grid_molecular
    public :: integrand_3d
 
    !> Default weight-pruning threshold (bohr^3); points with |w| below this
-   !> are dropped from the final grid.
+   !> are dropped from the final grid
    real(wp), parameter :: default_wthr = 1.0e-14_wp
 
    !> Abstract interface for scalar-valued 3D integrands used by
-   !> `molecular_grid_type%integrate`.
+   !> `molecular_grid_type%integrate`
    abstract interface
       pure function integrand_3d(r) result(val)
          import :: wp
@@ -54,18 +54,18 @@ module moist_math_grid_molecular
    end interface
 
    !> Atom-centered molecular integration grid
-   !> (Chebyshev-2 radial x Lebedev angular x Becke fuzzy-cell partitioning).
+   !> (Chebyshev-2 radial x Lebedev angular x Becke fuzzy-cell partitioning)
    type :: molecular_grid_type
       !> Total number of retained grid points (after Becke pruning)
       integer :: npts = 0
       !> Grid point coordinates in bohr, shape (3, npts)
       real(wp), allocatable :: xyz(:, :)
       !> Integration weights, shape (npts); include r^2 dr Jacobian,
-      !> 4*pi solid-angle factor, and Becke atomic weight w_A.
+      !> 4*pi solid-angle factor, and Becke atomic weight w_A
       real(wp), allocatable :: weights(:)
       !> CSR-style atom ownership: points owned by atom i are stored
       !> contiguously at indices [atom_offset(i), atom_offset(i+1)-1];
-      !> shape (nat+1). atom_offset(1) = 1, atom_offset(nat+1) = npts+1.
+      !> shape (nat+1). atom_offset(1) = 1, atom_offset(nat+1) = npts+1
       integer, allocatable :: atom_offset(:)
       !> Per-atom radial size actually used, shape (nat)
       integer, allocatable :: nrad_per_atom(:)
@@ -90,7 +90,7 @@ contains
    !>   K  and beyond    -> (99, 590)
    !>
    !> `nang` is the raw Lebedev point count; it is always one of the
-   !> supported sizes.
+   !> supported sizes
    pure subroutine default_grid_sizes(iz, nrad, nang)
       !> Atomic number
       integer, intent(in)  :: iz
@@ -110,11 +110,11 @@ contains
       end if
    end subroutine default_grid_sizes
 
-   !> Build a molecular grid using element-dependent default sizes.
+   !> Build a molecular grid using element-dependent default sizes
    !>
-   !> @param[out] self   Initialised molecular grid.
-   !> @param[in]  mol    Molecular structure (mctc_io `structure_type`).
-   !> @param[out] error  Propagated error (invalid grid sizes, alloc, ...).
+   !> @param[out] self   Initialised molecular grid
+   !> @param[in]  mol    Molecular structure (mctc_io `structure_type`)
+   !> @param[out] error  Propagated error (invalid grid sizes, alloc, ...)
    subroutine new_molecular_grid(self, mol, error)
       !> Grid to initialise
       type(molecular_grid_type), intent(out) :: self
@@ -136,16 +136,16 @@ contains
          & default_wthr, error)
    end subroutine new_molecular_grid
 
-   !> Build a molecular grid with uniform `(nrad, nang)` per atom.
+   !> Build a molecular grid with uniform `(nrad, nang)` per atom
    !>
-   !> @param[out] self   Initialised molecular grid.
-   !> @param[in]  mol    Molecular structure.
-   !> @param[in]  nrad   Number of radial points per atom (>= 1).
+   !> @param[out] self   Initialised molecular grid
+   !> @param[in]  mol    Molecular structure
+   !> @param[in]  nrad   Number of radial points per atom (>= 1)
    !> @param[in]  nang   Raw Lebedev point count per atom (must be one
-   !>                    of the supported sizes: 6, 14, 26, ..., 5810).
-   !> @param[out] error  Propagated error.
-   !> @param[in]  rmin   Optional minimum radial shell radius (bohr).
-   !> @param[in]  rmax   Optional maximum radial shell radius (bohr).
+   !>                    of the supported sizes: 6, 14, 26, ..., 5810)
+   !> @param[out] error  Propagated error
+   !> @param[in]  rmin   Optional minimum radial shell radius (bohr)
+   !> @param[in]  rmax   Optional maximum radial shell radius (bohr)
    subroutine new_molecular_grid_uniform(self, mol, nrad, nang, error, rmin, rmax)
       !> Grid to initialise
       type(molecular_grid_type), intent(out) :: self
@@ -178,7 +178,7 @@ contains
    end subroutine new_molecular_grid_uniform
 
    !> Internal worker: build atom-centered molecular grid with per-atom
-   !> (nrad, nang) arrays and optional radial clamp.
+   !> (nrad, nang) arrays and optional radial clamp
    subroutine build_molecular_grid(self, mol, nrad_atom, nang_atom, wthr, &
          & error, rmin, rmax)
       !> Grid to initialise
@@ -208,13 +208,13 @@ contains
 
       nat = mol%nat
 
-      ! Resolve atomic numbers once (mctc_io indexes through mol%id).
+      ! Resolve atomic numbers once (mctc_io indexes through mol%id)
       allocate (numbers(nat))
       do iat = 1, nat
          numbers(iat) = mol%num(mol%id(iat))
       end do
 
-      ! Upper bound on grid size before pruning.
+      ! Upper bound on grid size before pruning
       max_pts = 0
       do iat = 1, nat
          max_pts = max_pts + nrad_atom(iat)*nang_atom(iat)
@@ -228,7 +228,7 @@ contains
          nr = nrad_atom(iat)
          nl = nang_atom(iat)
 
-         ! Chebyshev-2 radial scale p (Becke 1988 convention).
+         ! Chebyshev-2 radial scale p (Becke 1988 convention)
          if (iz == 1) then
             p = covalent_rad(1)
          else
@@ -238,7 +238,7 @@ contains
          allocate (radii(nr), rad_w(nr))
          call chebyshev2_radii(nr, p, radii, rad_w)
 
-         ! Lebedev angular grid (use existing umbrella getter).
+         ! Lebedev angular grid (use existing umbrella getter)
          call lebedev_order_from_num(nl, order, error)
          if (allocated(error)) then
             deallocate (radii, rad_w)
@@ -251,7 +251,7 @@ contains
             return
          end if
 
-         ! Combine radial x angular, shift to atom center, apply Becke weight.
+         ! Combine radial x angular, shift to atom center, apply Becke weight
          do ir = 1, nr
             r = radii(ir)
             if (present(rmin)) then
@@ -283,7 +283,7 @@ contains
    end subroutine build_molecular_grid
 
    !> Compact the raw grid buffer into the final `molecular_grid_type`,
-   !> dropping points with |w| < wthr and rebuilding `atom_offset`.
+   !> dropping points with |w| < wthr and rebuilding `atom_offset`
    pure subroutine finalise_grid(self, nat, nrad_atom, nang_atom, &
          & nraw, raw_xyz, raw_w, raw_atom, wthr)
       type(molecular_grid_type), intent(out) :: self
@@ -298,7 +298,7 @@ contains
 
       integer :: i, iat, npts
 
-      ! First pass: count retained points.
+      ! First pass: count retained points
       npts = 0
       do i = 1, nraw
          if (abs(raw_w(i)) >= wthr) npts = npts + 1
@@ -312,16 +312,17 @@ contains
       self%nrad_per_atom = nrad_atom
       self%nang_per_atom = nang_atom
 
-      ! Second pass: copy retained points and build atom_offset.
-      ! raw_atom is monotonically non-decreasing because we emit atom-by-atom.
-      ! Default every entry to the end sentinel so atoms with zero points
-      ! get a well-defined (empty) range. Overwritten as points arrive.
+      ! Second pass: copy retained points and build atom_offset
+      ! raw_atom is monotonically non-decreasing because we emit atom-by-atom
+      !
+      ! Every entry defaults to the end sentinel, so atoms with zero points
+      ! get a well-defined (empty) range; overwritten as points arrive
       self%atom_offset = npts + 1
       self%atom_offset(1) = 1
       npts = 0
       iat = 1
       do i = 1, nraw
-         ! Advance atom_offset for any atoms that start at this position.
+         ! Advance atom_offset for any atoms that start at this position
          do while (iat < raw_atom(i))
             iat = iat + 1
             self%atom_offset(iat) = npts + 1
@@ -332,7 +333,7 @@ contains
             self%weights(npts) = raw_w(i)
          end if
       end do
-      ! Fill remaining (possibly empty) tail atoms.
+      ! Fill remaining (possibly empty) tail atoms
       do while (iat < nat)
          iat = iat + 1
          self%atom_offset(iat) = npts + 1
@@ -340,7 +341,7 @@ contains
       self%atom_offset(nat + 1) = npts + 1
    end subroutine finalise_grid
 
-   !> Free all component arrays. Idempotent; safe to call repeatedly.
+   !> Free all component arrays; idempotent, safe to call repeatedly
    pure subroutine molecular_grid_destroy(self)
       !> Grid instance
       class(molecular_grid_type), intent(inout) :: self
@@ -353,7 +354,7 @@ contains
       self%npts = 0
    end subroutine molecular_grid_destroy
 
-   !> Write a short grid summary to the given unit.
+   !> Write a short grid summary to the given unit
    subroutine molecular_grid_info(self, unit)
       !> Grid instance
       class(molecular_grid_type), intent(in) :: self
@@ -385,10 +386,10 @@ contains
       end do
    end subroutine molecular_grid_info
 
-   !> Evaluate sum_i weights(i) * f(xyz(:,i)).
+   !> Evaluate sum_i weights(i) * f(xyz(:,i))
    !>
-   !> @param[in]  f       Pure function with signature `f(r) -> real(wp)`.
-   !> @param[out] result  Quadrature result.
+   !> @param[in]  f       Pure function with signature `f(r) -> real(wp)`
+   !> @param[out] result  Quadrature result
    subroutine molecular_grid_integrate(self, f, result)
       !> Grid instance
       class(molecular_grid_type), intent(in)  :: self
@@ -401,9 +402,9 @@ contains
 
       ! Reduce with the sum() intrinsic over the per-point products so that for
       ! f == 1 (where w_i*1 == w_i exactly in IEEE) the result is bit-identical
-      ! to sum(weights), regardless of how the compiler orders the reduction. A
-      ! scalar accumulation loop is reassociated differently from sum() and
-      ! breaks that identity.
+      ! to sum(weights), regardless of how the compiler orders the reduction;
+      ! a scalar accumulation loop is reassociated differently from sum() and
+      ! breaks that identity
       result = sum([(self%weights(i)*f(self%xyz(:, i)), i=1, self%npts)])
    end subroutine molecular_grid_integrate
 

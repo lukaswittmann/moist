@@ -1,5 +1,5 @@
-!> Module implementing the fast algorithm for computing the Boys function:
-!> Beylkin, G. & Sharma, S., J. Chem. Phys. 155, 174117 (2021).
+!> Fast algorithm for computing the Boys function:
+!> Beylkin, G. & Sharma, S., J. Chem. Phys. 155, 174117 (2021)
 
 module moist_math_boys
    use mctc_env, only: wp
@@ -148,7 +148,7 @@ contains
       real(wp) :: x2, x3, x4, x5, x6, sqrtx, invx, expx
 
       if (x < 0.0_wp) then
-         ! CPCM kernels pass x >= 0. Keep a safe fallback for unexpected values.
+         ! CPCM kernels pass x >= 0; safe fallback for unexpected values
          vals(0) = 1.0_wp
          vals(1) = 1.0_wp/3.0_wp
          return
@@ -276,7 +276,7 @@ contains
          return
       end if
 
-      ! Intermediate |z| uses the Padé-quadrature rational approximation
+      ! Intermediate |z| uses the Pade-quadrature rational approximation
       val = sqpio2/sqrt(z) - 0.5_wp*ez*sum(ff(1:22)/(z + pp(1:22)))
 
       return

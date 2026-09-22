@@ -1,10 +1,11 @@
 !> Marching-cubes cavity: total area and volume of an LSF isosurface
 !>
 !> The cavity is the `f0 = 0` isosurface of a level set function (negative
-!> inside), triangulated on an adaptively refined cube grid. Unlike the other
-!> cavity models this one produces no surface discretization -- there are no
-!> grid points, weights, or Gaussians, only the two integrated totals -- so it
-!> serves as an independent numerical reference for whatever LSF it is given
+!> inside), triangulated on an adaptively refined cube grid
+!>
+!> - unlike the other cavity models it produces no surface discretization:
+!>   no grid points, weights or Gaussians, only the two integrated totals
+!> - serves as an independent numerical reference for whatever LSF it is given
 !>
 !> Two entry points live here:
 !>   - [[cavity_type_marchingcubes]], the [[cavity_type]] extension, constructed
@@ -59,7 +60,7 @@ module moist_cavity_marchingcubes
    !> Marching-cubes cavity state
    type, extends(cavity_type) :: cavity_type_marchingcubes
 
-      !> Level set function model. Constructed once at cavity setup; the
+      !> Level set function model, constructed once at cavity setup; the
       !> integrator source-allocates one thread-local clone per OpenMP thread
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
 
@@ -423,7 +424,6 @@ contains
       call self%register_alloc_string("pqr_file", self%pqr_file)
    end subroutine register_parameter_entries
 
-
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
@@ -469,8 +469,8 @@ contains
 
    !> Integrate the LSF isosurface for a new geometry
    !>
-   !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3). There is no surface
-   !> discretization, so `ngrid` stays zero and the grid arrays stay unallocated
+   !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3); with no surface
+   !> discretization `ngrid` stays zero and the grid arrays stay unallocated
    !>
    !> @param[inout] self  Cavity instance
    !> @param[in]    mol   Molecular structure
@@ -556,7 +556,7 @@ contains
 
    !> Marching cubes integrates a triangulated mesh whose connectivity changes
    !> discontinuously with the geometry, so there is no analytic nuclear
-   !> derivative to hand back. Fail loudly rather than return zeros
+   !> derivative to hand back -- fail loudly rather than return zeros
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling
@@ -615,11 +615,12 @@ contains
    end subroutine compute_lsf_grid_bounds
 
    !> Compute LSF isosurface area and volume with marching cubes
-   !> The cavity is the f0=0 isosurface (negative inside). Triangle winding follows the
-   !> standard table convention; volume is summed via signed tetrahedra w.r.t. the origin
    !>
-   !> Uses screened LSF evaluation for O(N) per-point cost
-   !> Initial coarse grid vertices are cached to avoid redundant evaluations
+   !> - the cavity is the f0=0 isosurface (negative inside)
+   !> - triangle winding follows the standard table convention
+   !> - volume is summed via signed tetrahedra w.r.t. the origin
+   !> - screened LSF evaluation, O(N) per point
+   !> - initial coarse grid vertices are cached to avoid redundant evaluations
    !>
    !> @param[in]  lsf             LSF level set function primitive
    !> @param[in]  xyz             Atomic coordinates (3, natom)
@@ -1148,9 +1149,11 @@ contains
    end subroutine march_single_cube
 
    !> Subdivide a cube into eight children and evaluate LSF at the child corners
-   !> Caches the 27 unique sample points of the 3x3x3 subdivision grid. The 8 parent
-   !> corner values are reused from parent_vals; only 19 new evaluations are performed
-   !> Uses screened LSF evaluation via the ssd system for O(N) per-point cost
+   !>
+   !> - caches the 27 unique sample points of the 3x3x3 subdivision grid
+   !> - the 8 parent corner values are reused from parent_vals, so only 19 new
+   !>   evaluations are performed
+   !> - screened LSF evaluation via the ssd system, O(N) per point
    !>
    !> @param[in]  minp         Minimum corner of parent cube
    !> @param[in]  maxp         Maximum corner of parent cube
@@ -1298,8 +1301,9 @@ contains
    end subroutine write_mc_obj
 
    !> Write triangle centroids to PQR file (coordinates in Angstrom)
-   !> Each triangle becomes one HETATM record with radius derived from
-   !> triangle area: r = sqrt(area / (2*pi))
+   !>
+   !> - each triangle becomes one HETATM record with radius derived from the
+   !>   triangle area: r = sqrt(area / (2*pi))
    subroutine write_mc_pqr(filename, tris)
       character(len=*), intent(in) :: filename
       type(mc_tri_buffer_type), intent(in) :: tris

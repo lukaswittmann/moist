@@ -13,10 +13,10 @@ module moist_math_lapack_sygvr
    !> Computes selected eigenvalues and, optionally, eigenvectors
    !> of a real symmetric matrix A.  Eigenvalues and eigenvectors can be
    !> selected by specifying either a range of values or a range of
-   !> indices for the desired eigenvalues.
+   !> indices for the desired eigenvalues
    !>
    !> The desired accuracy of the output can be specified by the input
-   !> parameter ABSTOL.
+   !> parameter ABSTOL
    interface lapack_syevr
       pure subroutine ssyevr(jobz, range, uplo, n, a, lda, vl, vu, il, iu, abstol, m, w, &
             & z, ldz, isuppz, work, lwork, iwork, liwork, info)
@@ -133,12 +133,12 @@ contains
       abstol = slamch_s()
       info = 0
 
-      ! Form a Cholesky factorization of B.
+      ! Form a Cholesky factorization of B
       call wrap_potrf(self%sbmat, info, uplo=uplo)
       call handle_info(error, info)
       if (allocated(error)) return
 
-      ! Transform problem to standard eigenvalue problem and solve.
+      ! Transform problem to standard eigenvalue problem and solve
       call wrap_sygst(hmat, self%sbmat, info, itype=itype, uplo=uplo)
       call handle_info(error, info)
       if (allocated(error)) return
@@ -167,7 +167,7 @@ contains
       call handle_info(error, info)
       if (allocated(error)) return
 
-      ! Backtransform eigenvectors to the original problem.
+      ! Backtransform eigenvectors to the original problem
       do ii = 1, self%n
          hmat(ii, ii) = self%schole(ii)
       end do
@@ -225,12 +225,12 @@ contains
       abstol = dlamch_s()
       info = 0
 
-      ! Form a Cholesky factorization of B.
+      ! Form a Cholesky factorization of B
       call wrap_potrf(self%dbmat, info, uplo=uplo)
       call handle_info(error, info)
       if (allocated(error)) return
 
-      ! Transform problem to standard eigenvalue problem and solve.
+      ! Transform problem to standard eigenvalue problem and solve
       call wrap_sygst(hmat, self%dbmat, info, itype=itype, uplo=uplo)
       call handle_info(error, info)
       if (allocated(error)) return
@@ -259,7 +259,7 @@ contains
       call handle_info(error, info)
       if (allocated(error)) return
 
-      ! Backtransform eigenvectors to the original problem.
+      ! Backtransform eigenvectors to the original problem
       do ii = 1, self%n
          hmat(ii, ii) = self%dchole(ii)
       end do

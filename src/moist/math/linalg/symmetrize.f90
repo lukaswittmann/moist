@@ -1,7 +1,7 @@
-!> Symmetric tensor combinations used in third- and fourth-derivative assembly.
+!> Symmetric tensor combinations used in third- and fourth-derivative assembly
 !>
 !> Symmetrized contractions of Hessians, gradients and rank-3 tensors into
-!> rank-3 and rank-4 tensors.
+!> rank-3 and rank-4 tensors
 module moist_math_linalg_symmetrize
    use mctc_env_accuracy, only: wp
    implicit none
@@ -15,12 +15,14 @@ module moist_math_linalg_symmetrize
 contains
 
    !> Symmetrically combine Hessian and gradient to form a rank-3 tensor
-   !> Computes the symmetric tensor contraction:
+   !>
+   !> Symmetric tensor contraction:
    !> $$
    !> T_{ijk} = H_{ij} g_k + H_{ik} g_j + H_{jk} g_i
    !> $$
-   !> This operation appears in third derivatives where the Hessian is contracted
-   !> with a gradient vector in a symmetric way.
+   !> Appears in third derivatives, where the Hessian is contracted with a
+   !> gradient vector in a symmetric way
+   !>
    !> @param[in] hess   Hessian matrix [3, 3]
    !> @param[in] grad   Gradient vector [3]
    !> @returns   tensor Rank-3 tensor [3, 3, 3]
@@ -46,6 +48,7 @@ contains
 
    !> Symmetrized rank-4 tensor: 4-term sym {grad x third}
    !> T_{ijkl} = g_i T_{jkl} + g_j T_{ikl} + g_k T_{ijl} + g_l T_{ijk}
+   !>
    !> @param[in] g   Gradient vector [3]
    !> @param[in] h3  Rank-3 tensor [3, 3, 3]
    !> @returns   t   Rank-4 tensor [3, 3, 3, 3]
@@ -73,8 +76,9 @@ contains
    !> T_{ijkl} = H_{ij} K_{kl} + H_{ik} K_{jl} + H_{il} K_{jk}
    !>
    !> NOTE: This produces only 3 of the 6 ordered 2+2 pair-partition terms
-   !> (those with index i on the left factor). For the full 6-term symmetric
-   !> version, call twice with swapped arguments: sym4_22(A,B) + sym4_22(B,A).
+   !> (those with index i on the left factor); for the full 6-term symmetric
+   !> version, call twice with swapped arguments: sym4_22(A,B) + sym4_22(B,A)
+   !>
    !> @param[in] h2a  First Hessian [3, 3]
    !> @param[in] h2b  Second Hessian [3, 3]
    !> @returns   t    Rank-4 tensor [3, 3, 3, 3]
@@ -102,6 +106,7 @@ contains
    !> Symmetrized rank-4 tensor: 6-term sym {(g g) x hess}
    !> Sum over all 6 unordered pairs {a,b} chosen from {i,j,k,l}:
    !>   g_a g_b * H_{cd}, where {c,d} = complement
+   !>
    !> @param[in] g   Gradient vector [3]
    !> @param[in] h2  Hessian matrix [3, 3]
    !> @returns   t   Rank-4 tensor [3, 3, 3, 3]

@@ -1,15 +1,19 @@
 !> MOIST -> host response items
 !>
-!> A response is a list of *items*, one per host contraction. An item that is
-!> absent from the list is correct physics, not an error: a cavity with
-!> field-independent geometry has no density response, a model without
-!> GOSTSHYP has no Gaussian amplitudes. The host selects on the dynamic type of
-!> `item(i)` and contracts what it finds
+!> A response is a list of items, one per host contraction
 !>
-!> Within one model call the items are accumulators over components:
-!> `accumulate` finds the item of the same dynamic type and adds to it, or
-!> appends a copy when there is none yet. Every `get_*` clears the list on
-!> entry, so the sum never leaks across calls
+!> - an item absent from the list is correct physics, not an error: a cavity
+!>   with field-independent geometry has no density response, a model without
+!>   GOSTSHYP no Gaussian amplitudes
+!> - the host selects on the dynamic type of `item(i)` and contracts what it
+!>   finds
+!>
+!> Within one model call the items are accumulators over components
+!>
+!> - `accumulate` finds the item of the same dynamic type and adds to it, or
+!>   appends a copy when there is none yet
+!> - every `get_*` clears the list on entry, so the sum never leaks across
+!>   calls
 module moist_channels_response
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -106,7 +110,7 @@ module moist_channels_response
    !> conjugate to the density itself, never to the level set built from it
    !>
    !> The item is **present only for a cavity whose level set is a function of
-   !> a density** (both isodensity variants). A geometric cavity -- iSwiG, or
+   !> a density** (both isodensity variants); a geometric cavity -- iSwiG, or
    !> DROP on SvdW or CFC -- produces no density item at all, because its
    !> surface does not move with the host density; that absence is the physical
    !> answer and is distinguishable from an item of zeros, which zeros would
@@ -126,14 +130,16 @@ module moist_channels_response
 
    !> Amplitudes conjugate to the host's Gaussian integral blocks
    !>
-   !> Counterpart of the Gaussian moment request. The host builds its Fock
+   !> Counterpart of the Gaussian moment request; the host builds its Fock
    !> contribution as a plain sum over grid points,
    !>
    !>    F_uv += sum_i [ w_overlap(i) g_uv,i + w_normal_deriv(i) f_uv,i ]
    !>
-   !> with `g_uv,i = <u|G_i|v>` and `f_uv,i = n_i . grad_r g_uv,i`. Both signs
-   !> are folded in here. Grid points the model has switched off carry exactly
-   !> zero, so the mask propagates without the host repeating it
+   !> with `g_uv,i = <u|G_i|v>` and `f_uv,i = n_i . grad_r g_uv,i`
+   !>
+   !> - both signs are folded in here
+   !> - grid points the model has switched off carry exactly zero, so the mask
+   !>   propagates without the host repeating it
    type, extends(response_channel_type) :: gostshyp_amplitude_response_type
       !> Overlap amplitudes (ngrid)
       real(wp), allocatable :: w_overlap(:)
@@ -151,9 +157,10 @@ module moist_channels_response
 
    !> Response item list handed back to the host for one model call
    !>
-   !> `accumulate` is the only binding that grows `items(:)`; `clear` empties
-   !> it. A variable of this type must be declared `target` wherever `item` or
-   !> a finder is called on it
+   !> - `accumulate` is the only binding that grows `items(:)`, `clear`
+   !>   empties it
+   !> - a variable of this type must be declared `target` wherever `item` or
+   !>   a finder is called on it
    type :: response_type
       !> Accumulated items, one per dynamic type
       type(response_slot), allocatable :: items(:)
@@ -468,7 +475,7 @@ contains
 
    end function response_item
 
-   !> Add an item into the stored one of the same dynamic type, or append a copy
+   !> Add an item into the stored one of the same type, or append a copy
    !>
    !> Appending moves the existing slots and copies only the new item (the
    !> gfortran safe pattern for polymorphic slot arrays)

@@ -9,8 +9,8 @@ module moist_cavity_fields
    public :: cavity_field_real, cavity_field_int, cavity_field_bool
    public :: cavity_field_max_rank
 
-   !> Element type tags. Mirrored by the `MOIST_FIELD_*` macros in moist.h;
-   !> the values are part of the public C contract and must not be renumbered.
+   !> Element type tags, mirrored by the `MOIST_FIELD_*` macros in moist.h;
+   !> the values are part of the public C contract and must not be renumbered
    integer, parameter :: cavity_field_real = 1
    integer, parameter :: cavity_field_int = 2
    integer, parameter :: cavity_field_bool = 3
@@ -37,9 +37,10 @@ module moist_cavity_fields
 
    !> Walker handed to `cavity_type%list_fields`
    !>
-   !> In enumeration mode it collects a descriptor per declared field.  In fetch
-   !> mode it copies out the one field whose name matches `want` and ignores the
-   !> rest, so listing stays cheap and reading copies exactly one array.
+   !> - enumeration mode collects a descriptor per declared field
+   !> - fetch mode copies out the one field whose name matches `want` and
+   !>   ignores the rest, so listing stays cheap and reading copies exactly
+   !>   one array
    type :: cavity_field_query_type
       !> Name being fetched; unallocated while enumerating
       character(len=:), allocatable :: want
@@ -203,7 +204,7 @@ contains
       wanted = .false.
 
       !> Fetching only ever wants one name, so reject the others before paying
-      !> for a descriptor.
+      !> for a descriptor
       if (allocated(self%want)) then
          if (name /= self%want) return
       end if
@@ -278,7 +279,7 @@ contains
    !> Declare an integer array
    !>
    !> `zero_based` marks a Fortran 1-based index that the C API hands out
-   !> 0-based; the shift is applied here so every consumer sees one convention.
+   !> 0-based; the shift is applied here so every consumer sees one convention
    !>
    !> @param[inout] self        Query walker
    !> @param[in]    name        Field name

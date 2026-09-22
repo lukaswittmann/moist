@@ -1,17 +1,19 @@
 !> Certified best-first octree search for all closest-point branches
 !>
-!> Enumerates every local minimum of the distance to an implicit surface that
-!> can lie within a given radius of an anchor, together with a proof that no
-!> further one was missed. The proof is purely geometric: minima of the
-!> distance live *on* the surface, so a region certified to contain no surface
-!> contains no minimum. Covering the search ball with such regions therefore
-!> reduces "did we find them all?" to "is the ball covered?".
+!> Enumerates every local minimum of the distance to an implicit surface
+!> within a given radius of an anchor, with a proof that no further one was
+!> missed
 !>
-!> The caller supplies that certificate through a probe callback returning, at
-!> a point `x`, both the level set value `S(x)` and a radius `r` such that `S`
-!> has no zero in `B(x, r)`. Nothing else about the surface is assumed, so the
-!> search is shared by every level set that can bound its own gradient (the
-!> SvdW LSF is 1-Lipschitz and returns `r = |S(x)|` exactly).
+!> - the proof is purely geometric: minima of the distance live *on* the
+!>   surface, so a region certified to contain no surface contains no minimum
+!> - covering the search ball with such regions reduces "did we find them
+!>   all?" to "is the ball covered?"
+!> - the caller supplies that certificate through a probe callback returning,
+!>   at a point `x`, both the level set value `S(x)` and a radius `r` such
+!>   that `S` has no zero in `B(x, r)`
+!> - nothing else about the surface is assumed, so the search is shared by
+!>   every level set that can bound its own gradient (the SvdW LSF is
+!>   1-Lipschitz and returns `r = |S(x)|` exactly)
 !>
 !> Algorithm -- best-first branch and bound on a cube octree:
 !>
@@ -23,34 +25,41 @@
 !>       if the box is at seed size     -> keep as a survivor
 !>       else                           -> split into 8 and push
 !>
-!> Popping in order of the distance lower bound means the search sweeps
-!> outwards from the anchor, so the boxes that can hold the *closest* branch
-!> are examined first and the ones that cannot hold any are never examined at
-!> all. When the heap's best box is worse than `rho_max`, every remaining box
-!> is too, and the loop stops with the ball fully accounted for.
+!> - popping in order of the distance lower bound sweeps outwards from the
+!>   anchor, so the boxes that can hold the *closest* branch are examined
+!>   first and the ones that cannot hold any are never examined at all
+!> - once the heap's best box is worse than `rho_max`, every remaining box is
+!>   too, and the loop stops with the ball fully accounted for
 !>
-!> `rho_max` also tightens itself as the search runs. Whenever a probed centre
-!> `c` has the opposite sign to the anchor, the segment from the anchor to `c`
-!> crosses the surface, so the closest branch is no further out than that
-!> crossing. The crossing cannot lie inside `c`'s own surface-free ball either,
-!> which puts it a further `r` short of the centre:
+!> `rho_max` also tightens itself as the search runs
+!>
+!> - a probed centre `c` of the opposite sign to the anchor means the segment
+!>   from the anchor to `c` crosses the surface, so the closest branch is no
+!>   further out than that crossing
+!> - the crossing cannot lie inside `c`'s own surface-free ball either, which
+!>   puts it a further `r` short of the centre:
 !>
 !>     rho_min <= ||c - anchor|| - r
 !>
-!> Both halves of that bound are quantities the probe has already returned, so
-!> the ball the search still has to certify shrinks for free.
+!> - both halves of that bound are quantities the probe has already returned,
+!>   so the ball the search still has to certify shrinks for free
 !>
-!> What the certificate covers is the *coverage of the search ball*: every box
-!> is either examined or proven to hold no surface, so no branch escapes the
-!> surviving leaves. Turning those leaves into seeds is a separate step, and in
-!> `octree_seed_cluster` mode it is a heuristic -- one seed per discrete local
-!> minimum of an estimated surface distance, which can merge two basins that
-!> share a survivor patch. `octree_seed_per_leaf` performs no such reduction and
-!> is the mode to fall back on when that matters.
+!> What the certificate covers is the *coverage of the search ball*
 !>
-!> This is deliberately not a [[solver_base_type]]: it does not refine a single
-!> iterate towards a solution, it partitions a region and returns seeds. The
-!> caller runs its own local solver on those seeds afterwards.
+!> - every box is either examined or proven to hold no surface, so no branch
+!>   escapes the surviving leaves
+!> - turning those leaves into seeds is a separate step; in
+!>   `octree_seed_cluster` mode it is a heuristic -- one seed per discrete
+!>   local minimum of an estimated surface distance, which can merge two
+!>   basins that share a survivor patch
+!> - `octree_seed_per_leaf` performs no such reduction and is the mode to fall
+!>   back on when that matters
+!>
+!> Deliberately not a [[solver_base_type]]
+!>
+!> - partitions a region and returns seeds rather than refining a single
+!>   iterate towards a solution
+!> - the caller runs its own local solver on those seeds afterwards
 module moist_math_solver_octree_branch
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -69,7 +78,7 @@ module moist_math_solver_octree_branch
 
    !> Largest octree depth the integer lattice key can address without
    !> overflowing a 64-bit integer (the key packs three coordinates in base
-   !> `2**depth`). Far above any depth a sane `seed_size` produces.
+   !> `2**depth`); far above any depth a sane `seed_size` produces
    integer, parameter :: max_addressable_depth = 20
 
    !> Number of radius-tightening events kept for the debug report
@@ -96,17 +105,17 @@ module moist_math_solver_octree_branch
       end subroutine octree_probe_context_interface
    end interface
 
-   !> Best-first octree branch search.
+   !> Best-first octree branch search
    !>
    !> One instance per thread: [[octree_init]] sizes the scratch once and every
-   !> [[octree_run]] reuses it, so the per-anchor hot path allocates nothing.
+   !> [[octree_run]] reuses it, so the per-anchor hot path allocates nothing
    type :: moist_math_octree_branch_type
 
       !*--------------------------- Search configuration -------------------- *!
 
       !> Edge length at which a surviving box stops splitting and becomes a
-      !> seed candidate (Bohr). Sets the resolution at which two minima are
-      !> still told apart.
+      !> seed candidate (Bohr); sets the resolution at which two minima are
+      !> still told apart
       real(wp) :: seed_size = 0.2_wp
       !> Largest number of boxes examined per anchor before the search gives up
       integer :: max_boxes = 200000
@@ -137,7 +146,7 @@ module moist_math_solver_octree_branch
       !*---------------------------- Debug bookkeeping ----------------------- *!
 
       !> Per-depth tallies of the last run: boxes popped, boxes certified
-      !> surface-free, boxes split, and boxes kept as survivors.
+      !> surface-free, boxes split, and boxes kept as survivors
       integer :: dbg_popped(0:max_addressable_depth) = 0
       integer :: dbg_free(0:max_addressable_depth) = 0
       integer :: dbg_split(0:max_addressable_depth) = 0
@@ -169,7 +178,7 @@ module moist_math_solver_octree_branch
       !> Binary min-heap of pending boxes, keyed on the box's lower bound for
       !> ||x - anchor||. A box is stored as its octree depth plus its integer
       !> lattice position at that depth, from which centre and half-width
-      !> follow exactly -- no accumulated floating-point drift down the tree.
+      !> follow exactly -- no accumulated floating-point drift down the tree
       real(wp), allocatable :: heap_key(:)
       integer, allocatable :: heap_depth(:)
       integer, allocatable :: heap_lat(:, :)
@@ -177,20 +186,23 @@ module moist_math_solver_octree_branch
 
       !> Surviving leaves: lattice position, centre, the box's distance lower
       !> bound (used to apply the final cap) and an estimate of how far the
-      !> *surface inside that box* is from the anchor (used to rank them).
+      !> *surface inside that box* is from the anchor (used to rank them)
       !>
-      !> Neither of the two obvious rankings works. The lower bound is
-      !> quantized, so whole rings of leaves share one value and a smooth patch
-      !> becomes a plateau on which dozens of cells look like minima. The centre
-      !> distance is worse: survivors form a slab straddling the surface, and a
-      !> centre sitting inside the slab is nearer the anchor than the surface it
-      !> stands for, which drags the ranking onto the slab's inner face and
-      !> spreads the minimum around a ring. The estimate below corrects the
-      !> centre distance by the level set value -- the surface lies |S| away
-      !> from the centre, beyond it when the centre is on the anchor's side of
-      !> the surface and nearer when it is not -- which is exact for a signed
-      !> distance field with a locally flat surface and puts the minimum where
-      !> the surface actually comes closest.
+      !> Neither of the two obvious rankings works
+      !>
+      !> - the lower bound is quantized, so whole rings of leaves share one
+      !>   value and a smooth patch becomes a plateau on which dozens of cells
+      !>   look like minima
+      !> - the centre distance is worse: survivors form a slab straddling the
+      !>   surface, and a centre sitting inside the slab is nearer the anchor
+      !>   than the surface it stands for, which drags the ranking onto the
+      !>   slab's inner face and spreads the minimum around a ring
+      !> - the estimate below corrects the centre distance by the level set
+      !>   value -- the surface lies |S| away from the centre, beyond it when
+      !>   the centre is on the anchor's side of the surface and nearer
+      !>   otherwise -- exact for a signed distance field with a locally flat
+      !>   surface, and it puts the minimum where the surface actually comes
+      !>   closest
       integer, allocatable :: surv_lat(:, :)
       real(wp), allocatable :: surv_centre(:, :)
       real(wp), allocatable :: surv_rho(:)
@@ -198,7 +210,7 @@ module moist_math_solver_octree_branch
       integer :: n_surv = 0
 
       !> Survivor lattice keys, sorted, with the permutation that produced
-      !> them. Used to answer face-neighbour queries by binary search.
+      !> them; answers face-neighbour queries by binary search
       integer(int64), allocatable :: surv_key(:)
       integer(int64), allocatable :: surv_key_sorted(:)
       integer, allocatable :: surv_order(:)
@@ -233,7 +245,7 @@ contains
    !>
    !> The arrays grow on demand up to the configured budgets, so an anchor
    !> whose ball is nearly empty never pays for the worst case, while the
-   !> budgets stay a hard ceiling on a pathological one.
+   !> budgets stay a hard ceiling on a pathological one
    !>
    !> @param[inout] self          Search instance
    !> @param[in]    seed_size     Edge length at which boxes stop splitting (Bohr)
@@ -284,7 +296,7 @@ contains
       call self%destroy()
 
       ! Splitting a box removes one entry and adds eight, so the heap never
-      ! needs more than eight slots per surviving leaf plus a small margin.
+      ! needs more than eight slots per surviving leaf plus a small margin
       self%heap_capacity_max = 8*self%max_survivors + 64
 
       heap_capacity = min(initial_capacity, self%heap_capacity_max)
@@ -296,6 +308,7 @@ contains
    end subroutine octree_init
 
    !> Grow the heap arrays to at least `required`, capped by the budget
+   !>
    !> @param[inout] self     Search instance
    !> @param[in]    required Capacity the heap must reach
    !> @param[out]   ok       `.false.` when the budget forbids the growth
@@ -328,6 +341,7 @@ contains
    end subroutine grow_heap_arrays
 
    !> Allocate or grow the survivor arrays to `capacity`, preserving contents
+   !>
    !> @param[inout] self     Search instance
    !> @param[in]    capacity Number of survivors the arrays must hold
    subroutine grow_survivor_arrays(self, capacity)
@@ -370,6 +384,7 @@ contains
    end subroutine grow_survivor_arrays
 
    !> Release the scratch arrays
+   !>
    !> @param[inout] self Search instance
    subroutine octree_destroy(self)
       class(moist_math_octree_branch_type), intent(inout) :: self
@@ -396,6 +411,7 @@ contains
 !* ================================================================================= *!
 
    !> Half-width of a box at a given depth
+   !>
    !> @param[in] self  Search instance (carries the root half-width)
    !> @param[in] depth Octree depth (0 = root)
    !> @returns   half  Half edge length at that depth
@@ -410,7 +426,7 @@ contains
    !> Depth at which a root of half-width `rho_max` first reaches `seed_size`
    !>
    !> Only used to tell the caller what to set `max_depth` to; the search itself
-   !> walks the depth down rather than computing it in floating point.
+   !> walks the depth down rather than computing it in floating point
    !>
    !> @param[in] self    Search instance
    !> @param[in] rho_max Root half-width (Bohr)
@@ -431,7 +447,7 @@ contains
    !>
    !> The root is centred on the anchor, so at depth `d` with half-width `h`
    !> the lattice cell `lat` sits at `h*(2*lat + 1 - 2**d)` -- exact in integer
-   !> arithmetic, unlike accumulating half-steps while descending the tree.
+   !> arithmetic, unlike accumulating half-steps while descending the tree
    !>
    !> @param[in] self  Search instance
    !> @param[in] depth Octree depth
@@ -447,6 +463,7 @@ contains
    end function box_offset
 
    !> Smallest distance from the anchor to any point of a box
+   !>
    !> @param[in] self  Search instance
    !> @param[in] depth Octree depth
    !> @param[in] lat   Lattice position at that depth
@@ -470,6 +487,7 @@ contains
 !* ================================================================================= *!
 
    !> Push a box onto the heap, sifting it up into place
+   !>
    !> @param[inout] self  Search instance
    !> @param[in]    key   Distance lower bound of the box
    !> @param[in]    depth Octree depth
@@ -505,6 +523,7 @@ contains
    end subroutine heap_push
 
    !> Pop the box with the smallest distance lower bound
+   !>
    !> @param[inout] self  Search instance
    !> @param[out]   key   Distance lower bound of the popped box
    !> @param[out]   depth Octree depth
@@ -540,6 +559,7 @@ contains
    end subroutine heap_pop
 
    !> Exchange two heap entries
+   !>
    !> @param[inout] self Search instance
    !> @param[in]    i    First heap position
    !> @param[in]    j    Second heap position
@@ -569,18 +589,19 @@ contains
 
    !> Enumerate all branch seeds within the admissible radius of one anchor
    !>
-   !> On return `self%seeds(:, 1:self%n_seeds)` holds the seed points and
-   !> `self%rho_max_final` the radius actually certified. An empty seed list is
-   !> a legitimate answer -- it means the whole ball was proven surface-free.
+   !> - on return `self%seeds(:, 1:self%n_seeds)` holds the seed points and
+   !>   `self%rho_max_final` the radius actually certified
+   !> - an empty seed list is a legitimate answer: the whole ball was proven
+   !>   surface-free
    !>
    !> @param[inout] self         Search instance (must be initialized)
    !> @param[in]    anchor       Anchor point (3)
    !> @param[in]    lsf0_anchor  Level set value at the anchor, for the sign test
    !> @param[in]    rho_max      Starting admissible radius (Bohr)
    !> @param[in]    rho2_slack   Squared-distance slack defining the admissible
-   !>                            set: rho_max^2 = rho_min^2 + rho2_slack. Used to
-   !>                            re-derive rho_max whenever the search improves
-   !>                            its upper bound on rho_min
+   !>                            set: rho_max^2 = rho_min^2 + rho2_slack, used
+   !>                            to re-derive rho_max whenever the search
+   !>                            improves its upper bound on rho_min
    !> @param[in]    probe        Level set probe callback
    !> @param[in]    context      Context forwarded to `probe`
    !> @param[out]   error        Budget exhausted, i.e. no certificate obtained
@@ -600,8 +621,8 @@ contains
       integer :: depth, lat(3), child_lat(3), leaf_depth
       integer :: ix, iy, iz, n_pushed
       logical :: ok, crosses, trace
-      !> Trace text for the box currently being examined. Sized to the trace's
-      !> action column; an internal write past it is a runtime "End of record".
+      !> Trace text for the box currently being examined, sized to the trace's
+      !> action column; an internal write past it is a runtime "End of record"
       character(len=trace_action_width) :: action
       !> Scratch for composing error messages
       character(len=256) :: buffer
@@ -616,7 +637,7 @@ contains
       end if
       ! A negative slack would put a NaN into the radius cap, after which every
       ! comparison against it is false and the search silently stops bounding
-      ! anything. Callers derive it from a weight floor, so a bad floor lands here.
+      ! anything; callers derive it from a weight floor, so a bad floor lands here
       if (rho2_slack < 0.0_wp) then
          call fatal_error(error, "Octree branch search: rho2_slack must not be negative")
          return
@@ -642,14 +663,14 @@ contains
       self%dbg_rho_start = rho_max
       self%dbg_rho2_slack = rho2_slack
 
-      ! Depth at which the edge length first drops to the seed size. Every
-      ! survivor stops there, so they all share one lattice -- which is what
-      ! lets face adjacency be an integer test further down.
+      ! Depth at which the edge length first drops to the seed size
       !
-      ! Stopping early because `max_depth` ran out would hand back leaves
-      ! coarser than asked for, merging minima that the configured resolution
-      ! separates -- and still report a completed search. The other caps are
-      ! errors for the same reason.
+      ! - every survivor stops there, so they all share one lattice, which is
+      !   what lets face adjacency be an integer test further down
+      ! - stopping early because `max_depth` ran out would hand back leaves
+      !   coarser than asked for, merging minima that the configured
+      !   resolution separates -- and still report a completed search
+      ! - the other caps are errors for the same reason
       leaf_depth = 0
       do while (2.0_wp*box_half(self, leaf_depth) > self%seed_size)
          leaf_depth = leaf_depth + 1
@@ -670,7 +691,7 @@ contains
 
       excl_ratio = 0.0_wp
       rho_cap = rho_max
-      ! An anchor sitting exactly on the surface is its own closest branch.
+      ! An anchor sitting exactly on the surface is its own closest branch
       rho_hit = huge(1.0_wp)
       if (lsf0_anchor == 0.0_wp) then
          rho_hit = 0.0_wp
@@ -693,7 +714,7 @@ contains
 
          ! Best-first: every box still queued is at least this far out, so a
          ! key beyond the cap proves the remainder of the ball carries no
-         ! branch weight and the search is finished.
+         ! branch weight and the search is finished
          if (key > rho_cap) then
             if (trace) then
                write (action, "(a)") "beyond rho_max: search complete"
@@ -741,7 +762,7 @@ contains
          end if
 
          ! Certified surface-free: the exclusion ball around the centre
-         ! swallows the box, so no zero of S lies inside it.
+         ! swallows the box, so no zero of S lies inside it
          if (excl_radius >= half*sqrt(3.0_wp)) then
             if (trace) then
                self%dbg_free(depth) = self%dbg_free(depth) + 1
@@ -771,12 +792,14 @@ contains
                write (action, "(a,i0)") "leaf: survivor ", self%n_surv
                call trace_row(self, depth, lat, leaf_depth, lsf0, excl_ratio, key, action)
             end if
-            ! Estimated distance from the anchor to the surface *through* this
-            ! box. The offset is the certified radius, not `abs(lsf0)`: the
-            ! probe contract gives units only to the radius, whereas the level
-            ! set value is a value whose sign alone is meaningful. The two
-            ! coincide for a 1-Lipschitz LSF, but an LSF that must divide by a
-            ! gradient bound (or works in density units) would rank nonsense.
+            ! Estimated distance from the anchor to the surface *through* the box
+            !
+            ! - the offset is the certified radius, not `abs(lsf0)`: the probe
+            !   contract gives units only to the radius, whereas the level set
+            !   value carries meaning in its sign alone
+            ! - the two coincide for a 1-Lipschitz LSF, but an LSF that must
+            !   divide by a gradient bound (or works in density units) would
+            !   rank nonsense
             self%surv_rho_est(self%n_surv) = norm2(centre - anchor)
             if (lsf0*lsf0_anchor >= 0.0_wp) then
                self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) + excl_radius
@@ -823,7 +846,7 @@ contains
       self%dbg_n_surv_raw = self%n_surv
 
       ! Survivors were collected against a cap that may have tightened after
-      ! they were accepted; drop the ones the final cap rules out.
+      ! they were accepted; drop the ones the final cap rules out
       call drop_survivors_beyond(self, rho_cap)
 
       call collect_seeds(self, leaf_depth)
@@ -832,6 +855,7 @@ contains
    end subroutine octree_run
 
    !> Discard survivors whose distance lower bound exceeds the final cap
+   !>
    !> @param[inout] self    Search instance
    !> @param[in]    rho_cap Final admissible radius
    pure subroutine drop_survivors_beyond(self, rho_cap)
@@ -860,22 +884,26 @@ contains
 
    !> Turn surviving leaves into seed points
    !>
-   !> In `per_leaf` mode every survivor is a seed. In `cluster` mode a survivor
-   !> is a seed when none of its 26 lattice neighbours present in the survivor
-   !> set is closer to the anchor -- the discrete local minima of the distance
-   !> field restricted to the survivors. That is one seed per basin rather than
-   !> one per box, and no connected patch can be skipped: the smallest survivor
-   !> of a connected group is a local minimum of that group by construction.
+   !> - `per_leaf` mode: every survivor is a seed
+   !> - `cluster` mode: a survivor is a seed when none of its 26 lattice
+   !>   neighbours present in the survivor set is closer to the anchor -- the
+   !>   discrete local minima of the distance field restricted to the survivors
+   !> - one seed per basin rather than one per box, and no connected patch can
+   !>   be skipped: the smallest survivor of a connected group is a local
+   !>   minimum of that group by construction
    !>
-   !> The full 26-neighbourhood matters. Survivors are not a surface but a slab
-   !> roughly two cells thick (a leaf survives whenever the surface passes
-   !> within its circumradius), and across a slab the six face neighbours alone
-   !> leave a cell looking like a minimum whenever the descent direction runs
-   !> diagonally -- which on a curved patch is most of them. Testing against
-   !> face neighbours only produced ~100 seeds for a patch holding one minimum.
+   !> The full 26-neighbourhood matters
+   !>
+   !> - survivors are not a surface but a slab roughly two cells thick (a leaf
+   !>   survives whenever the surface passes within its circumradius)
+   !> - across a slab the six face neighbours alone leave a cell looking like a
+   !>   minimum whenever the descent direction runs diagonally, which on a
+   !>   curved patch is most of them
+   !> - testing against face neighbours only produced ~100 seeds for a patch
+   !>   holding one minimum
    !>
    !> Ties are broken by lattice key so a symmetric pair of neighbours produces
-   !> one seed rather than two or none.
+   !> one seed rather than two or none
    !>
    !> @param[inout] self       Search instance
    !> @param[in]    leaf_depth Depth all survivors share
@@ -932,7 +960,7 @@ contains
    !>
    !> Estimated surface distance first (see `surv_rho_est`), with the lattice
    !> key as the tie-break, so the order is total and two exactly-tied
-   !> neighbours cannot each rule the other out.
+   !> neighbours cannot each rule the other out
    !>
    !> @param[in] self Search instance
    !> @param[in] a    First survivor index
@@ -951,6 +979,7 @@ contains
    end function precedes
 
    !> Pack a lattice position into a single sortable integer
+   !>
    !> @param[in] self Search instance
    !> @param[in] lat  Lattice position at the leaf depth
    !> @returns   key  Packed key
@@ -967,7 +996,7 @@ contains
    !> Sort `n` keys ascending, carrying an index permutation alongside
    !>
    !> Heapsort: in place, no recursion, and no worst case that a pathological
-   !> survivor layout could trigger.
+   !> survivor layout could trigger
    !>
    !> @param[in]    n     Number of entries to sort
    !> @param[inout] keys  Keys, sorted ascending on exit
@@ -993,6 +1022,7 @@ contains
    end subroutine heapsort_keys
 
    !> Restore the max-heap property below `start` within `bound`
+   !>
    !> @param[in]    start Position to sift down from
    !> @param[in]    bound Last position belonging to the heap
    !> @param[inout] keys  Key array
@@ -1018,6 +1048,7 @@ contains
    end subroutine sift_down
 
    !> Exchange two entries of a key array and its permutation
+   !>
    !> @param[in]    i1    First position
    !> @param[in]    i2    Second position
    !> @param[inout] keys  Key array
@@ -1040,6 +1071,7 @@ contains
    end subroutine swap_entries
 
    !> Find the survivor holding a given lattice key
+   !>
    !> @param[in] self Search instance
    !> @param[in] key  Packed lattice key to look for
    !> @returns   idx  Survivor index, or 0 when that cell did not survive
@@ -1072,18 +1104,20 @@ contains
 
    !> Print a per-anchor trace of the last run
    !>
-   !> Three tables, because three questions come up when a search misbehaves.
-   !> The depth table answers "where did the boxes go?" -- a level whose boxes
-   !> are nearly all split rather than certified surface-free is a level where
-   !> the exclusion radius is buying nothing. The tightening table answers "did
-   !> the search shrink its own ball, and how early?" -- the first sign change
-   !> should arrive within the first handful of boxes, and the gap between its
-   !> two distance columns is what the exclusion radius bought. The seed table
-   !> answers "what came out, and is it plausible?" -- seeds should sit at a
-   !> distance close to the certified radius, one per branch.
+   !> Three tables, because three questions come up when a search misbehaves
+   !>
+   !> - depth table -- "where did the boxes go?" A level whose boxes are nearly
+   !>   all split rather than certified surface-free is a level where the
+   !>   exclusion radius is buying nothing
+   !> - tightening table -- "did the search shrink its own ball, and how
+   !>   early?" The first sign change should arrive within the first handful of
+   !>   boxes, and the gap between its two distance columns is what the
+   !>   exclusion radius bought
+   !> - seed table -- "what came out, and is it plausible?" Seeds should sit at
+   !>   a distance close to the certified radius, one per branch
    !>
    !> Callers inside an OpenMP region should wrap this in a critical section;
-   !> the report is one contiguous block per anchor so it stays readable.
+   !> the report is one contiguous block per anchor so it stays readable
    !>
    !> @param[inout] self   Search instance holding the last run's bookkeeping
    !> @param[in]    anchor Anchor the run was for
@@ -1102,7 +1136,7 @@ contains
       !> Where the boxes went, level by level
       !>
       !> Collected only on a debug run, so a report asked for after an ordinary
-      !> one says so rather than printing a table of zeros.
+      !> one says so rather than printing a table of zeros
       if (.not. self%dbg_valid) then
          write (self%unit, "(4x,a)") &
             "Per-depth tallies were not collected: set `debug` before `run`."
@@ -1235,10 +1269,11 @@ contains
 
    !> Octant this box descended into at a given level of the tree
    !>
-   !> The lattice position at depth `depth` is the concatenation of the octant
-   !> choices made on the way down: each level appends one bit per axis. Level
-   !> `level` therefore reads bit `depth - level` of each component, and the
-   !> three bits pack into the familiar 1..8 octant index (+x fastest).
+   !> - the lattice position at depth `depth` concatenates the octant choices
+   !>   made on the way down, one bit per axis per level
+   !> - level `level` therefore reads bit `depth - level` of each component,
+   !>   and the three bits pack into the familiar 1..8 octant index (+x
+   !>   fastest)
    !>
    !> @param[in] lat   Lattice position at `depth`
    !> @param[in] depth Depth the box sits at
@@ -1262,7 +1297,7 @@ contains
    !>
    !> One column per tree level, two characters wide, so the depth a box sits
    !> at is simply the column its octant digit lands in: reading down the table
-   !> shows the search descending and backing out again.
+   !> shows the search descending and backing out again
    !>
    !> @param[inout] self       Search instance
    !> @param[in]    leaf_depth Deepest level this run can reach

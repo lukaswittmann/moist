@@ -35,7 +35,7 @@ module moist_cavity_iswig
       procedure :: register_entries => register_parameter_entries
    end type moist_cavity_iswig_parameters_type
 
-   !> iSwiG cavity state.
+   !> iSwiG cavity state
    type, extends(cavity_type) :: cavity_type_iswig
 
       !> Number of Lebedev points per sphere
@@ -96,7 +96,6 @@ contains
       call self%register_real_scalar("cut_f", self%cut_f)
    end subroutine register_parameter_entries
 
-
    !> Declare the results an iSwiG cavity holds, on top of the generic ones
    !>
    !> @param[in]    self   iSwiG cavity instance
@@ -125,17 +124,17 @@ contains
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    subroutine new_cavity_iswig(self, ctx, radius_model, error, param)
-      !> Cavity to initialize.
+      !> Cavity to initialize
       type(cavity_type_iswig), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity.
+      !> Borrowed context; must outlive the cavity
       type(moist_context_type), intent(in), target :: ctx
-      !> Radius model to copy.
+      !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
-      !> Construction error.
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
-      !> Configuration; omitted means compiled defaults.
+      !> Configuration; omitted means compiled defaults
       type(moist_cavity_iswig_parameters_type), intent(in), optional :: param
-      !> Resolved configuration.
+      !> Resolved configuration
       type(moist_cavity_iswig_parameters_type) :: settings
 
       if (present(param)) settings = param
@@ -185,7 +184,7 @@ contains
       self%nsph = mol%nat
 
       ! Nuclear derivative arrays belong to the previous geometry until the
-      ! caller explicitly requests a fresh gradient build.
+      ! caller explicitly requests a fresh gradient build
       if (allocated(self%area_grad)) deallocate (self%area_grad)
       if (allocated(self%volume_grad)) deallocate (self%volume_grad)
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
@@ -245,13 +244,13 @@ contains
 
    end subroutine update_cavity_iswig
 
-   !> Unified gradient computation for the iSwiG cavity.
-   !> Populates self%area_grad(3, nsph) and self%volume_grad(3, nsph)
-   !> in a single pass over grid points and switching function derivatives.
+   !> Unified gradient computation for the iSwiG cavity
    !>
-   !> Both gradients share the same expensive inner loop over pairs
-   !> (grid point ip, atom jat) for the switching function derivative df/ds.
-   !> The area and volume gradients differ only in the weight applied:
+   !> - populates self%area_grad(3, nsph) and self%volume_grad(3, nsph) in a
+   !>   single pass over grid points and switching function derivatives
+   !> - both gradients share the same expensive inner loop over pairs
+   !>   (grid point ip, atom jat) for the switching function derivative df/ds
+   !> - they differ only in the weight applied:
    !>   area:   dA/ds  = sum_p  R^2 * w * (df/ds)
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
    subroutine compute_gradient_iswig(self, error)
@@ -333,7 +332,7 @@ contains
 
             ! Volume gradient (switching function part), accumulated both per
             ! grid point and into the total; contracting v1_rA over the grid
-            ! reproduces volume_grad up to summation order.
+            ! reproduces volume_grad up to summation order
             self%volume_grad(1, iat) = self%volume_grad(1, iat) + dswitch*vol_weight*dx
             self%volume_grad(2, iat) = self%volume_grad(2, iat) + dswitch*vol_weight*dy
             self%volume_grad(3, iat) = self%volume_grad(3, iat) + dswitch*vol_weight*dz
@@ -414,7 +413,7 @@ contains
 
       ! Geometry-dependent radii would move the width, weight, normal and
       ! curvature channels this routine drops, and the forward path in
-      ! [[compute_gradient_iswig]] ignores them just as completely.
+      ! [[compute_gradient_iswig]] ignores them just as completely
       if (allocated(self%radius_model)) then
          if (allocated(self%radius_model%f1_rA)) then
             if (any(self%radius_model%f1_rA /= 0.0_wp)) then
@@ -435,7 +434,7 @@ contains
 
          !* -------------------------- Switching channel -------------------------- *!
          ! a_i = R_I^2 wleb_i f_i, and neither radius nor Lebedev weight moves,
-         ! so the area adjoint enters purely through df_i/dR_A.
+         ! so the area adjoint enters purely through df_i/dR_A
          w_f_eff = acc%w_f(igrid) &
                    + acc%w_a(igrid)*self%radii(iat)**2*self%wleb(igrid)
          if (w_f_eff == 0.0_wp) cycle
@@ -626,7 +625,7 @@ contains
 
          ! Points sit on their owner sphere, so the outward unit normal is the
          ! radial direction and the volume element is the divergence-theorem
-         ! contribution a_i (r_i . n_i)/3 that the total below accumulates.
+         ! contribution a_i (r_i . n_i)/3 that the total below accumulates
          normal0(1, ipt) = rx/radii(owner(ipt))
          normal0(2, ipt) = ry/radii(owner(ipt))
          normal0(3, ipt) = rz/radii(owner(ipt))
@@ -802,14 +801,14 @@ contains
    !> `f_i` is the product of the elementary switching factors over all spheres
    !> other than the owner, so its derivative with respect to the separation
    !> from sphere `j` factorizes into `f_i` times the logarithmic derivative of
-   !> that one factor. The result is returned as the radial coefficient `dfdr`
-   !> and the separation vector `dvec`, with
+   !> that one factor, returned as the radial coefficient `dfdr` and the
+   !> separation vector `dvec`, with
    !>
    !>   d f_i / d r  =  dfdr * dvec  =  -d f_i / d c_j
    !>
    !> Shared by the forward Jacobian in [[compute_gradient_iswig]] and the
    !> reverse contraction in [[get_surface_gradient_iswig]] so that both paths
-   !> evaluate the identical expression.
+   !> evaluate the identical expression
    !>
    !> @param[in]  point  Grid point position
    !> @param[in]  center Sphere center position

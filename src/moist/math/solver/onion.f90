@@ -1,9 +1,10 @@
 !> Hierarchical Lebedev onion-shell global search solver for LSF surface
 !>
-!> Implements a hierarchical bisection algorithm that couples radial and angular
-!> refinement to find points where LSF ~= 0, starting from an anchor point.
-!> The Lebedev angular grid resolution is interpolated based on the current
-!> search radius-coarse grids for large radii, fine grids near the surface.
+!> Hierarchical bisection coupling radial and angular refinement to find
+!> points where LSF ~= 0, starting from an anchor point
+!>
+!> - the Lebedev angular grid resolution is interpolated from the current
+!>   search radius: coarse grids for large radii, fine grids near the surface
 !>
 !> Algorithm:
 !>   1. Start from small radius (near anchor) with coarse step, scan outward
@@ -14,7 +15,7 @@
 !>   6. Repeat until R_upper - R_lower < min_step or convergence
 !>   7. Return best point found within converged bracket
 !>
-!> Uses screened LSF evaluation for O(N) complexity with many atoms.
+!> Uses screened LSF evaluation for O(N) complexity with many atoms
 module moist_math_solver_onion
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -66,7 +67,7 @@ contains
    !> Factory function to create and initialize an onion solver
    !>
    !> Creates a hierarchical Lebedev global search solver for finding points
-   !> on the LSF=0 surface starting from an anchor point.
+   !> on the LSF=0 surface starting from an anchor point
    !>
    !> @param[in]  lsf           LSF primitive for function evaluation
    !> @param[in]  anchor         Starting point for radial search [3]
@@ -144,10 +145,10 @@ contains
    !> Solve the global search problem
    !>
    !> Performs hierarchical bisection with radius-dependent Lebedev refinement
-   !> by scanning forward from anchor and stopping at first positive LSF.
+   !> by scanning forward from anchor and stopping at first positive LSF
    !>
    !> @param[inout] self   Solver instance
-   !> @param[inout] x      On input: ignored. On output: best point found [3]
+   !> @param[inout] x      Ignored on input, best point found on output [3]
    !> @param[out]   error  Error handling
    subroutine onion_solve(self, x, error)
       class(moist_math_solver_onion_type), intent(inout), target :: self
@@ -246,7 +247,7 @@ contains
    !> Perform single angular scan at given radius from anchor
    !>
    !> Evaluates LSF at all angular directions on a spherical shell and returns
-   !> the maximum LSF value and the point where it occurs.
+   !> the maximum LSF value and the point where it occurs
    !>
    !> @param[in]     self         Solver instance
    !> @param[in]     anchor       Center point for radial scan [3]
@@ -317,7 +318,7 @@ contains
       ierr = 0
       lsf_val = 0.0_wp
 
-      ! Refresh per-point screening, then evaluate value-only.
+      ! Refresh per-point screening, then evaluate value-only
       call self%lsf%prepare(point, lsf_error)
       if (allocated(lsf_error)) then
          ierr = 3

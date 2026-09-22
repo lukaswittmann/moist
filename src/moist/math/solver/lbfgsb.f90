@@ -6,8 +6,9 @@
 !>   minimize f(x)
 !>   subject to: l <= x <= u
 !>
-!> L-BFGS-B is particularly efficient for large problems where storing the full Hessian
-!> is impractical. It uses a limited-memory BFGS update with reverse communication.
+!> L-BFGS-B is particularly efficient for large problems where storing the
+!> full Hessian is impractical; it uses a limited-memory BFGS update with
+!> reverse communication
 module moist_math_solver_lbfgsb
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -149,9 +150,12 @@ contains
 
    !> Factory function to create and initialize an L-BFGS-B solver (unified interface)
    !>
-   !> This is a standalone constructor that allocates and initializes an L-BFGS-B solver.
-   !> Supports both legacy (no context) and context-aware (thread-safe) interfaces.
-   !> Use this with polymorphic allocation:
+   !> Standalone constructor that allocates and initializes an L-BFGS-B solver
+   !>
+   !> - supports both legacy (no context) and context-aware (thread-safe)
+   !>   interfaces
+   !>
+   !> Use with polymorphic allocation:
    !>
    !>   ! Context-aware (thread-safe):
    !>   call new_lbfgsb_solver(solver, n, error, &
@@ -357,7 +361,7 @@ contains
    !> Solve the optimization problem using L-BFGS-B
    !>
    !> Uses reverse communication to iteratively compute objective and gradient
-   !> until convergence or failure.
+   !> until convergence or failure
    !>
    !> @param[inout] self   Solver instance (must be initialized)
    !> @param[inout] x      Initial guess on input [n], solution on output [n]
@@ -432,7 +436,7 @@ contains
 
    !> Clean up solver resources
    !>
-   !> Deallocates all working arrays and nullifies function pointers.
+   !> Deallocates all working arrays and nullifies function pointers
    !>
    !> @param[inout] self  Solver instance to destroy
    subroutine lbfgsb_destroy(self)
@@ -463,7 +467,7 @@ contains
 
    !> Internal helper: compute objective and gradient
    !>
-   !> Dispatches to user-provided callbacks (legacy or context-aware).
+   !> Dispatches to user-provided callbacks (legacy or context-aware)
    !>
    !> @param[inout] self  Solver instance
    !> @param[in]    x     Current variables [n]

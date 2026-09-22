@@ -10,20 +10,20 @@ module moist_math_lapack_getri
    public :: wrap_getri
 
    !> Computes the inverse of a matrix using the LU factorization
-   !> computed by ?GETRF.
+   !> computed by ?GETRF
    !>
    !> This method inverts U and then computes inv(A) by solving the system
-   !> inv(A)*L = inv(U) for inv(A).
+   !> inv(A)*L = inv(U) for inv(A)
    interface wrap_getri
       module procedure :: wrap_sgetri
       module procedure :: wrap_dgetri
    end interface wrap_getri
 
    !> Computes the inverse of a matrix using the LU factorization
-   !> computed by ?GETRF.
+   !> computed by ?GETRF
    !>
    !> This method inverts U and then computes inv(A) by solving the system
-   !> inv(A)*L = inv(U) for inv(A).
+   !> inv(A)*L = inv(U) for inv(A)
    interface lapack_getri
       pure subroutine sgetri(n, a, lda, ipiv, work, lwork, info)
          import :: sp, lapack_ik

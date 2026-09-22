@@ -1,4 +1,4 @@
-!> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+!> Reduces a real symmetric-definite generalized eigenproblem to standard form
 module moist_math_lapack_sygst
    use mctc_env, only: sp, dp
    implicit none
@@ -6,29 +6,29 @@ module moist_math_lapack_sygst
 
    public :: wrap_sygst
 
-   !> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+   !> Reduces a real symmetric-definite generalized eigenproblem to standard form
    !>
    !> If ITYPE = 1, the problem is A*x = lambda*B*x,
    !> and A is overwritten by inv(U**T)*A*inv(U) or inv(L)*A*inv(L**T)
    !>
    !> If ITYPE = 2 or 3, the problem is A*B*x = lambda*x or
-   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L.
+   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L
    !>
-   !> B must have been previously factorized as U**T*U or L*L**T by POTRF.
+   !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface wrap_sygst
       module procedure :: wrap_ssygst
       module procedure :: wrap_dsygst
    end interface wrap_sygst
 
-   !> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+   !> Reduces a real symmetric-definite generalized eigenproblem to standard form
    !>
    !> If ITYPE = 1, the problem is A*x = lambda*B*x,
    !> and A is overwritten by inv(U**T)*A*inv(U) or inv(L)*A*inv(L**T)
    !>
    !> If ITYPE = 2 or 3, the problem is A*B*x = lambda*x or
-   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L.
+   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L
    !>
-   !> B must have been previously factorized as U**T*U or L*L**T by POTRF.
+   !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface lapack_sygst
       pure subroutine ssygst(itype, uplo, n, a, lda, b, ldb, info)
          import :: sp

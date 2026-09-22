@@ -1,4 +1,4 @@
-!> FFTW module using Fortran 2003 interfaces.
+!> FFTW module using Fortran 2003 interfaces
 module moist_math_fftw3
    use, intrinsic :: iso_c_binding
 #ifdef WITH_FFTW

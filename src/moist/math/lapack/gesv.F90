@@ -12,13 +12,13 @@ module moist_math_lapack_gesv
 
    !> Computes the solution to a real system of linear equations
    !>    A * X = B,
-   !> where A is an N-by-N matrix and X and B are N-by-NRHS matrices.
+   !> where A is an N-by-N matrix and X and B are N-by-NRHS matrices
    !> The LU decomposition with partial pivoting and row interchanges is
    !> used to factor A as
    !>    A = P * L * U,
    !> where P is a permutation matrix, L is unit lower triangular, and U is
    !> upper triangular.  The factored form of A is then used to solve the
-   !> system of equations A * X = B.
+   !> system of equations A * X = B
    interface lapack_gesv
       pure subroutine sgesv(n, nrhs, a, lda, ipiv, b, ldb, info)
          import :: sp, lapack_ik

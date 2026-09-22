@@ -1,9 +1,9 @@
 !> Multi-start SLSQP solver using a small Lebedev seed cloud
 !>
-!> Generates a set of initial guesses around the anchor using configurable
-!> Lebedev shells, runs SLSQP from each seed, and returns the
-!> solution closest to the anchor. Uses the same objective/constraint
-!> callbacks as the regular SLSQP setup.
+!> Generates initial guesses around the anchor on configurable Lebedev
+!> shells, runs SLSQP from each seed, and returns the solution closest to
+!> the anchor, using the same objective/constraint callbacks as the regular
+!> SLSQP setup
 module moist_math_solver_slsqp_multistart
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -105,7 +105,8 @@ module moist_math_solver_slsqp_multistart
 
 contains
 
-   !> Generate seed points on a single Lebedev shell around the anchor.
+   !> Generate seed points on a single Lebedev shell around the anchor
+   !>
    !> @param[in]    anchor   Center of the shell
    !> @param[in]    radius   Shell radius
    !> @param[in]    num_leb  Number of Lebedev points on this shell
@@ -144,7 +145,7 @@ contains
       offset = offset + num_leb
    end subroutine generate_layer_seeds
 
-   !> Factory function to create a multi-start SLSQP solver.
+   !> Factory function to create a multi-start SLSQP solver
    subroutine new_slsqp_multistart_solver(anchor, solver, &
                                           n, m, meq, obj_ctx, obj_grad_ctx, con_ctx, con_grad_ctx, context, &
                                           xl, xu, max_iter, tol, toldx, toldf, verbose, iter_callback_ctx, &
@@ -331,7 +332,7 @@ contains
       call move_alloc(tmp, solver)
    end subroutine new_slsqp_multistart_solver
 
-   !> Solve the constrained projection using multi-start SLSQP.
+   !> Solve the constrained projection using multi-start SLSQP
    subroutine slsqp_multistart_solve(self, x, error)
       class(moist_math_solver_slsqp_multistart_type), intent(inout), target :: self
       real(wp), dimension(:), intent(inout) :: x
@@ -462,7 +463,8 @@ contains
       deallocate (converged)
    end subroutine slsqp_multistart_solve
 
-   !> Get raw SLSQP candidates converged from multi-start seeds.
+   !> Get raw SLSQP candidates converged from multi-start seeds
+   !>
    !> @param[out] candidates  Raw candidate points (3,n)
    !> @param[out] n_candidates Number of available candidates
    subroutine slsqp_multistart_get_raw_candidates(self, candidates, n_candidates)

@@ -11,7 +11,7 @@ module moist_math_lapack_syev
    public :: dsyev, ssyev
 
    !> Computes all eigenvalues and, optionally, eigenvectors of a
-   !> real symmetric matrix A.
+   !> real symmetric matrix A
    interface lapack_syev
       pure subroutine ssyev(jobz, uplo, n, a, lda, w, work, lwork, info)
          import :: sp, lapack_ik

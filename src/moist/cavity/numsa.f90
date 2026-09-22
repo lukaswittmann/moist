@@ -2,9 +2,9 @@
 !>
 !> Implementation based on:
 !> - Original code: [github.com/grimme-lab/numsa](https://github.com/grimme-lab/numsa)
-!> - Theory: Im, W., Lee, M. S., Brooks, C. L. (2003).
+!> - Theory: Im, W., Lee, M. S., Brooks, C. L. (2003)
 !>   "Generalized Born Model with a Simple Smoothing Function."
-!>   *J. Comput. Chem.*, **24**(14), 1691-1702.
+!>   *J. Comput. Chem.*, **24**(14), 1691-1702
 !>   [DOI: 10.1002/jcc.10321](https://doi.org/10.1002/jcc.10321)
 !>
 module moist_cavity_numsa
@@ -29,24 +29,24 @@ module moist_cavity_numsa
 
    !> NUMSA construction parameters
    type, extends(moist_model_parameters_type) :: moist_cavity_numsa_parameters_type
-      !> Lebedev points per sphere.
+      !> Lebedev points per sphere
       integer :: num_leb = 110
-      !> Probe radius in bohr.
+      !> Probe radius in bohr
       real(wp) :: probe = 0.0_wp
-      !> Neighbor cutoff offset in bohr.
+      !> Neighbor cutoff offset in bohr
       real(wp) :: offset = 2.0_wp*aatoau
-      !> Smoothing width in bohr.
+      !> Smoothing width in bohr
       real(wp) :: smoothing = 0.3_wp*aatoau
-      !> Surface exclusion tolerance.
+      !> Surface exclusion tolerance
       real(wp) :: tolsesp = 1.0e-6_wp
    contains
-      !> Restore compiled defaults.
+      !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
-      !> Declare fields for JSON input, output, and printing.
+      !> Declare fields for JSON input, output, and printing
       procedure :: register_entries => register_parameter_entries
    end type moist_cavity_numsa_parameters_type
 
-   !> NUMSA cavity state.
+   !> NUMSA cavity state
    type, extends(cavity_type) :: cavity_type_numsa
 
       !> Number of Lebedev angular grid points
@@ -126,7 +126,6 @@ contains
       call self%register_real_scalar("tolsesp", self%tolsesp)
    end subroutine register_parameter_entries
 
-
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
@@ -135,9 +134,9 @@ contains
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    subroutine new_cavity_numsa(self, ctx, radii, error, param)
-      !> Cavity to initialize.
+      !> Cavity to initialize
       type(cavity_type_numsa), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity.
+      !> Borrowed context; must outlive the cavity
       type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radii
@@ -224,16 +223,16 @@ contains
 
 !> Retrieve gradient of total surface area
 !>
-!> This routine ensures that the area gradient has been computed during
-!> the last [[update_cavity_numsa]] call. The gradient is already stored
-!> in `self%area_grad(3, nat)` and represents:
+!> Ensures the area gradient was computed during the last
+!> [[update_cavity_numsa]] call; the gradient is stored in
+!> `self%area_grad(3, nat)` and represents:
 !>
 !> $$
 !> \frac{\partial A_{\mathrm{tot}}}{\partial {\bf R}_j} =
 !> \sum_i \frac{\partial A_i}{\partial {\bf R}_j}
 !> $$
 !>
-!> where $A_{\mathrm{tot}} = \sum_i A_i$ is the total surface area.
+!> where $A_{\mathrm{tot}} = \sum_i A_i$ is the total surface area
 !>
 !> @param[inout] self  The cavity object with cached gradients
 !> @param[out]   error Error handling
@@ -253,17 +252,17 @@ contains
    !>
    !> - **Switching function coefficients**: Computes $a_0, a_1, a_3$ for the cubic
    !>   polynomial $s(u) = a_0 + (a_1 + a_3 u^2) u$ that smoothly transitions from
-   !>   0 to 1 over the interval $u \in [-w, w]$.
+   !>   0 to 1 over the interval $u \in [-w, w]$
    !>
    !> - **Radial integral weights**: Precomputes the analytical integral
    !>   $$
    !>   w_r = \int_{R-w}^{R+w} \left(\frac{1}{4w} + 3a_3 f(r,R,w)\right) r^3 \, dr
    !>   $$
-   !>   to eliminate the need for radial quadrature.
+   !>   to eliminate the need for radial quadrature
    !>
-   !> - **Angular grid**: Sets up Lebedev quadrature points and weights on the unit sphere.
+   !> - **Angular grid**: Sets up Lebedev quadrature points and weights on the unit sphere
    !>
-   !> - **Neighbor pair indices**: Prepares all unique (i,j) pairs for neighbor list construction.
+   !> - **Neighbor pair indices**: Prepares all unique (i,j) pairs for neighbor list construction
    !>
    !> @param[inout] self      The cavity object to initialize
    !> @param[in]    num       Atomic numbers (nat)
@@ -344,9 +343,10 @@ contains
          ws = 0.3_wp*aatoau
       end if
 
-      ! Switching function polynomial coefficients for s(u) = a_0 + (a_1 + a_3*u^2)*u
-      ! This cubic polynomial smoothly transitions from 0 to 1 over u in [-w, w]
-      ! following Im, Lee, Brooks (2003) eq. (11)
+      ! Switching function polynomial coefficients
+      !   s(u) = a_0 + (a_1 + a_3*u^2)*u
+      !   cubic, rising smoothly from 0 to 1 over u in [-w, w]
+      !   following Im, Lee, Brooks (2003) eq. (11)
       self%ah0 = 0.5_wp
       self%ah1 = 3._wp/(4.0_wp*ws)
       self%ah3 = -1._wp/(4.0_wp*(ws*(ws*ws)))
@@ -359,8 +359,8 @@ contains
          ! Squared boundaries of smoothing region: (R-w)^2 and (R+w)^2
          self%trj2(1, iat) = (self%vdwsa(iat) - ws)**2
          self%trj2(2, iat) = (self%vdwsa(iat) + ws)**2
-         ! Precomputed radial integral weight (analytical primitive)
-         ! This eliminates the need for radial quadrature
+         ! Precomputed radial integral weight (analytical primitive), so no
+         ! radial quadrature is needed
          rr = self%vdwsa(iat) + ws
          self%wrp(iat) = (0.25_wp/ws + &
             & 3.0_wp*self%ah3*(0.2_wp*rr*rr - 0.5_wp*rr*self%vdwsa(iat) + &
@@ -379,8 +379,8 @@ contains
          self%srcut = self%srcut + 2.0_wp*aatoau
       end if
 
-      ! Set up Lebedev angular quadrature grid
-      ! Map requested num_leb to Lebedev order index
+      ! Set up Lebedev angular quadrature grid, mapping the requested num_leb
+      ! to a Lebedev order index
       call lebedev_order_from_num(nang, oleb, error)
       if (allocated(error)) return
 
@@ -400,10 +400,10 @@ contains
    !>
    !> Builds an efficient neighbor list containing only atom pairs within
    !> the cutoff distance `self%srcut`. This avoids checking all atom pairs
-   !> during surface integration.
+   !> during surface integration
    !>
    !> For each atom $i$, stores indices of neighbors $j$ such that
-   !> $|{\bf R}_i - {\bf R}_j| < r_{\mathrm{cut}}$.
+   !> $|{\bf R}_i - {\bf R}_j| < r_{\mathrm{cut}}$
    !>
    !> @param[inout] self The cavity object with neighbor list storage
    !> @param[in]    xyz  Atomic coordinates (3, nat) in bohr
@@ -467,7 +467,7 @@ contains
 
    !> Compute NUMSA surface areas and gradients via Lebedev quadrature
    !>
-   !> This is the core integration routine. For each atom $i$:
+   !> Core integration routine; for each atom $i$:
    !>
    !> 1. Places Lebedev grid points on a sphere of radius
    !>    $R_i = r_{\mathrm{vdW},i} + r_{\mathrm{probe}}$
@@ -479,7 +479,7 @@ contains
    !> 4. Accumulates gradients $\partial A_i / \partial {\bf R}_j$ using the chain rule
    !>
    !> The switching function product ensures that buried points (inside neighbors)
-   !> contribute zero, while exposed points contribute their full weight.
+   !> contribute zero, while exposed points contribute their full weight
    !>
    !> @param[inout] self    The cavity object with grid and parameters
    !> @param[in]    xyz     Atomic coordinates (3, nat) in bohr
@@ -601,7 +601,7 @@ contains
    !> \frac{{\bf x}_p - {\bf R}_j}{|{\bf x}_p - {\bf R}_j|}
    !> $$
    !>
-   !> This is the product rule applied to the logarithmic derivative.
+   !> Product rule applied to the logarithmic derivative
    !>
    !> @param[in]  self     The cavity object with parameters
    !> @param[in]  nat      Total number of atoms

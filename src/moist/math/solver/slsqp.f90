@@ -120,7 +120,7 @@ module moist_math_solver_slsqp
       procedure :: destroy => slsqp_destroy
    end type moist_math_solver_slsqp_type
 
-   !> Internal per-instance callback payload for the SLSQP wrappers.
+   !> Internal per-instance callback payload for the SLSQP wrappers
    type, extends(slsqp_solver) :: moist_slsqp_bridge_type
       private
       !> User-provided function pointers (legacy, no context)
@@ -137,7 +137,7 @@ module moist_math_solver_slsqp
       procedure(constraints_grad_context_interface), pointer, nopass :: user_con_grad_ctx => null()
       procedure(iteration_callback_context_interface), pointer, nopass :: user_iter_callback_ctx => null()
 
-      !> User context copied into the solver instance.
+      !> User context copied into the solver instance
       class(*), allocatable :: user_context
    end type moist_slsqp_bridge_type
 
@@ -145,9 +145,12 @@ contains
 
    !> Factory function to create and initialize an SLSQP solver (unified interface)
    !>
-   !> This is a standalone constructor that allocates and initializes an SLSQP solver.
-   !> Supports both legacy (no context) and context-aware (thread-safe) interfaces.
-   !> Use this with polymorphic allocation:
+   !> Standalone constructor that allocates and initializes an SLSQP solver
+   !>
+   !> - supports both legacy (no context) and context-aware (thread-safe)
+   !>   interfaces
+   !>
+   !> Use with polymorphic allocation:
    !>
    !>   ! Context-aware (thread-safe):
    !>   call new_slsqp_solver(solver, n, m, meq, error, &
@@ -223,8 +226,8 @@ contains
 
       select type (bridge => tmp%solver)
       type is (moist_slsqp_bridge_type)
-         ! Validate interface inputs first. Callback pointers are assigned only
-         ! after initialize(), because initialize() calls destroy() internally.
+         ! Validate interface inputs first; callback pointers are assigned only
+         ! after initialize(), because initialize() calls destroy() internally
          if (use_context_interface) then
             ! Context-aware interface
             if (.not. present(context)) then
@@ -355,7 +358,8 @@ contains
    end subroutine slsqp_destroy
 
    !> Wrapper for objective function (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_objective(me, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -385,7 +389,8 @@ contains
    end subroutine wrapper_objective
 
    !> Wrapper for gradient computation (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_gradient(me, x, df, dc)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -415,7 +420,8 @@ contains
    end subroutine wrapper_gradient
 
    !> Wrapper for iteration callback (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_iteration(me, iter, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       integer, intent(in) :: iter
