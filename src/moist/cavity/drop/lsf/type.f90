@@ -1,41 +1,50 @@
 !> Abstract level set function (LSF) base type for the DROP scheme
 !>
-!> The DROP cavity discretization is independent of *which* LSF defines the cavity surface.
-!> This module provides the abstract base any concrete LSF must extend.
+!> - DROP's discretization is independent of *which* LSF defines the surface
+!> - every concrete LSF extends this base
 !>
 !> A concrete LSF supplies:
-!>   - its own constructor (per-LSF parameters; see e.g. SvdW's [[moist_cavity_drop_lsf_svdw_type]]%new)
+!>   - its own constructor, carrying the per-LSF parameters (see e.g. SvdW's
+!>     [[moist_cavity_drop_lsf_svdw_type]]%new)
 !>   - a `candidate_space` declaration in that constructor (see below)
 !>   - implementations of the deferred procedures below
 !>   - optionally, overrides for the higher-order and direction-contracted
 !>     derivatives the base declares with erroring defaults (`f4_*`, `f2_rArB`,
 !>     `f3_r_rArB`, `f4_rr_rArB`, `f*_radrad`, `f*_rA_rad`, `normalized_f01_rA`,
-!>     `tangent_*`, `hvp_*`, `vjp_f1_rA`, `vjp_f1_rad`). SvdW and CFC implement all
-!>     of them; the isodensity LSFs implement only the identically zero
-!>     `vjp_f1_rA` and clear `radius_dependent` instead of implementing the radius
-!>     family at all, so asking one of those for a fourth derivative -- or for
-!>     anything radius-dependent, `vjp_f1_rad` included -- aborts rather than
-!>     returning a zero the caller cannot distinguish from a real answer
+!>     `tangent_*`, `hvp_*`, `vjp_f1_rA`, `vjp_f1_rad`)
+!>
+!> Coverage of that optional family:
+!>   - SvdW and CFC implement all of it
+!>   - the isodensity LSFs implement only the identically zero `vjp_f1_rA`, and
+!>     clear `radius_dependent` instead of implementing the radius family
+!>   - a fourth derivative there, or any radius-dependent query including
+!>     `vjp_f1_rad`, therefore aborts
+!>   - aborts rather than returns a zero the caller cannot tell from a real answer
 !>
 !> Two geometric-bound queries
 !> ---------------------------
-!> Both of the questions below are of the form "how far can something be", both are
-!> answered analytically from the LSF's own mathematics, and both exist so a caller
-!> can skip work without knowing which concrete LSF it holds. They are otherwise
-!> independent -- different subject, different consumer, different failure mode:
+!> Shared by both:
+!>   - both ask "how far can something be"
+!>   - both are answered analytically from the LSF's own mathematics
+!>   - both let a caller skip work without knowing which concrete LSF it holds
 !>
-!>   - [[exclusion_radius]]`(lsf0)` -- how far a piece of *surface* must be from the
-!>     evaluation point, given the value there. Answers "can I discard this region?"
-!>     for the certified branch search. Its safe answer is **zero** (certify
-!>     nothing, prune nothing); an over-estimate would silently lose branches.
-!>   - [[screening_offset]]`(radius)` -- how far an *atom* can be from the evaluation
-!>     point and still contribute above `screening_threshold`. Answers "can I skip
-!>     this atom?" for screening. Its safe answer is **huge** (screen nothing); an
-!>     under-estimate would silently drop contributions.
+!> Otherwise independent -- different subject, consumer and failure mode:
 !>
-!> So the safe direction is opposite for the two, which is why neither can be
-!> expressed in terms of the other, and why only the screening one has a documented
-!> safety margin (see [[lsf_screening_reach_margin]]).
+!>   - [[exclusion_radius]]`(lsf0)` -- how far a piece of *surface* must be from
+!>     the evaluation point, given the value there
+!>     - consumer: the certified branch search, "can I discard this region?"
+!>     - safe answer **zero**, i.e. certify nothing and prune nothing
+!>     - an over-estimate silently loses branches
+!>   - [[screening_offset]]`(radius)` -- how far an *atom* can be from the
+!>     evaluation point and still contribute above `screening_threshold`
+!>     - consumer: screening, "can I skip this atom?"
+!>     - safe answer **huge**, i.e. screen nothing
+!>     - an under-estimate silently drops contributions
+!>
+!> Consequences of the opposite safe directions:
+!>   - neither bound can be expressed in terms of the other
+!>   - only the screening one carries a documented safety margin
+!>     (see [[lsf_screening_reach_margin]])
 !>
 !> Screening contract
 !> ------------------
@@ -43,36 +52,46 @@
 !>
 !>    `screening_offset(radius)` = the radial offset, measured outward from the
 !>    atom surface, at which this LSF's contribution from that atom equals
-!>    `screening_threshold`.
+!>    `screening_threshold`
 !>
-!> It is an *exact* analytic inverse, never a bound and never a search, and it is
-!> the single source of truth for both screening consumers:
+!> An *exact* analytic inverse, never a bound and never a search, and the single
+!> source of truth for both screening consumers:
 !>
-!>   - the **per-point gate**: the base caches `(R + offset(R))**2` once per `update`,
-!>     interleaved with the atom center in `cand_screen`, and the gate is a
-!>     squared-distance compare against that cache -- no `exp` and no `sqrt`
-!>     anywhere in the reject path (see [[lsf_base_screen_candidates]]).
-!>   - the **cell-grid reach**: `neighbor_cutoff = lsf_screening_reach_margin * offset`,
-!>     handed to the cavity so it can size the molecular cell grid without knowing
-!>     the concrete LSF. `neighbor_cutoff` is `non_overridable` precisely so the two
-!>     consumers cannot drift apart again.
+!>   - the **per-point gate** -- the base caches `(R + offset(R))**2` once per
+!>     `update`, interleaved with the atom center in `cand_screen`, and the gate
+!>     is a squared-distance compare against that cache, with no `exp` and no
+!>     `sqrt` anywhere in the reject path (see [[lsf_base_screen_candidates]])
+!>   - the **cell-grid reach** -- `neighbor_cutoff = lsf_screening_reach_margin *
+!>     offset`, handed to the cavity so it can size the molecular cell grid
+!>     without knowing the concrete LSF
+!>   - `neighbor_cutoff` is `non_overridable` precisely so the two consumers
+!>     cannot drift apart again
 !>
 !> Candidate index space
 !> ---------------------
-!> The cavity's cell grid stores candidate atom ids in user space. Some LSFs want
-!> them relabelled into the base's spatially-sorted ordering (which turns the
-!> per-candidate geometry gathers in the screen loop into near-sequential reads and
-!> is worth roughly 15% of a projection update); others index per-atom data with the
-!> caller's own ids and must not be relabelled.
+!> The cavity's cell grid stores candidate atom ids in user space, and the two
+!> LSF families want opposite things from them:
 !>
-!> That choice is *declared*, not inferred: each concrete LSF sets `candidate_space`
-!> to [[lsf_candidate_space_sorted]] or [[lsf_candidate_space_user]] in its
-!> constructor, and the base performs (or skips) the relabelling accordingly in
-!> [[lsf_base_remap_candidate_grid]]. `update` aborts on an undeclared space, so a
-!> silent no-op can no longer masquerade as a deliberate choice.
+!>   - relabelled into the base's spatially-sorted ordering, which turns the
+!>     per-candidate geometry gathers in the screen loop into near-sequential
+!>     reads and is worth roughly 15% of a projection update
+!>   - left alone, for an LSF that indexes per-atom data with the caller's own ids
 !>
-!> The cavity holds a `class(moist_cavity_drop_lsf_type), allocatable` model from which thread-local clones are made.
-!> The [[lsf_thread_slot]] wrapper enables arrays of polymorphic LSF clones, since Fortran has no class(...), allocatable :: arr(:)
+!> That choice is *declared*, not inferred:
+!>
+!>   - each concrete LSF sets `candidate_space` to [[lsf_candidate_space_sorted]]
+!>     or [[lsf_candidate_space_user]] in its constructor
+!>   - the base performs, or skips, the relabelling accordingly in
+!>     [[lsf_base_remap_candidate_grid]]
+!>   - `update` aborts on an undeclared space, so a silent no-op can no longer
+!>     masquerade as a deliberate choice
+!>
+!> Thread-local clones
+!> -------------------
+!>   - the cavity holds one `class(moist_cavity_drop_lsf_type), allocatable`
+!>     model and clones it per thread
+!>   - [[lsf_thread_slot]] wraps a clone, since Fortran does not (afaik) allow
+!>     `class(...), allocatable :: arr(:)`
 module moist_cavity_drop_lsf_base
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
@@ -100,33 +119,41 @@ module moist_cavity_drop_lsf_base
    !> Number of rows in a `cand_screen` record
    integer, parameter :: lsf_cand_screen_rows = 4
 
-   !> `candidate_space` sentinel: the concrete LSF never declared one. Reaching
-   !> `update` in this state is a programming error and aborts.
+   !> `candidate_space` sentinel: the concrete LSF never declared one
+   !>
+   !> - reaching `update` in this state is a programming error and aborts
    integer, parameter :: lsf_candidate_space_undeclared = 0
-   !> `candidate_space`: candidate ids are user-space (caller) atom ids and are
-   !> handed to `prepare_subset` untouched. Required by LSFs that index per-atom
-   !> data (basis shells, ...) with the caller's numbering.
+   !> `candidate_space`: user-space (caller) atom ids, handed to `prepare_subset`
+   !> untouched
+   !>
+   !> - required by LSFs indexing per-atom data (basis shells, ...) with the
+   !>   caller's numbering
    integer, parameter :: lsf_candidate_space_user = 1
-   !> `candidate_space`: candidate ids are relabelled into the base's
-   !> spatially-sorted ordering, so `prepare_subset` can index `cand_screen` /
-   !> `cand_radii` directly with near-sequential access.
+   !> `candidate_space`: candidate ids relabelled into the base's spatially-sorted
+   !> ordering
+   !>
+   !> - lets `prepare_subset` index `cand_screen` / `cand_radii` directly, with
+   !>   near-sequential access
    integer, parameter :: lsf_candidate_space_sorted = 2
 
    !> Safety margin applied to `screening_offset` when sizing the cavity's
-   !> per-atom cell-grid reach.
+   !> per-atom cell-grid reach
    !>
    !> The gate is exact, so a reach of exactly `R + offset(R)` already admits every
    !> atom that can pass it for points inside the atom bounding box. The margin buys
-   !> headroom for the two places where that argument is not airtight: the cell grid
-   !> clamps out-of-box query points into the boundary cell, and cell membership is
-   !> decided by a sphere/AABB test in a different floating-point expression than the
-   !> gate itself. A larger reach only ever adds candidates the gate then rejects, so
-   !> the margin can never change a result -- only the amount of work.
+   !> headroom for the two places where that argument is not airtight:
    !>
-   !> This replaces SvdW's historical trick of bisecting for `0.1 * threshold`
-   !> instead of `threshold`, which was the same margin expressed as an
-   !> unnamed fudge on the target value: `-3*ln(0.1*thr)/k` exceeds
-   !> `-3*ln(thr)/k` by `3*ln(10)/k`, i.e. by ~8% at the production threshold.
+   !> - the cell grid clamps out-of-box query points into the boundary cell
+   !> - cell membership is decided by a sphere/AABB test in a different
+   !>   floating-point expression than the gate itself
+   !>
+   !> A larger reach only ever adds candidates the gate then rejects, so the margin
+   !> can never change a result -- only the amount of work
+   !>
+   !> Replaces SvdW's historical trick of bisecting for `0.1 * threshold` instead of
+   !> `threshold`, the same margin expressed as an unnamed fudge on the target value:
+   !> `-3*ln(0.1*thr)/k` exceeds `-3*ln(thr)/k` by `3*ln(10)/k`, i.e. by ~8% at the
+   !> production threshold
    real(wp), parameter :: lsf_screening_reach_margin = 1.10_wp
 
    !> Abstract LSF base
@@ -137,19 +164,20 @@ module moist_cavity_drop_lsf_base
       type(structure_type) :: mol
       !> Atomic radii (per-atom, user-space)
       real(wp), allocatable :: radii(:)
-      !> Screening threshold below which the LSF contribution is treated
-      !> as zero. Owned by the cavity (couples to the projection tolerance);
-      !> the LSF concrete reads this value to size its internal screening
-      !> caches whenever `update` runs. Direct users (tests calling the
-      !> concrete without a cavity) may set it before calling `update`
+      !> Screening threshold below which the LSF contribution is treated as zero
+      !>
+      !> - owned by the cavity, coupled to the projection tolerance
+      !> - read by the concrete LSF to size its screening caches on every `update`
+      !> - direct users (tests calling the concrete without a cavity) may set it
+      !>   before calling `update`
       real(wp) :: screening_threshold = 0.0_wp
       !> Highest spatial derivative order actually present in the per-point cache after
       !> the latest `prepare`/`prepare_subset`
       integer :: prepared_deriv = -1
 
-      !> Index space the concrete LSF wants its `prepare_subset` candidate ids in.
+      !> Index space the concrete LSF wants its `prepare_subset` candidate ids in
       !> Set by the concrete's constructor to [[lsf_candidate_space_user]] or
-      !> [[lsf_candidate_space_sorted]]; `update` aborts while undeclared.
+      !> [[lsf_candidate_space_sorted]]; `update` aborts while undeclared
       integer :: candidate_space = lsf_candidate_space_undeclared
 
       !> LSF dependency on atomic radii
@@ -158,18 +186,19 @@ module moist_cavity_drop_lsf_base
       !* ------------------------- Spatial sort machinery -------------------------- *!
 
       !> Permutation mapping a user-space atom index i to its spatially-sorted
-      !> position. Rebuilt by `update` / `set_centers`; size = ncenters.
+      !> position, rebuilt by `update` / `set_centers` [ncenters]
       integer, allocatable :: orig_to_sorted(:)
       !> Inverse of `orig_to_sorted`: the user-space atom index stored at
-      !> spatially-sorted position j. Size = ncenters.
+      !> spatially-sorted position j [ncenters]
       integer, allocatable :: sorted_to_orig(:)
 
       !* ------------------- Candidate-space geometry and screening ---------------- *!
       !> The arrays below are indexed by *candidate id in the declared
-      !> `candidate_space`*, so a screen loop can consume `prepare_subset`'s ids
-      !> without any per-candidate translation. For a `sorted` LSF they are the
-      !> spatially-sorted mirror of the geometry; for a `user` LSF they are the
-      !> user-space arrays themselves.
+      !> `candidate_space`*, so a screen loop consumes `prepare_subset`'s ids with
+      !> no per-candidate translation:
+      !>
+      !> - `sorted` LSF -- the spatially-sorted mirror of the geometry
+      !> - `user` LSF -- the user-space arrays themselves
 
       !> Everything the per-point reject test reads, interleaved per candidate
       !> [4, ncenters]:
@@ -178,31 +207,32 @@ module moist_cavity_drop_lsf_base
       !>                            saturated at `huge` rather than overflowed when
       !>                            screening is disabled
       !> One 32-byte record, so rejecting a candidate touches a single cache line
-      !> instead of striding through a separate centers array and a separate bounds
-      !> array. Use the [[lsf_cand_center]] / [[lsf_cand_bound_sq]] index parameters
-      !> rather than bare literals.
+      !> instead of striding through separate centers and bounds arrays
+      !>
+      !> - index with [[lsf_cand_center]] / [[lsf_cand_bound_sq]], never bare literals
       real(wp), allocatable :: cand_screen(:, :)
-      !> Atom radii in candidate space [ncenters]. Read only for candidates that
-      !> pass the gate, hence kept out of `cand_screen`
+      !> Atom radii in candidate space, read only for candidates that pass the gate
+      !> and hence kept out of `cand_screen` [ncenters]
       real(wp), allocatable :: cand_radii(:)
       !> User-space atom id of candidate c [ncenters]
       integer, allocatable :: cand_to_user(:)
-      !> Candidate ids covering every atom, in an order that makes the resulting
-      !> active list come out in ascending user-space order. Fed to the screen
-      !> loop by `prepare` (the unscreened full scan) [ncenters]
+      !> Candidate ids covering every atom, ordered so the resulting active list
+      !> comes out in ascending user-space order, fed to the screen loop by
+      !> `prepare` (the unscreened full scan) [ncenters]
       integer, allocatable :: full_scan_cand(:)
    contains
-      !> Bind molecular geometry and rebuild the screening caches. Concrete LSFs
-      !> may override to refresh additional caches; the override *must* call the
-      !> base implementation first via `call lsf_base_update(self, mol, radii)`
+      !> Bind molecular geometry and rebuild the screening caches
+      !>
+      !> - concrete LSFs may override to refresh additional caches
+      !> - an override *must* call `lsf_base_update(self, mol, radii)` first
       procedure :: update => lsf_base_update
       !> Move the atom centers without touching radii, parameters or derivative
       !> storage (used by nuclear finite-difference drivers)
       procedure, non_overridable :: set_centers => lsf_base_set_centers
       !> Abort when an accessor is asked for an order `prepare` did not compute
       procedure :: require_deriv => lsf_base_require_deriv
-      !> Relabel the cavity's cell-grid candidate lists into the declared
-      !> candidate index space. Not overridable: the declaration decides.
+      !> Relabel the cavity's cell-grid candidate lists into the declared candidate
+      !> index space, not overridable since the declaration decides
       procedure, non_overridable :: remap_candidate_grid => lsf_base_remap_candidate_grid
       !> Reject candidates whose contribution is below `screening_threshold`
       procedure, non_overridable :: screen_candidates => lsf_base_screen_candidates
@@ -212,15 +242,18 @@ module moist_cavity_drop_lsf_base
       !> Geometric bound query 1 of 2: how far a *surface* can be from a point
       !> with a known LSF value (see the "Two geometric-bound queries" note above)
       procedure :: exclusion_radius => lsf_base_exclusion_radius
-      !> Geometric bound query 2 of 2, consumer side: how far an *atom* can be
-      !> from a point and still matter. Derived from `screening_offset`; not
-      !> overridable, so gate and reach stay the same mathematics.
+      !> Geometric bound query 2 of 2, consumer side: how far an *atom* can be from
+      !> a point and still matter, derived from `screening_offset` and not
+      !> overridable, so gate and reach stay the same mathematics
       procedure, non_overridable :: neighbor_cutoff => lsf_base_neighbor_cutoff
+      !> Chain-rule factor `dS/drho` of a density-backed LSF, and whether this
+      !> LSF has a density at all (see [[lsf_base_density_adjoint_factor]])
+      procedure :: density_adjoint_factor => lsf_base_density_adjoint_factor
       !> Cache per-point screening / state
       procedure(lsf_prepare_iface), deferred :: prepare
-      !> Cache per-point state with a caller-provided candidate list.
+      !> Cache per-point state with a caller-provided candidate list
       procedure(lsf_prepare_subset_iface), deferred :: prepare_subset
-      !> Configure the highest spatial derivative order required.
+      !> Configure the highest spatial derivative order required
       procedure(lsf_set_max_deriv_iface), deferred :: set_max_deriv
       !> Number of atoms currently active after `prepare`/`prepare_subset`
       procedure(lsf_active_count_iface), deferred :: active_count
@@ -295,7 +328,7 @@ module moist_cavity_drop_lsf_base
       procedure :: vjp_f1_rad => lsf_base_vjp_f1_rad
    end type moist_cavity_drop_lsf_type
 
-   !> Wrapper struct for arrays of polymorphic-allocatable LSF clones.
+   !> Wrapper struct for arrays of polymorphic-allocatable LSF clones
    !>
    !> Fortran does (afaik) not allow `class(...), allocatable :: arr(:)`, so per-thread LSF copies are
    !> stored as `type(lsf_thread_slot) :: arr(:)` with the polymorphic clone living inside the wrapper
@@ -391,7 +424,7 @@ module moist_cavity_drop_lsf_base
 
       !> Every nuclear index is an active-list index: slot `i` belongs to the
       !> atom `active_atom(i)`. The caller owns all three buffers and sizes their
-      !> nuclear extent from `active_count()`.
+      !> nuclear extent from `active_count()`
       !>
       !> @param[in]  self       LSF instance
       !> @param[out] lsf1_rA    LSF gradient w.r.t. nuclear positions (optional)
@@ -407,7 +440,7 @@ module moist_cavity_drop_lsf_base
 
       !> Exact radial offset, measured outward from the atom surface, at which
       !> this LSF's contribution from an atom of the given radius equals
-      !> `screening_threshold`.
+      !> `screening_threshold`
       !>
       !> Contract:
       !>   - analytic and exact -- the closed-form inverse of the LSF's own decay,
@@ -418,7 +451,7 @@ module moist_cavity_drop_lsf_base
       !>
       !> Both screening consumers are derived from it: the per-point gate caches
       !> `radius + screening_offset(radius)`, and the cavity cell-grid reach is
-      !> `lsf_screening_reach_margin` times this value.
+      !> `lsf_screening_reach_margin` times this value
       !>
       !> @param[in] self    LSF instance
       !> @param[in] radius  Atom radius (Bohr)
@@ -469,7 +502,7 @@ contains
    !> Refreshes the spatial sort, the candidate-space geometry mirror and the
    !> screening bounds, but leaves radii, LSF parameters, derivative order and any
    !> concrete per-atom storage untouched. Nuclear finite-difference drivers use
-   !> this to displace one coordinate without re-initialising the whole LSF.
+   !> this to displace one coordinate without re-initialising the whole LSF
    !>
    !> @param[inout] self    LSF instance (must have been `update`d)
    !> @param[in]    centers Atom centers [ndim, ncenters]
@@ -491,7 +524,7 @@ contains
    !> Rebuild the spatial sort, the candidate-space geometry mirror and the
    !> per-atom screening bounds from the current `mol%xyz` / `radii`
    !>
-   !> Runs once per geometry change, never on the per-point path.
+   !> Runs once per geometry change, never on the per-point path
    !>
    !> @param[inout] self LSF instance
    subroutine lsf_base_rebuild_screening(self)
@@ -530,7 +563,7 @@ contains
          end do
          ! Visiting the full scan through orig_to_sorted keeps the resulting
          ! active list in ascending user-space order, so an unscreened `prepare`
-         ! sums in the same order regardless of how the spatial sort came out.
+         ! sums in the same order regardless of how the spatial sort came out
          do i = 1, n
             self%full_scan_cand(i) = self%orig_to_sorted(i)
          end do
@@ -550,7 +583,7 @@ contains
    !>
    !> Split out of [[lsf_base_rebuild_screening]] because it is the only part
    !> that depends on `screening_threshold`: it touches no allocation and does
-   !> not re-sort, so [[lsf_base_set_screening_threshold]] can re-run it alone.
+   !> not re-sort, so [[lsf_base_set_screening_threshold]] can re-run it alone
    !>
    !> @param[inout] self LSF instance with the candidate mirror already built
    subroutine lsf_base_refresh_bounds(self)
@@ -564,7 +597,7 @@ contains
       if (.not. allocated(self%cand_screen)) return
 
       ! Largest bound whose square still fits; beyond it the gate saturates so
-      ! that "screening disabled" never turns into an overflow.
+      ! that "screening disabled" never turns into an overflow
       bound_sq_max = sqrt(huge(0.0_wp))
       do j = 1, size(self%cand_radii)
          bound = self%cand_radii(j) + self%screening_offset(self%cand_radii(j))
@@ -581,12 +614,12 @@ contains
    !> Only the cached per-candidate reach depends on the threshold, so this
    !> rewrites one row of `cand_screen` and leaves the spatial sort, the
    !> candidate mirror and every allocation untouched. That makes it cheap
-   !> enough to bracket a solve with -- O(ncenters) stores, no allocation.
+   !> enough to bracket a solve with -- O(ncenters) stores, no allocation
    !>
    !> The cell grid is *not* rebuilt. Its reach is derived from the threshold
    !> the grid was built with, so this is safe only for a threshold that is
-   !> *looser* than that one (a smaller reach keeps the grid a valid superset).
-   !> Tightening the threshold below the grid's own would silently miss atoms.
+   !> *looser* than that one (a smaller reach keeps the grid a valid superset)
+   !> Tightening the threshold below the grid's own would silently miss atoms
    !>
    !> @param[inout] self      LSF instance
    !> @param[in]    threshold New screening threshold
@@ -606,7 +639,7 @@ contains
    !> Assigns each atom to one of 6^3 = 216 coarse 3D buckets and builds the
    !> permutation with a single-pass counting sort (O(N), stable), inspired by
    !> stdlib's int8 radix_sort. Sorting the geometry this way turns the gathers
-   !> driven by cell-local candidate lists into near-sequential reads.
+   !> driven by cell-local candidate lists into near-sequential reads
    !>
    !> @param[in]    xyz            Atom centers [ndim, n]
    !> @param[in]    n              Number of atoms
@@ -707,11 +740,11 @@ contains
    ! Returning zeros here would be a silent wrong answer -- the caller cannot tell
    ! a genuine vanishing tensor from a missing implementation. Each default
    ! therefore aborts with its own `error stop`, spelled out in full so the
-   ! diagnostic naming the missing derivative sits at the line that raises it.
+   ! diagnostic naming the missing derivative sits at the line that raises it
    ! Each result is still zeroed on the line before the abort, with the dummy
    ! arguments folded into that store: neither is ever observable (the next
    ! statement terminates the program) and both exist only so that
-   ! `-Wunused-dummy-argument` does not have to be switched off here.
+   ! `-Wunused-dummy-argument` does not have to be switched off here
 
    !> Erroring default of the pure spatial fourth derivative
    !>
@@ -1074,11 +1107,11 @@ contains
    !> *nuclear* index against a displacement direction, this one contracts the
    !> *spatial* (jet) indices against per-point adjoint weights and keeps the
    !> nuclear index, so no implementation ever has to materialize the full
-   !> `[3, 3, 3, n_active]` tensor `f3_rr_rA` returns.
+   !> `[3, 3, 3, n_active]` tensor `f3_rr_rA` returns
    !>
    !> The name follows the family convention: this is the `f1_rA` rung, the
    !> nuclear-gradient row, just as `hvp_f1_rA` is that same rung contracted
-   !> with a nuclear direction instead.
+   !> with a nuclear direction instead
    !>
    !> The result an implementation must produce is
    !>
@@ -1087,13 +1120,13 @@ contains
    !>                  + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, beta, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
-   !> convention as `f3_rr_rA`: slot `i` belongs to atom `active_atom(i)`.
+   !> convention as `f3_rr_rA`: slot `i` belongs to atom `active_atom(i)`
    !> Columns beyond `active_count()` are left untouched, and nothing is written
    !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
    !> entries are contracted, with no symmetry assumption and no folded factor
    !> of two. An implementation needs whatever prepared order its own `f3_rr_rA`
    !> needs -- 2 for SvdW, 3 for CFC, which asks for the highest *total* order --
-   !> and must say so via `require_deriv(<that order>, "vjp_f1_rA")`.
+   !> and must say so via `require_deriv(<that order>, "vjp_f1_rA")`
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
@@ -1118,7 +1151,7 @@ contains
    !> weights contract the same spatial (jet) indices, but the surviving
    !> derivative is taken with respect to the atomic radii. A radius is a scalar
    !> parameter, so the surviving index is just the atom -- there is no Cartesian
-   !> slot and the result is one rank lower than the nuclear one.
+   !> slot and the result is one rank lower than the nuclear one
    !>
    !> The result an implementation must produce is
    !>
@@ -1127,13 +1160,13 @@ contains
    !>            + sum_{a,b} w2(a, b) * lsf3_rr_rad(a, b, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
-   !> convention as `f3_rr_rad`: slot `i` belongs to atom `active_atom(i)`.
+   !> convention as `f3_rr_rad`: slot `i` belongs to atom `active_atom(i)`
    !> Entries beyond `active_count()` are left untouched, and nothing is written
    !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
    !> entries are contracted, with no symmetry assumption and no folded factor
    !> of two. An implementation needs whatever prepared order its own
    !> `f3_rr_rad` needs -- 2 for both SvdW and CFC today -- and must say so via
-   !> `require_deriv(<that order>, "vjp_f1_rad")`.
+   !> `require_deriv(<that order>, "vjp_f1_rad")`
    !>
    !> Unlike `vjp_f1_rA`, which the isodensity LSFs override with an identically
    !> zero row, this default is *not* overridden there: those LSFs do not see the
@@ -1141,7 +1174,7 @@ contains
    !> erroring. A consumer gates on `radius_dependent`; one that reaches here
    !> anyway has asked an LSF for a derivative it structurally does not have, and
    !> must abort rather than receive a zero it cannot distinguish from a real
-   !> answer.
+   !> answer
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
@@ -1170,15 +1203,15 @@ contains
    !> generic construction is `r = |S(x)| / L` with `L` a bound on the gradient
    !> norm over the region: `S` cannot travel from `S(x)` to zero in less than
    !> that distance. Concrete LSFs override with their own `L` (SvdW has the
-   !> exact `L = 1`).
+   !> exact `L = 1`)
    !>
    !> This is what lets the certified branch search (`proj_level = 9`)
    !> enumerate *all* branches carrying weight: minima live on the surface, so
-   !> a region proven free of surface holds no minimum.
+   !> a region proven free of surface holds no minimum
    !>
    !> Zero is the safe answer and the base returns it unconditionally: it
    !> certifies nothing, so a search built on it prunes nothing and runs into
-   !> its own box budget rather than silently reporting a false certificate.
+   !> its own box budget rather than silently reporting a false certificate
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point
@@ -1192,12 +1225,26 @@ contains
       if (self%ncenters < 0 .and. lsf0 /= 0.0_wp) r = 0.0_wp
    end function lsf_base_exclusion_radius
 
+   !> Is this level set a function of a density, and with which constant factor?
+   !>
+   !> @param[in]  self    LSF instance
+   !> @param[out] factor  Chain-rule factor `dS/drho`; zero when unavailable
+   !> @returns            Whether this LSF is backed by a density
+   function lsf_base_density_adjoint_factor(self, factor) result(available)
+      class(moist_cavity_drop_lsf_type), intent(in) :: self
+      real(wp), intent(out) :: factor
+      logical :: available
+
+      factor = 0.0_wp
+      available = .false.
+   end function lsf_base_density_adjoint_factor
+
    !> Per-atom cell-grid reach: the screening offset plus an explicit safety margin
    !>
    !> The cavity adds the atom radius and hands the result to the molecular cell
    !> grid, so a candidate list always contains every atom the per-point gate could
    !> still accept. Derived from the same `screening_offset` the gate uses, which is
-   !> why this procedure is `non_overridable`.
+   !> why this procedure is `non_overridable`
    !>
    !> @param[in] self    LSF instance
    !> @param[in] radius  Atom radius (Bohr)
@@ -1224,7 +1271,7 @@ contains
    !>
    !> The cavity always builds the grid with user-space ids; a `sorted` LSF gets
    !> them rewritten once here, per projector, so that its per-point screen loop
-   !> pays nothing per candidate.
+   !> pays nothing per candidate
    !>
    !> @param[in]    self      LSF instance (must have been `update`d)
    !> @param[inout] cell_nlat Flat cell-grid candidate atom-id list
@@ -1246,7 +1293,7 @@ contains
    !> The whole reject path is one squared-distance compare against the cached
    !> screening record: no `exp`, no `sqrt`, no allocation. `active_cand` is a
    !> caller-owned buffer (size >= size(candidate_indices)) so the hot path stays
-   !> allocation-free.
+   !> allocation-free
    !>
    !> @param[in]  self              LSF instance (must have been `update`d)
    !> @param[in]  point             Evaluation point [ndim]

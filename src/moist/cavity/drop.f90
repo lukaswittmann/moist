@@ -10,7 +10,7 @@ module moist_cavity_drop
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
    use moist_type, only: cavity_type, list_cavity_fields_base
-   use moist_channels, only: response_type
+   use moist_channels_response, only: response_type, density_response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_context, only: moist_context_type
@@ -39,7 +39,7 @@ module moist_cavity_drop
    use moist_cavity_drop_request, only: drop_property_request, &
                                         drop_request_default, drop_request_diagnostics, drop_request_fine
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: cavity_type_drop
@@ -229,6 +229,9 @@ module moist_cavity_drop
       procedure :: contract_surface_lsf_weights
       !> Map surface-coordinate weights into generic response channels
       procedure :: get_surface_response => get_surface_response_drop
+      !> The DROP surface responds to the host field: host surface weights are
+      !> consumed in the response phase, not only in the gradient
+      procedure :: has_field_dependent_geometry => drop_field_dependent
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
 
@@ -501,93 +504,55 @@ module moist_cavity_drop
 
 contains
 
-   !* ================================================================================= *!
-   !*                                    Constructor                                    *!
-   !* ================================================================================= *!
+   !> The DROP surface geometry depends on the host field
+   !>
+   !> `get_surface_response_drop` maps the accumulated surface weights to a
+   !> level-set response, so the host surface weights are consumed in the
+   !> response phase and must be declared for it.
+   !>
+   !> @param[in] self Cavity instance
+   function drop_field_dependent(self) result(field_dependent)
+      !> Cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Whether the live level set has a density adjoint.
+      logical :: field_dependent
+      real(wp) :: factor
+      field_dependent = .false.
+      if (allocated(self%lsf_model)) field_dependent = self%lsf_model%density_adjoint_factor(factor)
 
-   !> Initialize DROP model
+   end function drop_field_dependent
+
+   !> Construct from parameter values; omission uses compiled defaults.
    !>
-   !> Sets up a DROP cavity instance with optional settings/configuration
-   !>
-   !> The LSF model is *required*; callers build their LSF concrete (e.g. `svdw%new(...)`)
-   !> and pass it as `lsf_model`
-   !>
-   !> The cavity pushes its derived `screening_threshold` into the LSF so the LSF's internal screening
-   !> caches stay consistent with the cavity tolerance
-   !>
-   !>
-   !> @param[inout] self          Cavity instance to initialize
-   !> @param[in]    ctx           Shared run context (borrowed; must outlive the cavity)
-   !> @param[in]    nleb          Number of Lebedev points per sphere for angular grid (optional)
-   !> @param[in]    tolerance     Master numerical tolerance (optional)
-   !> @param[in]    proj_maxiter  Maximum number of projection iterations (optional)
-   !> @param[in]    proj_level    Projection refinement level (optional)
-   !> @param[in]    branch_weight_s Softmax scale for competing projection branches (optional, for testing)
-   !> @param[in]    rho_grid_h    Grid-density kernel length (optional)
-   !> @param[in]    wleb_prune_level Smooth Lebedev-weight pruning level (optional)
-   !> @param[in]    radius_model  Atomic radius model to use for cavity construction
-   !> @param[in]    lsf_model     LSF template (required; cavity stores a copy)
-   !> @param[in]    do_fine      Enable all optional properties (optional)
-   !> @param[out]   error         Error handling structure (optional)
-   !> Initialize DROP cavity
-   ! TODO: Unify use of constructor optional arguments for parameters
-   subroutine new_cavity_drop(self, &
-                              ctx, &
-                              nleb, &
-                              tolerance, proj_maxiter, proj_level, &
-                              branch_weight_s, rho_grid_h, wleb_prune_level, &
-                              do_fine, &
-                              radius_model, &
-                              lsf_model, &
-                              error)
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radius_model Atomic radius model to copy
+   !> @param[in] lsf_model Level set function to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_drop(self, ctx, radius_model, lsf_model, error, param)
+      !> Cavity to initialize.
       type(cavity_type_drop), intent(inout) :: self
-
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      !> Borrowed context; must outlive the cavity.
       type(moist_context_type), intent(in), target :: ctx
-
-      !> Grid settings
-      integer, intent(in), optional :: nleb
-
-      !> Master numerical tolerance
-      real(wp), intent(in), optional :: tolerance
-      integer, intent(in), optional :: proj_maxiter
-      integer, intent(in), optional :: proj_level
-
-      !> Branch weighting and grid-density settings
-      real(wp), intent(in), optional :: branch_weight_s
-      real(wp), intent(in), optional :: rho_grid_h
-
-      !> Weight switching level (0=off, 1-6=increasing aggressiveness)
-      integer, intent(in), optional :: wleb_prune_level
-
-      !> Enable all optional properties
-      logical, intent(in), optional :: do_fine
-
-      !> Radius model to use for cavity construction (provided by caller)
+      !> Atomic radius model to copy.
       class(radius_type), intent(in) :: radius_model
-
-      !> LSF model template (provided by caller)
+      !> Level set function to copy.
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
-
-      !> Error handling
+      !> Construction error.
       type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults.
+      type(moist_cavity_drop_parameters_type), intent(in), optional :: param
 
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
-      !> Convenience property shortcuts
-      if (present(do_fine)) then
-         if (do_fine) self%request = drop_request_fine()
-      end if
-
-      !> Parameter setup
-      call self%param%new( &
-         nleb=nleb, &
-         tolerance=tolerance, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-         branch_weight_s=branch_weight_s, rho_grid_h=rho_grid_h, &
-         wleb_prune_level=wleb_prune_level, &
-         error=error)
+      call self%param%init_defaults()
+      if (present(param)) self%param = param
+      call self%param%compute_derived(error)
       if (allocated(error)) return
+      self%request = drop_property_request()
+      if (self%param%do_fine) self%request = drop_request_fine()
 
       !> Radius model setup
       if (allocated(self%radius_model)) deallocate (self%radius_model)
@@ -944,9 +909,11 @@ contains
           .and. allocated(self%ang_weight) &
           .and. allocated(self%oleb) &
           ) then
-         if (.not. allocated(self%nmax)) allocate (self%nmax)
-         self%nmax = self%param%num_leb*self%nsph
-         return
+         if (self%oleb == oleb .and. size(self%ang_weight) == self%param%num_leb) then
+            if (.not. allocated(self%nmax)) allocate (self%nmax)
+            self%nmax = self%param%num_leb*self%nsph
+            return
+         end if
       end if
 
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)

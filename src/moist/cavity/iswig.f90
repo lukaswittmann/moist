@@ -1,4 +1,5 @@
 module moist_cavity_iswig
+   use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
    use mctc_io_structure, only: structure_type
@@ -13,11 +14,28 @@ module moist_cavity_iswig
    use moist_radius_type, only: radius_type
    use moist_cavity_fields, only: cavity_field_query_type
 
-   implicit none
+   implicit none(type, external)
    private
    public :: cavity_type_iswig, new_cavity_iswig
 
-   ! iSwiG implementation of cavity
+   public :: moist_cavity_iswig_parameters_type
+
+   !> iSwiG construction parameters
+   type, extends(moist_model_parameters_type) :: moist_cavity_iswig_parameters_type
+      !> Lebedev points per sphere
+      integer :: num_leb = 110
+      !> Area cutoff
+      real(wp) :: cut_a = 0.0_wp
+      !> Switching-factor cutoff
+      real(wp) :: cut_f = 1.0e-10_wp
+   contains
+      !> Restore compiled defaults
+      procedure :: init_defaults => init_parameter_defaults
+      !> Declare fields for JSON input, output, and printing
+      procedure :: register_entries => register_parameter_entries
+   end type moist_cavity_iswig_parameters_type
+
+   !> iSwiG cavity state.
    type, extends(cavity_type) :: cavity_type_iswig
 
       !> Number of Lebedev points per sphere
@@ -55,6 +73,30 @@ module moist_cavity_iswig
 
 contains
 
+   !> Restore compiled parameter defaults
+   !>
+   !> @param[inout] self Parameter values
+   subroutine init_parameter_defaults(self)
+      class(moist_cavity_iswig_parameters_type), intent(inout) :: self
+      type(moist_cavity_iswig_parameters_type) :: defaults
+
+      self%num_leb = defaults%num_leb
+      self%cut_a = defaults%cut_a
+      self%cut_f = defaults%cut_f
+   end subroutine init_parameter_defaults
+
+   !> Declare parameter fields for JSON input, output, and printing
+   !>
+   !> @param[inout] self Parameter values
+   subroutine register_parameter_entries(self)
+      class(moist_cavity_iswig_parameters_type), intent(inout), target :: self
+
+      call self%register_int_scalar("num_leb", self%num_leb)
+      call self%register_real_scalar("cut_a", self%cut_a)
+      call self%register_real_scalar("cut_f", self%cut_f)
+   end subroutine register_parameter_entries
+
+
    !> Declare the results an iSwiG cavity holds, on top of the generic ones
    !>
    !> @param[in]    self   iSwiG cavity instance
@@ -75,33 +117,34 @@ contains
 
    end subroutine list_cavity_fields_iswig
 
-   !> Constructor for iSwiG cavity
-   !> Initialize an already-declared object; no allocation of the object itself.
-   subroutine new_cavity_iswig(self, ctx, nleb, cut_a, cut_f, radius_model, error)
-      !> Cavity type instance to initialize
+   !> Construct from parameter values; omission uses compiled defaults
+   !>
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radius_model Atomic radius model to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_iswig(self, ctx, radius_model, error, param)
+      !> Cavity to initialize.
       type(cavity_type_iswig), intent(inout) :: self
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      !> Borrowed context; must outlive the cavity.
       type(moist_context_type), intent(in), target :: ctx
-      !> Number of lebedev grid points per unit sphere
-      integer, intent(in), optional :: nleb
-      !> Settings for iSwiG cavity
-      real(wp), intent(in), optional :: cut_a, cut_f
-      !> Enable simplified mode
-      !> Optional radii model
+      !> Radius model to copy.
       class(radius_type), intent(in) :: radius_model
-      !> Constructor error
+      !> Construction error.
       type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults.
+      type(moist_cavity_iswig_parameters_type), intent(in), optional :: param
+      !> Resolved configuration.
+      type(moist_cavity_iswig_parameters_type) :: settings
 
-      !> Borrow the shared run context (owns verbosity/debug/timer)
+      if (present(param)) settings = param
       self%ctx => ctx
-
-      !> Set configuration values (leave previously allocated buffers untouched)
-      if (present(nleb)) self%num_leb = nleb
-      if (present(cut_a)) self%cut_a = cut_a
-      if (present(cut_f)) self%cut_f = cut_f
-      if (allocated(self%radius_model)) deallocate (self%radius_model)
-      allocate (self%radius_model, source=radius_model)
-
+      self%num_leb = settings%num_leb
+      self%cut_a = settings%cut_a
+      self%cut_f = settings%cut_f
+      if (allocated(self%radius_model)) deallocate(self%radius_model)
+      allocate(self%radius_model, source=radius_model)
    end subroutine new_cavity_iswig
 
    !> Write grid to CSV, including numbering, Lebedev weight, and switching value
@@ -600,7 +643,7 @@ contains
    subroutine fill_intermediate_arrays( &
       nsph, centers, radii, num_leb, ang_grid, ang_weight, zeta_born, &
       nraw, xyz_raw, area_raw, owner_raw, zeta_raw, weight_raw, switch_raw)
-      implicit none
+      implicit none(type, external)
 
       !> Number of spheres
       integer, intent(in) :: nsph
@@ -667,7 +710,7 @@ contains
    !> Compute switching function values for all surface points
    subroutine compute_switching_function( &
       nraw, nsph, owner_raw, xyz_raw, centers, zeta_raw, radii, switch_raw)
-      implicit none
+      implicit none(type, external)
 
       !> Total number of raw points
       integer, intent(in) :: nraw

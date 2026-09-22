@@ -98,33 +98,35 @@ module moist_cavity_drop_lsf_isodensity_callback
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
+      procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
    end type moist_cavity_drop_lsf_isodensity_callback_type
 
 contains
 
-   !> Configure the callback pointer, context and level set parameters
+   !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self         LSF instance
-   !> @param[in]    callback_ptr C function pointer for density evaluation
-   !> @param[in]    context      User callback context
-   !> @param[in]    rho_iso      Density isovalue defining the surface
-   !> @param[in]    scale        Constant LSF multiplier
-   subroutine lsf_new(self, callback_ptr, context, rho_iso, scale)
+   !> @param[inout] self Object to initialize
+   !> @param[in]    callback_ptr Host density callback
+   !> @param[in]    context Borrowed callback context
+   !> @param[in]    param Configuration copied by value
+   subroutine lsf_new(self, callback_ptr, context, param)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       type(c_funptr), intent(in) :: callback_ptr
       type(c_ptr), intent(in) :: context
-      real(wp), intent(in) :: rho_iso
-      real(wp), intent(in), optional :: scale
+
+      !> Configuration; omitted means compiled defaults.
+      type(moist_cavity_drop_lsf_isodensity_param_type), intent(in), optional :: param
 
       !> The callback is globally evaluable and holds no per-atom data, so
-      !> candidate ids are never translated.
+      !> candidate ids are never translated
       self%candidate_space = lsf_candidate_space_user
 
       self%radius_dependent = .false.
 
       self%callback_ptr = callback_ptr
       self%context = context
-      call self%param%new(rho_iso=rho_iso, scale=scale)
+      self%param = moist_cavity_drop_lsf_isodensity_param_type()
+      if (present(param)) self%param = param
    end subroutine lsf_new
 
    !> Bind molecular geometry for the inherited base state
@@ -144,7 +146,7 @@ contains
       end if
    end subroutine lsf_update
 
-   !> Evaluate and cache callback data at one point.
+   !> Evaluate and cache callback data at one point
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
@@ -161,10 +163,6 @@ contains
       logical :: want_hess, want_third
       integer(c_int) :: status
 
-      ! Only request the (expensive) density Hessian/third derivative for the
-      ! orders the cavity actually needs.  The projection's value+gradient phase
-      ! sets max_deriv=1, so a NULL hess/third pointer tells the callback to skip
-      ! computing them entirely rather than evaluating and discarding them.
       want_hess = self%max_deriv >= 2
       want_third = self%max_deriv >= 3
       p_hess = c_null_ptr
@@ -174,9 +172,7 @@ contains
 
       call c_f_procpointer(self%callback_ptr, callback)
       self%point = point
-      !> Density and its gradient are mandatory in the callback ABI; the higher
-      !> orders are exactly those whose pointer was non-NULL.  Recorded so an accessor
-      !> asked for more aborts instead of returning the zeros below.
+
       self%prepared_deriv = 1
       if (want_hess) self%prepared_deriv = 2
       if (want_third) self%prepared_deriv = 3
@@ -279,7 +275,7 @@ contains
       val = self%value
    end subroutine lsf_f0
 
-   !> Return cached LSF value, gradient, and Hessian.
+   !> Return cached LSF value, gradient, and Hessian
    !>
    !> @param[in]  self    LSF instance
    !> @param[out] lsf0    Optional LSF value
@@ -389,5 +385,26 @@ contains
 
       r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
    end function lsf_exclusion_radius
+
+   !> Chain-rule factor between the level set and the density it is built from
+   !>
+   !> `S = scale * (rho_iso - rho)`, so `dS/drho = -scale` for the value and,
+   !> `scale` and `rho_iso` being constants, for every spatial derivative of it
+   !> as well; one factor therefore converts the whole level-set adjoint jet
+   !> into a density adjoint jet
+   !>
+   !> @param[in]  self    LSF instance
+   !> @param[out] factor  Chain-rule factor `dS/drho`
+   !> @returns            Always `.true.`: this level set is a density
+   function lsf_density_adjoint_factor(self, factor) result(available)
+      class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
+      !> Chain-rule factor `dS/drho`
+      real(wp), intent(out) :: factor
+      !> Whether this LSF is backed by a density
+      logical :: available
+
+      factor = -self%param%scale
+      available = .true.
+   end function lsf_density_adjoint_factor
 
 end module moist_cavity_drop_lsf_isodensity_callback

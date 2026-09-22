@@ -1,11 +1,5 @@
 !> Numerical solvent accessible surface area (NUMSA) integrator
 !>
-!> This module implements the NUMSA method for computing solvent accessible
-!> surface area (SASA) and its derivatives using Lebedev angular quadrature
-!> with smooth switching functions for neighbor exclusion.
-!>
-!> ## References
-!>
 !> Implementation based on:
 !> - Original code: [github.com/grimme-lab/numsa](https://github.com/grimme-lab/numsa)
 !> - Theory: Im, W., Lee, M. S., Brooks, C. L. (2003).
@@ -13,23 +7,8 @@
 !>   *J. Comput. Chem.*, **24**(14), 1691-1702.
 !>   [DOI: 10.1002/jcc.10321](https://doi.org/10.1002/jcc.10321)
 !>
-!> ## Mathematical Background
-!>
-!> The method computes SASA via angular integration on Lebedev spheres with
-!> smooth exclusion weights describing overlaps with neighboring atoms.
-!>
-!> For each atom $i$, surface points are placed on a sphere of radius
-!> $R_i = r_{\mathrm{vdW},i} + r_{\mathrm{probe}}$ and weighted by a product
-!> of switching functions from all neighbors:
-!>
-!> $$
-!> A_i = \int_{\Omega} w_r \prod_{j \in \text{neighbors}} H_j({\bf x}) \, d\Omega
-!> $$
-!>
-!> where $w_r$ is a precomputed radial integral and $H_j$ is a smooth switching
-!> polynomial that transitions from 0 (fully buried) to 1 (fully exposed).
-!>
 module moist_cavity_numsa
+   use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
@@ -46,10 +25,28 @@ module moist_cavity_numsa
    public :: cavity_type_numsa
    public :: new_cavity_numsa
 
-   !> NUMSA cavity integrator type
-   !>
-   !> Extends the base cavity_type with NUMSA-specific state for computing
-   !> solvent accessible surface area and its gradients.
+   public :: moist_cavity_numsa_parameters_type
+
+   !> NUMSA construction parameters
+   type, extends(moist_model_parameters_type) :: moist_cavity_numsa_parameters_type
+      !> Lebedev points per sphere.
+      integer :: num_leb = 110
+      !> Probe radius in bohr.
+      real(wp) :: probe = 0.0_wp
+      !> Neighbor cutoff offset in bohr.
+      real(wp) :: offset = 2.0_wp*aatoau
+      !> Smoothing width in bohr.
+      real(wp) :: smoothing = 0.3_wp*aatoau
+      !> Surface exclusion tolerance.
+      real(wp) :: tolsesp = 1.0e-6_wp
+   contains
+      !> Restore compiled defaults.
+      procedure :: init_defaults => init_parameter_defaults
+      !> Declare fields for JSON input, output, and printing.
+      procedure :: register_entries => register_parameter_entries
+   end type moist_cavity_numsa_parameters_type
+
+   !> NUMSA cavity state.
    type, extends(cavity_type) :: cavity_type_numsa
 
       !> Number of Lebedev angular grid points
@@ -102,52 +99,67 @@ module moist_cavity_numsa
 
 contains
 
-   !> Constructor for NUMSA cavity integrator
+   !> Restore compiled parameter defaults
    !>
-   !> Initializes a NUMSA cavity object with optional configuration parameters.
-   !> The actual surface computation happens later during [[update_cavity_numsa]].
+   !> @param[inout] self Parameter values
+   subroutine init_parameter_defaults(self)
+      class(moist_cavity_numsa_parameters_type), intent(inout) :: self
+      type(moist_cavity_numsa_parameters_type) :: defaults
+
+      self%num_leb = defaults%num_leb
+      self%probe = defaults%probe
+      self%offset = defaults%offset
+      self%smoothing = defaults%smoothing
+      self%tolsesp = defaults%tolsesp
+   end subroutine init_parameter_defaults
+
+   !> Declare parameter fields for JSON input, output, and printing
    !>
-   !> @param[inout] self       The cavity object to initialize
-   !> @param[in]    ctx        Shared run context (borrowed; must outlive the cavity)
-   !> @param[in]    nleb       Number of Lebedev angular grid points (optional)
-   !> @param[in]    probe_r    Probe radius in bohr (optional)
-   !> @param[in]    offset_r   Cutoff offset in bohr (optional)
-   !> @param[in]    smoothing_r Smoothing width $w$ in bohr (optional)
-   subroutine new_cavity_numsa(self, ctx, nleb, probe_r, offset_r, smoothing_r, &
-                               radii, error)
+   !> @param[inout] self Parameter values
+   subroutine register_parameter_entries(self)
+      class(moist_cavity_numsa_parameters_type), intent(inout), target :: self
+
+      call self%register_int_scalar("num_leb", self%num_leb)
+      call self%register_real_scalar("probe", self%probe)
+      call self%register_real_scalar("offset", self%offset)
+      call self%register_real_scalar("smoothing", self%smoothing)
+      call self%register_real_scalar("tolsesp", self%tolsesp)
+   end subroutine register_parameter_entries
+
+
+   !> Construct from parameter values; omission uses compiled defaults
+   !>
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radii Atomic radius model to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_numsa(self, ctx, radii, error, param)
+      !> Cavity to initialize.
       type(cavity_type_numsa), intent(inout) :: self
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      !> Borrowed context; must outlive the cavity.
       type(moist_context_type), intent(in), target :: ctx
-      integer, intent(in), optional :: nleb
-      real(wp), intent(in), optional :: probe_r, offset_r, smoothing_r
+      !> Radius model to copy
       class(radius_type), intent(in) :: radii
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_numsa_parameters_type), intent(in), optional :: param
+      !> Resolved configuration
+      type(moist_cavity_numsa_parameters_type) :: settings
 
-      !> Borrow the shared run context (owns verbosity/debug/timer)
+      if (present(param)) settings = param
       self%ctx => ctx
-
-      if (present(nleb)) self%num_leb = nleb
-      if (present(probe_r)) self%probe = probe_r
-      if (present(offset_r)) self%offset = offset_r
-      if (present(smoothing_r)) self%smoothing = smoothing_r
-      if (allocated(self%radius_model)) deallocate (self%radius_model)
-      allocate (self%radius_model, source=radii)
-
+      self%num_leb = settings%num_leb
+      self%probe = settings%probe
+      self%offset = settings%offset
+      self%smoothing = settings%smoothing
+      self%tolsesp = settings%tolsesp
+      if (allocated(self%radius_model)) deallocate(self%radius_model)
+      allocate(self%radius_model, source=radii)
    end subroutine new_cavity_numsa
 
    !> Update cavity surface and gradients for current molecular geometry
-   !>
-   !> This is the main entry point for NUMSA surface computation. It:
-   !>
-   !> 1. Initializes internal state (angular grid, switching parameters)
-   !> 2. Builds neighbor lists for efficient overlap detection
-   !> 3. Computes atomic surface areas via Lebedev quadrature
-   !> 4. Computes surface gradients $\partial A_i / \partial {\bf R}_j$
-   !> 5. Caches total area gradient for later retrieval
-   !>
-   !> The surface area for each atom is stored in `self%asph`, and the
-   !> full gradient tensor $\partial A_i / \partial {\bf R}_j$ is stored
-   !> in `self%dsdr(3, j, i)`.
    !>
    !> @param[inout] self   The cavity object to update
    !> @param[in]    mol    Molecular structure with coordinates
@@ -610,8 +622,8 @@ contains
                                 nno, xyzp, ah0, ah1, ah3, sasap, grds, nni, grdi)
       class(cavity_type_numsa), intent(in) :: self
       integer, intent(in) :: nat
-      integer, intent(in) :: nnlists(nno)
       integer, intent(in) :: nno
+      integer, intent(in) :: nnlists(nno)
       integer, intent(out) :: nni
       real(wp), intent(in) :: xyza(3, nat)
       real(wp), intent(in) :: xyzp(3)
