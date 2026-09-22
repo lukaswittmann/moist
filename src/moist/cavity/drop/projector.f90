@@ -10,7 +10,7 @@ module moist_cavity_drop_projector
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
    use moist_math_solver_newton, only: new_newton_solver
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_solver_slsqp_multi_tangent, only: new_slsqp_multi_tangent_solver, &

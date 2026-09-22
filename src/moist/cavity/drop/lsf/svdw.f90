@@ -226,35 +226,22 @@ module moist_cavity_drop_lsf_svdw
 
 contains
 
-   !* ================================================================================= *!
-   !*                              LSF lifecycle methods                                *!
-   !* ================================================================================= *!
-
-   !> Configure LSF blending parameters and declare the candidate index space
+   !> Construct from parameter values; omission uses compiled defaults.
    !>
-   !> @param[inout] self     LSF instance
-   !> @param[in]    blend_k  Blending sharpness k (optional)
-   !> @param[in]    blend_1b One-body weight (optional)
-   !> @param[in]    blend_2b Two-body weight (optional)
-   !> @param[in]    blend_3b Three-body weight (optional)
-   subroutine lsf_new(self, blend_k, blend_1b, blend_2b, blend_3b)
-      !> LSF instance
+   !> @param[inout] self Object to initialize
+   !> @param[in] param Configuration copied by value
+   subroutine lsf_new(self, param)
+      !> LSF to initialize.
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
-      !> Blending sharpness k (optional override)
-      real(wp), intent(in), optional :: blend_k
-      !> One-body weight (optional override)
-      real(wp), intent(in), optional :: blend_1b
-      !> Two-body weight (optional override)
-      real(wp), intent(in), optional :: blend_2b
-      !> Three-body weight (optional override)
-      real(wp), intent(in), optional :: blend_3b
+      !> Configuration; omitted means compiled defaults.
+      type(moist_cavity_drop_lsf_svdw_param_type), intent(in), optional :: param
 
       ! The screen loop indexes the base's candidate-space geometry mirror
       ! directly, so candidate ids must arrive spatially sorted.
       self%candidate_space = lsf_candidate_space_sorted
 
-      call self%param%new(blend_k=blend_k, blend_1b=blend_1b, &
-                          blend_2b=blend_2b, blend_3b=blend_3b)
+      self%param = moist_cavity_drop_lsf_svdw_param_type()
+      if (present(param)) self%param = param
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
