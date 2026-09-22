@@ -1,4 +1,6 @@
 module test_radii
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
@@ -21,7 +23,7 @@ module test_radii
 
 contains
 
-   !> Collect all radii tests.
+   !> Collect all radii tests
    subroutine collect_radii(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
@@ -48,13 +50,14 @@ contains
                   ]
    end subroutine collect_radii
 
-   !> Fetch a small reference molecule for the radii suite from mstore.
+   !> Fetch a small reference molecule for the radii suite from mstore
    !> AlH3 from MB16-43 has composition [Al, H, H, H] (Z = [13, 1, 1, 1],
    !> nat = 4) - enough atomic diversity to exercise both per-element and
-   !> per-atom code paths without being large enough to slow the suite.
+   !> per-atom code paths without being large enough to slow the suite
+   !>
    !> @param[out] mol  structure populated from MB16-43/AlH3
    subroutine make_test_molecule(mol)
-      !> Structure to populate with AlH3 from MB16-43.
+      !> Structure to populate with AlH3 from MB16-43
       type(structure_type), intent(out) :: mol
 
       call get_structure(mol, "MB16-43", "AlH3")
@@ -296,7 +299,7 @@ contains
       type(moist_error_type), allocatable :: err
       !> Test molecule is AlH3 (Z = [13, 1, 1, 1]); element table maps
       !> H -> 1.30, Al -> 2.30; so the per-atom expected values track the
-      !> [Al, H, H, H] ordering returned by mstore.
+      !> [Al, H, H, H] ordering returned by mstore
       integer, parameter :: atomic_numbers(2) = [1, 13]
       real(wp), parameter :: element_radii(2) = [1.30_wp, 2.30_wp]
       real(wp), parameter :: expected(4) = [2.30_wp, 1.30_wp, 1.30_wp, 1.30_wp]
@@ -463,10 +466,10 @@ contains
 
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=2.5_wp, blend_3b=1.0_wp)
-         call new_cavity_drop(cavity, ctx, nleb=110, &
-                              radius_model=model, &
-                              lsf_model=svdw_template, error=err)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=2.5_wp, &
+            blend_3b=1.0_wp))
+         call new_cavity_drop(cavity, ctx, radius_model=model, lsf_model=svdw_template, error=err, &
+            param=moist_cavity_drop_parameters_type(num_leb=110))
       end block
       if (allocated(err)) then
          call test_failed(error, "new_cavity_drop failed with custom radii model: "//trim(err%message))

@@ -170,7 +170,7 @@ contains
       real(wp), parameter :: stable_x(5) = &
                              [0.5_wp, 1.0_wp, 4.0_wp, 20.0_wp, 60.0_wp]
 
-      ! Exact values at the origin.
+      ! Exact values at the origin
       call pcm_amat_boys012(0.0_wp, f0, f1, f2, ex)
       call check(error, f0, 1.0_wp, thr=exact_thr, more="F0(0) is wrong")
       if (allocated(error)) return
@@ -199,7 +199,7 @@ contains
       end do
 
       ! The Taylor branch must join the recursion branch continuously at the
-      ! crossover; a short series would show up here first.
+      ! crossover; a short series would show up here first
       x = pcm_amat_x_taylor
       call pcm_amat_boys012(x*(1.0_wp - epsilon(1.0_wp)), f0, f1, f2, ex)
       call pcm_amat_boys012(x*(1.0_wp + 8.0_wp*epsilon(1.0_wp)), f0_ref, f1_ref, &
@@ -427,21 +427,21 @@ contains
       real(wp), parameter :: factors(4) = [1.0_wp, 2.0_wp, 10.0_wp, 100.0_wp]
 
       do i = 1, size(factors)
-         ! p**2 = xi**2/2, so x = p**2*r2; pick r2 from the requested x.
+         ! p**2 = xi**2/2, so x = p**2*r2; pick r2 from the requested x
          r2 = factors(i)*pcm_amat_x_far*2.0_wp/(xi*xi)
 
          call pcm_amat_far_hess(r2, a_far, a_r2_far, a_r2r2_far)
          call pcm_amat_near_hess(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2, &
                                  a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2)
 
-         ! The saturated routine is literally 1/sqrt(r2), so this is bitwise.
+         ! The saturated routine is literally 1/sqrt(r2), so this is bitwise
          call check(error, a_far, 1.0_wp/sqrt(r2), thr=0.0_wp, &
                     more="saturated value is not exactly 1/r")
          if (allocated(error)) return
 
          ! The full kernel reaches the same number through pref*p*F0 with
          ! F0 = sqrt(pi/4x); algebraically identical, so only the rounding of
-         ! the different groupings may differ (a few ULP).
+         ! the different groupings may differ (a few ULP)
          call check(error, a, a_far, thr=ulp_thr*abs(a_far), &
                     more="full kernel does not reduce to 1/r past the cutoff")
          if (allocated(error)) return
@@ -481,7 +481,7 @@ contains
       !> Widths whose pair width squared is xi**2/2
       real(wp), parameter :: xi = 3.0_wp
 
-      ! Step just below the cutoff so the erf/exp branch is taken.
+      ! Step just below the cutoff so the erf/exp branch is taken
       r2 = (1.0_wp - 1.0e-12_wp)*pcm_amat_x_far*2.0_wp/(xi*xi)
       call pcm_amat_far_grad(r2, a_far, a_r2_far)
       call pcm_amat_near_grad(xi, xi, r2, a, a_xi_i, a_xi_j, a_r2)

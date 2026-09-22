@@ -145,7 +145,7 @@ contains
          if (allocated(error)) return
 
          ! The lower triangle is written by the blocked mirror rather than by
-         ! the kernel, so an indexing slip there shows up only as asymmetry.
+         ! the kernel, so an indexing slip there shows up only as asymmetry
          asym = 0.0_wp
          do j = 1, ngrid
             do i = j + 1, ngrid

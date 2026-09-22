@@ -104,7 +104,7 @@ contains
       call ctx%delete()
    end subroutine test_writes_guard
 
-   !> do_profile follows verbosity >= 3 by default and honours an explicit override.
+   !> do_profile follows verbosity >= 3 by default and honours an explicit override
    subroutine test_profile_flag(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
@@ -258,7 +258,7 @@ contains
       ! The owned unit is closed after teardown. Ask by file rather than by unit
       ! number: the suite runs its cases concurrently, and a `newunit` in another
       ! case can be handed the number we just freed, which would make a
-      ! unit-based inquire report our file as still open.
+      ! unit-based inquire report our file as still open
       inquire (file=path, opened=is_open)
       call check(error,.not. is_open, "owned unit closed on delete")
       if (allocated(error)) return
@@ -314,7 +314,7 @@ contains
       character(64) :: line
 
       ! debug off: no debug file is opened at all (no orphan file), and the
-      ! debug stream falls back to the main output unit.
+      ! debug stream falls back to the main output unit
       call new_context(ctx, debug=.false., debugfile=path)
       call check(error,.not. ctx%owns_debug_unit, "no debug file opened when debug off")
       if (.not. allocated(error)) then
