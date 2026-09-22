@@ -54,7 +54,7 @@ module moist_cavity_drop_threads
    !> Lowest-grid-point-wins error latch for a parallel grid loop
    !>
    !> A latch is written only on a failure path, so the serialization it costs
-   !> is irrelevant.
+   !> is irrelevant
    type :: drop_abort_latch_type
       !> Whether any thread has latched a failure
       logical :: requested = .false.

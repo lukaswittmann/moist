@@ -53,8 +53,10 @@ module moist_cavity_drop_derivatives_kernel
 
    !> Per-grid point forward state consumed by [[apply_seed]]
    !>
-   !> Fields are filled in two stages. The `Inputs` block is written by the
-   !> caller before [[build_seed_state]] runs; everything below it is derived.
+   !> Fields are filled in two stages:
+   !>
+   !> - the `Inputs` block is written by the caller before [[build_seed_state]] runs
+   !> - everything below it is derived
    type :: drop_seed_state_type
 
       !* --------------------------------- Inputs --------------------------------- *!
@@ -136,10 +138,10 @@ module moist_cavity_drop_derivatives_kernel
    !> `xi_i = swx/(R_I sqrt(wleb_i))` we have `a = c f/xi^2` and `w = c/xi^2`,
    !> so both fold into the width channel through `d/dxi`. The area channel
    !> folds into the switching channel as well, through
-   !> `da/df = R_I^2 wleb_i` -- but only for a parameter that moves `f`.
+   !> `da/df = R_I^2 wleb_i` -- but only for a parameter that moves `f`
    !>
-   !> This type holds the result of that folding, so the seed loops read one
-   !> flat set of weights and never have to know which channel they came from.
+   !> Holds the result of that folding, so the seed loops read one flat set of
+   !> weights and never have to know which channel they came from
    type :: drop_surface_weights_type
       !> Gaussian-width adjoint, with the area and weight channels folded in
       real(wp), allocatable :: w_xi(:)
@@ -163,8 +165,10 @@ contains
 
    !> Evaluate every per-grid point quantity the seed loop reuses
    !>
-   !> The caller fills the `Inputs` block of `state` first. On a degenerate
-   !> point `status` is set and the derived fields are left incomplete.
+   !> The caller fills the `Inputs` block of `state` first
+   !>
+   !> - on a degenerate point `status` is set and the derived fields are left
+   !>   incomplete
    !>
    !> @param[inout] state             Seed state; inputs read, derived fields written
    !> @param[in]    f_crit            Critical-gradient switching function
@@ -312,8 +316,10 @@ contains
    !> The seed is the perturbation of the level-set jet at the *fixed* point
    !> (`dlsf1_r`, `dlsf2_rr`) together with the induced motion of the projected
    !> point and its multiplier (`dr`, `dlambda`), which the caller obtains from
-   !> the bordered KKT system. A perturbation of the level-set *value* enters
-   !> only through that system, so it has no argument here.
+   !> the bordered KKT system
+   !>
+   !> - a perturbation of the level-set *value* enters only through that system,
+   !>   so it has no argument here
    !>
    !> @param[in]  state    Per-grid point forward state from [[build_seed_state]]
    !> @param[in]  dlsf1_r  Seed perturbation of `grad S` at fixed `r`
@@ -480,12 +486,14 @@ contains
    !> Reverse pass over the branch-weight softmax
    !>
    !> Within an anchor group the Lebedev weight carries a softmax factor,
-   !> `wleb_m = base_m * p_m`. The per-point seed loop handles `d(base_m)`;
-   !> this pass converts the remaining width-induced adjoint `dL/dp_m` into
-   !> `dL/dPhi_m`, which the seed loop then couples to the point motion.
+   !> `wleb_m = base_m * p_m`
+   !>
+   !> - the per-point seed loop handles `d(base_m)`
+   !> - the pass converts the remaining width-induced adjoint `dL/dp_m` into
+   !>   `dL/dPhi_m`, which the seed loop then couples to the point motion
    !>
    !> Groups are runs of equal `anchor_id`; points with `branch_count <= 1`
-   !> carry no softmax factor and stay at zero.
+   !> carry no softmax factor and stay at zero
    !>
    !> @param[in]  branch_count    Number of branches per grid point (ngrid)
    !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
@@ -563,7 +571,7 @@ contains
 
    !> Render a degeneracy status as a diagnostic message
    !>
-   !> Callers prepend their own context and append the offending grid point.
+   !> Callers prepend their own context and append the offending grid point
    !>
    !> @param[in] status  One of the `seed_state_*` codes
    !> @returns           Human-readable description of the degeneracy

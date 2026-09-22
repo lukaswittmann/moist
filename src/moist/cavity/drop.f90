@@ -126,9 +126,9 @@ module moist_cavity_drop
       !> Gaussian curvature
       real(wp), allocatable :: KG(:)
 
-      !> Nuclear gradient of the first principal curvature (3, nsph, ngrid).
+      !> Nuclear gradient of the first principal curvature (3, nsph, ngrid)
       !> Mean/Gaussian curvature gradients are derived from k1_rA/k2_rA
-      !> downstream: dKM = (k1_rA + k2_rA)/2, dKG = k2*k1_rA + k1*k2_rA.
+      !> downstream: dKM = (k1_rA + k2_rA)/2, dKG = k2*k1_rA + k1*k2_rA
       real(wp), allocatable :: k1_rA(:, :, :)
       !> Nuclear gradient of the second principal curvature (3, nsph, ngrid)
       real(wp), allocatable :: k2_rA(:, :, :)
@@ -197,9 +197,9 @@ module moist_cavity_drop
       logical, allocatable :: converged(:)
       !> Branch weight per grid point (ngrid) (1 = default/unbranched)
       real(wp), allocatable :: wbranch(:)
-      !> Projection-objective value phi at each surviving grid point (ngrid).
+      !> Projection-objective value phi at each surviving grid point (ngrid)
       !> Used by the branch-weight softmax gradient to recover per-branch
-      !> phi values once the main-loop KKT solve has produced dr/dR_A.
+      !> phi values once the main-loop KKT solve has produced dr/dR_A
       real(wp), allocatable :: phi0(:)
 
       real(wp), allocatable :: lambda0(:)
@@ -255,8 +255,8 @@ module moist_cavity_drop
       !> Remove points below switching cutoff (after projection)
       procedure :: filter_arrays
 
-      !> Compute branch weights on the final surviving set and fold
-      !> them into wleb. Runs once, after all filter passes.
+      !> Compute branch weights on the final surviving set and fold them into
+      !> wleb, once, after all filter passes
       procedure :: compute_branch_weights
 
       !> Compute surface area from projected grid
@@ -383,7 +383,7 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_curvature
 
-      !> [projection.f90] Compute closest-point Jacobian scaling factors.
+      !> [projection.f90] Compute closest-point Jacobian scaling factors
       module subroutine compute_cp_jacobian_scaling(self, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -404,12 +404,13 @@ module moist_cavity_drop
          type(error_type), allocatable, intent(out) :: error
          !> Restrict each grid point's active atom to its owner (anchor motion
          !> only); used for callback/isodensity LSFs whose field nuclear
-         !> derivatives are identically zero.
+         !> derivatives are identically zero
          logical, intent(in), optional :: anchor_only
       end subroutine compute_gradient_drop
 
       !> [deriv/forward.f90] Compute anchor-only nuclear derivatives (owner motion,
-      !> frozen field).  Thin wrapper over compute_gradient_drop(anchor_only=.true.).
+      !> frozen field), a thin wrapper over
+      !> `compute_gradient_drop(anchor_only=.true.)`
       module subroutine compute_anchor_gradient(self, error)
          implicit none (type, external)
          class(cavity_type_drop), intent(inout) :: self
@@ -508,13 +509,13 @@ contains
    !>
    !> `get_surface_response_drop` maps the accumulated surface weights to a
    !> level-set response, so the host surface weights are consumed in the
-   !> response phase and must be declared for it.
+   !> response phase and must be declared for it
    !>
    !> @param[in] self Cavity instance
    function drop_field_dependent(self) result(field_dependent)
       !> Cavity instance
       class(cavity_type_drop), intent(in) :: self
-      !> Whether the live level set has a density adjoint.
+      !> Whether the live level set has a density adjoint
       logical :: field_dependent
       real(wp) :: factor
       field_dependent = .false.
@@ -522,7 +523,7 @@ contains
 
    end function drop_field_dependent
 
-   !> Construct from parameter values; omission uses compiled defaults.
+   !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
    !> @param[in] ctx Borrowed context; must outlive the object
@@ -531,17 +532,17 @@ contains
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
    subroutine new_cavity_drop(self, ctx, radius_model, lsf_model, error, param)
-      !> Cavity to initialize.
+      !> Cavity to initialize
       type(cavity_type_drop), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity.
+      !> Borrowed context; must outlive the cavity
       type(moist_context_type), intent(in), target :: ctx
-      !> Atomic radius model to copy.
+      !> Atomic radius model to copy
       class(radius_type), intent(in) :: radius_model
-      !> Level set function to copy.
+      !> Level set function to copy
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
-      !> Construction error.
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
-      !> Configuration; omitted means compiled defaults.
+      !> Configuration; omitted means compiled defaults
       type(moist_cavity_drop_parameters_type), intent(in), optional :: param
 
       !> Borrow the shared run context (owns verbosity/debug/timer)
@@ -648,7 +649,7 @@ contains
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
-      !> Timer stack depth at entry; error paths unwind back to it (below).
+      !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
 
       !> Set number of spheres
@@ -859,14 +860,15 @@ contains
    !*                                 First derivatives                                 *!
    !* ================================================================================= *!
 
-   !> Compute and store all requested DROP nuclear derivatives.
+   !> Compute and store all requested DROP nuclear derivatives
+   !>
    !> @param[inout] self  Cavity instance receiving the derivatives
    !> @param[out]   error Error handling
    subroutine get_gradient_drop(self, error)
       class(cavity_type_drop), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Timer stack depth at entry; error paths unwind back to it (below).
+      !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
 
       d0 = self%ctx%timer%current_depth()
@@ -1025,7 +1027,7 @@ contains
    !>
    !> Arrays gated by `drop_property_request` are simply not allocated when they
    !> were not asked for, so they are not declared and a caller asking for one
-   !> gets an error rather than zeros.
+   !> gets an error rather than zeros
    !>
    !> @param[in]    self   DROP cavity instance
    !> @param[inout] query  Walker collecting or fetching the declarations
@@ -1091,14 +1093,15 @@ contains
    !*                                     Finalizer                                     *!
    !* ================================================================================= *!
 
-   !> Finalizer for cavity_type_drop to properly deallocate all allocatable components
-   !> This ensures proper cleanup when the cavity is deleted through the C API
+   !> Finalizer deallocating every allocatable component of `cavity_type_drop`
+   !>
+   !> - ensures proper cleanup when the cavity is deleted through the C API
    subroutine finalize_cavity_drop(self)
       type(cavity_type_drop), intent(inout) :: self
 
       !> The profiling timer lives on the borrowed run context (self%ctx) and is
-      !> owned by the top-level caller, so it is not torn down here. Callers that
-      !> want the accumulated tree call self%ctx%timer%write(...) before teardown.
+      !> owned by the top-level caller, so it is not torn down here; callers
+      !> wanting the accumulated tree call self%ctx%timer%write(...) beforehand
 
       ! Deallocate grid point data arrays
       if (allocated(self%xi0)) deallocate (self%xi0)

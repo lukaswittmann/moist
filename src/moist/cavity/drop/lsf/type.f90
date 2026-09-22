@@ -140,8 +140,8 @@ module moist_cavity_drop_lsf_base
    !> per-atom cell-grid reach
    !>
    !> The gate is exact, so a reach of exactly `R + offset(R)` already admits every
-   !> atom that can pass it for points inside the atom bounding box. The margin buys
-   !> headroom for the two places where that argument is not airtight:
+   !> atom that can pass it for points inside the atom bounding box, the margin
+   !> buying headroom for the two places where that argument is not airtight:
    !>
    !> - the cell grid clamps out-of-box query points into the boundary cell
    !> - cell membership is decided by a sphere/AABB test in a different
@@ -438,8 +438,8 @@ module moist_cavity_drop_lsf_base
          real(wp), intent(out) :: lsf3_rr_rA(:, :, :, :)
       end subroutine lsf_f3_rr_rA_iface
 
-      !> Exact radial offset, measured outward from the atom surface, at which
-      !> this LSF's contribution from an atom of the given radius equals
+      !> Exact radial offset, measured outward from the atom surface, at which the
+      !> LSF's contribution from an atom of the given radius equals
       !> `screening_threshold`
       !>
       !> Contract:
@@ -501,8 +501,10 @@ contains
    !>
    !> Refreshes the spatial sort, the candidate-space geometry mirror and the
    !> screening bounds, but leaves radii, LSF parameters, derivative order and any
-   !> concrete per-atom storage untouched. Nuclear finite-difference drivers use
-   !> this to displace one coordinate without re-initialising the whole LSF
+   !> concrete per-atom storage untouched
+   !>
+   !> - lets nuclear finite-difference drivers displace one coordinate without
+   !>   re-initialising the whole LSF
    !>
    !> @param[inout] self    LSF instance (must have been `update`d)
    !> @param[in]    centers Atom centers [ndim, ncenters]
@@ -612,14 +614,17 @@ contains
    !> Change the screening threshold in place
    !>
    !> Only the cached per-candidate reach depends on the threshold, so this
-   !> rewrites one row of `cand_screen` and leaves the spatial sort, the
-   !> candidate mirror and every allocation untouched. That makes it cheap
-   !> enough to bracket a solve with -- O(ncenters) stores, no allocation
+   !> rewrites one row of `cand_screen` and leaves the spatial sort, the candidate
+   !> mirror and every allocation untouched
    !>
-   !> The cell grid is *not* rebuilt. Its reach is derived from the threshold
-   !> the grid was built with, so this is safe only for a threshold that is
-   !> *looser* than that one (a smaller reach keeps the grid a valid superset)
-   !> Tightening the threshold below the grid's own would silently miss atoms
+   !> - cheap enough to bracket a solve with: O(ncenters) stores, no allocation
+   !>
+   !> The cell grid is *not* rebuilt:
+   !>
+   !> - its reach derives from the threshold the grid was built with, so this is
+   !>   safe only for a threshold *looser* than that one, a smaller reach keeping
+   !>   the grid a valid superset
+   !> - tightening the threshold below the grid's own would silently miss atoms
    !>
    !> @param[inout] self      LSF instance
    !> @param[in]    threshold New screening threshold
@@ -638,8 +643,10 @@ contains
    !>
    !> Assigns each atom to one of 6^3 = 216 coarse 3D buckets and builds the
    !> permutation with a single-pass counting sort (O(N), stable), inspired by
-   !> stdlib's int8 radix_sort. Sorting the geometry this way turns the gathers
-   !> driven by cell-local candidate lists into near-sequential reads
+   !> stdlib's int8 radix_sort
+   !>
+   !> - sorting the geometry this way turns the gathers driven by cell-local
+   !>   candidate lists into near-sequential reads
    !>
    !> @param[in]    xyz            Atom centers [ndim, n]
    !> @param[in]    n              Number of atoms
@@ -737,12 +744,13 @@ contains
    !*                Erroring defaults of the optional derivative set                   *!
    !* ================================================================================= *!
    !
-   ! Returning zeros here would be a silent wrong answer -- the caller cannot tell
-   ! a genuine vanishing tensor from a missing implementation. Each default
-   ! therefore aborts with its own `error stop`, spelled out in full so the
-   ! diagnostic naming the missing derivative sits at the line that raises it
-   ! Each result is still zeroed on the line before the abort, with the dummy
-   ! arguments folded into that store: neither is ever observable (the next
+   ! Returning zeros here would be a silent wrong answer, the caller being unable
+   ! to tell a genuine vanishing tensor from a missing implementation:
+   !
+   ! - each default aborts with its own `error stop`, spelled out in full so the
+   !   diagnostic naming the missing derivative sits at the line that raises it
+   ! - each result is still zeroed on the line before the abort, with the dummy
+   !   arguments folded into that store: neither is ever observable (the next
    ! statement terminates the program) and both exist only so that
    ! `-Wunused-dummy-argument` does not have to be switched off here
 
@@ -1120,13 +1128,15 @@ contains
    !>                  + sum_{a,b} w2(a, b) * lsf3_rr_rA(a, b, beta, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
-   !> convention as `f3_rr_rA`: slot `i` belongs to atom `active_atom(i)`
-   !> Columns beyond `active_count()` are left untouched, and nothing is written
-   !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
-   !> entries are contracted, with no symmetry assumption and no folded factor
-   !> of two. An implementation needs whatever prepared order its own `f3_rr_rA`
-   !> needs -- 2 for SvdW, 3 for CFC, which asks for the highest *total* order --
-   !> and must say so via `require_deriv(<that order>, "vjp_f1_rA")`
+   !> convention as `f3_rr_rA`, slot `i` belonging to atom `active_atom(i)`
+   !>
+   !> - columns beyond `active_count()` are left untouched, and nothing is written
+   !>   when `active_count()` is zero
+   !> - `w2` is a general 3x3 matrix: all nine entries are contracted, with no
+   !>   symmetry assumption and no folded factor of two
+   !> - an implementation needs whatever prepared order its own `f3_rr_rA` needs,
+   !>   2 for SvdW and 3 for CFC, which asks for the highest *total* order
+   !> - it must say so via `require_deriv(<that order>, "vjp_f1_rA")`
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
@@ -1149,9 +1159,11 @@ contains
    !>
    !> The radius twin of [[lsf_base_vjp_f1_rA]]: the same per-point adjoint
    !> weights contract the same spatial (jet) indices, but the surviving
-   !> derivative is taken with respect to the atomic radii. A radius is a scalar
-   !> parameter, so the surviving index is just the atom -- there is no Cartesian
-   !> slot and the result is one rank lower than the nuclear one
+   !> derivative is taken with respect to the atomic radii
+   !>
+   !> - a radius is a scalar parameter, so the surviving index is just the atom
+   !> - there is no Cartesian slot, and the result is one rank lower than the
+   !>   nuclear one
    !>
    !> The result an implementation must produce is
    !>
@@ -1160,21 +1172,25 @@ contains
    !>            + sum_{a,b} w2(a, b) * lsf3_rr_rad(a, b, i)
    !>
    !> for `i = 1 .. active_count()`, with the same compact active-index
-   !> convention as `f3_rr_rad`: slot `i` belongs to atom `active_atom(i)`
-   !> Entries beyond `active_count()` are left untouched, and nothing is written
-   !> when `active_count()` is zero. `w2` is a general 3x3 matrix -- all nine
-   !> entries are contracted, with no symmetry assumption and no folded factor
-   !> of two. An implementation needs whatever prepared order its own
-   !> `f3_rr_rad` needs -- 2 for both SvdW and CFC today -- and must say so via
-   !> `require_deriv(<that order>, "vjp_f1_rad")`
+   !> convention as `f3_rr_rad`, slot `i` belonging to atom `active_atom(i)`
+   !>
+   !> - entries beyond `active_count()` are left untouched, and nothing is written
+   !>   when `active_count()` is zero
+   !> - `w2` is a general 3x3 matrix: all nine entries are contracted, with no
+   !>   symmetry assumption and no folded factor of two
+   !> - an implementation needs whatever prepared order its own `f3_rr_rad` needs,
+   !>   2 for both SvdW and CFC today
+   !> - it must say so via `require_deriv(<that order>, "vjp_f1_rad")`
    !>
    !> Unlike `vjp_f1_rA`, which the isodensity LSFs override with an identically
-   !> zero row, this default is *not* overridden there: those LSFs do not see the
-   !> radii at all, clear `radius_dependent`, and leave the whole radius family
-   !> erroring. A consumer gates on `radius_dependent`; one that reaches here
-   !> anyway has asked an LSF for a derivative it structurally does not have, and
-   !> must abort rather than receive a zero it cannot distinguish from a real
-   !> answer
+   !> zero row, this default is *not* overridden there:
+   !>
+   !> - those LSFs do not see the radii at all, clear `radius_dependent`, and
+   !>   leave the whole radius family erroring
+   !> - a consumer gates on `radius_dependent`
+   !> - one that reaches here anyway has asked an LSF for a derivative it
+   !>   structurally does not have, and must abort rather than receive a zero it
+   !>   cannot distinguish from a real answer
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the value
@@ -1199,15 +1215,16 @@ contains
 
    !> Radius of a ball around the evaluation point provably free of surface
    !>
-   !> Returns `r` such that `S` has no zero in `B(x, r)`, given `S(x)`. The
-   !> generic construction is `r = |S(x)| / L` with `L` a bound on the gradient
-   !> norm over the region: `S` cannot travel from `S(x)` to zero in less than
-   !> that distance. Concrete LSFs override with their own `L` (SvdW has the
-   !> exact `L = 1`)
+   !> Returns `r` such that `S` has no zero in `B(x, r)`, given `S(x)`
    !>
-   !> This is what lets the certified branch search (`proj_level = 9`)
-   !> enumerate *all* branches carrying weight: minima live on the surface, so
-   !> a region proven free of surface holds no minimum
+   !> - the generic construction is `r = |S(x)| / L`, with `L` a bound on the
+   !>   gradient norm over the region, since `S` cannot travel from `S(x)` to zero
+   !>   in less than that distance
+   !> - concrete LSFs override with their own `L` (SvdW has the exact `L = 1`)
+   !>
+   !> What lets the certified branch search (`proj_level = 9`) enumerate *all*
+   !> branches carrying weight: minima live on the surface, so a region proven
+   !> free of surface holds no minimum
    !>
    !> Zero is the safe answer and the base returns it unconditionally: it
    !> certifies nothing, so a search built on it prunes nothing and runs into
@@ -1243,8 +1260,10 @@ contains
    !>
    !> The cavity adds the atom radius and hands the result to the molecular cell
    !> grid, so a candidate list always contains every atom the per-point gate could
-   !> still accept. Derived from the same `screening_offset` the gate uses, which is
-   !> why this procedure is `non_overridable`
+   !> still accept
+   !>
+   !> - derived from the same `screening_offset` the gate uses, which is why this
+   !>   procedure is `non_overridable`
    !>
    !> @param[in] self    LSF instance
    !> @param[in] radius  Atom radius (Bohr)

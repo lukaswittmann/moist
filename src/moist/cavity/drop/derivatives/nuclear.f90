@@ -11,17 +11,17 @@
 !>
 !> A nuclear displacement reaches the surface through three routes:
 !>
-!>  1. Field: Nuclear dependence of the level set (field);
-!>     The per-point map is linear in its seed, seeding the 13 components of the
-!>     level-set jet gives adjoint weights `w_lsf0/1/2` that contract directly
-!>     with the LSF's own nuclear partials
+!>  1. Field: nuclear dependence of the level set
+!>     - the per-point map is linear in its seed, so seeding the 13 components
+!>       of the level-set jet gives adjoint weights `w_lsf0/1/2` contracting
+!>       directly with the LSF's own nuclear partials
 !>
-!>  2. Anchor: Anchor-owner sphere-dependence (`d(anch)/dR_A = delta_{A,own}`)
-!>     Adds three seeds via the objective's mixed derivative of
-!>     `-d^2 phi/dr dR = alpha*I` and only affects the owner atom
+!>  2. Anchor: anchor-owner sphere dependence, `d(anch)/dR_A = delta_{A,own}`
+!>     - adds three seeds via the objective's mixed derivative of
+!>       `-d^2 phi/dr dR = alpha*I`, affecting only the owner atom
 !>
-!>  3. Switching: The iSwiG `f_i` is function of the nuclear coordinates (and radii);
-!>     It is contracted with a scalar weight
+!>  3. Switching: the iSwiG `f_i` is a function of the nuclear coordinates and radii
+!>     - contracted with a scalar weight
 !>
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
    !$ use omp_lib, only: omp_get_thread_num
@@ -37,13 +37,14 @@ contains
 
    !> Contract a surface adjoint into the nuclear gradient
    !>
-   !> Accumulates `dE/dR_A` for the energy whose surface adjoints `acc` holds.
-   !> The result is *added* to `gradient`, so several cavities or several
-   !> passes can share one accumulator.
+   !> Accumulates `dE/dR_A` for the energy whose surface adjoints `acc` holds
    !>
-   !> This is the reverse-mode counterpart of running `compute_gradient_drop`
-   !> and contracting the resulting `*_rA` arrays; the two agree to round-off,
-   !> which is what `test_cavity_drop_nuclear_adjoint` asserts.
+   !> - the result is *added* to `gradient`, so several cavities or several
+   !>   passes can share one accumulator
+   !> - the reverse-mode counterpart of running `compute_gradient_drop` and
+   !>   contracting the resulting `*_rA` arrays
+   !> - the two agree to round-off, which `test_cavity_drop_nuclear_adjoint`
+   !>   asserts
    !>
    !> @param[in]    self     DROP cavity instance (must hold a projected grid)
    !> @param[in]    acc      Accumulated surface-observable adjoints
@@ -158,8 +159,8 @@ contains
 
          ! The failure cannot be returned from inside this worksharing construct,
          ! so park it for the post-region promotion and let the flag drain the
-         ! loop. The LSF's cached derivatives are substitutes; stop before
-         ! reading them.
+         ! loop; the LSF's cached derivatives are substitutes, so stop before
+         ! reading them
          if (allocated(lsf_error)) then
             call abort%latch_error(lsf_error, igrid)
             cycle
@@ -183,17 +184,18 @@ contains
 
          ! Outward-normal channel: the direct grad-S term rides on w_lsf1 and
          ! is picked up by the field contraction; its point-motion coupling
-         ! augments the effective position weight used by every seed.
+         ! augments the effective position weight used by every seed
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
          call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
 
          !* ------------------------ Bordered KKT sensitivities ----------------------- *!
-         ! Columns 1-4 are the level-set value and gradient seeds; the nine
-         ! Hessian seeds have a zero right-hand side. Columns 5-7 are the
-         ! anchor seeds: moving the owner rigidly leaves the field untouched
-         ! and drives the system through -d^2 phi/dr dR_owner = +alpha*I.
+         ! Columns 1-4 are the level-set value and gradient seeds, the nine
+         ! Hessian seeds having a zero right-hand side; columns 5-7 are the
+         ! anchor seeds, where moving the owner rigidly leaves the field
+         ! untouched and drives the system through
+         ! -d^2 phi/dr dR_owner = +alpha*I
          kkt_rhs = 0.0_wp
          kkt_rhs(4, 1) = -1.0_wp
          kkt_rhs(1, 2) = lambda_val
@@ -217,7 +219,7 @@ contains
          ! The level set contracts the jet indices itself: `vjp_f1_rA` returns the
          ! nuclear-gradient row already weighted by (w_lsf0, w_lsf1, w_lsf2), so
          ! the (3, 3, 3, n_active) mixed third derivative the weights used to be
-         ! folded against is never materialized -- neither here nor in the kernel.
+         ! folded against is never materialized -- neither here nor in the kernel
          n_active = slots%lsf(thread_slot)%lsf%active_count()
          do i = 1, n_active
             active_idx(i) = slots%lsf(thread_slot)%lsf%active_atom(i)
@@ -236,7 +238,7 @@ contains
          !* ------------------------- iSwig switching channel ------------------------- *!
          ! f_i depends on the nuclear geometry alone; swi1_rA already returns
          ! the full (3, nsph) gradient, so this channel costs the same in both
-         ! modes. anchor_xi has no nuclear dependence, matching forward.f90.
+         ! modes. anchor_xi has no nuclear dependence, matching forward.f90
          if (abs(eff%w_f(igrid)) > seed_weight_tol) then
             f1_rA_pt = self%iswig%swi1_rA(anchor, owner_idx, self%anchor_xi0(igrid), &
                                           anchor_xi_zero)
@@ -253,7 +255,7 @@ contains
       if (abort%requested) then
          ! An LSF failure or a KKT failure arrives as a ready-made error; a
          ! kernel degeneracy arrives as a status code that needs this routine's
-         ! name to become a diagnostic.
+         ! name to become a diagnostic
          if (allocated(abort%error)) then
             call move_alloc(abort%error, error)
          else

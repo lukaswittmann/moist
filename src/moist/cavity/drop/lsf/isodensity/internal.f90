@@ -1,8 +1,9 @@
 !> Internal isodensity level set function for DROP
 !>
 !> Internal variant of [[moist_cavity_drop_lsf_isodensity_callback_type]]
-!> This LSF owns the cartesian-monomial Gaussian basis and the density matrix
-!> and evaluates the level set internally
+!>
+!> - owns the cartesian-monomial Gaussian basis and the density matrix, and
+!>   evaluates the level set internally
 !>
 !> Relies on the GTO code in [[moist_cavity_drop_lsf_isodensity_gto]]
 !>
@@ -14,9 +15,9 @@
 !> - Basis set (once)
 !> - Density matrix (once per SCF step)
 !>
-!> The isodensity surface is a level set of the density itself -> level set function carries no
-!> *explicit* nuclear-position dependence for the cavity chain rule
-!> -> The mixed spatial/nuclear derivatives therefore vanish here
+!> The isodensity surface is a level set of the density itself, so the level set
+!> function carries no *explicit* nuclear-position dependence for the cavity
+!> chain rule, and the mixed spatial/nuclear derivatives vanish here
 module moist_cavity_drop_lsf_isodensity_internal
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
@@ -33,7 +34,7 @@ module moist_cavity_drop_lsf_isodensity_internal
 
    public :: moist_cavity_drop_lsf_isodensity_internal_type
 
-   !> Isodensity LSF backed by an internal cartesian-monomial GTO evaluator.
+   !> Isodensity LSF backed by an internal cartesian-monomial GTO evaluator
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_internal_type
       !> Cartesian-monomial Gaussian basis and density matrix
       type(moist_iso_gto_type) :: gto
@@ -117,9 +118,9 @@ contains
 
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
       if (allocated(error)) return
-      !> The per-instance scratch is sized from ``gto%ncart``, so a re-configured
-      !> basis invalidates it. Dropping it here makes ``lsf_prepare_impl`` size it
-      !> again; keeping it would let a larger basis write past its end.
+      !> The per-instance scratch is sized from `gto%ncart`, so a re-configured
+      !> basis invalidates it; dropping it here makes `lsf_prepare_impl` size it
+      !> again, while keeping it would let a larger basis write past its end
       if (allocated(self%phi)) deallocate (self%phi)
       if (allocated(self%t0)) deallocate (self%t0)
       if (allocated(self%tm)) deallocate (self%tm)
@@ -164,7 +165,7 @@ contains
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
    !>
-   !> Only the derivative orders demanded by ``max_deriv`` are computed
+   !> Only the derivative orders demanded by `max_deriv` are computed
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
@@ -175,9 +176,9 @@ contains
       call lsf_prepare_impl(self, point)
    end subroutine lsf_prepare
 
-   !> Shared prepare body: evaluate the level set at ``point`` and cache it
+   !> Shared prepare body: evaluate the level set at `point` and cache it
    !>
-   !> When ``cand_atoms`` is present only the shells owned by those atoms are computed
+   !> When `cand_atoms` is present only the shells owned by those atoms are computed
    !>
    !> @param[inout] self       LSF instance
    !> @param[in]    point      Evaluation point in Bohr
@@ -264,7 +265,7 @@ contains
       self%max_deriv = max(0, n)
    end subroutine lsf_set_max_deriv
 
-   !> Number of active atoms. True-density LSFs are not atom screened
+   !> Number of active atoms, true-density LSFs not being atom screened
    !>
    !> @param[in] self LSF instance
    pure function lsf_active_count(self) result(n)
@@ -278,7 +279,7 @@ contains
       n = 0
    end function lsf_active_count
 
-   !> Active atom lookup. Undefined for zero active atoms, returns zero sentinel
+   !> Active atom lookup, undefined for zero active atoms, returning a zero sentinel
    !>
    !> @param[in] self LSF instance
    !> @param[in] i    Active-list index
@@ -294,7 +295,7 @@ contains
       idx = 0
    end function lsf_active_atom
 
-   !> Return cached LSF value.
+   !> Return cached LSF value
    !>
    !> @param[in]  self LSF instance
    !> @param[out] val  LSF value
@@ -397,10 +398,10 @@ contains
    !> still contributes at the current screening threshold
    !>
    !> Reports the global shell reach for the current screening threshold, minus
-   !> the atom radius, so ``radius + screening_offset = max(radius, reach)``.
+   !> the atom radius, so `radius + screening_offset = max(radius, reach)`
    !> With screening disabled (threshold <= 0) the reach is huge and the cavity
    !> cell grid degrades to a full scan -- every atom is a candidate, i.e. exact
-   !> evaluation.
+   !> evaluation
    !>
    !> @param[in] self   LSF instance
    !> @param[in] radius Atom radius (Bohr)
@@ -419,7 +420,7 @@ contains
    !>
    !> Delegates to [[isodensity_exclusion_radius]], which carries the derivation
    !> and the caveats; the two isodensity variants share it because they share
-   !> the level set, differing only in where `rho` comes from.
+   !> the level set, differing only in where `rho` comes from
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point

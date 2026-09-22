@@ -2,8 +2,7 @@
 !> This is the top-level module users should import to access PCM functionality.
 module moist_model_component_pcm
    use moist_model_component_pcm_type, only: solvation_model_component_pcm, &
-      & pcm_solver_type, pcm_potential_source, &
-      & solver_type, potential_source
+      & pcm_solver_type, solver_type, moist_pcm_parameters_type
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, new_component_cosmo
    use moist_model_component_pcm_solvers, only: solve_pcm_lu, &

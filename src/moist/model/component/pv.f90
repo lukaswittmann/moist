@@ -3,7 +3,8 @@ module moist_model_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_type, only: solvation_model_component_type, cavity_type
-   use moist_channels, only: coupling_type, response_type
+   use moist_channels_request, only: coupling_type, coupling_view_type
+   use moist_channels_response, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none (type, external)
@@ -66,7 +67,7 @@ contains
    !> Add the linear cavity-volume energy
    !>
    !> @param[inout] self     Component instance
-   !> @param[in]    coupling Host coupling data, unused
+   !> @param[in]    coupling Host coupling data, only checked for stale requests
    !> @param[inout] cavity   Live model cavity
    !> @param[inout] energy   Energy accumulator
    !> @param[out]   error    Error handling
@@ -74,7 +75,7 @@ contains
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
-      class(coupling_type), intent(in) :: coupling
+      class(coupling_view_type), intent(in) :: coupling
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
       !> Energy accumulator
@@ -82,6 +83,8 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call coupling%check_mandatory(coupling%phase, error)
+      if (allocated(error)) return
       if (.not. allocated(cavity%total_volume)) then
          call fatal_error(error, "Cavity volume is unavailable")
          return
@@ -93,7 +96,7 @@ contains
    !> No direct host-trace response is produced by a volume contribution
    !>
    !> @param[inout] self      Component instance
-   !> @param[in]    coupling  Host coupling data, unused
+   !> @param[in]    coupling  Host coupling data, only checked for stale requests
    !> @param[inout] cavity    Live model cavity, unused
    !> @param[inout] response  Response accumulator, unchanged
    !> @param[out]   error     Error handling
@@ -101,13 +104,15 @@ contains
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
-      class(coupling_type), intent(in) :: coupling
+      class(coupling_view_type), intent(in) :: coupling
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
       !> Potential accumulator
       type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+
+      call coupling%check_mandatory(coupling%phase, error)
 
    end subroutine pv_get_response
 
@@ -127,7 +132,7 @@ contains
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
-      class(coupling_type), intent(in) :: coupling
+      class(coupling_view_type), intent(in) :: coupling
       !> Live model cavity
       class(cavity_type), intent(in) :: cavity
       !> Surface accumulator
@@ -166,22 +171,27 @@ contains
    !> its nuclear derivative is the contraction of `v1_rA` over the grid.
    !>
    !> @param[inout] self     Component instance
-   !> @param[in]    coupling Host coupling data, unused
+   !> @param[in]    coupling Host coupling data, only checked for stale requests
    !> @param[inout] cavity   Live model cavity
+   !> @param[inout] response Host part of the gradient phase, unchanged
    !> @param[inout] gradient Nuclear-gradient accumulator
    !> @param[out]   error    Error handling
-   subroutine pv_get_gradient(self, coupling, cavity, gradient, error)
+   subroutine pv_get_gradient(self, coupling, cavity, response, gradient, error)
       !> Component instance
       class(solvation_model_component_pv), intent(inout) :: self
       !> Host coupling data
-      class(coupling_type), intent(in) :: coupling
+      class(coupling_view_type), intent(in) :: coupling
       !> Live model cavity
       class(cavity_type), intent(inout) :: cavity
+      !> Host part of the gradient phase
+      type(response_type), intent(inout) :: response
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call coupling%check_mandatory(coupling%phase, error)
+      if (allocated(error)) return
       if (self%pressure == 0.0_wp) return
       if (any(shape(gradient) /= [3, cavity%nsph])) then
          call fatal_error(error, "Cavity-volume gradient shape mismatch")

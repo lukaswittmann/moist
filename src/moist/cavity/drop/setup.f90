@@ -1,4 +1,4 @@
-!> DROP setup and preprocessing routines.
+!> DROP setup and preprocessing routines
 submodule(moist_cavity_drop) moist_cavity_drop_setup
    use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -110,8 +110,8 @@ contains
 
    !> Initialize grid arrays with Lebedev points on atomic spheres
    !>
-   !> Places num_leb points on each atomic sphere using cached Lebedev grid.
-   !> Sets xyz, wleb (weights), and owner (atom index) arrays.
+   !> Places num_leb points on each atomic sphere using cached Lebedev grid
+   !> Sets xyz, wleb (weights), and owner (atom index) arrays
    !>
    !> @param[inout] self Cavity instance
    module subroutine fill_arrays(self, error)
@@ -120,7 +120,7 @@ contains
 
       integer :: i, ii, jj
 
-      ! Keep anchor-grid size consistent even after branched projection resized nmax.
+      ! Keep anchor-grid size consistent even after branched projection resized nmax
       self%nmax = self%nsph*self%param%num_leb
       self%ngrid = self%nmax
 
