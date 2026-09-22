@@ -69,31 +69,10 @@ if get_option('openmp')
   lib_deps += omp_dep
 endif
 
-# RISM needs FFTW for the reciprocal-space transforms and HDF5 for caching
 use_rism = get_option('rism')
-use_fftw = get_option('fftw') or use_rism
-use_hdf5 = get_option('hdf5') or use_rism
-
-if use_fftw
-  fftw_dep = dependency('fftw3', required: true)
-  lib_deps += fftw_dep
-
-  if get_option('openmp')
-    fftw_threads_dep = dependency('fftw3_threads', required: false)
-    if fftw_threads_dep.found()
-      lib_deps += fftw_threads_dep
-    endif
-  endif
-  add_project_arguments('-DWITH_FFTW=1', language: 'fortran')
-endif
 
 if use_rism
   add_project_arguments('-DWITH_RISM=1', language: 'fortran')
-endif
-
-if use_hdf5
-  lib_deps += dependency('hdf5', language: 'fortran', required: true)
-  add_project_arguments('-DWITH_HDF5=1', language: 'fortran')
 endif
 
 lapack_vendor = get_option('lapack')

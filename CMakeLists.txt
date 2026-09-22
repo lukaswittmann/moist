@@ -42,19 +42,8 @@ set(MOIST_CUSTOM_LIBRARIES "" CACHE STRING
   "Libraries for the custom LAPACK backend (mirror of meson custom_libraries)")
 option(MOIST_OPENMP "Use OpenMP parallelisation"            ON)
 option(MOIST_API    "Build C API using iso_c_binding"       ON)
-option(MOIST_RISM   "Build RISM module (auto-enables FFTW and HDF5)" OFF)
-option(MOIST_FFTW   "Enable FFTW support"                   OFF)
-option(MOIST_HDF5   "Enable HDF5 support for I/O"           OFF)
 option(MOIST_ILP64  "Enable BLAS/LAPACK ilp64 support"      OFF)
 option(MOIST_TESTS  "Build the moist unit test suite (ctest)" ON)
-
-# RISM needs FFTW for the reciprocal-space transforms and HDF5 for its VV
-# caches, so enabling it forces both on regardless of their own switches --
-# mirrors the use_fftw/use_hdf5 implications in config/meson.build.
-if(MOIST_RISM)
-  set(MOIST_FFTW ON)
-  set(MOIST_HDF5 ON)
-endif()
 
 # Default to an optimized-with-debug build, matching meson's debugoptimized.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -163,11 +152,21 @@ function(moist_add_subproject name)
   endif()
 endfunction()
 
+# Build vendored dependencies as position-independent static libraries.
+set(_moist_shared_library "${BUILD_SHARED_LIBS}")
+set(BUILD_SHARED_LIBS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 #                        depends on
 moist_add_subproject(toml-f)       # (leaf)
 moist_add_subproject(fclap)        # (leaf, CLI only)
 moist_add_subproject(jonquil)      # toml-f
+if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+  # Jonquil's JSON visitor is recursive; gfortran requires this explicitly.
+  target_compile_options(jonquil-lib PRIVATE -frecursive)
+endif()
 moist_add_subproject(mctc-lib)     # jonquil, toml-f (WITH_JSON)
+set(BUILD_SHARED_LIBS "${_moist_shared_library}")
 # test-drive and mstore are test-only and added under MOIST_TESTS below.
 
 # ---------------------------------------------------------------------------
@@ -193,20 +192,6 @@ list(REMOVE_ITEM moist_srcs
 if(NOT MOIST_API)
   list(REMOVE_ITEM moist_srcs
     "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/api.f90")
-endif()
-
-# fftw3.F90 only with FFTW (RISM forces MOIST_FFTW on above).
-if(NOT MOIST_FFTW)
-  list(REMOVE_ITEM moist_srcs
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/fftw3.F90")
-endif()
-
-# The entire RISM subtree (and its two model wrappers) only with RISM.
-if(NOT MOIST_RISM)
-  list(FILTER moist_srcs EXCLUDE REGEX "/src/moist/model/rism/")
-  list(REMOVE_ITEM moist_srcs
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/model/rism1d.f90"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/model/rism3d.f90")
 endif()
 
 # Build-info: stamp the short git commit (fallback "unknown" outside a checkout).
@@ -237,6 +222,7 @@ list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
   VERSION "${PROJECT_VERSION}"
+  SOVERSION "${PROJECT_VERSION_MAJOR}"
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include"
 )
 target_include_directories(moist PUBLIC
@@ -250,15 +236,6 @@ if(MOIST_ILP64)
   target_compile_definitions(moist PRIVATE IK=i8 MOIST_ILP64=1)
 else()
   target_compile_definitions(moist PRIVATE IK=i4 MOIST_ILP64=0)
-endif()
-if(MOIST_FFTW)
-  target_compile_definitions(moist PRIVATE WITH_FFTW=1)
-endif()
-if(MOIST_RISM)
-  target_compile_definitions(moist PRIVATE WITH_RISM=1)
-endif()
-if(MOIST_HDF5)
-  target_compile_definitions(moist PRIVATE WITH_HDF5=1)
 endif()
 
 # Compiler-specific flags (mirrors config/meson.build + moist_fortran_args).
@@ -285,17 +262,6 @@ if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()
 
-if(MOIST_FFTW)
-  find_package(PkgConfig REQUIRED)
-  pkg_check_modules(FFTW3 REQUIRED IMPORTED_TARGET fftw3)
-  target_link_libraries(moist PUBLIC PkgConfig::FFTW3)
-endif()
-
-if(MOIST_HDF5)
-  find_package(HDF5 REQUIRED COMPONENTS Fortran)
-  target_link_libraries(moist PUBLIC HDF5::HDF5)
-endif()
-
 # ---------------------------------------------------------------------------
 # CLI application (app/) -> executable `moist`
 # ---------------------------------------------------------------------------
@@ -309,14 +275,6 @@ set_target_properties(moist-exe PROPERTIES
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/app-modules"
   LINKER_LANGUAGE Fortran
 )
-# The CLI sources are .f90 but use #ifdef WITH_RISM, so force preprocessing.
-target_compile_options(moist-exe PRIVATE -cpp)
-if(MOIST_FFTW)
-  target_compile_definitions(moist-exe PRIVATE WITH_FFTW=1)
-endif()
-if(MOIST_RISM)
-  target_compile_definitions(moist-exe PRIVATE WITH_RISM=1)
-endif()
 target_link_libraries(moist-exe PRIVATE moist fclap)
 
 # ---------------------------------------------------------------------------
@@ -357,7 +315,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build.
   set(moist_test_suites
-    api utils utils_timer utils_context utils_mem utils_prettylistprint
+    api parameters utils utils_timer utils_context utils_mem utils_prettylistprint
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
@@ -369,14 +327,8 @@ if(MOIST_TESTS)
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
     model_component_pcm_electrostatics model_component_pcm_cpcm
     model_component_gostshyp model_component_pv
-    model_general
+    model_general channels model_coupling
   )
-  if(MOIST_RISM)
-    list(APPEND moist_test_suites rism_1d rism_thermo)
-  endif()
-  if(MOIST_HDF5)
-    list(APPEND moist_test_suites utils_hdf5)
-  endif()
 
   # Driver plus the shared fixture modules, which register no suite of their own.
   set(moist_test_srcs
@@ -394,20 +346,24 @@ if(MOIST_TESTS)
     LINKER_LANGUAGE Fortran
   )
   # main.F90 selects suites with the same #ifdefs as the library build.
-  if(MOIST_FFTW)
-    target_compile_definitions(moist-tester PRIVATE WITH_FFTW=1)
-  endif()
-  if(MOIST_RISM)
-    target_compile_definitions(moist-tester PRIVATE WITH_RISM=1)
-  endif()
-  if(MOIST_HDF5)
-    target_compile_definitions(moist-tester PRIVATE WITH_HDF5=1)
-  endif()
   if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_compile_options(moist-tester PRIVATE -ffree-line-length-none -fbacktrace)
   endif()
   target_link_libraries(moist-tester PRIVATE
     moist mstore::mstore test-drive::test-drive)
+
+  if(MOIST_API)
+    enable_language(CXX)
+    add_executable(moist-api-tester test/api/example.c)
+    set_property(TARGET moist-api-tester PROPERTY C_STANDARD 11)
+    target_link_libraries(moist-api-tester PRIVATE moist)
+    add_test(NAME api-c COMMAND moist-api-tester)
+    add_executable(moist-api-cpp-tester test/api/cpp.cpp)
+    set_property(TARGET moist-api-cpp-tester PROPERTY CXX_STANDARD 11)
+    set_property(TARGET moist-api-cpp-tester PROPERTY CXX_EXTENSIONS OFF)
+    target_link_libraries(moist-api-cpp-tester PRIVATE moist)
+    add_test(NAME api-cpp COMMAND moist-api-cpp-tester)
+  endif()
 
   foreach(suite IN LISTS moist_test_suites)
     add_test(NAME ${suite} COMMAND moist-tester ${suite})
@@ -421,4 +377,3 @@ endif()
 message(STATUS "moist ${MOIST_VERSION_FULL} (commit ${VCS_TAG})")
 message(STATUS "  LAPACK backend : ${MOIST_LAPACK}")
 message(STATUS "  OpenMP/API     : ${MOIST_OPENMP} / ${MOIST_API}")
-message(STATUS "  RISM/FFTW/HDF5 : ${MOIST_RISM} / ${MOIST_FFTW} / ${MOIST_HDF5}")
