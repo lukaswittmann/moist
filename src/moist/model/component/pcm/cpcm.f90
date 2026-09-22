@@ -1,6 +1,7 @@
 !> CPCM (Conductor-like Polarizable Continuum Model) implementation
-!> This module provides the CPCM variant of PCM with its specific dielectric
-!> scaling (f epsilon = ( epsilon -1)/ epsilon )
+!>
+!> The CPCM variant of PCM, with its specific dielectric scaling
+!> (f epsilon = ( epsilon -1)/ epsilon )
 module moist_model_component_pcm_cpcm
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
@@ -16,13 +17,14 @@ module moist_model_component_pcm_cpcm
    public :: new_component_cpcm
 
    !> CPCM (Conductor-like Polarizable Continuum Model) variant
-   !> Uses f epsilon = ( epsilon -1)/ epsilon scaling
+   !>
+   !> - f epsilon = ( epsilon -1)/ epsilon scaling
    type, extends(solvation_model_component_pcm) :: solvation_model_component_cpcm
    end type solvation_model_component_cpcm
 
 contains
 
-   !> Construct from parameter values; omission uses compiled defaults.
+   !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
    !> @param[in] ctx Borrowed context; must outlive the object
@@ -37,23 +39,23 @@ contains
       type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
       real(wp), intent(in) :: epsilon
-      !> Solver configuration; omitted means compiled defaults.
+      !> Solver configuration; omitted means compiled defaults
       type(moist_pcm_parameters_type), intent(in), optional :: param
       !> Optional: external pre-computed matrix (ngrid, ngrid)
       real(wp), intent(in), optional :: external_matrix(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Resolved solver configuration.
+      !> Resolved solver configuration
       type(moist_pcm_parameters_type) :: settings
 
       if (present(param)) settings = param
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
-      ! Set dielectric properties. Below eps = 1 the scaling factor turns
-      ! negative (and diverges at eps = 0), so the model is undefined there.
-      ! The `epsilon /= epsilon` test rejects a NaN input.
+      ! Set dielectric properties; below eps = 1 the scaling factor turns
+      ! negative (and diverges at eps = 0), so the model is undefined there,
+      ! and the `epsilon /= epsilon` test rejects a NaN input
       if (epsilon < 1.0_wp .or. epsilon /= epsilon) then
          call fatal_error(error, &
             & "[new_component_cpcm] Dielectric constant must be >= 1")

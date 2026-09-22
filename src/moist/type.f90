@@ -30,12 +30,12 @@ module moist_type
    !> Cavities within moist are per default discretized using Gaussians
    type, abstract :: cavity_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller. Never allocated/freed by the cavity.
+      !> owned by the top-level caller, never allocated or freed by the cavity
       type(moist_context_type), pointer :: ctx => null()
 
       !> Sphere radii, bohr (nat)
       real(wp), allocatable :: radii(:)
-      !> Radii model used to update cached radii.
+      !> Radii model used to update cached radii
       class(radius_type), allocatable :: radius_model
 
       !> Number of atomic spheres
@@ -66,7 +66,7 @@ module moist_type
       !> Point volume element, bohr**3 (ngrid)
       !>
       !> Divergence-theorem partition of the enclosed volume,
-      !> v_i = a_i (r_i . n_i)/3, so that `total_volume` is `sum(v)`.
+      !> v_i = a_i (r_i . n_i)/3, so that `total_volume` is `sum(v)`
       real(wp), allocatable :: v(:)
 
       !> Total surface area, bohr**2
@@ -80,8 +80,9 @@ module moist_type
       real(wp), allocatable :: f1_rA(:, :, :)
       !> Nuclear derivatives of surface positions (3, 3, nsph, ngrid)
       real(wp), allocatable :: xyz1_rA(:, :, :, :)
-      !> Nuclear derivatives of surface point volumes (3, nsph, ngrid).
-      !> Contracting over the grid gives the total-volume nuclear gradient.
+      !> Nuclear derivatives of surface point volumes (3, nsph, ngrid)
+      !>
+      !> - contracting over the grid gives the total-volume nuclear gradient
       real(wp), allocatable :: v1_rA(:, :, :)
    contains
       procedure(update_cavity), deferred :: update
@@ -132,7 +133,7 @@ module moist_type
    !> Abstract base solvation model
    type, abstract :: solvation_model_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller. Never allocated/freed by the model.
+      !> owned by the top-level caller, never allocated or freed by the model
       type(moist_context_type), pointer :: ctx => null()
 
    contains
@@ -147,7 +148,8 @@ module moist_type
    abstract interface
 
       !> Update the solvation model with the current molecular structure
-      !> Calculate all structure-dependent properties
+      !>
+      !> - calculates all structure-dependent properties
       subroutine update_model(self, mol, error)
          import solvation_model_type, structure_type, error_type
          implicit none(type, external)
@@ -211,16 +213,18 @@ module moist_type
    !> Abstract solvation model component
    type, abstract :: solvation_model_component_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller. Never allocated/freed by the component.
+      !> owned by the top-level caller, never allocated or freed by the component
       type(moist_context_type), pointer :: ctx => null()
       !> Name of the component
       character(len=:), allocatable :: name
       !> Molecular structure data for the component
       type(structure_type) :: mol_solu
-      !> Linear scale factor applied to this contribution.  The component
-      !> multiplies its energy, solvation response, and surface/level set
-      !> response by this constant so the contribution stays variational: 1.0
-      !> leaves it unchanged, 0.0 disables it.
+      !> Linear scale factor applied to this contribution
+      !>
+      !> - the component multiplies its energy, solvation response and
+      !>   surface/level set response by this constant, so the contribution
+      !>   stays variational
+      !> - 1.0 leaves it unchanged, 0.0 disables it
       real(wp) :: scale = 1.0_wp
       !> Error handling
       type(error_type), allocatable :: error
@@ -231,17 +235,17 @@ module moist_type
       procedure(get_component_response), deferred :: get_response
       procedure(get_component_gradient), deferred :: get_gradient
       !> Internal emission hook: accumulate the response items that depend only
-      !> on the surface charge. Called by a component's own `get_response` and
-      !> `get_gradient`; the public phase accessors are `get_energy`,
-      !> `get_response` and `get_gradient`.
+      !> on the surface charge; called by a component's own `get_response` and
+      !> `get_gradient`, while the public phase accessors are `get_energy`,
+      !> `get_response` and `get_gradient`
       procedure :: get_trace_response => get_component_trace_response_default
-      !> Accumulate component-specific surface adjoint weights.
+      !> Accumulate component-specific surface adjoint weights
       procedure :: get_surface_weights => get_component_surface_weights_default
-      !> Accumulate the host's direct trace-geometry surface adjoint weights.
+      !> Accumulate the host's direct trace-geometry surface adjoint weights
       procedure :: get_host_surface_weights => get_component_host_surface_weights_default
-      !> Accumulate the surface adjoint weights the *nuclear gradient* needs.
+      !> Accumulate the surface adjoint weights the *nuclear gradient* needs
       procedure :: get_gradient_surface_weights => get_component_gradient_surface_weights_default
-      !> Accumulate nuclear-gradient terms that do not flow through the surface.
+      !> Accumulate nuclear-gradient terms that do not flow through the surface
       procedure :: get_direct_gradient => get_component_direct_gradient_default
       !> Declare the host requests this component reads (none by default)
       procedure :: declare_coupling => declare_component_coupling_default
@@ -333,9 +337,10 @@ module moist_type
 contains
 
    !> Output unit for a cavity: the borrowed run context's unit when one is
-   !> attached, otherwise the standard output unit. The base procedures below
-   !> are reachable on a cavity that never went through a constructor, so the
-   !> association has to be checked rather than assumed.
+   !> attached, otherwise the standard output unit
+   !>
+   !> - the base procedures below are reachable on a cavity that never went
+   !>   through a constructor, so the association is checked, not assumed
    pure function cavity_unit(self) result(iunit)
       !> Cavity instance
       class(cavity_type), intent(in) :: self
@@ -402,8 +407,8 @@ contains
    !> Default reverse-mode nuclear-gradient hook
    !>
    !> Cavities that do not implement the surface-adjoint contraction must be
-   !> reached through the forward path instead. Returning silently here would
-   !> hand back a zero gradient, so this errors
+   !> reached through the forward path instead; returning silently here would
+   !> hand back a zero gradient, so it errors
    !>
    !> @param[in]    self     Cavity instance
    !> @param[in]    acc      Surface-observable adjoints, unused
@@ -444,7 +449,8 @@ contains
 
    end subroutine get_component_trace_response_default
 
-   !> Default no-op surface-weight hook for components without cavity response.
+   !> Default no-op surface-weight hook for components without cavity response
+   !>
    !> @param[inout] self    Solvation component
    !> @param[in]    coupling     Wavefunction data
    !> @param[in]    cavity  Cavity data
@@ -469,10 +475,10 @@ contains
    !> Surface traces built from the host's QM integrals (potential, normal
    !> derivative, ...) carry a surface dependence moist cannot differentiate, so
    !> the host supplies dE/d(xi, f, r, n) at fixed operator through the
-   !> surface-weight requests of the coupling.
+   !> surface-weight requests of the coupling
    !>
    !> Components with such a trace override this hook to add those channels to
-   !> the shared surface-adjoint accumulator; the rest inherit the no-op.
+   !> the shared surface-adjoint accumulator; the rest inherit the no-op
    !>
    !> @param[inout] self     Solvation component
    !> @param[in]    coupling Wavefunction data carrying the host weights
@@ -497,8 +503,8 @@ contains
    !>
    !> For most components the surface adjoint of the energy is one object, so
    !> the reverse-mode nuclear gradient can reuse `get_surface_weights`
-   !> verbatim. A component whose gradient legitimately consumes a different
-   !> set of host channels overrides this (see `solvation_model_component_pcm`).
+   !> verbatim; a component whose gradient legitimately consumes a different
+   !> set of host channels overrides this (see `solvation_model_component_pcm`)
    !>
    !> @param[inout] self     Solvation component
    !> @param[in]    coupling Wavefunction data
@@ -525,7 +531,7 @@ contains
    !>
    !> Used by the reverse-mode gradient path for contributions that do not
    !> reach the energy through a cavity surface quantity -- for PCM, the
-   !> solute nuclei moving under fixed surface charges.
+   !> solute nuclei moving under fixed surface charges
    !>
    !> @param[inout] self     Solvation component
    !> @param[in]    coupling Wavefunction data
@@ -569,7 +575,7 @@ contains
    !>
    !> A cavity that overrides `get_surface_response` (DROP) overrides this to
    !> `.true.`; it decides whether host surface weights are declared for the
-   !> response phase or only for the gradient.
+   !> response phase or only for the gradient
    !>
    !> @param[in] self Cavity instance
    function cavity_field_dependent_default(self) result(field_dependent)
@@ -600,21 +606,19 @@ contains
 
    end subroutine declare_component_coupling_default
 
-
-
-   !> Snapshot only the grid fields declared by active host calculations.
+   !> Snapshot only the grid fields declared by active host calculations
    !>
-   !> An absent cavity field is an error only if a calculation requires it.
+   !> An absent cavity field is an error only if a calculation requires it
    !>
    !> @param[in]    cavity   Updated cavity
    !> @param[inout] coupling Coupling receiving the snapshot
    !> @param[out]   error    Error handling
    subroutine snapshot_cavity_coupling(cavity, coupling, error)
-      !> Updated cavity.
+      !> Updated cavity
       class(cavity_type), intent(in) :: cavity
-      !> Collection receiving declared grid inputs.
+      !> Collection receiving declared grid inputs
       type(coupling_type), intent(inout) :: coupling
-      !> Missing declared grid field.
+      !> Missing declared grid field
       type(error_type), allocatable, intent(out) :: error
       call coupling%snapshot(cavity%ngrid, error, xyz=cavity%xyz, normal=cavity%normal0, &
          xi=cavity%xi0, f=cavity%f, area=cavity%a)
@@ -622,7 +626,7 @@ contains
 
    !> Map the optional `energy`/`response`/`gradient` flags to one phase index
    !>
-   !> Exactly one flag must be present and true; anything else is an error.
+   !> Exactly one flag must be present and true; anything else is an error
    !>
    !> @param[in]  energy   Stage the energy phase
    !> @param[in]  response Stage the response phase
@@ -674,7 +678,7 @@ contains
    !> Build the coupling of a bare component driven without a model
    !>
    !> Runs the cavity's and the component's `declare_coupling`, then takes the
-   !> first geometry snapshot. The request list never grows after this call.
+   !> first geometry snapshot; the request list never grows after this call
    !>
    !> @param[in]  self     Solvation component
    !> @param[in]  cavity   Updated cavity the component was updated on
@@ -703,9 +707,12 @@ contains
 
    !> Stage one phase of a bare component's coupling
    !>
-   !> Refresh declarations and scientific inputs before selecting missing outputs.
-   !> Energy starts a new host evaluation; later phases reuse valid raw answers.
-   !> Changed grid inputs invalidate answers even at unchanged grid size.
+   !> Refresh declarations and scientific inputs before selecting missing
+   !> outputs
+   !>
+   !> - energy starts a new host evaluation; later phases reuse valid raw
+   !>   answers
+   !> - changed grid inputs invalidate answers even at unchanged grid size
    !>
    !> @param[inout] self     Solvation component
    !> @param[in]    cavity   Live cavity
@@ -1004,10 +1011,10 @@ contains
          thrs = 4.0_wp
       end if
 
-      !> Silent unless the caller asks for output. This deliberately does not
-      !> follow the context verbosity: the only caller passes no verbose_inp,
-      !> and defaulting from the context would start printing island tables on
-      !> every verbosity-2 run.
+      !> Silent unless the caller asks for output, deliberately not following
+      !> the context verbosity: the only caller passes no verbose_inp, and
+      !> defaulting from the context would start printing island tables on
+      !> every verbosity-2 run
       verbose = 0
       if (present(verbose_inp)) verbose = verbose_inp
 
@@ -1028,7 +1035,7 @@ contains
       volume = max(1.0e-12_wp, bbox(1)*bbox(2)*bbox(3))
       spacing_guess = max(1.0e-6_wp, (volume/real(self%ngrid, wp))**(1.0_wp/3.0_wp))
 
-      ! First pass: estimate average nearest-neighbour spacing with a coarse grid.
+      ! First pass: estimate average nearest-neighbour spacing with a coarse grid
       cell_size = spacing_guess
       nx = max(1, int(bbox(1)/cell_size) + 1)
       ny = max(1, int(bbox(2)/cell_size) + 1)
@@ -1074,7 +1081,7 @@ contains
          head(lin) = i
       end do
 
-      ! Accumulate nearest-neighbour distances to form a characteristic spacing.
+      ! Accumulate nearest-neighbour distances to form a characteristic spacing
       spacing_est = 0.0_wp
       nspacing_count = 0
       do i = 1, self%ngrid
@@ -1120,7 +1127,7 @@ contains
       end if
 
       spacing_est = spacing_est/real(nspacing_count, wp)
-      ! Use dimensionless threshold to derive connectivity radius.
+      ! Use dimensionless threshold to derive connectivity radius
       cell_size = thrs*spacing_est
       cell_size2 = cell_size*cell_size
 
@@ -1129,7 +1136,7 @@ contains
             cell_size, "bohr"
       end if
 
-      ! Rebuild grid for connectivity search with final cell size.
+      ! Rebuild grid for connectivity search with final cell size
       nx = max(1, int((bbox(1)/cell_size)) + 1)
       ny = max(1, int((bbox(2)/cell_size)) + 1)
       nz = max(1, int((bbox(3)/cell_size)) + 1)
@@ -1178,7 +1185,7 @@ contains
          return
       end if
 
-      ! BFS to label connected components using distance-limited neighbours.
+      ! BFS to label connected components using distance-limited neighbours
       comp = 0
       do i = 1, self%ngrid
          if (visited(i)) cycle

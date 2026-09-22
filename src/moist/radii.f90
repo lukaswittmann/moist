@@ -32,7 +32,8 @@ module moist_radii
 
 contains
 
-   !> Return a default CPCM static radii model object.
+   !> Return a default CPCM static radii model object
+   !>
    !> @param[in]  verbosity  optional print level for diagnostics
    !> @return radii          CPCM static radii model
    function default_cpcm_radii(verbosity) result(radii)
@@ -44,7 +45,8 @@ contains
       call new_cpcm_radii(radii, verbosity)
    end function default_cpcm_radii
 
-   !> Construct a custom radii object from per-atom radii.
+   !> Construct a custom radii object from per-atom radii
+   !>
    !> @param[in]  radii  per-atom radii in bohr (size must match mol%nat in update)
    !> @param[out] model      constructed custom radii model
    !> @param[out] error      allocated on invalid input
@@ -66,7 +68,8 @@ contains
       end select
    end subroutine new_radii_custom_atoms
 
-   !> Construct a custom radii object from per-element radii.
+   !> Construct a custom radii object from per-element radii
+   !>
    !> @param[in]  atomic_numbers  atomic numbers with custom radii
    !> @param[in]  radii           radii matching atomic_numbers in bohr
    !> @param[out] model           constructed custom radii model
@@ -91,7 +94,8 @@ contains
       end select
    end subroutine new_radii_custom_elements
 
-   !> Construct a radii object from an integer model tag.
+   !> Construct a radii object from an integer model tag
+   !>
    !> @param[in]  model_tag  radius type tag
    !> @param[out] model      constructed radii model
    !> @param[out] error      allocated on unknown model tag
@@ -146,7 +150,8 @@ contains
       end select
    end subroutine new_radii_int
 
-   !> Construct a radii object from a model name.
+   !> Construct a radii object from a model name
+   !>
    !> @param[in]  model_name  radius model name
    !> @param[out] model       constructed radii model
    !> @param[out] error       allocated on unknown model name

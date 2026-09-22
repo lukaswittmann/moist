@@ -120,8 +120,8 @@ contains
    !>
    !> The enclosed volume is the divergence-theorem sum over the grid points,
    !> `V = sum_i a_i (r_i . n_i)/3`, so its surface adjoints follow directly from
-   !> the per-point geometry. The area channel carries `dV/da_i = (r_i . n_i)/3`;
-   !> the cavity folds it into whichever primitive channels it is built from.
+   !> the per-point geometry; the area channel carries `dV/da_i = (r_i . n_i)/3`,
+   !> the cavity folds it into whichever primitive channels it is built from
    !>
    !> @param[inout] self     Component instance
    !> @param[in]    coupling Host coupling data, unused
@@ -168,7 +168,7 @@ contains
    !> Add the pressure-scaled cavity-volume nuclear gradient
    !>
    !> The total volume is the grid sum of the per-grid point volume elements, so
-   !> its nuclear derivative is the contraction of `v1_rA` over the grid.
+   !> its nuclear derivative is the contraction of `v1_rA` over the grid
    !>
    !> @param[inout] self     Component instance
    !> @param[in]    coupling Host coupling data, only checked for stale requests
@@ -199,7 +199,7 @@ contains
       end if
 
       !> The per-grid point volume derivatives belong to the current geometry only
-      !> once a gradient run has produced them.
+      !> once a gradient run has produced them
       if (.not. allocated(cavity%v1_rA)) then
          call cavity%get_gradient(error)
          if (allocated(error)) return

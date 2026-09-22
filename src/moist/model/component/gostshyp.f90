@@ -185,11 +185,11 @@ contains
             !> The floor is *relative*, so it says nothing about the absolute
             !>
             !> size of `ftilde`: a grid uniformly down at the denormals clears it
-            !> intact and the two divisions above then leave the reals. No SCF
+            !> intact and the two divisions above then leave the reals; no SCF
             !> density gets within 300 decades of that, but the moments arrive
             !> over the C API from an arbitrary host, and an infinity here would
             !> spread silently through the energy, the host's Fock matrix and
-            !> every surface weight. A point that cannot be divided is treated
+            !> every surface weight, and a point that cannot be divided is treated
             !> like a point that has left the density
             active = ieee_is_finite(alpha_i) .and. ieee_is_finite(beta_i)
          end if
@@ -257,7 +257,7 @@ contains
    !> Declare the Gaussian-moment request
    !>
    !> Energy and amplitudes consume gt and pt; geometry derivatives additionally
-   !> need mt and rt. Disabled pressure or scale declares no host work
+   !> need mt and rt; disabled pressure or scale declares no host work
    !>
    !> @param[in]    self     Component instance
    !> @param[in]    cavity   Cavity the model is built on, unused
@@ -342,9 +342,10 @@ contains
       !> inactive fraction is *normal* (15% for fluoroacetate/STO-3G at 50 GPa),
       !> so any threshold loose enough to stay quiet would also stay quiet for
       !> the failure worth catching -- a systematically wrong `gostshyp%pt`, which
-      !> shrinks every `ftilde` and pushes points under the floor. The number is
-      !> the diagnostic; what counts as too many is the reader's call
-      !> Reported here rather than in `gostshyp_amplitudes` so one energy
+      !> shrinks every `ftilde` and pushes points under the floor; the number
+      !> is the diagnostic, and what counts as too many is the reader's call
+      !>
+      !> Reported here rather than in `gostshyp_amplitudes`, so one energy
       !> evaluation produces one line, not three
       if (associated(self%ctx) .and. ninactive > 0) then
          write (report, "(a,i0,a,i0,a)") &
@@ -387,9 +388,9 @@ contains
       type(gostshyp_amplitude_response_type) :: item
 
       ! A component switched off by zero pressure or zero scale still publishes
-      ! its item, filled with zeros. It is present and contributing nothing,
-      ! which is a different statement from having no GOSTSHYP component at all,
-      ! and only the latter may leave the item absent
+      ! its item, filled with zeros: present and contributing nothing, which is
+      ! a different statement from having no GOSTSHYP component at all, and
+      ! only the latter may leave the item absent
       allocate (item%w_overlap(cavity%ngrid), source=0.0_wp)
       allocate (item%w_normal_deriv(cavity%ngrid), source=0.0_wp)
 
@@ -418,7 +419,7 @@ contains
    !>
    !> The area enters twice: explicitly through the amplitude `p_i`, and through
    !> the Gaussian width `w_i = pi ln2 / a_i`, whence the `-w_i/a_i` chain
-   !> factor on the width route. The switching factor carries no dependence at
+   !> factor on the width route; the switching factor carries no dependence at
    !> all -- `w_f` is exactly zero -- because the Gaussian width is the only
    !> route by which the area reaches the level set
    !>
@@ -503,7 +504,7 @@ contains
    !> Forward-mode nuclear gradient, which GOSTSHYP does not provide
    !>
    !> The energy reaches the nuclei only through cavity-surface quantities, all
-   !> of which `get_surface_weights` already states. The reverse-mode path
+   !> of which `get_surface_weights` already states; the reverse-mode path
    !> contracts those once against the cavity's own nuclear derivatives; a
    !> forward-mode implementation would be a second, independently maintained
    !> derivation of the same numbers, so it is refused rather than approximated

@@ -1,5 +1,6 @@
 !> Main PCM module - re-exports all PCM functionality
-!> This is the top-level module users should import to access PCM functionality.
+!>
+!> - the top-level module to import for PCM access
 module moist_model_component_pcm
    use moist_model_component_pcm_type, only: solvation_model_component_pcm, &
       & pcm_solver_type, solver_type, moist_pcm_parameters_type

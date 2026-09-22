@@ -1,5 +1,5 @@
 
-!> License text for moist.
+!> License text for moist
 module moist_output_license
    implicit none
    private
@@ -8,7 +8,7 @@ module moist_output_license
 
 contains
 
-   !> Print LGPL license notice.
+   !> Print LGPL license notice
    subroutine print_license(unit)
       !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit

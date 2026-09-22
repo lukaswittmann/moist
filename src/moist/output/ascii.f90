@@ -1,7 +1,8 @@
 
-!> Canonical ASCII art headers for moist and its sub-models.
-!> All banner output should go through this module so that the art
-!> is defined in exactly one place.
+!> Canonical ASCII art headers for moist and its sub-models
+!>
+!> All banner output should go through this module, so that the art is
+!> defined in exactly one place
 module moist_output_ascii
    use moist_build_info, only: git_commit, build_host
    use moist_version, only: get_moist_version
@@ -21,22 +22,24 @@ module moist_output_ascii
 
 contains
 
-   !> Print moist banner.
+   !> Print moist banner
+   !>
    !> @param[in] unit   Fortran I/O unit (6 = stdout)
    !> @param[in] style  Optional style selector:
    !>                    HEADER_FULL (0, default) = logo + tagline,
    !>                    HEADER_SHORT (1) = tagline box only,
    !>                    HEADER_ASCII (2) = logo only
-   !> Return the canonical banner as text with newline-terminated lines.
-   !> @param[in] style Full (0), short (1), ASCII (2), or build information (3).
+   !>
+   !> Return the canonical banner as text with newline-terminated lines
+   !> @param[in] style Full (0), short (1), ASCII (2), or build information (3)
    function moist_banner_text(style) result(text)
-      !> Banner selector.
+      !> Banner selector
       integer, intent(in) :: style
-      !> Host-printable banner text.
+      !> Host-printable banner text
       character(len=:), allocatable :: text
-      !> Release and build metadata.
+      !> Release and build metadata
       character(len=:), allocatable :: version, line
-      !> Newline separator.
+      !> Newline separator
       character(len=1), parameter :: nl = achar(10)
       text = ""
       if (style == HEADER_FULL .or. style == HEADER_ASCII) then
@@ -62,7 +65,7 @@ contains
          text = text//"     '---------------------------------------------'"//nl//nl
       end if
    contains
-      !> Center one build metadata line inside the banner.
+      !> Center one build metadata line inside the banner
       function boxed(value) result(row)
          character(len=*), intent(in) :: value
          character(len=:), allocatable :: row
@@ -84,7 +87,7 @@ contains
 
    !> Print the moist build banner + version and commit
    subroutine moist_build_header(unit)
-      !> Destination Fortran unit.
+      !> Destination Fortran unit
       integer, intent(in) :: unit
       write(unit, "(a)", advance="no") moist_banner_text(3)
    end subroutine moist_build_header
@@ -100,8 +103,9 @@ contains
 
    end subroutine moist_version_header
 
-   !> Print cavity construction banner.
-   !> If scheme is present, includes the scheme name in the header.
+   !> Print cavity construction banner
+   !>
+   !> - a present `scheme` puts the scheme name in the header
    subroutine cavity_header(unit, scheme)
       !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit
