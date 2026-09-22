@@ -69,12 +69,6 @@ if get_option('openmp')
   lib_deps += omp_dep
 endif
 
-use_rism = get_option('rism')
-
-if use_rism
-  add_project_arguments('-DWITH_RISM=1', language: 'fortran')
-endif
-
 lapack_vendor = get_option('lapack')
 if lapack_vendor == 'auto'
   if fc_id == 'intel'

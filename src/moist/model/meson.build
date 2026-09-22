@@ -6,8 +6,3 @@ srcs += files(
   'general.f90',
   'component.f90',
 )
-
-if use_rism
-  srcs += files(
-  )
-endif
