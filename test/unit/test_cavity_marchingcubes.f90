@@ -1,5 +1,7 @@
 !> Tests for the marching-cubes cavity
 module test_cavity_marchingcubes
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_marchingcubes, only: moist_cavity_marchingcubes_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
@@ -18,7 +20,7 @@ module test_cavity_marchingcubes
 
    !> Finest marching-cubes spacing used throughout; the adaptive refinement
    !> reaches roughly 0.2 % on area and 0.4 % on volume for a sphere at this
-   !> setting, so the checks below allow 1 %.
+   !> setting, so the checks below allow 1 %
    real(wp), parameter :: MC_SPACING = 0.2_wp
    !> Relative tolerance on the integrated area and volume
    real(wp), parameter :: REL_THR = 1.0E-2_wp
@@ -54,7 +56,7 @@ module test_cavity_marchingcubes
 
    !> References taken from test/unit/test_cavity/drop/integration.f90, where they
    !> serve as the target the DROP cavity is validated against. Here they check the
-   !> integrator that produced them, so a coarser grid must still reproduce them.
+   !> integrator that produced them, so a coarser grid must still reproduce them
    type(integration_case_type), parameter :: cases(*) = [ &
       integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 1033.798426_wp, 3088.935546_wp), &
       integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 739.232911_wp, 1734.806473_wp), &
@@ -110,7 +112,7 @@ contains
 
    end subroutine collect_cavity_marchingcubes
 
-   !> Build a marching-cubes cavity over hydrogen centers with custom radii.
+   !> Build a marching-cubes cavity over hydrogen centers with custom radii
    !>
    !> @param[out]   error   Test failure state
    !> @param[inout] ctx     Run context borrowed by the cavity (caller-owned)
@@ -150,8 +152,8 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, &
-         & lsf_model=svdw_template, spacing=grid_spacing, error=cavity_error)
+      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=grid_spacing))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -159,11 +161,11 @@ contains
 
    end subroutine build_custom_cavity
 
-   !> Build a single-atom marching-cubes cavity of radius `SPHERE_RADIUS`.
+   !> Build a single-atom marching-cubes cavity of radius `SPHERE_RADIUS`
    !>
    !> The SvdW level set of an isolated atom reduces to its one-body term, so its
    !> zero isosurface is exactly the sphere of that radius -- the one geometry with
-   !> a closed-form area and volume to check the integrator against.
+   !> a closed-form area and volume to check the integrator against
    !>
    !> @param[out]   error   Test failure state
    !> @param[inout] ctx     Run context borrowed by the cavity (caller-owned)
@@ -227,8 +229,8 @@ contains
    !> The adaptive refinement stops on an effectively absolute floor -- its change
    !> test divides by `max(1, |value|)` -- so the relative error grows as the spheres
    !> shrink: at `MC_SPACING` the volume is low by 0.08 % at r = 5 and by 0.8 % at
-   !> r = 1.5, crossing the 1 % checked here only near r = 1.4 (2.1 % at r = 1).
-   !> The scan therefore starts at 1.5 bohr, below every atomic radius in use.
+   !> r = 1.5, crossing the 1 % checked here only near r = 1.4 (2.1 % at r = 1)
+   !> The scan therefore starts at 1.5 bohr, below every atomic radius in use
    subroutine test_sphere_radii(error)
 
       !> Error handling
@@ -458,8 +460,8 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, &
-         & lsf_model=svdw_template, spacing=0.0_wp, error=cavity_error)
+      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=0.0_wp))
 
       call check(error, allocated(cavity_error), &
          & more="A zero marching-cubes spacing must be rejected")
@@ -489,13 +491,12 @@ contains
 
       call get_structure(mol, trim(cases(case_idx)%dataset), trim(cases(case_idx)%structure))
 
-      call svdw_template%new(blend_k=cases(case_idx)%blend_k, &
-         & blend_2b=cases(case_idx)%blend_2b, &
-         & blend_3b=cases(case_idx)%blend_3b)
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=cases(case_idx)%blend_k, &
+         blend_2b=cases(case_idx)%blend_2b, blend_3b=cases(case_idx)%blend_3b))
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=default_cpcm_radii(), &
-         & lsf_model=svdw_template, spacing=MC_SPACING, error=cavity_error)
+      call new_cavity_marchingcubes(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING))
       if (allocated(cavity_error)) then
          call test_failed(error, "new_cavity_marchingcubes failed for "// &
             & case_to_string(cases(case_idx))//": "//cavity_error%message)

@@ -1,4 +1,5 @@
 module test_cavity_iswig
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
@@ -76,8 +77,8 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, nleb=1202, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=1202))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -243,8 +244,8 @@ contains
       allocate (asph_full(nsph), asph_eff(nsph))
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -258,8 +259,8 @@ contains
       deallocate (cav)
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -390,9 +391,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -407,9 +407,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -424,9 +423,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -441,9 +439,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -464,9 +461,8 @@ contains
          ! Use type-bound gradient on the cavity (3, nat)
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-            & cut_a=cut_a, cut_f=cut_f, &
-            & radius_model=radius_model, error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -1329,9 +1325,9 @@ contains
 
    end subroutine test_amat_orca_reference
 
-   !> Numerical vs analytical test for the contracted A-matrix derivative.
+   !> Numerical vs analytical test for the contracted A-matrix derivative
    !> Uses 5-point finite differences on q1^T A q2 to verify the
-   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain.
+   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain
    subroutine test_amat_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1364,8 +1360,8 @@ contains
 
       ! Build reference cavity to set up charge vectors
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
-         & error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1468,8 +1464,8 @@ contains
          value = 0.0_wp
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
-            & error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -1508,12 +1504,12 @@ contains
    !> re-evaluated on a cavity rebuilt at each displaced geometry. Every channel
    !> is driven at once, including the four the contraction drops as
    !> geometry-independent: if any of them did move with the nuclei, the
-   !> numerical derivative would see it and the analytic one would not.
+   !> numerical derivative would see it and the analytic one would not
    !>
    !> Weights are pinned to the *raw* Lebedev index rather than the filtered
    !> grid index, so a rebuilt grid keeps assigning the same weight to the same
    !> point; the energy helper additionally refuses to run if the surviving set
-   !> changes at all, which would put a step into the finite difference.
+   !> changes at all, which would put a step into the finite difference
    subroutine test_surface_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1557,8 +1553,8 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1690,8 +1686,8 @@ contains
          value = 0.0_wp
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
-            & radius_model=radius_model, error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return

@@ -1,4 +1,5 @@
 module test_cavity_numsa
+   use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -68,7 +69,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -125,7 +127,8 @@ contains
       call get_structure(mol, "MB16-43", "02")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -176,7 +179,8 @@ contains
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -213,7 +217,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -265,7 +270,8 @@ contains
       call get_structure(mol, "MB16-43", "05")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -317,7 +323,8 @@ contains
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, nleb=nleb, probe_r=probe, radii=radii, error=cavity_error)
+      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -356,7 +363,7 @@ contains
    !>   f'(x) = (f(x-2h) - 8 f(x-h) + 8 f(x+h) - f(x+2h)) / (12 h)
    !>
    !> Each atomic coordinate is perturbed in turn, the cavity is re-evaluated,
-   !> and the corresponding total-area derivative is assembled.
+   !> and the corresponding total-area derivative is assembled
    subroutine compute_total_area_gradient_fd(cav, mol, stepsize, grad, error)
       type(cavity_type_numsa), intent(inout) :: cav
       type(structure_type), intent(inout) :: mol
