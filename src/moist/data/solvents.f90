@@ -17,12 +17,13 @@ module moist_data_solvents
 
    integer, parameter, public :: max_solvents = 180
 
-   public :: solvation_system_parameters, new_solvation_system_parameters
+   public :: solvation_system_type, new_solvation_system
    public :: get_solvent_id, get_solvent_for_alpb
 
    private
 
-   type :: solvation_system_parameters
+   !> Solvent and solute properties and molecular structures.
+   type :: solvation_system_type
 
       integer :: solvent_id
       character(:), allocatable  :: solvent_name
@@ -59,10 +60,10 @@ module moist_data_solvents
 
    contains
 
-      procedure :: print => print_solvation_system_parameters
+      procedure :: print => print_solvation_system
       procedure :: update => add_solute_properties
 
-   end type solvation_system_parameters
+   end type solvation_system_type
 
 contains
 
@@ -159,8 +160,8 @@ contains
 
    end subroutine get_solvent_for_alpb
 
-   !> Initialize system parameters for a new solvent
-   subroutine new_solvation_system_parameters( &
+   !> Initialize a solvation system from solvent data
+   subroutine new_solvation_system( &
       self, &
       solvent_id, &
       temperature, &
@@ -168,8 +169,8 @@ contains
       error &
       )
 
-      !> Solvation system parameters
-      class(solvation_system_parameters), intent(out) :: self
+      !> Solvation system
+      class(solvation_system_type), intent(out) :: self
 
       !> Solvent ID
       integer, intent(in) :: solvent_id
@@ -225,7 +226,7 @@ contains
          end if
       end if
 
-      !> Get basic solvent informationget_solvation_system_parameters
+      !> Get basic solvent information
       include "solvents.inc"
       found = .false.
       do i = 1, max_solvents
@@ -291,13 +292,13 @@ contains
       ! Convert solvent molecular volume to atomic units (m^3/mol)
       self%solvent_molecular_volume_au = self%solvent_molecular_volume_si/(Bohr_radius**3)
 
-   end subroutine new_solvation_system_parameters
+   end subroutine new_solvation_system
 
    !> Subroutine that adds solute properties to the solvation system
    subroutine add_solute_properties(self, solu_mol, error)
 
-      !> Solvation system parameters
-      class(solvation_system_parameters), intent(inout) :: self
+      !> Solvation system
+      class(solvation_system_type), intent(inout) :: self
 
       !> Solute molecule geometry
       type(structure_type), intent(in) :: solu_mol
@@ -329,9 +330,9 @@ contains
 
    end subroutine add_solute_properties
 
-   !> Print the solvation system parameters
-   subroutine print_solvation_system_parameters(self)
-      class(solvation_system_parameters), intent(in) :: self
+   !> Print the solvation system properties
+   subroutine print_solvation_system(self)
+      class(solvation_system_type), intent(in) :: self
       type(prettyprinter) :: pp
 
       pp = new_prettyprinter(unit=output_unit, col_value=30, indent_step=2, fmt_len=16)
@@ -374,6 +375,6 @@ contains
       end if
       call pp%blank()
 
-   end subroutine print_solvation_system_parameters
+   end subroutine print_solvation_system
 
 end module moist_data_solvents
