@@ -99,7 +99,7 @@ contains
 
    !> Physically motivated surface-free radius for an isodensity level set
    !>
-   !> This is a *physically motivated* bound, not a theorem
+   !> A physically motivated bound, not a theorem
    !>
    !> @param[in] self  Isodensity parameters
    !> @param[in] zmax  Largest nuclear charge in the structure
@@ -128,10 +128,10 @@ contains
       if (.not. (ratio > 0.0_wp)) return
 
       if (lsf0 > 0.0_wp) then
-         ! Exterior: the ball stays exterior, so the cusp never enters.
+         ! Exterior: the ball stays exterior, so the cusp never enters
          kappa = self%log_grad_out
       else
-         ! Interior: the ball can reach a nucleus.
+         ! Interior: the ball can reach a nucleus
          kappa = max(self%log_grad_out, self%log_grad_cusp*zmax)
       end if
 

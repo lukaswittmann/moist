@@ -1,4 +1,4 @@
-!> DROP grid filtering routines.
+!> DROP grid filtering routines
 submodule(moist_cavity_drop) moist_cavity_drop_filter
    use mctc_env_accuracy, only: wp
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
@@ -9,8 +9,8 @@ contains
 
    !> Compact all per-grid arrays using a keep mask
    !>
-   !> This helper centralizes the actual filtering logic so different
-   !> filtering stages only need to define the keep criterion.
+   !> Centralizes the filtering logic, so each filtering stage only has to define
+   !> its keep criterion
    !>
    !> @param[inout] self   Cavity data to compact
    !> @param[in]    nold   Number of active grid points before filtering
@@ -70,7 +70,7 @@ contains
       ncur = self%ngrid
       allocate (keep(ncur), source=.false.)
 
-      !> Remove based on the current accumulated quadrature weights.
+      !> Remove based on the current accumulated quadrature weights
       keep = self%wleb*self%f > self%param%wleb_cut
 
       nvalid = count(keep)
@@ -86,20 +86,19 @@ contains
    end subroutine filter_arrays
 
    !> Compute branch weights on the final surviving set of grid points
-   !> and fold them into wleb.
+   !> and fold them into wleb
    !>
-   !> For each contiguous anchor group (group_size > 1) this routine:
-   !>   1. Computes softmax over the full set of surviving phi values
-   !>   2. Marks any sibling whose weight is below `wleb_cut` for
-   !>      removal (sets its wleb to zero so the next filter_arrays
-   !>      call drops it)
-   !>   3. Re-computes softmax restricted to the kept siblings, so
-   !>      their weights once again sum to 1.
-   !>   4. Writes wbranch, multiplies wleb by wbranch, and sets
-   !>      branch_count to the kept-sibling count
+   !> For each contiguous anchor group (group_size > 1):
+   !>   1. compute the softmax over the full set of surviving phi values
+   !>   2. mark any sibling whose weight is below `wleb_cut` for removal, setting
+   !>      its wleb to zero so the next `filter_arrays` call drops it
+   !>   3. recompute the softmax restricted to the kept siblings, so their
+   !>      weights once again sum to 1
+   !>   4. write wbranch, multiply wleb by wbranch, and set branch_count to the
+   !>      kept-sibling count
    !>
-   !> Singleton groups (group_size == 1) keep their placeholder
-   !> wbranch = 1.0 from projection and are skipped
+   !> - singleton groups (group_size == 1) keep their placeholder wbranch = 1.0
+   !>   from projection and are skipped
    !>
    !> The caller is responsible for a follow-up filter_arrays call to
    !> compact the grid after any siblings have been marked for removal
@@ -133,7 +132,7 @@ contains
       ! branched groups, so it is not the right denominator/numerator for
       ! "branched points (kept)" or "branches/anchor (avg)"
       integer :: post_n_multi_kept
-      ! Anchors that started branched but collapsed to a single sibling.
+      ! Anchors that started branched but collapsed to a single sibling
       integer :: post_n_collapsed_groups
       integer :: post_nbranch_max
       real(wp) :: post_avg_kept
@@ -177,7 +176,7 @@ contains
          call pp%pop()
       end if
 
-      ! Post-loop accumulators populated while processing each group.
+      ! Post-loop accumulators populated while processing each group
       post_n_multi_groups = 0
       post_n_multi_kept = 0
       post_n_collapsed_groups = 0

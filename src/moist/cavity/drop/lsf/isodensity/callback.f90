@@ -1,8 +1,8 @@
 !> Callback-backed isodensity level set function for DROP
 !>
-!> Callback twin of [[moist_cavity_drop_lsf_isodensity_internal_type]]: the host
-!> owns the density, moist owns the level set built from it. The C callback
-!> returns the electron density and its spatial derivatives at a point,
+!> Callback twin of [[moist_cavity_drop_lsf_isodensity_internal_type]], where the
+!> host owns the density and moist owns the level set built from it; the C
+!> callback returns the electron density and its spatial derivatives at a point,
 !>
 !>    rho(r), d rho/dr, d^2 rho/dr^2, d^3 rho/dr^3
 !>
@@ -34,12 +34,12 @@ module moist_cavity_drop_lsf_isodensity_callback
    abstract interface
       !> C callback for the electron density and its spatial derivatives
       !>
-      !> Density and its gradient are always requested.  ``d2rho`` and ``d3rho``
+      !> Density and its gradient are always requested.  `d2rho` and `d3rho`
       !> are passed as raw pointers that are NULL when that order is not required
-      !> (driven by the cavity's ``set_max_deriv``): a NULL pointer signals the
+      !> (driven by the cavity's `set_max_deriv`): a NULL pointer signals the
       !> callee to skip computing -- not just writing -- that derivative, so the
       !> expensive density Hessian/third derivative is never evaluated during the
-      !> value+gradient-only projection phase.
+      !> value+gradient-only projection phase
       !>
       !> @param[in]  context  User-owned callback context
       !> @param[in]  point    Evaluation point in Bohr
@@ -61,7 +61,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       end function isodensity_lsf_callback
    end interface
 
-   !> Isodensity LSF implemented by a foreign callback.
+   !> Isodensity LSF implemented by a foreign callback
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_callback_type
       !> Raw C callback pointer
       type(c_funptr) :: callback_ptr = c_null_funptr
@@ -114,7 +114,7 @@ contains
       type(c_funptr), intent(in) :: callback_ptr
       type(c_ptr), intent(in) :: context
 
-      !> Configuration; omitted means compiled defaults.
+      !> Configuration; omitted means compiled defaults
       type(moist_cavity_drop_lsf_isodensity_param_type), intent(in), optional :: param
 
       !> The callback is globally evaluable and holds no per-atom data, so
@@ -196,8 +196,8 @@ contains
          return
       end if
       ! S = scale (rho_iso - rho): the isovalue shifts the value only, and every
-      ! derivative inherits the sign flip. Identical to the lift in
-      ! [[moist_cavity_drop_lsf_isodensity_internal]], by construction.
+      ! derivative inherits the sign flip; identical by construction to the lift
+      ! in [[moist_cavity_drop_lsf_isodensity_internal]]
       self%value = self%param%scale*(self%param%rho_iso - real(c_rho, wp))
       self%grad = -self%param%scale*real(c_drho, wp)
       if (want_hess) then
@@ -239,7 +239,7 @@ contains
       self%max_deriv = max(0, n)
    end subroutine lsf_set_max_deriv
 
-   !> Number of active atoms. True-density callbacks are not atom screened
+   !> Number of active atoms, true-density callbacks not being atom screened
    pure function lsf_active_count(self) result(n)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       integer :: n
@@ -251,7 +251,7 @@ contains
       n = 0
    end function lsf_active_count
 
-   !> Active atom lookup. Undefined for zero active atoms, returns zero sentinel
+   !> Active atom lookup, undefined for zero active atoms, returning a zero sentinel
    pure function lsf_active_atom(self, i) result(idx)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(in) :: self
       integer, intent(in) :: i
@@ -351,8 +351,10 @@ contains
    !> Density callback is globally evaluable; no atom-specific reach is needed
    !>
    !> Nothing about the callback decays with distance from an atom, so the offset
-   !> is zero: the cavity cell grid gets no extra shell and the candidate lists
-   !> this LSF is handed are ignored anyway.
+   !> is zero
+   !>
+   !> - the cavity cell grid gets no extra shell, and the candidate lists this LSF
+   !>   is handed are ignored anyway
    !>
    !> @param[in] self   LSF instance
    !> @param[in] radius Atom radius (Bohr)

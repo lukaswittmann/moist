@@ -34,7 +34,8 @@ module moist_cavity_drop_projector
    !> Projector type for efficient grid point projection onto LSF surface
 
    !> Context type for thread-safe projection callbacks
-   !> Contains all data needed by solver callbacks without module-level variables
+   !>
+   !> - holds everything solver callbacks need, with no module-level variables
    type :: projection_context_type
       type(drop_projector_type), pointer :: projector => null()  !> Pointer to parent projector
       class(moist_cavity_drop_lsf_type), pointer :: lsf => null() !> Polymorphic LSF
@@ -139,17 +140,19 @@ module moist_cavity_drop_projector
       !> Per-cell candidate atom lists for SSD screening
       type(moist_cell_grid_type) :: mol_cell_grid
 
-      !> SSD point cache: skip recomputation when evaluation point unchanged.
-      !> Eliminates redundant compute_ssd calls within SLSQP (objective+constraint
-      !> share x) and Newton (residual+Jacobian share z) iterations.
+      !> SSD point cache: skip recomputation when the evaluation point is unchanged
+      !>
+      !> Eliminates redundant `compute_ssd` calls within SLSQP (objective and
+      !> constraint share x) and Newton (residual and Jacobian share z) iterations
       real(wp) :: cached_ssd_point(3) = [huge(0.0_wp), huge(0.0_wp), huge(0.0_wp)]
       logical :: ssd_cache_valid = .false.
 
       !> Failure during the current `project_point` that invalidates the whole
-      !> build rather than just this anchor: an LSF that cannot evaluate, or a
-      !> certified search that ran out of budget before it could finish. The
-      !> caller promotes this to a fatal error instead of dropping the point,
-      !> because a surface silently missing points is worse than no surface.
+      !> build rather than just this anchor
+      !>
+      !> - an LSF that cannot evaluate, or a certified search out of budget
+      !> - promoted by the caller to a fatal error instead of dropping the point,
+      !>   since a surface silently missing points is worse than no surface
       type(error_type), allocatable :: abort_error
 
       !> Cache for SLSQP callbacks (reuse phi computation across objective/gradient/constraint)
@@ -165,8 +168,9 @@ module moist_cavity_drop_projector
       real(wp) :: work_tangent_t1(3)
       real(wp) :: work_tangent_t2(3)
 
-      !> Certified octree branch search (projection level 9). Scratch is sized
-      !> on first use and reused for every subsequent anchor on this thread.
+      !> Certified octree branch search (projection level 9)
+      !>
+      !> - scratch sized on first use, reused for every later anchor on this thread
       type(moist_math_octree_branch_type) :: octree
       !> Octree configuration, overwritten from the cavity parameters at init
       real(wp) :: octree_seed_size = 0.2_wp
@@ -207,14 +211,15 @@ contains
    !*            Augmented-Lagrangian solver callbacks (Newton / KKT system)            *!
    !* ================================================================================= *!
 
-   !> Residual function for augmented Lagrangian system (context-aware)
-   !> F(x, lambda) = [ phi_alpha*(x - anchor) - lambda*grad_LSF(x) ]
-   !>                [            -LSF(x)                           ]
-   !> Phi is the pure-quadratic anchor objective: phi_alpha/2 * ||x - anchor||^2.
-   !> Also eagerly computes and caches lsf2_rr (Hessian) for the subsequent
-   !> Jacobian call at the same point: the z012 accumulation always computes
-   !> hessZ internally, so requesting lsf2_rr adds only the trivial quotient
-   !> rule (~20 FLOPs), while saving a full z012 recomputation in the Jacobian.
+   !> Residual function for the augmented Lagrangian system (context-aware)
+   !>
+   !>    F(x, lambda) = [ phi_alpha*(x - anchor) - lambda*grad_LSF(x) ]
+   !>                   [            -LSF(x)                           ]
+   !>
+   !> - phi is the pure-quadratic anchor objective, `phi_alpha/2 * ||x - anchor||^2`
+   !> - also caches `lsf2_rr` eagerly for the Jacobian call at the same point
+   !> - the z012 accumulation always computes hessZ internally, so `lsf2_rr` costs
+   !>   only the quotient rule (~20 FLOPs) and saves a full z012 recomputation
    subroutine projection_residual(z, f, context)
       real(wp), dimension(:), intent(in) :: z   ! [x1, x2, x3, lambda]
       real(wp), dimension(:), intent(out) :: f  ! [f1, f2, f3, f4]
@@ -241,8 +246,8 @@ contains
       ! Compute SSD (cached: skips if point unchanged)
       call ctx%projector%compute_ssd(x)
 
-      ! Compute screened LSF value, gradient, AND Hessian.
-      ! The Hessian is cached for the subsequent Jacobian call at the same point.
+      ! Compute the screened LSF value, gradient AND Hessian
+      ! Hessian cached for the subsequent Jacobian call at the same point
       call ctx%lsf%f012_r( &
          lsf0=ctx%projector%cached_lsf0, &
          lsf1_r=ctx%projector%cached_lsf1_r, &
@@ -257,12 +262,14 @@ contains
 
    end subroutine projection_residual
 
-   !> Jacobian function for augmented Lagrangian system (context-aware)
-   !> J = [ phi_alpha*I - lambda*Hess_LSF   -grad_LSF ]
-   !>     [         -grad_LSF^T                  0     ]
-   !> All LSF derivatives are already cached from the preceding residual call
-   !> at the same point (nlesolver always calls func then grad at identical x).
-   !> Hess_phi = phi_alpha * I (constant, pure-quadratic anchor).
+   !> Jacobian function for the augmented Lagrangian system (context-aware)
+   !>
+   !>    J = [ phi_alpha*I - lambda*Hess_LSF   -grad_LSF ]
+   !>        [         -grad_LSF^T                  0     ]
+   !>
+   !> - every LSF derivative is already cached by the preceding residual call at
+   !>   the same point (nlesolver always calls func then grad at identical x)
+   !> - `Hess_phi = phi_alpha * I`, constant for the pure-quadratic anchor
    subroutine projection_jacobian(z, jac, context)
       real(wp), dimension(:), intent(in) :: z       ! [x1, x2, x3, lambda]
       real(wp), dimension(:, :), intent(out) :: jac  ! (4,4)
@@ -285,9 +292,9 @@ contains
       lambda = z(4)
       phi_alpha = ctx%projector%phi%param%phi_alpha
 
-      ! All LSF derivatives (lsf0, lsf1_r, lsf2_rr) were cached by the
-      ! preceding projection_residual call at the same point. No SSD
-      ! computation or LSF accumulation needed - pure matrix assembly.
+      ! All LSF derivatives (lsf0, lsf1_r, lsf2_rr) were cached by the preceding
+      ! projection_residual call at the same point, so no SSD computation and no
+      ! LSF accumulation is needed here -- pure matrix assembly
 
       ! Upper-left 3x3: Lagrangian Hessian = phi_alpha*I - lambda*Hess_LSF
       jac(1:3, 1:3) = -lambda*ctx%projector%cached_lsf2_rr(:, :)
@@ -315,7 +322,7 @@ contains
                              tol, maxiter, verbosity, debug)
       class(drop_projector_type), intent(inout) :: self
       type(moist_cavity_drop_parameters_type), intent(in) :: param
-      !> Polymorphic LSF template; the projector source-allocates its own clone.
+      !> Polymorphic LSF template; the projector source-allocates its own clone
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
       !> Minimum point-to-point separation for deduplicating projected candidates (Bohr)
       real(wp), intent(in) :: branch_sep_cut
@@ -324,14 +331,14 @@ contains
       integer, intent(in), optional :: verbosity
       logical, intent(in), optional :: debug
 
-      ! Store branching cutoffs. The squared slack is the single admissibility
-      ! criterion shared by the filter, the deflation ball caps and the
-      ! certified octree search.
+      ! Store branching cutoffs; the squared slack is the single admissibility
+      ! criterion shared by the filter, the deflation ball caps and the certified
+      ! octree search
       self%branch_sep_cut = branch_sep_cut
       self%branch_rho2_slack = param%branch_rho2_slack()
 
       ! Octree search configuration (level 9); the scratch itself is sized on
-      ! first use, since this routine has no channel to report a bad budget.
+      ! first use, since this routine has no channel to report a bad budget
       self%octree_seed_size = param%octree_seed_size
       self%octree_max_boxes = param%octree_max_boxes
       self%octree_max_survivors = param%octree_max_survivors
@@ -352,13 +359,14 @@ contains
       if (present(verbosity)) self%verbosity = verbosity
       if (present(debug)) self%debug = debug
 
-      ! Set parameters for primitives. The LSF is cloned from the caller's
-      ! template; its constructor was already invoked at cavity setup.
+      ! Set parameters for primitives; the LSF is cloned from the caller's
+      ! template, its constructor having run at cavity setup
       call self%phi%set_parameters(param)
       if (allocated(self%lsf)) deallocate (self%lsf)
       allocate (self%lsf, source=lsf_model)
 
    end subroutine projector_init
+
    !> Initialize the primitives
 
    subroutine projector_init_primitives(self, mol, radii, mol_cell_grid)
@@ -372,7 +380,7 @@ contains
       call self%lsf%update(mol, radii)
 
       ! The gate the cell grid was built for; the seed stage may loosen it
-      ! temporarily, and this is what it gets restored to.
+      ! temporarily, and this is what it gets restored to
       self%prod_screening_threshold = self%lsf%screening_threshold
 
 
@@ -392,8 +400,9 @@ contains
    !> Solver tolerance to use during the seed stage
    !>
    !> Raises `base_tol` to the noise floor the loose gate imposes, so a seed
-   !> solver is never asked for precision the screened `S` cannot deliver.
-   !> Returns `base_tol` unchanged when the seed swap is inactive.
+   !> solver is never asked for precision the screened `S` cannot deliver
+   !>
+   !> - returns `base_tol` unchanged when the seed swap is inactive
    !>
    !> @param[in] self     Projector instance
    !> @param[in] base_tol Production tolerance
@@ -416,7 +425,7 @@ contains
    !> Ball-cap slack for the deflation solvers
    !>
    !> Derived on every call rather than cached at `init`, so widening the
-   !> margin afterwards actually reaches the solvers.
+   !> margin afterwards actually reaches the solvers
    !>
    !> @param[in] self  Projector instance
    !> @return    slack Squared cap slack (Bohr^2)
@@ -429,14 +438,16 @@ contains
 
    !> Switch the LSF screening gate between the seed and production thresholds
    !>
-   !> The seed stage only has to put each seed in the correct basin; Newton
-   !> re-polishes it against the production gate afterwards. A looser gate
-   !> there shrinks the active set, which is what `prepare` spends its time on.
-   !> Swapping costs one O(ncenters) pass over the cached reach column -- no
-   !> allocation and no re-sort -- so it is affordable once per solve.
+   !> The seed stage only has to put each seed in the correct basin, Newton
+   !> re-polishing it against the production gate afterwards
+   !>
+   !> - a looser gate there shrinks the active set, which is what `prepare`
+   !>   spends its time on
+   !> - swapping costs one O(ncenters) pass over the cached reach column, with no
+   !>   allocation and no re-sort, so it is affordable once per solve
    !>
    !> Any swap invalidates the SSD cache: the same point screened at two
-   !> thresholds gives two different active sets.
+   !> thresholds gives two different active sets
    !>
    !> @param[inout] self LSF projector instance
    !> @param[in]    on   `.true.` for the seed threshold, `.false.` to restore
@@ -456,12 +467,14 @@ contains
       self%ssd_cache_valid = .false.
    end subroutine projector_seed_screening
 
-   !> Compute SSD data for an evaluation point using per-cell screening.
+   !> Compute SSD data for an evaluation point using per-cell screening
    !>
    !> Queries the molecular cell grid for the candidate atom list of the cell
-   !> containing `point` (strict clamp for points outside the atom bounding
-   !> box) and passes it to the SSD subset routine. Zero allocation on the
-   !> hot path - `cell_nlat(start+1:start+n)` is a contiguous slice.
+   !> containing `point` (strict clamp outside the atom bounding box) and hands
+   !> that list to the SSD subset routine
+   !>
+   !> - zero allocation on the hot path, `cell_nlat(start+1:start+n)` being a
+   !>   contiguous slice
    !>
    !> @param[inout] self  Projector instance (cell grid must be built)
    !> @param[in]    point Evaluation point (3)
@@ -494,9 +507,10 @@ contains
    !*            Solver callbacks (diagnostics, displacement control, SLSQP)            *!
    !* ================================================================================= *!
 
-   !> Debug callback - shows physical quantities for projection (context-aware)
-   !> Variables: x(1:3) = point coordinates, x(4) = lambda
-   !> Residuals: f(1:3) = dL (Lagrangian gradient), f(4) = -G (LSF constraint)
+   !> Debug callback showing physical quantities for projection (context-aware)
+   !>
+   !> - variables: `x(1:3)` = point coordinates, `x(4)` = lambda
+   !> - residuals: `f(1:3)` = dL (Lagrangian gradient), `f(4)` = -G (LSF constraint)
    subroutine newton_debug_callback(iter, x, f, context, jac, jac_sparse)
       integer, intent(in) :: iter
       real(wp), dimension(:), intent(in) :: x
@@ -568,8 +582,10 @@ contains
 
    end subroutine newton_debug_callback
 
-   !> Check if displacement exceeds threshold (user_input_check callback, context-aware)
-   !> Returns .true. to stop the solver if rho > threshold
+   !> Check whether the displacement exceeds the threshold
+   !>
+   !> - `user_input_check` callback, context-aware
+   !> - result is `.true.`, stopping the solver, when `rho > threshold`
    function displacement_check(x, context) result(stop_solver)
       real(wp), dimension(:), intent(in) :: x
       class(*), intent(in) :: context
@@ -616,6 +632,7 @@ contains
       end if
 
    end function displacement_check
+
    !> SLSQP iteration callback for debugging (context-aware)
 
    subroutine slsqp_debug_callback(iter, x, f, c, context)
@@ -639,8 +656,8 @@ contains
 
       if (.not. associated(ctx%projector)) return
 
-      ! LSF constraint G(x) and its gradient (using screened)
-      ! Note: slsqp_constraint/grad called before this, so values should be in cache
+      ! Screened LSF constraint G(x) and its gradient; slsqp_constraint and its
+      ! gradient run before this, so both values should be in the cache
       S_val = ctx%projector%cached_lsf0
       grad_S(:) = ctx%projector%cached_lsf1_r(:)
       norm_grad_S = sqrt(sum(grad_S**2))
@@ -672,8 +689,10 @@ contains
 
    !*---------------- SLSQP objective and constraint callbacks--------------- *!
 
-   !> SLSQP objective function: Phi (x) = full phi objective (context-aware)
-   !> Computes phi value and gradient, caches them for subsequent gradient/constraint calls
+   !> SLSQP objective function `Phi(x)`, the full phi objective (context-aware)
+   !>
+   !> - computes the phi value and gradient, caching both for the later gradient
+   !>   and constraint calls
    subroutine slsqp_objective(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -691,7 +710,7 @@ contains
       if (.not. associated(ctx%projector)) return
 
       ! Phi is pure-quadratic (anchor term only) and does not use SSD data,
-      ! so compute_ssd is deferred to the constraint callback where it is needed.
+      ! so compute_ssd is deferred to the constraint callback where it is needed
       call ctx%projector%phi%f012_r(x, ctx%anchor, ctx%owner, &
          & ctx%projector%cached_phi0, ctx%projector%cached_phi1_r)
 
@@ -699,8 +718,9 @@ contains
 
    end subroutine slsqp_objective
 
-   !> SLSQP objective gradient: dPhi (x) = full phi gradient (context-aware)
-   !> Uses cached gradient computed by slsqp_objective
+   !> SLSQP objective gradient `dPhi(x)`, the full phi gradient (context-aware)
+   !>
+   !> - reads the gradient cached by [[slsqp_objective]]
    subroutine slsqp_objective_grad(x, grad_f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: grad_f
@@ -722,8 +742,9 @@ contains
 
    end subroutine slsqp_objective_grad
 
-   !> SLSQP constraint: g(x) = LSF(x) = 0 (context-aware)
-   !> Computes and caches screened LSF value
+   !> SLSQP constraint `g(x) = LSF(x) = 0` (context-aware)
+   !>
+   !> - computes and caches the screened LSF value
    subroutine slsqp_constraint(x, g, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: g
@@ -740,8 +761,8 @@ contains
 
       if (.not. associated(ctx%projector)) return
 
-      ! Compute screened LSF value (and grad) and cache them in projector
-      ! Using ctx%lsf which comes from the projector context
+      ! Compute the screened LSF value and gradient and cache both in the
+      ! projector, via the ctx%lsf taken from the projector context
       call ctx%projector%compute_ssd(x)
 
       call ctx%lsf%f012_r( &
@@ -751,8 +772,10 @@ contains
       g(1) = ctx%projector%cached_lsf0
 
    end subroutine slsqp_constraint
-   !> SLSQP constraint gradient: dg(x) = dLSF(x) (context-aware)
-   !> Uses cached LSF gradient computed by slsqp_constraint
+
+   !> SLSQP constraint gradient `dg(x) = dLSF(x)` (context-aware)
+   !>
+   !> - reads the LSF gradient cached by [[slsqp_constraint]]
 
    subroutine slsqp_constraint_grad(x, grad_g, context)
       real(wp), dimension(:), intent(in) :: x
@@ -770,9 +793,9 @@ contains
 
       if (.not. associated(ctx%projector)) return
 
-      ! Return cached LSF gradient from projector's cache.
-      ! Assumes slsqp_constraint was called for the same x before this
-      ! (standard SLSQP order: constraints evaluated, then gradients).
+      ! Return the LSF gradient from the projector's cache, assuming
+      ! slsqp_constraint ran for the same x beforehand
+      ! (standard SLSQP order: constraints evaluated, then gradients)
 
       grad_g(1, :) = ctx%projector%cached_lsf1_r(:)
 
@@ -780,14 +803,15 @@ contains
 
    !> Level set probe for the certified octree search (context-aware)
    !>
-   !> Returns the LSF value and the radius of a ball around `x` that the LSF
-   !> can prove holds no surface. Only the value is needed, so this runs on the
-   !> cheapest evaluation path -- the caller drops the LSF to `max_deriv = 0`
-   !> for the duration of the search.
+   !> Returns the LSF value, plus the radius of a ball around `x` the LSF can
+   !> prove holds no surface
+   !>
+   !> - only the value is needed, so this runs on the cheapest evaluation path
+   !> - the caller drops the LSF to `max_deriv = 0` for the search
    !>
    !> An LSF failure is latched in the projector's `abort_error` exactly as in
    !> the SLSQP callbacks; the value handed back afterwards is stale, but the
-   !> caller checks `abort_error` once the search returns and discards the run.
+   !> caller checks `abort_error` once the search returns and discards the run
    !>
    !> @param[in]  x       Evaluation point
    !> @param[out] lsf0    LSF value at `x`
@@ -822,8 +846,10 @@ contains
    !*                    Seed generation: multi-start solver drivers                    *!
    !* ================================================================================= *!
 
-   !> Extract candidate seeds from a multi-start or multi-tangent solver.
-   !> Unifies the type-dispatch + filter + packing logic shared by both solver types.
+   !> Extract candidate seeds from a multi-start or multi-tangent solver
+   !>
+   !> - unifies the type dispatch, filter and packing shared by both solver types
+   !>
    !> @param[inout] self       Projector (needed for filter_candidates)
    !> @param[inout] solver     Solved multi-start or multi-tangent solver
    !> @param[in]    anchor     Anchor point for filtering
@@ -844,9 +870,9 @@ contains
 
       n_seeds = 0
 
-      ! Dispatch to the type-specific get_raw_candidates call. Newton-deflation
-      ! returns 4-row (x, lambda) candidates; we strip lambda right here so the
-      ! downstream filter only sees xyz.
+      ! Dispatch to the type-specific get_raw_candidates call; Newton-deflation
+      ! returns 4-row (x, lambda) candidates, whose lambda is stripped right here
+      ! so the downstream filter only sees xyz
       select type (ms_solver => solver)
       type is (moist_math_solver_slsqp_multistart_type)
          call ms_solver%get_raw_candidates(candidates, n_candidates)
@@ -912,7 +938,8 @@ contains
 
    end subroutine extract_seeds_from_solver
 
-   !> Run a multi-start or multi-tangent SLSQP solver and return filtered seed points.
+   !> Run a multi-start or multi-tangent SLSQP solver and return filtered seed points
+   !>
    !> @param[inout] self         Projector instance
    !> @param[in]    level        Projection level (8 fine reference, 7 multistart, 6 Newton-defl, 4-5 SLSQP-defl, <4 multi-tangent)
    !> @param[in]    anchor       Anchor point
@@ -948,9 +975,9 @@ contains
 
       n_seeds = 0
 
-      ! Choose solver and assemble it. The SLSQP variants work in 3-D xyz;
-      ! Newton-deflation works on the full 4-D KKT system z = (x, lambda),
-      ! so its branch needs separate seed handling.
+      ! Choose solver and assemble it; the SLSQP variants work in 3-D xyz while
+      ! Newton-deflation works on the full 4-D KKT system z = (x, lambda), so its
+      ! branch needs separate seed handling
       !
       !   level == 8 : fine SLSQP multistart reference               -- 3D
       !   level == 7 : regular SLSQP multistart baseline            -- 3D
@@ -1006,7 +1033,7 @@ contains
             )
       else if (level == 6) then
          ! Newton solves the augmented Lagrangian system, so we need
-         ! second-order LSF derivatives for the Hessian block.
+         ! second-order LSF derivatives for the Hessian block
          lxl(1:3) = xl
          lxu(1:3) = xu
          lxl(4) = -1.0e6_wp
@@ -1092,7 +1119,7 @@ contains
 
       ! SLSQP-style solvers only need value+gradient (max_deriv=1, skips
       ! per-atom Hessians); Newton-deflation needs the LSF Hessian for the
-      ! Lagrangian block, so it requires max_deriv=2.
+      ! Lagrangian block, so it requires max_deriv=2
       if (level == 6) then
          req_max_deriv = 2
       else
@@ -1135,7 +1162,7 @@ contains
    end subroutine projector_run_multistart_solver
 
    !> Build the deterministic high-density SLSQP multistart profile used by
-   !> projection level 8 reference tests.
+   !> projection level 8 reference tests
    subroutine build_fine_multistart_profile(radii, n_points)
       real(wp), allocatable, intent(out) :: radii(:)
       integer, allocatable, intent(out) :: n_points(:)
@@ -1162,7 +1189,8 @@ contains
       end do
    end subroutine build_fine_multistart_profile
 
-   !> Run a single local SLSQP solver and return its result as a one-element seed array.
+   !> Run a single local SLSQP solver and return its result as a one-element seed array
+   !>
    !> @param[inout] self         Projector instance
    !> @param[in]    anchor       Anchor point
    !> @param[in]    xl           Lower bounds
@@ -1173,10 +1201,9 @@ contains
    !> @param[out]   x_seeds      Seed point (3, 1)
    !> @param[out]   n_seeds      Always 1 on success
    !> @param[out]   error        Error descriptor
-   !> @param[out]   converged    Optional: whether SLSQP itself converged. The
-   !>                            seed is returned either way (the caller may
-   !>                            still refine it), so a caller that needs to
-   !>                            trust the seed's displacement must ask
+   !> @param[out]   converged    Whether SLSQP itself converged (optional); the
+   !>                            seed is returned either way, so a caller that
+   !>                            must trust the seed's displacement has to ask
    subroutine projector_run_single_solver(self, anchor, xl, xu, proj_context, &
                                           index, x_slsqp, x_seeds, n_seeds, error, &
                                           converged)
@@ -1253,26 +1280,29 @@ contains
    !>
    !> When phase 0 gives no bound the search would otherwise start from the
    !> full displacement threshold, and certifying a 15 Bohr ball costs an order
-   !> of magnitude more boxes than certifying the shell that actually matters.
+   !> of magnitude more boxes than certifying the shell that actually matters
    !>
-   !> A single ray does far better. Marching along the surface normal by the
-   !> Newton step `|S| / ||grad S||` reaches the surface in a handful of
-   !> evaluations, and the step either overshoots -- flipping the sign, which
-   !> proves by the intermediate value theorem that the surface lies no further
-   !> out than this point -- or converges onto it, at which point `|S|` inside
-   !> the feasibility tolerance means the same thing to the same standard the
-   !> phase-0 point is judged by.
+   !> A single ray does far better, marching along the surface normal by the
+   !> Newton step `|S| / ||grad S||` and reaching the surface in a handful of
+   !> evaluations, where the step either
    !>
-   !> The plain sphere-tracing step of `|S|` is not enough here. It is the safe
-   !> step for a 1-Lipschitz field precisely because it cannot cross the
-   !> surface, and where the SvdW smoothing makes `||grad S||` small it creeps:
-   !> each step cuts `|S|` by only a factor `||grad S||`, so the walk converges
-   !> geometrically and runs out of budget short of the surface. On a symmetric
-   !> carbon cube that was every single ray.
+   !> - overshoots, flipping the sign, which proves by the intermediate value
+   !>   theorem that the surface lies no further out than this point, or
+   !> - converges onto it, `|S|` inside the feasibility tolerance meaning the same
+   !>   thing to the same standard the phase-0 point is judged by
+   !>
+   !> The plain sphere-tracing step of `|S|` is not enough here:
+   !>
+   !> - it is the safe step for a 1-Lipschitz field precisely because it cannot
+   !>   cross the surface
+   !> - where the SvdW smoothing makes `||grad S||` small it creeps, each step
+   !>   cutting `|S|` by only a factor `||grad S||`
+   !> - the walk then converges geometrically and runs out of budget short of the
+   !>   surface, which on a symmetric carbon cube was every single ray
    !>
    !> The ray can still stall, running tangentially past a shoulder without ever
    !> reaching the surface; the step budget catches that and the caller keeps
-   !> its conservative fallback.
+   !> its conservative fallback
    !>
    !> @param[inout] self         Projector instance
    !> @param[in]    anchor       Anchor point
@@ -1306,13 +1336,13 @@ contains
       ! Prime the cached value and gradient at the anchor. `slsqp_constraint_grad`
       ! hands back whatever the last `slsqp_constraint` call computed, and that
       ! call was at the phase-0 point -- stepping the anchor along a gradient
-      ! belonging to somewhere else sends the ray off in the wrong direction.
+      ! belonging to somewhere else sends the ray off in the wrong direction
       x = anchor
       call slsqp_constraint(x, val, proj_context)
 
       ! No single step may leave the region the caller would have certified
       ! anyway, so a near-vanishing gradient cannot fling the ray across the
-      ! molecule and bound `rho_min` by something meaningless.
+      ! molecule and bound `rho_min` by something meaningless
       max_step = self%max_displacement_threshold
 
       do istep = 1, max_steps
@@ -1328,7 +1358,7 @@ contains
          if (grad_norm < grad_floor) return
 
          ! Toward the surface: up the gradient from inside, down it from
-         ! outside, by the first-order distance estimate |S| / ||grad S||.
+         ! outside, by the first-order distance estimate |S| / ||grad S||
          step_dir = grad/grad_norm
          if (val(1) > 0.0_wp) step_dir = -step_dir
          step_len = min(abs(val(1))/grad_norm, max_step)
@@ -1337,7 +1367,7 @@ contains
          call slsqp_constraint(x, val, proj_context)
 
          ! A sign flip means the segment just traversed crosses the surface,
-         ! so the surface is no further out than this point.
+         ! so the surface is no further out than this point
          if (val(1)*lsf0_anchor < 0.0_wp) then
             rho_bound = norm2(x - anchor)
             found = .true.
@@ -1348,19 +1378,25 @@ contains
 
    !> Enumerate every branch seed for one anchor, with a completeness certificate
    !>
-   !> Two phases. Phase 0 runs the plain local SLSQP and keeps its point as a
-   !> seed without refining it -- the Newton pass downstream refines every seed
-   !> at once, so doing it here would only duplicate work. What phase 0 really
-   !> buys is its displacement: knowing one branch at `rho_1` caps every other
-   !> branch that can still carry weight at `sqrt(rho_1^2 + slack)`, which for
-   !> the default softmax is a shell barely a tenth of a Bohr thick. The octree
-   !> then has to certify that shell rather than the whole displacement bound.
+   !> Two phases, of which phase 0 runs the plain local SLSQP and keeps its point
+   !> as a seed without refining it:
    !>
-   !> Correctness never rests on phase 0. Its `rho_1` is a local minimum and may
-   !> not be the closest one, which only makes the certified ball a superset of
-   !> the required one; if it does not converge at all the search simply starts
-   !> from the full displacement bound and tightens itself from the first sign
-   !> change it meets. Either way the octree's own bound is what is certified.
+   !> - the Newton pass downstream refines every seed at once, so refining here
+   !>   would only duplicate work
+   !> - what phase 0 really buys is its displacement -- knowing one branch at
+   !>   `rho_1` caps every other branch that can still carry weight at
+   !>   `sqrt(rho_1^2 + slack)`, a shell barely a tenth of a Bohr thick for the
+   !>   default softmax
+   !> - the octree then certifies that shell rather than the whole displacement
+   !>   bound
+   !>
+   !> Correctness never rests on phase 0:
+   !>
+   !> - its `rho_1` is a local minimum and may not be the closest one, which only
+   !>   makes the certified ball a superset of the required one
+   !> - if it does not converge at all, the search simply starts from the full
+   !>   displacement bound and tightens itself from the first sign change it meets
+   !> - either way the octree's own bound is what is certified
    !>
    !> @param[inout] self         Projector instance
    !> @param[in]    anchor       Anchor point
@@ -1389,7 +1425,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       !> Largest |S| at which the phase-0 point still counts as sitting on the
-      !> surface. Matches the feasibility tolerance the KKT check uses.
+      !> surface, matching the feasibility tolerance the KKT check uses
       real(wp), parameter :: phase0_feasible_tol = 1.0e-6_wp
 
       real(wp), allocatable :: phase0_seeds(:, :)
@@ -1399,8 +1435,8 @@ contains
 
       n_seeds = 0
 
-      ! The octree scratch is sized once per thread. projector_init cannot do
-      ! it because it has no channel to report an invalid budget.
+      ! The octree scratch is sized once per thread; projector_init cannot size
+      ! it, having no channel to report an invalid budget
       if (.not. allocated(self%octree%seeds)) then
          call self%octree%init(seed_size=self%octree_seed_size, &
                                max_boxes=self%octree_max_boxes, &
@@ -1413,7 +1449,7 @@ contains
 
       ! The search reports itself at the end of `run`. Anchors are projected in
       ! parallel, so serialize it or the per-anchor blocks interleave into
-      ! something unreadable.
+      ! something unreadable
       self%octree%debug = self%debug
       self%octree%unit = output_unit
       self%octree%point_id = index
@@ -1428,13 +1464,16 @@ contains
       phase0_usable = rho_1 <= rho_fallback
 
       ! Whether phase 0 hands over a *bound* is a question about its point, not
-      ! about its exit status. `rho_min <= rho_1` needs the segment from the
-      ! anchor to hit the surface, which the intermediate value theorem gives
-      ! when the point landed on the surface or crossed to the far side of it.
-      ! An SLSQP that stopped on iteration count usually still lands there, and
-      ! reading its status as "no bound" sends the search off to certify the
-      ! whole displacement ball for nothing -- on a symmetric carbon cube that
-      ! was a fifth of the anchors, at four times the boxes each.
+      ! about its exit status:
+      !
+      ! - `rho_min <= rho_1` needs the segment from the anchor to hit the
+      !   surface, which the intermediate value theorem gives when the point
+      !   landed on the surface or crossed to the far side of it
+      ! - an SLSQP that stopped on iteration count usually still lands there,
+      !   so reading its status as "no bound" sends the search off to certify
+      !   the whole displacement ball for nothing
+      ! - on a symmetric carbon cube that was a fifth of the anchors, at four
+      !   times the boxes each
       call slsqp_constraint(x_slsqp, tmp_val, proj_context)
       phase0_bound = phase0_usable .and. &
                      (abs(tmp_val(1)) <= phase0_feasible_tol .or. &
@@ -1443,10 +1482,10 @@ contains
       if (phase0_bound) then
          rho_start = sqrt(rho_1*rho_1 + self%branch_rho2_slack)
       else
-         ! Phase 0 gave nothing usable. Rather than fall straight back to the
+         ! Phase 0 gave nothing usable; rather than fall straight back to the
          ! displacement threshold, spend a few LSF evaluations tracing one ray
-         ! to the surface; on a symmetric cluster that is the difference
-         ! between a 15 Bohr ball and the shell that actually holds branches.
+         ! to the surface, which on a symmetric cluster is the difference
+         ! between a 15 Bohr ball and the shell that actually holds branches
          call self%trace_rho_bound(anchor, lsf0_anchor, proj_context, &
                                    phase0_feasible_tol, rho_traced, traced_ok)
          if (traced_ok) then
@@ -1470,7 +1509,7 @@ contains
       !> Certified octree search over the admissible ball
 
       ! The search reads only the LSF value, so drop the per-atom derivative
-      ! work for its duration.
+      ! work for its duration
       call self%lsf%set_max_deriv(0)
       self%ssd_cache_valid = .false.
 
@@ -1498,9 +1537,9 @@ contains
       self%ssd_cache_valid = .false.
 
       ! A search that could not finish is fatal to the whole build, not just to
-      ! this anchor. The ordinary per-anchor failure path would keep the anchor
-      ! and mark it unconverged, quietly deleting it from the quadrature -- and
-      ! a certified level that silently drops points is worse than none.
+      ! this anchor; the ordinary per-anchor failure path would keep the anchor
+      ! and mark it unconverged, quietly deleting it from the quadrature, and a
+      ! certified level that silently drops points is worse than none
       if (allocated(error)) then
          call move_alloc(error, self%abort_error)
          return
@@ -1520,7 +1559,7 @@ contains
       ! The phase-0 point is kept as a seed whenever it is inside the
       ! displacement bound, even when it gave no usable *bound* -- refining it
       ! costs one Newton solve and `filter_candidates` drops it if it is not a
-      ! branch that carries weight.
+      ! branch that carries weight
       allocate (x_seeds(3, n_octree + n_phase0), source=0.0_wp)
       if (phase0_usable) then
          do i_seed = 1, n_phase0
@@ -1538,8 +1577,11 @@ contains
    !*                 Projection pipeline (seed refinement and dispatch)                *!
    !* ================================================================================= *!
 
-   !> Refine seed points onto the LSF surface and populate the projection workspace.
-   !> At level 1, uses fast SLSQP-only diagnostics; at level >= 2, applies Newton refinement.
+   !> Refine seed points onto the LSF surface and populate the projection workspace
+   !>
+   !> - level 1 -- fast SLSQP-only diagnostics
+   !> - level >= 2 -- Newton refinement on top
+   !>
    !> @param[inout] self      Projector instance
    !> @param[in]    level     Projection level
    !> @param[in]    anchor    Anchor point
@@ -1573,9 +1615,9 @@ contains
       !> intentionally passes an empty seed list so the n_points == 0 onion
       !> fallback can run. reserve(0) is a legal no-op in that case and the
       !> workspace may still be unallocated on its first use, so skip the
-      !> allocation sanity check.
+      !> allocation sanity check
       if (n_seeds > 0) then
-         ! `reserve` reports which buffer it refused and why; keep that.
+         ! `reserve` reports which buffer it refused and why; keep that
          call work%reserve(n_seeds, error)
          if (allocated(error)) return
          if (.not. allocated(work%points) .or. .not. allocated(work%normals) .or. &
@@ -1592,8 +1634,8 @@ contains
       end if
 
       if (level == 1) then
-         ! Fast path: keep pure SLSQP result, no Newton/KKT refinement
-         ! Still populate diagnostics (rho, phi, normal, lambda estimate)
+         ! Fast path: keep the pure SLSQP result, no Newton/KKT refinement,
+         ! but still populate diagnostics (rho, phi, normal, lambda estimate)
          do i_seed = 1, n_seeds
             n_points = n_points + 1
             if (n_points > work%capacity) then
@@ -1698,13 +1740,14 @@ contains
 
    !*-------------------- Top-level projection entry point------------------- *!
 
-   !> Project an anchor point onto the LSF surface and return one or more branches.
+   !> Project an anchor point onto the LSF surface and return one or more branches
    !>
    !> Dispatches to a single-SLSQP or multi-start solver depending on
    !> projection level and local gradient quality, refines the resulting seeds,
-   !> deduplicates, and populates the workspace and optional output arrays.
-   !> If the single-solver path yields no surviving points, a multistart
-   !> fallback is attempted before giving up.
+   !> deduplicates, and populates the workspace and optional output arrays
+   !>
+   !> - a multistart fallback is attempted before giving up when the
+   !>   single-solver path yields no surviving points
    subroutine projector_project_point(self, anchor, gridpoints, n_points, owner, index, &
                                       proj_level, &
                                       initial_guess, error, &
@@ -1789,7 +1832,7 @@ contains
 
       ! Level 9 certifies every anchor: there is no gradient gate, because a
       ! gate would leave the anchors it skips uncertified and the guarantee is
-      ! the whole point of the level. Cheap gating belongs in a heuristic mode.
+      ! the whole point of the level -- cheap gating belongs in a heuristic mode
       if (level >= 9) then
          call self%run_octree_search(anchor, xl, xu, proj_context, index, &
                                      x_slsqp, tmp_val(1), rho_max, &
@@ -1980,10 +2023,10 @@ contains
          end if
       end do
 
-      !> Discard points that cannot carry branch weight. A branch enters the
+      !> Discard points that cannot carry branch weight; a branch enters the
       !> quadrature with weight exp[-(Phi_b - Phi_min)/sigma], and with the
       !> quadratic objective Phi = (alpha/2) rho^2 that admissible set is a
-      !> difference of *squares*: rho_b^2 <= rho_min^2 + pm_sep_cut.
+      !> difference of *squares*: rho_b^2 <= rho_min^2 + pm_sep_cut
       rho2_min = huge(1.0_wp)
       do i = 1, n_candidates
          if (keep_mask(i)) then
@@ -2359,7 +2402,8 @@ contains
    !* ================================================================================= *!
 
    !> Check whether a converged KKT solution is a constrained local minimum or saddle
-   !> Uses reduced Hessian eigenvalues in the tangent space (not bordered KKT)
+   !>
+   !> - uses reduced Hessian eigenvalues in the tangent space, not bordered KKT
    !>
    !> @param[in]     r_star     Candidate solution point
    !> @param[in]     anchor     Anchor point for projection (r0)
@@ -2478,7 +2522,7 @@ contains
       ! (For this specific problem: Phi = 0.5*||r - r0||^2, so hess_phi = I)
       H_lagrangian = hess_phi - lambda*hess_S
 
-      ! Step 3: Compute reduced Hessian R = T^T * H_L * T (2x2) using intrinsic matmul
+      ! Step 3: reduced Hessian R = T^T * H_L * T (2x2), via intrinsic matmul
       tmp = matmul(H_lagrangian, T_mat)     ! tmp = H_L * T (3x2)
       R_reduced = matmul(transpose(T_mat), tmp)  ! R = T^T * tmp (2x2)
 
@@ -2535,9 +2579,9 @@ contains
          ! (phi is quadratic, so d3(phi) = 0)
          d_degen = matmul(T_mat, v_min)
 
-         ! Temporarily upgrade SSD to third-order derivatives for degenerate test.
+         ! Temporarily upgrade SSD to third-order derivatives for degenerate test
          ! The SSD is normally max_deriv=2; we allocate f3_rrr_arr on the fly,
-         ! recompute for the current point, then restore.
+         ! recompute for the current point, then restore
          call self%lsf%set_max_deriv(3)
          self%ssd_cache_valid = .false.
          call self%compute_ssd(r_star)
@@ -2570,8 +2614,8 @@ contains
          end if
 
          if (abs(D3_ddd) > tol_D3) then
-            ! Nonzero third derivative => inflection point on the surface
-            ! This is NOT a local minimum; treat as saddle (escapable)
+            ! Nonzero third derivative => inflection point on the surface,
+            ! NOT a local minimum; treat as saddle (escapable)
             if (self%debug) then
                write (output_unit, "(5x,a)") "*** INFLECTION: nonzero D3 => treating as saddle ***"
             end if
@@ -2601,13 +2645,14 @@ contains
    !*      (Surface walker along the constraint in the direction of lowest penalty)     *!
    !* ================================================================================= *!
 
-   !> Riemannian Newton method to escape saddle points on constrained surface
-   !> Uses negative curvature direction to escape, then descends to minimum
+   !> Riemannian Newton method to escape saddle points on the constrained surface
+   !>
+   !> - uses the negative curvature direction to escape, then descends to a minimum
    !>
    !> Strategy:
-   !>   1. At saddle: identify negative curvature direction in tangent space
-   !>   2. Take step along negative eigenvector to escape saddle
-   !>   3. Once escaped, use standard Riemannian gradient descent to reach minimum
+   !>   1. at a saddle, identify the negative curvature direction in tangent space
+   !>   2. take a step along the negative eigenvector to escape the saddle
+   !>   3. once escaped, reach the minimum by Riemannian gradient descent
    !>
    !> @param[in]     r_init      Initial point
    !> @param[in]     anchor      Anchor point for projection (r0)
@@ -2897,7 +2942,7 @@ contains
             r_out = r_curr
 
             ! Compute lambda from KKT stationarity: grad_phi = lambda * grad_S
-            ! Use least-squares projection to handle small numerical inconsistency.
+            ! Use least-squares projection to handle small numerical inconsistency
             norm_grad_S = dot_product(grad_S, grad_S)
             if (norm_grad_S < 1.0e-14_wp) then
                call fatal_error(error, "Retraction failed: degenerate LSF gradient at converged point")
@@ -2937,8 +2982,9 @@ contains
       call finalize_projector(self)
    end subroutine projector_destroy
 
-   !> Finalizer for projector type to properly deallocate all allocatable components
-   !> The nested phi type has its own finalizer that will be called automatically
+   !> Finalizer deallocating every allocatable component of the projector type
+   !>
+   !> - the nested phi type has its own finalizer, called automatically
    subroutine finalize_projector(self)
       type(drop_projector_type), intent(inout) :: self
       call self%mol_cell_grid%destroy()

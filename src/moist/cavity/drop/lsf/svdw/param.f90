@@ -57,7 +57,6 @@ contains
       call self%register_real_scalar("blend_3b", self%blend_3b)
    end subroutine register_parameter_entries
 
-
    !> Override any subset of SvdW parameter fields
    !>
    !> @param[inout] self     SvdW parameter instance

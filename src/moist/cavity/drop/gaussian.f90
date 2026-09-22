@@ -1,9 +1,10 @@
 !> Gaussian-based switching functions for DROP cavities
 !>
-!> For efficient evaluation, a sorted per-atom neighbor list is built
-!> during set_input using [[adjacency_list_type]] (O(N) cell-grid build).
-!> This enables O(n_neighbors) switching function evaluation with early
-!> exit instead of O(nsph) per point
+!> For efficient evaluation, a sorted per-atom neighbor list is built during
+!> `set_input` using [[adjacency_list_type]], an O(N) cell-grid build
+!>
+!> - enables O(n_neighbors) switching function evaluation with early exit,
+!>   instead of O(nsph) per point
 module moist_cavity_drop_gaussian
    use mctc_env_accuracy, only: wp
    use mctc_io_constants, only: pi
@@ -15,7 +16,7 @@ module moist_cavity_drop_gaussian
 
    public :: moist_cavity_drop_iswig, new_iswig
 
-   !> Erf argument threshold beyond which erf(x) = 1 within double precision (erf(6) = 1 - 2.2e-17)
+   !> Erf argument beyond which erf(x) = 1 in double precision (erf(6) = 1 - 2.2e-17)
    real(wp), parameter :: erf_cutoff = 6.0_wp
 
    !> iSwig switching function type
@@ -53,7 +54,7 @@ contains
 
    end subroutine new_iswig
 
-   !> Set molecular geometry and radii for iSwig switching function.
+   !> Set molecular geometry and radii for iSwig switching function
    !>
    !> @param[in] mol      Molecular structure
    !> @param[in] radii    Atomic radii (bohr)
@@ -107,10 +108,10 @@ contains
 
       self%R_max = maxval(self%radii)
 
-      ! Global cutoff: conservative bound that includes all relevant pairs.
+      ! Global cutoff: conservative bound that includes all relevant pairs
       ! Per-atom break distance is R_i + R_max + erf_cutoff / xi_min(i)
-      ! where xi_min(i) = swx / (R_i * sqrt(wleb_max)).
-      ! Maximum over all atoms occurs at R_i = R_max.
+      ! where xi_min(i) = swx / (R_i * sqrt(wleb_max))
+      ! Maximum over all atoms occurs at R_i = R_max
       cutoff_global = self%R_max*(2.0_wp + erf_cutoff*sqrt(wleb_max)/self%swx)
 
       ! Build adjacency list (distances and sorting handled internally)
@@ -185,7 +186,7 @@ contains
 
    end function iswig_xi1_rA
 
-   !> Compute iSwig switching function value for a single surface point.
+   !> Compute iSwig switching function value for a single surface point
    !>
    !> The switching function is computed as:
    !>   f = prod [1 - 0.5 * (erf(xi*(R_j+r_ij)) + erf(xi*(R_j-r_ij)))]

@@ -11,24 +11,25 @@ module moist_cavity_drop_branching
    !>
    !> Uses the softmax model
    !> p_m = exp(-Phi_m/sigma_phi) / sum_n exp(-Phi_n/sigma_phi)
-   !> with softmax width sigma_phi = s.
+   !> with softmax width sigma_phi = s
    type :: branch_weight_type
-      !> Softmax scale parameter; also serves as the softmax width sigma_phi.
+      !> Softmax scale parameter; also serves as the softmax width sigma_phi
       real(wp) :: s = 1.0_wp
    contains
-      !> Initialize softmax scale parameter.
+      !> Initialize softmax scale parameter
       procedure :: init => branch_weight_init
-      !> Compute branch weights for one branch group.
+      !> Compute branch weights for one branch group
       procedure :: weights => branch_weight_weights
-      !> Compute Shannon entropy of branch weights for one branch group.
+      !> Compute Shannon entropy of branch weights for one branch group
       procedure :: branch_weights_entropy
-      !> Compute branch weights and derivatives for one branch group.
+      !> Compute branch weights and derivatives for one branch group
       procedure :: weights_grad => branch_weight_weights_grad
    end type branch_weight_type
 
 contains
 
    !> Initialize branch-weight model
+   !>
    !> @param[inout] self Branch-weight instance
    !> @param[in]    s    Softmax scale parameter
    subroutine branch_weight_init(self, s)
@@ -39,6 +40,7 @@ contains
    end subroutine branch_weight_init
 
    !> Compute softmax branch weights from objective values
+   !>
    !> @param[in]  phi       Objective values Phi_m for one branch group
    !> @param[in]  sigma_phi Softmax width
    !> @param[out] weights   Softmax weights p_m
@@ -61,9 +63,10 @@ contains
       end if
    end subroutine softmax_weights
 
-   !> Compute softmax weights and their derivatives.
+   !> Compute softmax weights and their derivatives
    !>
    !> dweights(k,m) corresponds to derivative of p_m w.r.t. k
+   !>
    !> @param[in]  phi        Objective values Phi_m (nbranch)
    !> @param[in]  dphi       Derivatives dPhi/dq_k (nparam,nbranch)
    !> @param[in]  sigma_phi  Softmax width
@@ -110,6 +113,7 @@ contains
    end subroutine softmax_weights_grad
 
    !> Type-bound wrapper for softmax weights
+   !>
    !> @param[in]  self    Branch-weight instance
    !> @param[in]  phi     Objective values Phi_m
    !> @param[out] weights Softmax weights p_m
@@ -123,7 +127,8 @@ contains
 
    !> Type-bound Shannon entropy diagnostic for branch weights
    !>
-   !> Computes H = -sum_m p_m log(p_m) with p_m from the branch softmax model.
+   !> Computes H = -sum_m p_m log(p_m) with p_m from the branch softmax model
+   !>
    !> @param[in]  self    Branch-weight instance
    !> @param[in]  phi     Objective values Phi_m
    !> @param[out] entropy Branch entropy H
@@ -150,7 +155,8 @@ contains
    !> Type-bound wrapper for softmax weights and derivatives
    !>
    !> The softmax width sigma_phi = s is independent of the nuclear
-   !> coordinates, so dsigma_phi = 0 and only the dPhi term survives.
+   !> coordinates, so dsigma_phi = 0 and only the dPhi term survives
+   !>
    !> @param[in]  self     Branch-weight instance
    !> @param[in]  phi      Objective values Phi_m
    !> @param[in]  dphi     Derivatives dPhi/dq_k

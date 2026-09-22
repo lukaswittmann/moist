@@ -49,7 +49,7 @@ contains
    !> ```
    !>
    !> The full bordered system is solved rather than eliminating `dlambda`,
-   !> so `H_L` itself need not be invertible.
+   !> so `H_L` itself need not be invertible
    !>
    !> @param[in]    H_lagrangian Lagrangian Hessian at the projected point
    !> @param[in]    lsf1_r       Level-set gradient at the projected point
@@ -81,13 +81,14 @@ contains
 
    !> Fold an outward-normal adjoint into the level-set gradient and position channels
    !>
-   !> The normal `n = grad S / |grad S|` depends on the level set twice over: at
-   !> a fixed point through `grad S`, which lands on the gradient channel, and
-   !> through the point's own motion, which lands on the position channel as
-   !> `H @ normal_grad`.
+   !> The normal `n = grad S / |grad S|` depends on the level set twice over:
+   !>
+   !> - at a fixed point through `grad S`, landing on the gradient channel
+   !> - through the point's own motion, landing on the position channel as
+   !>   `H @ normal_grad`
    !>
    !> Call this only once the point is known to be usable -- a rejected point
-   !> must not leave a half-contracted weight behind.
+   !> must not leave a half-contracted weight behind
    !>
    !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
@@ -126,13 +127,14 @@ contains
 
    !> Push the 13 level-set jet directions through the kernel
    !>
-   !> The per-point map is linear in its seed, so seeding each basis direction
-   !> of the jet `(S, grad S, grad^2 S)` once and collecting the responses gives
-   !> the adjoint of the whole jet. Only the value and gradient directions move
-   !> the point; the nine Hessian directions have `dr/dp = 0`.
+   !> The per-point map is linear in its seed, so seeding each basis direction of
+   !> the jet `(S, grad S, grad^2 S)` once and collecting the responses gives the
+   !> adjoint of the whole jet
    !>
-   !> The results are point-local. `potential.f90` scatters them into
-   !> `w_lsf*(..., igrid)`; `nuclear.f90` contracts them with `lsf*_rA`.
+   !> - only the value and gradient directions move the point, the nine Hessian
+   !>   directions having `dr/dp = 0`
+   !> - the results are point-local: `potential.f90` scatters them into
+   !>   `w_lsf*(..., igrid)`, `nuclear.f90` contracts them with `lsf*_rA`
    !>
    !> @param[in]    state     Per-grid point forward state
    !> @param[in]    eff       Folded surface adjoints
@@ -191,7 +193,7 @@ contains
          call apply_seed(state, dlsf1_r, dlsf2_rr, dr_dp, dlambda_dp, res)
 
          ! No w_f term: the switching factor is an anchor-only iSwig overlap,
-         ! so a level-set perturbation at fixed nuclei leaves it alone.
+         ! so a level-set perturbation at fixed nuclei leaves it alone
          contribution = dot_product(w_xyz_pt, dr_dp) + eff%w_xi(igrid)*res%dxi
          if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
             contribution = contribution + eff%branch_phi_adj(igrid)*dot_product(phi1_r, dr_dp)
@@ -212,11 +214,11 @@ contains
 
    !> Push the three anchor directions through the kernel
    !>
-   !> The anchor moves rigidly with its owner sphere, so `da_i/dR_I = delta`.
+   !> The anchor moves rigidly with its owner sphere, so `da_i/dR_I = delta`
    !> The level-set field is untouched; the whole channel enters through the
-   !> objective, whose mixed derivative `-d^2 phi / dr dR_I` is `+alpha * I`.
+   !> objective, whose mixed derivative `-d^2 phi / dr dR_I` is `+alpha * I`
    !> That makes it three extra right-hand sides on the same factorization,
-   !> independent of the number of spheres.
+   !> independent of the number of spheres
    !>
    !> @param[in]    state      Per-grid point forward state
    !> @param[in]    eff        Folded surface adjoints

@@ -60,7 +60,6 @@ contains
       call self%register_int_scalar("m", self%m)
    end subroutine register_parameter_entries
 
-
    !> Override any subset of CFC parameter fields
    !>
    !> @param[inout] self  CFC parameter instance

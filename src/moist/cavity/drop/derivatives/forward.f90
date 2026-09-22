@@ -1,13 +1,11 @@
-!> Lgecacy forward-mode nuclear Jacobian of every DROP surface quantity
+!> Legacy forward-mode nuclear Jacobian of every DROP surface quantity
 !>
-!> This is a legacy duplicate of the new implementation as
-!> [[moist_cavity_drop_derivatives_kernel:build_seed_state]] +
-!> [[moist_cavity_drop_derivatives_kernel:apply_seed]], seeded with
-!> `dlsf1_r = lsf2_r_rA(:,beta,A)` and `dlsf2_rr = lsf3_rr_rA(:,:,beta,A)`.
-!>
-!> This is left in the code base to allow for comparisons and reference
-!> until possible bugs or inconsistencies in the reverse implementation
-!> are resolved
+!> - a legacy duplicate of the new implementation,
+!>   [[moist_cavity_drop_derivatives_kernel:build_seed_state]] +
+!>   [[moist_cavity_drop_derivatives_kernel:apply_seed]], seeded with
+!>   `dlsf1_r = lsf2_r_rA(:,beta,A)` and `dlsf2_rr = lsf3_rr_rA(:,:,beta,A)`
+!> - kept for comparison and reference until possible bugs or inconsistencies
+!>   in the reverse implementation are resolved
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_math_lapack_kinds, only: lapack_ik
@@ -66,10 +64,12 @@ contains
       !> OpenMP thread management
       integer :: thread_slot
       !> Thread whose timings stand in for the whole team, and the resulting
-      !> per-thread gate. The timer is not thread-safe (see utils/timer.f90),
-      !> so exactly one thread may touch it -- and only when the user asked for
-      !> a detailed profile, since ~20 timer calls per grid point in the hot
-      !> loop are not free.
+      !> per-thread gate
+      !>
+      !> - the timer is not thread-safe (see utils/timer.f90), so exactly one
+      !>   thread may touch it
+      !> - only when the user asked for a detailed profile, since ~20 timer calls
+      !>   per grid point in the hot loop are not free
       integer :: timer_ref_thread
       logical :: do_timing
       !> First failure seen anywhere in the parallel region
@@ -163,23 +163,25 @@ contains
       integer :: min_axis_surf
       real(wp) :: proj_surf, v_norm_surf, n_dot_q1_surf
 
-      !> Principal-curvature gradient intermediates (frame-free invariants).
-      !> Grid-level (per igrid): shape-operator invariants of the LSF Hessian H;
-      !> Hn = H n, adjH = adj(H), Cn = adj(H) n; T = k1+k2 = 2*KM, D = k1*k2 = KG.
+      !> Principal-curvature gradient intermediates (frame-free invariants)
+      !>
+      !> - grid-level, per igrid: shape-operator invariants of the LSF Hessian H
+      !> - Hn = H n, adjH = adj(H), Cn = adj(H) n
+      !> - T = k1+k2 = 2*KM, D = k1*k2 = KG
       real(wp) :: Hn_curv(3), Cn_curv(3), adjH(3, 3)
       real(wp) :: trH_curv, nHn_curv, T_curv, nCn_curv, D_curv, KM_curv, disc_curv
       !> Per-(atom,axis): total nuclear derivative of H and adj(H) and the
-      !> resulting curvature-invariant derivatives.
+      !> resulting curvature-invariant derivatives
       real(wp) :: dH_curv(3, 3), dadjH(3, 3)
       real(wp) :: dtrH_c, dnHn_c, dT_c, dnCn_c, dD_c, d_disc_c
       !> Guard below which the k1/k2 split is treated as (near-)umbilic and the
       !> discriminant derivative is set to zero (individual k1/k2 derivatives are
-      !> ill-defined at k1 = k2; KM and KG remain smooth).
+      !> ill-defined at k1 = k2; KM and KG remain smooth)
       real(wp), parameter :: curv_disc_guard = 1.0e-10_wp
 
-      ! Branch-weight post-pass state (serial, after main loop).
-      ! Softmax weights_grad takes dphi in (nparam, nbranch) layout where
-      ! nparam = 3 * nsph; we flatten (iatom, iaxis) -> (iatom - 1) * 3 + iaxis.
+      ! Branch-weight post-pass state (serial, after main loop)
+      ! Softmax weights_grad takes dphi in (nparam, nbranch) layout with
+      ! nparam = 3 * nsph, flattening (iatom, iaxis) -> (iatom - 1) * 3 + iaxis
       integer :: igroup_start, igroup_end, group_size, m_branch, im_grid
       integer :: owner_m, k_param
       real(wp) :: pt_m(3), anch_m(3), phi1_r_m(3), dphi_m, factor_m
@@ -247,9 +249,9 @@ contains
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
       allocate (self%xi1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
 
-      ! Principal-curvature gradients (diagnostic; gated by the same request
-      ! flag as the forward compute_curvature). Mean/Gaussian curvature
-      ! gradients are derived from these downstream, so they are not stored
+      ! Principal-curvature gradients, diagnostic and gated by the same request
+      ! flag as the forward compute_curvature; mean/Gaussian curvature gradients
+      ! are derived from these downstream, so they are not stored
       if (self%request%curvature) then
          if (allocated(self%k1_rA)) deallocate (self%k1_rA)
          allocate (self%k1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
@@ -260,12 +262,15 @@ contains
       call abort%reset()
 
       ! Pre-resolve the per-grid point timer handles under the "Gradients" node
-      ! once, before the parallel region. Inside the loop the single timing
-      ! thread uses these handles for pure-index start/stop with no lookup.
-      ! The caller (get_gradient_drop) opens "Gradients" by name first, so the
-      ! fine timers nest under whatever node is currently open -- regardless of
-      ! how deep it sits. Fall back to a top-level "Gradients" if
-      ! compute_gradient is invoked with nothing open.
+      ! once, before the parallel region:
+      !
+      ! - inside the loop the single timing thread uses these handles for
+      !   pure-index start/stop with no lookup
+      ! - the caller (get_gradient_drop) opens "Gradients" by name first, so the
+      !   fine timers nest under whatever node is currently open, regardless of
+      !   how deep it sits
+      ! - falls back to a top-level "Gradients" if compute_gradient is invoked
+      !   with nothing open
       h_grad = self%ctx%timer%current()
       if (h_grad == 0) h_grad = self%ctx%timer%resolve("Gradients", 0, cat_gradient)
       h_prim = self%ctx%timer%resolve("Primitives", h_grad)
@@ -280,7 +285,7 @@ contains
       h_vol = self%ctx%timer%resolve("Volume", h_grad)
       h_bw = self%ctx%timer%resolve("Branch weights", h_grad)
 
-      ! Loop over all grid points (parallelized).
+      ! Loop over all grid points (parallelized)
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, &
       !$omp& iatom, iaxis, jaxis, point, anchor, rho_vec, rho_norm, owner_idx, lsf0, lsf1_r, lsf2_rr, &
       !$omp& lsf1_rA, lsf2_r_rA, phi0, phi1_r, phi2_rr, phi2_r_rA, lambda_val, &
@@ -312,7 +317,7 @@ contains
       do_timing = thread_slot == timer_ref_thread .and. self%ctx%do_profile
 
       ! The LSF nuclear outputs are active-indexed and caller-owned; the buffers
-      ! are sized to the atom count, which bounds `active_count()` from above.
+      ! are sized to the atom count, which bounds `active_count()` from above
       allocate (lsf3_rrr(3, 3, 3))
       allocate (lsf3_rr_rA(3, 3, 3, self%nsph))
       allocate (active_idx(self%nsph))
@@ -505,8 +510,8 @@ contains
          ! n = grad(S) / ||grad(S)||
          ! dn/dr_A = (1/||grad(S)||) * [d(grad(S))/dr_A - n * (n^T * d(grad(S))/dr_A)]
          ! where d(grad(S))/dr_A = explicit + Hessian * dr/dr_A
-         ! Always computed into thread-local buffer (needed by volume gradient).
-         ! Stored to self%normal1_rA only when requested.
+         ! Always computed into thread-local buffer (needed by volume gradient)
+         ! Stored to self%normal1_rA only when requested
          if (do_timing) call self%ctx%timer%start(h_norm)
 
          dn_dR_buf = 0.0_wp
@@ -664,7 +669,7 @@ contains
 
          ! Grid-level principal-curvature invariants (frame independent)
          ! Shape operator of the level set: eigenvalues on the tangent plane are
-         ! the principal curvatures k1 >= k2. Using invariants avoids the
+         ! the principal curvatures k1 >= k2, and using invariants avoids the
          ! discontinuous tangent-frame choice of the forward compute_curvature:
          !   T = k1 + k2 = 2*KM = (tr H - n^T H n)/|g|
          !   D = k1 * k2 = KG   = (n^T adj(H) n)/|g|^2   (Goldman implicit-surface)
@@ -752,7 +757,7 @@ contains
                dBinv22 = (dB11*det_B - B11*ddet_B)/(det_B*det_B)
 
                ! Basis-invariant d lambda_switch / dr_A
-               ! Differentiate M = P A P; P_tan and AP_tan hoisted above atom loop.
+               ! Differentiate M = P A P; P_tan and AP_tan hoisted above atom loop
                dP_tan(:, :) = -(spread(dn_surf_dR, dim=2, ncopies=3)*spread(n_surf, dim=1, ncopies=3) &
                                 + spread(n_surf, dim=2, ncopies=3)*spread(dn_surf_dR, dim=1, ncopies=3))
                dM_tan = matmul(dP_tan, AP_tan) &
@@ -762,8 +767,8 @@ contains
 
                ! Sphere tangent frame is constant w.r.t. nuclear coordinates:
                ! n_sph = (anchor - R_I)/|...| has zero derivative for all atoms
-               ! (anchor moves rigidly with owner, fixed for others).
-               ! Therefore dt1/dr_A = dt2/dr_A = 0; t_vec1_rA stays at zero.
+               ! (anchor moves rigidly with owner, fixed for others)
+               ! Therefore dt1/dr_A = dt2/dr_A = 0; t_vec1_rA stays at zero
 
                ! dtau_k/dr_A: tau_k = Q^T t_k (dt_k = 0)
                dtau1(1) = dot_product(dq1_dR, t1_vec)
@@ -856,16 +861,16 @@ contains
                   dD_c = dnCn_c/g_norm_sq - 2.0_wp*D_curv*d_gnorm/g_norm
 
                   ! Discriminant split: disc^2 = KM^2 - KG, so
-                  ! 2 disc d(disc) = 2 KM dKM - dKG = (T/2) dT - dD.
+                  ! 2 disc d(disc) = 2 KM dKM - dKG = (T/2) dT - dD
                   if (disc_curv > curv_disc_guard) then
                      d_disc_c = (KM_curv*dT_c - dD_c)/(2.0_wp*disc_curv)
                   else
                      d_disc_c = 0.0_wp
                   end if
 
-                  ! Principal-curvature gradients. The mean/Gaussian curvature
-                  ! gradients are intentionally not stored: downstream they are
-                  !   dKM = (k1_rA + k2_rA)/2,  dKG = k2*k1_rA + k1*k2_rA.
+                  ! Principal-curvature gradients; the mean/Gaussian curvature
+                  ! gradients are intentionally not stored, being downstream
+                  !   dKM = (k1_rA + k2_rA)/2,  dKG = k2*k1_rA + k1*k2_rA
                   self%k1_rA(iaxis, iatom, igrid) = 0.5_wp*dT_c + d_disc_c
                   self%k2_rA(iaxis, iatom, igrid) = 0.5_wp*dT_c - d_disc_c
                end if
@@ -892,7 +897,7 @@ contains
          if (do_timing) call self%ctx%timer%start(h_sw)
 
          !> iswig switching derivatives: evaluated at anchor position
-         !> Uses built-in sorted neighbor list for inner loops (early exit).
+         !> Uses built-in sorted neighbor list for inner loops (early exit)
          self%f1_rA(:, :, igrid) = self%iswig%swi1_rA( &
                                    anchor, owner_idx, self%anchor_xi0(igrid), anchor_xi_local, &
                                    active=active_idx(1:n_active))
@@ -981,7 +986,7 @@ contains
       !* ========================= Branch-weight post-pass ========================= *!
       call self%ctx%timer%start(h_bw)
 
-      ! TODO: This will (have to be) refactored; for now this is a slightly ugly solution (and not parallel)
+      ! TODO: refactor this; for now a slightly ugly, non-parallel solution
 
       ! Assemble d(wbranch_m)/dr_A for every anchor group
       if (self%ngrid > 0 .and. any(self%branch_count(1:self%ngrid) > 1)) then
@@ -999,7 +1004,7 @@ contains
                cycle
             end if
 
-            ! Extend group while anchor_id stays the same.
+            ! Extend group while anchor_id stays the same
             igroup_end = igroup_start
             do while (igroup_end < self%ngrid)
                if (self%anchor_id(igroup_end + 1) /= self%anchor_id(igroup_start)) exit
@@ -1007,7 +1012,7 @@ contains
             end do
             group_size = igroup_end - igroup_start + 1
 
-            ! Gather phi and dphi for every branch.
+            ! Gather phi and dphi for every branch
             do m_branch = 1, group_size
                im_grid = igroup_start + m_branch - 1
                branch_phi(m_branch) = self%phi0(im_grid)
@@ -1015,16 +1020,16 @@ contains
                owner_m = self%owner(im_grid)
                pt_m = self%xyz(:, im_grid)
                anch_m = self%anchorxyz(:, im_grid)
-               ! phi = 0.5 * alpha * |r* - anch|^2, so d phi / d r = alpha * (r* - anch).
+               ! phi = 0.5 * alpha * |r* - anch|^2, so d phi / d r = alpha * (r* - anch)
                phi1_r_m = self%param%phi_alpha*(pt_m - anch_m)
 
                do iatom = 1, self%nsph
                   do iaxis = 1, 3
-                     ! Chain rule: phi1_r . d r*/d r_A^iaxis.
+                     ! Chain rule: phi1_r . d r*/d r_A^iaxis
                      dphi_m = dot_product(phi1_r_m, &
                                           self%xyz1_rA(:, iaxis, iatom, im_grid))
                      ! Direct: anch moves rigidly with the owner atom, so
-                     ! d phi / d R_owner = -alpha * (r* - anch) at fixed r*.
+                     ! d phi / d R_owner = -alpha * (r* - anch) at fixed r*
                      if (iatom == owner_m) then
                         dphi_m = dphi_m - phi1_r_m(iaxis)
                      end if
@@ -1122,9 +1127,9 @@ contains
    !> @param[in]  lsf1_rA    Active-indexed dS/dR_A
    !> @param[in]  lsf2_r_rA  Active-indexed d^2S/(dr dR_A)
    !> @param[in]  lsf3_rr_rA Active-indexed d^3S/(dr^2 dR_A)
-   !> @param[out] s1_rA      This atom's dS/dR_A [3]
-   !> @param[out] s2_r_rA    This atom's d^2S/(dr dR_A) [3, 3]
-   !> @param[out] s3_rr_rA   This atom's d^3S/(dr^2 dR_A) [3, 3, 3]
+   !> @param[out] s1_rA      dS/dR_A of this atom [3]
+   !> @param[out] s2_r_rA    d^2S/(dr dR_A) of this atom [3, 3]
+   !> @param[out] s3_rr_rA   d^3S/(dr^2 dR_A) of this atom [3, 3, 3]
    pure subroutine gather_lsf_partials(islot, lsf1_rA, lsf2_r_rA, lsf3_rr_rA, &
                                        s1_rA, s2_r_rA, s3_rr_rA)
       !> LSF active slot, or zero
