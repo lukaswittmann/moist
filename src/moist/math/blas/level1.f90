@@ -1,5 +1,5 @@
 !> @file moist/blas/level1.f90
-!> Provides interfactes to level 1 BLAS routines
+!> Provides interfaces to level 1 BLAS routines
 
 !> High-level interface to level 1 basic linear algebra subprogram operations
 module moist_math_blas_level1
@@ -14,7 +14,7 @@ module moist_math_blas_level1
    public :: wrap_copy
    public :: wrap_axpy
 
-   !> Forms the dot product of two vectors.
+   !> Forms the dot product of two vectors
    interface wrap_dot
       module procedure :: wrap_sdot
       module procedure :: wrap_ddot
@@ -26,32 +26,33 @@ module moist_math_blas_level1
       module procedure :: wrap_ddot22
    end interface wrap_dot
 
-   !> Euclidean (2-)norm of a vector.
+   !> Euclidean (2-)norm of a vector
    interface wrap_nrm2
       module procedure :: wrap_snrm2
       module procedure :: wrap_dnrm2
    end interface wrap_nrm2
 
-   !> Scale a vector in place by a scalar.
+   !> Scale a vector in place by a scalar
    interface wrap_scal
       module procedure :: wrap_sscal
       module procedure :: wrap_dscal
    end interface wrap_scal
 
-   !> Copy a vector into another.
+   !> Copy a vector into another
    interface wrap_copy
       module procedure :: wrap_scopy
       module procedure :: wrap_dcopy
    end interface wrap_copy
 
-   !> Constant times a vector plus a vector (y := y + a*x).
+   !> Constant times a vector plus a vector (y := y + a*x)
    interface wrap_axpy
       module procedure :: wrap_saxpy
       module procedure :: wrap_daxpy
    end interface wrap_axpy
 
-   !> Forms the dot product of two vectors.
-   !> Uses unrolled loops for increments equal to one.
+   !> Forms the dot product of two vectors
+   !>
+   !> - unrolled loops for increments equal to one
    interface blas_dot
       pure function sdot(n, x, incx, y, incy)
          import :: sp, blas_ik
@@ -73,7 +74,7 @@ module moist_math_blas_level1
       end function ddot
    end interface blas_dot
 
-   !> Euclidean norm of a vector (level-1 BLAS).
+   !> Euclidean norm of a vector (level-1 BLAS)
    interface blas_nrm2
       pure function snrm2(n, x, incx)
          import :: sp, blas_ik
@@ -91,7 +92,7 @@ module moist_math_blas_level1
       end function dnrm2
    end interface blas_nrm2
 
-   !> Scales a vector by a constant (level-1 BLAS).
+   !> Scales a vector by a constant (level-1 BLAS)
    interface blas_scal
       pure subroutine sscal(n, a, x, incx)
          import :: sp, blas_ik
@@ -109,7 +110,7 @@ module moist_math_blas_level1
       end subroutine dscal
    end interface blas_scal
 
-   !> Copies a vector into another (level-1 BLAS).
+   !> Copies a vector into another (level-1 BLAS)
    interface blas_copy
       pure subroutine scopy(n, x, incx, y, incy)
          import :: sp, blas_ik
@@ -129,7 +130,7 @@ module moist_math_blas_level1
       end subroutine dcopy
    end interface blas_copy
 
-   !> Constant times a vector plus a vector (level-1 BLAS).
+   !> Constant times a vector plus a vector (level-1 BLAS)
    interface blas_axpy
       pure subroutine saxpy(n, a, x, incx, y, incy)
          import :: sp, blas_ik

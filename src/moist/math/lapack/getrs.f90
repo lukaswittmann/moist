@@ -12,7 +12,7 @@ module moist_math_lapack_getrs
    !> Solves a system of linear equations
    !>    A * X = B  or  A**T * X = B
    !> with a general N-by-N matrix A using the LU factorization computed
-   !> by ?GETRF.
+   !> by ?GETRF
    interface wrap_getrs
       module procedure :: wrap_sgetrs
       module procedure :: wrap_dgetrs
@@ -21,7 +21,7 @@ module moist_math_lapack_getrs
    !> Solves a system of linear equations
    !>    A * X = B  or  A**T * X = B
    !> with a general N-by-N matrix A using the LU factorization computed
-   !> by ?GETRF.
+   !> by ?GETRF
    interface lapack_getrs
       pure subroutine sgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info)
          import :: sp, lapack_ik

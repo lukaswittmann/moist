@@ -1,7 +1,7 @@
-!> Small dense matrix inversion and analytic eigen-decomposition.
+!> Small dense matrix inversion and analytic eigen-decomposition
 !>
 !> Analytical routines for small fixed-size matrices that are not efficiently
-!> handled by BLAS/LAPACK due to call overhead.
+!> handled by BLAS/LAPACK due to call overhead
 module moist_math_linalg_decomp
    use mctc_env_accuracy, only: wp
    implicit none
@@ -14,10 +14,10 @@ contains
 
    !> Compute analytical inverse of a 3x3 matrix
    !>
-   !> Uses the adjugate matrix formula: A^{-1} = adj(A) / det(A)
-   !> Returns .false. if matrix is singular (within tolerance).
-   !> For 3x3 matrices, this analytical approach is faster than
-   !> LAPACK LU decomposition due to lower overhead.
+   !> - adjugate matrix formula: A^{-1} = adj(A) / det(A)
+   !> - .false. if the matrix is singular (within tolerance)
+   !> - at 3x3 the analytical route beats a LAPACK LU decomposition, thanks
+   !>   to the lower overhead
    !>
    !> @param[in]  A       Input 3x3 matrix to invert
    !> @param[out] Ainv    Output 3x3 inverse matrix
@@ -97,15 +97,15 @@ contains
    !> Analytic eigenvalue decomposition for 2x2 symmetric matrix
    !>
    !> For a symmetric 2x2 matrix R = [a b; b c], computes eigenvalues and
-   !> eigenvectors analytically using the characteristic polynomial. This is
-   !> significantly faster than calling LAPACK for such small matrices due to
-   !> elimination of function call overhead and optimized branch prediction.
+   !> eigenvectors analytically using the characteristic polynomial, far
+   !> faster than calling LAPACK for such small matrices thanks to the
+   !> eliminated call overhead and optimized branch prediction
    !>
    !> The eigenvalues are computed via the quadratic formula applied to
    !> the characteristic equation: lambda^2 - trace*lambda + det = 0
    !>
    !> Eigenvectors are computed using the standard formula (R - lambda*I)v = 0,
-   !> with special handling for diagonal and degenerate cases.
+   !> with special handling for diagonal and degenerate cases
    !>
    !> @param[in]  a          R(1,1) element
    !> @param[in]  b          R(1,2) = R(2,1) off-diagonal element
@@ -148,9 +148,9 @@ contains
       lambda_min = 0.5_wp*(trace - sqrt_disc)
       lambda_max = 0.5_wp*(trace + sqrt_disc)
 
-      ! Eigenvectors: For eigenvalue lambda, solve (R - lambda*I)*v = 0
-      ! First row: (a - lambda)*v1 + b*v2 = 0  =>  v2 = -(a - lambda)*v1 / b
-      ! Then normalize. Handle special cases when b ~= 0 (diagonal matrix)
+      ! Eigenvectors: for eigenvalue lambda, solve (R - lambda*I)*v = 0
+      !   first row: (a-lambda)*v1 + b*v2 = 0  =>  v2 = -(a-lambda)*v1/b
+      !   then normalize, with a special case for b ~= 0 (diagonal matrix)
 
       if (abs(b) > 1.0e-14_wp) then
          ! Non-diagonal case: use standard formula

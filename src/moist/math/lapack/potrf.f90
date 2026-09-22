@@ -1,4 +1,4 @@
-!> Computes the Cholesky factorization of a real symmetric positive definite matrix A.
+!> Computes the Cholesky factorization of a real symmetric positive definite matrix A
 module moist_math_lapack_potrf
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
@@ -8,28 +8,28 @@ module moist_math_lapack_potrf
    public :: wrap_potrf
 
    !> Computes the Cholesky factorization of a real symmetric
-   !> positive definite matrix A.
+   !> positive definite matrix A
    !>
    !> The factorization has the form
    !>    A = U**T * U,  if UPLO = 'U', or
    !>    A = L  * L**T,  if UPLO = 'L',
-   !> where U is an upper triangular matrix and L is lower triangular.
+   !> where U is an upper triangular matrix and L is lower triangular
    !>
-   !> This is the block version of the algorithm, calling Level 3 BLAS.
+   !> This is the block version of the algorithm, calling Level 3 BLAS
    interface wrap_potrf
       module procedure :: wrap_spotrf
       module procedure :: wrap_dpotrf
    end interface wrap_potrf
 
    !> Computes the Cholesky factorization of a real symmetric
-   !> positive definite matrix A.
+   !> positive definite matrix A
    !>
    !> The factorization has the form
    !>    A = U**T * U,  if UPLO = 'U', or
    !>    A = L  * L**T,  if UPLO = 'L',
-   !> where U is an upper triangular matrix and L is lower triangular.
+   !> where U is an upper triangular matrix and L is lower triangular
    !>
-   !> This is the block version of the algorithm, calling Level 3 BLAS.
+   !> This is the block version of the algorithm, calling Level 3 BLAS
    interface lapack_potrf
       pure subroutine spotrf(uplo, n, a, lda, info)
          import :: sp, lapack_ik

@@ -1,6 +1,6 @@
-!> Outer-product constructors, from rank-2 dyadics through rank-4 tensors.
+!> Outer-product constructors, from rank-2 dyadics through rank-4 tensors
 !>
-!> Direct small-size implementations that avoid BLAS/temporary overhead.
+!> Direct small-size implementations that avoid BLAS/temporary overhead
 module moist_math_linalg_outer
    use mctc_env_accuracy, only: wp
    implicit none
@@ -13,13 +13,15 @@ module moist_math_linalg_outer
 
 contains
 
-   !> Compute outer product of two vectors
-   !> Computes the dyadic (outer) product:
+   !> Outer product of two vectors
+   !>
+   !> Dyadic product:
    !> $$
    !> M_{ij} = \ell_i \, r_j
    !> $$
    !> Direct implementation is used for 3x3 matrices as it is faster than
-   !> BLAS dger due to lower function call overhead at this scale.
+   !> BLAS dger due to lower function call overhead at this scale
+   !>
    !> @param[in] left   Left vector [3]
    !> @param[in] right  Right vector [3]
    !> @returns   mat    Outer product matrix [3, 3]
@@ -36,25 +38,26 @@ contains
       mat(:, 3) = left*right(3)
    end function outer_matrix
 
-   !> Add a rank-1 outer product to a 3x3 matrix.
+   !> Add a rank-1 outer product to a 3x3 matrix
    !>
    !> Computes the in-place update
    !> \f[
    !>   A \leftarrow A + l\,r^{T},
    !> \f]
-   !> where \c l = \c left and \c r = \c right are 3-vectors and \c A is a 3x3 matrix.
-   !> This is equivalent to (but avoids forming the temporary)
+   !> where \c l = \c left and \c r = \c right are 3-vectors,
+   !> and \c A is a 3x3 matrix; equivalent to the following, minus the
+   !> temporary
    !> \code
    !>   A = A + outer_matrix(left, right)
    !> \endcode
    !>
    !> Notes:
-   !> - Implemented via three column updates \c A(:,j) += left * right(j).
-   !> - Avoids allocating/storing a temporary 3x3 matrix; typically faster in tight loops.
+   !> - Implemented via three column updates \c A(:,j) += left * right(j)
+   !> - Avoids allocating/storing a temporary 3x3 matrix; typically faster in tight loops
    !>
-   !> \param[in,out] A     3x3 matrix updated in-place.
-   !> \param[in]     left  Left vector (length 3).
-   !> \param[in]     right Right vector (length 3).
+   !> \param[in,out] A     3x3 matrix updated in-place
+   !> \param[in]     left  Left vector (length 3)
+   !> \param[in]     right Right vector (length 3)
    pure subroutine outer_add(A, left, right)
       real(wp), intent(inout) :: A(3, 3)
       real(wp), intent(in)    :: left(3), right(3)
@@ -64,13 +67,15 @@ contains
       A(:, 3) = A(:, 3) + left*right(3)
    end subroutine outer_add
 
-   !> Compute triple outer product of a vector with itself
-   !> Computes the rank-3 tensor:
+   !> Triple outer product of a vector with itself
+   !>
+   !> Rank-3 tensor:
    !> $$
    !> T_{ijk} = v_i \, v_j \, v_k
    !> $$
-   !> This creates a rank-3 tensor representing the third-order self outer product.
-   !> Used in fourth derivatives and tensor contractions.
+   !> - third-order self outer product
+   !> - used in fourth derivatives and tensor contractions
+   !>
    !> @param[in] vec    Input vector [3]
    !> @returns   tensor Rank-3 tensor [3, 3, 3]
    pure function outer3(vec) result(tensor)
@@ -90,8 +95,9 @@ contains
 
    end function outer3
 
-   !> Compute derivative of triple outer product
-   !> Computes the linearization of the triple outer product:
+   !> Derivative of the triple outer product
+   !>
+   !> Linearization:
    !> $$
    !> \frac{d}{dt}\left[\mathbf{v}(t) \otimes \mathbf{v}(t) \otimes \mathbf{v}(t)\right]
    !> = \delta\mathbf{v} \otimes \mathbf{v} \otimes \mathbf{v}
@@ -102,7 +108,8 @@ contains
    !> $$
    !> T_{ijk} = \delta v_i \, v_j \, v_k + v_i \, \delta v_j \, v_k + v_i \, v_j \, \delta v_k
    !> $$
-   !> This appears in sensitivities of fourth derivatives.
+   !> Appears in sensitivities of fourth derivatives
+   !>
    !> @param[in] vec    Base vector [3]
    !> @param[in] dvec   Derivative/perturbation of vector [3]
    !> @returns   tensor Linearized rank-3 tensor [3, 3, 3]
@@ -129,6 +136,7 @@ contains
    end function outer3_linear
 
    !> Self outer product of rank 4: T_{ijkl} = v_i v_j v_k v_l
+   !>
    !> @param[in] v   Input vector [3]
    !> @returns   t   Rank-4 tensor [3, 3, 3, 3]
    pure function outer4(v) result(t)

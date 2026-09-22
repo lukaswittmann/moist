@@ -1,12 +1,14 @@
-!> Generator for Lebedev-Laikov angular grids on the unit sphere.
-!> Adapted from John Burkardt's portation of Dmitri Laikov's C implementation of
+!> Generator for Lebedev-Laikov angular grids on the unit sphere
+!>
+!> Adapted from John Burkardt's portation of Dmitri Laikov's C implementation
+!> of
 !>
 !> V.I. Lebedev, and D.N. Laikov, "A quadrature formula for the sphere of the
 !> 131st algebraic order of accuracy", Doklady Mathematics, Vol. 59, No. 3,
-!> 1999, pp. 477-481.
+!> 1999, pp. 477-481
 !>
 !> Normalization: weights returned by `get_angular_grid` sum to 1 on the unit
-!> sphere (Laikov convention). Multiply by 4*pi to obtain solid-angle weights.
+!> sphere (Laikov convention); multiply by 4*pi for solid-angle weights
 module moist_math_grid_lebedev
    use iso_fortran_env, only: error_unit
    use mctc_env, only: error_type, fatal_error, get_argument, wp
@@ -179,8 +181,8 @@ contains
 
 !> Rotate Lebedev grid using extrinsic XYZ Euler angles
 !>
-!> Applies rotation matrix R = Rz(angle_z) * Ry(angle_y) * Rx(angle_x).
-!> Currently unused but available for grid orientation control.
+!> - applies rotation matrix R = Rz(angle_z) * Ry(angle_y) * Rx(angle_x)
+!> - currently unused, available for grid orientation control
 !>
 !> @param[inout] grid    Grid points (3, num_points)
 !> @param[in]    angle_x Rotation around x-axis [radians]

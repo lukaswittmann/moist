@@ -16,7 +16,7 @@ module moist_data_en
    !> Highest atomic number this table covers
    integer, parameter :: max_elem = 118
 
-   !> Pauling electronegativities, used for the covalent coordination number.
+   !> Pauling electronegativities, used for the covalent coordination number
    real(wp), parameter :: pauling_en(max_elem) = [ &
       & 2.20_wp, 3.00_wp, & ! H,He
       & 0.98_wp, 1.57_wp, 2.04_wp, 2.55_wp, 3.04_wp, 3.44_wp, 3.98_wp, 4.50_wp, & ! Li-Ne

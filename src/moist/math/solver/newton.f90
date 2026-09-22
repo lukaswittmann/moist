@@ -1,7 +1,7 @@
 !> Newton-Raphson nonlinear equation solver interface for MOIST
 !>
 !> self module provides a clean interface to the nlesolver_module,
-!> wrapping it with MOIST conventions and error handling.
+!> wrapping it with MOIST conventions and error handling
 module moist_math_solver_newton
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -142,7 +142,7 @@ module moist_math_solver_newton
       procedure :: destroy => newton_destroy
    end type moist_math_solver_newton_type
 
-   !> Internal per-instance callback payload for Newton wrapper callbacks.
+   !> Internal per-instance callback payload for Newton wrapper callbacks
    type, extends(nlesolver_type) :: moist_newton_bridge_type
       private
       !> Legacy callbacks
@@ -159,7 +159,7 @@ module moist_math_solver_newton
       procedure(debug_callback_context_interface), pointer, nopass :: user_debug_ctx => null()
       procedure(user_input_check_context_interface), pointer, nopass :: user_check_ctx => null()
 
-      !> Per-instance context and temporary callback state.
+      !> Per-instance context and temporary callback state
       class(*), allocatable :: user_context
       logical :: debug_mode = .false.
       integer :: debug_unit = -1
@@ -170,17 +170,21 @@ contains
 
    !> Factory function to create and initialize a Newton solver
    !>
-   !> This is a standalone constructor that allocates and initializes a Newton solver.
-   !> Use this with polymorphic allocation:
+   !> Standalone constructor that allocates and initializes a Newton solver
+   !>
+   !> Use with polymorphic allocation:
    !>
    !>   class(solver_base_type), allocatable :: solver
    !>   call new_newton_solver(solver, n, m, func, grad, error, ...)
    !>
    !> Factory function to create and initialize a Newton solver (unified interface)
    !>
-   !> This is a standalone constructor that allocates and initializes a Newton solver.
-   !> Supports both legacy (no context) and context-aware (thread-safe) interfaces.
-   !> Use this with polymorphic allocation:
+   !> Standalone constructor that allocates and initializes a Newton solver
+   !>
+   !> - supports both legacy (no context) and context-aware (thread-safe)
+   !>   interfaces
+   !>
+   !> Use with polymorphic allocation:
    !>
    !>   ! Context-aware (thread-safe):
    !>   call new_newton_solver(solver, n, m, error, &
@@ -360,11 +364,11 @@ contains
 
    end subroutine new_newton_solver
 
-   !> Solve the nonlinear system using Newton-Raphson iteration.
+   !> Solve the nonlinear system using Newton-Raphson iteration
    !>
    !> Attempts to find a solution x* such that f(x*) ~= 0 using Newton's method
-   !> with optional line search and Broyden updates. The iteration continues until
-   !> convergence criteria are met or maximum iterations reached.
+   !> with optional line search and Broyden updates; the iteration continues until
+   !> convergence criteria are met or maximum iterations reached
    !>
    !> Convergence is achieved when:
    !>  - ||f(x)|| < tol (function norm below tolerance), or
@@ -422,11 +426,11 @@ contains
 
    end subroutine newton_solve
 
-   !> Get status information from the solver.
+   !> Get status information from the solver
    !>
    !> Retrieves the current status code and descriptive message from the last
-   !> solver operation. Useful for diagnosing convergence issues or checking
-   !> solver state.
+   !> solver operation, useful for diagnosing convergence issues or checking
+   !> solver state
    !>
    !> Status codes:
    !>  - 0: Successfully initialized
@@ -453,10 +457,11 @@ contains
       end if
    end subroutine newton_status
 
-   !> Destroy the solver and release resources.
+   !> Destroy the solver and release resources
    !>
-   !> Cleans up internal state, deallocates memory, and nullifies function pointers.
-   !> Should be called when the solver is no longer needed.
+   !> - cleans up internal state, deallocates memory, nullifies function
+   !>   pointers
+   !> - call when the solver is no longer needed
    !>
    !> @param[inout] self  Solver instance to destroy
    subroutine newton_destroy(self)
@@ -487,10 +492,10 @@ contains
       end if
    end subroutine newton_destroy
 
-   !> Internal wrapper for user function callback.
+   !> Internal wrapper for user function callback
    !>
    !> Adapts the clean user interface (without class argument) to the
-   !> nlesolver_module interface and dispatches through the instance-owned bridge.
+   !> nlesolver_module interface and dispatches through the instance-owned bridge
    !>
    !> @param[inout] me  nlesolver instance (unused, required by interface)
    !> @param[in]    x   Variables [n]
@@ -511,10 +516,11 @@ contains
       end select
    end subroutine wrapper_func_module
 
-   !> Internal wrapper for user Jacobian callback (dense).
+   !> Internal wrapper for user Jacobian callback (dense)
    !>
-   !> Adapts the clean user interface to nlesolver_module interface for dense
-   !> Jacobian computation. Supports both legacy and context-aware interfaces.
+   !> Adapts the clean user interface to the nlesolver_module interface for
+   !> dense Jacobian computation; supports both legacy and context-aware
+   !> interfaces
    !>
    !> @param[inout] me   nlesolver instance (unused, required by interface)
    !> @param[in]    x    Variables [n]
@@ -535,9 +541,9 @@ contains
       end select
    end subroutine wrapper_grad_module
 
-   !> Decode error code into a detailed error message.
+   !> Decode error code into a detailed error message
    !>
-   !> Provides human-readable descriptions for all Newton solver error codes.
+   !> Provides human-readable descriptions for all Newton solver error codes
    !>
    !> @param[in]  istat    Error status code
    !> @param[in]  message  Original message from nlesolver
@@ -602,7 +608,7 @@ contains
 
    end function decode_error_message
 
-   !> Convert integer to string (helper function).
+   !> Convert integer to string (helper function)
    !>
    !> @param[in]  i  Integer to convert
    !> @return     String representation
@@ -612,12 +618,14 @@ contains
       write (s, '(I0)') i
    end function int_to_str
 
-   !> Internal wrapper for user Jacobian callback (sparse).
+   !> Internal wrapper for user Jacobian callback (sparse)
    !>
-   !> Adapts the clean user interface to nlesolver_module interface for sparse
-   !> Jacobian computation. Elements
-   !> correspond to (irow, icol) sparsity pattern provided during initialization.
-   !> Supports both legacy and context-aware interfaces.
+   !> Adapts the clean user interface to the nlesolver_module interface for
+   !> sparse Jacobian computation
+   !>
+   !> - elements correspond to the (irow, icol) sparsity pattern provided
+   !>   during initialization
+   !> - supports both legacy and context-aware interfaces
    !>
    !> @param[inout] me          nlesolver instance (unused, required by interface)
    !> @param[in]    x           Variables [n]
@@ -638,10 +646,11 @@ contains
       end select
    end subroutine wrapper_grad_sparse_module
 
-   !> Internal wrapper for debug/export callback.
+   !> Internal wrapper for debug/export callback
    !>
-   !> Called after each Newton iteration to export debug information.
-   !> Adapts nlesolver export interface to clean user callback.
+   !> Called after each Newton iteration to export debug information
+   !>
+   !> - adapts the nlesolver export interface to the clean user callback
    !>
    !> @param[in] x     Current variables [n]
    !> @param[in] f     Current residuals [m]
@@ -693,8 +702,9 @@ contains
                call bridge%user_grad(x, jac_dense)
                call bridge%user_debug(iter, x, f, jac=jac_dense)
             else if (associated(bridge%user_grad_sparse)) then
-               ! Sparse mode - Note: cannot determine sparse size from nlesolver_type (private)
-               ! User must pass consistent size; we skip Jacobian in export for now
+               ! Sparse mode - cannot determine the sparse size from
+               ! nlesolver_type (private), so the user must pass a consistent
+               ! size; the Jacobian is skipped in export for now
                call bridge%user_debug(iter, x, f)
             else
                ! No Jacobian available, just pass x and f
@@ -705,10 +715,11 @@ contains
 
    end subroutine wrapper_export_module
 
-   !> Internal wrapper for user_input_check callback.
+   !> Internal wrapper for user_input_check callback
    !>
-   !> Adapts the clean user interface to nlesolver_module interface.
-   !> Supports both legacy and context-aware interfaces.
+   !> Adapts the clean user interface to the nlesolver_module interface
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_check_module(me, user_stop)
       class(nlesolver_type), intent(inout) :: me
       logical, intent(out) :: user_stop

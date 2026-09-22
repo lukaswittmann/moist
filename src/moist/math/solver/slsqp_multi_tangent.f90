@@ -3,8 +3,8 @@
 !> Builds a tangent basis at the anchor from the owner-anchor direction,
 !> generates ring seeds in that tangent plane for configurable radii and
 !> points-per-ring, runs SLSQP from each seed, and returns the solution
-!> closest to the anchor. Uses the same objective/constraint callbacks as
-!> the regular SLSQP setup.
+!> closest to the anchor, using the same objective/constraint callbacks as
+!> the regular SLSQP setup
 module moist_math_solver_slsqp_multi_tangent
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -100,7 +100,8 @@ module moist_math_solver_slsqp_multi_tangent
 
 contains
 
-   !> Build an orthonormal tangent-plane basis for a given unit normal.
+   !> Build an orthonormal tangent-plane basis for a given unit normal
+   !>
    !> @param[in]  normal  Unit normal vector (3)
    !> @param[out] t1      First tangent vector (3)
    !> @param[out] t2      Second tangent vector (3), equals normal x t1
@@ -128,7 +129,8 @@ contains
       t2(3) = normal(1)*t1(2) - normal(2)*t1(1)
    end subroutine build_tangent_basis
 
-   !> Generate seed points on a single tangent-plane ring around the anchor.
+   !> Generate seed points on a single tangent-plane ring around the anchor
+   !>
    !> @param[in]    anchor    Center of the ring
    !> @param[in]    t1        First tangent basis vector
    !> @param[in]    t2        Second tangent basis vector
@@ -162,7 +164,7 @@ contains
       offset = offset + n_points
    end subroutine generate_layer_seeds
 
-   !> Factory function to create a multi-tangent SLSQP solver.
+   !> Factory function to create a multi-tangent SLSQP solver
    subroutine new_slsqp_multi_tangent_solver(anchor, owner_pos, solver, &
                                              n, m, meq, obj_ctx, obj_grad_ctx, con_ctx, con_grad_ctx, context, &
                                              xl, xu, max_iter, tol, toldx, toldf, verbose, iter_callback_ctx, &
@@ -349,7 +351,7 @@ contains
       call move_alloc(tmp, solver)
    end subroutine new_slsqp_multi_tangent_solver
 
-   !> Solve the constrained projection using multi-tangent SLSQP.
+   !> Solve the constrained projection using multi-tangent SLSQP
    subroutine slsqp_multi_tangent_solve(self, x, error)
       class(moist_math_solver_slsqp_multi_tangent_type), intent(inout), target :: self
       real(wp), dimension(:), intent(inout) :: x
@@ -425,7 +427,8 @@ contains
       deallocate (converged)
    end subroutine slsqp_multi_tangent_solve
 
-   !> Get raw SLSQP candidates converged from multi-start seeds.
+   !> Get raw SLSQP candidates converged from multi-start seeds
+   !>
    !> @param[out] candidates  Raw candidate points (3,n)
    !> @param[out] n_candidates Number of available candidates
    subroutine slsqp_multi_tangent_get_raw_candidates(self, candidates, n_candidates)

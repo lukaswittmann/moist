@@ -12,7 +12,7 @@ module moist_math_lapack_potrs
    !> Solves a system of linear equations
    !>    A * X = B
    !> where A is a real symmetric positive definite matrix using the
-   !> Cholesky factorization computed by ?POTRF.
+   !> Cholesky factorization computed by ?POTRF
    interface wrap_potrs
       module procedure :: wrap_spotrs
       module procedure :: wrap_dpotrs
@@ -21,7 +21,7 @@ module moist_math_lapack_potrs
    !> Solves a system of linear equations
    !>    A * X = B
    !> where A is a real symmetric positive definite matrix using the
-   !> Cholesky factorization A = U**T * U or A = L * L**T computed by ?POTRF.
+   !> Cholesky factorization A = U**T * U or A = L * L**T computed by ?POTRF
    interface lapack_potrs
       pure subroutine spotrs(uplo, n, nrhs, a, lda, b, ldb, info)
          import :: sp, lapack_ik

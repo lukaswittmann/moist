@@ -3,7 +3,7 @@
 !> M. Mantina, R. Valero, C. J. Cramer, and D. G. Truhlar,
 !> in CRC Handbook of Chemistry and Physics, 91st Edition (2010-2011),
 !> edited by W. M. Haynes (CRC Press, Boca Raton, FL, 2010), pages 9-49-9-50;
-!> corrected Nov. 17, 2010 for the 92nd edition.
+!> corrected Nov. 17, 2010 for the 92nd edition
 module moist_data_atomicrad
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error

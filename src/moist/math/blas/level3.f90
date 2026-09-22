@@ -1,5 +1,5 @@
 !> @file moist/blas/level3.f90
-!> Provides interfactes to level 3 BLAS routines
+!> Provides interfaces to level 3 BLAS routines
 
 !> High-level interface to level 3 basic linear algebra subprogram operations
 module moist_math_blas_level3
@@ -20,7 +20,7 @@ module moist_math_blas_level3
    !>
    !> where alpha and beta are scalars, C is an n by n symmetric matrix
    !> and A is an n by k matrix in the first case and a k by n matrix
-   !> in the second case.
+   !> in the second case
    interface wrap_syrk
       module procedure :: wrap_ssyrk
       module procedure :: wrap_dsyrk
@@ -35,7 +35,7 @@ module moist_math_blas_level3
    !>    C := alpha*B*A + beta*C,
    !>
    !> where alpha and beta are scalars,  A is a symmetric matrix and  B and
-   !> C are  m by n matrices.
+   !> C are  m by n matrices
    interface wrap_gemm
       module procedure :: wrap_sgemm
       module procedure :: wrap_dgemm
@@ -54,9 +54,9 @@ module moist_math_blas_level3
    !> where alpha is a scalar, X and B are m by n matrices, A is a unit, or
    !> non-unit,  upper or lower triangular matrix  and  op( A )  is one  of
    !>
-   !>    op( A ) = A   or   op( A ) = A**T.
+   !>    op( A ) = A   or   op( A ) = A**T
    !>
-   !> The matrix X is overwritten on B.
+   !> The matrix X is overwritten on B
    interface wrap_trsm
       module procedure :: wrap_strsm
       module procedure :: wrap_dtrsm
@@ -71,7 +71,7 @@ module moist_math_blas_level3
    !>    op( X ) = X   or   op( X ) = X**T,
    !>
    !> alpha and beta are scalars, and A, B and C are matrices, with op( A )
-   !> an m by k matrix,  op( B )  a  k by n matrix and  C an m by n matrix.
+   !> an m by k matrix,  op( B )  a  k by n matrix and  C an m by n matrix
    interface blas_gemm
       pure subroutine sgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, &
             & beta, c, ldc)
@@ -116,9 +116,9 @@ module moist_math_blas_level3
    !> where alpha is a scalar, X and B are m by n matrices, A is a unit, or
    !> non-unit,  upper or lower triangular matrix  and  op( A )  is one  of
    !>
-   !>    op( A ) = A   or   op( A ) = A**T.
+   !>    op( A ) = A   or   op( A ) = A**T
    !>
-   !> The matrix X is overwritten on B.
+   !> The matrix X is overwritten on B
    interface blas_trsm
       pure subroutine strsm(side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
          import :: sp, blas_ik
@@ -160,7 +160,7 @@ module moist_math_blas_level3
    !>
    !> where alpha and beta are scalars, C is an n by n symmetric matrix
    !> and A is an n by k matrix in the first case and a k by n matrix
-   !> in the second case.
+   !> in the second case
    interface blas_syrk
       pure subroutine ssyrk(uplo, trans, n, k, alpha, a, lda, beta, c, ldc)
          import :: sp, blas_ik

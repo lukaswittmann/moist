@@ -1,12 +1,12 @@
-!> Classic-signature level-1 BLAS routines bound to the linked BLAS library.
+!> Classic-signature level-1 BLAS routines bound to the linked BLAS library
 !>
 !> moist always links an external BLAS/LAPACK backend; some solvers
 !> (slsqp, lbfgsb) call BLAS with the classic Fortran-77 convention (explicit
 !> length and increments, array offsets, non-unit/zero strides) that the
-!> whole-array, unit-stride wrappers in moist_math_blas cannot express. This
+!> whole-array, unit-stride wrappers in moist_math_blas cannot express; this
 !> module exposes the double-precision routines they need with that classic
-!> signature so the solvers use the optimized library instead of bundling their
-!> own copies.
+!> signature, so the solvers use the optimized library instead of bundling
+!> their own copies
 
 !> Raw interfaces to the linked BLAS library
 !>
@@ -134,7 +134,7 @@ contains
       call blas_daxpy(int(n, blas_ik), da, dx, int(incx, blas_ik), dy, int(incy, blas_ik))
    end subroutine daxpy
 
-   !> Copy a vector: dy := dx.
+   !> Copy a vector: dy := dx
    pure subroutine dcopy(n, dx, incx, dy, incy)
       !> Number of elements to process
       integer, intent(in) :: n

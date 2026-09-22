@@ -1,7 +1,8 @@
-!> Utilities for packed symmetric matrix storage.
-!> Uses column-packed upper triangular format (LAPACK style):
-!> For a 3x3 matrix, the packed form stores: (1,1), (2,1), (2,2), (3,1), (3,2), (3,3)
-!> This allows use with LAPACK packed routines (DSPTRF, DSPTRS, etc.)
+!> Utilities for packed symmetric matrix storage
+!>
+!> - column-packed upper triangular format (LAPACK style); a 3x3 matrix packs
+!>   as (1,1), (2,1), (2,2), (3,1), (3,2), (3,3)
+!> - usable with the LAPACK packed routines (DSPTRF, DSPTRS, etc.)
 module moist_math_packed_sym
    use mctc_env, only: wp
    implicit none(type, external)
@@ -15,9 +16,10 @@ module moist_math_packed_sym
    public :: packed_symmatmul
    public :: packed_symmatmul_lut
 
-   !> Lookup table for packed symmetric matrix indices.
-   !> Stores precomputed packed_index(i,j) for all i,j in [1,ns].
-   !> Thread-safe: each instance has its own copy.
+   !> Lookup table for packed symmetric matrix indices
+   !>
+   !> - precomputed packed_index(i,j) for all i,j in [1,ns]
+   !> - thread-safe: each instance has its own copy
    type :: packed_index_lut
       !> Number of sites (matrix dimension)
       integer :: ns = 0
@@ -30,7 +32,8 @@ module moist_math_packed_sym
 
 contains
 
-   !> Initialize the lookup table for a given matrix dimension.
+   !> Initialize the lookup table for a given matrix dimension
+   !>
    !> @param[inout] self  Lookup table to initialize
    !> @param[in]    ns    Matrix dimension (number of sites)
    subroutine packed_index_lut_init(self, ns)
@@ -49,7 +52,8 @@ contains
       end do
    end subroutine packed_index_lut_init
 
-   !> Deallocate the lookup table.
+   !> Deallocate the lookup table
+   !>
    !> @param[inout] self  Lookup table to deallocate
    subroutine packed_index_lut_dealloc(self)
       class(packed_index_lut), intent(inout) :: self
@@ -57,7 +61,7 @@ contains
       self%ns = 0
    end subroutine packed_index_lut_dealloc
 
-   !> Return number of unique pairs for ns sites (upper triangle including diagonal).
+   !> Return number of unique pairs for ns sites (upper triangle including diagonal)
    !> npair = ns * (ns + 1) / 2
    pure function npair_from_ns(ns) result(npair)
       integer, intent(in) :: ns
@@ -65,8 +69,10 @@ contains
       npair = ns*(ns + 1)/2
    end function npair_from_ns
 
-   !> Convert (i, j) indices to packed column-major upper-triangular index.
-   !> Handles i > j by swapping, so packed_index(i,j) == packed_index(j,i).
+   !> Convert (i, j) indices to packed column-major upper-triangular index
+   !>
+   !> - i > j is handled by swapping, so packed_index(i,j) == packed_index(j,i)
+   !>
    !> @param[in] i  Row index (1 to ns)
    !> @param[in] j  Column index (1 to ns)
    !> @return Index into packed array (1 to npair)
@@ -84,7 +90,8 @@ contains
       idx = jj*(jj - 1)/2 + ii
    end function packed_index
 
-   !> Unpack a symmetric matrix from packed to full storage.
+   !> Unpack a symmetric matrix from packed to full storage
+   !>
    !> @param[in]  packed  Input packed array (npair)
    !> @param[out] full    Output full matrix (ns, ns), symmetric
    !> @param[in]  ns      Matrix dimension
@@ -101,8 +108,10 @@ contains
       end do
    end subroutine unpack_sym_matrix
 
-   !> Pack a symmetric matrix from full to packed storage.
-   !> Only the upper triangle of full is read.
+   !> Pack a symmetric matrix from full to packed storage
+   !>
+   !> - only the upper triangle of full is read
+   !>
    !> @param[in]  full    Input full matrix (ns, ns)
    !> @param[out] packed  Output packed array (npair)
    !> @param[in]  ns      Matrix dimension
@@ -119,11 +128,12 @@ contains
       end do
    end subroutine pack_sym_matrix
 
-   !> Symmetric matrix multiplication for packed matrices: C = A * B.
-   !> Given two symmetric matrices A and B in packed form, computes C = A * B
-   !> and stores only the upper triangle of C in packed form.
-   !> Note: The product of two symmetric matrices is not generally symmetric,
-   !> but for the RISM equation the specific matrix products preserve symmetry.
+   !> Symmetric matrix multiplication for packed matrices: C = A * B
+   !>
+   !> - A and B in packed form; only the upper triangle of C is stored, packed
+   !> - note: the product of two symmetric matrices is not generally
+   !>   symmetric, but the RISM equation's matrix products preserve symmetry
+   !>
    !> @param[in]  A_packed  First symmetric matrix in packed form (npair)
    !> @param[in]  B_packed  Second symmetric matrix in packed form (npair)
    !> @param[out] C_packed  Result packed matrix (npair), upper triangle only
@@ -150,8 +160,10 @@ contains
       end do
    end subroutine packed_symmatmul
 
-   !> Symmetric matrix multiplication for packed matrices using LUT: C = A * B.
-   !> Uses precomputed lookup table for vectorizable index access.
+   !> Symmetric matrix multiplication for packed matrices using LUT: C = A * B
+   !>
+   !> - precomputed lookup table for vectorizable index access
+   !>
    !> @param[in]  A_packed  First symmetric matrix in packed form (npair)
    !> @param[in]  B_packed  Second symmetric matrix in packed form (npair)
    !> @param[out] C_packed  Result packed matrix (npair), upper triangle only

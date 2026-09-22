@@ -1,10 +1,10 @@
-!> Umbrella module for the moist integration-grid submodule.
+!> Umbrella module for the moist integration-grid submodule
 !>
 !> Re-exports the public API for Lebedev angular grids and atom-centered
-!> molecular integration grids. Chebyshev-2 radial quadrature and Becke
+!> molecular integration grids; Chebyshev-2 radial quadrature and Becke
 !> fuzzy-cell partitioning are kept out of the public surface; import
 !> their sub-modules (`moist_math_grid_radial`, `moist_math_grid_becke`)
-!> directly if they are needed.
+!> directly if they are needed
 module moist_math_grid
    use moist_math_grid_lebedev, only: &
       & grid_size, get_angular_grid, lebedev_order_from_num

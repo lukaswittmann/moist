@@ -1,9 +1,10 @@
 !> Sparse adjacency list (neighbour list) in compressed sparse row (CSR) format
 !>
-!> Provides a reusable spatial neighbour list that can be built from any set of
-!> 3D coordinates and a global interaction cutoff. Internally uses a uniform
-!> cell grid (linked-list variant) for O(N) build cost. The resulting list is
-!> stored in CSR format for cache-friendly traversal.
+!> Reusable spatial neighbour list, built from any set of 3D coordinates and
+!> a global interaction cutoff
+!>
+!> - a uniform cell grid (linked-list variant) gives O(N) build cost
+!> - the result is stored in CSR format for cache-friendly traversal
 !>
 !> Usage:
 !> ```fortran
@@ -27,6 +28,7 @@ module moist_math_adjacency_list
    !>   nlat( inl(i)+1 : inl(i)+nnl(i) )
    !> with corresponding center-center distances in
    !>   dist( inl(i)+1 : inl(i)+nnl(i) )
+   !>
    !> When sorted=.true., both arrays are ordered by ascending distance
    type :: adjacency_list_type
       !> Global interaction cutoff distance
@@ -39,9 +41,9 @@ module moist_math_adjacency_list
       integer, allocatable :: inl(:)
       !> Number of neighbours for each point (n)
       integer, allocatable :: nnl(:)
-      !> Flat-packed neighbour indices (sum(nnl)); sorted by distance when sorted=.true.
+      !> Flat-packed neighbour indices (sum(nnl)); sorted by distance when sorted=.true
       integer, allocatable :: nlat(:)
-      !> Center-center distances parallel to nlat; sorted ascending when sorted=.true.
+      !> Center-center distances parallel to nlat; sorted ascending when sorted=.true
       real(wp), allocatable :: dist(:)
    contains
       !> Set the interaction cutoff
@@ -58,7 +60,7 @@ module moist_math_adjacency_list
 
 contains
 
-   !> Set the interaction cutoff. Must be called before the first update
+   !> Set the interaction cutoff, before the first update
    !>
    !> Every setting is reset, so init fully defines the configuration of the list:
    !> omitting `sorted` means unsorted, regardless of how the instance was used before
@@ -81,10 +83,11 @@ contains
 
    !> (Re)build the neighbour list from a coordinate array using a cell grid
    !>
-   !> The coordinates are partitioned into a uniform cubic grid with cell side
-   !> length equal to the cutoff. For each point, only the 27 surrounding cells
-   !> are inspected for potential neighbours, giving O(N*k) total cost where k
-   !> is the average neighbour count. Self-pairs (i==i) are excluded
+   !> - the coordinates are partitioned into a uniform cubic grid of cell side
+   !>   length equal to the cutoff
+   !> - only the 27 cells around a point are inspected for neighbours, giving
+   !>   O(N*k) total cost for an average neighbour count k
+   !> - self-pairs (i==i) are excluded
    !>
    !> @param[inout] self  Adjacency list instance (cutoff must be set)
    !> @param[in]    xyz   Coordinate array (3, npoints)
@@ -273,7 +276,7 @@ contains
                      self%nlat(self%inl(i) + 1:self%inl(i) + self%nnl(i)), &
                      sort_error)
                   ! qsort only fails on a companion-array size mismatch,
-                  ! which cannot happen here, still TODO: add errorprop.
+                  ! which cannot happen here, still TODO: add errorprop
                   if (allocated(sort_error)) then
                      error stop "adjacency_list: dist/nlat slice bounds diverged"
                   end if
@@ -312,7 +315,7 @@ contains
       if (allocated(self%dist)) deallocate (self%dist)
    end subroutine adjacency_list_destroy
 
-   !> Finalizer - delegates to destroy.
+   !> Finalizer - delegates to destroy
    subroutine adjacency_list_finalize(self)
       type(adjacency_list_type), intent(inout) :: self
       call self%destroy()

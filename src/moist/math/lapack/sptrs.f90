@@ -1,4 +1,4 @@
-!> Provides wrappers for solving symmetric packed linear systems.
+!> Provides wrappers for solving symmetric packed linear systems
 module moist_math_lapack_sptrs
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik

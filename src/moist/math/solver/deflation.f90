@@ -1,5 +1,5 @@
 !> Generic deflation operator for multi-root enumeration (Farrell, Birkisson
-!> & Funke 2015, arXiv:1410.5620).
+!> & Funke 2015, arXiv:1410.5620)
 !>
 !> The operator encodes a list of already-known roots x*_i and produces the
 !> scalar multiplier
@@ -7,13 +7,13 @@
 !>    M(x) = prod_i ( ||x - x*_i||^{-p} + alpha )
 !>
 !> which tends to infinity as x -> x*_i and smoothly to alpha far from any
-!> known root. Multiplying a target residual (or objective) by M redirects a
+!> known root; multiplying a target residual (or objective) by M redirects a
 !> local solver away from the already-found roots so iterating the same local
-!> solver from the same seed can enumerate new roots.
+!> solver from the same seed can enumerate new roots
 !>
-!> This module is deliberately solver-agnostic: it is consumed by both the
+!> Deliberately solver-agnostic: consumed by both the
 !> SLSQP-deflation and Newton-deflation solver wrappers, which differ only in
-!> *which* quantity they multiply by M (objective scalar vs residual vector).
+!> *which* quantity they multiply by M (objective scalar vs residual vector)
 module moist_math_solver_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -22,21 +22,21 @@ module moist_math_solver_deflation
 
    public :: moist_deflation_operator_type
 
-   !> Operator carrying the accumulated known roots and the scalar M(x), grad_M(x).
+   !> Operator carrying the accumulated known roots and the scalar M(x), grad_M(x)
    type :: moist_deflation_operator_type
-      !> Dimension of the search space (length of x).
+      !> Dimension of the search space (length of x)
       integer :: n_dim = 0
-      !> Maximum number of roots that can be stored.
+      !> Maximum number of roots that can be stored
       integer :: max_roots = 0
-      !> Current number of known roots.
+      !> Current number of known roots
       integer :: n_known = 0
-      !> Exponent p in ||x - x*_i||^{-p}. Farrell default: 2.
+      !> Exponent p in ||x - x*_i||^{-p}. Farrell default: 2
       integer :: p_power = 2
-      !> Additive shift alpha; prevents M from vanishing far from known roots.
+      !> Additive shift alpha; prevents M from vanishing far from known roots
       real(wp) :: alpha_shift = 1.0_wp
-      !> L2 tolerance for considering two roots to be the same point.
+      !> L2 tolerance for considering two roots to be the same point
       real(wp) :: dedup_tol = 1.0e-6_wp
-      !> Known-root list (n_dim, max_roots); first n_known columns are used.
+      !> Known-root list (n_dim, max_roots); first n_known columns are used
       real(wp), allocatable :: known_roots(:, :)
    contains
       procedure :: init => deflation_init
@@ -50,7 +50,7 @@ module moist_math_solver_deflation
 
 contains
 
-   !> Initialise the operator with given dimensions and parameters.
+   !> Initialise the operator with given dimensions and parameters
    !>
    !> @param[inout] self        Operator instance
    !> @param[in]    n_dim       Length of the search-space vector x
@@ -104,7 +104,7 @@ contains
       allocate (self%known_roots(n_dim, max_roots), source=0.0_wp)
    end subroutine deflation_init
 
-   !> Forget all known roots (operator behaves as identity on M until next append).
+   !> Forget all known roots (operator behaves as identity on M until next append)
    !>
    !> @param[inout] self Operator instance
    subroutine deflation_reset(self)
@@ -113,7 +113,7 @@ contains
       self%n_known = 0
    end subroutine deflation_reset
 
-   !> Append a newly-found root if it is not a duplicate of any known root.
+   !> Append a newly-found root if it is not a duplicate of any known root
    !>
    !> @param[inout] self     Operator instance
    !> @param[in]    x        New root candidate (length n_dim)
@@ -136,10 +136,10 @@ contains
       accepted = .true.
    end subroutine deflation_append_root
 
-   !> Evaluate M(x) = prod_i ( ||x - x*_i||^{-p} + alpha ).
+   !> Evaluate M(x) = prod_i ( ||x - x*_i||^{-p} + alpha )
    !>
    !> When n_known == 0 this returns 1.0 (no deflation yet), so the inner
-   !> solver sees the original problem on the first invocation.
+   !> solver sees the original problem on the first invocation
    !>
    !> @param[in] self Operator instance
    !> @param[in] x    Evaluation point
@@ -166,13 +166,13 @@ contains
       end do
    end function deflation_multiplier
 
-   !> Evaluate grad_M(x) via the product rule.
+   !> Evaluate grad_M(x) via the product rule
    !>
    !> grad_M = sum_i [ -p * (x - x*_i) / r_i^{p+2} ] * prod_{j /= i} (r_j^{-p} + alpha)
    !>
    !> Implemented as a single pass that builds the full product M, then for
-   !> each i scales the per-i gradient contribution by M / factor_i. This keeps
-   !> the cost at O(n_known * n_dim) without the explicit double loop.
+   !> each i scales the per-i gradient contribution by M / factor_i, keeping
+   !> the cost at O(n_known * n_dim) without the explicit double loop
    !>
    !> @param[in]  self   Operator instance
    !> @param[in]  x      Evaluation point
@@ -206,7 +206,7 @@ contains
       do i = 1, self%n_known
          r = max(norm2(x - self%known_roots(1:self%n_dim, i)), r_floor)
          ! Per-term local gradient:  -p * (x - x*_i) / r^{p+2}
-         ! Multiply by the product of the *other* factors = m_total / factor(i).
+         ! Multiply by the product of the *other* factors = m_total / factor(i)
          grad_m = grad_m + (m_total/factor(i))* &
                   (-real(self%p_power, wp))* &
                   (x - self%known_roots(1:self%n_dim, i))/r**(self%p_power + 2)
@@ -215,7 +215,7 @@ contains
       deallocate (factor)
    end subroutine deflation_gradient
 
-   !> Test whether x is within dedup_tol of any stored root.
+   !> Test whether x is within dedup_tol of any stored root
    !>
    !> @param[in] self Operator instance
    !> @param[in] x    Query point
@@ -239,7 +239,7 @@ contains
       end do
    end function deflation_is_near_known
 
-   !> Release storage and reset state.
+   !> Release storage and reset state
    !>
    !> @param[inout] self Operator instance
    subroutine deflation_destroy(self)

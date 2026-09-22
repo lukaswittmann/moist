@@ -1,39 +1,45 @@
-!> Uniform cubic cell grid with precomputed per-cell candidate atom lists.
+!> Uniform cubic cell grid with precomputed per-cell candidate atom lists
 !>
 !> Given atom positions and a per-atom effective reach `r_eff(j)`, builds a
 !> spatial index whose cells hold every atom whose sphere `(center_j, r_eff(j))`
 !> intersects the cell AABB. Query at an arbitrary point P is O(1): compute the
 !> clamped cell index from origin + inverse cell size, then read the cell's
-!> precomputed list.
+!> precomputed list
 !>
 !> Correctness invariant: for every point P inside cell C and every atom j
-!> with `||P - center_j|| <= r_eff(j)`, atom j appears in C's candidate list.
+!> with `||P - center_j|| <= r_eff(j)`, atom j appears in C's candidate list
+!>
 !> During build, each atom's sphere is tested against every cell AABB in its
-!> bounding range, so this holds for any positive cell side length.
+!> bounding range, so this holds for any positive cell side length
 !>
 !> By default `cell_side = maxval(r_eff)`, keeping the build cheap (each atom
-!> reaches at most 2^3 cells). The optional `cell_fraction` parameter
-!> (0 < cell_fraction <= 1) scales the cell side to
-!> `maxval(r_eff) * cell_fraction`, producing finer spatial bins at the cost
-!> of increased memory: each atom may appear in up to O(1/cell_fraction^3)
-!> cells. Finer bins improve screening (fewer candidates per query) which
-!> pays off when the downstream per-candidate cost (SSD, LSF) is high.
+!> reaches at most 2^3 cells)
+!>
+!> - the optional `cell_fraction` parameter (0 < cell_fraction <= 1) scales
+!>   the cell side to `maxval(r_eff) * cell_fraction`, giving finer spatial
+!>   bins at the cost of memory: each atom may appear in up to
+!>   O(1/cell_fraction^3) cells
+!> - finer bins improve screening (fewer candidates per query), which pays
+!>   off when the downstream per-candidate cost (SSD, LSF) is high
 !>
 !> Points outside the atom bounding box are strictly clamped to the nearest
-!> boundary cell. The consumer guarantees correctness only for points inside
-!> the bounding box; external points fall back onto the clamped cell's list,
-!> which is sufficient when the downstream screening weight has already decayed
-!> below threshold.
+!> boundary cell
+!>
+!> - the consumer guarantees correctness only for points inside the bounding
+!>   box
+!> - external points fall back onto the clamped cell's list, which suffices
+!>   once the downstream screening weight has decayed below threshold
 !>
 !> Structural parallel to `moist_math_adjacency_list` but intentionally not
 !> factored: the query model here is asymmetric (arbitrary point -> atoms), so
-!> sharing the build code would obscure semantics.
+!> sharing the build code would obscure semantics
 !>
-!> For small systems, the per-cell fan-out degenerates: each atom reaches
-!> most cells anyway, so we pay build cost for no query-time benefit. The
-!> optional `full_scan_below` argument to `build` short-circuits to a
-!> single-cell grid containing every atom - every query then returns the
-!> full atom list with O(1) overhead.
+!> For small systems the per-cell fan-out degenerates: each atom reaches most
+!> cells anyway, so the build cost buys no query-time benefit
+!>
+!> - the optional `full_scan_below` argument to `build` short-circuits to a
+!>   single-cell grid containing every atom, so every query returns the full
+!>   atom list with O(1) overhead
 !>
 !> Usage:
 !> ```fortran
@@ -52,7 +58,7 @@ module moist_math_cell_grid
 
    public :: moist_cell_grid_type
 
-   !> Uniform cell grid with per-cell candidate atom lists in CSR format.
+   !> Uniform cell grid with per-cell candidate atom lists in CSR format
    type :: moist_cell_grid_type
       !> Cell side length (equals maxval(r_eff) after build)
       real(wp) :: cell_side = 0.0_wp
@@ -89,23 +95,24 @@ module moist_math_cell_grid
 
 contains
 
-   !> Build the per-cell candidate lists.
+   !> Build the per-cell candidate lists
    !>
-   !> Cell side is set to `maxval(r_eff) * cell_fraction`. Each atom is
-   !> enumerated over all cells whose AABB its sphere intersects using a
-   !> sphere-AABB closest-point test. Build cost scales with the total number
-   !> of (atom, cell) overlaps and uses the standard two-pass CSR fill
-   !> (count, prefix-sum, fill), reusing cell_nnl as a running offset during
-   !> the fill pass as in moist_math_adjacency_list.
+   !> - cell side is `maxval(r_eff) * cell_fraction`
+   !> - each atom is enumerated over all cells whose AABB its sphere
+   !>   intersects, using a sphere-AABB closest-point test
+   !> - build cost scales with the total number of (atom, cell) overlaps
+   !> - standard two-pass CSR fill (count, prefix-sum, fill), reusing
+   !>   cell_nnl as a running offset during the fill pass, as in
+   !>   moist_math_adjacency_list
    !>
-   !> With `cell_fraction = 1.0` (default), each atom overlaps at most 2^3
-   !> cells. Smaller fractions produce finer bins - each atom overlaps up to
-   !> O(1/cell_fraction^3) cells - but each query returns fewer candidates.
+   !> With `cell_fraction = 1.0` (default) each atom overlaps at most 2^3
+   !> cells; smaller fractions give finer bins -- each atom overlaps up to
+   !> O(1/cell_fraction^3) cells -- but each query returns fewer candidates
    !>
    !> If `full_scan_below` is supplied and `natoms < full_scan_below`, the
-   !> grid collapses to a single cell holding every atom. This skips the
-   !> fan-out work for small systems where the grid would degenerate anyway
-   !> (r_eff comparable to the molecular diameter).
+   !> grid collapses to a single cell holding every atom, skipping the
+   !> fan-out work for small systems where it would degenerate anyway
+   !> (r_eff comparable to the molecular diameter)
    !>
    !> @param[inout] self             Grid instance (reset on entry)
    !> @param[in]    xyz              Atom centers, shape (3, natoms)
@@ -136,8 +143,8 @@ contains
          return
       end if
 
-      ! Full-scan shortcut for small systems. The grid would otherwise pay
-      ! sphere-AABB build cost only to return "nearly every atom" per cell.
+      ! Full-scan shortcut for small systems, which would otherwise pay
+      ! sphere-AABB build cost only to return "nearly every atom" per cell
       if (present(full_scan_below)) then
          if (self%natoms < full_scan_below) then
             call build_full_scan(self, xyz)
@@ -262,11 +269,13 @@ contains
 
    end subroutine moist_cell_grid_build
 
-   !> Degenerate build: a single cell holding every atom.
+   !> Degenerate build: a single cell holding every atom
    !>
-   !> Invoked when the caller deems the system too small for spatial
-   !> binning to pay off. The grid is set up so `query` naturally returns
-   !> the full atom list - nx = ny = nz = 1 clamps every point to cell 1.
+   !> Invoked when the caller deems the system too small for spatial binning
+   !> to pay off
+   !>
+   !> - the grid is set up so `query` naturally returns the full atom list:
+   !>   nx = ny = nz = 1 clamps every point to cell 1
    !>
    !> @param[inout] self  Grid instance (natoms already set by caller)
    !> @param[in]    xyz   Atom centers; only used to seed `origin`
@@ -279,7 +288,7 @@ contains
       integer :: j
 
       ! cell_side/inv_cell just have to be finite and positive; the clamp
-      ! in query forces every point to cell 1 regardless of these values.
+      ! in query forces every point to cell 1 regardless of these values
       self%cell_side = 1.0_wp
       self%inv_cell = 1.0_wp
       self%origin = minval(xyz, dim=2)
@@ -299,10 +308,10 @@ contains
       end do
    end subroutine build_full_scan
 
-   !> Locate the candidate atom list for an evaluation point.
+   !> Locate the candidate atom list for an evaluation point
    !>
    !> Zero-copy: the caller consumes `self%cell_nlat(start+1 : start+n)`. Cell
-   !> index is strictly clamped to `[0, n{x,y,z}-1]`; no fallback branch.
+   !> index is strictly clamped to `[0, n{x,y,z}-1]`; no fallback branch
    !>
    !> @param[in]  self   Grid instance (must be built)
    !> @param[in]  point  Evaluation point (3)
@@ -334,7 +343,7 @@ contains
       n = self%cell_nnl(ic)
    end subroutine moist_cell_grid_query
 
-   !> Deallocate all storage.
+   !> Deallocate all storage
    subroutine moist_cell_grid_destroy(self)
       class(moist_cell_grid_type), intent(inout) :: self
 
@@ -353,13 +362,13 @@ contains
       if (allocated(self%cell_nlat)) deallocate (self%cell_nlat)
    end subroutine moist_cell_grid_destroy
 
-   !> Finalizer delegates to destroy.
+   !> Finalizer delegates to destroy
    subroutine moist_cell_grid_finalize(self)
       type(moist_cell_grid_type), intent(inout) :: self
       call self%destroy()
    end subroutine moist_cell_grid_finalize
 
-   !> Squared distance from a point to an axis-aligned box; 0 if inside.
+   !> Squared distance from a point to an axis-aligned box; 0 if inside
    pure function sphere_aabb_closest_d2(center, lo, hi) result(d2)
       !> Sphere centers
       real(wp), intent(in) :: center(3)

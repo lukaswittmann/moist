@@ -1,4 +1,5 @@
-!> Implementation of various smoothing Kernels
+!> Various smoothing kernels
+!>
 !> References:
 !> https://pysph.readthedocs.io/en/main/reference/kernels.html
 !> https://ludwigboess.github.io/SPHKernels.jl/stable/kernels/
@@ -279,7 +280,7 @@ contains
       self%compute_deriv => null()
 
       !> Guard the reciprocal below; a zero or negative smoothing length has no
-      !> kernel and would otherwise divide by zero.
+      !> kernel and would otherwise divide by zero
       if (h <= 0.0_wp) then
          call fatal_error(error, "wendland_init: smoothing length must be positive")
          return

@@ -2,7 +2,7 @@
 !>
 !> Provides rotation matrix construction for aligning coordinate frames
 !> to arbitrary directions, used e.g. for orienting Lebedev grids along
-!> surface normals.
+!> surface normals
 module moist_math_trigonometry
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: cross_product
@@ -13,11 +13,11 @@ module moist_math_trigonometry
 
 contains
 
-   !> Build rotation matrix that maps the z-axis [0,0,1] to a given unit vector.
+   !> Build rotation matrix that maps the z-axis [0,0,1] to a given unit vector
    !>
-   !> Uses Rodrigues' formula. Falls back to trivial matrices when the
+   !> Uses Rodrigues' formula, falling back to trivial matrices when the
    !> target is (anti-)parallel to z, where the cross-product axis is
-   !> undefined.
+   !> undefined
    !>
    !> @param[in]  n_hat  Target unit vector (must be normalised)
    !> @param[out] R      3x3 rotation matrix satisfying R * [0,0,1] = n_hat

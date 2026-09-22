@@ -1,17 +1,20 @@
-!> Chebyshev-2 radial quadrature for atom-centered integration grids.
+!> Chebyshev-2 radial quadrature for atom-centered integration grids
 !>
 !> Maps the Chebyshev-Gauss nodes `x_i = cos(i*pi/(n+1))` on [-1, 1] to
-!> radii on [0, inf) via `r = p * (1 + x) / (1 - x)`, where `p` is an
-!> atom-dependent scale (typically a fraction of the covalent radius,
-!> in bohr). This is Becke's 1988 second-kind Chebyshev quadrature.
+!> radii on [0, inf) via
+!>
+!>    r = p * (1 + x) / (1 - x)
+!>
+!> with `p` an atom-dependent scale, typically a fraction of the covalent
+!> radius in bohr; Becke's 1988 second-kind Chebyshev quadrature
 !>
 !> Weights returned by `chebyshev2_radii` include the `r^2 dr` Jacobian
 !> so that, for a spherically symmetric f,
 !>    integral_0^inf f(r) r^2 dr  approximately  sum_i w_i f(r_i)
 !>
 !> Units convention: `p` is supplied in bohr; returned radii and weights
-!> are in bohr (and bohr^3 respectively). The caller is responsible for
-!> ensuring the scale matches the rest of the atomic units workflow.
+!> are in bohr and bohr^3 respectively; the caller must keep the scale
+!> consistent with the rest of the atomic-units workflow
 module moist_math_grid_radial
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -22,14 +25,14 @@ module moist_math_grid_radial
 
 contains
 
-   !> Generate nr Chebyshev-2 radial nodes and weights with `r^2 dr`
-   !> Jacobian folded into the weights.
+   !> Generate nr Chebyshev-2 radial nodes and weights, with the Jacobian
+   !> `r^2 dr` folded into the weights
    !>
-   !> @param[in]  nr      Number of radial points (nr >= 1).
+   !> @param[in]  nr      Number of radial points (nr >= 1)
    !> @param[in]  p       Radial scale (bohr); typically a fraction of
-   !>                     the atomic covalent radius.
-   !> @param[out] radii   Radii in bohr, shape (nr).
-   !> @param[out] weights Weights in bohr^3, shape (nr); include r^2 dr.
+   !>                     the atomic covalent radius
+   !> @param[out] radii   Radii in bohr, shape (nr)
+   !> @param[out] weights Weights in bohr^3, shape (nr); include r^2 dr
    pure subroutine chebyshev2_radii(nr, p, radii, weights)
       !> Number of radial points
       integer, intent(in)  :: nr
