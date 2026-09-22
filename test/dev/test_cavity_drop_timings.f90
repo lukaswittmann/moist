@@ -1,4 +1,7 @@
 module test_cavity_drop_timings
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -40,11 +43,11 @@ contains
                   ]
    end subroutine collect_cavity_drop_timings
 
-   !> Time a serial cavity build and report the geometry it produced.
+   !> Time a serial cavity build and report the geometry it produced
    !>
    !> Area and volume are printed alongside the timing so that a change aimed
    !> at the projection can be checked for having left the cavity alone --
-   !> which is the whole premise of relaxing anything in the *seed* stage.
+   !> which is the whole premise of relaxing anything in the *seed* stage
    subroutine test_timing_cavity_build(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -81,7 +84,8 @@ contains
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=5.5_wp, blend_2b=0.0_wp, blend_3b=3.0_wp)
+            call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=5.5_wp, &
+               blend_2b=0.0_wp, blend_3b=3.0_wp))
             call new_cavity_drop(cavity, ctx, radius_model=radius_model, &
                                  lsf_model=svdw_template, error=cavity_error)
          end block
@@ -111,7 +115,7 @@ contains
 
    end subroutine test_timing_cavity_build
 
-   !> Split `prepare` into its screening and accumulation halves.
+   !> Split `prepare` into its screening and accumulation halves
    !>
    !> `prepare` does two things: reject candidates that cannot contribute
    !> (`screen_candidates`, one squared-distance compare per candidate) and
@@ -119,7 +123,7 @@ contains
    !> tensors per active atom). Only the second half depends on the evaluation
    !> point continuously; the first is a set membership that barely moves
    !> between two nearby points. Knowing the split therefore decides whether
-   !> freezing the active set across solver iterations is worth anything.
+   !> freezing the active set across solver iterations is worth anything
    !>
    !> Both halves are measured through the public API, by timing the same
    !> points twice with different candidate-list lengths:
@@ -130,11 +134,11 @@ contains
    !> `acc` is identical in the two because the surviving set is the same, so
    !> the pair determines both unknowns. `a` must come out independent of the
    !> derivative order (screening does no derivative work), which is printed as
-   !> a consistency check on the model rather than assumed.
+   !> a consistency check on the model rather than assumed
    !>
    !> The cell grid is built exactly as `setup_mol_cell_grid` builds it, and the
-   !> query is timed separately so the grid lookup is not charged to screening.
-   !> SvdW only: CFC does not remap the cell grid into its candidate space.
+   !> query is timed separately so the grid lookup is not charged to screening
+   !> SvdW only: CFC does not remap the cell grid into its candidate space
    subroutine test_timing_prepare_split(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -189,7 +193,8 @@ contains
          allocate (r_eff(nat), points(ndim, npts))
          call build_lsf_shell_points(mol, radii, points)
 
-         call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+            blend_3b=blend_3b))
          lsf%screening_threshold = screen_thr
          call lsf%update(mol, radii)
 
@@ -251,7 +256,7 @@ contains
 
             ! t_full = a*N + acc, t_grid = a*ncand + acc. Below
             ! `full_scan_below` the grid is a single cell, so the two
-            ! measurements coincide and the split is not determined.
+            ! measurements coincide and the split is not determined
             if (real(nat, wp) - ncand_mean > 1.0_wp) then
                a_screen(ilvl) = (t_full(ilvl) - t_grid(ilvl))/(real(nat, wp) - ncand_mean)
                t_acc(ilvl) = t_grid(ilvl) - a_screen(ilvl)*ncand_mean
@@ -298,11 +303,11 @@ contains
    !> in `S = -(1/k) ln Z` -- and `Z` is not 1 away from the surface. This sweep
    !> measures what the absolute gate buys and costs: active count, `prepare`
    !> cost, and the resulting error in `S` against an effectively unscreened
-   !> reference, over the shell points where a cavity surface would sit.
+   !> reference, over the shell points where a cavity surface would sit
    !>
    !> `dS` is reported in absolute terms on purpose. The projection solves
    !> `S = 0`, so a shift in `S` displaces the surface by `dS/|grad S|`; a
-   !> relative measure against `S ~ 0` would be meaningless there.
+   !> relative measure against `S ~ 0` would be meaningless there
    subroutine sweep_screening_threshold(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -340,7 +345,8 @@ contains
       call build_lsf_shell_points(mol, radii, points)
 
       !> Reference S at a threshold far below any of the sweep values
-      call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+         blend_3b=blend_3b))
       lsf%screening_threshold = thr_ref
       call lsf%update(mol, radii)
       call lsf%set_max_deriv(0)
@@ -356,7 +362,8 @@ contains
          '------------', '------------'
 
       do ithr = 1, n_thr
-         call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+            blend_3b=blend_3b))
          lsf%screening_threshold = thr_list(ithr)
          call lsf%update(mol, radii)
          offset = lsf%screening_offset(radii(1))
@@ -483,11 +490,12 @@ contains
                call cpu_time(t0)
                block
                   type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                  call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-                  call new_cavity_drop(cavity_drop, ctx, nleb=nleb, &
-                                       tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                       radius_model=default_cpcm_radii(), &
-                                       lsf_model=svdw_template, error=cavity_error)
+                  call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                     blend_2b=blend_2b, blend_3b=blend_3b))
+                  call new_cavity_drop(cavity_drop, ctx, radius_model=default_cpcm_radii(), &
+                     lsf_model=svdw_template, error=cavity_error, &
+                     param=moist_cavity_drop_parameters_type(num_leb=nleb, tolerance=1.0E-10_wp, &
+                     proj_level=proj_level))
                end block
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
                call cavity_drop%update(mol, error=cavity_error)
@@ -518,11 +526,11 @@ contains
 
    end subroutine test_timing_drop_proj_levels
 
-   !> Generate categorized test points: surface, interior, and exterior.
+   !> Generate categorized test points: surface, interior, and exterior
    !>
    !> Surface points are placed near atomic sphere surfaces where screening is
    !> least effective (many active atoms). Interior points sit deep inside where
-   !> screening rapidly culls. Exterior points lie well outside the molecule.
+   !> screening rapidly culls. Exterior points lie well outside the molecule
    !>
    !> @param[in]  mol           Molecular structure
    !> @param[in]  radii         Atomic radii [n_atoms]
@@ -599,14 +607,14 @@ contains
       end do
    end subroutine generate_categorized_points
 
-   !> Benchmark cell_fraction impact on cell-grid-screened SSD + LSF evaluation.
+   !> Benchmark cell_fraction impact on cell-grid-screened SSD + LSF evaluation
    !>
    !> For each structure, compares:
    !>   - Full SSD compute (no cell grid, brute-force baseline)
    !>   - Cell-grid-screened SSD + LSF with cell_fraction = 1.0, 0.5, 0.25
    !>
    !> Reports per-call timings, average candidates per query, and speedup
-   !> relative to the unscreened baseline.
+   !> relative to the unscreened baseline
    subroutine test_timing_cell_fraction_benchmark(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -674,8 +682,8 @@ contains
          r_eff = radii + delta
 
          ! Setup LSF primitive (owns its internal SSD system)
-         call lsf_prim%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
-                           blend_3b=blend_3b)
+         call lsf_prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_1b=1.0_wp, &
+            blend_2b=1.0_wp, blend_3b=blend_3b))
          lsf_prim%screening_threshold = threshold
          call lsf_prim%set_max_deriv(2)
          call lsf_prim%update(mol, radii)
@@ -750,12 +758,12 @@ contains
       if (allocated(r_eff)) deallocate (r_eff)
    end subroutine test_timing_cell_fraction_benchmark
 
-   !> Benchmark DROP cavity component scaling with system size.
+   !> Benchmark DROP cavity component scaling with system size
    !>
    !> Runs full DROP cavity update and gradient computation for polyalanine
    !> chains of increasing size. Reads per-component wall times from the
    !> internal timer and fits t(N) = A * N^X via grid search to
-   !> determine the formal scaling exponent of each component.
+   !> determine the formal scaling exponent of each component
    !>
    !> @param[out] error  Test error (set on failure)
    subroutine test_timing_drop_scaling(error)
@@ -767,7 +775,7 @@ contains
       !> Number of polyalanine structures to benchmark
       integer, parameter :: n_struct = 25
       !> Upper bound on the number of timer nodes; the actual count is read from
-      !> the cavity timer tree at runtime into n_timers.
+      !> the cavity timer tree at runtime into n_timers
       integer, parameter :: max_timers = 64
       !> Minimum time (s) for a data point to be included in the fit
       real(wp), parameter :: t_min = 1.0e-6_wp
@@ -781,7 +789,7 @@ contains
 
       character(len=20) :: struct_names(n_struct)
       !> Display labels (indented by tree depth) and top-level flags, enumerated
-      !> from the cavity timer itself rather than a hardcoded table.
+      !> from the cavity timer itself rather than a hardcoded table
       integer :: n_timers
       character(len=40) :: timer_labels(max_timers)
       logical :: is_parent(max_timers)
@@ -821,7 +829,7 @@ contains
 
       !> The timer node set (names, nesting, order) is not declared here: it is
       !> enumerated from the cavity's own timer after the first build, so this
-      !> benchmark automatically tracks whatever the DROP source measures.
+      !> benchmark automatically tracks whatever the DROP source measures
       is_parent = .false.
       n_timers = 0
 
@@ -837,7 +845,7 @@ contains
       write (*, '(a)') '=================================================================='
 
       !> Open the CSV file; its header is written once the timer tree is known
-      !> (after the first cavity builds, so columns match what was measured).
+      !> (after the first cavity builds, so columns match what was measured)
       open (newunit=csv_unit, file=csv_file, status='replace', action='write')
 
       do istruct = 1, n_struct
@@ -853,16 +861,15 @@ contains
             allocate (cavity)
             !> Zero the shared timer so every node reports this build alone. The
             !> node tree (and hence the itimer -> label mapping snapshotted below)
-            !> survives the reset, unlike a freshly constructed context.
+            !> survives the reset, unlike a freshly constructed context
             call ctx%timer%reset()
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, ctx, nleb=nleb, &
-                                    do_fine=.true., &
-                                    tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                    radius_model=default_cpcm_radii(), &
-                                    lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                  blend_2b=blend_2b, blend_3b=blend_3b))
+               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, do_fine=.true., &
+                  tolerance=1.0E-10_wp, proj_level=proj_level))
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -882,7 +889,7 @@ contains
             end if
 
             !> On the first build, enumerate the timer tree (labels + structure)
-            !> and write the now-known CSV header.
+            !> and write the now-known CSV header
             if (n_timers == 0) then
                call snapshot_timer_tree()
                write (csv_unit, '(a)', advance='no') 'structure,n_atoms,n_grid,iter,total'
@@ -1012,7 +1019,7 @@ contains
 
       !> Enumerate the cavity timer tree into the display arrays: label indented
       !> by nesting depth, top-level nodes flagged as parents. Uses the timer's
-      !> own introspection so nothing about the node set is duplicated here.
+      !> own introspection so nothing about the node set is duplicated here
       subroutine snapshot_timer_tree()
          integer :: id, depth
          n_timers = min(cavity%ctx%timer%num_nodes(), max_timers)
@@ -1025,8 +1032,8 @@ contains
 
    end subroutine test_timing_drop_scaling
 
-   !> Benchmark marching cubes integration scaling with system size.
-   !> Uses the same polyalanine series as test_timing_drop_scaling.
+   !> Benchmark marching cubes integration scaling with system size
+   !> Uses the same polyalanine series as test_timing_drop_scaling
    subroutine test_timing_mc_scaling(error)
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: mc_error
@@ -1102,8 +1109,8 @@ contains
             return
          end if
 
-         call lsf%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
-                      blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_1b=1.0_wp, &
+            blend_2b=1.0_wp, blend_3b=blend_3b))
          lsf%screening_threshold = 0.0_wp
          call lsf%update(mol, radius_model%f0)
 
@@ -1150,8 +1157,8 @@ contains
 
    end subroutine test_timing_mc_scaling
 
-   !> Benchmark iSwiG cavity scaling with system size.
-   !> Uses the same polyalanine series as test_timing_drop_scaling.
+   !> Benchmark iSwiG cavity scaling with system size
+   !> Uses the same polyalanine series as test_timing_drop_scaling
    subroutine test_timing_iswig_scaling(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -1220,8 +1227,8 @@ contains
          do iter = 1, n_iter
             if (allocated(cavity)) deallocate (cavity)
             allocate (cavity)
-            call new_cavity_iswig(cavity, ctx, nleb=nleb, &
-                                  radius_model=default_cpcm_radii(), error=cavity_error)
+            call new_cavity_iswig(cavity, ctx, radius_model=default_cpcm_radii(), error=cavity_error, &
+               param=moist_cavity_iswig_parameters_type(num_leb=nleb))
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -1276,20 +1283,20 @@ contains
 
    end subroutine test_timing_iswig_scaling
 
-   !> Benchmark LSF evaluation cost per derivative order and per LSF type.
+   !> Benchmark LSF evaluation cost per derivative order and per LSF type
    !>
    !> Baseline for the code-generation refactor of the SvdW and CFC level set
    !> functions. Deliberately independent of the DROP projection: the evaluation
    !> points come from a fixed deterministic shell sample (see
    !> [[build_lsf_shell_points]]) rather than from a cavity, so the series stays
-   !> comparable while the projection code changes underneath it.
+   !> comparable while the projection code changes underneath it
    !>
    !> `prepare` and the accessors are timed separately, because the refactor
    !> deliberately moves work across exactly that boundary. `prepare` gets one
    !> sweep per `set_max_deriv` level; every accessor then gets its own sweep in
    !> which `prepare` (and, for the two accessors consuming its output,
    !> `f3_rr_rA`) runs outside the timer window, so an accessor row is
-   !> never a difference of two much larger numbers.
+   !> never a difference of two much larger numbers
    subroutine test_timing_lsf_accessors(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1344,11 +1351,11 @@ contains
                                      'f2_rArB', 'f3_r_rArB', 'f4_rr_rArB', &
                                      'tangent_f2_rr', 'hvp_f1_rA', 'hvp_f2_r_rA', &
                                      'hvp_f3_rr_rA']
-      !> `set_max_deriv` level each CFC row is measured at.
+      !> `set_max_deriv` level each CFC row is measured at
       !>
       !> CFC's `max_deriv` is the highest *total* order `prepare` provisions, so a
       !> row reading the one-nuclear-index family sits one level above the tensor
-      !> rank it returns: `f3_rr_rA` reads `qn2_rr`, a total order 3.
+      !> rank it returns: `f3_rr_rA` reads `qn2_rr`, a total order 3
       integer, parameter :: acc_deriv_cfc(n_acc_cfc) = &
                             [0, 0, 1, 2, 3, 3, 4, 4, 2, 1, 2, 3, 2, 1, 2, 3]
 
@@ -1462,17 +1469,17 @@ contains
 
    end subroutine test_timing_lsf_accessors
 
-   !> Deterministic shell sample of evaluation points around a molecule.
+   !> Deterministic shell sample of evaluation points around a molecule
    !>
    !> Point `p` is assigned to atom `a = 1 + mod((p-1)*stride, nat)` with a
    !> stride prime larger than any structure benchmarked here, so consecutive
    !> points hop across the molecule and any *prefix* of the sequence is still
-   !> spread over all atoms (the O(ncenters^2) accessors are timed on a prefix).
+   !> spread over all atoms (the O(ncenters^2) accessors are timed on a prefix)
    !> The point is placed at `r_a + (R_a + delta)*u_p`, with `u_p` the p-th
    !> direction of a fixed Fibonacci sphere and `delta` cycling through
-   !> {0, 0.25, 0.5} Bohr, so points sit near where a cavity surface would lie.
+   !> {0, 0.25, 0.5} Bohr, so points sit near where a cavity surface would lie
    !>
-   !> No `random_number` anywhere: the sample depends only on the geometry.
+   !> No `random_number` anywhere: the sample depends only on the geometry
    !>
    !> @param[in]  mol    Molecular structure
    !> @param[in]  radii  Atomic radii in Bohr [nat]
@@ -1504,7 +1511,7 @@ contains
       end do
    end subroutine build_lsf_shell_points
 
-   !> Time SvdW `prepare` and every SvdW accessor on a fixed point set.
+   !> Time SvdW `prepare` and every SvdW accessor on a fixed point set
    !>
    !> @param[in]  mol         Molecular structure
    !> @param[in]  radii       Atomic radii in Bohr [nat]
@@ -1570,7 +1577,8 @@ contains
       npts = size(points, 2)
       chk = 0.0_wp
 
-      call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+         blend_3b=blend_3b))
       lsf%screening_threshold = thr
       call lsf%update(mol, radii)
 
@@ -1635,13 +1643,13 @@ contains
 
    contains
 
-      !> Time accessor row `iacc` over the first `nc` points.
+      !> Time accessor row `iacc` over the first `nc` points
       !>
       !> `prepare` (and, for the two accessors consuming it, the
       !> `f3_rr_rA` that produces their input) runs outside the timer
       !> window, so the row measures the accessor alone rather than a difference
       !> of two much larger numbers - the CFC accessors are five orders of
-      !> magnitude cheaper than their `prepare`, which no subtraction survives.
+      !> magnitude cheaper than their `prepare`, which no subtraction survives
       !>
       !> @param[in]  iacc     Accessor row
       !> @param[in]  nc       Points to sweep
@@ -1762,11 +1770,11 @@ contains
 
    end subroutine bench_lsf_svdw
 
-   !> Time CFC `prepare` and every CFC accessor on a fixed point set.
+   !> Time CFC `prepare` and every CFC accessor on a fixed point set
    !>
    !> Same protocol as [[bench_lsf_svdw]]; the CFC LSF stops at order 3 and has
    !> no nuclear-pair accessors, so no row needs its own point budget - but the
-   !> pair term makes every `prepare` expensive, hence the smaller `npts_use`.
+   !> pair term makes every `prepare` expensive, hence the smaller `npts_use`
    !>
    !> @param[in]  mol         Molecular structure
    !> @param[in]  radii       Atomic radii in Bohr [nat]
@@ -1799,9 +1807,9 @@ contains
 
       integer, parameter :: acc_deriv(16) = &
                             [0, 0, 1, 2, 3, 3, 4, 4, 2, 1, 2, 3, 2, 1, 2, 3]
-      !> Per-row point cap; 0 means "use the full `npts_use` prefix".
+      !> Per-row point cap; 0 means "use the full `npts_use` prefix"
       !>
-      !> Two costs drive these, and both are quadratic in the active-atom count.
+      !> Two costs drive these, and both are quadratic in the active-atom count
       !> First, `time_accessor` re-`prepare`s at the row's own `set_max_deriv`
       !> level for every point, and a CFC `prepare` at level 4 accumulates the
       !> two largest pair branches in the module (1101 + 2484 CSE temporaries),
@@ -1809,20 +1817,20 @@ contains
       !> accessor is even called. Second, the two-nucleus and direction-
       !> contracted rows run their own O(n_active**2) sweep on top of that --
       !> the `f*_rArB` rows twice over, once for the diagonal blocks and once
-      !> for the ordered pairs.
+      !> for the ordered pairs
       !>
       !> The caps keep every row near or below a second per structure. The point
       !> sequence is quasi-uniform over the molecule, so a shorter prefix stays
-      !> a fair sample; `points` in the report names the budget each row used.
+      !> a fair sample; `points` in the report names the budget each row used
       integer, parameter :: acc_npts_cap(16) = &
                             [0, 0, 0, 0, 50, 50, 10, 10, 0, 10, 4, 2, 10, 10, 10, 4]
 
-      !> Point budget of the `prepare` pass at each derivative level.
+      !> Point budget of the `prepare` pass at each derivative level
       !>
       !> Level 4 accumulates the order-4 spatial ladder and the order-3 nuclear
       !> one, i.e. the two largest pair branches in the module (1101 + 2484 CSE
       !> temporaries), so at the top of the series a single point costs tens of
-      !> milliseconds. Same prefix argument as above.
+      !> milliseconds. Same prefix argument as above
       integer, parameter :: prep_npts_cap(0:4) = [0, 0, 0, 50, 10]
 
       type(moist_cavity_drop_lsf_cfc_type) :: lsf
@@ -2045,7 +2053,7 @@ contains
 
    end subroutine bench_lsf_cfc
 
-   !> Print the per-system, per-accessor and scaling tables for one LSF.
+   !> Print the per-system, per-accessor and scaling tables for one LSF
    !>
    !> @param[in] title        LSF name used in the table headers
    !> @param[in] n_struct     Number of structures
@@ -2219,8 +2227,8 @@ contains
 
    end subroutine report_lsf_timings
 
-   !> Collect valid data points for power-law fitting.
-   !> Only includes points where the measured time exceeds t_min.
+   !> Collect valid data points for power-law fitting
+   !> Only includes points where the measured time exceeds t_min
    !>
    !> @param[in]  n_struct  Number of structures
    !> @param[in]  n_atoms   Atom counts per structure
@@ -2249,11 +2257,11 @@ contains
       end do
    end subroutine collect_valid_points
 
-   !> Fit power law: t(N) = A * N^X  (constrained through origin).
+   !> Fit power law: t(N) = A * N^X  (constrained through origin)
    !>
    !> Uses a two-pass grid search over X. For each candidate X the
    !> model is linear in A, so the optimal prefactor is obtained as
-   !> A = sum(N_i^X * t_i) / sum(N_i^{2X}).
+   !> A = sum(N_i^X * t_i) / sum(N_i^{2X})
    !>
    !> Pass 1: X in [0, 4], step 0.05  (coarse scan)
    !> Pass 2: X in [best-0.05, best+0.05], step 0.001  (refinement)
@@ -2350,7 +2358,7 @@ contains
       end if
    end subroutine fit_power_law
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
    subroutine fill_cpcm_radii(mol, radii, error)
       !> Structure whose per-atom radii are filled
       type(structure_type), intent(in) :: mol

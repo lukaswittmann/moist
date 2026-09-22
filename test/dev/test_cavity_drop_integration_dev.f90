@@ -1,4 +1,5 @@
 module test_cavity_drop_integration_dev
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -42,7 +43,7 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       ! TODO: re-enable the per-dataset marching-cubes tests (upu23, amino20x4, mb16_43,
-      ! but14diol, il16, dimer_pes) once the comparison harness is finalized.
+      ! but14diol, il16, dimer_pes) once the comparison harness is finalized
       testsuite = [ &
                   new_unittest("mc_mixed", test_mc_mixed) &
                   ]
@@ -93,7 +94,6 @@ contains
       end do
 
    end subroutine test_mc_upu23
-
 
    !> Test ray-casting on amino20x4 molecules (sample)
    subroutine test_mc_amino20x4(error)
@@ -598,11 +598,11 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                             tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                             radius_model=default_cpcm_radii(), &
-                             lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_2b=beta, &
+            blend_3b=gamma))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -615,8 +615,8 @@ contains
       end if
 
       ! Set up LSF primitive for raycast integration
-      call lsf%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
-      !> Direct LSF use (no cavity to set screening); we own this.
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_2b=beta, blend_3b=gamma))
+      !> Direct LSF use (no cavity to set screening); we own this
       lsf%screening_threshold = PROJ_TOL * 0.1_wp
       call lsf%update(mol, radii_local)
 
@@ -754,12 +754,11 @@ contains
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
-            call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                                tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                                proj_level=PROJ_LEVEL, &
-                                radius_model=default_cpcm_radii(), &
-                                lsf_model=svdw_template, error=cavity_error)
+            call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_2b=beta, &
+               blend_3b=gamma))
+            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, &
+               tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
@@ -779,7 +778,7 @@ contains
 
    end subroutine compare_mc_cavity_cached
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
    subroutine fill_cpcm_radii(mol, radii, error)
       !> Structure whose per-atom radii are filled
       type(structure_type), intent(in) :: mol
