@@ -8,7 +8,8 @@ module moist_math_solver_slsqp_multistart
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use iso_fortran_env, only: output_unit
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_grid_lebedev, only: lebedev_order_from_num, get_angular_grid
    use moist_math_trigonometry, only: rotation_z_to_n

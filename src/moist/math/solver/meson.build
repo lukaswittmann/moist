@@ -4,6 +4,7 @@ subdir('newton')
 subdir('fmin')
 
 srcs += files(
+  'type.f90',
   'lbfgsb.f90',
   'slsqp.f90',
   'slsqp_multistart.f90',

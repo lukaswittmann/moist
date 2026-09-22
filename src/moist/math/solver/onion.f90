@@ -18,7 +18,8 @@
 module moist_math_solver_onion
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
    use iso_fortran_env, only: output_unit

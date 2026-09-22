@@ -10,7 +10,8 @@
 module moist_math_solver_slsqp
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use slsqp_module, only: slsqp_solver
    use iso_fortran_env, only: output_unit
 

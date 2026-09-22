@@ -22,7 +22,8 @@ module moist_math_solver_newton_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use iso_fortran_env, only: output_unit
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_newton, only: new_newton_solver
    use moist_math_solver_deflation, only: moist_deflation_operator_type
    implicit none
