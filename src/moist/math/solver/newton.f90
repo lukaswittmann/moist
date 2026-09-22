@@ -5,7 +5,8 @@
 module moist_math_solver_newton
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use nlesolver_module
    implicit none
    private
