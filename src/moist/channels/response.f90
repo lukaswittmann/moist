@@ -21,9 +21,9 @@ module moist_channels_response
    private
 
    public :: response_channel_type, response_slot, response_type
-   public :: surface_charge_response_type, density_response_type
+   public :: potential_adjoint_response_type, density_response_type
    public :: gostshyp_amplitude_response_type
-   public :: find_surface_charge, find_density, find_gostshyp_amplitude
+   public :: find_potential_adjoint, find_density, find_gostshyp_amplitude
    public :: response_name_len
 
    !> Length of the fixed-size item names returned by `name()`
@@ -36,7 +36,7 @@ module moist_channels_response
    !> One contraction handed back to the host, accumulated over components
    type, abstract :: response_channel_type
    contains
-      !> Short fixed-length name for diagnostics, e.g. "surface_charge"
+      !> Short fixed-length name for diagnostics, e.g. "potential_adjoint"
       procedure(response_item_name), deferred :: name
       !> Add another item of the same dynamic type into this one
       procedure(response_item_add), deferred :: add
@@ -88,19 +88,26 @@ module moist_channels_response
    !*                              Concrete items                                    *!
    !* ============================================================================== *!
 
-   !> Surface charge, the adjoint `dE/dphi_i` by stationarity
+   !> Weights conjugate to the host potential on the cavity grid, `dE/dphi_i`
    !>
-   !> The host contracts it with its own potential integrals,
-   !> `F_uv += sum_i q_i V_uv(r_i)`. Only charge-like contributions may be
-   !> accumulated here, so that the name stays true of the sum
-   type, extends(response_channel_type) :: surface_charge_response_type
-      !> Surface charge (ngrid)
-      real(wp), allocatable :: q(:)
+   !> The host contracts them with its own potential integrals,
+   !> `F_uv += sum_i w_phi(i) V_uv(r_i)`, and with their basis-center
+   !> derivative in the gradient phase
+   !>
+   !> - for a stationary PCM (CPCM, COSMO) the weights are the induced surface
+   !>   charges `q_i`; for a non-symmetric response matrix (IEF-PCM, SS(V)PE)
+   !>   they are the symmetrized adjoint, which is not the apparent charge
+   !> - any component whose energy depends on the potential accumulates here,
+   !>   so the sum is the adjoint of the model energy, never a charge of one
+   !>   component
+   type, extends(response_channel_type) :: potential_adjoint_response_type
+      !> Weights for the potential values (ngrid)
+      real(wp), allocatable :: w_phi(:)
    contains
-      procedure :: name => surface_charge_name
-      procedure :: add => surface_charge_add
-      procedure :: clear => surface_charge_clear
-   end type surface_charge_response_type
+      procedure :: name => potential_adjoint_name
+      procedure :: add => potential_adjoint_add
+      procedure :: clear => potential_adjoint_clear
+   end type potential_adjoint_response_type
 
    !> Weights conjugate to the solute density on the cavity grid
    !>
@@ -304,46 +311,46 @@ contains
    end subroutine type_mismatch
 
    !* ============================================================================== *!
-   !*                              Surface charge item                               *!
+   !*                            Potential adjoint item                             *!
    !* ============================================================================== *!
 
-   !> Name of the surface charge item
-   function surface_charge_name(self) result(name)
+   !> Name of the potential adjoint item
+   function potential_adjoint_name(self) result(name)
       !> Item
-      class(surface_charge_response_type), intent(in) :: self
+      class(potential_adjoint_response_type), intent(in) :: self
       !> Name
       character(len=response_name_len) :: name
 
-      name = "surface_charge"
+      name = "potential_adjoint"
 
-   end function surface_charge_name
+   end function potential_adjoint_name
 
-   !> Add another surface charge item into this one
-   subroutine surface_charge_add(self, other, error)
+   !> Add another potential adjoint item into this one
+   subroutine potential_adjoint_add(self, other, error)
       !> Accumulator
-      class(surface_charge_response_type), intent(inout) :: self
+      class(potential_adjoint_response_type), intent(inout) :: self
       !> Item to add
       class(response_channel_type), intent(in) :: other
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       select type (other)
-      type is (surface_charge_response_type)
-         call accumulate_vector(self%q, other%q, "surface_charge", "q", error)
+      type is (potential_adjoint_response_type)
+         call accumulate_vector(self%w_phi, other%w_phi, "potential_adjoint", "w_phi", error)
       class default
-         call type_mismatch("surface_charge", error)
+         call type_mismatch("potential_adjoint", error)
       end select
 
-   end subroutine surface_charge_add
+   end subroutine potential_adjoint_add
 
-   !> Deallocate the surface charge
-   subroutine surface_charge_clear(self)
+   !> Deallocate the potential weights
+   subroutine potential_adjoint_clear(self)
       !> Item
-      class(surface_charge_response_type), intent(inout) :: self
+      class(potential_adjoint_response_type), intent(inout) :: self
 
-      if (allocated(self%q)) deallocate (self%q)
+      if (allocated(self%w_phi)) deallocate (self%w_phi)
 
-   end subroutine surface_charge_clear
+   end subroutine potential_adjoint_clear
 
    !* ============================================================================== *!
    !*                              Density item                                      *!
@@ -535,14 +542,14 @@ contains
    !*                              Per-type finders                                  *!
    !* ============================================================================== *!
 
-   !> Find the surface charge item, null when absent
+   !> Find the potential adjoint item, null when absent
    !>
    !> @param[in] response Response, which must be a target
-   function find_surface_charge(response) result(item)
+   function find_potential_adjoint(response) result(item)
       !> Response
       class(response_type), intent(in), target :: response
       !> Item, or null
-      type(surface_charge_response_type), pointer :: item
+      type(potential_adjoint_response_type), pointer :: item
 
       integer :: i
 
@@ -550,13 +557,13 @@ contains
       if (.not. allocated(response%items)) return
       do i = 1, size(response%items)
          select type (stored => response%items(i)%item)
-         type is (surface_charge_response_type)
+         type is (potential_adjoint_response_type)
             item => stored
             return
          end select
       end do
 
-   end function find_surface_charge
+   end function find_potential_adjoint
 
    !> Find the density item, null when absent
    !>

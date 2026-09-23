@@ -12,7 +12,7 @@ module moist_cavity_numsa
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error, get_argument, wp
    use mctc_io_convert, only: aatoau
-   use moist_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type

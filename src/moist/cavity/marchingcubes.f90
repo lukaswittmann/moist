@@ -24,7 +24,7 @@ module moist_cavity_marchingcubes
    use mctc_io_convert, only: autoaa
    use mctc_io_constants, only: pi
    use moist_math_linalg, only: cross_product
-   use moist_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type

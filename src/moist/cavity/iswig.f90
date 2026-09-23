@@ -8,7 +8,7 @@ module moist_cavity_iswig
    use iso_fortran_env, only: error_unit, output_unit
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type

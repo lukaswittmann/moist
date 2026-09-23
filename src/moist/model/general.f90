@@ -3,10 +3,10 @@ module moist_model_general
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_type, only: solvation_model_type, solvation_model_component_type, cavity_type, &
-      & snapshot_cavity_coupling, resolve_coupling_phase
+   use moist_cavity_type, only: cavity_type, snapshot_cavity_coupling
+   use moist_model_type, only: solvation_model_type, solvation_model_component_type
    use moist_channels_response, only: response_type
-   use moist_channels_request, only: coupling_type, coupling_view_type, &
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & coupling_registry_type, moist_phase_none, moist_phase_energy, &
             & moist_phase_response, moist_phase_gradient
    use moist_cavity_drop, only: cavity_type_drop
@@ -51,11 +51,11 @@ module moist_model_general
       procedure :: release_coupling => general_release_coupling
       !> Stage one phase of the coupling (snapshot, arm, declare scientific inputs)
       procedure :: update_coupling => general_update_coupling
-      !> Stage the energy phase (alias of `update_coupling(energy=.true.)`)
+      !> Stage the energy phase
       procedure :: prepare_energy => general_prepare_energy
-      !> Stage the response phase (alias of `update_coupling(response=.true.)`)
+      !> Stage the response phase
       procedure :: prepare_response => general_prepare_response
-      !> Stage the gradient phase (alias of `update_coupling(gradient=.true.)`)
+      !> Stage the gradient phase
       procedure :: prepare_gradient => general_prepare_gradient
    end type solvation_model_general
 
@@ -218,8 +218,8 @@ contains
 
    !> Assemble the host part of the response phase
    !>
-   !> `response` is cleared after input validation and returns the surface
-   !> charge, the Gaussian amplitudes and, for a cavity with field-dependent
+   !> `response` is cleared after input validation and returns the potential
+   !> adjoint, the Gaussian amplitudes and, for a cavity with field-dependent
    !> geometry, the density weights
    !>
    !> - components accumulate into it within this call
@@ -271,7 +271,7 @@ contains
    !> Accumulate the nuclear gradient of every component
    !>
    !> `response` is cleared after input validation and returns the host part
-   !> of the gradient phase: the surface charge and the Gaussian amplitudes,
+   !> of the gradient phase: the potential adjoint and the Gaussian amplitudes,
    !> which the host contracts with its own geometry derivatives
    !>
    !> - in reverse mode (the default) the components never see `get_gradient`,
@@ -367,10 +367,38 @@ contains
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
-   !> Build the host coupling of an updated model
+   !> Declare cavity and component requests, then snapshot the grid
    !>
-   !> Declare cavity and component requests, sharing calculations with matching
-   !> inputs, then snapshot the grid
+   !> Calculations with matching inputs are shared between components
+   !>
+   !> @param[in,out] self     Updated general model
+   !> @param[in,out] coupling Coupling to declare
+   !> @param[out]   error    Error handling
+   subroutine declare_general_pass(self, coupling, error)
+      !> Updated general model
+      class(solvation_model_general), intent(inout) :: self
+      !> Coupling to declare
+      type(coupling_type), intent(inout) :: coupling
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Component index
+      integer :: i
+
+      call coupling%begin_registration()
+      call coupling%set_scope(0)
+      call self%cavity%declare_coupling(coupling, error)
+      if (allocated(error)) return
+      do i = 1, size(self%components)
+         call coupling%set_scope(i)
+         call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
+         if (allocated(error)) return
+      end do
+      call snapshot_cavity_coupling(self%cavity, coupling, error)
+
+   end subroutine declare_general_pass
+
+   !> Build the host coupling of an updated model
    !>
    !> - multiple couplings may coexist; release unused ones with
    !>   `release_coupling`
@@ -382,30 +410,12 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Component index
-      integer :: i
-
       nullify (coupling)
       call require_updated(self, error)
       if (allocated(error)) return
       call self%couplings%mint(coupling, error)
       if (allocated(error)) return
-      call coupling%begin_registration()
-      call coupling%set_scope(0)
-      call self%cavity%declare_coupling(coupling, error)
-      if (allocated(error)) then
-         call self%release_coupling(coupling)
-         return
-      end if
-      do i = 1, size(self%components)
-         call coupling%set_scope(i)
-         call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
-         if (allocated(error)) then
-            call self%release_coupling(coupling)
-            return
-         end if
-      end do
-      call snapshot_cavity_coupling(self%cavity, coupling, error)
+      call declare_general_pass(self, coupling, error)
       if (allocated(error)) call self%release_coupling(coupling)
 
    end subroutine general_new_coupling
@@ -423,42 +433,29 @@ contains
    !>
    !> Energy staging starts a new host evaluation; response and gradient
    !> staging reuse outputs until geometry or declared scientific inputs change
-   subroutine general_update_coupling(self, coupling, error, energy, response, gradient)
+   !>
+   !> @param[in,out] self     Updated general model
+   !> @param[in,out] coupling Coupling built by `new_coupling`
+   !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
+   !> @param[out]   error    Foreign coupling, invalid phase or failed declaration
+   subroutine general_update_coupling(self, coupling, phase, error)
       !> Updated general model
       class(solvation_model_general), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
+      !> Phase index
+      integer, intent(in) :: phase
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Stage the energy phase
-      logical, intent(in), optional :: energy
-      !> Stage the response phase
-      logical, intent(in), optional :: response
-      !> Stage the gradient phase
-      logical, intent(in), optional :: gradient
-
-      !> Resolved phase index and component index
-      integer :: phase, i
 
       call require_updated(self, error)
-      if (allocated(error)) return
-      call resolve_coupling_phase(energy, response, gradient, phase, error)
       if (allocated(error)) return
       if (.not. self%couplings%owns(coupling)) then
          call fatal_error(error, "Coupling belongs to a different model")
          return
       end if
       if (phase == moist_phase_energy) call coupling%invalidate()
-      call coupling%begin_registration()
-      call coupling%set_scope(0)
-      call self%cavity%declare_coupling(coupling, error)
-      if (allocated(error)) return
-      do i = 1, size(self%components)
-         call coupling%set_scope(i)
-         call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
-         if (allocated(error)) return
-      end do
-      call snapshot_cavity_coupling(self%cavity, coupling, error)
+      call declare_general_pass(self, coupling, error)
       if (allocated(error)) return
       call coupling%arm(phase, error)
 
@@ -473,7 +470,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, error, energy=.true.)
+      call self%update_coupling(coupling, moist_phase_energy, error)
 
    end subroutine general_prepare_energy
 
@@ -486,7 +483,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, error, response=.true.)
+      call self%update_coupling(coupling, moist_phase_response, error)
 
    end subroutine general_prepare_response
 
@@ -499,7 +496,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, error, gradient=.true.)
+      call self%update_coupling(coupling, moist_phase_gradient, error)
 
    end subroutine general_prepare_gradient
 

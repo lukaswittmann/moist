@@ -16,7 +16,6 @@ srcs += files(
   'model.f90',
   'output.f90',
   'version.f90',
-  'type.f90',
   'utils.f90',
 )
 

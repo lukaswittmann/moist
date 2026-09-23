@@ -1,4 +1,4 @@
 srcs += files(
-  'request.f90',
+  'coupling.f90',
   'response.f90',
 )

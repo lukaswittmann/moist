@@ -2,8 +2,9 @@
 module moist_model_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type
-   use moist_channels_request, only: coupling_type, coupling_view_type
+   use moist_cavity_type, only: cavity_type
+   use moist_model_type, only: solvation_model_component_type
+   use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_channels_response, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 

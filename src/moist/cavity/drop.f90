@@ -9,7 +9,7 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_channels_response, only: response_type, density_response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_fields, only: cavity_field_query_type
@@ -786,15 +786,6 @@ contains
          return
       end if
       call self%ctx%timer%stop("Grid adj. list")
-
-      !> Nearest neighbour search to find disconnected cavities
-      call self%ctx%timer%start("Disconnected cav.")
-      call self%find_disconnected_cavities(error=error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("Disconnected cav.")
 
       call self%ctx%timer%stop("Post processing")
 
