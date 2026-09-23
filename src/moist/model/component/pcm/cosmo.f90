@@ -7,7 +7,7 @@ module moist_model_component_pcm_cosmo
    use mctc_env_error, only: error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type
    use moist_model_component_pcm_type, only: solvation_model_component_pcm, moist_pcm_parameters_type
    implicit none (type, external)
    private

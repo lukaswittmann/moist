@@ -26,10 +26,11 @@ module moist_model_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
-   use moist_type, only: solvation_model_component_type, cavity_type
+   use moist_cavity_type, only: cavity_type
+   use moist_model_type, only: solvation_model_component_type
    use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
-   use moist_channels_request, only: coupling_type, coupling_view_type, &
-      & gaussian_moment_request_type, grid_normal, grid_area, &
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
+      & gaussian_moment_request_type, &
                                      moist_phase_energy, moist_phase_response, moist_phase_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
@@ -61,7 +62,6 @@ module moist_model_component_gostshyp
       procedure :: get_surface_weights => gostshyp_get_surface_weights
       !> Declare the Gaussian-moment request
       procedure :: declare_coupling => gostshyp_declare_coupling
-      !> Hand the Gaussian widths to the moment request
    end type solvation_model_component_gostshyp
 
 contains
@@ -230,8 +230,18 @@ contains
       real(wp), allocatable, optional, intent(out) :: rt(:, :)
       !> Read error
       type(error_type), allocatable, intent(out) :: error
-      call coupling%read_moments(error, gt, pt, mt, rt)
+      call coupling%read("moments", "gt", gt, error)
       if (allocated(error)) return
+      call coupling%read("moments", "pt", pt, error)
+      if (allocated(error)) return
+      if (present(mt)) then
+         call coupling%read("moments", "mt", mt, error)
+         if (allocated(error)) return
+      end if
+      if (present(rt)) then
+         call coupling%read("moments", "rt", rt, error)
+         if (allocated(error)) return
+      end if
       if (size(gt) /= cavity%ngrid .or. any(shape(pt) /= [3, cavity%ngrid])) then
          call fatal_error(error, "GOSTSHYP: moment extents do not match the live cavity")
          return
@@ -283,13 +293,31 @@ contains
       do i = 1, cavity%ngrid
          if (cavity%a(i) > 0.0_wp) moments%width(i) = pi_ln2/cavity%a(i)
       end do
-      call moments%require(moist_phase_energy, gt=.true., pt=.true.)
-      call moments%require(moist_phase_response, gt=.true., pt=.true., &
-                           mt=cavity%has_field_dependent_geometry(), &
-                              & rt=cavity%has_field_dependent_geometry())
-      call moments%require(moist_phase_gradient, gt=.true., pt=.true., mt=.true., rt=.true.)
+      call moments%require(moist_phase_energy, "gt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_energy, "pt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_response, "gt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_response, "pt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_response, "mt", cavity%has_field_dependent_geometry(), error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_response, "rt", cavity%has_field_dependent_geometry(), error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_gradient, "gt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_gradient, "pt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_gradient, "mt", error)
+      if (allocated(error)) return
+      call moments%require(moist_phase_gradient, "rt", error)
+      if (allocated(error)) return
       ! Host integral contractions need the surface normals and areas
-      moments%fields = ior(moments%fields, ior(grid_normal, grid_area))
+      call moments%uses("normal0", error)
+      if (allocated(error)) return
+      call moments%uses("a", error)
+      if (allocated(error)) return
       call coupling%register("moments", moments, error)
    end subroutine gostshyp_declare_coupling
 
