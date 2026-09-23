@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a wrong result, crash, error, or build failure
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal input (geometry, model, settings) or code snippet that triggers the problem
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output / error message
+      description: MOIST output, with verbosity raised (`-v -v`) and debug flags (`-d`) if possible
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: MOIST version
+      description: Release tag or commit hash
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, compiler and version, build system (meson/cmake/fpm), BLAS/LAPACK provider
+      placeholder: macOS 15, gfortran 14.3, meson, OpenBLAS
+    validations:
+      required: true
