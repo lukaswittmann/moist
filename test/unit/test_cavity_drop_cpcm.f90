@@ -1,4 +1,6 @@
 module test_cavity_drop_cpcm
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -68,7 +70,7 @@ contains
 
    !> Test the contracted A-matrix gradient against the explicit tensor
    !> contraction of the dense derivative built by
-   !> `assemble_pcm_amat_with_gradient`.
+   !> `assemble_pcm_amat_with_gradient`
    subroutine test_contract_amat1_q1q2_rA(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -94,11 +96,10 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=gamma)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -179,19 +180,20 @@ contains
       end do
    end subroutine test_contract_amat1_q1q2_rA
 
-   !> Test the fused nuclear/electronic contraction against finite differences.
-   !> This checks the point-charge case with qefield = 0.
+   !> Test the fused nuclear/electronic contraction against finite differences
+   !> This checks the point-charge case: the host total position weight is
+   !> `w_xyz(:, i) = q_i grad phi_nuc(r_i)` of the nuclear potential
    subroutine test_contract_nuc_elec_pointcharge_fd(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol, mol_fd
       type(cavity_type_drop), allocatable :: cavity
       real(wp), allocatable :: radii(:)
-      real(wp), allocatable :: surface_q(:), qefield(:, :), za(:)
+      real(wp), allocatable :: surface_q(:), w_xyz(:, :), za(:)
       real(wp), allocatable :: grad_ctr(:, :), grad_num(:, :)
       integer, allocatable :: numbering_ref(:)
       integer :: iat, iaxis, igrid, ngrid
-      real(wp) :: e_plus, e_minus
+      real(wp) :: e_plus, e_minus, r_vec(3), r_dist
       real(wp), parameter :: step = 1.0e-5_wp
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavities built here
@@ -207,12 +209,10 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=gamma)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                              wleb_prune_level=3, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=3))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -235,7 +235,7 @@ contains
          return
       end if
 
-      allocate (surface_q(ngrid), qefield(3, ngrid), za(mol%nat))
+      allocate (surface_q(ngrid), w_xyz(3, ngrid), za(mol%nat))
       allocate (grad_ctr(3, mol%nat), grad_num(3, mol%nat))
 
       do igrid = 1, ngrid
@@ -246,13 +246,21 @@ contains
          end if
       end do
 
-      qefield = 0.0_wp
       do iat = 1, mol%nat
          za(iat) = real(mol%num(mol%id(iat)), wp)
       end do
+      ! Host total position weight of the nuclear point-charge potential
+      w_xyz = 0.0_wp
+      do igrid = 1, ngrid
+         do iat = 1, mol%nat
+            r_vec = cavity%xyz(:, igrid) - mol%xyz(:, iat)
+            r_dist = norm2(r_vec)
+            w_xyz(:, igrid) = w_xyz(:, igrid) - surface_q(igrid)*za(iat)*r_vec/(r_dist*r_dist*r_dist)
+         end do
+      end do
 
       call pcm_electrostatic_nuclear_gradient(cavity%xyz, cavity%sphxyz, &
-                                              cavity%xyz1_rA, surface_q, qefield, za, &
+                                              cavity%xyz1_rA, surface_q, w_xyz, za, &
                                               grad_ctr, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -573,12 +581,12 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k_local, blend_3b=gamma)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
+            blend_3b=gamma))
          call new_context(ctx, verbosity=0, debug=.false.)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -616,7 +624,7 @@ contains
          valid_gridpoint_ref(idx_i) = cavity%converged(jgrid)
       end do
 
-      !> Get analytic geometry derivatives.
+      !> Get analytic geometry derivatives
       call cavity%get_gradient(cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -924,11 +932,11 @@ contains
       !> Compare analytic vs numeric A matrix gradients (only valid gridpoint
       !> pairs). Two passes over each channel: the first fixes its scale, which
       !> the scale-relative MTHR term of the tolerance needs, the second judges
-      !> every entry against that tolerance and keeps the worst violation.
+      !> every entry against that tolerance and keeps the worst violation
       !> The passes are plain traversals of arrays that are already complete, so
-      !> they cost nothing next to the finite differences that filled them.
+      !> they cost nothing next to the finite differences that filled them
 
-      !> Off-diagonal elements, pass 1: channel scale.
+      !> Off-diagonal elements, pass 1: channel scale
       do iat = 1, mol%nat
          do idir = 1, ndim
             do igrid = 1, ngrid
@@ -941,7 +949,7 @@ contains
          end do
       end do
 
-      !> Off-diagonal elements, pass 2: tolerance.
+      !> Off-diagonal elements, pass 2: tolerance
       do iat = 1, mol%nat
          do idir = 1, ndim
             do igrid = 1, ngrid
@@ -960,7 +968,7 @@ contains
          end do
       end do
 
-      !> Diagonal elements, pass 1: channel scale.
+      !> Diagonal elements, pass 1: channel scale
       do iat = 1, mol%nat
          do idir = 1, ndim
             do igrid = 1, ngrid
@@ -972,7 +980,7 @@ contains
          end do
       end do
 
-      !> Diagonal elements, pass 2: tolerance.
+      !> Diagonal elements, pass 2: tolerance
       do iat = 1, mol%nat
          do idir = 1, ndim
             do igrid = 1, ngrid
@@ -989,7 +997,7 @@ contains
       end do
 
       ! One assertion at the end rather than a check per entry, so the message
-      ! can name the entry that actually decided the outcome.
+      ! can name the entry that actually decided the outcome
       if (worst_ratio > 1.0_wp) then
          write (error_unit, "(a)") "A-matrix gradient exceeds its tolerance:"
          write (error_unit, "(2x,a,a)") "channel   : ", trim(worst_kind)
@@ -1006,12 +1014,13 @@ contains
 
    contains
 
-      !> True iff a gridpoint pair carries a usable finite difference.
+      !> True iff a gridpoint pair carries a usable finite difference
       !>
       !> Both points must have converged in the reference configuration and
       !> must have existed (nonzero numbering) and converged in all four
       !> displaced ones; otherwise `num_Amat1_rA` was left at zero and there is
-      !> nothing to compare against.
+      !> nothing to compare against
+      !>
       !> @param[in] idir   Displacement axis
       !> @param[in] iat    Displaced atom
       !> @param[in] ig     Row gridpoint
@@ -1031,7 +1040,8 @@ contains
                  num_pp(idir, iat, ig) /= 0 .and. num_pp(idir, iat, jg) /= 0
       end function pair_is_valid
 
-      !> Keep the entry with the largest deviation measured in its own tolerance.
+      !> Keep the entry with the largest deviation measured in its own tolerance
+      !>
       !> @param[in] kind  Channel label used in the failure report
       !> @param[in] a     Analytic derivative
       !> @param[in] n     Numeric derivative
@@ -1066,6 +1076,6 @@ contains
 
    end subroutine do_test
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
 
 end module test_cavity_drop_cpcm

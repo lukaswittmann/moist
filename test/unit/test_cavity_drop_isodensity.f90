@@ -7,7 +7,7 @@
 !>     independent direct monomial evaluation, and each analytic derivative order
 !>     against a 4-point central FD of the analytic previous order; plus the
 !>     radial screening, which must not perturb any evaluated quantity beyond its
-!>     own threshold.
+!>     own threshold
 !>
 !>   * the two isodensity LSF backends: the internal
 !>     [[moist_cavity_drop_lsf_isodensity_internal_type]] (moist evaluates the
@@ -20,10 +20,11 @@
 !>     one
 !>
 !> Every layer runs on real molecules: the mstore records But14diol/1,
-!> MB16-43/01, and Heavy28/h2o in STO-3G, def2-SVP, and def2-TZVP.
+!> MB16-43/01, and Heavy28/h2o in STO-3G, def2-SVP, and def2-TZVP
 !> Geoms from mstore, the bases and converged density matrices from the reference
 !> files in `test/unit/data` (generated using PySCF)
 module test_cavity_drop_isodensity
+   use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use, intrinsic :: iso_c_binding, only: c_double, c_int, c_ptr, c_null_ptr, c_funloc, &
                                           c_associated, c_f_pointer, c_null_funptr
    use mctc_env_accuracy, only: wp
@@ -84,11 +85,11 @@ module test_cavity_drop_isodensity
                           ibasis_sto_3g, ibasis_def2_svp, ibasis_def2_tzvp]
 
    !> test used wherever one reference density is enough. Heavy28/h2o in
-   !> def2-TZVP is the cheapest test that still carries f functions.
+   !> def2-TZVP is the cheapest test that still carries f functions
    integer, parameter :: test_reference = 8
 
-   !> Shell and Cartesian-function counts of the checked-in reference files.
-   !> Asserted so a regenerated file cannot silently change basis set.
+   !> Shell and Cartesian-function counts of the checked-in reference files
+   !> Asserted so a regenerated file cannot silently change basis set
    integer, parameter :: expected_nshell(ntests) = &
                          [28, 66, 106, 42, 83, 5, 12, 19]
    integer, parameter :: expected_ncart(ntests) = &
@@ -109,7 +110,7 @@ module test_cavity_drop_isodensity
    !> Reference density shared with the C-interoperable callback
    type(moist_iso_gto_type), save :: cb_gto
 
-   !> Packed spatial derivative multi-indices through third order.
+   !> Packed spatial derivative multi-indices through third order
    integer, parameter :: ref_deriv_x(0:19) = [ &
                          0, 1, 0, 0, 2, 1, 1, 0, 0, 0, &
                          3, 2, 2, 1, 1, 1, 0, 0, 0, 0]
@@ -225,7 +226,7 @@ contains
               //trim(basis_name(test_basis_index(test)))
    end function test_label
 
-   !> Fetch the mstore record a test is built on.
+   !> Fetch the mstore record a test is built on
    !>
    !> @param[in]  test test identifier
    !> @param[out] mol     test geometry
@@ -241,7 +242,7 @@ contains
       call get_structure(mol, trim(mol_collection(imol)), trim(mol_record(imol)))
    end subroutine test_molecule
 
-   !> Check the Cartesian component order assumed by the PySCF density files.
+   !> Check the Cartesian component order assumed by the PySCF density files
    subroutine check_cart_layout(gto, error)
       type(moist_iso_gto_type), intent(in) :: gto
       type(error_type), allocatable, intent(out) :: error
@@ -382,7 +383,7 @@ contains
       if (allocated(error)) return
 
       !> The geometry the density was converged for must be the mstore record
-      !> the tests evaluate on, otherwise every reference below is meaningless.
+      !> the tests evaluate on, otherwise every reference below is meaningless
       do iat = 1, nat
          call check(error, number(iat), mol%num(mol%id(iat)), &
                     more=label//" atomic number")
@@ -416,7 +417,7 @@ contains
 
       ! get_env always returns an allocated string, so an `allocated` guard would
       ! never fire; the default is what covers an unset variable. meson exports
-      ! the source root, fpm runs the tester from the project root.
+      ! the source root, fpm runs the tester from the project root
       source_root = get_env("MOIST_SOURCE_ROOT", default=".")
       filename = source_root//"/test/unit/data/" &
                  //trim(mol_tag(test_molecule_index(test)))//"_" &
@@ -739,7 +740,7 @@ contains
    !> Points remain near a stationary molecule while an identical, block-diagonal
    !> density is translated away. The moving copy must contribute when adjacent,
    !> become fully inactive at large separation, and stay within the screening
-   !> error bound throughout the transition.
+   !> error bound throughout the transition
    subroutine test_gto_screening_separation(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -758,7 +759,7 @@ contains
                              1.0e-11_wp, 1.0e-12_wp, 1.0e-13_wp]
       integer, parameter :: nsteps = 140
       !> Clearance the widest shell must still gain at the end of the scan, in
-      !> Bohr; the test points themselves already sit up to `pad` outside the box.
+      !> Bohr; the test points themselves already sit up to `pad` outside the box
       real(wp), parameter :: gap_margin = 10.0_wp
 
       do test = 1, ntests
@@ -770,7 +771,7 @@ contains
 
          !> The scan has to end beyond the widest shell reach of this test,
          !> which spans a factor of four between STO-3G carbon and the diffuse
-         !> def2-TZVP sodium shells of MB16-43/01.
+         !> def2-TZVP sodium shells of MB16-43/01
          gap_step = (base_gto%reach(minval(thresholds)) + gap_margin)/real(nsteps, wp)
 
          do ithreshold = 1, size(thresholds)
@@ -1120,11 +1121,11 @@ contains
 
       ! Unscreened, and at the cavity's production screening threshold. Screening
       ! only ever drops density, so the exterior branch -- the one that divides by
-      ! a *smaller* rho -- is the one that could be pushed into over-claiming.
+      ! a *smaller* rho -- is the one that could be pushed into over-claiming
       real(wp), parameter :: thresholds(2) = [0.0_wp, 1.0e-11_wp]
 
       ! A deterministic spread of probe directions; no RNG, so a failure here
-      ! reproduces exactly.
+      ! reproduces exactly
       integer, parameter :: ndir = 14
       real(wp), parameter :: dirs(ndim, ndir) = reshape([ &
                              1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
@@ -1200,7 +1201,7 @@ contains
       ! Exterior (S > 0) and interior (S < 0) values of equal density contrast:
       ! rho = rho_iso/e outside, rho = e*rho_iso inside. Built from the LSF's own
       ! scale, since `S = scale (rho_iso - rho)` and the certificate divides that
-      ! scale back out.
+      ! scale back out
       allocate (radii(mol%nat), source=2.0_wp)
       unit_s = lsf%param%scale*lsf%param%rho_iso
       r_out = lsf%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp)))
@@ -1217,17 +1218,19 @@ contains
       end if
 
       ! Same contrast, so the same |ln(rho/rho_iso)| = 1: the radii are the
-      ! reciprocals of the two bounds in force.
+      ! reciprocals of the two bounds in force
       call check(error, r_out, 1.0_wp/lsf%param%log_grad_out, thr=1.0e-12_wp, &
                  more="exterior radius is 1/log_grad_out at unit log contrast")
       if (allocated(error)) return
 
       ! The callback variant shares the certificate, so on the same geometry and
       ! the same parameters it must return the same radius -- it differs only in
-      ! where `rho` comes from, and the certificate never asks for `rho` itself.
+      ! where `rho` comes from, and the certificate never asks for `rho` itself
       ! No `prepare` here, so the shared reference density is not touched and
-      ! this stays independent of the `cb_gto` lock.
-      call lsf_cb%new(c_null_funptr, c_null_ptr, lsf%param%rho_iso, lsf%param%scale)
+      ! this stays independent of the `cb_gto` lock
+      call lsf_cb%new(callback_ptr=c_null_funptr, context=c_null_ptr, &
+         param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=lsf%param%rho_iso, &
+         scale=lsf%param%scale))
       call lsf_cb%update(mol, radii)
       call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp))), &
                  r_out, thr=0.0_wp, &
@@ -1266,8 +1269,9 @@ contains
       sh_nprim = cb_gto%sh_poff(2:) - cb_gto%sh_poff(:cb_gto%nshell)
       allocate (radii(mol%nat), source=2.0_wp)
 
-      call lsf%new(cb_gto%sh_atom, cb_gto%sh_l, sh_nprim, cb_gto%exps, cb_gto%coeffs, rho_iso_ref, &
-                   lsf_scale, merr)
+      call lsf%new(sh_atom=cb_gto%sh_atom, sh_l=cb_gto%sh_l, sh_nprim=sh_nprim, exps=cb_gto%exps, &
+         coeffs=cb_gto%coeffs, error=merr, &
+         param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=rho_iso_ref, scale=lsf_scale))
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -1299,8 +1303,8 @@ contains
       sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
       allocate (radii(mol%nat), source=2.0_wp)
 
-      call lsf%new(gto%sh_atom, gto%sh_l, sh_nprim, gto%exps, gto%coeffs, &
-                   rho_iso_ref, 1.0_wp, merr)
+      call lsf%new(sh_atom=gto%sh_atom, sh_l=gto%sh_l, sh_nprim=sh_nprim, exps=gto%exps, coeffs=gto%coeffs, &
+         error=merr, param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=rho_iso_ref, scale=1.0_wp))
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -1327,7 +1331,8 @@ contains
       real(wp), allocatable :: radii(:)
 
       allocate (radii(mol%nat), source=2.0_wp)
-      call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, rho_iso_ref, lsf_scale)
+      call lsf%new(callback_ptr=c_funloc(iso_reference_callback), context=c_null_ptr, &
+         param=moist_cavity_drop_lsf_isodensity_param_type(rho_iso=rho_iso_ref, scale=lsf_scale))
       call lsf%update(mol, radii)
    end subroutine build_callback_lsf
 
@@ -1364,7 +1369,7 @@ contains
       integer :: ip
 
       !> Roundoff-limited thresholds include headroom for the different summation
-      !> orders of the dense production contraction and direct Leibniz reference.
+      !> orders of the dense production contraction and direct Leibniz reference
       real(wp), parameter :: THR_VAL = 1.0e-12_wp
       real(wp), parameter :: THR_GRAD = 1.0e-12_wp
       real(wp), parameter :: THR_HESS = 1.0e-11_wp
@@ -1432,7 +1437,7 @@ contains
       end do
 
       !> The test must actually produce a non-trivial level set; otherwise the
-      !> agreement above would be vacuous.
+      !> agreement above would be vacuous
       call check(error, scale_ref > 1.0e-3_wp, &
                  "isodensity test produced a vanishing third derivative")
       if (allocated(error)) return
@@ -1474,7 +1479,7 @@ contains
 
          any_nonzero = .false.
          do ip = 1, size(pts, 2)
-            !> Value+gradient only: the Hessian is deliberately not requested.
+            !> Value+gradient only: the Hessian is deliberately not requested
             call lsf%set_max_deriv(1)
             call lsf%prepare(pts(:, ip), lsf_err)
             if (allocated(lsf_err)) then
@@ -1539,7 +1544,7 @@ contains
 
       any_nonzero = .false.
       do ip = 1, size(pts, 2)
-         !> Value+gradient only: the Hessian is deliberately not requested.
+         !> Value+gradient only: the Hessian is deliberately not requested
          call lsf%set_max_deriv(1)
          call lsf%prepare(pts(:, ip), lsf_err)
          if (allocated(lsf_err)) then
@@ -1598,7 +1603,7 @@ contains
       !> Set once a non-zero max_deriv=2 Hessian is seen
       logical, intent(inout) :: any_nonzero
 
-      !> Lowering max_deriv must not disturb the orders that are still requested.
+      !> Lowering max_deriv must not disturb the orders that are still requested
       call check(error, v1, v2, thr=0.0_wp, &
                  more=label//" isodensity LSF value depends on max_deriv")
       if (allocated(error)) return
@@ -1615,7 +1620,7 @@ contains
    !> evaluator's cap, so every shell contributes at every point (exact
    !> evaluation) and neighbor_cutoff degrades the cavity cell grid to a full
    !> scan. A tight positive threshold must reproduce that exact result at both
-   !> near and far points, otherwise the screening bound is not conservative.
+   !> near and far points, otherwise the screening bound is not conservative
    !>
    !> @param[out] error Set on mismatch
    subroutine test_internal_screening_equivalence(error)
@@ -1644,7 +1649,7 @@ contains
          if (allocated(error)) return
 
          !> Screening off -> reach saturates at the evaluator cap, so the cell-grid
-         !> reach swallows the whole molecule and no shell is ever dropped.
+         !> reach swallows the whole molecule and no shell is ever dropped
          call check(error, lsf_exact%gto%reach(0.0_wp) > 500.0_wp, &
                     "screening_threshold <= 0 must give an unbounded shell reach")
          if (allocated(error)) return
@@ -1652,7 +1657,7 @@ contains
                     "screening_threshold <= 0 must disable the cell-grid cutoff")
          if (allocated(error)) return
 
-         !> Screening on -> a finite reach that actually drops shells.
+         !> Screening on -> a finite reach that actually drops shells
          call check(error, lsf_screened%gto%reach(SCREEN_TOL) < 50.0_wp, &
                     "positive screening threshold must give a finite shell reach")
          if (allocated(error)) return
@@ -1685,7 +1690,7 @@ contains
             if (allocated(error)) return
          end do
 
-         ! Far points exercise outright shell drops beyond the diffuse reach.
+         ! Far points exercise outright shell drops beyond the diffuse reach
          ! They are placed relative to the molecule so every test, from a
          ! water molecule to a 16-atom structure, gets the same clearances
          centroid = sum(mol%xyz, dim=2)/real(mol%nat, wp)
@@ -1773,7 +1778,7 @@ contains
    !>
    !> This is the LSF-level counterpart of [[test_gto_fourth_fd]]: it covers the
    !> sign/scale lift, the `(3,3,3,3)` cache and the `tmm` scratch that the bare
-   !> evaluator test does not touch.
+   !> evaluator test does not touch
    !>
    !> @param[out] error Set on mismatch
    subroutine test_internal_fourth_fd(error)
@@ -1866,12 +1871,12 @@ contains
    !>     raising `max_deriv` *after* a low-order `prepare` already sized it must
    !>     grow it rather than let `gto_eval` write past its end;
    !>   * the `tmm` scratch stays unallocated until an order-4 `prepare` runs;
-   !>   * raising the order must not disturb the lower orders' values.
+   !>   * raising the order must not disturb the lower orders' values
    !>
    !> The callback backend is checked in the same test for the opposite property:
    !> its published C ABI stops at the third derivative, so `set_max_deriv(4)`
    !> must still leave `prepared_deriv` at 3 rather than claim an order it cannot
-   !> deliver.
+   !> deliver
    !>
    !> @param[out] error Set on contract violation
    subroutine test_internal_fourth_gating(error)

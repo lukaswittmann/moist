@@ -44,7 +44,7 @@ module test_model_component_helper
                                                   -2.0_wp, 0.8_wp, 1.4_wp, &
                                                   0.6_wp, 1.3_wp, -2.1_wp], [3, fixture_ngrid_param])
    !> Tilted normal field: deliberately NOT the normalised positions, so a
-   !> kernel that silently assumes a radial surface fails here.
+   !> kernel that silently assumes a radial surface fails here
    real(wp), parameter :: fixture_normals_param(3, fixture_ngrid_param) = reshape([ &
                                           0.95_wp, 0.28_wp, 0.14_wp, &
                                           -0.11_wp, 0.97_wp, 0.21_wp, &
@@ -54,13 +54,13 @@ module test_model_component_helper
                                           -0.78_wp, 0.31_wp, 0.54_wp, &
                                           0.23_wp, 0.49_wp, -0.84_wp], [3, fixture_ngrid_param])
 
-   !> Channel selectors for `sample_channel`.
+   !> Channel selectors for `sample_channel`
    integer, parameter :: channel_xi = 1
    integer, parameter :: channel_f = 2
    integer, parameter :: channel_xyz = 3
    integer, parameter :: channel_normal = 4
 
-   !> Independent DROP surface variables used by component energy callbacks.
+   !> Independent DROP surface variables used by component energy callbacks
    type :: surface_fixture
       !> Area prefactor held fixed when xi or f is perturbed
       real(wp), allocatable :: area_base(:)
@@ -73,14 +73,14 @@ module test_model_component_helper
       !> Outward surface normals
       real(wp), allocatable :: normal(:, :)
    contains
-      !> Reconstruct quadrature areas from the independent DROP variables.
+      !> Reconstruct quadrature areas from the independent DROP variables
       procedure :: areas => fixture_areas
-      !> Return the number of surface points.
+      !> Return the number of surface points
       procedure :: ngrid => fixture_ngrid
    end type surface_fixture
 
    abstract interface
-      !> Evaluate the cavity-dependent component energy on a surface fixture.
+      !> Evaluate the cavity-dependent component energy on a surface fixture
       function surface_energy_callback(surface) result(energy)
          import :: surface_fixture, wp
          !> Surface variables at which to evaluate the energy
@@ -92,7 +92,8 @@ module test_model_component_helper
 
 contains
 
-   !> Construct a surface fixture while preserving the DROP area invariant.
+   !> Construct a surface fixture while preserving the DROP area invariant
+   !>
    !> @param[out] surface Fixture to initialize
    !> @param[in]  areas   Surface quadrature areas
    !> @param[in]  xi      Gaussian widths
@@ -116,14 +117,18 @@ contains
       integer :: ngrid
 
       ngrid = size(areas)
-      if (size(xi) /= ngrid .or. size(f) /= ngrid) &
+      if (size(xi) /= ngrid .or. size(f) /= ngrid) then
          error stop "new_surface_fixture: scalar channel size mismatch"
-      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid) &
+      end if
+      if (size(xyz, 1) /= 3 .or. size(xyz, 2) /= ngrid) then
          error stop "new_surface_fixture: xyz shape mismatch"
-      if (size(normal, 1) /= 3 .or. size(normal, 2) /= ngrid) &
+      end if
+      if (size(normal, 1) /= 3 .or. size(normal, 2) /= ngrid) then
          error stop "new_surface_fixture: normal shape mismatch"
-      if (any(abs(f) <= tiny(1.0_wp))) &
+      end if
+      if (any(abs(f) <= tiny(1.0_wp))) then
          error stop "new_surface_fixture: f must be nonzero"
+      end if
 
       allocate (surface%area_base, source=areas*xi**2/f)
       allocate (surface%xi, source=xi)
@@ -132,7 +137,8 @@ contains
       allocate (surface%normal, source=normal)
    end subroutine new_surface_fixture
 
-   !> Reconstruct quadrature areas for the current fixture variables.
+   !> Reconstruct quadrature areas for the current fixture variables
+   !>
    !> @param[in] self Surface fixture
    !> @return Surface quadrature areas
    pure function fixture_areas(self) result(areas)
@@ -144,7 +150,8 @@ contains
       allocate (areas, source=self%area_base*self%f/self%xi**2)
    end function fixture_areas
 
-   !> Return the number of points in a surface fixture.
+   !> Return the number of points in a surface fixture
+   !>
    !> @param[in] self Surface fixture
    !> @return Number of surface points
    pure integer function fixture_ngrid(self) result(ngrid)
@@ -154,11 +161,11 @@ contains
       ngrid = size(self%xi)
    end function fixture_ngrid
 
-   !> Check DROP surface weights against fourth-order central differences.
+   !> Check DROP surface weights against fourth-order central differences
    !>
    !> The energy callback receives the complete perturbed surface, so coupled
    !> point terms are tested without special treatment. Individual channels can
-   !> be disabled only when a component does not depend on that surface variable.
+   !> be disabled only when a component does not depend on that surface variable
    !>
    !> @param[out] error       Test failure information
    !> @param[in]  surface     Reference surface fixture
@@ -276,13 +283,13 @@ contains
       end do
    end subroutine check_surface_weights
 
-   !> Radial unit normals of the shared fixture: `xyz` normalised point by point.
+   !> Radial unit normals of the shared fixture: `xyz` normalised point by point
    !>
    !> A genuinely different surface from `fixture_normals_param` on the same
    !> point set, for components whose energy is only defined on a closed radial
    !> surface; swapping in the tilted field would silently change what such a
    !> suite tests. Kept as a function because `norm2` is not permitted in a
-   !> constant expression.
+   !> constant expression
    !>
    !> @return  Unit normals, (3, fixture_ngrid_param)
    pure function fixture_radial_normals() result(normals)
@@ -296,12 +303,12 @@ contains
       end do
    end function fixture_radial_normals
 
-   !> Sample one surface channel at the four `fd4_offsets` displacements.
+   !> Sample one surface channel at the four `fd4_offsets` displacements
    !>
    !> Every channel perturbs a single scalar slot of the fixture, so the stencil
    !> order lives in exactly one place here rather than being re-derived per
    !> channel -- a reversed stencil would otherwise silently flip the sign of
-   !> whichever channel got it wrong.
+   !> whichever channel got it wrong
    !>
    !> @param[in]  surface   Reference surface fixture
    !> @param[in]  evaluate  Component energy callback
@@ -349,7 +356,7 @@ contains
       end do
    end subroutine sample_channel
 
-   !> Check that every DROP weight channel has the fixture shape.
+   !> Check that every DROP weight channel has the fixture shape
    pure logical function weights_are_valid(weights, ngrid) result(valid)
       type(cavity_surface_adjoint_type), intent(in) :: weights
       integer, intent(in) :: ngrid
