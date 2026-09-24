@@ -1,4 +1,5 @@
 module test_cavity_drop_gradient
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -155,13 +156,13 @@ contains
    !> minima per anchor, so the multistart projector returns siblings. Keeping
    !> them alive additionally needs a softer branch softmax: at the production
    !> scale (0.05, set by `new_cavity_drop`) the prune in filter.f90 discards
-   !> every sibling but the strongest and `branch_count` collapses back to 1.
+   !> every sibling but the strongest and `branch_count` collapses back to 1
    !> Measured onset is s ~ 0.2; 0.5 leaves margin so the stencil geometries
-   !> branch too.
+   !> branch too
    !>
    !> This is the only fixture that exercises the branch post-pass, which
-   !> corrects `wleb1_rA`, `xi1_rA`, `a_i1_rA` and `v1_rA` after the main loop.
-   !> `xi1_rA` was missing from that list and nothing caught it.
+   !> corrects `wleb1_rA`, `xi1_rA`, `a_i1_rA` and `v1_rA` after the main loop
+   !> `xi1_rA` was missing from that list and nothing caught it
    subroutine test_cross_branching(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -202,12 +203,11 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=1.0_wp, blend_3b=1.0_wp)
-         call new_cavity_drop(cavity, ctx, nleb=110, &
-                              do_fine=.true., &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.0_wp, &
+            blend_3b=1.0_wp))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110, do_fine=.true., &
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7))
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
 
@@ -271,7 +271,7 @@ contains
    end subroutine test_branching_xyz_totals
 
    !> Helper: rebuild cavity with atom (iat, idir) shifted by delta and
-   !> return sum(a) and sum(v) over the resulting grid points.
+   !> return sum(a) and sum(v) over the resulting grid points
    subroutine build_and_totalize(cavity, mol, iat, idir, delta, A_tot, V_tot, error)
       type(cavity_type_drop), intent(inout) :: cavity
       type(structure_type), intent(in) :: mol
@@ -297,7 +297,7 @@ contains
 
    !> Sort the reference branches (and mirror the sort on phi_ref) so
    !> subsequent perturbed projections can be matched branch-by-branch
-   !> via the same "nearest original atom" labelling.
+   !> via the same "nearest original atom" labelling
    subroutine sort_by_projected_owner(work, n, mol, phi)
       type(projection_workspace_type), intent(inout) :: work
       integer, intent(in) :: n
@@ -314,7 +314,7 @@ contains
          key_owner(i) = nearest_atom(work%points(:, i), mol)
       end do
 
-      ! Simple insertion sort by key_owner ascending. n is small (typically 4).
+      ! Simple insertion sort by key_owner ascending. n is small (typically 4)
       do i = 2, n
          do j = i, 2, -1
             if (key_owner(j) < key_owner(j - 1)) then
@@ -332,7 +332,7 @@ contains
       end do
    end subroutine sort_by_projected_owner
 
-   !> Return the atom whose centers is closest to the given point.
+   !> Return the atom whose centers is closest to the given point
    integer function nearest_atom(point, mol) result(idx)
       real(wp), intent(in) :: point(3)
       type(structure_type), intent(in) :: mol
@@ -351,7 +351,7 @@ contains
    end function nearest_atom
 
    !> Translate an mctc_error message into the testdrive error_type so the
-   !> check assertion framework can pick it up.
+   !> check assertion framework can pick it up
    subroutine fatal_error_from_mctc(error, msg)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: msg
@@ -477,13 +477,11 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k_local, blend_3b=blend_3b_local)
-         call new_cavity_drop(cavity, ctx, nleb=nleb_local, &
-                              do_fine=.true., &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, &
-                              wleb_prune_level=4, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
+            blend_3b=blend_3b_local))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_local, do_fine=.true., &
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4))
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
       ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
@@ -491,7 +489,7 @@ contains
       if (present(branch_weight_s_override)) then
          cavity%param%branch_weight_s = branch_weight_s_override
          ! The admissible branch set is derived from the softmax scale, so it
-         ! has to be recomputed alongside it.
+         ! has to be recomputed alongside it
          call cavity%param%compute_derived(cavity_error)
          if (allocated(cavity_error)) &
             call test_failed(error, "Failed to recompute derived parameters: "//cavity_error%message)
@@ -551,7 +549,7 @@ contains
       allocate (en_xi1_rA(ndim, mol%nat, ngrid_set), source=0.0_wp)
       allocate (en_normal1_rA(ndim, mol%nat, ndim, ngrid_set), source=0.0_wp)
 
-      ! Fill analytical derivatives mapped onto reference numbering.
+      ! Fill analytical derivatives mapped onto reference numbering
       do jgrid = 1, cavity%ngrid
          num_idn = cavity%numbering(jgrid)
          if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
@@ -1197,7 +1195,7 @@ contains
    end subroutine do_test
 
    !> Finite-difference validation of the optional surface-adjoint channels
-   !> w_n, w_k1, and w_k2 of contract_surface_lsf_weights.
+   !> w_n, w_k1, and w_k2 of contract_surface_lsf_weights
    !>
    !> For a *non-owner* atom A the projection objective (the anchor term phi)
    !> carries no dependence on R_A, so displacing A perturbs the surface only
@@ -1210,12 +1208,12 @@ contains
    !>
    !> which is finite-differenced here by rebuilding the cavity at +-h and +-2h
    !> and reading the forward normals and principal curvatures back per grid point
-   !> (matched through the persistent grid numbering, as in do_test).
+   !> (matched through the persistent grid numbering, as in do_test)
    !>
    !> Every channel is contracted on its own *and* all three together: the normal
    !> channel folds a Hessian coupling (H @ dS-gradient weight) into the effective
    !> position weight that exists only when w_n is present, so a combined-only
-   !> check could not separate it from the curvature contributions.
+   !> check could not separate it from the curvature contributions
    subroutine test_adjoint_channels_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1223,14 +1221,14 @@ contains
       !> Adjoint channel combinations probed: w_n, w_k1, w_k2, and all three
       integer, parameter :: NCHAN = 4
       !> Near-umbilic guard. At k1 == k2 the individual principal curvatures are
-      !> not differentiable, so such grid points are skipped for the k channels.
+      !> not differentiable, so such grid points are skipped for the k channels
       real(wp), parameter :: CURV_GAP_THR = 5.0e-2_wp
       !> FD-vs-analytic thresholds for this test. The measured worst-case
       !> deviations are 6.4e-12 (w_n), 2.1e-12 (w_k1), 2.1e-12 (w_k2), and
       !> 6.3e-12 (all three) against adjoint magnitudes up to ~0.5, i.e. the
-      !> agreement is limited by the 4-point FD roundoff floor at STEP_SIZE.
+      !> agreement is limited by the 4-point FD roundoff floor at STEP_SIZE
       !> These bounds keep roughly one order of magnitude of headroom, far below
-      !> the suite-wide ABS_THR/REL_THR used for the cheaper forward gradients.
+      !> the suite-wide ABS_THR/REL_THR used for the cheaper forward gradients
       real(wp), parameter :: ADJ_ABS = 5.0e-11_wp
       real(wp), parameter :: ADJ_REL = 5.0e-10_wp
 
@@ -1264,7 +1262,7 @@ contains
 
       !> Small asymmetric cluster: the two heavy centers make an elongated
       !> cavity with well-separated principal curvatures over most of the grid,
-      !> and the off-axis hydrogen removes the residual rotational symmetry.
+      !> and the off-axis hydrogen removes the residual rotational symmetry
       call new(mol, [8, 6, 1], reshape([ &
                                        0.00_wp, 0.00_wp, 0.00_wp, &
                                        0.00_wp, 0.00_wp, 4.60_wp, &
@@ -1276,20 +1274,18 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=blend_3b)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
          call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                              proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
          return
       end if
       !> The curvature channels need the forward principal curvatures; the
-      !> normals are stored by the projection regardless.
+      !> normals are stored by the projection regardless
       call cavity%properties(do_curvature=.true., do_normal=.true.)
 
       call cavity%update(mol, error=cavity_error)
@@ -1305,7 +1301,7 @@ contains
          return
       end if
 
-      !> Reference bookkeeping: persistent numbering -> reference grid index.
+      !> Reference bookkeeping: persistent numbering -> reference grid index
       call build_numbering_map(cavity%numbering(1:ngrid_set), numbering_to_idx)
       allocate (ref_conv(ngrid_set), source=.false.)
       allocate (ref_owner(ngrid_set), source=0)
@@ -1318,7 +1314,7 @@ contains
          ref_k2(igrid) = cavity%k2(igrid)
       end do
 
-      !> Arbitrary, distinct, non-proportional surface adjoint weights.
+      !> Arbitrary, distinct, non-proportional surface adjoint weights
       allocate (w_n(ndim, ngrid_set), w_k1(ngrid_set), w_k2(ngrid_set))
       do igrid = 1, ngrid_set
          do ax = 1, ndim
@@ -1330,7 +1326,7 @@ contains
       end do
 
       !> All non-probed surface channels are switched off, so w_lsf is the pure
-      !> adjoint of the channel combination under test.
+      !> adjoint of the channel combination under test
       allocate (w_lsf0(ngrid_set, NCHAN), source=0.0_wp)
       allocate (w_lsf1(ndim, ngrid_set, NCHAN), source=0.0_wp)
       allocate (w_lsf2(ndim, ndim, ngrid_set, NCHAN), source=0.0_wp)
@@ -1375,7 +1371,7 @@ contains
       end if
 
       !> Analytic dL/dR_A: the adjoint weights contracted with the LSF nuclear
-      !> jet at the reference projected points (before any FD rebuild moves them).
+      !> jet at the reference projected points (before any FD rebuild moves them)
       allocate (en_adj(ndim, nsph, ngrid_set, NCHAN), source=0.0_wp)
       allocate (lsf, source=cavity%lsf_model)
       call lsf%set_max_deriv(3)
@@ -1410,7 +1406,7 @@ contains
          end do
       end do
 
-      !> Numeric dL/dR_A from 4-point central differences of the forward surface.
+      !> Numeric dL/dR_A from 4-point central differences of the forward surface
       allocate (num_adj(ndim, nsph, ngrid_set, NCHAN), source=0.0_wp)
       allocate (valid(ndim, nsph, ngrid_set), source=.false.)
       allocate (st_normal(ndim, ngrid_set, 4), st_k1(ngrid_set, 4), st_k2(ngrid_set, 4))
@@ -1462,7 +1458,7 @@ contains
       end do
 
       !> Compare, skipping the owner atom (whose anchor term is not part of the
-      !> level set adjoint) and near-umbilic points for the curvature channels.
+      !> level set adjoint) and near-umbilic points for the curvature channels
       ncompared = 0
       do ich = 1, NCHAN
          do igrid = 1, ngrid_set
@@ -1484,7 +1480,7 @@ contains
       end do
 
       !> Guard against a vacuously green run: every channel must have been
-      !> exercised on a healthy number of grid points.
+      !> exercised on a healthy number of grid points
       do ich = 1, NCHAN
          call check(error, ncompared(ich) > 100, &
                     "Adjoint channel "//to_string(ich)//" was never compared")
@@ -1493,7 +1489,7 @@ contains
    end subroutine test_adjoint_channels_fd
 
    !> The area and integration-weight adjoint channels must be equivalent to the
-   !> `w_xi` weights they fold into.
+   !> `w_xi` weights they fold into
    !>
    !> A DROP point area is `a = wleb * f / xi**2`, so a weight on `a` and a
    !> weight on `wleb` both reach the level set only through
@@ -1501,7 +1497,7 @@ contains
    !> and feeding the pre-folded `w_xi` directly must therefore produce the same
    !> contraction, at all three LSF orders. Not a finite-difference test: the two
    !> paths run the same kernel on algebraically identical input, so they agree
-   !> to roundoff.
+   !> to roundoff
    subroutine test_adjoint_area_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1519,10 +1515,10 @@ contains
       real(wp), allocatable :: w_lsf0_ref(:), w_lsf1_ref(:, :), w_lsf2_ref(:, :, :)
       integer :: igrid, ngrid_set
 
-      !> The two paths differ only by the order of a handful of flops.
+      !> The two paths differ only by the order of a handful of flops
       real(wp), parameter :: ADJ_EQ_THR = 1.0e-13_wp
 
-      !> Same asymmetric cluster as `test_adjoint_channels_fd`.
+      !> Same asymmetric cluster as `test_adjoint_channels_fd`
       call new(mol, [8, 6, 1], reshape([ &
                                        0.00_wp, 0.00_wp, 0.00_wp, &
                                        0.00_wp, 0.00_wp, 4.60_wp, &
@@ -1534,13 +1530,11 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=k, blend_3b=blend_3b)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
          call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                              proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
@@ -1594,7 +1588,7 @@ contains
          return
       end if
 
-      ! Guard against a vacuous comparison: both paths returning zero would pass.
+      ! Guard against a vacuous comparison: both paths returning zero would pass
       call check(error, maxval(abs(w_lsf0_ref)) > 1.0e-8_wp, &
                  "derived area-channel contraction is identically zero")
       if (allocated(error)) return
@@ -1609,6 +1603,6 @@ contains
                  thr=ADJ_EQ_THR, more="derived Hessian surface-weight channel")
    end subroutine test_adjoint_area_channels
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
 
 end module test_cavity_drop_gradient

@@ -41,7 +41,7 @@ contains
                   ]
    end subroutine collect_cavity_drop_primitives
 
-   !> Test phi value against the direct quadratic expression.
+   !> Test phi value against the direct quadratic expression
    subroutine test_phi_f0(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -75,7 +75,7 @@ contains
       end do
    end subroutine test_phi_f0
 
-   !> Test phi point gradient against a finite difference of the value.
+   !> Test phi point gradient against a finite difference of the value
    subroutine test_phi_f1_r(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -131,7 +131,7 @@ contains
       end do
    end subroutine test_phi_f1_r
 
-   !> Test phi point Hessian against a finite difference of the point gradient.
+   !> Test phi point Hessian against a finite difference of the point gradient
    subroutine test_phi_f2_rr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -191,10 +191,10 @@ contains
       end do
    end subroutine test_phi_f2_rr
 
-   !> Test phi third point derivative against a finite difference of the Hessian.
+   !> Test phi third point derivative against a finite difference of the Hessian
    !> Mol-less pure-math test: phi = 0.5*alpha*(r-anchor)^2 has analytic
    !> derivatives that hold for any two distinct points, so the (point,
-   !> anchor) pair is hard-coded rather than sourced from a molecule.
+   !> anchor) pair is hard-coded rather than sourced from a molecule
    subroutine test_phi_f3_rrr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -247,8 +247,8 @@ contains
       end do
    end subroutine test_phi_f3_rrr
 
-   !> Test phi fourth point derivative against a finite difference of the third derivative.
-   !> Mol-less pure-math test (see test_phi_f3_rrr).
+   !> Test phi fourth point derivative against a finite difference of the third derivative
+   !> Mol-less pure-math test (see test_phi_f3_rrr)
    subroutine test_phi_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -306,7 +306,7 @@ contains
       end do
    end subroutine test_phi_f4_rrrr
 
-   !> Test phi nuclear gradient against a finite difference of the anchor point.
+   !> Test phi nuclear gradient against a finite difference of the anchor point
    subroutine test_phi_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -364,7 +364,7 @@ contains
       end do
    end subroutine test_phi_f1_rA
 
-   !> Test phi nuclear Hessian against finite differences of the nuclear gradient.
+   !> Test phi nuclear Hessian against finite differences of the nuclear gradient
    subroutine test_phi_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -429,7 +429,7 @@ contains
       end do
    end subroutine test_phi_f2_rArB
 
-   !> Test phi mixed point-nuclear Hessian against finite differences of point gradient.
+   !> Test phi mixed point-nuclear Hessian against finite differences of point gradient
    subroutine test_phi_f2_r_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -489,7 +489,7 @@ contains
       end do
    end subroutine test_phi_f2_r_rA
 
-   !> Test combined phi value, gradient, and Hessian against finite differences.
+   !> Test combined phi value, gradient, and Hessian against finite differences
    subroutine test_phi_f012_r(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -567,10 +567,10 @@ contains
       end do
    end subroutine test_phi_f012_r
 
-   !> Test switching function nuclear gradient via finite difference.
+   !> Test switching function nuclear gradient via finite difference
    !> Builds an LSF-svdw scaffold to obtain f0 and nuclear gradients,
    !> wraps them through the smooth-step switching function, and
-   !> FD-checks against the analytic switching gradient.
+   !> FD-checks against the analytic switching gradient
    subroutine test_switching_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type), allocatable :: mols(:)

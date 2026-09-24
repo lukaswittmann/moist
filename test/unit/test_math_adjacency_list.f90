@@ -38,7 +38,7 @@ contains
                   ]
    end subroutine collect_math_adjacency_list
 
-   !> Compare adjacency membership against brute-force distance checks.
+   !> Compare adjacency membership against brute-force distance checks
    subroutine test_pair_membership_bruteforce(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -49,7 +49,7 @@ contains
       integer :: i, j, expected_count
       logical :: in_expected, in_list
 
-      ! Mix of inside, outside, and exact-cutoff pairs.
+      ! Mix of inside, outside, and exact-cutoff pairs
       xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       xyz(:, 2) = [1.5_wp, 0.0_wp, 0.0_wp]    ! exactly at cutoff from 1
       xyz(:, 3) = [1.5002_wp, 0.0_wp, 0.0_wp] ! just outside cutoff from 1
@@ -95,7 +95,7 @@ contains
       call nlist%destroy()
    end subroutine test_pair_membership_bruteforce
 
-   !> Neighbour content for a simple linear cluster with one isolated point.
+   !> Neighbour content for a simple linear cluster with one isolated point
    subroutine test_neighbour_content(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -144,7 +144,7 @@ contains
    ! the dist/nlat pairing are load-bearing for production correctness.      !
    !=========================================================================!
 
-   !> With sorted=.true. every row must be non-decreasing in distance.
+   !> With sorted=.true. every row must be non-decreasing in distance
    subroutine test_sorted_distances_ascending(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -160,7 +160,7 @@ contains
       if (allocated(error)) return
 
       ! The central point must see every other point, so at least one row is long
-      ! enough to be worth sorting.
+      ! enough to be worth sorting
       call check(error, nlist%nnl(1) == size(xyz, 2) - 1, &
                  "Central point should neighbour all others")
       if (allocated(error)) return
@@ -176,10 +176,10 @@ contains
       call nlist%destroy()
    end subroutine test_sorted_distances_ascending
 
-   !> Every stored distance must belong to the neighbour id stored beside it.
+   !> Every stored distance must belong to the neighbour id stored beside it
    !>
    !> Sorting permutes dist and nlat together; if the companion array ever came
-   !> loose the list would stay plausible but silently mispair ids and distances.
+   !> loose the list would stay plausible but silently mispair ids and distances
    subroutine test_dist_matches_nlat_pairing(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -211,7 +211,7 @@ contains
       end do
    end subroutine test_dist_matches_nlat_pairing
 
-   !> Sorting must permute a row, never add or drop neighbours.
+   !> Sorting must permute a row, never add or drop neighbours
    subroutine test_sorted_matches_unsorted_set(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: plain, ordered
@@ -249,18 +249,18 @@ contains
       call ordered%destroy()
    end subroutine test_sorted_matches_unsorted_set
 
-   !> Duplicate distances must survive sorting intact.
+   !> Duplicate distances must survive sorting intact
    !>
    !> qsort is not stable and switches from insertion sort to quicksort
    !> partitioning above 24 elements, so this fixture builds a row of 40
-   !> neighbours made of 20 distances that each occur twice.
+   !> neighbours made of 20 distances that each occur twice
    subroutine test_sorted_equidistant_ties(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
       real(wp) :: xyz(3, 41)
       integer :: m, k, start, cnt
 
-      ! Point 1 at the origin; mirrored pairs at +-0.1*m along x.
+      ! Point 1 at the origin; mirrored pairs at +-0.1*m along x
       xyz(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       do m = 1, 20
          xyz(:, 2*m) = [0.1_wp*real(m, wp), 0.0_wp, 0.0_wp]
@@ -284,7 +284,7 @@ contains
          if (allocated(error)) return
       end do
 
-      ! Each distance occurs exactly twice, and no id may be lost or repeated.
+      ! Each distance occurs exactly twice, and no id may be lost or repeated
       do m = 1, 20
          call check(error, count(abs(nlist%dist(start + 1:start + cnt) &
                                      - 0.1_wp*real(m, wp)) <= thr) == 2, &
@@ -305,7 +305,7 @@ contains
    end subroutine test_sorted_equidistant_ties
 
    !> Reproduce the consumer contract: stopping at the first over-threshold
-   !> distance must yield exactly the neighbours within that threshold.
+   !> distance must yield exactly the neighbours within that threshold
    subroutine test_sorted_early_exit_contract(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -329,7 +329,7 @@ contains
             start = nlist%inl(i)
             cnt = nlist%nnl(i)
 
-            ! Walk the row exactly as the switching function does.
+            ! Walk the row exactly as the switching function does
             reached = .false.
             taken = 0
             do ii = 1, cnt
@@ -359,11 +359,11 @@ contains
    ! Cell grid                                                               !
    !=========================================================================!
 
-   !> Many-cell brute-force comparison.
+   !> Many-cell brute-force comparison
    !>
    !> The small hand-written fixtures span barely two cells per axis, which
    !> leaves the 27-cell stencil, its boundary clipping and the cell-index
-   !> decode effectively unexercised. Here the box is six cutoffs wide.
+   !> decode effectively unexercised. Here the box is six cutoffs wide
    subroutine test_many_cells_bruteforce(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -378,7 +378,7 @@ contains
       if (allocated(error)) return
 
       ! Guard the fixture itself: a box this dense must produce real neighbours,
-      ! otherwise the comparison below would pass vacuously.
+      ! otherwise the comparison below would pass vacuously
       call check(error, size(nlist%nlat) > 300, &
                  "Fixture is too sparse to exercise the cell stencil")
       if (allocated(error)) return
@@ -389,7 +389,7 @@ contains
       call nlist%destroy()
    end subroutine test_many_cells_bruteforce
 
-   !> A cutoff far larger than the bounding box collapses to a single cell.
+   !> A cutoff far larger than the bounding box collapses to a single cell
    subroutine test_cutoff_exceeds_extent(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -417,7 +417,7 @@ contains
       call nlist%destroy()
    end subroutine test_cutoff_exceeds_extent
 
-   !> Degenerate grid extents: a flat sheet (nz == 1) and a line (ny == nz == 1).
+   !> Degenerate grid extents: a flat sheet (nz == 1) and a line (ny == nz == 1)
    subroutine test_planar_and_collinear(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -457,7 +457,7 @@ contains
       call nlist%destroy()
    end subroutine test_planar_and_collinear
 
-   !> Coincident points still pair up, at zero distance, without self-pairs.
+   !> Coincident points still pair up, at zero distance, without self-pairs
    subroutine test_coincident_points(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -490,7 +490,7 @@ contains
       call nlist%destroy()
    end subroutine test_coincident_points
 
-   !> Adjacency is symmetric: j neighbours i exactly when i neighbours j.
+   !> Adjacency is symmetric: j neighbours i exactly when i neighbours j
    subroutine test_pair_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -523,7 +523,7 @@ contains
    ! Degenerate input and object lifecycle                                   !
    !=========================================================================!
 
-   !> Zero and one point must produce a valid, empty list.
+   !> Zero and one point must produce a valid, empty list
    subroutine test_empty_and_single_point(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -551,7 +551,7 @@ contains
       call nlist%destroy()
    end subroutine test_empty_and_single_point
 
-   !> A non-positive cutoff yields an empty list rather than a crash.
+   !> A non-positive cutoff yields an empty list rather than a crash
    subroutine test_nonpositive_cutoff(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: untouched, negative
@@ -562,7 +562,7 @@ contains
       xyz(:, 3) = [0.0_wp, 0.1_wp, 0.0_wp]
       xyz(:, 4) = [0.0_wp, 0.0_wp, 0.1_wp]
 
-      ! No init at all: the default cutoff of zero must short-circuit.
+      ! No init at all: the default cutoff of zero must short-circuit
       call untouched%update(xyz)
       call check_csr_invariants(error, untouched, size(xyz, 2))
       if (allocated(error)) return
@@ -582,10 +582,10 @@ contains
       call negative%destroy()
    end subroutine test_nonpositive_cutoff
 
-   !> Repeated update on a populated object must resize cleanly.
+   !> Repeated update on a populated object must resize cleanly
    !>
    !> No production caller reaches this path (both always re-init first), so the
-   !> reallocation logic is only covered here.
+   !> reallocation logic is only covered here
    subroutine test_rebuild_grow_and_shrink(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: reused, fresh
@@ -630,7 +630,7 @@ contains
       call fresh%destroy()
    end subroutine test_rebuild_grow_and_shrink
 
-   !> destroy must be idempotent and must leave the object reusable.
+   !> destroy must be idempotent and must leave the object reusable
    subroutine test_destroy_and_reuse(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: nlist
@@ -660,7 +660,7 @@ contains
       call check(error,.not. allocated(nlist%dist), "destroy must release dist")
       if (allocated(error)) return
 
-      ! The cutoff survives destroy by design, so update alone rebuilds the list.
+      ! The cutoff survives destroy by design, so update alone rebuilds the list
       call nlist%update(xyz)
       call check_csr_invariants(error, nlist, size(xyz, 2))
       if (allocated(error)) return
@@ -671,7 +671,7 @@ contains
    end subroutine test_destroy_and_reuse
 
    !> init fully defines the configuration: omitting sorted means unsorted, even
-   !> if the instance was previously initialised as sorted.
+   !> if the instance was previously initialised as sorted
    subroutine test_init_resets_sorted(error)
       type(error_type), allocatable, intent(out) :: error
       type(adjacency_list_type) :: reused, fresh
@@ -684,7 +684,7 @@ contains
       call check(error, reused%sorted, "sorted=.true. must be honoured")
       if (allocated(error)) return
 
-      ! Re-init without the optional argument.
+      ! Re-init without the optional argument
       call reused%init(cutoff=1.6_wp)
       call reused%update(xyz)
 
@@ -704,7 +704,7 @@ contains
    ! Helpers                                                                 !
    !=========================================================================!
 
-   !> Central point surrounded by seven others at pairwise distinct distances.
+   !> Central point surrounded by seven others at pairwise distinct distances
    pure subroutine star_cluster(xyz)
       real(wp), intent(out) :: xyz(3, 8)
 
@@ -718,12 +718,12 @@ contains
       xyz(:, 8) = [0.0_wp, 0.0_wp, -1.375_wp]
    end subroutine star_cluster
 
-   !> Fill a coordinate array with points drawn from a pinned random stream.
+   !> Fill a coordinate array with points drawn from a pinned random stream
    !>
    !> The seed follows the convention in test_math_sorters, so the fixture is
    !> reproducible for a given compiler. Assertions built on it are all
    !> comparisons against a brute-force reference, so a differing pseudo-random
-   !> stream changes the fixture but never the verdict.
+   !> stream changes the fixture but never the verdict
    subroutine random_points(xyz, npoints, box)
       real(wp), allocatable, intent(out) :: xyz(:, :)
       !> Number of points to generate
@@ -747,7 +747,7 @@ contains
       xyz = box*xyz
    end subroutine random_points
 
-   !> Brute-force reference for the neighbours of point i within cutoff.
+   !> Brute-force reference for the neighbours of point i within cutoff
    subroutine brute_force_row(xyz, i, cutoff, ids, dists)
       real(wp), intent(in) :: xyz(:, :)
       !> Query point index
@@ -787,7 +787,7 @@ contains
       end do
    end subroutine brute_force_row
 
-   !> Assert the raw CSR contract every production consumer walks directly.
+   !> Assert the raw CSR contract every production consumer walks directly
    subroutine check_csr_invariants(error, nlist, npoints)
       type(error_type), allocatable, intent(inout) :: error
       !> List under test
@@ -843,7 +843,7 @@ contains
       end do
    end subroutine check_csr_invariants
 
-   !> Compare every row against the brute-force reference set.
+   !> Compare every row against the brute-force reference set
    subroutine check_all_rows_bruteforce(error, nlist, xyz)
       type(error_type), allocatable, intent(inout) :: error
       !> List under test
@@ -865,7 +865,7 @@ contains
          if (allocated(error)) return
 
          ! Together with the no-duplicate invariant, matching counts plus
-         ! one-way containment give set equality.
+         ! one-way containment give set equality
          do k = 1, size(ref_ids)
             call check(error, any(nlist%nlat(start + 1:start + cnt) == ref_ids(k)), &
                        "Brute-force neighbour missing from the list")
@@ -874,7 +874,7 @@ contains
       end do
    end subroutine check_all_rows_bruteforce
 
-   !> Assert two lists agree in every stored field.
+   !> Assert two lists agree in every stored field
    subroutine check_lists_identical(error, lhs, rhs, label)
       type(error_type), allocatable, intent(inout) :: error
       !> Lists to compare

@@ -13,7 +13,8 @@ module test_math_solvers
    use mctc_env, only: wp
    use mctc_io_utils, only: to_string
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_newton
    use moist_math_solver_slsqp
    use moist_math_solver_lbfgsb
@@ -26,7 +27,7 @@ module test_math_solvers
    use moist_math_solver_octree_branch, only: moist_math_octree_branch_type, &
                                               octree_seed_cluster, octree_seed_per_leaf
    use mctc_env_error, only: moist_error_type => error_type
-   ! Raw vendored solver APIs (upstream test ports folded into this suite).
+   ! Raw vendored solver APIs (upstream test ports folded into this suite)
    use slsqp_module, only: slsqp_solver
    use lbfgsb_module, only: setulb
    use moist_math_solver_fmin, only: fmin
@@ -39,11 +40,11 @@ module test_math_solvers
 
    public :: collect_math_solvers
 
-   !> Context for the analytic probe: a union of spheres, as a signed distance.
+   !> Context for the analytic probe: a union of spheres, as a signed distance
    !>
    !> `S(x) = min_i (||x - c_i|| - R_i)` is exactly 1-Lipschitz, so `|S(x)|` is
    !> a valid surface-free radius -- the same certificate the SvdW level set
-   !> supplies, without pulling the whole cavity machinery into a solver test.
+   !> supplies, without pulling the whole cavity machinery into a solver test
    type :: sphere_union_context
       !> Sphere centres (3, nsphere)
       real(wp) :: centre(3, 2) = 0.0_wp
@@ -64,25 +65,25 @@ module test_math_solvers
    !*     Raw-kernel test constants (vendored APIs ported from upstream test suites)    *!
    !* ================================================================================= *!
 
-   !> SLSQP raw-kernel acceptance tolerance.
+   !> SLSQP raw-kernel acceptance tolerance
    real(wp), parameter :: slsqp_kernel_thr = 1.0e-4_wp
-   !> Reference solution of the constrained Rosenbrock problem (upstream slsqp).
+   !> Reference solution of the constrained Rosenbrock problem (upstream slsqp)
    real(wp), parameter :: slsqp_rosen_x(2) = &
                           [0.78641515097183889_wp, 0.61769831659541152_wp]
-   !> L-BFGS-B raw-kernel problem size and convergence controls.
+   !> L-BFGS-B raw-kernel problem size and convergence controls
    integer, parameter :: lbfgsb_n = 25, lbfgsb_m = 5
    real(wp), parameter :: lbfgsb_factr = 1.0e7_wp, lbfgsb_pgtol = 1.0e-5_wp
-   !> fmin raw-kernel tolerances (upstream accepts 10*tol on the minimizer).
+   !> fmin raw-kernel tolerances (upstream accepts 10*tol on the minimizer)
    real(wp), parameter :: fmin_tol = 1.0e-8_wp
    real(wp), parameter :: fmin_thr = 10.0_wp*fmin_tol
-   !> Newton/nlesolver raw-kernel problem definition.
+   !> Newton/nlesolver raw-kernel problem definition
    integer, parameter :: newton_n = 2, newton_m = 2, newton_max_iter = 100
    real(wp), parameter :: newton_tol = 1.0e-8_wp
-   !> Root of the test system (positive branch).
+   !> Root of the test system (positive branch)
    real(wp), parameter :: newton_x_ref(2) = [0.5477225575051661_wp, -0.2_wp]
-   !> Acceptance tolerance on the converged Newton solution.
+   !> Acceptance tolerance on the converged Newton solution
    real(wp), parameter :: newton_x_thr = 1.0e-4_wp
-   !> COO sparsity pattern of the Jacobian (structural zero at (2,1) omitted).
+   !> COO sparsity pattern of the Jacobian (structural zero at (2,1) omitted)
    integer, parameter :: newton_irow(3) = [1, 1, 2]
    integer, parameter :: newton_icol(3) = [1, 2, 2]
 
@@ -612,8 +613,8 @@ contains
       f = (1.0_wp - x(1))**2 + 100.0_wp*(x(2) - x(1)**2)**2
    end subroutine rosenbrock_objective
 
-   !> Rosenbrock objective with context for 3D variables (ignore z).
-   !> Needed because multistart seeds are 3D.
+   !> Rosenbrock objective with context for 3D variables (ignore z)
+   !> Needed because multistart seeds are 3D
    subroutine rosenbrock_objective_ctx3(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -634,8 +635,8 @@ contains
       df(2) = 200.0_wp*(x(2) - x(1)**2)
    end subroutine rosenbrock_objective_gradient
 
-   !> Rosenbrock objective gradient with context for 3D variables (ignore z).
-   !> Needed because multistart seeds are 3D.
+   !> Rosenbrock objective gradient with context for 3D variables (ignore z)
+   !> Needed because multistart seeds are 3D
    subroutine rosenbrock_objective_gradient_ctx3(x, df, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: df
@@ -645,8 +646,8 @@ contains
       call rosenbrock_objective_gradient(x(1:2), df(1:2))
    end subroutine rosenbrock_objective_gradient_ctx3
 
-   !> Empty constraint with context for 3D variables (m=0).
-   !> Required by multistart's SLSQP interface even when m=0.
+   !> Empty constraint with context for 3D variables (m=0)
+   !> Required by multistart's SLSQP interface even when m=0
    subroutine empty_constraint_ctx3(x, c, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: c
@@ -655,8 +656,8 @@ contains
       if (size(c) > 0) c = 0.0_wp
    end subroutine empty_constraint_ctx3
 
-   !> Empty constraint gradient with context for 3D variables (m=0).
-   !> Required by multistart's SLSQP interface even when m=0.
+   !> Empty constraint gradient with context for 3D variables (m=0)
+   !> Required by multistart's SLSQP interface even when m=0
    subroutine empty_constraint_gradient_ctx3(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:, :), intent(out) :: dc
@@ -784,7 +785,7 @@ contains
       call circle_constraint_gradient(x, dc)
    end subroutine circle_constraint_gradient_ctx
 
-   !> Circle objective with context for 3D variables (ignore z).
+   !> Circle objective with context for 3D variables (ignore z)
    subroutine circle_objective_ctx3(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -793,7 +794,7 @@ contains
       call circle_objective(x(1:2), f)
    end subroutine circle_objective_ctx3
 
-   !> Circle objective gradient with context for 3D variables (ignore z).
+   !> Circle objective gradient with context for 3D variables (ignore z)
    subroutine circle_objective_gradient_ctx3(x, df, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: df
@@ -803,7 +804,7 @@ contains
       call circle_objective_gradient(x(1:2), df(1:2))
    end subroutine circle_objective_gradient_ctx3
 
-   !> Circle constraint with context for 3D variables (ignore z).
+   !> Circle constraint with context for 3D variables (ignore z)
    subroutine circle_constraint_ctx3(x, c, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: c
@@ -812,7 +813,7 @@ contains
       call circle_constraint(x(1:2), c)
    end subroutine circle_constraint_ctx3
 
-   !> Circle constraint gradient with context for 3D variables (ignore z).
+   !> Circle constraint gradient with context for 3D variables (ignore z)
    subroutine circle_constraint_gradient_ctx3(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:, :), intent(out) :: dc
@@ -858,10 +859,10 @@ contains
    !* ================================================================================= *!
    !> Projection of an anchor onto the union of two unit circles centered at
    !> (-2, 0) and (+2, 0), represented by the smooth product-form constraint
-   !>   h(x, y) = (||r - c_L||^2 - 1) * (||r - c_R||^2 - 1) = 0.
+   !>   h(x, y) = (||r - c_L||^2 - 1) * (||r - c_R||^2 - 1) = 0
    !> The set of KKT points for min 0.5||r - a||^2 s.t. h = 0 has FOUR members
    !> (nearest + farthest point on each circle)
-   !> with anchor a = (0, 0.5), symmetry about the y-axis pairs them.
+   !> with anchor a = (0, 0.5), symmetry about the y-axis pairs them
    subroutine test_slsqp_deflation_two_circle_union(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -873,14 +874,14 @@ contains
       integer :: dummy_context
       logical :: found_near_right
       !> Nearest point on the right unit circle (center (+2,0)) to anchor (0,0.5):
-      !> c_R + (a - c_R)/||a - c_R||, with ||a - c_R|| = sqrt(4.25).
+      !> c_R + (a - c_R)/||a - c_R||, with ||a - c_R|| = sqrt(4.25)
       real(wp), parameter :: near_right(2) = &
                              [1.0298574998546681_wp, 0.24253562503633297_wp]
 
       xl = [-3.0_wp, -3.0_wp]
       xu = [3.0_wp, 3.0_wp]
 
-      ! Seed at the anchor.
+      ! Seed at the anchor
       x = [0.0_wp, 0.5_wp]
 
       dummy_context = 0
@@ -948,7 +949,7 @@ contains
                  message="deflation must place >= 2 roots on the right circle")
       if (allocated(error)) return
 
-      ! The exact nearest-point KKT projection on the right circle is recovered.
+      ! The exact nearest-point KKT projection on the right circle is recovered
       call check(error, found_near_right, .true., &
                  message="deflation must recover the near_R KKT projection exactly")
 
@@ -1005,7 +1006,7 @@ contains
          return
       end select
 
-      ! Must enumerate all three distinct real roots.
+      ! Must enumerate all three distinct real roots
       call check(error, n_roots, 3)
       if (allocated(error)) then
          return
@@ -1023,7 +1024,7 @@ contains
 
    end subroutine test_newton_deflation_cubic
 
-   !> Objective: 0.5 * ||x - anchor||^2 with anchor = (0, 0.5).
+   !> Objective: 0.5 * ||x - anchor||^2 with anchor = (0, 0.5)
    subroutine two_circle_objective(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -1127,9 +1128,9 @@ contains
    !*         Raw-kernel ports: jacobwilliams/slsqp (slsqp_module%slsqp_solver)         *!
    !* ================================================================================= *!
    ! These exercise the raw SLSQP class directly; the wrapper layer above goes
-   ! through new_slsqp_solver/solver%solve. Reference solutions are upstream.
+   ! through new_slsqp_solver/solver%solve. Reference solutions are upstream
 
-   !> slsqp_test.f90: minimize Rosenbrock subject to x1^2 + x2^2 <= 1.
+   !> slsqp_test.f90: minimize Rosenbrock subject to x1^2 + x2^2 <= 1
    subroutine test_slsqp_rosenbrock(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1159,7 +1160,7 @@ contains
    end subroutine test_slsqp_rosenbrock
 
    !> slsqp_test_2.f90: minimize x1^2 + x2^2 + x3 subject to x1*x2 - x3 = 0
-   !> (equality) and x3 - 1 >= 0 (inequality). Optimum x = [1,1,1], f = 3.
+   !> (equality) and x3 - 1 >= 0 (inequality). Optimum x = [1,1,1], f = 3
    subroutine test_slsqp_quadratic(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1193,7 +1194,7 @@ contains
    end subroutine test_slsqp_quadratic
 
    !> slsqp_test_3.f90: Rosenbrock solved with finite-difference gradients in
-   !> all three modes (1=backward, 2=forward, 3=central).
+   !> all three modes (1=backward, 2=forward, 3=central)
    subroutine test_slsqp_fd_gradients(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1210,7 +1211,7 @@ contains
       do gradient_mode = 1, 3
          x = [0.1_wp, 0.1_wp]
          ! grad is passed to satisfy the argument but is never called because
-         ! gradient_mode /= 0 selects finite differences.
+         ! gradient_mode /= 0 selects finite differences
          call solver%initialize(n, m, meq, max_iter, acc, slsqp_rosenbrock_func, &
                                 slsqp_rosenbrock_grad, xl, xu, status_ok=status_ok, &
                                 linesearch_mode=1, iprint=0, gradient_mode=gradient_mode, &
@@ -1235,7 +1236,7 @@ contains
    end subroutine test_slsqp_fd_gradients
 
    !> slsqp_test_71.f90: Hock-Schittkowski problem 71, solved with both NNLS
-   !> modes (1=nnls, 2=bvls). Optimum x = (1, 4.743, 3.821, 1.379, 0), f = 17.014.
+   !> modes (1=nnls, 2=bvls). Optimum x = (1, 4.743, 3.821, 1.379, 0), f = 17.014
    subroutine test_slsqp_hs71(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1279,7 +1280,7 @@ contains
    end subroutine test_slsqp_hs71
 
    !> slsqp_test_stopping_criterion.f90: Rosenbrock with the constraint treated
-   !> as equality (meq=1), missing bounds passed as NaN, all stop tols zero.
+   !> as equality (meq=1), missing bounds passed as NaN, all stop tols zero
    ! NOTE: This test crashes if compiled with -ffpe-trap=invalid
    subroutine test_slsqp_stopping(error)
       type(error_type), allocatable, intent(out) :: error
@@ -1313,7 +1314,7 @@ contains
    end subroutine test_slsqp_stopping
 
    !> Rosenbrock objective f = 100*(x2 - x1^2)^2 + (1 - x1)^2 with the
-   !> constraint c = 1 - x1^2 - x2^2 (slsqp_module func interface).
+   !> constraint c = 1 - x1^2 - x2^2 (slsqp_module func interface)
    subroutine slsqp_rosenbrock_func(me, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1324,7 +1325,7 @@ contains
       c(1) = 1.0_wp - x(1)**2 - x(2)**2
    end subroutine slsqp_rosenbrock_func
 
-   !> Analytic gradients for slsqp_rosenbrock_func.
+   !> Analytic gradients for slsqp_rosenbrock_func
    subroutine slsqp_rosenbrock_grad(me, x, g, a)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1337,7 +1338,7 @@ contains
       a(1, 2) = -2.0_wp*x(2)
    end subroutine slsqp_rosenbrock_grad
 
-   !> Objective f = x1^2 + x2^2 + x3 with c1 = x1*x2 - x3 (eq), c2 = x3 - 1 (ineq).
+   !> Objective f = x1^2 + x2^2 + x3 with c1 = x1*x2 - x3 (eq), c2 = x3 - 1 (ineq)
    subroutine slsqp_quadratic_func(me, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1349,7 +1350,7 @@ contains
       c(2) = x(3) - 1.0_wp
    end subroutine slsqp_quadratic_func
 
-   !> Analytic gradients for slsqp_quadratic_func.
+   !> Analytic gradients for slsqp_quadratic_func
    subroutine slsqp_quadratic_grad(me, x, g, a)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1367,7 +1368,7 @@ contains
       a(2, 3) = 1.0_wp
    end subroutine slsqp_quadratic_grad
 
-   !> Hock-Schittkowski problem 71 objective and constraints.
+   !> Hock-Schittkowski problem 71 objective and constraints
    subroutine slsqp_hs71_func(me, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1379,7 +1380,7 @@ contains
       c(2) = x(1)**2 + x(2)**2 + x(3)**2 + x(4)**2 - 40.0_wp
    end subroutine slsqp_hs71_func
 
-   !> Analytic gradients for slsqp_hs71_func.
+   !> Analytic gradients for slsqp_hs71_func
    subroutine slsqp_hs71_grad(me, x, g, a)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1408,10 +1409,10 @@ contains
    !*       Raw-kernel ports: jacobwilliams/lbfgsb (setulb reverse communication)       *!
    !* ================================================================================= *!
    ! All three drivers minimize the same bound-constrained 25-variable extended
-   ! Rosenbrock problem (optimum f = 0); they differ only in termination policy.
-   ! File/console output is suppressed via iprint = -1.
+   ! Rosenbrock problem (optimum f = 0); they differ only in termination policy
+   ! File/console output is suppressed via iprint = -1
 
-   !> driver1: run to the default convergence test (f -> 0).
+   !> driver1: run to the default convergence test (f -> 0)
    subroutine test_lbfgsb_driver1(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1426,7 +1427,7 @@ contains
    end subroutine test_lbfgsb_driver1
 
    !> driver2: stop after at most 99 function/gradient evaluations; the custom
-   !> STOP (or early convergence) must fire and the objective must decrease.
+   !> STOP (or early convergence) must fire and the objective must decrease
    subroutine test_lbfgsb_driver2(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1443,7 +1444,7 @@ contains
       call check(error, f < f0, "driver2 made no progress")
    end subroutine test_lbfgsb_driver2
 
-   !> driver3: with a large evaluation budget the solver should reach f -> 0.
+   !> driver3: with a large evaluation budget the solver should reach f -> 0
    subroutine test_lbfgsb_driver3(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1459,7 +1460,7 @@ contains
 
    !> Drive the setulb reverse-communication loop on the sample problem. If
    !> max_nfg > 0 a custom STOP is issued once isave(34) reaches max_nfg or the
-   !> projected gradient becomes negligible; otherwise only built-in tests stop.
+   !> projected gradient becomes negligible; otherwise only built-in tests stop
    subroutine run_lbfgsb_kernel(max_nfg, f, final_task)
       integer, intent(in) :: max_nfg
       real(wp), intent(out) :: f
@@ -1471,7 +1472,7 @@ contains
       character(len=60) :: task, csave
       logical :: lsave(4)
 
-      ! Odd variables: bounds [1, 100]; even variables: bounds [-100, 100].
+      ! Odd variables: bounds [1, 100]; even variables: bounds [-100, 100]
       do i = 1, lbfgsb_n, 2
          nbd(i) = 2
          l(i) = 1.0_wp
@@ -1506,7 +1507,7 @@ contains
       final_task = task
    end subroutine run_lbfgsb_kernel
 
-   !> Extended Rosenbrock objective and gradient (the L-BFGS-B sample problem).
+   !> Extended Rosenbrock objective and gradient (the L-BFGS-B sample problem)
    subroutine lbfgsb_rosenbrock_eval(x, f, g)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -1535,7 +1536,7 @@ contains
    !*        Raw-kernel ports: jacobwilliams/fmin (1D derivative-free minimizer)        *!
    !* ================================================================================= *!
 
-   !> fmin test.f90: minimize sin(x) on [-4, 0]; the minimum is at x = -pi/2.
+   !> fmin test.f90: minimize sin(x) on [-4, 0]; the minimum is at x = -pi/2
    subroutine test_fmin_sin(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1546,7 +1547,7 @@ contains
       call check(error, xmin, -pi/2.0_wp, thr=fmin_thr)
    end subroutine test_fmin_sin
 
-   !> Minimize (x - 2)^2 on [0, 5]; the minimum is at x = 2.
+   !> Minimize (x - 2)^2 on [0, 5]; the minimum is at x = 2
    subroutine test_fmin_parabola(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1574,10 +1575,10 @@ contains
    !*         Raw-kernel ports: jacobwilliams/nlesolver-fortran (nlesolver_type)        *!
    !* ================================================================================= *!
    ! Both solve f1 = x1^2 + x2 - 0.1 = 0, f2 = x2 + 0.2 = 0; root (sqrt(0.3),
-   ! -0.2). Dense sweeps line-search/Broyden; sparse drives LSQR/LUSOL/LSMR.
+   ! -0.2). Dense sweeps line-search/Broyden; sparse drives LSQR/LUSOL/LSMR
 
    !> nlesolver_test_1.f90: dense solve across all four line-search step modes
-   !> with the Broyden update both off and on, using scalar variable bounds.
+   !> with the Broyden update both off and on, using scalar variable bounds
    subroutine test_newton_dense(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1595,7 +1596,7 @@ contains
    end subroutine test_newton_dense
 
    !> sparse_test.f90: same line-search/Broyden sweep, run through each of the
-   !> sparse linear-solver backends (LSQR, LUSOL, LSMR).
+   !> sparse linear-solver backends (LSQR, LUSOL, LSMR)
    subroutine test_newton_sparse(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1619,7 +1620,7 @@ contains
       end do
    end subroutine test_newton_sparse
 
-   !> Run one dense configuration and verify convergence to the root.
+   !> Run one dense configuration and verify convergence to the root
    subroutine run_newton_dense(step_mode, use_broyden, label, error)
       integer, intent(in) :: step_mode
       logical, intent(in) :: use_broyden
@@ -1649,7 +1650,7 @@ contains
 
    end subroutine run_newton_dense
 
-   !> Run one sparse configuration and verify convergence to the root.
+   !> Run one sparse configuration and verify convergence to the root
    subroutine run_newton_sparse(sparsity_mode, step_mode, use_broyden, label, error)
       integer, intent(in) :: sparsity_mode
       integer, intent(in) :: step_mode
@@ -1681,7 +1682,7 @@ contains
 
    end subroutine run_newton_sparse
 
-   !> Assert that x is the expected root and the residual norm is small.
+   !> Assert that x is the expected root and the residual norm is small
    subroutine check_newton_root(x, label, error)
       real(wp), dimension(newton_n), intent(in) :: x
       character(len=*), intent(in) :: label
@@ -1699,7 +1700,7 @@ contains
       call check(error, x(2), newton_x_ref(2), thr=newton_x_thr, message=label//": x(2) mismatch")
    end subroutine check_newton_root
 
-   !> Residual vector of the test system (nlesolver_module func interface).
+   !> Residual vector of the test system (nlesolver_module func interface)
    subroutine newton_func(me, x, f)
       class(nlesolver_type), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1709,7 +1710,7 @@ contains
       f(2) = x(2) + 0.2_wp
    end subroutine newton_func
 
-   !> Dense Jacobian of the test system.
+   !> Dense Jacobian of the test system
    subroutine newton_grad(me, x, g)
       class(nlesolver_type), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1721,7 +1722,7 @@ contains
       g(2, 2) = 1.0_wp
    end subroutine newton_grad
 
-   !> Sparse Jacobian packed into the COO pattern (newton_irow, newton_icol).
+   !> Sparse Jacobian packed into the COO pattern (newton_irow, newton_icol)
    subroutine newton_grad_sparse(me, x, g)
       class(nlesolver_type), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -1739,10 +1740,10 @@ contains
    !*       Failure-path tests for the solver wrappers (error-reporting coverage)       *!
    !* ================================================================================= *!
 
-   !> L-BFGS-B construction must reject an out-of-range memory parameter m.
+   !> L-BFGS-B construction must reject an out-of-range memory parameter m
    !> The valid range is [3, 20] (lbfgsb.f90 lines 225-229); m=1 is below the
    !> minimum, so new_lbfgsb_solver must allocate solver_error and must NOT
-   !> allocate the solver. Pure construction-time validation: fully deterministic.
+   !> allocate the solver. Pure construction-time validation: fully deterministic
    subroutine test_lbfgsb_invalid_memory(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -1764,7 +1765,7 @@ contains
 
       ! Expected failure (registered should_fail=.true.): the out-of-range memory
       ! parameter must be rejected at construction. Propagating solver_error makes
-      ! testdrive report EXPECTED FAIL; an UNEXPECTED PASS flags a regression.
+      ! testdrive report EXPECTED FAIL; an UNEXPECTED PASS flags a regression
       if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
    end subroutine test_lbfgsb_invalid_memory
 
@@ -1775,7 +1776,7 @@ contains
       type(moist_error_type), allocatable :: solver_error
       real(wp), dimension(2) :: x
 
-      ! Far start so a single step cannot converge or stagnate.
+      ! Far start so a single step cannot converge or stagnate
       x = [-1.2_wp, 1.0_wp]
 
       call new_newton_solver(solver, &
@@ -1788,20 +1789,20 @@ contains
                              tolx=1.0e-14_wp)
 
       ! Construction is expected to succeed; the one-iteration solve from a far
-      ! start must then report non-convergence (registered should_fail=.true.).
+      ! start must then report non-convergence (registered should_fail=.true.)
       if (allocated(solver)) then
          call solver%solve(x, solver_error)
       end if
       if (allocated(solver_error)) call test_failed(error, trim(solver_error%message))
    end subroutine test_newton_maxiter_fail
 
-   !> SLSQP must surface non-convergence when the iteration budget is exhausted.
+   !> SLSQP must surface non-convergence when the iteration budget is exhausted
    !> From the far start x=[-0.9, 0.9] on Rosenbrock (unconstrained) with
    !> max_iter=1, the SLSQP core returns mode=9 ("More than max_iter iterations",
    !> slsqp_module.F90 lines 664-665); slsqp_wrapper sets istat=mode (line 543),
    !> and slsqp_solve allocates a fatal_error for any istat/=0 (slsqp.f90 lines
    !> 322-325). We assert that error channel fires and that the message names the
-   !> non-zero status.
+   !> non-zero status
    subroutine test_slsqp_maxiter_fail(error)
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
@@ -1809,7 +1810,7 @@ contains
       real(wp), dimension(2) :: x
       real(wp), dimension(2) :: xl, xu
 
-      ! Far start; bound the box so SLSQP cannot trivially jump to the optimum.
+      ! Far start; bound the box so SLSQP cannot trivially jump to the optimum
       x = [-0.9_wp, 0.9_wp]
       xl = [-2.0_wp, -2.0_wp]
       xu = [2.0_wp, 2.0_wp]
@@ -1825,7 +1826,7 @@ contains
          tol=1.0e-12_wp)
 
       ! Construction is expected to succeed; the one-iteration solve from a far
-      ! start must then report non-convergence (registered should_fail=.true.).
+      ! start must then report non-convergence (registered should_fail=.true.)
       if (allocated(solver)) then
          call solver%solve(x, solver_error)
       end if
@@ -1917,11 +1918,11 @@ contains
          return
       end if
 
-      ! With no known roots the multiplier is the documented "no deflation" value 1.
+      ! With no known roots the multiplier is the documented "no deflation" value 1
       call check(error, op%multiplier([1.0_wp, 2.0_wp]), 1.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
 
-      ! append_root accepts two fresh, well-separated points.
+      ! append_root accepts two fresh, well-separated points
       root_a = [1.0_wp, 0.0_wp]
       call op%append_root(root_a, accepted)
       call check(error, accepted, .true., message="first root must be accepted")
@@ -1932,24 +1933,24 @@ contains
       call check(error, accepted, .true., message="second root must be accepted")
       if (allocated(error)) return
 
-      ! A point within dedup_tol (default 1e-6) of root_a is a duplicate: rejected.
+      ! A point within dedup_tol (default 1e-6) of root_a is a duplicate: rejected
       call op%append_root([1.0_wp + 1.0e-9_wp, 0.0_wp], accepted)
       call check(error, accepted, .false., &
                  message="within-dedup_tol duplicate must be rejected")
       if (allocated(error)) return
 
-      ! A point just outside dedup_tol is a distinct root: accepted.
+      ! A point just outside dedup_tol is a distinct root: accepted
       call op%append_root([1.0_wp + 1.0e-3_wp, 0.0_wp], accepted)
       call check(error, accepted, .true., &
                  message="point outside dedup_tol must be accepted")
       if (allocated(error)) return
 
-      ! Reset to the two clean, well-separated roots for the gradient FD check.
+      ! Reset to the two clean, well-separated roots for the gradient FD check
       call op%reset()
       call op%append_root(root_a, accepted)
       call op%append_root(root_b, accepted)
 
-      ! Central-difference check of grad_M against analytic gradient.
+      ! Central-difference check of grad_M against analytic gradient
       do ip = 1, 3
          p = probes(:, ip)
          call op%gradient(p, grad_analytic)
@@ -1989,7 +1990,7 @@ contains
       character(len=60) :: task, csave
       logical :: lsave(4)
 
-      ! Upper bound only: nbd(i) = 3, u(i) = 1; l(i) is unused for nbd = 3.
+      ! Upper bound only: nbd(i) = 3, u(i) = 1; l(i) is unused for nbd = 3
       do i = 1, n
          nbd(i) = 3
          u(i) = 1.0_wp
@@ -2013,7 +2014,7 @@ contains
       call check(error, task(1:4) == "CONV", &
                  "bound-active problem did not converge: "//trim(task))
       if (allocated(error)) return
-      ! Every variable must pin to its active upper bound u = 1.
+      ! Every variable must pin to its active upper bound u = 1
       call check(error, maxval(abs(x - 1.0_wp)) < 1.0e-5_wp, &
                  "bound-active solution not on the active upper bound")
       if (allocated(error)) return
@@ -2021,11 +2022,13 @@ contains
                  "bound-active objective not n*(1-3)^2 = 12")
       if (allocated(error)) return
    end subroutine test_lbfgsb_bound_active
+
    !* ================================================================================= *!
    !*              Certified octree branch search on an analytic level set              *!
    !* ================================================================================= *!
 
    !> Probe callback: level set value and exact Lipschitz exclusion radius
+   !>
    !> @param[in]  x       Evaluation point
    !> @param[out] lsf0    Level set value
    !> @param[out] radius  Surface-free radius around `x`
@@ -2056,7 +2059,7 @@ contains
    end subroutine sphere_union_probe
 
    !> Two equal spheres straddling the anchor: the closest-point projection is
-   !> two-valued and the search must return both branches.
+   !> two-valued and the search must return both branches
    subroutine test_octree_two_sphere(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2067,7 +2070,7 @@ contains
       integer :: i, n_left, n_right
 
       ! Spheres of radius 1 centred at x = -2 and x = +2. The anchor sits at
-      ! the origin, equidistant from both surfaces at rho = 1.
+      ! the origin, equidistant from both surfaces at rho = 1
       ctx%nsphere = 2
       ctx%centre(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
       ctx%centre(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
@@ -2095,7 +2098,7 @@ contains
                  to_string(octree%n_seeds))
       if (allocated(error)) return
 
-      ! One seed on each side, each near the inner pole of its sphere.
+      ! One seed on each side, each near the inner pole of its sphere
       n_left = 0
       n_right = 0
       do i = 1, octree%n_seeds
@@ -2110,7 +2113,7 @@ contains
    end subroutine test_octree_two_sphere
 
    !> A single sphere admits exactly one branch, and the search tightens its own
-   !> radius down to that branch instead of certifying the ball it started from.
+   !> radius down to that branch instead of certifying the ball it started from
    subroutine test_octree_single_sphere(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2133,7 +2136,7 @@ contains
       call sphere_union_probe(anchor, lsf0, radius, ctx)
 
       ! Start from a ball far wider than needed: the anchor is 1 Bohr inside a
-      ! sphere of radius 2, so the only branch sits at rho = 1.
+      ! sphere of radius 2, so the only branch sits at rho = 1
       call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
                       rho2_slack=0.25_wp, probe=sphere_union_probe, &
                       context=ctx, error=solver_error)
@@ -2148,7 +2151,7 @@ contains
       if (allocated(error)) return
 
       ! rho_min = 1 with slack 0.25 gives sqrt(1.25) ~ 1.118, well below the 5.0
-      ! the run started from: the sign-change bound did the tightening.
+      ! the run started from: the sign-change bound did the tightening
       call check(error, octree%rho_max_final < 1.2_wp, &
                  message="search failed to tighten its own admissible radius")
    end subroutine test_octree_single_sphere
@@ -2182,7 +2185,7 @@ contains
       ! The anchor sits 2 Bohr outside the sphere, so rho_min is exactly 2 and
       ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
       ! that bounds the crossing by the probed centre alone, without taking off
-      ! that centre's surface-free radius, stops around 2.1035 instead.
+      ! that centre's surface-free radius, stops around 2.1035 instead
       call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
                       rho2_slack=slack, probe=sphere_union_probe, &
                       context=ctx, error=solver_error)
@@ -2199,7 +2202,7 @@ contains
       rho_true = sqrt(4.0_wp + slack)
 
       ! The epsilon absorbs a last-bit difference in how the bound is summed,
-      ! not a real shortfall: the margin a working run keeps here is ~2e-3.
+      ! not a real shortfall: the margin a working run keeps here is ~2e-3
       call check(error, octree%rho_max_final >= rho_true - 1.0e-10_wp, &
                  message="certified radius fell below the true admissible one")
       if (allocated(error)) return
@@ -2210,7 +2213,7 @@ contains
    end subroutine test_octree_sign_change_bound
 
    !> A ball holding no surface is certified empty, with no seeds and without
-   !> spending more than the root box.
+   !> spending more than the root box
    subroutine test_octree_empty_ball(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2233,7 +2236,7 @@ contains
       call sphere_union_probe(anchor, lsf0, radius, ctx)
 
       ! The surface is 10 Bohr away; a ball of radius 1 around the anchor holds
-      ! none of it, and the root box alone proves that.
+      ! none of it, and the root box alone proves that
       call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=1.0_wp, &
                       rho2_slack=0.25_wp, probe=sphere_union_probe, &
                       context=ctx, error=solver_error)
@@ -2250,7 +2253,7 @@ contains
    end subroutine test_octree_empty_ball
 
    !> The per-leaf reference mode must see the same branches as the clustered
-   !> mode, just spread over many more seeds.
+   !> mode, just spread over many more seeds
    subroutine test_octree_seed_modes(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2306,7 +2309,7 @@ contains
    end subroutine test_octree_seed_modes
 
    !> Exhausting the box budget must be reported, never silently truncated: a
-   !> partial search carries no completeness certificate.
+   !> partial search carries no completeness certificate
    subroutine test_octree_budget(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2337,9 +2340,9 @@ contains
       end if
    end subroutine test_octree_budget
 
-   !> A depth cap that stops short of the requested seed size must be reported.
+   !> A depth cap that stops short of the requested seed size must be reported
    !> Continuing with coarser leaves would merge minima the configured
-   !> resolution separates, while still claiming a completed enumeration.
+   !> resolution separates, while still claiming a completed enumeration
    subroutine test_octree_depth_cap(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -2353,7 +2356,7 @@ contains
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
 
-      ! A 5 Bohr ball needs depth 7 to reach 0.1 Bohr leaves; three is not enough.
+      ! A 5 Bohr ball needs depth 7 to reach 0.1 Bohr leaves; three is not enough
       call octree%init(seed_size=0.1_wp, max_depth=3, error=solver_error)
       if (allocated(solver_error)) then
          call test_failed(error, "octree init: "//solver_error%message)
@@ -2374,7 +2377,7 @@ contains
    end subroutine test_octree_depth_cap
 
    !> A negative squared-distance slack would poison the radius cap with a NaN,
-   !> after which every comparison against it is false and nothing is bounded.
+   !> after which every comparison against it is false and nothing is bounded
    subroutine test_octree_negative_slack(error)
       type(error_type), allocatable, intent(out) :: error
 

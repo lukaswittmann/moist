@@ -15,7 +15,7 @@ contains
    !> Misuse of the printer (mismatched widths and headers, no columns, a row
    !> that over- or underruns its column count) is a programming error and now
    !> ends in `error stop`, so it cannot be exercised from inside the test
-   !> binary. What remains testable is the output the printer produces.
+   !> binary. What remains testable is the output the printer produces
    subroutine collect_utils_prettylistprint(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -204,7 +204,7 @@ contains
    !> `count_lines` discards the file itself; a test that only ever calls
    !> `read_line` has to clean up explicitly. Skipping it leaks the file into the
    !> working directory, which is the build tree under meson but the project root
-   !> under fpm.
+   !> under fpm
    !>
    !> @param[in] path Scratch file name
    subroutine discard_scratch(path)
@@ -222,7 +222,7 @@ contains
    !> Read one line of printer output, keeping the scratch file for later reads
    !>
    !> Blanks are rendered as '_' so that trailing spaces survive the comparison
-   !> that `check` performs on trimmed strings.
+   !> that `check` performs on trimmed strings
    !>
    !> @param[in]  path   Scratch file name
    !> @param[in]  iline  One-based line to return

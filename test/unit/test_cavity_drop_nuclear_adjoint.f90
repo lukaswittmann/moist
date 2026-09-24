@@ -3,7 +3,7 @@
 !> [[get_surface_gradient_drop]] contracts a surface adjoint straight into
 !> `dE/dR_A` without ever forming the forward Jacobian. These tests pin it
 !> against the forward `*_rA` arrays, which are independently validated by the
-!> finite-difference suite in gradient.f90.
+!> finite-difference suite in gradient.f90
 !>
 !> The identity under test is, for every atom `A` and axis `beta`,
 !>
@@ -17,8 +17,11 @@
 !>                        + w_k2_i  * k2_rA(beta,A,i) ]
 !>
 !> `test_all_channels` drives every channel at once; `test_single_channels`
-!> drives them one at a time so a bug in one cannot hide behind another.
+!> drives them one at a time so a bug in one cannot hide behind another
 module test_cavity_drop_nuclear_adjoint
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -30,12 +33,16 @@ module test_cavity_drop_nuclear_adjoint
    use moist_radii, only: default_cpcm_radii
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
-   use moist_channels, only: coupling_type
+   use moist_channels_coupling, only: coupling_type
+   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
+      & find_potential_adjoint
    use moist_model_general, only: solvation_model_general, new_model_general
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
-   use test_helpers, only: make_charge_coupling, fill_legacy_radii
+   use test_helpers, only: stage_model_point_charge_energy, fill_missing_with_zeros, &
+      & fill_point_charge_field, &
+      & fill_legacy_radii
    implicit none(type, external)
    private
 
@@ -52,9 +59,7 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: PROJ_MAXITER = 1000
    integer, parameter :: PROJ_LEVEL = 2
 
-   !> Forward-versus-reverse agreement bounds. Both paths evaluate the same
-   !> analytic derivatives, so the only difference is summation order and the
-   !> reverse path's seed decomposition; the residual is pure round-off.
+   !> Forward-versus-reverse thresholds
    real(wp), parameter :: EQ_ABS = 1.0E-9_wp
    real(wp), parameter :: EQ_REL = 1.0E-9_wp
 
@@ -108,9 +113,9 @@ contains
    !>
    !> The default fixture is asymmetric, so its multistart seeds all refine to
    !> one minimum and `branch_count` never exceeds one -- which leaves the
-   !> softmax reverse pass and its explicit owner term completely untested.
+   !> softmax reverse pass and its explicit owner term completely untested
    !> A near-symmetric dimer under multistart projection does branch, and
-   !> [[run_equivalence]] asserts that it actually did.
+   !> [[run_equivalence]] asserts that it actually did
    !>
    !> @param[out] error  Error handle
    subroutine test_branching_channels(error)
@@ -136,7 +141,7 @@ contains
    !>
    !> A channel that the reverse path drops entirely would still pass the
    !> combined test if another channel dominated the sum, so each one is also
-   !> checked in isolation with its own non-vacuity guard.
+   !> checked in isolation with its own non-vacuity guard
    !>
    !> @param[out] error  Error handle
    subroutine test_single_channels(error)
@@ -169,7 +174,7 @@ contains
    !> Grid points are filtered and reordered on every rebuild, so the weights
    !> are keyed on the persistent `cavity%numbering` and restricted to points
    !> that survive at every stencil geometry -- otherwise a point appearing or
-   !> vanishing would put a step discontinuity into L.
+   !> vanishing would put a step discontinuity into L
    !>
    !> @param[out] error  Error handle
    subroutine test_branching_xi_fd(error)
@@ -180,7 +185,7 @@ contains
       integer, parameter :: NSTEP = 4
       real(wp), parameter :: FD_STEP = 1.0E-4_wp
       !> Displaced atom and axis. One coordinate is enough: the branch
-      !> correction is the same code path for every atom and axis.
+      !> correction is the same code path for every atom and axis
       integer, parameter :: FD_ATOM = 5, FD_AXIS = 3
       !> FD-versus-analytic bounds, limited by the stencil round-off floor
       real(wp), parameter :: FD_ABS = 5.0E-8_wp
@@ -322,7 +327,7 @@ contains
 
       ! Same stencil against the forward path. The branch post-pass has to
       ! reach xi1_rA as well as wleb1_rA and a_i1_rA -- it originally did not,
-      ! and nothing caught it because no shipped fixture branches.
+      ! and nothing caught it because no shipped fixture branches
       call cavity%get_gradient(cav_error)
       if (allocated(cav_error)) then
          call test_failed(error, "forward gradient failed: "//cav_error%message)
@@ -349,11 +354,11 @@ contains
    !> that supports the surface contraction -- the model suite uses an iSwiG
    !> cavity, which falls back to the forward path -- so it is what actually
    !> exercises the component hooks `get_gradient_surface_weights` and
-   !> `get_direct_gradient`.
+   !> `get_direct_gradient`
    !>
    !> The two paths are required to agree, not merely to be close: the
    !> gradient-side surface weights were chosen to reproduce exactly the set
-   !> of terms the forward path assembles.
+   !> of terms the forward path assembles
    !>
    !> @param[out] error  Error handle
    subroutine test_model_forward_reverse(error)
@@ -371,15 +376,21 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(solvation_model_general) :: model_rev, model_fwd
+      type(solvation_model_general), target :: model_rev, model_fwd
       type(solvation_model_component_cpcm) :: pcm_component
       type(solvation_model_component_pv) :: pv_component
-      type(coupling_type) :: coupling
+      type(coupling_type), pointer :: coupling
+      !> Host part of the gradient phase from each path
+      type(response_type), target :: response_rev, response_fwd
+      !> Potential adjoint items published by each path
+      type(potential_adjoint_response_type), pointer :: charge_rev, charge_fwd
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
 
       real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
       real(wp) :: diff, scale
+      !> Energy of the reverse model, solved to stage the gradient phase
+      real(wp) :: energy
       integer :: nat, iatom, iaxis
 
       call fixture_geometry(.false., mol)
@@ -387,8 +398,8 @@ contains
       if (allocated(error)) return
       nat = mol%nat
 
-      call make_charge_coupling(qat_vals, coupling)
-      call new_component_cpcm(pcm_component, ctx, epsilon_r, solver=solver_type%cholesky, error=err)
+      call new_component_cpcm(pcm_component, ctx, epsilon=epsilon_r, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -401,19 +412,54 @@ contains
       if (allocated(error)) return
       model_fwd%force_forward_gradient = .true.
 
+      ! Point-charge potential trace plus its total position weight
+      call stage_model_point_charge_energy(error, model_rev, qat_vals, mol, coupling)
+      if (allocated(error)) return
+      energy = 0.0_wp
+      call model_rev%get_energy(coupling, energy, err)
+      if (allocated(err)) then
+         call test_failed(error, "reverse-mode model energy failed: "//err%message)
+         return
+      end if
+      call model_rev%prepare_gradient(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "gradient staging failed: "//err%message)
+         return
+      end if
+      call fill_missing_with_zeros(coupling)
+      call fill_point_charge_field(model_rev%cavity, coupling, qat_vals, mol)
+
       allocate (grad_rev(3, nat), source=0.0_wp)
       allocate (grad_fwd(3, nat), source=0.0_wp)
 
-      call model_rev%get_gradient(coupling, grad_rev, err)
+      call model_rev%get_gradient(coupling, response_rev, grad_rev, err)
       if (allocated(err)) then
          call test_failed(error, "reverse-mode model gradient failed: "//err%message)
          return
       end if
-      call model_fwd%get_gradient(coupling, grad_fwd, err)
+      call stage_model_point_charge_energy(error, model_fwd, qat_vals, mol, coupling)
+      if (allocated(error)) return
+      call model_fwd%prepare_gradient(coupling, err)
+      call fill_point_charge_field(model_fwd%cavity, coupling, qat_vals, mol)
+      call model_fwd%get_gradient(coupling, response_fwd, grad_fwd, err)
       if (allocated(err)) then
          call test_failed(error, "forward model gradient failed: "//err%message)
          return
       end if
+
+      ! Both paths publish the host part of the phase
+      charge_rev => find_potential_adjoint(response_rev)
+      charge_fwd => find_potential_adjoint(response_fwd)
+      if (.not. associated(charge_rev) .or. .not. associated(charge_fwd)) then
+         call test_failed(error, "model gradient published no potential adjoint")
+         return
+      end if
+      call check(error, maxval(abs(charge_rev%w_phi - charge_fwd%w_phi)), 0.0_wp, thr=EQ_ABS, &
+         & more="reverse and forward gradient paths published different potential adjoints")
+      if (allocated(error)) return
+      call check(error, maxval(abs(charge_rev%w_phi)) > 0.0_wp, &
+         & more="model gradient published a vanishing potential adjoint")
+      if (allocated(error)) return
 
       if (maxval(abs(grad_fwd)) <= VACUITY_THR) then
          call test_failed(error, "model gradient is vacuous")
@@ -625,7 +671,7 @@ contains
    !> Populate one surface-adjoint channel with a reproducible weight pattern
    !>
    !> The pattern is deterministic and varies across the grid so that a bug
-   !> that happens to cancel for uniform weights still shows up.
+   !> that happens to cancel for uniform weights still shows up
    !>
    !> @param[inout] acc      Surface-adjoint accumulator
    !> @param[in]    channel  Channel identifier
@@ -703,14 +749,14 @@ contains
    !>
    !> The two heavy centers give an elongated cavity with well-separated
    !> principal curvatures and the off-axis hydrogen removes the residual
-   !> rotational symmetry, so no channel is accidentally degenerate.
+   !> rotational symmetry, so no channel is accidentally degenerate
    !>
    !> The `branching` variant instead uses the five-carbon cross with concave
    !> seams. Branching needs the projector to find sibling minima, which takes
    !> a concave seam and multistart projection -- a plain dimer never branches
    !> at any Lebedev order or softmax scale -- *and* a softmax flat enough that
    !> the prune keeps the siblings. The caller asserts `branch_count > 1`
-   !> actually occurred rather than trusting the configuration.
+   !> actually occurred rather than trusting the configuration
    !>
    !> @param[out]   cavity     Constructed cavity
    !> @param[inout] ctx        Run context borrowed by the cavity
@@ -809,13 +855,12 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k_loc, blend_3b=gamma_loc)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
+            blend_3b=gamma_loc))
          call new_context(ctx, verbosity=0)
-         call new_cavity_drop(cavity, ctx, nleb=nleb_loc, &
-                              tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                              proj_level=proj_level_loc, wleb_prune_level=prune_loc, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cav_error)
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc))
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)
@@ -825,11 +870,11 @@ contains
       ! Multistart projection finds sibling branches, but the default softmax
       ! scale (0.0025) is so peaked that the prune in filter.f90 keeps only the
       ! strongest one and branch_count collapses to 1. Widening the softmax lets
-      ! siblings survive, which is what puts the branch channel under test.
+      ! siblings survive, which is what puts the branch channel under test
       if (branching) then
          cavity%param%branch_weight_s = BRANCH_SOFTMAX_S
          ! branch_dphi_max scales with the softmax width, so recompute the
-         ! derived parameters rather than leaving a stale admissible set.
+         ! derived parameters rather than leaving a stale admissible set
          call cavity%param%compute_derived(cav_error)
          if (allocated(cav_error)) then
             call test_failed(error, "failed to recompute derived parameters: "//cav_error%message)

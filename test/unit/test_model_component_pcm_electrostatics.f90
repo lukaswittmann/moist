@@ -1,9 +1,12 @@
 !> Unit tests for PCM electrostatic nuclear-gradient contractions
 module test_model_component_pcm_electrostatics
+   use, intrinsic :: ieee_exceptions, only: ieee_divide_by_zero, &
+      & ieee_get_halting_mode, ieee_set_halting_mode
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
-   use moist_model_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient
+   use moist_model_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
+      & pcm_electrostatic_direct_gradient
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
                            fd4_scalar, fd4_offsets
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
@@ -26,11 +29,13 @@ contains
       testsuite = [ &
                   new_unittest("nuclear_gradient_vs_fd", test_nuclear_gradient_vs_fd), &
                   new_unittest("channels_isolated", test_channels_isolated), &
-                  new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes) &
+                  new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes), &
+                  new_unittest("direct_gradient", test_direct_gradient), &
+                  new_unittest("gaussian_zero_width", test_gaussian_zero_width) &
                   ]
    end subroutine collect_model_component_pcm_electrostatics
 
-   !> Check the nuclear/electronic field contraction by finite differences
+   !> Check the direct-plus-host-weight contraction by finite differences
    subroutine test_nuclear_gradient_vs_fd(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -45,8 +50,8 @@ contains
       real(wp), allocatable :: xyz(:, :)
       !> Surface-position derivatives
       real(wp), allocatable :: xyz1_rA(:, :, :, :)
-      !> Surface charges, field weights, and nuclear charges
-      real(wp), allocatable :: surface_q(:), qefield(:, :), za(:)
+      !> Surface charges, host position weights, and nuclear charges
+      real(wp), allocatable :: surface_q(:), w_xyz(:, :), za(:)
       !> Analytic nuclear gradient
       real(wp), allocatable :: grad(:, :)
       !> Atom, axis, surface, stencil, and extent indices
@@ -73,13 +78,13 @@ contains
          za(iatom) = real(mols(1)%num(mols(1)%id(iatom)), wp)
       end do
 
-      allocate (surface_q(ngrid), qefield(3, ngrid))
+      allocate (surface_q(ngrid), w_xyz(3, ngrid))
       allocate (xyz1_rA(3, 3, nsph, ngrid))
       do i = 1, ngrid
          surface_q(i) = 0.1_wp*sin(0.9_wp*real(i, wp)) - 0.02_wp
-         qefield(1, i) = 0.05_wp*cos(0.4_wp*real(i, wp))
-         qefield(2, i) = 0.03_wp*sin(1.1_wp*real(i, wp))
-         qefield(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
+         w_xyz(1, i) = 0.05_wp*cos(0.4_wp*real(i, wp))
+         w_xyz(2, i) = 0.03_wp*sin(1.1_wp*real(i, wp))
+         w_xyz(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
          do iatom = 1, nsph
             do iaxis = 1, 3
                xyz1_rA(1, iaxis, iatom, i) = 0.1_wp*sin(0.3_wp*real(i + iatom + iaxis, wp))
@@ -91,7 +96,7 @@ contains
 
       allocate (grad(3, nsph))
       call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              qefield, za, grad, err)
+                                              w_xyz, za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "nuclear/electronic contraction failed: "//err%message)
          return
@@ -104,7 +109,7 @@ contains
                sphxyz_trial = sphxyz
                sphxyz_trial(iaxis, iatom) = saved + fd4_offsets(k)*step
                vals(k) = nuc_elec_energy(xyz, sphxyz, sphxyz_trial, xyz1_rA, &
-                                         surface_q, qefield, za)
+                                         surface_q, w_xyz, za)
             end do
             fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
             write (context, "(a,i0,a,i0)") "nuc/elec gradient atom ", iatom, &
@@ -120,10 +125,12 @@ contains
    !>
    !> The routine folds two physically distinct terms into one accumulator: the
    !> direct force between the surface charges and the nuclei, and the chain-rule
-   !> term carrying the surface's response to nuclear motion. The combined
-   !> finite-difference test above would still pass if the two were swapped or
-   !> if one absorbed a sign that the other cancelled, so each is switched on
-   !> alone here and compared with its closed form to machine precision.
+   !> term carrying the host total position weight through the surface's
+   !> response to nuclear motion. The combined finite-difference test above
+   !> would still pass if the two were swapped or if one absorbed a sign that
+   !> the other cancelled, so each is switched on alone here and compared with
+   !> its closed form to machine precision
+   !>
    !> @param[out] error Test failure
    subroutine test_channels_isolated(error)
       !> Test failure
@@ -137,8 +144,8 @@ contains
       real(wp), allocatable :: sphxyz(:, :), xyz(:, :)
       !> Surface-position derivatives
       real(wp), allocatable :: xyz1_rA(:, :, :, :)
-      !> Surface charges, field weights, and nuclear charges
-      real(wp), allocatable :: surface_q(:), qefield(:, :), za(:)
+      !> Surface charges, host position weights, and nuclear charges
+      real(wp), allocatable :: surface_q(:), w_xyz(:, :), za(:)
       !> Analytic and closed-form gradients
       real(wp), allocatable :: grad(:, :), grad_ref(:, :)
       !> Surface, atom, and axis indices; extents
@@ -161,21 +168,21 @@ contains
       do iatom = 1, nsph
          za(iatom) = real(mols(1)%num(mols(1)%id(iatom)), wp)
       end do
-      allocate (surface_q(ngrid), qefield(3, ngrid))
+      allocate (surface_q(ngrid), w_xyz(3, ngrid))
       allocate (xyz1_rA(3, 3, nsph, ngrid))
       allocate (grad(3, nsph), grad_ref(3, nsph))
       do i = 1, ngrid
          surface_q(i) = 0.1_wp*sin(0.9_wp*real(i, wp)) - 0.02_wp
-         qefield(1, i) = 0.05_wp*cos(0.4_wp*real(i, wp))
-         qefield(2, i) = 0.03_wp*sin(1.1_wp*real(i, wp))
-         qefield(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
+         w_xyz(1, i) = 0.05_wp*cos(0.4_wp*real(i, wp))
+         w_xyz(2, i) = 0.03_wp*sin(1.1_wp*real(i, wp))
+         w_xyz(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
       end do
 
-      ! Direct channel: a rigid surface (no response) and no electronic field
-      ! leave the plain Coulomb force of the surface charges on each nucleus.
+      ! Direct channel: a rigid surface (no response) and no host weight leave
+      ! the plain Coulomb force of the surface charges on each nucleus
       xyz1_rA = 0.0_wp
       call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              0.0_wp*qefield, za, grad, err)
+                                              0.0_wp*w_xyz, za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "direct-channel contraction failed: "//err%message)
          return
@@ -198,7 +205,7 @@ contains
       if (allocated(error)) return
 
       ! Chain-rule channel: uncharged nuclei and an uncharged surface leave only
-      ! the electronic field contracted with the surface response.
+      ! the host position weight contracted with the surface response
       do i = 1, ngrid
          do iatom = 1, nsph
             do iaxis = 1, 3
@@ -209,7 +216,7 @@ contains
          end do
       end do
       call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
-                                              0.0_wp*surface_q, qefield, &
+                                              0.0_wp*surface_q, w_xyz, &
                                               0.0_wp*za, grad, err)
       if (allocated(err)) then
          call test_failed(error, "chain-rule contraction failed: "//err%message)
@@ -222,7 +229,7 @@ contains
             do iaxis = 1, 3
                grad_ref(iaxis, iatom) = grad_ref(iaxis, iatom) &
                                         + dot_product(xyz1_rA(:, iaxis, iatom, i), &
-                                                      qefield(:, i))
+                                                      w_xyz(:, i))
             end do
          end do
       end do
@@ -235,7 +242,8 @@ contains
 
    end subroutine test_channels_isolated
 
-   !> Inconsistent array shapes are rejected and the gradient is left defined.
+   !> Inconsistent array shapes are rejected and the gradient is left defined
+   !>
    !> @param[out] error Test failure
    subroutine test_rejects_invalid_shapes(error)
       !> Test failure
@@ -245,7 +253,7 @@ contains
       type(moist_error_type), allocatable :: err
       !> Synthetic two-nucleus, three-grid point problem
       real(wp) :: xyz(3, 3), sphxyz(3, 2), xyz1_rA(3, 3, 2, 3)
-      real(wp) :: surface_q(3), qefield(3, 3), za(2)
+      real(wp) :: surface_q(3), w_xyz(3, 3), za(2)
       real(wp) :: grad(3, 2), grad_small(3, 1)
 
       xyz(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
@@ -255,13 +263,13 @@ contains
       sphxyz(:, 2) = [0.0_wp, 0.0_wp, 2.1_wp]
       xyz1_rA = 0.05_wp
       surface_q = [0.2_wp, -0.1_wp, 0.05_wp]
-      qefield = 0.01_wp
+      w_xyz = 0.01_wp
       za = [8.0_wp, 1.0_wp]
 
-      ! A gradient sized for the wrong number of nuclei.
+      ! A gradient sized for the wrong number of nuclei
       grad_small = 1.0_wp
       call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
-                                              qefield, za, grad_small, err)
+                                              w_xyz, za, grad_small, err)
       call check(error, allocated(err), more="a mis-shaped gradient was accepted")
       if (allocated(error)) return
       call check(error, maxval(abs(grad_small)), 0.0_wp, thr=0.0_wp, &
@@ -269,36 +277,131 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ! A surface response that does not match the surface it belongs to.
+      ! A surface response that does not match the surface it belongs to
       grad = 1.0_wp
       call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA(:, :, :, 1:2), &
-                                              surface_q, qefield, za, grad, err)
+                                              surface_q, w_xyz, za, grad, err)
       call check(error, allocated(err), &
                  more="a mis-shaped surface response was accepted")
       if (allocated(error)) return
       call check(error, maxval(abs(grad)), 0.0_wp, thr=0.0_wp, &
                  more="rejected contraction left the gradient untouched")
 
+      ! The direct kernel applies the same discipline
+      grad_small = 1.0_wp
+      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad_small, err)
+      call check(error, allocated(err), more="direct kernel accepted a mis-shaped gradient")
+      if (allocated(error)) return
+      call check(error, maxval(abs(grad_small)), 0.0_wp, thr=0.0_wp, &
+                 more="rejected direct kernel left the gradient untouched")
+
    end subroutine test_rejects_invalid_shapes
 
-   !> Evaluate the nuclear plus external-field reference energy.
+   !> The direct kernel is the forward kernel's direct channel
+   !>
+   !> `pcm_electrostatic_direct_gradient` serves the reverse-mode path, where
+   !> the host position weight goes to the cavity instead. It must equal the
+   !> forward kernel on a rigid surface (`xyz1_rA = 0`) and its closed form,
+   !> the Coulomb force of the surface charges on each nucleus
+   subroutine test_direct_gradient(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Sampled structures
+      type(structure_type), allocatable :: mols(:)
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Nuclear and surface positions
+      real(wp), allocatable :: sphxyz(:, :), xyz(:, :)
+      !> Vanishing surface-position derivatives
+      real(wp), allocatable :: xyz1_rA(:, :, :, :)
+      !> Surface charges, host position weights, and nuclear charges
+      real(wp), allocatable :: surface_q(:), w_xyz(:, :), za(:)
+      !> Direct, forward and closed-form gradients
+      real(wp), allocatable :: grad(:, :), grad_fwd(:, :), grad_ref(:, :)
+      !> Surface and atom indices; extents
+      integer :: i, iatom, ngrid, nsph
+      !> Displacement and its cubed length
+      real(wp) :: rvec(3), r3
+      !> Number of synthetic surface points
+      integer, parameter :: n_surface = 12
+      !> Tolerance for a sum of a few dozen terms in double precision
+      real(wp), parameter :: exact_thr = 1.0e-13_wp
+
+      call get_test_structures(mols, nmol)
+      call center_at_origin(mols(1))
+      nsph = mols(1)%nat
+      allocate (sphxyz, source=mols(1)%xyz)
+      call get_test_points(mols(1), xyz, n_surface)
+      ngrid = size(xyz, 2)
+
+      allocate (za(nsph))
+      do iatom = 1, nsph
+         za(iatom) = real(mols(1)%num(mols(1)%id(iatom)), wp)
+      end do
+      allocate (surface_q(ngrid), w_xyz(3, ngrid))
+      allocate (xyz1_rA(3, 3, nsph, ngrid), source=0.0_wp)
+      allocate (grad(3, nsph), grad_fwd(3, nsph), grad_ref(3, nsph))
+      do i = 1, ngrid
+         surface_q(i) = 0.1_wp*sin(0.9_wp*real(i, wp)) - 0.02_wp
+         w_xyz(1, i) = 0.05_wp*cos(0.4_wp*real(i, wp))
+         w_xyz(2, i) = 0.03_wp*sin(1.1_wp*real(i, wp))
+         w_xyz(3, i) = -0.04_wp*cos(0.7_wp*real(i, wp))
+      end do
+
+      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad, err)
+      if (allocated(err)) then
+         call test_failed(error, "direct kernel failed: "//err%message)
+         return
+      end if
+      ! A nonzero host weight on a rigid surface contributes nothing
+      call pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, surface_q, &
+                                              w_xyz, za, grad_fwd, err)
+      if (allocated(err)) then
+         call test_failed(error, "forward kernel failed: "//err%message)
+         return
+      end if
+
+      grad_ref = 0.0_wp
+      do iatom = 1, nsph
+         do i = 1, ngrid
+            rvec = xyz(:, i) - sphxyz(:, iatom)
+            r3 = norm2(rvec)**3
+            grad_ref(:, iatom) = grad_ref(:, iatom) + surface_q(i)*za(iatom)*rvec/r3
+         end do
+      end do
+      call check(error, maxval(abs(grad_ref)) > 0.0_wp, &
+                 more="direct gradient is identically zero, the test is vacuous")
+      if (allocated(error)) return
+      call check(error, maxval(abs(grad - grad_ref)), 0.0_wp, &
+                 thr=exact_thr*maxval(abs(grad_ref)), &
+                 more="direct kernel deviates from its closed form")
+      if (allocated(error)) return
+      call check(error, maxval(abs(grad - grad_fwd)), 0.0_wp, &
+                 thr=exact_thr*maxval(abs(grad_ref)), &
+                 more="direct kernel deviates from the forward kernel on a rigid surface")
+
+   end subroutine test_direct_gradient
+
+   !> Evaluate the reference energy the kernel differentiates
+   !>
    !> @param[in] xyz Reference grid point positions
    !> @param[in] sphxyz0 Reference nuclear positions
    !> @param[in] sphxyz Displaced nuclear positions
    !> @param[in] xyz1_rA Surface-position response
    !> @param[in] surface_q Surface charges
-   !> @param[in] qefield Charge-weighted electronic field
+   !> @param[in] w_xyz Host total position weight
    !> @param[in] za Nuclear charges
    !> @return energy Reference energy
-   function nuc_elec_energy(xyz, sphxyz0, sphxyz, xyz1_rA, surface_q, qefield, za) &
+   function nuc_elec_energy(xyz, sphxyz0, sphxyz, xyz1_rA, surface_q, w_xyz, za) &
       result(energy)
       !> Reference surface positions, reference nuclei, and displaced nuclei
       real(wp), intent(in) :: xyz(:, :), sphxyz0(:, :), sphxyz(:, :)
       !> Surface-position response
       real(wp), intent(in) :: xyz1_rA(:, :, :, :)
-      !> Surface charges, electronic field weights, and nuclear charges
-      real(wp), intent(in) :: surface_q(:), qefield(:, :), za(:)
-      !> Nuclear plus external-field reference energy
+      !> Surface charges, host position weights, and nuclear charges
+      real(wp), intent(in) :: surface_q(:), w_xyz(:, :), za(:)
+      !> Reference energy
       real(wp) :: energy
 
       !> Surface, atom, axis, and extent indices
@@ -319,10 +422,32 @@ contains
             end do
          end do
          do katom = 1, nsph
-            energy = energy + surface_q(i)*za(katom)/norm2(ri - sphxyz(:, katom))
+            energy = energy + surface_q(i)*za(katom)/norm2(xyz(:, i) - sphxyz(:, katom))
          end do
-         energy = energy + dot_product(qefield(:, i), ri)
+         energy = energy + dot_product(w_xyz(:, i), ri)
       end do
    end function nuc_elec_energy
+
+   !> Zero Gaussian width produces no force, including under floating-point traps
+   subroutine test_gaussian_zero_width(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Separated source and surface point
+      real(wp) :: xyz(3, 1), nuclei(3, 1), gradient(3, 1)
+      !> Restore the caller's floating-point trap setting after the zero-width probe
+      logical :: halt_on_zero
+      xyz(:, 1) = [1.0_wp, 0.0_wp, 0.0_wp]
+      nuclei = 0.0_wp
+      call ieee_get_halting_mode(ieee_divide_by_zero, halt_on_zero)
+      call ieee_set_halting_mode(ieee_divide_by_zero, .true.)
+      call pcm_electrostatic_direct_gradient(xyz, nuclei, [1.0_wp], [1.0_wp], &
+         & gradient, err, xi=[0.0_wp])
+      call ieee_set_halting_mode(ieee_divide_by_zero, halt_on_zero)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient)), 0.0_wp, thr=0.0_wp)
+   end subroutine test_gaussian_zero_width
 
 end module test_model_component_pcm_electrostatics

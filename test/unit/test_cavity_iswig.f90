@@ -7,6 +7,7 @@ module test_cavity_iswig
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
+   use moist_cavity_diagnostic, only: find_disconnected_cavities
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -33,6 +34,7 @@ contains
 
       testsuite = [ &
          & new_unittest("spherical_cavity", test_spherical_cavity), &
+         & new_unittest("islands", test_islands), &
          & new_unittest("molecular_cavity", test_molecular_cavity), &
          & new_unittest("area_sum", test_area_summation), &
          & new_unittest("area_variants", test_area_variants), &
@@ -108,6 +110,69 @@ contains
          & more="Single-atom switching function does not match")
 
    end subroutine test_spherical_cavity
+
+   !> Island count: one sphere is one island, two far spheres are two
+   subroutine test_islands(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_iswig), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+      integer, allocatable :: islands(:)
+      real(wp) :: xyz(3, 2)
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+      call new_radii_custom_atoms([3.0_wp, 3.0_wp], radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=302))
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      xyz = 0.0_wp
+      xyz(1, 2) = 40.0_wp
+      call new(mol, [1, 1], xyz)
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, size(islands), 2, more="two far spheres are two islands")
+      if (allocated(error)) return
+      call check(error, sum(islands), cav%ngrid, more="island sizes sum to ngrid")
+      if (allocated(error)) return
+      call check(error, islands(1) >= islands(2), more="islands are sorted largest first")
+      if (allocated(error)) return
+
+      xyz(1, 2) = 2.0_wp
+      call new(mol, [1, 1], xyz)
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, size(islands), 1, more="two overlapping spheres are one island")
+      if (allocated(error)) return
+      call check(error, islands(1), cav%ngrid, more="the single island holds every point")
+
+   end subroutine test_islands
 
    !> Smoke test for molecular cavity
    subroutine test_molecular_cavity(error)
