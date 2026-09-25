@@ -1,7 +1,7 @@
 !> PCM (Polarizable Continuum Model) abstract base type
 !>
-!> This module defines the abstract PCM base component that is extended by
-!> concrete implementations (CPCM, COSMO, ...) in their respective modules.
+!> The abstract PCM base component, extended by the concrete implementations
+!> (CPCM, COSMO, ...) in their respective modules
 module moist_model_component_pcm_type
    use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp, fatal_error
@@ -42,29 +42,30 @@ module moist_model_component_pcm_type
 
    public :: moist_pcm_parameters_type
 
-   !> PCM solver configuration.
+   !> PCM solver configuration
    type, extends(moist_model_parameters_type) :: moist_pcm_parameters_type
-      !> Linear solver selection.
+      !> Linear solver selection
       integer :: solver = solver_type%cholesky
-      !> Iterative solver convergence tolerance.
+      !> Iterative solver convergence tolerance
       real(wp) :: solver_tol = 1.0e-10_wp
-      !> Maximum iterative solver steps.
+      !> Maximum iterative solver steps
       integer :: solver_maxiter = 1000
    contains
-      !> Restore compiled defaults.
+      !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
-      !> Declare fields for JSON input, output, and printing.
+      !> Declare fields for JSON input, output, and printing
       procedure :: register_entries => register_parameter_entries
-      !> Check solver controls.
+      !> Check solver controls
       procedure :: validate => validate_pcm_parameters
    end type moist_pcm_parameters_type
 
    !> Abstract PCM base component
    !>
-   !> Provides common infrastructure for PCM-family methods (CPCM, COSMO, IEF-PCM).
-   !> Matrix assembly uses the generic Gaussian surface kernel (assemble_pcm_amat).
+   !> Common infrastructure for PCM-family methods (CPCM, COSMO, IEF-PCM)
    !>
-   !> Wraps general moist solvers for the linear system solution.
+   !> Matrix assembly uses the generic Gaussian surface kernel (assemble_pcm_amat)
+   !>
+   !> Wraps general moist solvers for the linear system solution
    type, abstract, extends(solvation_model_component_type) :: solvation_model_component_pcm
 
       !> Dielectric constant of the solvent
@@ -97,7 +98,7 @@ module moist_model_component_pcm_type
       !> Molecular electrostatic potential at cavity grid points (ngrid)
       !>
       !> Copied from the coupling's potential request by `ensure_charges`;
-      !> never computed here.
+      !> never computed here
       real(wp), allocatable :: phi(:)
 
       !> Whether self%q holds the charges belonging to the current matrix and phi
@@ -157,7 +158,8 @@ module moist_model_component_pcm_type
 
 contains
 
-   !> Validate PCM solver settings.
+   !> Validate PCM solver settings
+   !>
    !> @param[inout] self Solver settings
    !> @param[out] error Invalid setting
    subroutine validate_pcm_parameters(self, error)
@@ -170,7 +172,8 @@ contains
       end if
    end subroutine validate_pcm_parameters
 
-   !> Restore compiled parameter defaults.
+   !> Restore compiled parameter defaults
+   !>
    !> @param[inout] self Parameter values
    subroutine init_parameter_defaults(self)
       class(moist_pcm_parameters_type), intent(inout) :: self
@@ -181,7 +184,8 @@ contains
       self%solver_maxiter = defaults%solver_maxiter
    end subroutine init_parameter_defaults
 
-   !> Declare parameter fields for JSON input, output, and printing.
+   !> Declare parameter fields for JSON input, output, and printing
+   !>
    !> @param[inout] self Parameter values
    subroutine register_parameter_entries(self)
       class(moist_pcm_parameters_type), intent(inout), target :: self
@@ -191,12 +195,11 @@ contains
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
    end subroutine register_parameter_entries
 
-
    !> Update PCM base component
    !>
    !> Stores references to mol/cavity and assembles the PCM matrix
    !>
-   !> (unless using an external matrix).
+   !> (unless using an external matrix)
    !>
    !> @param[in,out] self PCM component instance
    !> @param[in] mol Molecular structure data
@@ -279,8 +282,8 @@ contains
       end if
 
       ! Note: charge solving happens on demand in ensure_charges, once the
-      ! wavefunction data (electrostatic potential phi ) is available. A new
-      ! geometry means a new matrix, so any cached charges are stale.
+      ! wavefunction data (electrostatic potential phi ) is available; a new
+      ! geometry means a new matrix, so any cached charges are stale
       self%charges_valid = .false.
 
       call self%ctx%timer%stop("PCM setup")
@@ -291,12 +294,12 @@ contains
    !>
    !> The molecular potential is read off the coupling's potential request
    !>
-   !> (mandatory: a stale answer is reported by name, never read as zero).
+   !> (mandatory: a stale answer is reported by name, never read as zero)
    !> A host may change the potential without touching the geometry (the
    !> ordinary SCF pattern), so update() has had no chance to clear the cache:
    !> cached charges stay valid only while phi is unchanged, which is a
    !> component-internal solve cache and deliberately not the request's
-   !> staleness flag.
+   !> staleness flag
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling Host data carrying the molecular potential trace
@@ -363,9 +366,10 @@ contains
    !>
    !> E_solv = 0.5 * dot(q, phi)
    !>
-   !> The molecular potential phi comes from the coupling's potential request.
+   !> The molecular potential phi comes from the coupling's potential request
+   !>
    !> Like every accessor, this starts by reporting a stale mandatory request
-   !> of the armed phase (or a failure latched by a mis-shaped `set`) by name.
+   !> of the armed phase (or a failure latched by a mis-shaped `set`) by name
    !>
    !> @param[in,out] self PCM component instance
    !> @param[in] coupling Host data carrying the molecular potential trace
@@ -470,7 +474,7 @@ contains
       ngrid = cavity%ngrid
 
       ! The PCM surface charge is dE/dphi by stationarity, so accumulating it
-      ! here keeps the item's charge-only invariant intact.
+      ! here keeps the item's charge-only invariant intact
       allocate (item%q(ngrid), source=0.0_wp)
       item%q(:) = item%q(:) + self%q(:)
       call response%accumulate(item, error)
@@ -483,12 +487,12 @@ contains
    !> derivative is
    !>    dE/dR_A = q^T dphi/dR_A
    !>
-   !>              + 1/(2 f(eps)) q^T (dA/dR_A) q.
+   !>              + 1/(2 f(eps)) q^T (dA/dR_A) q
    !>
    !> The A-matrix contribution is obtained from [[pcm_component_amat_nuclear_gradient]]
    !>
    !> The surface charge the host contracts with its own `dA/dR` is accumulated
-   !> into `response` from the already solved charges.
+   !> into `response` from the already solved charges
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling Wavefunction and electrostatic coupling data
@@ -542,12 +546,12 @@ contains
       if (allocated(error)) return
 
       ! The host contracts the solved charges with its own dA/dR; they are
-      ! published even when they vanish identically below.
+      ! published even when they vanish identically below
       call self%get_trace_response(coupling, cavity, response, error)
       if (allocated(error)) return
 
       ! At eps == 1 the right-hand side and surface charges vanish, so the
-      ! polarization energy and all of its derivatives are exactly zero.
+      ! polarization energy and all of its derivatives are exactly zero
       if (self%feps == 0.0_wp) return
 
       if (.not. allocated(cavity%xi1_rA) .or. &
@@ -585,9 +589,9 @@ contains
 
    !> Nuclear charges of the solute
    !>
-   !> The moving sources of the host potential are the solute nuclei. They
+   !> The moving sources of the host potential are the solute nuclei, which
    !> enter only the direct nuclear gradient at fixed surface charges: every
-   !> host quantity is a total, so nothing else in the component sees them.
+   !> host quantity is a total, so nothing else in the component sees them
    !>
    !> @param[in]  self PCM component instance
    !> @param[out] za   Nuclear charges (nat)
@@ -608,22 +612,22 @@ contains
 
    end subroutine pcm_component_nuclear_charges
 
-   !> Contract the raw spatial derivative with this component's charges.
+   !> Contract the raw spatial derivative with this component's charges
    !>
-   !> The nuclear and electronic contributions share the host's potential convention.
+   !> The nuclear and electronic contributions share the host's potential convention
    !>
    !> @param[in]  coupling QM coupling data
-   !> @param[in]  q        This component's charges (ngrid)
+   !> @param[in]  q        Charges of this component (ngrid)
    !> @param[out] w_xyz    Host total surface-position weight (3, ngrid)
    !> @param[out] error    Error handling
    subroutine read_host_position_weight(coupling, q, w_xyz, error)
-      !> Scoped raw host primitives.
+      !> Scoped raw host primitives
       class(coupling_view_type), intent(in) :: coupling
-      !> This component's surface charges.
+      !> Surface charges of this component
       real(wp), intent(in) :: q(:)
-      !> Contracted position weights.
+      !> Contracted position weights
       real(wp), allocatable, intent(out) :: w_xyz(:, :)
-      !> Missing spatial derivative.
+      !> Missing spatial derivative
       type(error_type), allocatable, intent(out) :: error
       integer :: i
       call coupling%read_potential(error, dphi_dr=w_xyz)
@@ -633,9 +637,9 @@ contains
       end do
    end subroutine read_host_position_weight
 
-   !> Accumulate PCM matrix and raw-potential adjoints for the nuclear gradient.
+   !> Accumulate PCM matrix and raw-potential adjoints for the nuclear gradient
    !>
-   !> Each component contracts its own charges once before the cavity reverse pass.
+   !> Each component contracts its own charges once before the cavity reverse pass
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data
@@ -643,15 +647,15 @@ contains
    !> @param[in,out] acc      Accumulated cavity surface adjoints
    !> @param[out]   error    Error handling
    subroutine pcm_component_get_gradient_surface_weights(self, coupling, cavity, acc, error)
-      !> PCM component with its own solved charges.
+      !> PCM component with its own solved charges
       class(solvation_model_component_pcm), intent(inout) :: self
-      !> Raw host primitives in this component's scope.
+      !> Raw host primitives in this component's scope
       class(coupling_view_type), intent(in) :: coupling
-      !> Live cavity.
+      !> Live cavity
       class(cavity_type), intent(in) :: cavity
-      !> Model-total surface adjoints.
+      !> Model-total surface adjoints
       class(cavity_surface_adjoint_type), intent(inout) :: acc
-      !> Error handling.
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :), host_xyz(:, :), host_xi(:)
       real(wp) :: prefactor
@@ -678,7 +682,7 @@ contains
    !>
    !> The solute nuclei move under the fixed surface charges; this term does
    !> not reach the energy through any cavity surface quantity, so it stays
-   !> with the component instead of going through the cavity contraction.
+   !> with the component instead of going through the cavity contraction
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data
@@ -766,11 +770,11 @@ contains
 
    end subroutine pcm_component_amat_surface_weights
 
-   !> Contract the current PCM charges to the A-matrix nuclear gradient.
+   !> Contract the current PCM charges to the A-matrix nuclear gradient
    !>
    !> Computes `q^T (dA/dR_A) q` from the Gaussian-surface derivative arrays on
-   !> the supplied live cavity. This is the A-matrix contribution only, without
-   !> dielectric scaling or the host electrostatic-potential contribution.
+   !> the supplied live cavity -- the A-matrix contribution only, without
+   !> dielectric scaling or the host electrostatic-potential contribution
    !>
    !> @param[in]  self     PCM component with current surface charges
    !> @param[in]  cavity   Live cavity carrying Gaussian-surface derivatives
@@ -811,8 +815,11 @@ contains
 
    !> Accumulate the PCM cavity surface adjoint weights
    !>
-   !> With A q = -f(eps) phi the energy is E = 1/2 q^T phi = -q^T A q/(2 f(eps)),
-   !> so differentiating at fixed host potential and eliminating dq/dp through the
+   !> With A q = -f(eps) phi the energy is
+   !>
+   !>    E = 1/2 q^T phi = -q^T A q/(2 f(eps))
+   !>
+   !> Differentiating at fixed host potential and eliminating dq/dp through the
    !> linear system gives
    !>    dE/dp = 1/(2 f(eps)) * q^T (dA/dp) q  +  q^T (dphi/dp)
    !>
@@ -859,7 +866,7 @@ contains
          return
       end if
 
-      ! eps == 1: q == 0, so both operator and host responses vanish.
+      ! eps == 1: q == 0, so both operator and host responses vanish
       if (self%feps == 0.0_wp) return
 
       allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
@@ -876,7 +883,7 @@ contains
 
    end subroutine pcm_component_get_surface_weights
 
-   !> Contract raw potential derivatives into position and Gaussian-width adjoints.
+   !> Contract raw potential derivatives into position and Gaussian-width adjoints
    !>
    !> @param[in,out] self     PCM component instance
    !> @param[in]    coupling QM coupling data carrying the host weights
@@ -884,15 +891,15 @@ contains
    !> @param[in]    ngrid    Expected electrostatic grid size
    !> @param[out]   error    Error handling
    subroutine pcm_component_get_host_surface_weights(self, coupling, acc, ngrid, error)
-      !> PCM component with its own solved charges.
+      !> PCM component with its own solved charges
       class(solvation_model_component_pcm), intent(inout) :: self
-      !> Raw host primitives.
+      !> Raw host primitives
       class(coupling_view_type), intent(in) :: coupling
-      !> Model-total surface adjoints.
+      !> Model-total surface adjoints
       class(cavity_surface_adjoint_type), intent(inout) :: acc
-      !> Expected point count.
+      !> Expected point count
       integer, intent(in) :: ngrid
-      !> Missing or mismatched derivative.
+      !> Missing or mismatched derivative
       type(error_type), allocatable, intent(out) :: error
       real(wp), allocatable :: w_xyz(:, :), w_xi(:)
       call read_host_position_weight(coupling, self%q, w_xyz, error)
@@ -910,23 +917,23 @@ contains
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
-   !> Declare Gaussian potential outputs independently for each phase.
+   !> Declare Gaussian potential outputs independently for each phase
    !>
    !> Spatial and width derivatives are needed in the response only when the
-   !> level set follows the density, and in every nuclear gradient.
+   !> level set follows the density, and in every nuclear gradient
    !>
    !> @param[in]    self     PCM component instance
    !> @param[in]    cavity   Cavity the model is built on
    !> @param[in,out] coupling Coupling being declared
    !> @param[out]   error    Error handling
    subroutine pcm_component_declare_coupling(self, cavity, coupling, error)
-      !> PCM component.
+      !> PCM component
       class(solvation_model_component_pcm), intent(in) :: self
-      !> Live cavity used to select phase requirements.
+      !> Live cavity used to select phase requirements
       class(cavity_type), intent(in) :: cavity
-      !> Component-scoped registration context.
+      !> Component-scoped registration context
       type(coupling_type), intent(inout) :: coupling
-      !> Registration error.
+      !> Registration error
       type(error_type), allocatable, intent(out) :: error
       type(gaussian_potential_request_type) :: potential
       call potential%require(moist_phase_energy, phi=.true.)
@@ -939,7 +946,7 @@ contains
 
    !> Set external matrix (bypasses internal assembly)
    !>
-   !> Allows user to provide a pre-computed PCM matrix.
+   !> Allows user to provide a pre-computed PCM matrix
    !>
    !> @param[in,out] self PCM component instance
    !> @param[in] amat External matrix (ngrid, ngrid)
@@ -958,7 +965,7 @@ contains
 
    !> Solve the PCM linear system A*q = rhs
    !>
-   !> Dispatches to appropriate solver based on self%solver setting.
+   !> Dispatches to appropriate solver based on self%solver setting
    !>
    !> @param[in] self PCM component instance
    !> @param[in] amat System matrix (ngrid, ngrid)
@@ -984,7 +991,7 @@ contains
 
       !> The timer lives on the borrowed context, so it is writable even though
       !>
-      !> self is intent(in) -- only the pointer association would be fixed.
+      !> self is intent(in) -- only the pointer association would be fixed
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM solve", category=cat_solve)
 

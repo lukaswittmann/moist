@@ -1,5 +1,8 @@
-!> Shared JSON/TOML file input and output, with JSON printing for native parameter objects.
-!> Derived types declare their fields in register_entries and defaults in init_defaults.
+!> Shared JSON/TOML file input and output, with JSON printing for native
+!> parameter objects
+!>
+!> Derived types declare their fields in register_entries and defaults in
+!> init_defaults
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -12,27 +15,27 @@ module moist_model_parameters
    private
    public :: moist_model_parameters_type
 
-   !> Base for parameter values; no references to caller-owned fields are retained.
+   !> Base for parameter values; no references to caller-owned fields are retained
    type, abstract :: moist_model_parameters_type
       private
-      !> Temporary document, present only during a file or print operation.
+      !> Temporary document, present only during a file or print operation
       class(toml_value), allocatable :: document
-      !> Whether registered fields are being read from the document.
+      !> Whether registered fields are being read from the document
       logical :: reading = .false.
-      !> First field-conversion error during the current operation.
+      !> First field-conversion error during the current operation
       type(error_type), allocatable :: failure
    contains
-      !> Declare the parameter fields through register_* calls.
+      !> Declare the parameter fields through register_* calls
       procedure(register_entries_ifc), deferred :: register_entries
-      !> Restore compiled defaults.
+      !> Restore compiled defaults
       procedure(init_defaults_ifc), deferred :: init_defaults
-      !> Validate values and recompute derived settings.
+      !> Validate values and recompute derived settings
       procedure :: validate => validate_parameters
-      !> Read JSON or TOML with defaults for omitted fields.
+      !> Read JSON or TOML with defaults for omitted fields
       procedure :: read_file
-      !> Write JSON or TOML, selected by the file extension.
+      !> Write JSON or TOML, selected by the file extension
       procedure :: write_file
-      !> Print parameter values as formatted JSON.
+      !> Print parameter values as formatted JSON
       procedure :: print_parameters
       procedure :: register_real_scalar
       procedure :: register_int_scalar
@@ -60,19 +63,19 @@ module moist_model_parameters
 
 contains
 
-   !> Select the parser or serializer from a case-insensitive file extension.
+   !> Select the parser or serializer from a case-insensitive file extension
    !>
    !> @param[in] filepath Input or output path
    !> @param[out] use_toml True for TOML, false for JSON
    !> @param[out] error Unsupported or missing extension
    subroutine resolve_file_format(filepath, use_toml, error)
-      !> Parameter file path.
+      !> Parameter file path
       character(len=*), intent(in) :: filepath
-      !> Selected format.
+      !> Selected format
       logical, intent(out) :: use_toml
-      !> Format-selection error.
+      !> Format-selection error
       type(error_type), allocatable, intent(out) :: error
-      !> Last extension separator.
+      !> Last extension separator
       integer :: dot
 
       use_toml = .false.
@@ -89,7 +92,8 @@ contains
       call fatal_error(error, "Parameter file extension must be .json or .toml: "//trim(filepath))
    end subroutine resolve_file_format
 
-   !> Default validation for parameter sets with no derived values.
+   !> Default validation for parameter sets with no derived values
+   !>
    !> @param[inout] self Parameter values
    !> @param[out] error Validation error
    subroutine validate_parameters(self, error)
@@ -97,7 +101,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
    end subroutine validate_parameters
 
-   !> Discard the temporary document after each operation.
+   !> Discard the temporary document after each operation
+   !>
    !> @param[inout] self Parameter values
    subroutine clear_document(self)
       class(moist_model_parameters_type), intent(inout) :: self
@@ -106,7 +111,8 @@ contains
       self%reading = .false.
    end subroutine clear_document
 
-   !> Read JSON or TOML, apply defaults for missing fields, then validate.
+   !> Read JSON or TOML, apply defaults for missing fields, then validate
+   !>
    !> @param[inout] self Parameter values
    !> @param[in] filepath Input path ending in .json or .toml
    !> @param[out] error File, conversion, or validation error
@@ -116,9 +122,9 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(toml_error), allocatable :: format_error
       type(toml_table), pointer :: root
-      !> TOML parser result; moved into the shared document.
+      !> TOML parser result; moved into the shared document
       type(toml_table), allocatable :: table
-      !> Selected input format.
+      !> Selected input format
       logical :: use_toml
 
       call self%clear_document()
@@ -147,7 +153,8 @@ contains
       if (.not. allocated(error)) call self%validate(error)
    end subroutine read_file
 
-   !> Collect parameter values into a temporary document.
+   !> Collect parameter values into a temporary document
+   !>
    !> @param[inout] self Parameter values
    !> @param[out] error Allocation or conversion error
    subroutine collect_document(self, error)
@@ -165,7 +172,8 @@ contains
       call move_alloc(self%failure, error)
    end subroutine collect_document
 
-   !> Write JSON or TOML, replacing an existing file.
+   !> Write JSON or TOML, replacing an existing file
+   !>
    !> @param[inout] self Parameter values
    !> @param[in] filepath Output path ending in .json or .toml
    !> @param[out] error File or serialization error
@@ -176,7 +184,7 @@ contains
       type(toml_error), allocatable :: format_error
       integer :: unit, stat
       character(len=512) :: message
-      !> Selected output format.
+      !> Selected output format
       logical :: use_toml
 
       call self%clear_document()
@@ -201,7 +209,8 @@ contains
       call self%clear_document()
    end subroutine write_file
 
-   !> Print parameter values as formatted JSON.
+   !> Print parameter values as formatted JSON
+   !>
    !> @param[inout] self Parameter values
    !> @param[out] error Serialization or output error
    !> @param[in] unit Output unit; defaults to standard output
@@ -222,7 +231,8 @@ contains
       call self%clear_document()
    end subroutine print_parameters
 
-   !> Resolve a dotted key; missing input fields keep their default values.
+   !> Resolve a dotted key; missing input fields keep their default values
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[out] parent Parent object, or null when no field is available
@@ -268,7 +278,8 @@ contains
       end if
    end subroutine field_parent
 
-   !> Read or write one real scalar field.
+   !> Read or write one real scalar field
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
@@ -292,7 +303,8 @@ contains
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
    end subroutine register_real_scalar
 
-   !> Read or write one int scalar field.
+   !> Read or write one int scalar field
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
@@ -316,7 +328,8 @@ contains
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
    end subroutine register_int_scalar
 
-   !> Read or write one logical field.
+   !> Read or write one logical field
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
@@ -340,7 +353,8 @@ contains
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter: "//key)
    end subroutine register_logical
 
-   !> Read or write a fixed-size real vector.
+   !> Read or write a fixed-size real vector
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] values Parameter values
@@ -378,7 +392,8 @@ contains
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter vector: "//key)
    end subroutine register_real_vector
 
-   !> Read or write an allocatable string; absent values remain unallocated.
+   !> Read or write an allocatable string; absent values remain unallocated
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value
@@ -402,7 +417,8 @@ contains
       if (stat /= 0) call fatal_error(self%failure, "Invalid parameter string: "//key)
    end subroutine register_alloc_string
 
-   !> Read or write a fixed-length string, rejecting oversized input.
+   !> Read or write a fixed-length string, rejecting oversized input
+   !>
    !> @param[inout] self Active document
    !> @param[in] key Dotted field name
    !> @param[inout] value Parameter value

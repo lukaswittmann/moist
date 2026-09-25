@@ -44,6 +44,7 @@ module moist_utils_prettylistprint
 contains
 
    !> Print a centered section header line using '=' fill
+   !>
    !> @param[inout] self  Pretty list printer instance
    !> @param[in]    title Section title text
    subroutine header(self, title)
@@ -109,7 +110,7 @@ contains
 
       ! A malformed column specification is a programming error at the call
       ! site, not a runtime condition: there is no table to print and no
-      ! sensible substitute for one.
+      ! sensible substitute for one
       ! TODO: add errorprop
       if (size(widths) /= size(headers)) then
          error stop "prettylistprinter: widths and headers size mismatch"
@@ -152,6 +153,7 @@ contains
    end function new_prettylistprinter
 
    !> Set default real formats after construction
+   !>
    !> @param[inout] self     Pretty list printer instance
    !> @param[in]    fmt_real Optional fixed-point format
    !> @param[in]    fmt_exp  Optional exponential format
@@ -168,6 +170,7 @@ contains
    end subroutine set_real_formats
 
    !> Set the spacing inserted between adjacent columns
+   !>
    !> @param[inout] self       Pretty list printer instance
    !> @param[in]    column_gap Number of spaces between columns
    subroutine set_column_gap(self, column_gap)
@@ -180,6 +183,7 @@ contains
    end subroutine set_column_gap
 
    !> Print column headers right-aligned in their fields
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine print_header(self)
       !> Pretty list printer instance
@@ -197,6 +201,7 @@ contains
    end subroutine print_header
 
    !> Print a separator line with `width-1` dashes per column and configurable gaps
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine separator(self)
       !> Pretty list printer instance
@@ -211,7 +216,8 @@ contains
       write (self%unit, *)
    end subroutine separator
 
-   !> Print a blank line.
+   !> Print a blank line
+   !>
    !> @param[inout] self Pretty printer instance
    subroutine blank(self)
       !> Pretty list printer instance
@@ -221,6 +227,7 @@ contains
    end subroutine blank
 
    !> Start a new row and reset write position to first column
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine begin_row(self)
       !> Pretty list printer instance
@@ -231,6 +238,7 @@ contains
    end subroutine begin_row
 
    !> Leave current column blank and move to the next one
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine skip(self)
       !> Pretty list printer instance
@@ -242,6 +250,7 @@ contains
    end subroutine skip
 
    !> Print current row and reset for next row
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine end_row(self)
       !> Pretty list printer instance
@@ -268,6 +277,7 @@ contains
    end subroutine end_row
 
    !> Add an int8 value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -285,10 +295,11 @@ contains
       call add_from_string(self, value_to_string(val, eff_fmt))
    end subroutine add_i8
 
-   !> Add an int16 value to current row.
-   !> @param[inout] self Pretty list printer instance.
-   !> @param[in]    val  Value to insert.
-   !> @param[in]    fmt  Optional format override for this cell.
+   !> Add an int16 value to current row
+   !>
+   !> @param[inout] self Pretty list printer instance
+   !> @param[in]    val  Value to insert
+   !> @param[in]    fmt  Optional format override for this cell
    subroutine add_i16(self, val, fmt)
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
@@ -304,6 +315,7 @@ contains
    end subroutine add_i16
 
    !> Add an int32 value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -322,6 +334,7 @@ contains
    end subroutine add_i32
 
    !> Add an int64 value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -340,6 +353,7 @@ contains
    end subroutine add_i64
 
    !> Add a real32 value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -373,6 +387,7 @@ contains
    end subroutine add_r32
 
    !> Add a real64 value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -406,6 +421,7 @@ contains
    end subroutine add_r64
 
    !> Add a logical value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -424,6 +440,7 @@ contains
    end subroutine add_l
 
    !> Add a character value to current row
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    val  Value to insert
    !> @param[in]    fmt  Optional format override for this cell
@@ -443,6 +460,7 @@ contains
    end subroutine add_c
 
    !> Add pre-formatted string content to the current column
+   !>
    !> @param[inout] self Pretty list printer instance
    !> @param[in]    s    Pre-formatted cell text
    subroutine add_from_string(self, s)
@@ -457,7 +475,9 @@ contains
    end subroutine add_from_string
 
    !> Stop unless the current row still has space for one more value
-   !> Callers may write into `next_col` unconditionally after this returns
+   !>
+   !> - callers may write into `next_col` unconditionally after this returns
+   !>
    !> @param[inout] self Pretty list printer instance
    subroutine ensure_can_add(self)
       !> Pretty list printer instance
@@ -470,6 +490,7 @@ contains
    end subroutine ensure_can_add
 
    !> Fit and right-align a cell value into fixed-width output
+   !>
    !> @param[in] s     Source text
    !> @param[in] width Cell width
    function format_cell(s, width) result(out)
@@ -495,6 +516,7 @@ contains
    end function format_cell
 
    !> Convert supported scalar values to string using supplied format
+   !>
    !> @param[in] val Scalar value
    !> @param[in] fmt Fortran format string without outer parentheses
    function value_to_string(val, fmt) result(s)
@@ -539,6 +561,7 @@ contains
    end function value_to_string
 
    !> Return canonical zero representation based on supplied format width
+   !>
    !> @param[in] fmt Fortran format string without outer parentheses
    function zero_value_string(fmt) result(s)
       character(*), intent(in) :: fmt
@@ -558,6 +581,7 @@ contains
    end function zero_value_string
 
    !> Build fixed real format string
+   !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
    function fixed_fmt(width, decimals) result(fmt)
@@ -571,6 +595,7 @@ contains
    end function fixed_fmt
 
    !> Build exponential real format string
+   !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
    function exp_fmt(width, decimals) result(fmt)
@@ -584,6 +609,7 @@ contains
    end function exp_fmt
 
    !> Build integer format string
+   !>
    !> @param[in] width Base width used to derive integer field width
    function int_fmt(width) result(fmt)
       integer, intent(in) :: width
@@ -595,6 +621,7 @@ contains
    end function int_fmt
 
    !> Select default real format from value magnitude
+   !>
    !> @param[in] self Pretty list printer instance
    !> @param[in] val  Real64 value
    function default_real_fmt(self, val) result(fmt)
@@ -614,6 +641,7 @@ contains
    end function default_real_fmt
 
    !> Determine whether formatted real text overflows the target cell width
+   !>
    !> @param[in] s      Formatted real text
    !> @param[in] width  Target cell width
    function is_real_overflow(s, width) result(overflow)
@@ -625,8 +653,10 @@ contains
    end function is_real_overflow
 
    !> Create overflow marker text for a real cell
-   !> Positive overflow uses '+' and negative overflow uses '-'
-   !> Marker length is `width-1` as requested
+   !>
+   !> - positive overflow uses '+', negative overflow '-'
+   !> - marker length is `width-1` as requested
+   !>
    !> @param[in] width       Target cell width
    !> @param[in] is_negative Sign selector
    function overflow_marker(width, is_negative) result(s)
@@ -644,6 +674,7 @@ contains
    end function overflow_marker
 
    !> Compute total printable table width, including inter-column spaces
+   !>
    !> @param[in] self Pretty list printer instance
    function table_width(self) result(w)
       class(prettylistprinter), intent(in) :: self
@@ -657,6 +688,7 @@ contains
    end function table_width
 
    !> Insert one space between all characters of input text
+   !>
    !> @param[in] s Input text
    function spread_text(s) result(out)
       character(*), intent(in) :: s

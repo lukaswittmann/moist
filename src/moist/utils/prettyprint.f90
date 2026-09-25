@@ -40,9 +40,10 @@ module moist_utils_prettyprint
 
 contains
 
-   !> Set output unit used by the pretty printer.
-   !> @param[inout] self Pretty printer instance.
-   !> @param[in]    iu   Fortran unit number for output.
+   !> Set output unit used by the pretty printer
+   !>
+   !> @param[inout] self Pretty printer instance
+   !> @param[in]    iu   Fortran unit number for output
    subroutine set_unit(self, iu)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -51,19 +52,20 @@ contains
       self%iu = iu
    end subroutine set_unit
 
-   !> Configure layout and numeric formatting options.
-   !> @param[inout] self       Pretty printer instance.
-   !> @param[in]    col_value  Column where first value starts.
-   !> @param[in]    col_value2 Column where second value starts in `kv2`.
-   !> @param[in]    indent_step Indentation increment for `push`/`pop`.
-   !> @param[in]    dot_gap    Spaces between label and dot leader.
-   !> @param[in]    dot_right  Minimum right-most dots in automatic mode.
-   !> @param[in]    dot_total  Exact total dots (`<0` enables automatic mode).
-   !> @param[in]    fmt_len    Base width to derive default numeric formats.
-   !> @param[in]    fmt_int    Override integer format.
-   !> @param[in]    fmt_real   Override fixed real format.
-   !> @param[in]    fmt_exp    Override exponential real format.
-   !> @param[in]    fmt_logical Override logical format.
+   !> Configure layout and numeric formatting options
+   !>
+   !> @param[inout] self       Pretty printer instance
+   !> @param[in]    col_value  Column where first value starts
+   !> @param[in]    col_value2 Column where second value starts in `kv2`
+   !> @param[in]    indent_step Indentation increment for `push`/`pop`
+   !> @param[in]    dot_gap    Spaces between label and dot leader
+   !> @param[in]    dot_right  Minimum right-most dots in automatic mode
+   !> @param[in]    dot_total  Exact total dots (`<0` enables automatic mode)
+   !> @param[in]    fmt_len    Base width to derive default numeric formats
+   !> @param[in]    fmt_int    Override integer format
+   !> @param[in]    fmt_real   Override fixed real format
+   !> @param[in]    fmt_exp    Override exponential real format
+   !> @param[in]    fmt_logical Override logical format
    subroutine set_layout(self, col_value, col_value2, indent_step, dot_gap, dot_right, dot_total, &
      & fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical)
       !> Pretty printer instance
@@ -98,19 +100,20 @@ contains
       if (present(fmt_logical)) self%fmt_logical = trim(fmt_logical)
    end subroutine set_layout
 
-   !> Construct a pretty printer with optional layout and format overrides.
-   !> @param[in] unit        Optional Fortran output unit.
-   !> @param[in] col_value   Optional column where first value starts.
-   !> @param[in] col_value2  Optional column where second value starts in `kv2`.
-   !> @param[in] indent_step Optional indentation increment for `push`/`pop`.
-   !> @param[in] dot_gap     Optional spaces between label and dot leader.
-   !> @param[in] dot_right   Optional minimum right-most dots in automatic mode.
-   !> @param[in] dot_total   Optional exact total dots (`<0` enables automatic mode).
-   !> @param[in] fmt_len     Optional base width to derive default numeric formats.
-   !> @param[in] fmt_int     Optional integer format override.
-   !> @param[in] fmt_real    Optional fixed real format override.
-   !> @param[in] fmt_exp     Optional exponential real format override.
-   !> @param[in] fmt_logical Optional logical format override.
+   !> Construct a pretty printer with optional layout and format overrides
+   !>
+   !> @param[in] unit        Optional Fortran output unit
+   !> @param[in] col_value   Optional column where first value starts
+   !> @param[in] col_value2  Optional column where second value starts in `kv2`
+   !> @param[in] indent_step Optional indentation increment for `push`/`pop`
+   !> @param[in] dot_gap     Optional spaces between label and dot leader
+   !> @param[in] dot_right   Optional minimum right-most dots in automatic mode
+   !> @param[in] dot_total   Optional exact total dots (`<0` enables automatic mode)
+   !> @param[in] fmt_len     Optional base width to derive default numeric formats
+   !> @param[in] fmt_int     Optional integer format override
+   !> @param[in] fmt_real    Optional fixed real format override
+   !> @param[in] fmt_exp     Optional exponential real format override
+   !> @param[in] fmt_logical Optional logical format override
    function new_prettyprinter(unit, col_value, col_value2, indent_step, dot_gap, dot_right, &
       & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical) result(pp)
       !> Optional output unit
@@ -129,17 +132,19 @@ contains
          & fmt_int=fmt_int, fmt_real=fmt_real, fmt_exp=fmt_exp, fmt_logical=fmt_logical)
    end function new_prettyprinter
 
-   !> Print a blank line.
-   !> @param[inout] self Pretty printer instance.
+   !> Print a blank line
+   !>
+   !> @param[inout] self Pretty printer instance
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
       write (self%iu, '(A)') ''
    end subroutine blank
 
-   !> Print a section title at current indentation.
-   !> @param[inout] self  Pretty printer instance.
-   !> @param[in]    title Section title text.
+   !> Print a section title at current indentation
+   !>
+   !> @param[inout] self  Pretty printer instance
+   !> @param[in]    title Section title text
    subroutine section(self, title)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -148,9 +153,10 @@ contains
       write (self%iu, '(A)') repeat(' ', self%indent)//trim(title)
    end subroutine section
 
-   !> Print a section title and increase indentation level.
-   !> @param[inout] self  Pretty printer instance.
-   !> @param[in]    title Section title text.
+   !> Print a section title and increase indentation level
+   !>
+   !> @param[inout] self  Pretty printer instance
+   !> @param[in]    title Section title text
    subroutine push(self, title)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -160,21 +166,23 @@ contains
       self%indent = self%indent + self%indent_step
    end subroutine push
 
-   !> Decrease indentation level by `indent_step`.
-   !> @param[inout] self Pretty printer instance.
+   !> Decrease indentation level by `indent_step`
+   !>
+   !> @param[inout] self Pretty printer instance
    subroutine pop(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
       self%indent = max(0, self%indent - self%indent_step)
    end subroutine pop
 
-   !> Print one key-value line with optional unit and format override.
-   !> @param[inout] self    Pretty printer instance.
-   !> @param[in]    desc    Label shown on the left side.
-   !> @param[in]    val     Value to print.
-   !> @param[in]    unit    Optional unit text after the value.
-   !> @param[in]    fmt     Optional explicit format string for `val`.
-   !> @param[in]    use_exp Optional exponential-format selector when `fmt` is absent.
+   !> Print one key-value line with optional unit and format override
+   !>
+   !> @param[inout] self    Pretty printer instance
+   !> @param[in]    desc    Label shown on the left side
+   !> @param[in]    val     Value to print
+   !> @param[in]    unit    Optional unit text after the value
+   !> @param[in]    fmt     Optional explicit format string for `val`
+   !> @param[in]    use_exp Optional exponential-format selector when `fmt` is absent
    subroutine kv(self, desc, val, unit, fmt, use_exp)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -239,18 +247,20 @@ contains
       write (self%iu, '(A)') line
    end subroutine kv
 
-   !> Print one key with two values on the same line.
-   !> Useful for SI/AU pairs while keeping aligned second-column output.
-   !> @param[inout] self     Pretty printer instance.
-   !> @param[in]    desc     Label shown on the left side.
-   !> @param[in]    val1     First value.
-   !> @param[in]    unit1    Optional unit for first value.
-   !> @param[in]    val2     Second value.
-   !> @param[in]    unit2    Optional unit for second value.
-   !> @param[in]    fmt1     Optional explicit format for first value.
-   !> @param[in]    fmt2     Optional explicit format for second value.
-   !> @param[in]    use_exp1 Optional exponential-format selector for first value.
-   !> @param[in]    use_exp2 Optional exponential-format selector for second value.
+   !> Print one key with two values on the same line
+   !>
+   !> - useful for SI/AU pairs while keeping aligned second-column output
+   !>
+   !> @param[inout] self     Pretty printer instance
+   !> @param[in]    desc     Label shown on the left side
+   !> @param[in]    val1     First value
+   !> @param[in]    unit1    Optional unit for first value
+   !> @param[in]    val2     Second value
+   !> @param[in]    unit2    Optional unit for second value
+   !> @param[in]    fmt1     Optional explicit format for first value
+   !> @param[in]    fmt2     Optional explicit format for second value
+   !> @param[in]    use_exp1 Optional exponential-format selector for first value
+   !> @param[in]    use_exp2 Optional exponential-format selector for second value
    subroutine kv2(self, desc, val1, unit1, val2, unit2, fmt1, fmt2, use_exp1, use_exp2)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -336,20 +346,23 @@ contains
       write (self%iu, '(A)') line
    end subroutine kv2
 
-   !> Print one key with three values on the same line and one shared trailing unit.
-   !> Useful for component triples while keeping aligned multi-column output.
-   !> @param[inout] self     Pretty printer instance.
-   !> @param[in]    desc     Label shown on the left side.
-   !> @param[in]    val1     First value.
-   !> @param[in]    val2     Second value.
-   !> @param[in]    val3     Third value.
-   !> @param[in]    unit     Optional unit printed once after the third value.
-   !> @param[in]    fmt1     Optional explicit format for first value.
-   !> @param[in]    fmt2     Optional explicit format for second value.
-   !> @param[in]    fmt3     Optional explicit format for third value.
-   !> @param[in]    use_exp1 Optional exponential-format selector for first value.
-   !> @param[in]    use_exp2 Optional exponential-format selector for second value.
-   !> @param[in]    use_exp3 Optional exponential-format selector for third value.
+   !> Print one key with three values on the same line and one shared
+   !> trailing unit
+   !>
+   !> - useful for component triples while keeping aligned multi-column output
+   !>
+   !> @param[inout] self     Pretty printer instance
+   !> @param[in]    desc     Label shown on the left side
+   !> @param[in]    val1     First value
+   !> @param[in]    val2     Second value
+   !> @param[in]    val3     Third value
+   !> @param[in]    unit     Optional unit printed once after the third value
+   !> @param[in]    fmt1     Optional explicit format for first value
+   !> @param[in]    fmt2     Optional explicit format for second value
+   !> @param[in]    fmt3     Optional explicit format for third value
+   !> @param[in]    use_exp1 Optional exponential-format selector for first value
+   !> @param[in]    use_exp2 Optional exponential-format selector for second value
+   !> @param[in]    use_exp3 Optional exponential-format selector for third value
    subroutine kvvv(self, desc, val1, val2, val3, unit, fmt1, fmt2, fmt3, use_exp1, use_exp2, &
      & use_exp3)
       !> Pretty printer instance

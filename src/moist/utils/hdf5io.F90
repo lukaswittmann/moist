@@ -1,18 +1,19 @@
-!> HDF5 file I/O utilities for reading and writing scientific data.
+!> HDF5 file I/O utilities for reading and writing scientific data
 !>
-!> This module provides a high-level object-oriented interface to HDF5,
-!> supporting scalar and multidimensional arrays of integers, reals, and strings.
+!> A high-level object-oriented interface to HDF5, supporting scalar and
+!> multidimensional arrays of integers, reals and strings
+!>
 !> The [[hdf5_file]] type encapsulates file handles and provides generic
-!> bindings for type-transparent read/write operations.
+!> bindings for type-transparent read/write operations
 !>
 !> The HDF5 Fortran interface is initialized on first use and never explicitly
-!> finalized. This is safe because the operating system reclaims all resources
-!> on process exit, and calling h5close_f while other library users exist can
-!> cause crashes. The module is thread-safe for initialization when OpenMP is
-!> enabled.
+!> finalized, which is safe because the operating system reclaims all
+!> resources on process exit, and calling h5close_f while other library users
+!> exist can cause crashes; initialization is thread-safe when OpenMP is
+!> enabled
 !>
 !> When built without HDF5 support, all operations return an error indicating
-!> that HDF5 is not available.
+!> that HDF5 is not available
 module moist_utils_hdf5io
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
@@ -26,14 +27,15 @@ module moist_utils_hdf5io
 
    private
 
-   !> Flag indicating whether HDF5 Fortran interface has been initialized.
-   !> This is never reset to false - the OS handles cleanup on process exit.
+   !> Flag indicating whether HDF5 Fortran interface has been initialized
+   !>
+   !> - never reset to false; the OS handles cleanup on process exit
    logical, save :: hdf5_initialized = .false.
 
-   !> HDF5 file handle wrapper for reading and writing datasets.
+   !> HDF5 file handle wrapper for reading and writing datasets
    !>
    !> Provides methods to open/close files, manage groups, and read/write
-   !> datasets of various types (integers, reals, strings) and ranks (0-3D).
+   !> datasets of various types (integers, reals, strings) and ranks (0-3D)
    type :: hdf5_file
 
       !> Path to the HDF5 file
@@ -133,7 +135,8 @@ module moist_utils_hdf5io
 
 contains
 
-   !> Get the current HDF5 location identifier (file or group).
+   !> Get the current HDF5 location identifier (file or group)
+   !>
    !> @param[in] self HDF5 file instance
    !> @return Location identifier, or -1 if HDF5 not available
    function hdf_get_location_id(self) result(loc_id)
@@ -144,8 +147,10 @@ contains
 
    end function hdf_get_location_id
 
-   !> Ensure the HDF5 Fortran interface is initialized.
-   !> Thread-safe initialization using OpenMP critical section.
+   !> Ensure the HDF5 Fortran interface is initialized
+   !>
+   !> - thread-safe initialization via an OpenMP critical section
+   !>
    !> @param[out] error Error handler
    subroutine hdf5_ensure_initialized(error)
       type(error_type), allocatable, intent(out), optional :: error
@@ -179,7 +184,8 @@ contains
 
    end subroutine hdf5_ensure_initialized
 
-   !> Open an HDF5 file for reading or writing.
+   !> Open an HDF5 file for reading or writing
+   !>
    !> @param[in,out] self     HDF5 file instance
    !> @param[in]     filename Path to the HDF5 file
    !> @param[in]     status   File status: 'old', 'new', or 'replace' (default: 'old')
@@ -249,7 +255,8 @@ contains
 
    end subroutine hdf_open_file
 
-   !> Close the HDF5 file.
+   !> Close the HDF5 file
+   !>
    !> @param[in,out] self  HDF5 file instance
    !> @param[out]    error Error handler
    subroutine hdf_close_file(self, error)
@@ -293,7 +300,8 @@ contains
 
    end subroutine hdf_close_file
 
-   !> Open a group within the HDF5 file for subsequent operations.
+   !> Open a group within the HDF5 file for subsequent operations
+   !>
    !> @param[in,out] self  HDF5 file instance
    !> @param[in]     gname Name of the group to open
    !> @param[out]    error Error handler
@@ -327,7 +335,8 @@ contains
 
    end subroutine hdf_open_group
 
-   !> Close the currently open group and restore the previous location.
+   !> Close the currently open group and restore the previous location
+   !>
    !> @param[in,out] self  HDF5 file instance
    !> @param[out]    error Error handler
    subroutine hdf_close_group(self, error)
@@ -356,7 +365,8 @@ contains
 
    end subroutine hdf_close_group
 
-   !> Ensure the HDF5 file is open before using its handle.
+   !> Ensure the HDF5 file is open before using its handle
+   !>
    !> @param[in]  self    HDF5 file instance
    !> @param[in]  action  Description of the attempted operation
    !> @param[out] error   Error handler
@@ -374,7 +384,8 @@ contains
 
    end function hdf_require_open
 
-   !> Ensure dataset rank matches expected rank.
+   !> Ensure dataset rank matches expected rank
+   !>
    !> @param[in]  self          HDF5 file instance
    !> @param[in]  dname         Dataset name
    !> @param[in]  expected_rank Expected dataset rank
@@ -435,7 +446,8 @@ contains
 
    end function hdf_expect_rank
 
-   !> Check whether a dataset or group exists in the file.
+   !> Check whether a dataset or group exists in the file
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  name  Name of the dataset or group to check
    !> @param[out] exist True if the object exists
@@ -464,7 +476,8 @@ contains
 
    end subroutine hdf_exist
 
-   !> Delete a dataset or group from the file.
+   !> Delete a dataset or group from the file
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  name  Name of the dataset or group to delete
    !> @param[out] error Error handler
@@ -490,8 +503,10 @@ contains
 
    end subroutine hdf_delete
 
-   !> Ensure parent groups exist for a given path (internal helper).
-   !> Creates only intermediate groups, not the final path component.
+   !> Ensure parent groups exist for a given path (internal helper)
+   !>
+   !> - creates only intermediate groups, not the final path component
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  path  Full path (e.g., '/data/results/dataset')
    !> @param[out] error Error handler
@@ -554,7 +569,8 @@ contains
 
    end subroutine hdf_ensure_parent_groups
 
-   !> Create a group, creating parent groups as needed.
+   !> Create a group, creating parent groups as needed
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  gname Full path of the group to create (e.g., '/data/results')
    !> @param[out] error Error handler
@@ -611,7 +627,8 @@ contains
 
    end subroutine hdf_add_group
 
-   !> Add a string attribute to a group or dataset.
+   !> Add a string attribute to a group or dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  path  Path to the group or dataset
    !> @param[in]  name  Attribute name
@@ -655,7 +672,8 @@ contains
 
    end subroutine hdf_adda_string
 
-   !> Get a string attribute from a group or dataset.
+   !> Get a string attribute from a group or dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  path  Path to the group or dataset
    !> @param[in]  name  Attribute name
@@ -692,7 +710,8 @@ contains
 
    end subroutine hdf_geta_string
 
-   !> Write a scalar integer dataset.
+   !> Write a scalar integer dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value Scalar integer value
@@ -760,7 +779,8 @@ contains
 
    end subroutine hdf_add_int
 
-   !> Write a 1D integer array dataset.
+   !> Write a 1D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 1D integer array
@@ -795,7 +815,8 @@ contains
 
    end subroutine hdf_add_int1d
 
-   !> Write a 2D integer array dataset.
+   !> Write a 2D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 2D integer array
@@ -830,7 +851,8 @@ contains
 
    end subroutine hdf_add_int2d
 
-   !> Write a 3D integer array dataset.
+   !> Write a 3D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 3D integer array
@@ -865,7 +887,8 @@ contains
 
    end subroutine hdf_add_int3d
 
-   !> Write a scalar real dataset.
+   !> Write a scalar real dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value Scalar real value
@@ -933,7 +956,8 @@ contains
 
    end subroutine hdf_add_real
 
-   !> Write a 1D real array dataset.
+   !> Write a 1D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 1D real array
@@ -968,7 +992,8 @@ contains
 
    end subroutine hdf_add_real1d
 
-   !> Write a 2D real array dataset.
+   !> Write a 2D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 2D real array
@@ -1003,7 +1028,8 @@ contains
 
    end subroutine hdf_add_real2d
 
-   !> Write a 3D real array dataset.
+   !> Write a 3D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value 3D real array
@@ -1038,7 +1064,8 @@ contains
 
    end subroutine hdf_add_real3d
 
-   !> Write a string dataset.
+   !> Write a string dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[in]  value String value
@@ -1070,7 +1097,8 @@ contains
 
    end subroutine hdf_add_string
 
-   !> Read a string dataset.
+   !> Read a string dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable string to receive the data
@@ -1112,7 +1140,8 @@ contains
 
    end subroutine hdf_get_string
 
-   !> Read a scalar integer dataset.
+   !> Read a scalar integer dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Scalar integer to receive the data
@@ -1157,7 +1186,8 @@ contains
 
    end subroutine hdf_get_int
 
-   !> Read a 1D integer array dataset.
+   !> Read a 1D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 1D integer array to receive the data
@@ -1201,7 +1231,8 @@ contains
 
    end subroutine hdf_get_int1d
 
-   !> Read a 2D integer array dataset.
+   !> Read a 2D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 2D integer array to receive the data
@@ -1245,7 +1276,8 @@ contains
 
    end subroutine hdf_get_int2d
 
-   !> Read a 3D integer array dataset.
+   !> Read a 3D integer array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 3D integer array to receive the data
@@ -1289,7 +1321,8 @@ contains
 
    end subroutine hdf_get_int3d
 
-   !> Read a scalar real dataset.
+   !> Read a scalar real dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Scalar real to receive the data
@@ -1334,7 +1367,8 @@ contains
 
    end subroutine hdf_get_real
 
-   !> Read a 1D real array dataset.
+   !> Read a 1D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 1D real array to receive the data
@@ -1378,7 +1412,8 @@ contains
 
    end subroutine hdf_get_real1d
 
-   !> Read a 2D real array dataset.
+   !> Read a 2D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 2D real array to receive the data
@@ -1422,7 +1457,8 @@ contains
 
    end subroutine hdf_get_real2d
 
-   !> Read a 3D real array dataset.
+   !> Read a 3D real array dataset
+   !>
    !> @param[in]  self  HDF5 file instance
    !> @param[in]  dname Dataset name
    !> @param[out] value Allocatable 3D real array to receive the data
@@ -1466,7 +1502,8 @@ contains
 
    end subroutine hdf_get_real3d
 
-   !> Convert a string to lowercase.
+   !> Convert a string to lowercase
+   !>
    !> @param[in] str Input string
    !> @return Lowercase version of the input string
    elemental function to_lower(str)

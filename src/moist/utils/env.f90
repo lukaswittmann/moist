@@ -39,8 +39,11 @@ contains
       if (present(default)) val = default
    end function get_env
 
-   !> Resolve a directory from an environment variable, falling back to a default.
-   !> Does not touch the filesystem; pair with `ensure_dir` to create it.
+   !> Resolve a directory from an environment variable, falling back to a
+   !> default
+   !>
+   !> - does not touch the filesystem; pair with `ensure_dir` to create it
+   !>
    !> @param[in]  env_name  Environment variable consulted first
    !> @param[in]  fallback  Default used when the variable is unset or empty
    !> @return               Resolved directory path (no trailing slash)
@@ -55,7 +58,8 @@ contains
       dir = get_env(env_name, default=fallback)
    end function resolve_dir
 
-   !> Create a directory (and any missing parents) if it does not already exist.
+   !> Create a directory (and any missing parents) if it does not already exist
+   !>
    !> @param[in]  path  Directory to create
    !> @param[out] stat  Optional status; 0 on success, non-zero on failure
    subroutine ensure_dir(path, stat)

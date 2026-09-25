@@ -1,5 +1,5 @@
 
-!> License text for moist.
+!> License text for moist
 module moist_output_license
    implicit none
    private

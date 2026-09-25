@@ -5,7 +5,7 @@
 !> through the surface positions `r_i(R)`. The host owns the potential, so the
 !> second route is the host total `w_xyz_i = dE_host/dr_i = q_i grad phi(r_i)`
 !> (nuclear plus electronic); MOIST forms only the first, the nuclear charges
-!> moving under the fixed surface charges.
+!> moving under the fixed surface charges
 module moist_model_component_pcm_electrostatics
    use mctc_env, only: wp, error_type, fatal_error
    implicit none(type, external)
@@ -23,7 +23,7 @@ contains
    !> `grad_rA = sum_i q_i Z_A (r_i - R_A)/|r_i - R_A|^3`. This is the only
    !> nuclear term MOIST forms itself; the surface-position term is the host
    !> total `w_xyz_i = dE_host/dr_i`, which the cavity contracts in reverse
-   !> mode or [[pcm_electrostatic_nuclear_gradient]] contracts in forward mode.
+   !> mode or [[pcm_electrostatic_nuclear_gradient]] contracts in forward mode
    !>
    !> @param[in]  xyz        Surface positions (3, ngrid)
    !> @param[in]  sphxyz     Atomic sphere centers (3, nsph)
@@ -35,17 +35,17 @@ contains
    subroutine pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad_rA, error, xi)
       !> Surface positions and sphere centers
       real(wp), intent(in) :: xyz(:, :)
-      !> Sphxyz.
+      !> Sphxyz
       real(wp), intent(in) :: sphxyz(:, :)
       !> Surface charges and nuclear charges
       real(wp), intent(in) :: surface_q(:)
-      !> Za.
+      !> Za
       real(wp), intent(in) :: za(:)
       !> Direct nuclear gradient
       real(wp), intent(out) :: grad_rA(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Gaussian inverse lengths; absent selects the point operator.
+      !> Gaussian inverse lengths; absent selects the point operator
       real(wp), intent(in), optional :: xi(:)
 
       !> Surface, source-atom, and extent indices
@@ -101,10 +101,10 @@ contains
    !>
    !> The direct term of [[pcm_electrostatic_direct_gradient]] plus the host
    !> total surface-position weight contracted with the surface's response to
-   !> nuclear motion: `grad_rA += sum_i xyz1_rA(:, :, A, i)^T w_xyz(:, i)`.
+   !> nuclear motion: `grad_rA += sum_i xyz1_rA(:, :, A, i)^T w_xyz(:, i)`
    !>
    !> Used by cavities that expose `xyz1_rA`; the reverse-mode path hands
-   !> `w_xyz` to the cavity instead.
+   !> `w_xyz` to the cavity instead
    !>
    !> @param[in]  xyz         Surface positions (3, ngrid)
    !> @param[in]  sphxyz      Atomic sphere centers (3, nsph)
@@ -119,21 +119,21 @@ contains
                                                  surface_q, w_xyz, za, grad_rA, error, xi)
       !> Surface positions, sphere centers, and surface-position derivatives
       real(wp), intent(in) :: xyz(:, :)
-      !> Sphxyz.
+      !> Sphxyz
       real(wp), intent(in) :: sphxyz(:, :)
-      !> Xyz1 ra.
+      !> Xyz1 ra
       real(wp), intent(in) :: xyz1_rA(:, :, :, :)
       !> Surface charges, host surface-position weights, and nuclear charges
       real(wp), intent(in) :: surface_q(:)
-      !> W xyz.
+      !> W xyz
       real(wp), intent(in) :: w_xyz(:, :)
-      !> Za.
+      !> Za
       real(wp), intent(in) :: za(:)
       !> Contracted nuclear gradient
       real(wp), intent(out) :: grad_rA(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Gaussian inverse lengths; absent selects the point operator.
+      !> Gaussian inverse lengths; absent selects the point operator
       real(wp), intent(in), optional :: xi(:)
 
       !> Surface, moving-atom, source-atom, and extent indices

@@ -74,8 +74,10 @@ contains
 
    end subroutine getline
 
-   !> Print a string with word-wrapping at a given width.
-   !> Words are never split; breaks occur at spaces only.
+   !> Print a string with word-wrapping at a given width
+   !>
+   !> - words are never split; breaks occur at spaces only
+   !>
    !> @param[in] unit   Fortran I/O unit
    !> @param[in] text   String to print
    !> @param[in] indent Prefix for every line (e.g. "  ")

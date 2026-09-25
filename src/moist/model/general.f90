@@ -218,11 +218,13 @@ contains
 
    !> Assemble the host part of the response phase
    !>
-   !> `response` is cleared after input validation and returns the surface charge, the
-   !> Gaussian amplitudes and, for a cavity with field-dependent geometry, the
-   !> density weights; components accumulate into it within this call. The
-   !> coupling must be staged by `prepare_response`; a stale mandatory request
-   !> of the response phase is then reported by name
+   !> `response` is cleared after input validation and returns the surface
+   !> charge, the Gaussian amplitudes and, for a cavity with field-dependent
+   !> geometry, the density weights
+   !>
+   !> - components accumulate into it within this call
+   !> - the coupling must be staged by `prepare_response`; a stale mandatory
+   !>   request of the response phase is then reported by name
    subroutine general_get_response(self, coupling, response, error)
       !> General model
       class(solvation_model_general), intent(inout) :: self
@@ -268,17 +270,20 @@ contains
 
    !> Accumulate the nuclear gradient of every component
    !>
-   !> `response` is cleared after input validation and returns the host part of the gradient
-   !> phase: the surface charge and the Gaussian amplitudes, which the host
-   !> contracts with its own geometry derivatives. In reverse mode (the
-   !> default) the components never see `get_gradient`, so that part is
-   !> collected through their `get_response` after the surface contraction;
-   !> in forward mode every component emits it from its own `get_gradient`
-   !> The two branches are exclusive, so nothing is counted twice. The coupling
-   !> must be staged by `prepare_gradient`; a stale mandatory request of the
-   !> gradient phase is then reported by name. The components' own checks run
-   !> against the armed phase, so the reverse-path `get_response` calls do not
-   !> demand the response-phase requests again
+   !> `response` is cleared after input validation and returns the host part
+   !> of the gradient phase: the surface charge and the Gaussian amplitudes,
+   !> which the host contracts with its own geometry derivatives
+   !>
+   !> - in reverse mode (the default) the components never see `get_gradient`,
+   !>   so that part is collected through their `get_response` after the
+   !>   surface contraction
+   !> - in forward mode every component emits it from its own `get_gradient`
+   !> - the two branches are exclusive, so nothing is counted twice
+   !> - the coupling must be staged by `prepare_gradient`; a stale mandatory
+   !>   request of the gradient phase is then reported by name
+   !> - the components' own checks run against the armed phase, so the
+   !>   reverse-path `get_response` calls do not demand the response-phase
+   !>   requests again
    subroutine general_get_gradient(self, coupling, response, gradient, error)
       !> General model
       class(solvation_model_general), intent(inout) :: self
@@ -317,7 +322,7 @@ contains
 
       if (.not. self%force_forward_gradient) then
          ! Reverse mode: every component states its surface adjoint, the cavity
-         ! contracts the lot once. Nothing builds a nuclear Jacobian
+         ! contracts the lot once, and nothing builds a nuclear Jacobian
          block
             type(cavity_surface_adjoint_type) :: acc
 
@@ -365,8 +370,10 @@ contains
    !> Build the host coupling of an updated model
    !>
    !> Declare cavity and component requests, sharing calculations with matching
-   !> inputs, then snapshot the grid. Multiple couplings may coexist; release
-   !> unused ones with `release_coupling`
+   !> inputs, then snapshot the grid
+   !>
+   !> - multiple couplings may coexist; release unused ones with
+   !>   `release_coupling`
    subroutine general_new_coupling(self, coupling, error)
       !> Updated general model
       class(solvation_model_general), intent(inout), target :: self
@@ -414,8 +421,8 @@ contains
 
    !> Stage per-output requirements and preserve still-valid raw answers
    !>
-   !> Energy staging starts a new host evaluation. Response and gradient staging
-   !> reuse outputs until geometry or declared scientific inputs change
+   !> Energy staging starts a new host evaluation; response and gradient
+   !> staging reuse outputs until geometry or declared scientific inputs change
    subroutine general_update_coupling(self, coupling, error, energy, response, gradient)
       !> Updated general model
       class(solvation_model_general), intent(inout) :: self
@@ -512,7 +519,7 @@ contains
    !> `check_mandatory` only asks whether the requests of a phase carry an
    !> answer, which a coupling staged for a neighbouring phase can satisfy by
    !> accident: the answers of the response phase are still fresh when the
-   !> gradient phase is read. Which phase was staged is the more fundamental
+   !> gradient phase is read; which phase was staged is the more fundamental
    !> fact, so it is checked first and reported naming both phases
    subroutine require_staged(coupling, phase, accessor, error)
       !> Coupling handed to the accessor

@@ -1,6 +1,7 @@
 !> COSMO (Conductor-like Screening Model) implementation
-!> This module provides the COSMO variant of PCM with its specific dielectric
-!> scaling (f epsilon = ( epsilon -1)/( epsilon +0.5))
+!>
+!> The COSMO variant of PCM, with its specific dielectric scaling
+!> (f epsilon = ( epsilon -1)/( epsilon +0.5))
 module moist_model_component_pcm_cosmo
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
@@ -15,14 +16,15 @@ module moist_model_component_pcm_cosmo
    public :: new_component_cosmo
 
    !> COSMO (Conductor-like Screening Model) variant
-   !> Uses f epsilon = ( epsilon -1)/( epsilon +0.5) scaling
+   !>
+   !> - f epsilon = ( epsilon -1)/( epsilon +0.5) scaling
    type, extends(solvation_model_component_pcm) :: solvation_model_component_cosmo
 
    end type solvation_model_component_cosmo
 
 contains
 
-   !> Construct from parameter values; omission uses compiled defaults.
+   !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
    !> @param[in] ctx Borrowed context; must outlive the object
@@ -37,22 +39,22 @@ contains
       type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
       real(wp), intent(in) :: epsilon
-      !> Solver configuration; omitted means compiled defaults.
+      !> Solver configuration; omitted means compiled defaults
       type(moist_pcm_parameters_type), intent(in), optional :: param
       !> Optional: external pre-computed matrix (ngrid, ngrid)
       real(wp), intent(in), optional :: external_matrix(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Resolved solver configuration.
+      !> Resolved solver configuration
       type(moist_pcm_parameters_type) :: settings
 
       if (present(param)) settings = param
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
-      ! Set dielectric properties. Below eps = 1 the scaling factor turns
-      ! negative, so the model is undefined there.
+      ! Set dielectric properties; below eps = 1 the scaling factor turns
+      ! negative, so the model is undefined there
       if (epsilon < 1.0_wp) then
          call fatal_error(error, &
             & "[new_component_cosmo] Dielectric constant must be >= 1")
