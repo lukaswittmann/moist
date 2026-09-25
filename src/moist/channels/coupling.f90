@@ -3,29 +3,34 @@
 !> A coupling is the model-owned list of calculations the host performs on the
 !> cavity grid, one request per distinct set of inputs
 !>
-!> - a request is a declaration: named outputs such as `phi` or `dphi_dr(3, ngrid)`
-!>   and the cavity fields it reads; it holds no data, so copies are cheap
-!> - each phase stages the outputs still missing and mints one handle per
-!>   request; the host answers by handle and output name,
-!>   `coupling%answer(request%handle, "phi", phi, error)`, and a superseded
-!>   handle is refused
+!> - a request is a declaration: named outputs such as `phi` or `dphi_dr(3, ngrid)`;
+!>   it holds no data, so copies are cheap
+!> - each phase stages its requirements; the host walks them with a cursor,
+!>   `do while (coupling%next())`, inspects `coupling%request()` and answers
+!>   by output name, `coupling%answer("phi", phi, error)`
 !> - the coupling owns the answer arrays; they survive across phases until the
 !>   owner invalidates them, and a rejected answer leaves its output missing
 !> - components never see the coupling; each reads its own registrations through
 !>   a short-lived `coupling_view_type` after one completeness check per call
+!> - request kinds are a closed set: `declare` is private, so new kinds are
+!>   defined in this module only
 module moist_channels_coupling
-   use, intrinsic :: iso_c_binding, only: c_int64_t
+   use, intrinsic :: iso_fortran_env, only: int64
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    implicit none(type, external)
    private
    public :: coupling_type, coupling_view_type, coupling_registry_type
-   public :: coupling_request_type, output_slot_type
+   public :: coupling_request_type
    public :: point_potential_request_type, gaussian_potential_request_type
    public :: gaussian_moment_request_type
-   public :: moist_phase_none, moist_phase_energy, moist_phase_response, &
-      & moist_phase_gradient, moist_n_phases
-   public :: request_name_len, output_name_len, grid_name_len
+   public :: current_request, answer_flat
+   public :: coupling_register, request_require
+   public :: coupling_begin_registration, coupling_set_scope, coupling_snapshot
+   public :: coupling_arm, coupling_invalidate, coupling_check_mandatory
+   public :: coupling_make_view, coupling_close_view
+   public :: moist_phase_energy, moist_phase_response, moist_phase_gradient
+   public :: request_name_len, output_name_len
 
    !> No phase is staged
    integer, parameter :: moist_phase_none = 0
@@ -41,11 +46,11 @@ module moist_channels_coupling
    integer, parameter :: request_name_len = 32
    !> Output name capacity
    integer, parameter :: output_name_len = 16
-   !> Grid field name capacity; grid fields are cavity fields, so this matches
-   !> MOIST_FIELD_NAME_MAX in moist.h
-   integer, parameter :: grid_name_len = 64
    !> Leading extents an output may declare before ngrid
    integer, parameter :: max_lead = 2
+   !> Diagnostic for an answer or query outside a `next()` window
+   character(len=*), parameter :: no_current_request = &
+      & "No current coupling request - call next() first"
 
    !> One declared output of a request; the coupling owns its answer array
    !>
@@ -67,39 +72,32 @@ module moist_channels_coupling
    !> Scientific request: what a host computes, never the data it returns
    !>
    !> Kinds declare their outputs once in `declare`; every accessor works by
-   !> output name, so a new kind adds no per-output code. Hosts answer through
-   !> `coupling%answer(handle, name, values, error)`, so copies of a request are
-   !> cheap declarations
+   !> output name, so a new kind adds no per-output code. A host sees a copy
+   !> through `coupling%request()`: its kind, `name()` and `is_missing(name)`
    type, abstract :: coupling_request_type
-      !> Opaque host token, replaced on every staging or invalidation
-      integer(c_int64_t) :: handle = 0_c_int64_t
+      private
       !> Named outputs, filled by `declare` on first use
       type(output_slot_type), allocatable :: outputs(:)
-      !> Cavity grid fields this calculation reads, by the cavity's field names
-      character(len=grid_name_len), allocatable :: fields(:)
-      !> Expected grid size
-      integer :: ngrid = -1
       !> Phase staged by the latest arm
       integer :: phase = moist_phase_none
    contains
+      !> Scientific name, e.g. "gaussian_potential"
       procedure(request_name), deferred :: name
-      procedure(request_declare), deferred :: declare
-      procedure :: ensure_outputs => request_ensure_outputs
-      procedure, private :: request_add_vector, request_add_array
-      generic :: add => request_add_vector, request_add_array
-      procedure :: uses => request_uses_grid
-      procedure :: n_outputs => request_n_outputs
-      procedure :: find => request_find
-      procedure, private :: request_require_always, request_require_when
-      generic :: require => request_require_always, request_require_when
-      procedure :: clear_requirements => request_clear_requirements
-      procedure :: is_required => request_is_required
-      procedure :: is_available => request_is_available
+      !> Whether an output is required by the staged phase and still unanswered
       procedure :: is_missing => request_is_missing
-      procedure :: n_missing => request_n_missing
-      procedure :: rows => request_rows
-      procedure :: invalidate => request_invalidate
-      procedure :: same_inputs => request_same_inputs
+      procedure(request_declare), deferred, private :: declare
+      procedure, private :: ensure_outputs => request_ensure_outputs
+      procedure, private :: request_add_vector, request_add_array
+      generic, private :: add => request_add_vector, request_add_array
+      procedure, private :: n_outputs => request_n_outputs
+      procedure, private :: find => request_find
+      procedure, private :: clear_requirements => request_clear_requirements
+      procedure, private :: is_required => request_is_required
+      procedure, private :: is_available => request_is_available
+      procedure, private :: n_missing => request_n_missing
+      procedure, private :: rows => request_rows
+      procedure, private :: invalidate => request_invalidate
+      procedure, private :: same_inputs => request_same_inputs
    end type coupling_request_type
 
    !> Polymorphic scientific request operations
@@ -117,7 +115,7 @@ module moist_channels_coupling
          character(len=request_name_len) :: name
       end function request_name
 
-      !> Declare the kind's outputs and grid fields
+      !> Declare the kind's outputs
       !>
       !> @param[in,out] self Request to declare
       !> @param[out] error Invalid declaration
@@ -135,14 +133,14 @@ module moist_channels_coupling
    type, extends(coupling_request_type) :: point_potential_request_type
    contains
       procedure :: name => point_potential_name
-      procedure :: declare => point_potential_declare
+      procedure, private :: declare => point_potential_declare
    end type point_potential_request_type
 
    !> Raw gaussian_potential calculation: phi, dphi_dr(3, ngrid), dphi_dxi
    type, extends(coupling_request_type) :: gaussian_potential_request_type
    contains
       procedure :: name => gaussian_potential_name
-      procedure :: declare => gaussian_potential_declare
+      procedure, private :: declare => gaussian_potential_declare
    end type gaussian_potential_request_type
 
    !> Raw gaussian_moments calculation: gt, pt(3, ngrid), mt(3, 3, ngrid), rt(3, ngrid)
@@ -151,9 +149,16 @@ module moist_channels_coupling
       real(wp), allocatable :: width(:)
    contains
       procedure :: name => gaussian_moment_name
-      procedure :: declare => gaussian_moment_declare
-      procedure :: same_inputs => moment_same_inputs
+      procedure, private :: declare => gaussian_moment_declare
+      procedure, private :: same_inputs => moment_same_inputs
    end type gaussian_moment_request_type
+
+   !> Placeholder `coupling%request()` returns outside a `next()` window; no outputs
+   type, extends(coupling_request_type) :: no_request_type
+   contains
+      procedure :: name => no_request_name
+      procedure, private :: declare => no_request_declare
+   end type no_request_type
 
    !> Stored answer of one output
    type :: output_values_type
@@ -178,54 +183,51 @@ module moist_channels_coupling
       !> Registered request slot
       integer :: slot = 0
    end type registration_type
-   !> Model-owned collection exposed to hosts through borrowed handles
+
+   !> Model-owned collection exposed to hosts through borrowed pointers
+   !>
+   !> The type carries only what a host calls: `next`, `request` and `answer`.
+   !> Declaring, staging and reading belong to the model and its components and
+   !> are module procedures instead (`coupling_arm`, `coupling_register`, ...),
+   !> which the `moist` umbrella does not re-export -- Fortran has no friend
+   !> access, so privilege is expressed by what a host can reach, not by a
+   !> binding it is asked not to call
    type :: coupling_type
       private
       !> Scientific calculations
       type(request_slot_type), allocatable :: requests(:)
       !> Component-local registrations
       type(registration_type), allocatable :: registrations(:)
-      !> Next never-reused handle
-      integer(c_int64_t) :: serial = 0_c_int64_t
       !> Epoch of scoped views
-      integer(c_int64_t) :: epoch = 0_c_int64_t
+      integer(int64) :: epoch = 0_int64
       !> Scope currently registering requirements
       integer :: scope = 1
-      !> Frozen pending slot indices
-      integer, allocatable :: pending_index(:)
-      !> Whether the declared grid fields are current on their owner
-      logical :: grid_valid = .false.
-      !> Current phase
-      integer, public :: phase = moist_phase_none
+      !> Staged phase; none before staging and after invalidation
+      integer :: phase = moist_phase_none
       !> Number of evaluation points
-      integer, public :: ngrid = 0
+      integer :: ngrid = 0
+      !> Request of the host walk; zero before the first and after the last
+      integer :: cursor = 0
    contains
-      procedure :: register => coupling_register
-      procedure :: begin_registration
-      procedure :: set_scope
-      procedure :: snapshot => coupling_snapshot
-      procedure :: arm => coupling_arm
-      procedure :: invalidate => coupling_invalidate
-      procedure :: n_requests
-      procedure :: n_pending
-      procedure :: declared
-      procedure :: pending
-      procedure :: lookup
+      !> Advance to the next request with a missing output
+      procedure :: next => coupling_next
+      !> Copy of the current request
+      procedure :: request => coupling_request
       procedure, private :: coupling_answer_1, coupling_answer_2, coupling_answer_3
+      !> Answer one output of the current request
       generic :: answer => coupling_answer_1, coupling_answer_2, coupling_answer_3
-      procedure :: answer_flat => coupling_answer_flat
-      procedure :: reject => coupling_reject
-      procedure, private :: index_of
+      procedure, private :: n_requests
       procedure, private :: resolve
       procedure, private :: store
-      procedure :: check_mandatory
-      procedure :: make_view
-      procedure :: close_view
+      procedure, private :: reject
       procedure, private :: compact
-      procedure :: grid_fields
-      procedure :: uses_grid
-      procedure :: has_snapshot
    end type coupling_type
+
+   !> Declare one output required in one phase, used before `coupling_register`
+   interface request_require
+      module procedure :: request_require_always
+      module procedure :: request_require_when
+   end interface request_require
 
    !> Short-lived read-only component view; never exposes pointers to requests
    type :: coupling_view_type
@@ -235,11 +237,10 @@ module moist_channels_coupling
       !> Component-local registration scope
       integer :: scope = 0
       !> Epoch at construction, checked on every read
-      integer(c_int64_t) :: epoch = -1_c_int64_t
+      integer(int64) :: epoch = -1_int64
       !> Current phase
       integer, public :: phase = moist_phase_none
    contains
-      procedure :: request => view_request
       procedure :: check_mandatory => view_check
       procedure, private :: validate => view_validate
       procedure, private :: view_read_1, view_read_2, view_read_3
@@ -269,6 +270,10 @@ module moist_channels_coupling
    end type coupling_registry_type
 contains
 
+   !* ================================================================================= *!
+   !*                                 Request declarations                              *!
+   !* ================================================================================= *!
+
    !> Mark every output unanswered; the coupling keeps the storage
    !>
    !> @param[in,out] self Request to invalidate
@@ -290,78 +295,12 @@ contains
       class(coupling_request_type), intent(inout) :: self
       !> Invalid declaration
       type(error_type), allocatable, intent(out) :: error
-      if (.not. allocated(self%outputs)) then
-         call self%declare(error)
-         if (allocated(error)) then
-            if (allocated(self%outputs)) deallocate (self%outputs)
-            return
-         end if
+      if (allocated(self%outputs)) return
+      call self%declare(error)
+      if (allocated(error)) then
+         if (allocated(self%outputs)) deallocate (self%outputs)
       end if
-      if (.not. allocated(self%fields)) allocate (self%fields(0))
    end subroutine request_ensure_outputs
-
-   !> Declare that this calculation reads one cavity grid field
-   !>
-   !> @param[in,out] self Request being declared
-   !> @param[in] name Cavity field name, e.g. "xyz" or "xi0"
-   !> @param[out] error Name longer than a cavity field name can be
-   subroutine request_uses_grid(self, name, error)
-      !> Request being declared
-      class(coupling_request_type), intent(inout) :: self
-      !> Cavity field name
-      character(len=*), intent(in) :: name
-      !> Invalid name
-      type(error_type), allocatable, intent(out) :: error
-      !> Name padded to the stored length; gfortran ignores the constructor
-      !> type-spec for an assumed-length dummy, so `[character(len=n) :: name]`
-      !> would keep the actual length
-      character(len=grid_name_len) :: field
-      if (len_trim(name) > grid_name_len) then
-         call fatal_error(error, trim(self%name())//": grid field name '"//name//"' is too long")
-         return
-      end if
-      field = name
-      if (.not. allocated(self%fields)) allocate (self%fields(0))
-      self%fields = union_names(self%fields, [field])
-   end subroutine request_uses_grid
-
-   !> Names of b not yet in a, appended to a in first-seen order
-   !>
-   !> @param[in] a Existing names
-   !> @param[in] b Names to merge
-   pure function union_names(a, b) result(union)
-      !> Existing names
-      character(len=grid_name_len), intent(in) :: a(:)
-      !> Names to merge
-      character(len=grid_name_len), intent(in) :: b(:)
-      !> Merged names
-      character(len=grid_name_len), allocatable :: union(:)
-      integer :: i
-      union = a
-      do i = 1, size(b)
-         if (.not. any(union == b(i))) union = [union, b(i)]
-      end do
-   end function union_names
-
-   !> Sort names so that hosts see a stable order across preparations
-   !>
-   !> @param[in,out] names Names to sort in place
-   pure subroutine sort_names(names)
-      !> Names to sort
-      character(len=grid_name_len), intent(inout) :: names(:)
-      character(len=grid_name_len) :: key
-      integer :: i, j
-      do i = 2, size(names)
-         key = names(i)
-         j = i - 1
-         do while (j >= 1)
-            if (names(j) <= key) exit
-            names(j + 1) = names(j)
-            j = j - 1
-         end do
-         names(j + 1) = key
-      end do
-   end subroutine sort_names
 
    !> Declare one vector output (ngrid); called from a kind's `declare`
    !>
@@ -447,7 +386,6 @@ contains
       i = 0
    end function request_find
 
-
    !> Flattened row count of one output
    !>
    !> @param[in] self Request to inspect
@@ -464,13 +402,13 @@ contains
 
    !> Declare one output required in one phase
    !>
-   !> @param[in,out] self Request requirements
+   !> @param[in,out] request Request requirements
    !> @param[in] phase Phase index
    !> @param[in] name Output name
    !> @param[out] error Invalid phase, unknown output or failed declaration
-   subroutine request_require_always(self, phase, name, error)
+   subroutine request_require_always(request, phase, name, error)
       !> Request requirements
-      class(coupling_request_type), intent(inout) :: self
+      class(coupling_request_type), intent(inout) :: request
       !> Phase index
       integer, intent(in) :: phase
       !> Output name
@@ -479,29 +417,29 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer :: i
       if (phase < 1 .or. phase > moist_n_phases) then
-         call fatal_error(error, trim(self%name())//": invalid coupling phase")
+         call fatal_error(error, trim(request%name())//": invalid coupling phase")
          return
       end if
-      call self%ensure_outputs(error)
+      call request%ensure_outputs(error)
       if (allocated(error)) return
-      i = self%find(name)
+      i = request%find(name)
       if (i == 0) then
-         call fatal_error(error, trim(self%name())//" has no output '"//name//"'")
+         call fatal_error(error, trim(request%name())//" has no output '"//name//"'")
          return
       end if
-      self%outputs(i)%required(phase) = .true.
+      request%outputs(i)%required(phase) = .true.
    end subroutine request_require_always
 
    !> Declare one output required in one phase under a condition
    !>
-   !> @param[in,out] self Request requirements
+   !> @param[in,out] request Request requirements
    !> @param[in] phase Phase index
    !> @param[in] name Output name
    !> @param[in] when Whether the requirement applies
    !> @param[out] error Invalid phase, unknown output or failed declaration
-   subroutine request_require_when(self, phase, name, when, error)
+   subroutine request_require_when(request, phase, name, when, error)
       !> Request requirements
-      class(coupling_request_type), intent(inout) :: self
+      class(coupling_request_type), intent(inout) :: request
       !> Phase index
       integer, intent(in) :: phase
       !> Output name
@@ -510,7 +448,7 @@ contains
       logical, intent(in) :: when
       !> Invalid requirement
       type(error_type), allocatable, intent(out) :: error
-      if (when) call request_require_always(self, phase, name, error)
+      if (when) call request_require_always(request, phase, name, error)
    end subroutine request_require_when
 
    !> Drop every phase requirement before a new declaration pass
@@ -566,6 +504,9 @@ contains
    end function request_is_available
 
    !> Whether an output is required by the staged phase and still unanswered
+   !>
+   !> State of the copy, taken when `request()` was called; an unknown name
+   !> is not missing
    !>
    !> @param[in] self Request to inspect
    !> @param[in] name Output name
@@ -629,6 +570,24 @@ contains
       end if
    end function request_available_index
 
+   !> Default input identity for calculations with no private scientific inputs
+   !>
+   !> @param[in] self Registered calculation
+   !> @param[in] other Candidate calculation
+   function request_same_inputs(self, other) result(equal)
+      !> Registered calculation
+      class(coupling_request_type), intent(in) :: self
+      !> Candidate calculation
+      class(coupling_request_type), intent(in) :: other
+      !> Whether both calculations have identical inputs
+      logical :: equal
+      equal = same_type_as(self, other)
+   end function request_same_inputs
+
+   !* ================================================================================= *!
+   !*                                   Request kinds                                   *!
+   !* ================================================================================= *!
+
    !> Name of the point_potential calculation
    !>
    !> @param[in] self Request to describe
@@ -652,8 +611,6 @@ contains
       call self%add("phi", error)
       if (allocated(error)) return
       call self%add("dphi_dr", [3], error)
-      if (allocated(error)) return
-      call self%uses("xyz", error)
    end subroutine point_potential_declare
 
    !> Name of the gaussian_potential calculation
@@ -667,9 +624,10 @@ contains
       name = "gaussian_potential"
    end function gaussian_potential_name
 
-   !> Outputs of the gaussian_potential calculation; needs the grid widths
+   !> Outputs of the gaussian_potential calculation
    !>
    !> @param[in,out] self Request to declare
+   !> @param[out] error Invalid declaration
    subroutine gaussian_potential_declare(self, error)
       !> Request to declare
       class(gaussian_potential_request_type), intent(inout) :: self
@@ -680,10 +638,6 @@ contains
       call self%add("dphi_dr", [3], error)
       if (allocated(error)) return
       call self%add("dphi_dxi", error)
-      if (allocated(error)) return
-      call self%uses("xyz", error)
-      if (allocated(error)) return
-      call self%uses("xi0", error)
    end subroutine gaussian_potential_declare
 
    !> Name of the gaussian_moments calculation
@@ -713,51 +667,95 @@ contains
       call self%add("mt", [3, 3], error)
       if (allocated(error)) return
       call self%add("rt", [3], error)
-      if (allocated(error)) return
-      call self%uses("xyz", error)
    end subroutine gaussian_moment_declare
 
-   !> Start a fresh declaration pass while retaining charge-independent answers
+   !> Moment calculations share answers only when their exponents match exactly
    !>
-   !> @param[in,out] self Collection to declare
-   subroutine begin_registration(self)
+   !> @param[in] self Registered moments
+   !> @param[in] other Candidate calculation
+   function moment_same_inputs(self, other) result(equal)
+      !> Registered moments
+      class(gaussian_moment_request_type), intent(in) :: self
+      !> Candidate calculation
+      class(coupling_request_type), intent(in) :: other
+      !> Whether inputs match
+      logical :: equal
+      equal = .false.
+      select type (other)
+      type is (gaussian_moment_request_type)
+         if (.not. allocated(self%width) .or. .not. allocated(other%width)) return
+         if (size(self%width) /= size(other%width)) return
+         equal = all(self%width == other%width)
+      end select
+   end function moment_same_inputs
+
+   !> Name of the placeholder returned outside a `next()` window
+   !>
+   !> @param[in] self Placeholder to describe
+   function no_request_name(self) result(name)
+      !> Placeholder to describe
+      class(no_request_type), intent(in) :: self
+      !> Diagnostic name
+      character(len=request_name_len) :: name
+      name = "no_current_request"
+   end function no_request_name
+
+   !> The placeholder stands for no calculation, so it cannot be declared
+   !>
+   !> @param[in,out] self Placeholder to declare
+   !> @param[out] error Always set
+   subroutine no_request_declare(self, error)
+      !> Placeholder to declare
+      class(no_request_type), intent(inout) :: self
+      !> Always set
+      type(error_type), allocatable, intent(out) :: error
+      call fatal_error(error, "The placeholder request '"//trim(self%name())//"' cannot be declared")
+   end subroutine no_request_declare
+
+   !* ================================================================================= *!
+   !*                              Declaration and staging                              *!
+   !* ================================================================================= *!
+
+   !> Start a fresh declaration pass while retaining the stored answers
+   !>
+   !> @param[in,out] coupling Collection to declare
+   subroutine coupling_begin_registration(coupling)
       !> Collection to declare
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       integer :: i
-      if (allocated(self%registrations)) deallocate (self%registrations)
-      allocate (self%registrations(0))
-      if (.not. allocated(self%requests)) allocate (self%requests(0))
+      if (allocated(coupling%registrations)) deallocate (coupling%registrations)
+      allocate (coupling%registrations(0))
+      if (.not. allocated(coupling%requests)) allocate (coupling%requests(0))
       ! The previous staging ends here, not at arm: a pass that fails in between
-      ! must leave no pending list, live handle or matching phase behind
-      self%phase = moist_phase_none
-      if (allocated(self%pending_index)) deallocate (self%pending_index)
-      do i = 1, size(self%requests)
-         call self%requests(i)%item%clear_requirements()
-         self%requests(i)%item%handle = 0_c_int64_t
+      ! must leave no current request or matching phase behind
+      coupling%phase = moist_phase_none
+      coupling%cursor = 0
+      do i = 1, size(coupling%requests)
+         call coupling%requests(i)%item%clear_requirements()
       end do
-   end subroutine begin_registration
+   end subroutine coupling_begin_registration
 
    !> Select the component whose declarations follow
    !>
-   !> @param[in,out] self Collection to declare
+   !> @param[in,out] coupling Collection to declare
    !> @param[in] scope Component index, zero for the cavity
-   subroutine set_scope(self, scope)
+   subroutine coupling_set_scope(coupling, scope)
       !> Collection to declare
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       !> Component index
       integer, intent(in) :: scope
-      self%scope = scope
-   end subroutine set_scope
+      coupling%scope = scope
+   end subroutine coupling_set_scope
 
    !> Register by local name, sharing calculations only when their inputs match
    !>
-   !> @param[in,out] self Collection receiving the declaration
+   !> @param[in,out] coupling Collection receiving the declaration
    !> @param[in] key Component-local scientific name
    !> @param[in] item Calculation and output requirements
    !> @param[out] error Registration error
-   subroutine coupling_register(self, key, item, error)
+   subroutine coupling_register(coupling, key, item, error)
       !> Collection receiving the declaration
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       !> Component-local scientific name
       character(len=*), intent(in) :: key
       !> Calculation and requirements
@@ -768,9 +766,8 @@ contains
       !> Declared copy of the registered value
       class(coupling_request_type), allocatable :: declared
       integer :: i, slot, stat
-      logical :: equal
-      if (.not. allocated(self%requests)) allocate (self%requests(0))
-      if (.not. allocated(self%registrations)) allocate (self%registrations(0))
+      if (.not. allocated(coupling%requests)) allocate (coupling%requests(0))
+      if (.not. allocated(coupling%registrations)) allocate (coupling%registrations(0))
       if (len_trim(key) > request_name_len .or. len_trim(key) == 0) then
          call fatal_error(error, "Invalid local request name")
          return
@@ -782,19 +779,17 @@ contains
       end if
       call declared%ensure_outputs(error)
       if (allocated(error)) return
-      ! A registration is a declaration: availability and tokens are the coupling's
+      ! A registration is a declaration: availability is the coupling's
       call declared%invalidate()
-      declared%handle = 0_c_int64_t
       slot = 0
-      do i = 1, size(self%requests)
-         equal = self%requests(i)%item%same_inputs(declared)
-         if (equal) then
+      do i = 1, size(coupling%requests)
+         if (coupling%requests(i)%item%same_inputs(declared)) then
             slot = i
             exit
          end if
       end do
       if (slot == 0) then
-         slot = size(self%requests) + 1
+         slot = size(coupling%requests) + 1
          allocate (grown(slot), stat=stat)
          if (stat /= 0) then
             call fatal_error(error, "Cannot allocate request registry")
@@ -803,157 +798,74 @@ contains
          allocate (grown(slot)%answers(declared%n_outputs()))
          call move_alloc(declared, grown(slot)%item)
          do i = 1, slot - 1
-            call move_alloc(self%requests(i)%item, grown(i)%item)
-            call move_alloc(self%requests(i)%answers, grown(i)%answers)
+            call move_alloc(coupling%requests(i)%item, grown(i)%item)
+            call move_alloc(coupling%requests(i)%answers, grown(i)%answers)
          end do
-         call move_alloc(grown, self%requests)
+         call move_alloc(grown, coupling%requests)
       else
-         associate (live => self%requests(slot)%item)
+         associate (live => coupling%requests(slot)%item)
             do i = 1, min(live%n_outputs(), declared%n_outputs())
                live%outputs(i)%required = live%outputs(i)%required .or. declared%outputs(i)%required
             end do
-            if (any(self%registrations%slot == slot)) then
-               live%fields = union_names(live%fields, declared%fields)
-            else
-               live%fields = declared%fields
-            end if
          end associate
       end if
-      self%registrations = [self%registrations, registration_type(self%scope, key, slot)]
+      coupling%registrations = [coupling%registrations, registration_type(coupling%scope, key, slot)]
    end subroutine coupling_register
 
-   !> Sorted union of the cavity grid fields used by active declarations
+   !> Record the grid size after a declaration pass; a new size drops every answer
    !>
-   !> @param[in] self Collection to inspect
-   function grid_fields(self) result(fields)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Field names
-      character(len=grid_name_len), allocatable :: fields(:)
-      integer :: i
-      allocate (fields(0))
-      if (.not. allocated(self%registrations)) return
-      do i = 1, size(self%registrations)
-         fields = union_names(fields, self%requests(self%registrations(i)%slot)%item%fields)
-      end do
-      call sort_names(fields)
-   end function grid_fields
-
-   !> Whether any active declaration reads one cavity grid field
+   !> Staleness at an unchanged size is the owner's duty: a model update
+   !> invalidates every coupling it minted
    !>
-   !> @param[in] self Collection to inspect
-   !> @param[in] name Cavity field name
-   function uses_grid(self, name) result(used)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Cavity field name
-      character(len=*), intent(in) :: name
-      !> Whether the field is declared
-      logical :: used
-      used = any(self%grid_fields() == name)
-   end function uses_grid
-
-   !> Mark the owner's declared grid fields current; no grid values are copied
-   !>
-   !> Staleness is the owner's duty: it must invalidate whenever the grid changes
-   !>
-   !> @param[in,out] self Collection to refresh
+   !> @param[in,out] coupling Collection to refresh
    !> @param[in] ngrid Evaluation point count
-   !> @param[in] available Grid field names the owner can supply
-   !> @param[out] error Missing declared field
-   subroutine coupling_snapshot(self, ngrid, available, error)
+   subroutine coupling_snapshot(coupling, ngrid)
       !> Collection to refresh
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       !> Evaluation point count
       integer, intent(in) :: ngrid
-      !> Grid field names the owner can supply
-      character(len=*), intent(in) :: available(:)
-      !> Missing declared field
-      type(error_type), allocatable, intent(out) :: error
-      !> Declared field names
-      character(len=grid_name_len), allocatable :: declared(:)
-      integer :: i
-      self%grid_valid = .false.
-      if (ngrid < 0) then
-         call fatal_error(error, "Grid size must be nonnegative")
-         return
-      end if
-      call self%compact()
-      if (self%ngrid /= ngrid) call self%invalidate()
-      self%ngrid = ngrid
-      declared = self%grid_fields()
-      do i = 1, size(declared)
-         if (any(available == declared(i))) cycle
-         call fatal_error(error, "Declared grid field "//trim(declared(i))//" is unavailable")
-         return
-      end do
-      do i = 1, self%n_requests()
-         self%requests(i)%item%ngrid = ngrid
-      end do
-      self%grid_valid = .true.
+      call coupling%compact()
+      if (coupling%ngrid /= ngrid) call coupling_invalidate(coupling)
+      coupling%ngrid = ngrid
    end subroutine coupling_snapshot
 
-   !> Whether a current geometry snapshot is available, including an empty grid
+   !> Invalidate every answer, the staging and any outstanding scoped view
    !>
-   !> @param[in] self Collection to inspect
-   function has_snapshot(self) result(valid)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Snapshot validity
-      logical :: valid
-      valid = self%grid_valid
-   end function has_snapshot
-
-   !> Invalidate every answer and every outstanding host token or scoped view
-   !>
-   !> @param[in,out] self Collection to invalidate
-   subroutine coupling_invalidate(self)
+   !> @param[in,out] coupling Collection to invalidate
+   subroutine coupling_invalidate(coupling)
       !> Collection to invalidate
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       integer :: i
-      self%epoch = self%epoch + 1_c_int64_t
-      self%phase = moist_phase_none
-      self%grid_valid = .false.
-      do i = 1, self%n_requests()
-         call self%requests(i)%item%invalidate()
-         self%requests(i)%item%handle = 0_c_int64_t
+      coupling%epoch = coupling%epoch + 1_int64
+      coupling%phase = moist_phase_none
+      coupling%cursor = 0
+      do i = 1, coupling%n_requests()
+         call coupling%requests(i)%item%invalidate()
       end do
-      if (allocated(self%pending_index)) deallocate (self%pending_index)
    end subroutine coupling_invalidate
 
-   !> Stage missing outputs and mint fresh, never-reused answer tokens
+   !> Stage the phase requirements and start a new host walk
    !>
-   !> @param[in,out] self Collection to stage
+   !> @param[in,out] coupling Collection to stage
    !> @param[in] phase Requested phase
-   !> @param[out] error Invalid phase or exhausted token space
-   subroutine coupling_arm(self, phase, error)
+   !> @param[out] error Invalid phase
+   subroutine coupling_arm(coupling, phase, error)
       !> Collection to stage
-      class(coupling_type), intent(inout) :: self
+      class(coupling_type), intent(inout) :: coupling
       !> Requested phase
       integer, intent(in) :: phase
-      !> Invalid phase or exhausted token space
+      !> Invalid phase
       type(error_type), allocatable, intent(out) :: error
       integer :: i
       if (phase < 1 .or. phase > moist_n_phases) then
          call fatal_error(error, "Invalid coupling phase")
          return
       end if
-      if (self%serial > huge(self%serial) - int(self%n_requests(), c_int64_t)) then
-         call fatal_error(error, "Coupling handle space exhausted")
-         return
-      end if
-      self%phase = phase
-      self%epoch = self%epoch + 1_c_int64_t
-      if (allocated(self%pending_index)) deallocate (self%pending_index)
-      allocate (self%pending_index(0))
-      do i = 1, self%n_requests()
-         self%serial = self%serial + 1_c_int64_t
-         associate (item => self%requests(i)%item)
-            item%handle = self%serial
-            item%ngrid = self%ngrid
-            item%phase = phase
-            if (item%n_missing() > 0) self%pending_index = [self%pending_index, i]
-         end associate
+      coupling%phase = phase
+      coupling%cursor = 0
+      coupling%epoch = coupling%epoch + 1_int64
+      do i = 1, coupling%n_requests()
+         coupling%requests(i)%item%phase = phase
       end do
    end subroutine coupling_arm
 
@@ -969,275 +881,118 @@ contains
       if (allocated(self%requests)) n = size(self%requests)
    end function n_requests
 
-   !> Size of the frozen pending work list
+   !> Remove calculations no longer used and remap local registrations
    !>
-   !> @param[in] self Collection to inspect
-   function n_pending(self) result(n)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Pending count
-      integer :: n
+   !> @param[in,out] self Collection after component declaration
+   subroutine compact(self)
+      !> Collection after component declaration
+      class(coupling_type), intent(inout) :: self
+      type(request_slot_type), allocatable :: active(:)
+      integer, allocatable :: mapping(:)
+      integer :: i, n
+      if (.not. allocated(self%requests)) return
+      if (.not. allocated(self%registrations)) return
+      allocate (mapping(size(self%requests)), source=0)
       n = 0
-      if (allocated(self%pending_index)) n = size(self%pending_index)
-   end function n_pending
+      do i = 1, size(self%requests)
+         if (.not. any(self%registrations%slot == i)) cycle
+         n = n + 1
+         mapping(i) = n
+      end do
+      if (n == size(self%requests)) return
+      allocate (active(n))
+      do i = 1, size(self%requests)
+         if (mapping(i) == 0) cycle
+         call move_alloc(self%requests(i)%item, active(mapping(i))%item)
+         call move_alloc(self%requests(i)%answers, active(mapping(i))%answers)
+      end do
+      call move_alloc(active, self%requests)
+      do i = 1, size(self%registrations)
+         self%registrations(i)%slot = mapping(self%registrations(i)%slot)
+      end do
+      self%registrations = pack(self%registrations, self%registrations%slot > 0)
+   end subroutine compact
 
-   !> Copy one declaration for host inspection
-   !>
-   !> @param[in] self Collection to inspect
-   !> @param[in] i One-based declaration index
-   function declared(self, i) result(item)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> One-based declaration index
-      integer, intent(in) :: i
-      !> Independent request value, absent for an invalid index
-      class(coupling_request_type), allocatable :: item
-      if (i < 1 .or. i > self%n_requests()) return
-      allocate (item, source=self%requests(i)%item)
-   end function declared
+   !* ================================================================================= *!
+   !*                                     Host walk                                     *!
+   !* ================================================================================= *!
 
-   !> Copy one pending calculation; submit its answer with answer()
+   !> Advance to the next request with a missing output of the staged phase
    !>
-   !> @param[in] self Collection to inspect
-   !> @param[in] i One-based pending index
-   function pending(self, i) result(item)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> One-based pending index
-      integer, intent(in) :: i
-      !> Independent request value
-      class(coupling_request_type), allocatable :: item
-      if (i < 1 .or. i > self%n_pending()) return
-      allocate (item, source=self%requests(self%pending_index(i))%item)
-   end function pending
-
-   !> Resolve a current host token, refusing every superseded staging
+   !> - each request is visited at most once per pass
+   !> - false ends the pass and rewinds, so the next call starts a new one
+   !> - a pass left early resumes here; staging resets the cursor
+   !> - moves the cursor, so it must stand alone in a loop condition
    !>
-   !> @param[in] self Collection to inspect
-   !> @param[in] handle Opaque token from pending()
-   !> @param[out] item Independent scientific request
-   !> @param[out] error Superseded or unknown token
-   subroutine lookup(self, handle, item, error)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Scientific request copy
-      class(coupling_request_type), allocatable, intent(out) :: item
-      !> Invalid token error
-      type(error_type), allocatable, intent(out) :: error
+   !> @param[in,out] self Collection to walk
+   function coupling_next(self) result(more)
+      !> Collection to walk
+      class(coupling_type), intent(inout) :: self
+      !> Whether a request is now current
+      logical :: more
       integer :: i
-      i = self%index_of(handle)
-      if (i == 0) then
-         call fatal_error(error, "Superseded or unknown coupling request handle")
-         return
-      end if
-      allocate (item, source=self%requests(i)%item)
-   end subroutine lookup
-
-   !> Slot of a current host token, zero for a superseded or unknown one
-   !>
-   !> @param[in] self Collection to inspect
-   !> @param[in] handle Opaque token from pending()
-   function index_of(self, handle) result(i)
-      !> Collection to inspect
-      class(coupling_type), intent(in) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Slot index
-      integer :: i
-      if (handle /= 0_c_int64_t) then
-         do i = 1, self%n_requests()
-            if (self%requests(i)%item%handle == handle) return
+      more = .false.
+      if (self%phase /= moist_phase_none) then
+         do i = self%cursor + 1, self%n_requests()
+            if (self%requests(i)%item%n_missing(self%phase) == 0) cycle
+            self%cursor = i
+            more = .true.
+            return
          end do
       end if
-      i = 0
-   end function index_of
+      self%cursor = 0
+   end function coupling_next
 
-   !> Validate and store one flattened answer (rows, ngrid) into the live request
+   !> Copy of the current request; answer it with `answer`
    !>
-   !> A rejected answer leaves the output unanswered, so a wrong retry never
-   !> keeps an older value alive
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] lead Caller's leading extents, absent for a pre-flattened array
-   !> @param[in] values Flattened answer
-   !> @param[out] error Rejected handle, name or answer
-   subroutine store(self, handle, name, lead, values, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Caller's leading extents
-      integer, intent(in), optional :: lead(:)
-      !> Flattened answer
-      real(wp), intent(in) :: values(:, :)
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      !> Why the answer is rejected, empty when it is stored
-      character(len=:), allocatable :: reason
-      integer :: i, j
-      call self%resolve(handle, name, i, j, error)
-      if (allocated(error)) return
-      associate (item => self%requests(i)%item)
-         associate (out => item%outputs(j))
-            out%available = .false.
-            reason = ""
-            if (present(lead)) then
-               if (size(lead) /= out%nlead) then
-                  reason = "rank mismatch"
-               else if (any(lead /= out%lead(:size(lead)))) then
-                  reason = "shape mismatch"
-               end if
-            end if
-            if (len(reason) == 0) then
-               if (any(shape(values) /= [item%rows(j), item%ngrid])) then
-                  reason = "shape mismatch"
-               else if (.not. all(ieee_is_finite(values))) then
-                  reason = "must be finite"
-               end if
-            end if
-            if (len(reason) > 0) then
-               call fatal_error(error, trim(item%name())//": "//trim(name)//" "//reason)
-               return
-            end if
-            self%requests(i)%answers(j)%values = values
-            out%available = .true.
-         end associate
-      end associate
-   end subroutine store
-
-   !> Answer a vector output (ngrid) of a current request
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] values Answer on the grid
-   !> @param[out] error Rejected handle, name or answer
-   subroutine coupling_answer_1(self, handle, name, values, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Answer on the grid
-      real(wp), intent(in) :: values(:)
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      !> No leading extents
-      integer :: lead(0)
-      call self%store(handle, name, lead, reshape(values, [1, size(values)]), error)
-   end subroutine coupling_answer_1
-
-   !> Answer a (lead(1), ngrid) output of a current request
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] values Answer on the grid
-   !> @param[out] error Rejected handle, name or answer
-   subroutine coupling_answer_2(self, handle, name, values, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Answer on the grid
-      real(wp), intent(in) :: values(:, :)
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      call self%store(handle, name, [size(values, 1)], values, error)
-   end subroutine coupling_answer_2
-
-   !> Answer a (lead(1), lead(2), ngrid) output of a current request
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] values Answer on the grid
-   !> @param[out] error Rejected handle, name or answer
-   subroutine coupling_answer_3(self, handle, name, values, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Answer on the grid
-      real(wp), intent(in) :: values(:, :, :)
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      call self%store(handle, name, [size(values, 1), size(values, 2)], &
-         & reshape(values, [size(values, 1)*size(values, 2), size(values, 3)]), error)
-   end subroutine coupling_answer_3
-
-   !> Answer one output already flattened to (rows, ngrid), as C hosts supply it
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] values Flattened answer
-   !> @param[out] error Rejected handle, name or answer
-   subroutine coupling_answer_flat(self, handle, name, values, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Flattened answer
-      real(wp), intent(in) :: values(:, :)
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      call self%store(handle, name, values=values, error=error)
-   end subroutine coupling_answer_flat
-
-   !> Mark one output unanswered without reading anything, reporting why
-   !>
-   !> @param[in,out] self Collection to answer
-   !> @param[in] handle Opaque token from pending()
-   !> @param[in] name Output name
-   !> @param[in] message Reason, e.g. "grid size must match exactly"
-   !> @param[out] error Rejected handle, name or the reason
-   subroutine coupling_reject(self, handle, name, message, error)
-      !> Collection to answer
-      class(coupling_type), intent(inout) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
-      !> Output name
-      character(len=*), intent(in) :: name
-      !> Reason
-      character(len=*), intent(in) :: message
-      !> Rejected answer
-      type(error_type), allocatable, intent(out) :: error
-      integer :: i, j
-      call self%resolve(handle, name, i, j, error)
-      if (allocated(error)) return
-      associate (item => self%requests(i)%item)
-         item%outputs(j)%available = .false.
-         call fatal_error(error, trim(item%name())//": "//trim(name)//" "//message)
-      end associate
-   end subroutine coupling_reject
-
-   !> Resolve a current token and an output name to slot and output indices
+   !> The copy carries the requirement state at this call, so `is_missing`
+   !> tells a host what to compute; outside a `next()` window it is a
+   !> placeholder named "no_current_request" with no outputs
    !>
    !> @param[in] self Collection to inspect
-   !> @param[in] handle Opaque token from pending()
+   function coupling_request(self) result(item)
+      !> Collection to inspect
+      class(coupling_type), intent(in) :: self
+      !> Independent request value
+      class(coupling_request_type), allocatable :: item
+      if (self%cursor < 1 .or. self%cursor > self%n_requests()) then
+         allocate (no_request_type :: item)
+         return
+      end if
+      allocate (item, source=self%requests(self%cursor)%item)
+   end function coupling_request
+
+   !> Copy the current request, or report that none is current
+   !>
+   !> The checked form of `coupling%request()` for the C layer
+   !>
+   !> @param[in] coupling Collection to inspect
+   !> @param[out] item Independent request value
+   !> @param[out] error No current request
+   subroutine current_request(coupling, item, error)
+      !> Collection to inspect
+      class(coupling_type), intent(in) :: coupling
+      !> Independent request value
+      class(coupling_request_type), allocatable, intent(out) :: item
+      !> No current request
+      type(error_type), allocatable, intent(out) :: error
+      if (coupling%cursor < 1 .or. coupling%cursor > coupling%n_requests()) then
+         call fatal_error(error, no_current_request)
+         return
+      end if
+      allocate (item, source=coupling%requests(coupling%cursor)%item)
+   end subroutine current_request
+
+   !> Resolve an output name of the current request to slot and output indices
+   !>
+   !> @param[in] self Collection to inspect
    !> @param[in] name Output name
    !> @param[out] i Slot index
    !> @param[out] j Output index
-   !> @param[out] error Superseded handle or unknown name
-   subroutine resolve(self, handle, name, i, j, error)
+   !> @param[out] error No current request or unknown name
+   subroutine resolve(self, name, i, j, error)
       !> Collection to inspect
       class(coupling_type), intent(in) :: self
-      !> Opaque token
-      integer(c_int64_t), intent(in) :: handle
       !> Output name
       character(len=*), intent(in) :: name
       !> Slot index
@@ -1247,9 +1002,10 @@ contains
       !> Resolution error
       type(error_type), allocatable, intent(out) :: error
       j = 0
-      i = self%index_of(handle)
-      if (i == 0) then
-         call fatal_error(error, "Superseded or unknown coupling request handle")
+      i = self%cursor
+      if (i < 1 .or. i > self%n_requests()) then
+         i = 0
+         call fatal_error(error, no_current_request)
          return
       end if
       j = self%requests(i)%item%find(name)
@@ -1257,27 +1013,213 @@ contains
          & trim(self%requests(i)%item%name())//" has no output '"//name//"'")
    end subroutine resolve
 
-   !> Check completeness against the active phase, never against optional stale data
+   !> Mark one output unanswered and report why its answer was refused
    !>
-   !> @param[in] self Collection to validate
+   !> @param[in,out] self Collection to answer
+   !> @param[in] i Slot index
+   !> @param[in] j Output index
+   !> @param[in] reason Why the answer is refused, e.g. "shape mismatch"
+   !> @param[out] error The refusal
+   subroutine reject(self, i, j, reason, error)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: self
+      !> Slot index
+      integer, intent(in) :: i
+      !> Output index
+      integer, intent(in) :: j
+      !> Why the answer is refused
+      character(len=*), intent(in) :: reason
+      !> The refusal
+      type(error_type), allocatable, intent(out) :: error
+      associate (item => self%requests(i)%item)
+         item%outputs(j)%available = .false.
+         call fatal_error(error, trim(item%name())//": "//trim(item%outputs(j)%name)//" "//reason)
+      end associate
+   end subroutine reject
+
+   !> Validate and store one flattened answer (rows, ngrid)
+   !>
+   !> A rejected answer leaves the output unanswered, so a wrong retry never
+   !> keeps an older value alive
+   !>
+   !> @param[in,out] self Collection to answer
+   !> @param[in] i Slot index
+   !> @param[in] j Output index
+   !> @param[in] values Flattened answer
+   !> @param[out] error Rejected answer
+   !> @param[in] lead Caller's leading extents, absent for a pre-flattened array
+   subroutine store(self, i, j, values, error, lead)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: self
+      !> Slot index
+      integer, intent(in) :: i
+      !> Output index
+      integer, intent(in) :: j
+      !> Flattened answer
+      real(wp), intent(in) :: values(:, :)
+      !> Rejected answer
+      type(error_type), allocatable, intent(out) :: error
+      !> Caller's leading extents
+      integer, intent(in), optional :: lead(:)
+      !> Why the answer is rejected, empty when it is stored
+      character(len=:), allocatable :: reason
+      reason = ""
+      associate (item => self%requests(i)%item)
+         if (present(lead)) then
+            if (size(lead) /= item%outputs(j)%nlead) then
+               reason = "rank mismatch"
+            else if (any(lead /= item%outputs(j)%lead(:size(lead)))) then
+               reason = "shape mismatch"
+            end if
+         end if
+         if (len(reason) == 0) then
+            if (any(shape(values) /= [item%rows(j), self%ngrid])) then
+               reason = "shape mismatch"
+            else if (.not. all(ieee_is_finite(values))) then
+               reason = "must be finite"
+            end if
+         end if
+      end associate
+      if (len(reason) > 0) then
+         call self%reject(i, j, reason, error)
+         return
+      end if
+      self%requests(i)%answers(j)%values = values
+      self%requests(i)%item%outputs(j)%available = .true.
+   end subroutine store
+
+   !> Answer a vector output (ngrid) of the current request
+   !>
+   !> @param[in,out] self Collection to answer
+   !> @param[in] name Output name
+   !> @param[in] values Answer on the grid
+   !> @param[out] error No current request or rejected answer
+   subroutine coupling_answer_1(self, name, values, error)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: self
+      !> Output name
+      character(len=*), intent(in) :: name
+      !> Answer on the grid
+      real(wp), intent(in) :: values(:)
+      !> Rejected answer
+      type(error_type), allocatable, intent(out) :: error
+      !> No leading extents
+      integer :: lead(0)
+      integer :: i, j
+      call self%resolve(name, i, j, error)
+      if (allocated(error)) return
+      call self%store(i, j, reshape(values, [1, size(values)]), error, lead)
+   end subroutine coupling_answer_1
+
+   !> Answer a (lead(1), ngrid) output of the current request
+   !>
+   !> @param[in,out] self Collection to answer
+   !> @param[in] name Output name
+   !> @param[in] values Answer on the grid
+   !> @param[out] error No current request or rejected answer
+   subroutine coupling_answer_2(self, name, values, error)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: self
+      !> Output name
+      character(len=*), intent(in) :: name
+      !> Answer on the grid
+      real(wp), intent(in) :: values(:, :)
+      !> Rejected answer
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i, j
+      call self%resolve(name, i, j, error)
+      if (allocated(error)) return
+      call self%store(i, j, values, error, [size(values, 1)])
+   end subroutine coupling_answer_2
+
+   !> Answer a (lead(1), lead(2), ngrid) output of the current request
+   !>
+   !> @param[in,out] self Collection to answer
+   !> @param[in] name Output name
+   !> @param[in] values Answer on the grid
+   !> @param[out] error No current request or rejected answer
+   subroutine coupling_answer_3(self, name, values, error)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: self
+      !> Output name
+      character(len=*), intent(in) :: name
+      !> Answer on the grid
+      real(wp), intent(in) :: values(:, :, :)
+      !> Rejected answer
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i, j
+      call self%resolve(name, i, j, error)
+      if (allocated(error)) return
+      call self%store(i, j, reshape(values, [size(values, 1)*size(values, 2), size(values, 3)]), &
+         & error, [size(values, 1), size(values, 2)])
+   end subroutine coupling_answer_3
+
+   !> Answer one output of the current request from a flat C-order buffer
+   !>
+   !> - `values` holds rows * ngrid numbers in the declared (rows, ngrid) order,
+   !>   with ngrid the grid size of the coupling; the caller's buffer is trusted
+   !>   to be that long, as a pointer cannot say otherwise
+   !> - assumed size on purpose: the rows of an output are private here, so
+   !>   the C layer cannot build the (rows, ngrid) view itself
+   !>
+   !> @param[in,out] coupling Collection to answer
+   !> @param[in] name Output name
+   !> @param[in] values Flattened answer, rows * ngrid long
+   !> @param[out] error No current request or rejected answer
+   subroutine answer_flat(coupling, name, values, error)
+      !> Collection to answer
+      class(coupling_type), intent(inout) :: coupling
+      !> Output name
+      character(len=*), intent(in) :: name
+      !> Flattened answer
+      real(wp), intent(in) :: values(*)
+      !> Rejected answer
+      type(error_type), allocatable, intent(out) :: error
+      integer :: i, j, rows
+      call coupling%resolve(name, i, j, error)
+      if (allocated(error)) return
+      rows = coupling%requests(i)%item%rows(j)
+      call coupling%store(i, j, reshape(values(:rows*coupling%ngrid), [rows, coupling%ngrid]), &
+         & error)
+   end subroutine answer_flat
+
+   !> Check the staging and the required outputs before a phase is consumed
+   !>
+   !> The staging comes first and is named: a neighbouring phase can carry
+   !> every answer by accident, e.g. the response answers are still fresh when
+   !> the gradient phase is read
+   !>
+   !> @param[in] coupling Collection to validate
    !> @param[in] phase Phase to consume
-   !> @param[out] error Missing scientific output or unstaged collection
-   subroutine check_mandatory(self, phase, error)
+   !> @param[out] error Wrong staging or missing scientific output
+   subroutine coupling_check_mandatory(coupling, phase, error)
       !> Collection to validate
-      class(coupling_type), intent(in) :: self
+      class(coupling_type), intent(in) :: coupling
       !> Phase to consume
       integer, intent(in) :: phase
-      !> Missing scientific output
+      !> Wrong staging or missing scientific output
       type(error_type), allocatable, intent(out) :: error
       !> Missing output names, comma separated
       character(len=:), allocatable :: names
       integer :: i, j
-      if (phase < 1 .or. phase > moist_n_phases .or. phase /= self%phase) then
-         call fatal_error(error, "Coupling is not staged for this phase")
+      if (phase < 1 .or. phase > moist_n_phases) then
+         call fatal_error(error, "Invalid coupling phase")
          return
       end if
-      do i = 1, self%n_requests()
-         associate (item => self%requests(i)%item)
+      if (coupling%phase /= phase) then
+         if (coupling%phase == moist_phase_none) then
+            call fatal_error(error, "get_"//trim(phase_name(phase))// &
+               & " requires a coupling staged by prepare_"//trim(phase_name(phase))// &
+               & "; this coupling is not staged")
+         else
+            call fatal_error(error, "get_"//trim(phase_name(phase))// &
+               & " requires a coupling staged by prepare_"//trim(phase_name(phase))// &
+               & "; this coupling is staged for the "//trim(phase_name(coupling%phase))//" phase")
+         end if
+         return
+      end if
+      do i = 1, coupling%n_requests()
+         associate (item => coupling%requests(i)%item)
             if (item%n_missing(phase) == 0) cycle
             names = ""
             do j = 1, item%n_outputs()
@@ -1289,35 +1231,62 @@ contains
             return
          end associate
       end do
-   end subroutine check_mandatory
+   end subroutine coupling_check_mandatory
+
+   !> Name of a phase for diagnostics, e.g. "gradient"
+   !>
+   !> Fixed length, so that no deferred-length temporary is created for the
+   !> result; callers `trim` it
+   !>
+   !> @param[in] phase Phase index
+   pure function phase_name(phase) result(name)
+      !> Phase index
+      integer, intent(in) :: phase
+      !> Phase name, blank padded
+      character(len=8) :: name
+      select case (phase)
+      case (moist_phase_energy)
+         name = "energy"
+      case (moist_phase_response)
+         name = "response"
+      case (moist_phase_gradient)
+         name = "gradient"
+      case default
+         name = "none"
+      end select
+   end function phase_name
+
+   !* ================================================================================= *!
+   !*                                  Component views                                  *!
+   !* ================================================================================= *!
 
    !> Create a read-only component scope for one call
    !>
-   !> @param[in,out] self Collection owning the answers
+   !> @param[in,out] coupling Collection owning the answers
    !> @param[in] scope Component registration index
    !> @param[out] view Scoped read interface
-   subroutine make_view(self, scope, view)
+   subroutine coupling_make_view(coupling, scope, view)
       !> Collection owning the answers
-      class(coupling_type), intent(inout), target :: self
+      class(coupling_type), intent(inout), target :: coupling
       !> Component registration index
       integer, intent(in) :: scope
       !> Scoped read interface
       type(coupling_view_type), intent(out) :: view
-      self%epoch = self%epoch + 1_c_int64_t
-      view%owner => self
+      coupling%epoch = coupling%epoch + 1_int64
+      view%owner => coupling
       view%scope = scope
-      view%epoch = self%epoch
-      view%phase = self%phase
-   end subroutine make_view
+      view%epoch = coupling%epoch
+      view%phase = coupling%phase
+   end subroutine coupling_make_view
 
    !> End the component call and invalidate any captured value copy of its view
    !>
-   !> @param[in,out] self Collection owning the answers
-   subroutine close_view(self)
+   !> @param[in,out] coupling Collection owning the answers
+   subroutine coupling_close_view(coupling)
       !> Collection owning the answers
-      class(coupling_type), intent(inout) :: self
-      self%epoch = self%epoch + 1_c_int64_t
-   end subroutine close_view
+      class(coupling_type), intent(inout) :: coupling
+      coupling%epoch = coupling%epoch + 1_int64
+   end subroutine coupling_close_view
 
    !> Validate a scoped read
    !>
@@ -1333,7 +1302,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       call self%validate(error)
       if (allocated(error)) return
-      call self%owner%check_mandatory(phase, error)
+      call coupling_check_mandatory(self%owner, phase, error)
    end subroutine view_check
 
    !> Refuse an unbound or expired view
@@ -1351,31 +1320,6 @@ contains
          call fatal_error(error, "Expired component coupling view")
       end if
    end subroutine view_validate
-
-   !> Copy a complete request for inspection within its registration scope
-   !>
-   !> Use `read` to copy only one output array
-   !>
-   !> @param[in] self Component view
-   !> @param[in] key Local name used in register()
-   !> @param[out] item Independent request value
-   !> @param[out] error Expired view or undeclared name
-   subroutine view_request(self, key, item, error)
-      !> Component view
-      class(coupling_view_type), intent(in) :: self
-      !> Local registration name
-      character(len=*), intent(in) :: key
-      !> Independent request value
-      class(coupling_request_type), allocatable, intent(out) :: item
-      !> Read error
-      type(error_type), allocatable, intent(out) :: error
-      !> Resolved request slot
-      integer :: slot
-      slot = self%find_slot(key, error)
-      if (allocated(error)) return
-      allocate (item, source=self%owner%requests(slot)%item)
-      item%handle = 0_c_int64_t
-   end subroutine view_request
 
    !> Resolve a local registration without copying its answer arrays
    !>
@@ -1496,6 +1440,10 @@ contains
       end associate
    end subroutine view_read_3
 
+   !* ================================================================================= *!
+   !*                                   Model registry                                  *!
+   !* ================================================================================= *!
+
    !> Allocate a model-owned coupling and return a borrowed pointer
    !>
    !> @param[in,out] self Model registry
@@ -1570,8 +1518,7 @@ contains
       if (.not. allocated(self%first)) return
       node => self%first
       do
-
-         call node%item%invalidate()
+         call coupling_invalidate(node%item)
          if (.not. allocated(node%next)) exit
          node => node%next
       end do
@@ -1594,7 +1541,6 @@ contains
       if (.not. allocated(self%first)) return
       node => self%first
       do
-
          candidate => node%item
          if (associated(candidate, coupling)) then
             found = .true.
@@ -1618,71 +1564,5 @@ contains
          deallocate (node)
       end do
    end subroutine registry_clear
-
-   !> Default input identity for calculations with no private scientific inputs
-   !>
-   !> @param[in] self Registered calculation
-   !> @param[in] other Candidate calculation
-   function request_same_inputs(self, other) result(equal)
-      !> Registered calculation
-      class(coupling_request_type), intent(in) :: self
-      !> Candidate calculation
-      class(coupling_request_type), intent(in) :: other
-      !> Whether both calculations have identical inputs
-      logical :: equal
-      equal = same_type_as(self, other)
-   end function request_same_inputs
-
-   !> Moment calculations share answers only when their exponents match exactly
-   !>
-   !> @param[in] self Registered moments
-   !> @param[in] other Candidate calculation
-   function moment_same_inputs(self, other) result(equal)
-      !> Registered moments
-      class(gaussian_moment_request_type), intent(in) :: self
-      !> Candidate calculation
-      class(coupling_request_type), intent(in) :: other
-      !> Whether inputs match
-      logical :: equal
-      equal = .false.
-      select type (other)
-      type is (gaussian_moment_request_type)
-         if (.not. allocated(self%width) .or. .not. allocated(other%width)) return
-         if (size(self%width) /= size(other%width)) return
-         equal = all(self%width == other%width)
-      end select
-   end function moment_same_inputs
-
-   !> Remove calculations no longer used and remap local registrations
-   !>
-   !> @param[in,out] self Collection after component declaration
-   subroutine compact(self)
-      !> Collection after component declaration
-      class(coupling_type), intent(inout) :: self
-      type(request_slot_type), allocatable :: active(:)
-      integer, allocatable :: mapping(:)
-      integer :: i, n
-      if (.not. allocated(self%requests)) return
-      if (.not. allocated(self%registrations)) return
-      allocate (mapping(size(self%requests)), source=0)
-      n = 0
-      do i = 1, size(self%requests)
-         if (.not. any(self%registrations%slot == i)) cycle
-         n = n + 1
-         mapping(i) = n
-      end do
-      if (n == size(self%requests)) return
-      allocate (active(n))
-      do i = 1, size(self%requests)
-         if (mapping(i) == 0) cycle
-         call move_alloc(self%requests(i)%item, active(mapping(i))%item)
-         call move_alloc(self%requests(i)%answers, active(mapping(i))%answers)
-      end do
-      call move_alloc(active, self%requests)
-      do i = 1, size(self%registrations)
-         self%registrations(i)%slot = mapping(self%registrations(i)%slot)
-      end do
-      self%registrations = pack(self%registrations, self%registrations%slot > 0)
-   end subroutine compact
 
 end module moist_channels_coupling

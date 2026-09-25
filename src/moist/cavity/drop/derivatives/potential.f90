@@ -53,7 +53,7 @@ contains
       item%w_rho = item%w_rho + factor*w0
       item%w_grad_rho = item%w_grad_rho + factor*w1
       item%w_hess_rho = item%w_hess_rho + factor*w2
-      call response%accumulate(item, error)
+      call response_accumulate(response, item, error)
 
    end subroutine get_surface_response_drop
 

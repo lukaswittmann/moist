@@ -2130,8 +2130,8 @@ contains
       call get_test_radii(mol, radii)
       nat = mol%nat
 
-      !* A nonzero threshold is what lets screening reject everything; at the
-      !* default 0 every atom stays a candidate however far away the point is
+      ! A nonzero threshold is what lets screening reject everything; at the
+      ! default 0 every atom stays a candidate however far away the point is
       call init_lsf(lsf, mol, radii, 3, kind, screening_threshold=1.0e-10_wp)
       point = [5.0e2_wp, 5.0e2_wp, 5.0e2_wp]
       if (prepare_failed(lsf, point, error)) return
@@ -2150,7 +2150,7 @@ contains
       allocate (mx4(ndim, ndim, ndim, nat, nat))
       allocate (h1(ndim, nat), h2(ndim, ndim, nat), h3(ndim, ndim, ndim, nat))
 
-      !* Uncontracted radius ladder
+      ! Uncontracted radius ladder
       g1 = EMPTY_POISON; g2 = EMPTY_POISON; g3 = EMPTY_POISON
       call lsf%f3_rr_rad(g1, g2, g3)
       call check_all_zero(error, reshape(g1, [size(g1)]), "f1_rad")
@@ -2160,7 +2160,7 @@ contains
       call check_all_zero(error, reshape(g3, [size(g3)]), "f3_rr_rad")
       if (allocated(error)) return
 
-      !* Uncontracted two-radius and nuclear-radius blocks
+      ! Uncontracted two-radius and nuclear-radius blocks
       rr2 = EMPTY_POISON; rr3 = EMPTY_POISON; rr4 = EMPTY_POISON
       mx2 = EMPTY_POISON; mx3 = EMPTY_POISON; mx4 = EMPTY_POISON
       call lsf%f2_radrad(rr2)
@@ -2182,7 +2182,7 @@ contains
       call check_all_zero(error, reshape(mx4, [size(mx4)]), "f4_rr_rA_rad")
       if (allocated(error)) return
 
-      !* Radius row of the joint HVP
+      ! Radius row of the joint HVP
       g1 = EMPTY_POISON; g2 = EMPTY_POISON; g3 = EMPTY_POISON
       call lsf%hvp_f1_rad(v, vrad, g1)
       call lsf%hvp_f2_r_rad(v, vrad, g2)
@@ -2194,8 +2194,8 @@ contains
       call check_all_zero(error, reshape(g3, [size(g3)]), "hvp_f3_rr_rad")
       if (allocated(error)) return
 
-      !* Nuclear row, both with and without a radius direction: the two take
-      !* different branches inside CFC, and only one of them allocates
+      ! Nuclear row, both with and without a radius direction: the two take
+      ! different branches inside CFC, and only one of them allocates
       h1 = EMPTY_POISON; h2 = EMPTY_POISON; h3 = EMPTY_POISON
       call lsf%hvp_f1_rA(v, h1)
       call lsf%hvp_f2_r_rA(v, h2)
@@ -2413,7 +2413,7 @@ contains
       if (kind == kind_svdw) then
          val = svdw_blend_k_values(i)
       else
-         !* Placeholder; CFC call sites pass this via "optional" wrapping below
+         ! Placeholder; CFC call sites pass this via "optional" wrapping below
          val = 0.0_wp
       end if
    end function svdw_sweep_blend
@@ -2466,8 +2466,8 @@ contains
          call get_test_points(mol, points)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         !* FD buffers are sized by mol%nat only and reused across the
-         !* (iblend, igamma, ipt) sweep
+         ! FD buffers are sized by mol%nat only and reused across the
+         ! (iblend, igamma, ipt) sweep
          if (allocated(rA_fwd)) deallocate (rA_fwd)
          if (allocated(rA_fwd2)) deallocate (rA_fwd2)
          if (allocated(rA_bwd)) deallocate (rA_bwd)
@@ -2494,9 +2494,9 @@ contains
                      return
                   end if
                   call prim%f2_rArB(analytic)
-                  !* Active-indexed result, so assert the shape and defer the
-                  !* identity check to the shared helper before the atom loops
-                  !* below index `analytic` with user-space ids
+                  ! Active-indexed result, so assert the shape and defer the
+                  ! identity check to the shared helper before the atom loops
+                  ! below index `analytic` with user-space ids
                   call check(error, size(analytic, 2), prim%active_count())
                   if (allocated(error)) return
                   call check_identity_active(error, prim, mol%nat)
@@ -2565,10 +2565,10 @@ contains
          call get_test_points(mol, points)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         !* f3_r_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
-         !* non-allocatable assumed-shape; passing unallocated allocatables
-         !* is undefined behavior, so size the dummies up front. All
-         !* buffers depend only on mol%nat, so allocate once per icase
+         ! f3_r_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
+         ! non-allocatable assumed-shape; passing unallocated allocatables
+         ! is undefined behavior, so size the dummies up front. All
+         ! buffers depend only on mol%nat, so allocate once per icase
          if (allocated(dummy_rA)) deallocate (dummy_rA)
          if (allocated(r_rA_fwd)) deallocate (r_rA_fwd)
          if (allocated(r_rA_fwd2)) deallocate (r_rA_fwd2)
@@ -2844,10 +2844,10 @@ contains
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
-         !* f4_rr_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
-         !* non-allocatable assumed-shape; passing unallocated allocatables
-         !* is undefined behavior, so size the dummies to the active-atom
-         !* count up front. Both depend only on mol%nat
+         ! f4_rr_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
+         ! non-allocatable assumed-shape; passing unallocated allocatables
+         ! is undefined behavior, so size the dummies to the active-atom
+         ! count up front. Both depend only on mol%nat
          if (allocated(dummy_rA)) deallocate (dummy_rA)
          if (allocated(dummy_r_rA)) deallocate (dummy_r_rA)
          allocate (dummy_rA(ndim, mol%nat), dummy_r_rA(ndim, ndim, mol%nat))
@@ -3063,7 +3063,7 @@ contains
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
 
-         !* A deterministic, non-symmetric direction field
+         ! A deterministic, non-symmetric direction field
          if (allocated(v)) deallocate (v)
          allocate (v(ndim, nat))
          do iA = 1, nat
@@ -3299,9 +3299,9 @@ contains
                return
             end if
             call prim%f2_rArB(analytic)
-            !* Active-indexed result: assert the shape and that the active list
-            !* is the identity here, so the atom loops below may index
-            !* `analytic` with user-space ids
+            ! Active-indexed result: assert the shape and that the active list
+            ! is the identity here, so the atom loops below may index
+            ! `analytic` with user-space ids
             call check(error, size(analytic, 2), prim%active_count())
             if (allocated(error)) return
             call check(error, prim%active_count(), mol%nat)
@@ -3772,7 +3772,7 @@ contains
          call get_test_radii(mol, radii)
          call get_test_points(mol, points, n_points_cfc)
 
-         !* A deterministic, non-symmetric direction field
+         ! A deterministic, non-symmetric direction field
          if (allocated(v)) deallocate (v)
          allocate (v(ndim, nat))
          do iA = 1, nat
@@ -3896,10 +3896,10 @@ contains
             end do
 
             !* ---------------------------- vjp_f1_rA --------------------------- *!
-            !* The reverse mirror of `tangent_*`: the jet indices are contracted
-            !* away, the nuclear index survives. The weights are deliberately
-            !* non-symmetric in `w2` -- a kernel that folded the Hessian slot
-            !* into a symmetric half would pass a symmetric probe and fail here
+            ! The reverse mirror of `tangent_*`: the jet indices are contracted
+            ! away, the nuclear index survives. The weights are deliberately
+            ! non-symmetric in `w2` -- a kernel that folded the Hessian slot
+            ! into a symmetric half would pass a symmetric probe and fail here
             w0_adj = 0.37_wp
             w1_adj = [0.19_wp, -0.53_wp, 0.71_wp]
             do k = 1, ndim
@@ -3921,9 +3921,9 @@ contains
             end do
 
             !* --------------------------- vjp_f1_rad --------------------------- *!
-            !* The same contraction against the radius ladder. A radius is a
-            !* scalar parameter, so the surviving index is the atom alone and
-            !* the result is one number per active slot
+            ! The same contraction against the radius ladder. A radius is a
+            ! scalar parameter, so the surviving index is the atom alone and
+            ! the result is one number per active slot
             call prim%f3_rr_rad(rad1, rad2, rad3)
             call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
             do iA = 1, prim%active_count()
@@ -3935,11 +3935,11 @@ contains
             end do
 
             !* ---------------- nuclear Hessian exchange symmetry ---------------- *!
-            !* d2S/(dR_A dR_B) must equal d2S/(dR_B dR_A) under a simultaneous
-            !* swap of both nuclear slots. The two sides come from *different*
-            !* kernel calls (the `qq` cross block is built with A in the pair's
-            !* `a` slot and B in its `b` slot, and vice versa), so this is a real
-            !* check of the two-nucleus lift, not an identity
+            ! d2S/(dR_A dR_B) must equal d2S/(dR_B dR_A) under a simultaneous
+            ! swap of both nuclear slots. The two sides come from *different*
+            ! kernel calls (the `qq` cross block is built with A in the pair's
+            ! `a` slot and B in its `b` slot, and vice versa), so this is a real
+            ! check of the two-nucleus lift, not an identity
             do iB = 1, prim%active_count()
                do iA = 1, prim%active_count()
                   do t_ax = 1, ndim
@@ -4013,7 +4013,7 @@ contains
       call prim%update(mol, radii)
       call prim%set_max_deriv(4)
 
-      !* Exactly on nucleus 2
+      ! Exactly on nucleus 2
       point = centers(:, 2)
       call prim%prepare(point, lsf_err)
       if (allocated(lsf_err)) then
@@ -4090,7 +4090,7 @@ contains
                  "hvp_* is not finite on a nucleus")
       if (allocated(error)) return
 
-      !* The value is continuous across the nucleus even though its slope is not
+      ! The value is continuous across the nucleus even though its slope is not
       point = centers(:, 2) + [nudge, 0.0_wp, 0.0_wp]
       call prim%prepare(point, lsf_err)
       call prim%f0(f0_near)

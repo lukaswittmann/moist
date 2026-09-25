@@ -5,52 +5,58 @@
 !> - an item absent from the list is correct physics, not an error: a cavity
 !>   with field-independent geometry has no density response, a model without
 !>   GOSTSHYP no Gaussian amplitudes
-!> - the host selects on the dynamic type of `item(i)` and contracts what it
-!>   finds
+!> - the host walks the items with a cursor, `do while (response%next())`,
+!>   selects on the dynamic type of the copy `response%item()` and contracts
+!>   what it finds
+!> - a default branch that stops the host is the one check that no item goes
+!>   uncontracted: unlike an unanswered request, a skipped item fails nowhere
 !>
 !> Within one model call the items are accumulators over components
 !>
-!> - `accumulate` finds the item of the same dynamic type and adds to it, or
-!>   appends a copy when there is none yet
+!> - `response_accumulate` finds the item of the same dynamic type and adds to
+!>   it, or appends a copy when there is none yet
 !> - every `get_*` clears the list on entry, so the sum never leaks across
-!>   calls
+!>   calls and every walk starts afresh
 module moist_channels_response
    use mctc_env, only: wp, error_type, fatal_error
 
-   implicit none
+   implicit none(type, external)
    private
 
-   public :: response_channel_type, response_slot, response_type
+   public :: response_item_type, response_type
    public :: potential_adjoint_response_type, density_response_type
    public :: gostshyp_amplitude_response_type
-   public :: find_potential_adjoint, find_density, find_gostshyp_amplitude
+   public :: current_response_item, response_accumulate, response_clear
    public :: response_name_len
 
    !> Length of the fixed-size item names returned by `name()`
    integer, parameter :: response_name_len = 32
+
+   !> Error of a read outside a `next()` window
+   character(len=*), parameter :: no_current_item = &
+      & "No current response item - call next() first"
 
    !* ============================================================================== *!
    !*                              Response base type                                *!
    !* ============================================================================== *!
 
    !> One contraction handed back to the host, accumulated over components
-   type, abstract :: response_channel_type
+   type, abstract :: response_item_type
    contains
       !> Short fixed-length name for diagnostics, e.g. "potential_adjoint"
       procedure(response_item_name), deferred :: name
-      !> Add another item of the same dynamic type into this one
-      procedure(response_item_add), deferred :: add
-      !> Deallocate every array of this item
-      procedure(response_item_clear), deferred :: clear
-   end type response_channel_type
+      procedure(response_item_add), deferred, private :: add
+      procedure(response_item_clear), deferred, private :: clear
+   end type response_item_type
 
    abstract interface
 
       !> Short fixed-length name of a response item for diagnostics
       function response_item_name(self) result(name)
-         import :: response_channel_type, response_name_len
+         import :: response_item_type, response_name_len
+         implicit none(type, external)
          !> Item to name
-         class(response_channel_type), intent(in) :: self
+         class(response_item_type), intent(in) :: self
          !> Name, blank padded
          character(len=response_name_len) :: name
       end function response_item_name
@@ -60,20 +66,22 @@ module moist_channels_response
       !> Arrays absent on `self` are copied from `other`; arrays absent on
       !> `other` contribute nothing; a shape mismatch is an error
       subroutine response_item_add(self, other, error)
-         import :: response_channel_type, error_type
+         import :: response_item_type, error_type
+         implicit none(type, external)
          !> Accumulator
-         class(response_channel_type), intent(inout) :: self
+         class(response_item_type), intent(inout) :: self
          !> Item to add
-         class(response_channel_type), intent(in) :: other
+         class(response_item_type), intent(in) :: other
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
       end subroutine response_item_add
 
       !> Deallocate every array of a response item
       subroutine response_item_clear(self)
-         import :: response_channel_type
+         import :: response_item_type
+         implicit none(type, external)
          !> Item to clear
-         class(response_channel_type), intent(inout) :: self
+         class(response_item_type), intent(inout) :: self
       end subroutine response_item_clear
 
    end interface
@@ -81,7 +89,7 @@ module moist_channels_response
    !> Owning box that makes heterogeneous response items storable in one array
    type :: response_slot
       !> Concrete item owned by this slot
-      class(response_channel_type), allocatable :: item
+      class(response_item_type), allocatable :: item
    end type response_slot
 
    !* ============================================================================== *!
@@ -100,13 +108,13 @@ module moist_channels_response
    !> - any component whose energy depends on the potential accumulates here,
    !>   so the sum is the adjoint of the model energy, never a charge of one
    !>   component
-   type, extends(response_channel_type) :: potential_adjoint_response_type
+   type, extends(response_item_type) :: potential_adjoint_response_type
       !> Weights for the potential values (ngrid)
       real(wp), allocatable :: w_phi(:)
    contains
       procedure :: name => potential_adjoint_name
-      procedure :: add => potential_adjoint_add
-      procedure :: clear => potential_adjoint_clear
+      procedure, private :: add => potential_adjoint_add
+      procedure, private :: clear => potential_adjoint_clear
    end type potential_adjoint_response_type
 
    !> Weights conjugate to the solute density on the cavity grid
@@ -122,7 +130,15 @@ module moist_channels_response
    !> surface does not move with the host density; that absence is the physical
    !> answer and is distinguishable from an item of zeros, which zeros would
    !> not be
-   type, extends(response_channel_type) :: density_response_type
+   !>
+   !> The **response phase alone** produces it. The weights are `dE/drho` at
+   !> fixed nuclei, the same object in either phase, so they are formed once and
+   !> the gradient phase leaves the contraction out -- a host that does not need
+   !> them would otherwise pay for it. A host on a density-backed cavity runs
+   !> the response phase first and carries the weights over: against its own
+   !> `d rho/dP` they complete the Fock matrix, against the basis-centre
+   !> `d rho/dR` the nuclear gradient
+   type, extends(response_item_type) :: density_response_type
       !> Weights for the density values (ngrid)
       real(wp), allocatable :: w_rho(:)
       !> Weights for the density gradients (3, ngrid)
@@ -131,8 +147,8 @@ module moist_channels_response
       real(wp), allocatable :: w_hess_rho(:, :, :)
    contains
       procedure :: name => density_name
-      procedure :: add => density_add
-      procedure :: clear => density_clear
+      procedure, private :: add => density_add
+      procedure, private :: clear => density_clear
    end type density_response_type
 
    !> Amplitudes conjugate to the host's Gaussian integral blocks
@@ -147,16 +163,24 @@ module moist_channels_response
    !> - both signs are folded in here
    !> - grid points the model has switched off carry exactly zero, so the mask
    !>   propagates without the host repeating it
-   type, extends(response_channel_type) :: gostshyp_amplitude_response_type
+   type, extends(response_item_type) :: gostshyp_amplitude_response_type
       !> Overlap amplitudes (ngrid)
       real(wp), allocatable :: w_overlap(:)
       !> Normal derivative amplitudes (ngrid)
       real(wp), allocatable :: w_normal_deriv(:)
    contains
       procedure :: name => gostshyp_amplitude_name
-      procedure :: add => gostshyp_amplitude_add
-      procedure :: clear => gostshyp_amplitude_clear
+      procedure, private :: add => gostshyp_amplitude_add
+      procedure, private :: clear => gostshyp_amplitude_clear
    end type gostshyp_amplitude_response_type
+
+   !> Placeholder `response%item()` returns outside a `next()` window; no arrays
+   type, extends(response_item_type) :: no_response_item_type
+   contains
+      procedure :: name => no_item_name
+      procedure, private :: add => no_item_add
+      procedure, private :: clear => no_item_clear
+   end type no_response_item_type
 
    !* ============================================================================== *!
    !*                              Response container                                *!
@@ -164,22 +188,25 @@ module moist_channels_response
 
    !> Response item list handed back to the host for one model call
    !>
-   !> - `accumulate` is the only binding that grows `items(:)`, `clear`
-   !>   empties it
-   !> - a variable of this type must be declared `target` wherever `item` or
-   !>   a finder is called on it
+   !> Hosts use `next` and `item`; the model and its components grow and empty
+   !> the list through the module procedures `response_accumulate` and
+   !> `response_clear`, which the `moist` umbrella does not re-export
+   !>
+   !> - `response_accumulate` is the only route that grows `items(:)`,
+   !>   `response_clear` empties it; both reset the cursor
    type :: response_type
+      private
       !> Accumulated items, one per dynamic type
       type(response_slot), allocatable :: items(:)
+      !> Item of the host walk; zero before the first and after the last
+      integer :: cursor = 0
    contains
-      !> Number of items
-      procedure :: n => response_n
-      !> Pointer to the i-th item
+      !> Advance to the next item
+      procedure :: next => response_next
+      !> Copy of the current item
       procedure :: item => response_item
-      !> Add an item to the one of the same type, appending a copy if absent
-      procedure :: accumulate => response_accumulate
-      !> Drop every item
-      procedure :: clear => response_clear
+      !> Number of items
+      procedure, private :: n => response_n
    end type response_type
 
 contains
@@ -330,7 +357,7 @@ contains
       !> Accumulator
       class(potential_adjoint_response_type), intent(inout) :: self
       !> Item to add
-      class(response_channel_type), intent(in) :: other
+      class(response_item_type), intent(in) :: other
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -372,7 +399,7 @@ contains
       !> Accumulator
       class(density_response_type), intent(inout) :: self
       !> Item to add
-      class(response_channel_type), intent(in) :: other
+      class(response_item_type), intent(in) :: other
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -420,7 +447,7 @@ contains
       !> Accumulator
       class(gostshyp_amplitude_response_type), intent(inout) :: self
       !> Item to add
-      class(response_channel_type), intent(in) :: other
+      class(response_item_type), intent(in) :: other
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -448,6 +475,48 @@ contains
    end subroutine gostshyp_amplitude_clear
 
    !* ============================================================================== *!
+   !*                              Placeholder item                                  *!
+   !* ============================================================================== *!
+
+   !> Name of the placeholder returned outside a `next()` window
+   !>
+   !> @param[in] self Placeholder to describe
+   function no_item_name(self) result(name)
+      !> Placeholder to describe
+      class(no_response_item_type), intent(in) :: self
+      !> Diagnostic name
+      character(len=response_name_len) :: name
+
+      name = "no_current_item"
+
+   end function no_item_name
+
+   !> The placeholder stands for no item, so nothing accumulates into it
+   !>
+   !> @param[inout] self  Placeholder
+   !> @param[in]    other Item to add
+   !> @param[out]   error Always set
+   subroutine no_item_add(self, other, error)
+      !> Placeholder
+      class(no_response_item_type), intent(inout) :: self
+      !> Item to add
+      class(response_item_type), intent(in) :: other
+      !> Always set
+      type(error_type), allocatable, intent(out) :: error
+
+      call fatal_error(error, "The placeholder response item '"//trim(self%name())// &
+         & "' cannot accumulate '"//trim(other%name())//"'")
+
+   end subroutine no_item_add
+
+   !> The placeholder holds no arrays, so there is nothing to deallocate
+   subroutine no_item_clear(self)
+      !> Placeholder
+      class(no_response_item_type), intent(inout) :: self
+
+   end subroutine no_item_clear
+
+   !* ============================================================================== *!
    !*                              Container bindings                                *!
    !* ============================================================================== *!
 
@@ -463,38 +532,87 @@ contains
 
    end function response_n
 
-   !> Pointer to the i-th item, null when `i` is out of range
+   !> Advance to the next item of the response
    !>
-   !> @param[in] self Response, which must be a target
-   !> @param[in] i    Item index
-   function response_item(self, i) result(item)
-      !> Response
-      class(response_type), intent(in), target :: self
-      !> Item index
-      integer, intent(in) :: i
-      !> Item, or null
-      class(response_channel_type), pointer :: item
+   !> - each item is visited once per pass, in accumulation order
+   !> - false ends the pass and rewinds, so the next call starts a new one; an
+   !>   empty response returns false at once
+   !> - a pass left early resumes here; `accumulate` and `clear` reset the
+   !>   cursor
+   !> - moves the cursor, so it must stand alone in a loop condition
+   !>
+   !> @param[inout] self Response to walk
+   function response_next(self) result(more)
+      !> Response to walk
+      class(response_type), intent(inout) :: self
+      !> Whether an item is now current
+      logical :: more
 
-      item => null()
-      if (.not. allocated(self%items)) return
-      if (i < 1 .or. i > size(self%items)) return
-      item => self%items(i)%item
+      more = self%cursor < self%n()
+      if (more) then
+         self%cursor = self%cursor + 1
+      else
+         self%cursor = 0
+      end if
+
+   end function response_next
+
+   !> Copy of the current item; select on its dynamic type to contract it
+   !>
+   !> Outside a `next()` window it is a placeholder named "no_current_item" with no
+   !> arrays, which falls through to `class default`
+   !>
+   !> @param[in] self Response to inspect
+   function response_item(self) result(item)
+      !> Response to inspect
+      class(response_type), intent(in) :: self
+      !> Independent item value
+      class(response_item_type), allocatable :: item
+
+      if (self%cursor < 1 .or. self%cursor > self%n()) then
+         allocate (no_response_item_type :: item)
+         return
+      end if
+      allocate (item, source=self%items(self%cursor)%item)
 
    end function response_item
+
+   !> Copy the current item, or report that none is current
+   !>
+   !> The checked form of `response%item()` for the C layer
+   !>
+   !> @param[in]  response Response to inspect
+   !> @param[out] item     Independent item value
+   !> @param[out] error    No current item
+   subroutine current_response_item(response, item, error)
+      !> Response to inspect
+      class(response_type), intent(in) :: response
+      !> Independent item value
+      class(response_item_type), allocatable, intent(out) :: item
+      !> No current item
+      type(error_type), allocatable, intent(out) :: error
+
+      if (response%cursor < 1 .or. response%cursor > response%n()) then
+         call fatal_error(error, no_current_item)
+         return
+      end if
+      allocate (item, source=response%items(response%cursor)%item)
+
+   end subroutine current_response_item
 
    !> Add an item into the stored one of the same type, or append a copy
    !>
    !> Appending moves the existing slots and copies only the new item (the
    !> gfortran safe pattern for polymorphic slot arrays)
    !>
-   !> @param[inout] self  Response
+   !> @param[inout] response  Response
    !> @param[in]    item  Item to accumulate
    !> @param[out]   error Error handling
-   subroutine response_accumulate(self, item, error)
+   subroutine response_accumulate(response, item, error)
       !> Response
-      class(response_type), intent(inout) :: self
+      class(response_type), intent(inout) :: response
       !> Item to accumulate
-      class(response_channel_type), intent(in) :: item
+      class(response_item_type), intent(in) :: item
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -502,10 +620,11 @@ contains
       type(response_slot), allocatable :: grown(:)
       integer :: i, n, stat
 
-      n = self%n()
+      response%cursor = 0
+      n = response%n()
       do i = 1, n
-         if (same_type_as(self%items(i)%item, item)) then
-            call self%items(i)%item%add(item, error)
+         if (same_type_as(response%items(i)%item, item)) then
+            call response%items(i)%item%add(item, error)
             return
          end if
       end do
@@ -522,93 +641,21 @@ contains
       end if
       ! Keep existing items intact until all allocations succeed
       do i = 1, n
-         call move_alloc(self%items(i)%item, grown(i)%item)
+         call move_alloc(response%items(i)%item, grown(i)%item)
       end do
-      call move_alloc(grown, self%items)
+      call move_alloc(grown, response%items)
 
    end subroutine response_accumulate
 
    !> Drop every item
-   subroutine response_clear(self)
+   subroutine response_clear(response)
       !> Response
-      class(response_type), intent(inout) :: self
+      class(response_type), intent(inout) :: response
 
-      if (allocated(self%items)) deallocate (self%items)
-      allocate (self%items(0))
+      response%cursor = 0
+      if (allocated(response%items)) deallocate (response%items)
+      allocate (response%items(0))
 
    end subroutine response_clear
-
-   !* ============================================================================== *!
-   !*                              Per-type finders                                  *!
-   !* ============================================================================== *!
-
-   !> Find the potential adjoint item, null when absent
-   !>
-   !> @param[in] response Response, which must be a target
-   function find_potential_adjoint(response) result(item)
-      !> Response
-      class(response_type), intent(in), target :: response
-      !> Item, or null
-      type(potential_adjoint_response_type), pointer :: item
-
-      integer :: i
-
-      item => null()
-      if (.not. allocated(response%items)) return
-      do i = 1, size(response%items)
-         select type (stored => response%items(i)%item)
-         type is (potential_adjoint_response_type)
-            item => stored
-            return
-         end select
-      end do
-
-   end function find_potential_adjoint
-
-   !> Find the density item, null when absent
-   !>
-   !> @param[in] response Response, which must be a target
-   function find_density(response) result(item)
-      !> Response
-      class(response_type), intent(in), target :: response
-      !> Item, or null
-      type(density_response_type), pointer :: item
-
-      integer :: i
-
-      item => null()
-      if (.not. allocated(response%items)) return
-      do i = 1, size(response%items)
-         select type (stored => response%items(i)%item)
-         type is (density_response_type)
-            item => stored
-            return
-         end select
-      end do
-
-   end function find_density
-
-   !> Find the GOSTSHYP amplitude item, null when absent
-   !>
-   !> @param[in] response Response, which must be a target
-   function find_gostshyp_amplitude(response) result(item)
-      !> Response
-      class(response_type), intent(in), target :: response
-      !> Item, or null
-      type(gostshyp_amplitude_response_type), pointer :: item
-
-      integer :: i
-
-      item => null()
-      if (.not. allocated(response%items)) return
-      do i = 1, size(response%items)
-         select type (stored => response%items(i)%item)
-         type is (gostshyp_amplitude_response_type)
-            item => stored
-            return
-         end select
-      end do
-
-   end function find_gostshyp_amplitude
 
 end module moist_channels_response

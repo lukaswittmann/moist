@@ -13,8 +13,7 @@ module test_model_general
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      & find_potential_adjoint
+   use moist_channels_response, only: response_type, potential_adjoint_response_type
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
@@ -23,7 +22,7 @@ module test_model_general
    use moist_radii, only: radius_type_static
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: build_test_cavity, stage_model_point_charge_energy, &
-      & fill_missing_with_zeros, fill_point_charge_field
+      & fill_missing_with_zeros, fill_point_charge_field, copy_potential_adjoint
 
    implicit none
    private
@@ -63,8 +62,8 @@ contains
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type), pointer :: coupling
-      type(response_type), target :: response
-      type(potential_adjoint_response_type), pointer :: charge
+      type(response_type) :: response
+      type(potential_adjoint_response_type), allocatable :: charge
       real(wp) :: energy, reference_energy
 
       real(wp), parameter :: epsilon = 32.0_wp
@@ -171,8 +170,8 @@ contains
          call test_failed(error, "General-model response failed: "//err%message)
          return
       end if
-      charge => find_potential_adjoint(response)
-      call check(error, associated(charge), &
+      call copy_potential_adjoint(response, charge)
+      call check(error, allocated(charge), &
          & more="general model did not expose the CPCM potential adjoint")
       if (allocated(error)) return
       call check(error, maxval(abs(charge%w_phi - pcm_reference%q)), 0.0_wp, &
@@ -217,8 +216,8 @@ contains
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type), pointer :: coupling, coupling_pcm, coupling_zero
-      type(response_type), target :: response
-      type(potential_adjoint_response_type), pointer :: charge
+      type(response_type) :: response
+      type(potential_adjoint_response_type), allocatable :: charge
       real(wp) :: energy_pcm, energy_pv, energy_zero, volume
       real(wp), allocatable :: gradient_pcm(:, :), gradient_pv(:, :)
       real(wp), allocatable :: gradient_zero(:, :), volume_gradient(:, :)
@@ -318,33 +317,30 @@ contains
          call test_failed(error, "CPCM+PV potential failed: "//err%message)
          return
       end if
-      charge => find_potential_adjoint(response)
-      call check(error, associated(charge), &
+      call copy_potential_adjoint(response, charge)
+      call check(error, allocated(charge), &
          & more="CPCM+PV model produced no potential adjoint item")
       if (allocated(error)) return
 
       ! Asking a second time must still carry the CPCM potential adjoint when a
-      ! second, non-electrostatic component shares the accumulator. The list is
-      ! cleared on entry, so reusing it here cannot double-count the charge
+      ! second, non-electrostatic component shares the accumulator
       call model_pv%get_response(coupling, response, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM+PV second response failed: "//err%message)
          return
       end if
-      charge => find_potential_adjoint(response)
-      call check(error, associated(charge), &
+      call copy_potential_adjoint(response, charge)
+      call check(error, allocated(charge), &
          & more="CPCM+PV model did not expose the CPCM potential adjoint")
       if (allocated(error)) return
 
-      ! Gradient phase: the point-charge potential's total position weight is
-      ! answered, the width weight with zeros. The injected charge is
-      ! model_pv's; the other two models solved the same system themselves
+      ! Gradient phase
       call model_pv%prepare_gradient(coupling, err)
       if (allocated(err)) then
          call test_failed(error, "Gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(coupling)
+      call fill_missing_with_zeros(model_pv%cavity, coupling)
       call fill_point_charge_field(model_pv%cavity, coupling, qat_vals, mol)
 
       allocate (gradient_pcm(3, mol%nat), source=0.0_wp)

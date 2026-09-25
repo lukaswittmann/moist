@@ -3,12 +3,14 @@ module moist_model_general
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_cavity_type, only: cavity_type, snapshot_cavity_coupling
+   use moist_cavity_type, only: cavity_type
    use moist_model_type, only: solvation_model_type, solvation_model_component_type
-   use moist_channels_response, only: response_type
+   use moist_channels_response, only: response_type, response_clear
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & coupling_registry_type, moist_phase_none, moist_phase_energy, &
-            & moist_phase_response, moist_phase_gradient
+      & coupling_registry_type, moist_phase_energy, moist_phase_response, &
+      & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
+      & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
+      & coupling_make_view, coupling_close_view
    use moist_cavity_drop, only: cavity_type_drop
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -46,11 +48,11 @@ module moist_model_general
       procedure :: get_energy => general_get_energy
       procedure :: get_response => general_get_response
       procedure :: get_gradient => general_get_gradient
-      !> Build a model-owned coupling and its initial grid snapshot
+      !> Build a model-owned coupling and declare its requests
       procedure :: new_coupling => general_new_coupling
       procedure :: release_coupling => general_release_coupling
-      !> Stage one phase of the coupling (snapshot, arm, declare scientific inputs)
-      procedure :: update_coupling => general_update_coupling
+      !> Stage one phase of the coupling (declare, record the grid size, arm)
+      procedure, private :: stage => general_stage_coupling
       !> Stage the energy phase
       procedure :: prepare_energy => general_prepare_energy
       !> Stage the response phase
@@ -175,9 +177,8 @@ contains
 
    !> Accumulate the energy of every component
    !>
-   !> Requires a coupling staged by `prepare_energy` and reports any other
-   !> staged phase by name; then a stale mandatory request of the energy phase,
-   !> or a failure latched by a mis-shaped `set`, by name
+   !> Requires a coupling staged by `prepare_energy`; reports any other staged
+   !> phase, then every missing output of the energy phase, by name
    subroutine general_get_energy(self, coupling, energy, error)
       !> General model
       class(solvation_model_general), intent(inout) :: self
@@ -201,15 +202,13 @@ contains
       end if
       call require_updated(self, error)
       if (allocated(error)) return
-      call require_staged(coupling, moist_phase_energy, "get_energy", error)
-      if (allocated(error)) return
-      call coupling%check_mandatory(moist_phase_energy, error)
+      call coupling_check_mandatory(coupling, moist_phase_energy, error)
       if (allocated(error)) return
       local_energy = 0.0_wp
       do i = 1, size(self%components)
-         call coupling%make_view(i, view)
+         call coupling_make_view(coupling, i, view)
          call self%components(i)%item%get_energy(view, self%cavity, local_energy, error)
-         call coupling%close_view()
+         call coupling_close_view(coupling)
          if (allocated(error)) return
       end do
       energy = energy + local_energy
@@ -248,20 +247,18 @@ contains
       end if
       call require_updated(self, error)
       if (allocated(error)) return
-      call require_staged(coupling, moist_phase_response, "get_response", error)
+      call coupling_check_mandatory(coupling, moist_phase_response, error)
       if (allocated(error)) return
-      call coupling%check_mandatory(moist_phase_response, error)
-      if (allocated(error)) return
-      call response%clear()
+      call response_clear(response)
       call acc%init(self%cavity%ngrid)
       do i = 1, size(self%components)
-         call coupling%make_view(i, view)
+         call coupling_make_view(coupling, i, view)
          call self%components(i)%item%get_response(view, self%cavity, response, error)
-         call coupling%close_view()
+         call coupling_close_view(coupling)
          if (allocated(error)) return
-         call coupling%make_view(i, view)
+         call coupling_make_view(coupling, i, view)
          call self%components(i)%item%get_surface_weights(view, self%cavity, acc, error)
-         call coupling%close_view()
+         call coupling_close_view(coupling)
          if (allocated(error)) return
       end do
       call self%cavity%get_surface_response(acc, response, error)
@@ -309,15 +306,13 @@ contains
       end if
       call require_updated(self, error)
       if (allocated(error)) return
-      call require_staged(coupling, moist_phase_gradient, "get_gradient", error)
-      if (allocated(error)) return
-      call coupling%check_mandatory(moist_phase_gradient, error)
+      call coupling_check_mandatory(coupling, moist_phase_gradient, error)
       if (allocated(error)) return
       if (any(shape(gradient) /= [3, self%cavity%nsph])) then
          call fatal_error(error, "General-model gradient shape mismatch")
          return
       end if
-      call response%clear()
+      call response_clear(response)
       allocate (local(3, self%cavity%nsph), source=0.0_wp)
 
       if (.not. self%force_forward_gradient) then
@@ -328,15 +323,15 @@ contains
 
             call acc%init(self%cavity%ngrid)
             do i = 1, size(self%components)
-               call coupling%make_view(i, view)
+               call coupling_make_view(coupling, i, view)
                call self%components(i)%item%get_direct_gradient(view, self%cavity, &
                                                                 local, error)
-               call coupling%close_view()
+               call coupling_close_view(coupling)
                if (allocated(error)) return
-               call coupling%make_view(i, view)
+               call coupling_make_view(coupling, i, view)
                call self%components(i)%item%get_gradient_surface_weights(view, &
                                                                          self%cavity, acc, error)
-               call coupling%close_view()
+               call coupling_close_view(coupling)
                if (allocated(error)) return
             end do
             call self%cavity%get_surface_gradient(acc, local, error)
@@ -344,17 +339,17 @@ contains
          end block
          ! Host part of the phase: the already solved charges and the amplitudes
          do i = 1, size(self%components)
-            call coupling%make_view(i, view)
+            call coupling_make_view(coupling, i, view)
             call self%components(i)%item%get_response(view, self%cavity, response, error)
-            call coupling%close_view()
+            call coupling_close_view(coupling)
             if (allocated(error)) return
          end do
       else
          do i = 1, size(self%components)
-            call coupling%make_view(i, view)
+            call coupling_make_view(coupling, i, view)
             call self%components(i)%item%get_gradient(view, self%cavity, response, local, &
                                                       error)
-            call coupling%close_view()
+            call coupling_close_view(coupling)
             if (allocated(error)) return
          end do
       end if
@@ -367,7 +362,7 @@ contains
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
-   !> Declare cavity and component requests, then snapshot the grid
+   !> Declare cavity and component requests, then record the grid size
    !>
    !> Calculations with matching inputs are shared between components
    !>
@@ -385,16 +380,16 @@ contains
       !> Component index
       integer :: i
 
-      call coupling%begin_registration()
-      call coupling%set_scope(0)
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 0)
       call self%cavity%declare_coupling(coupling, error)
       if (allocated(error)) return
       do i = 1, size(self%components)
-         call coupling%set_scope(i)
+         call coupling_set_scope(coupling, i)
          call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
          if (allocated(error)) return
       end do
-      call snapshot_cavity_coupling(self%cavity, coupling, error)
+      call coupling_snapshot(coupling, self%cavity%ngrid)
 
    end subroutine declare_general_pass
 
@@ -431,14 +426,15 @@ contains
 
    !> Stage per-output requirements and preserve still-valid raw answers
    !>
-   !> Energy staging starts a new host evaluation; response and gradient
-   !> staging reuse outputs until geometry or declared scientific inputs change
+   !> - energy staging starts a new host evaluation; response and gradient
+   !>   staging reuse outputs until geometry or declared scientific inputs change
+   !> - every staging starts a new host walk: `next()` begins at the first request
    !>
    !> @param[in,out] self     Updated general model
    !> @param[in,out] coupling Coupling built by `new_coupling`
    !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
    !> @param[out]   error    Foreign coupling, invalid phase or failed declaration
-   subroutine general_update_coupling(self, coupling, phase, error)
+   subroutine general_stage_coupling(self, coupling, phase, error)
       !> Updated general model
       class(solvation_model_general), intent(inout) :: self
       !> Coupling built by `new_coupling`
@@ -454,12 +450,12 @@ contains
          call fatal_error(error, "Coupling belongs to a different model")
          return
       end if
-      if (phase == moist_phase_energy) call coupling%invalidate()
+      if (phase == moist_phase_energy) call coupling_invalidate(coupling)
       call declare_general_pass(self, coupling, error)
       if (allocated(error)) return
-      call coupling%arm(phase, error)
+      call coupling_arm(coupling, phase, error)
 
-   end subroutine general_update_coupling
+   end subroutine general_stage_coupling
 
    !> Stage the energy phase of the coupling
    subroutine general_prepare_energy(self, coupling, error)
@@ -470,7 +466,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, moist_phase_energy, error)
+      call self%stage(coupling, moist_phase_energy, error)
 
    end subroutine general_prepare_energy
 
@@ -483,7 +479,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, moist_phase_response, error)
+      call self%stage(coupling, moist_phase_response, error)
 
    end subroutine general_prepare_response
 
@@ -496,7 +492,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(coupling, moist_phase_gradient, error)
+      call self%stage(coupling, moist_phase_gradient, error)
 
    end subroutine general_prepare_gradient
 
@@ -510,59 +506,6 @@ contains
       if (.not. self%updated) call fatal_error(error, "General model must be updated first")
 
    end subroutine require_updated
-
-   !> Require a coupling staged for the phase the accessor reads
-   !>
-   !> `check_mandatory` only asks whether the requests of a phase carry an
-   !> answer, which a coupling staged for a neighbouring phase can satisfy by
-   !> accident: the answers of the response phase are still fresh when the
-   !> gradient phase is read; which phase was staged is the more fundamental
-   !> fact, so it is checked first and reported naming both phases
-   subroutine require_staged(coupling, phase, accessor, error)
-      !> Coupling handed to the accessor
-      class(coupling_type), intent(in) :: coupling
-      !> Phase index the accessor reads
-      integer, intent(in) :: phase
-      !> Name of the accessor
-      character(len=*), intent(in) :: accessor
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      if (coupling%phase == phase) return
-      if (coupling%phase == moist_phase_none) then
-         call fatal_error(error, accessor//" requires a coupling staged by prepare_"// &
-            & trim(phase_name(phase))//"; this coupling has never been staged")
-         return
-      end if
-      call fatal_error(error, accessor//" requires a coupling staged by prepare_"// &
-         & trim(phase_name(phase))//"; this coupling is staged for the "// &
-         & trim(phase_name(coupling%phase))//" phase")
-
-   end subroutine require_staged
-
-   !> Name of a phase for diagnostics, e.g. "gradient"
-   !>
-   !> Fixed length, so that no deferred-length temporary is created for the
-   !> result; callers `trim` it
-   !>
-   pure function phase_name(phase) result(name)
-      !> Phase index
-      integer, intent(in) :: phase
-      !> Phase name, blank padded
-      character(len=8) :: name
-
-      select case (phase)
-      case (moist_phase_energy)
-         name = "energy"
-      case (moist_phase_response)
-         name = "response"
-      case (moist_phase_gradient)
-         name = "gradient"
-      case default
-         name = "unknown"
-      end select
-
-   end function phase_name
 
    !> Release collections owned by the model; borrowed handles must not outlive it
    subroutine destroy_model(self)

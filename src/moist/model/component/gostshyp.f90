@@ -28,10 +28,11 @@ module moist_model_component_gostshyp
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
    use moist_model_type, only: solvation_model_component_type
-   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
+   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type, &
+      & response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & gaussian_moment_request_type, &
-                                     moist_phase_energy, moist_phase_response, moist_phase_gradient
+      & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
+      & moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none(type, external)
@@ -293,32 +294,27 @@ contains
       do i = 1, cavity%ngrid
          if (cavity%a(i) > 0.0_wp) moments%width(i) = pi_ln2/cavity%a(i)
       end do
-      call moments%require(moist_phase_energy, "gt", error)
+      call request_require(moments, moist_phase_energy, "gt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_energy, "pt", error)
+      call request_require(moments, moist_phase_energy, "pt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_response, "gt", error)
+      call request_require(moments, moist_phase_response, "gt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_response, "pt", error)
+      call request_require(moments, moist_phase_response, "pt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_response, "mt", cavity%has_field_dependent_geometry(), error)
+      call request_require(moments, moist_phase_response, "mt", cavity%has_field_dependent_geometry(), error)
       if (allocated(error)) return
-      call moments%require(moist_phase_response, "rt", cavity%has_field_dependent_geometry(), error)
+      call request_require(moments, moist_phase_response, "rt", cavity%has_field_dependent_geometry(), error)
       if (allocated(error)) return
-      call moments%require(moist_phase_gradient, "gt", error)
+      call request_require(moments, moist_phase_gradient, "gt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_gradient, "pt", error)
+      call request_require(moments, moist_phase_gradient, "pt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_gradient, "mt", error)
+      call request_require(moments, moist_phase_gradient, "mt", error)
       if (allocated(error)) return
-      call moments%require(moist_phase_gradient, "rt", error)
+      call request_require(moments, moist_phase_gradient, "rt", error)
       if (allocated(error)) return
-      ! Host integral contractions need the surface normals and areas
-      call moments%uses("normal0", error)
-      if (allocated(error)) return
-      call moments%uses("a", error)
-      if (allocated(error)) return
-      call coupling%register("moments", moments, error)
+      call coupling_register(coupling, "moments", moments, error)
    end subroutine gostshyp_declare_coupling
 
    !* ================================================================================= *!
@@ -433,7 +429,7 @@ contains
          item%w_normal_deriv = item%w_normal_deriv - beta
       end if
 
-      call response%accumulate(item, error)
+      call response_accumulate(response, item, error)
 
    end subroutine gostshyp_get_response
 

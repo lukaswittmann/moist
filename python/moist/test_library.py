@@ -5,10 +5,11 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
+from moist import Isodensity
 from moist.interface import (
-    CavityDROPIsodensity,
-    GeneralSolvationModel,
+    CavityDROP,
     ModelComponentPV,
+    SolvationModel,
     Structure,
 )
 from moist.library import _callback_takes_order, get_api_version
@@ -158,40 +159,32 @@ def flaky_lsf(water) -> SimpleNamespace:
     return state
 
 
+def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
+    """A callback-backed DROP cavity; the contour is an LSF setting, not the source's."""
+    return CavityDROP(lsf=Isodensity(rho_iso=rho_iso), nleb=26, source=source, **kwargs)
+
+
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
     numbers, positions = water
     structure = Structure(numbers, positions)
-    cavity = CavityDROPIsodensity(callback, rho_iso=rho_iso, nleb=26, **kwargs)
+    cavity = _isodensity(callback, rho_iso, **kwargs)
     cavity.update(structure)
     return cavity.cavity
 
 
 def test_isodensity_cavity_accepts_a_density_source(water) -> None:
-    """The cavity constructor owns source adaptation and parameter matching."""
+    """A source is a callable or an object with ``density(point, order)``."""
     numbers, positions = water
     source = _GaussianSource(positions)
-    cavity = CavityDROPIsodensity(source, nleb=26)
+    cavity = _isodensity(source)
 
     cavity.update(Structure(numbers, positions))
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
-    with raises(ValueError, match="scale must match"):
-        CavityDROPIsodensity(source, nleb=26, scale=1000.0)
-    with raises(ValueError, match="rho_iso must match"):
-        CavityDROPIsodensity(source, nleb=26, rho_iso=2.0e-3)
-    with raises(TypeError, match="rho_iso must be given"):
-        CavityDROPIsodensity(source.with_order, nleb=26)
-
-
-def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None:
-    _, positions = water
-    source = _GaussianDensity(positions)
-
-    with pytest.deprecated_call(match="source"):
-        cavity = CavityDROPIsodensity(callback=source.with_order, rho_iso=source.rho_iso, nleb=26)
-
-    assert isinstance(cavity, CavityDROPIsodensity)
+    assert cavity.lsf == Isodensity(rho_iso=_RHO_ISO)
+    with raises(TypeError, match="callable source"):
+        _isodensity(object())
 
 
 def test_callback_both_forms_agree(water) -> None:
@@ -316,7 +309,7 @@ def test_callback_failure_stops_further_calls(water) -> None:
 def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
     """A cavity whose callback failed once must rebuild cleanly afterwards."""
     structure = Structure(*water)
-    cavity = CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
+    cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     flaky_lsf.arm()
 
     with raises(RuntimeError, match="no density here"):
@@ -330,7 +323,7 @@ def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
 def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) -> None:
     """A failed second build must not leave the first surface readable as current."""
     structure = Structure(*water)
-    cavity = CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
+    cavity = _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso)
     cavity.update(structure)
     assert cavity.snapshot().ngrid > 0
 
@@ -345,8 +338,8 @@ def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) ->
 def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> None:
     """Model updates propagate callback failures and invalidate their live view."""
     structure = Structure(*water)
-    model = GeneralSolvationModel(
-        CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26), [ModelComponentPV(1.0e-4)]
+    model = SolvationModel(
+        _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
     )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0
@@ -357,3 +350,64 @@ def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> N
 
     with raises(RuntimeError, match="successfully updated"):
         model.cavity.snapshot()
+
+
+@pytest.mark.parametrize("name,args,ctype,initial", [
+    ("get_coupling_request_missing", (b"phi",), "bool", True),
+])
+def test_scalar_query_errors_preserve_outputs(name, args, ctype, initial):
+    """C query failures use the error handle and never overwrite the result."""
+    from moist.library import ffi, lib
+
+    error = lib.moist_new_error()
+    value = ffi.new(f"{ctype} *", initial)
+    query = getattr(lib, "moist_" + name)
+    try:
+        query(error, ffi.NULL, *args, value)
+        assert lib.moist_check_error(error) == lib.moist_failure
+        assert value[0] == initial
+        query(error, ffi.NULL, *args, ffi.NULL)
+        assert lib.moist_check_error(error) == lib.moist_failure
+        message = ffi.new("char[512]")
+        size = ffi.new("int *", 512)
+        lib.moist_get_error(error, message, size)
+        assert b"Output pointer is missing" in ffi.string(message)
+        query(ffi.NULL, ffi.NULL, *args, value)
+        assert lib.moist_check_error(ffi.NULL) == lib.moist_invalid_error
+        assert value[0] == initial
+    finally:
+        lib.moist_delete_error(ffi.new("moist_error *", error))
+
+
+def test_next_coupling_request_fails_closed():
+    """The cursor entry returns false on every failure, so a host loop cannot spin.
+
+    False is also the ordinary end of a pass, which is why the wrapper checks
+    the error handle after every call and raises instead.
+    """
+    from moist.library import CouplingHandle, next_coupling_request, ffi, lib
+
+    error = lib.moist_new_error()
+    try:
+        assert not lib.moist_next_coupling_request(error, ffi.NULL)
+        assert lib.moist_check_error(error) == lib.moist_failure
+        assert not lib.moist_next_coupling_request(ffi.NULL, ffi.NULL)
+    finally:
+        lib.moist_delete_error(ffi.new("moist_error *", error))
+    with raises(RuntimeError, match="next_coupling_request"):
+        next_coupling_request(CouplingHandle.null())
+
+
+def test_next_response_item_fails_closed():
+    """The response cursor fails closed like the coupling's: false on every failure."""
+    from moist.library import ResponseHandle, ffi, lib, next_response_item
+
+    error = lib.moist_new_error()
+    try:
+        assert not lib.moist_next_response_item(error, ffi.NULL)
+        assert lib.moist_check_error(error) == lib.moist_failure
+        assert not lib.moist_next_response_item(ffi.NULL, ffi.NULL)
+    finally:
+        lib.moist_delete_error(ffi.new("moist_error *", error))
+    with raises(RuntimeError, match="next_response_item"):
+        next_response_item(ResponseHandle.null())

@@ -9,10 +9,11 @@ module moist_model_component_pcm_type
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
    use moist_model_type, only: solvation_model_component_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type
+   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
+      & response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & gaussian_potential_request_type, &
-                                     moist_phase_energy, moist_phase_response, moist_phase_gradient
+      & gaussian_potential_request_type, moist_phase_energy, moist_phase_response, &
+      & moist_phase_gradient, coupling_register, request_require
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
@@ -50,7 +51,7 @@ module moist_model_component_pcm_type
       !> Iterative solver convergence tolerance
       real(wp) :: solver_tol = 1.0e-10_wp
       !> Maximum iterative solver steps
-      integer :: solver_maxiter = 1000
+      integer :: solver_maxiter = 50
    contains
       !> Restore compiled defaults
       procedure :: init_defaults => init_parameter_defaults
@@ -84,6 +85,9 @@ module moist_model_component_pcm_type
       !> PCM interaction matrix A (ngrid, ngrid)
       real(wp), allocatable :: amat(:, :)
 
+
+      ! TODO: remove these parameters here and use the parameter type
+
       !> Solver type identifier
       integer :: solver = solver_type%lu
 
@@ -94,7 +98,7 @@ module moist_model_component_pcm_type
       real(wp) :: solver_tol = 1.0e-10_wp
 
       !> Maximum iterations for iterative solvers
-      integer :: solver_maxiter = 1000
+      integer :: solver_maxiter = 50
 
       !> Molecular electrostatic potential at cavity grid points (ngrid)
       !>
@@ -171,7 +175,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (self%solver < solver_type%inversion .or. self%solver > solver_type%iterative .or. &
-          self%solver_tol <= 0.0_wp .or. self%solver_maxiter < 1) then
+          self%solver_tol <= 0.0_wp .or. self%solver_tol /= self%solver_tol .or. &
+          self%solver_maxiter < 1) then
          call fatal_error(error, "Invalid PCM solver parameters")
       end if
    end subroutine validate_pcm_parameters
@@ -502,7 +507,7 @@ contains
       if (allocated(error)) return
       call self%potential_adjoint(item%w_phi, error)
       if (allocated(error)) return
-      call response%accumulate(item, error)
+      call response_accumulate(response, item, error)
 
    end subroutine pcm_component_get_trace_response
 
@@ -979,21 +984,21 @@ contains
       !> Registration error
       type(error_type), allocatable, intent(out) :: error
       type(gaussian_potential_request_type) :: potential
-      call potential%require(moist_phase_energy, "phi", error)
+      call request_require(potential, moist_phase_energy, "phi", error)
       if (allocated(error)) return
-      call potential%require(moist_phase_response, "phi", error)
+      call request_require(potential, moist_phase_response, "phi", error)
       if (allocated(error)) return
-      call potential%require(moist_phase_response, "dphi_dr", cavity%has_field_dependent_geometry(), error)
+      call request_require(potential, moist_phase_response, "dphi_dr", cavity%has_field_dependent_geometry(), error)
       if (allocated(error)) return
-      call potential%require(moist_phase_response, "dphi_dxi", cavity%has_field_dependent_geometry(), error)
+      call request_require(potential, moist_phase_response, "dphi_dxi", cavity%has_field_dependent_geometry(), error)
       if (allocated(error)) return
-      call potential%require(moist_phase_gradient, "phi", error)
+      call request_require(potential, moist_phase_gradient, "phi", error)
       if (allocated(error)) return
-      call potential%require(moist_phase_gradient, "dphi_dr", error)
+      call request_require(potential, moist_phase_gradient, "dphi_dr", error)
       if (allocated(error)) return
-      call potential%require(moist_phase_gradient, "dphi_dxi", error)
+      call request_require(potential, moist_phase_gradient, "dphi_dxi", error)
       if (allocated(error)) return
-      call coupling%register("potential", potential, error)
+      call coupling_register(coupling, "potential", potential, error)
    end subroutine pcm_component_declare_coupling
 
    !> Set external matrix (bypasses internal assembly)
