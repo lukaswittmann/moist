@@ -199,7 +199,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Pinned: 2.14.0 breaks UHF/UKS gradients over an atom subset (fixed on master)
       - name: Install Python dependencies
         run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf==2.13.1
 
@@ -250,7 +249,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Pinned: 2.14.0 breaks UHF/UKS gradients over an atom subset (fixed on master)
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip pytest numpy pyscf==2.13.1
 
