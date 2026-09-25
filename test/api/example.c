@@ -7,8 +7,8 @@
 
 #include "moist.h"
 
-/* Construction helpers for numerical fixtures. Public API usage is tested in
- * test_v1_contract below. Each helper copies and releases its LSF configuration. */
+/* Fixture builders for numerical tests; public API exercised in test_v1_contract
+ * below. Each copies and releases its LSF configuration */
 static moist_cavity fixture_drop(moist_error error, const int *nleb, const bool *debug, const int *verbose, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
 {
     moist_drop_options options;
@@ -127,7 +127,7 @@ static moist_cavity fixture_isodensity_callback(moist_error error, moist_isodens
     return cavity;
 }
 
-/* Report a failed handle without terminating the host. */
+/* Report a failed handle without terminating the host */
 static inline void
 show_error(moist_error error)
 {
@@ -139,14 +139,9 @@ show_error(moist_error error)
     printf("[Message] %s\n", message);
 }
 
-/* Caller-side "abort on failure" policy.
- *
- * The library deliberately offers no entry point that terminates the process
- * -- a library linked into a host program must never do that. Deciding to die
- * is the driver's business, and it is these few lines: check the handle, pull
- * the message out, report, exit. Each test below instead reports and returns a
- * status so that main() can run the remaining tests, which is what a real host
- * should do too. */
+/* Caller-side abort-on-failure policy; the library itself never terminates the
+ * host. Tests below report and return a status instead, so main() runs the
+ * rest */
 static void
 die_on_error(moist_error error, const char* context)
 {
@@ -159,20 +154,16 @@ die_on_error(moist_error error, const char* context)
     exit(EXIT_FAILURE);
 }
 
-/* Normalization coefficient of a single s primitive, (2a/pi)^(3/4).
- *
- * M_PI is not in the C standard; glibc hides it once __STRICT_ANSI__ is set,
- * which is exactly what this project's c_std=c11 does. acos(-1.0) is portable. */
+/* Normalization coefficient of a single s primitive, (2a/pi)^(3/4); uses
+ * acos(-1.0), not M_PI, which is not standard C */
 static inline double gto_s_norm(double alpha)
 {
     return pow(2.0 * alpha / acos(-1.0), 0.75);
 }
 
 /* Read one named cavity field, reporting rather than aborting on failure.
- *
- * The field API is self-describing: moist_get_cavity_field_info hands out the
- * element count, and the accessor writes exactly that many elements, so the
- * caller allocates the count it already knows. */
+ * moist_get_cavity_field_info returns the element count; the accessor writes
+ * exactly that many elements */
 static int read_field_real(moist_error error, moist_cavity cav, const char* name,
                            double* values)
 {
@@ -197,7 +188,7 @@ static int read_field_int(moist_error error, moist_cavity cav, const char* name,
     return 0;
 }
 
-/* The DROP fields a caller most often wants, read in one go by name. */
+/* DROP fields most callers want, read in one go by name */
 static int read_drop_fields(moist_error error, moist_cavity cav, int ngrid,
                             int* nmax, double* normal, double* wleb,
                             double* r_iI0, double* f, double* rho)
@@ -210,8 +201,8 @@ static int read_drop_fields(moist_error error, moist_cavity cav, int ngrid,
         || read_field_real(error, cav, "rho", rho);
 }
 
-/* Agreement between two independently summed results, measured relative to the
- * magnitude involved.*/
+/* Agreement between two independently summed results, relative to the
+ * magnitude involved */
 static int agrees_to(double a, double b, double rel_tol)
 {
     double scale = fabs(a) > fabs(b) ? fabs(a) : fabs(b);
@@ -221,7 +212,7 @@ static int agrees_to(double a, double b, double rel_tol)
     return fabs(a - b) <= rel_tol * scale;
 }
 
-/* Native-axis helpers for diagnostic buffers. C axes are their exact reverse. */
+/* Native-axis helpers for diagnostic buffers; C axes are the exact reverse */
 static inline size_t idx_f2(int i0, int i1, int d0)
 {
     return (size_t)i0 + (size_t)d0 * (size_t)i1;
@@ -235,12 +226,8 @@ static inline size_t idx_f4(int i0, int i1, int i2, int i3, int d0, int d1, int 
          + (size_t)d2 * (size_t)i3));
 }
 
-/* The H2O geometry nearly every test below builds on, in Bohr.
- *
- * Static storage rather than a literal repeated in each test: the isodensity
- * callbacks hold a pointer to the centers for the lifetime of a build, and one
- * shared definition keeps the callback and internal backends from drifting
- * apart. A real host would of course pass its own arrays. */
+/* H2O geometry most tests below build on, in Bohr. Isodensity callbacks hold a
+ * pointer to these centers for the lifetime of a build */
 #define H2O_NATOMS 3
 
 static int h2o_numbers[H2O_NATOMS] = {8, 1, 1};
@@ -267,7 +254,7 @@ int test_uninitialized_error(void)
     printf("Start test: uninitialized error\n");
     moist_error error = moist_new_error();
     int status = moist_check_error(error);
-    /* A clean handle must be a no-op for the caller-side abort helper. */
+    /* A clean handle must be a no-op for the caller-side abort helper */
     die_on_error(error, "uninitialized error handle");
     moist_delete_error(&error);
     return status == 0 ? 0 : 1;
@@ -300,13 +287,8 @@ int test_drop_cavity(void)
 
     /* Heap, not VLAs.
      *
-     * moist.h is C++-clean and C++ has no variable-length arrays, so an example
-     * meant to be copied must not use them. The A-matrix is the reason it also
-     * matters here and not only for portability: it is ngrid*ngrid doubles,
-     * which is nothing to put on a stack once the solute grows.
-     *
      * Vector arrays are C [ngrid][3]: read component k of point i as
-     * xyz[3*i + k] (see the layout convention in moist.h). */
+     * xyz[3*i + k] (see the layout convention in moist.h) */
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
@@ -346,14 +328,14 @@ int test_drop_cavity(void)
         goto cleanup;
     }
 
-    // Now build the cavity with structure
+    // Build the cavity with structure
     moist_update_cavity(error, cav, mol);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
     }
 
-    // First get generic cavity sizes to allocate arrays correctly
+    // Get generic cavity sizes for array allocation
     double area = 0.0, volume = 0.0;
     int ngrid = 0, nsph = 0, nmax = 0;
     moist_get_cavity_sizes(error, cav, &ngrid, &nsph);
@@ -388,7 +370,7 @@ int test_drop_cavity(void)
         goto cleanup;
     }
 
-    // Get generic cavity results (Tier 1 - works for all cavity types)
+    // Get generic cavity results
     moist_get_cavity_results(error, cav, ngrid, nsph,
                              &area, &volume, &ngrid, &nsph,
                              xyz, a, owner, converged, vradii, asph);
@@ -397,7 +379,7 @@ int test_drop_cavity(void)
         goto cleanup;
     }
 
-    // Get DROP results by name (Tier 2 - works for whatever the cavity holds)
+    // Get DROP results by name
     if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;
     }
@@ -409,7 +391,7 @@ int test_drop_cavity(void)
         goto cleanup;
     }
 
-    // Validate results before cleanup
+    // Validate results
     result = area > 0.0 && ngrid > 0 &&
              nmax >= ngrid && wleb[0] > 0.0 && a[0] > 0.0 &&
              r_iI0[0] > 0.0 && xi[0] > 0.0 &&
@@ -424,7 +406,7 @@ cleanup:
     free(normal); free(wleb); free(r_iI0); free(xi); free(f); free(rho);
     free(amat0);
 
-    // Cleanup and verify handles are reset to NULL (using generic delete)
+    // Free handles and verify they reset to NULL (generic delete)
     moist_delete_cavity(&cav);
     moist_delete_radii(&radii_model);
     moist_delete_structure(&mol);
@@ -470,7 +452,7 @@ int test_custom_radii(void)
         goto cleanup;
     }
 
-    // Element-specific custom radii.
+    // Element-specific custom radii
     int z_list[2] = {1, 8};
     double r_elem[2] = {2.0, 3.2};
     moist_set_custom_radii_elements(error, radii_model, 2, z_list, r_elem);
@@ -523,13 +505,12 @@ int test_custom_radii(void)
                      fabs(vradii[1] - r_elem[0]) < 1e-12 &&
                      fabs(vradii[2] - r_elem[0]) < 1e-12;
 
-    /* The second round rebuilds at a different radius set, so the grid size can
-     * change: release the first round's buffers before resizing. */
+    /* Grid size can change between rounds; free the first round's buffers before resizing */
     free(xyz); free(a); free(owner); free(converged); free(vradii); free(asph);
     xyz = NULL; a = NULL; owner = NULL; converged = NULL; vradii = NULL; asph = NULL;
     moist_delete_cavity(&cav);
 
-    // Atom-specific custom radii.
+    // Atom-specific custom radii
     double r_atom[3] = {1.7, 2.1, 2.4};
     moist_set_custom_radii_atoms(error, radii_model, natoms, r_atom);
     if (moist_check_error(error)) {
@@ -619,7 +600,7 @@ int test_h2o_cavity(void)
     moist_structure mol = NULL;
     moist_cavity cav = NULL;
 
-    // Allocate arrays dynamically (C++ compatible, no VLAs)
+    // Allocate arrays on the heap, no VLAs
     double* xyz = NULL;
     double* a = NULL;
     int* owner = NULL;
@@ -745,12 +726,9 @@ int test_cavity_gradient(void)
 {
     printf("Start test: cavity gradient computation\n");
 
-    /* Single-exit cleanup.
-     *
-     * Every owned pointer is declared here and starts NULL, so the one ladder
-     * under `cleanup:` is correct no matter how early the test leaves -- adding
-     * an allocation means touching two places, not seventeen. `result` starts
-     * at failure; only the path that runs to the end clears it. */
+    /* Single-exit cleanup: every pointer starts NULL here and is freed once
+     * under `cleanup:`. `result` starts at failure; only the path that runs
+     * to completion clears it */
     int result = 1;
 
     moist_error error = moist_new_error();
@@ -779,11 +757,8 @@ int test_cavity_gradient(void)
     double* grad_ne_zero = NULL;     // (3, nsph)
     double* grad_ne = NULL;          // (3, nsph)
     double* grad_ne_scaled = NULL;   // (3, nsph)
-    /* Outputs of the surface-to-LSF contraction. They get their own buffers on
-     * purpose: w_lsf2 is Fortran (3,3,ngrid), so reusing the ngrid*ngrid
-     * A-matrix for it would only fit when ngrid >= 9 and would destroy the
-     * matrix validated just above. Capacity discipline is what this file is
-     * meant to demonstrate. */
+    /* Outputs of the surface-to-LSF contraction, own buffers rather than
+     * reused from the A-matrix. w_lsf2 is Fortran (3,3,ngrid) */
     double* w_lsf0 = NULL;           // (ngrid)
     double* w_lsf1 = NULL;           // (3, ngrid)
     double* w_lsf2 = NULL;           // (3, 3, ngrid)
@@ -866,7 +841,7 @@ int test_cavity_gradient(void)
     printf("    y: %12.6f\n", V_tot1_rA[1]);
     printf("    z: %12.6f\n", V_tot1_rA[2]);
 
-    // Now get A-matrix with gradient
+    // Get A-matrix with gradient
     printf("  Computing A-matrix gradient...\n");
     Amat0 = (double*)malloc(ngrid * ngrid * sizeof(double));
     Amat1_rA = (double*)malloc(3 * nsph * ngrid * ngrid * sizeof(double));
@@ -949,7 +924,7 @@ int test_cavity_gradient(void)
         goto cleanup;
     }
 
-    // Both the original and extended surface-contraction ABI must remain callable.
+    // Both the original and extended surface-contraction ABI must remain callable
     for (int i = 0; i < ngrid; i++) {
         surface_q[i] = 0.0;
         surface_q_scaled[i] = 0.0;
@@ -1004,8 +979,8 @@ int test_cavity_gradient(void)
             contract_norm += grad_contract[idx] * grad_contract[idx];
         }
     }
-    /* Symmetry and finiteness are both satisfied by an all-zero result, so the
-     * magnitude has to be part of the assertion, not a printed remark. */
+    /* An all-zero result passes symmetry and finiteness too; check the
+     * magnitude as well */
     if (contract_ok && contract_norm < 1e-20) {
         printf("  Error: contract_amat1_q1q2_rA norm is essentially zero\n");
         contract_ok = 0;
@@ -1080,10 +1055,10 @@ int test_cavity_gradient(void)
         }
     }
 
-    /* Zero-input, finiteness and homogeneity are all satisfied by a routine
-     * that writes nothing but zeros. Pin the magnitude too: with nonzero
-     * surface charges, a nonzero field and real nuclear charges, the
-     * nuclear-electron gradient cannot vanish. */
+    /* A routine that writes nothing but zeros also passes zero-input,
+     * finiteness and homogeneity; pin the magnitude too. With nonzero surface
+     * charges, a nonzero field and real nuclear charges, the nuclear-electron
+     * gradient cannot vanish */
     double nuc_elec_norm = 0.0;
     for (int i = 0; i < 3 * nsph; i++) {
         nuc_elec_norm += grad_ne[i] * grad_ne[i];
@@ -1093,7 +1068,7 @@ int test_cavity_gradient(void)
         nuc_elec_ok = 0;
     }
 
-    // Validate results - check that gradients are computed and non-trivial
+    // Validate results: gradients computed and non-trivial
     result = 0;
     // A_tot1_rA should have non-zero values (area depends on nuclear coords)
     double grad_sum = 0.0;
@@ -1132,11 +1107,10 @@ cleanup:
 
 /* Internal isodensity DROP cavity: basis in, density in, cavity out.
  *
- * Uses a minimal one-primitive s shell per atom so the level set
- * S = scale * (rho_iso - rho) is an analytic sum of spherical Gaussians. The
- * test exercises the full internal-backend entry-point chain: constructor ->
- * two-pass layout query -> density install -> build -> numbering / anchor
- * gradients / tolerance getter.
+ * One-primitive s shell per atom; level set S = scale * (rho_iso - rho) is an
+ * analytic sum of spherical Gaussians. Exercises the full internal-backend
+ * chain: constructor -> two-pass layout query -> density install -> build ->
+ * numbering / anchor gradients / tolerance getter.
  */
 int test_isodensity_internal_cavity(void)
 {
@@ -1234,7 +1208,7 @@ int test_isodensity_internal_cavity(void)
     }
 
     /* A wrong-size density must be rejected before anything is installed.
-     * Uses a scratch handle so the expected failure does not poison `error`. */
+     * Uses a scratch handle; the expected failure does not poison `error` */
     double reject = 0.0;
     moist_error probe = moist_new_error();
     moist_set_isodensity_density(probe, cav, ncart + 1, &reject);
@@ -1361,30 +1335,30 @@ cleanup:
 }
 
 /* ---------------------------------------------------------------------------
- * Isodensity level set supplied through the C callback ABI.
+ * Isodensity level set supplied through the C callback ABI
  *
- * This is the reference implementation of the V_1_0 callback contract: `hess`
- * and `third` may be NULL, and NULL means "do not compute this derivative",
- * not merely "do not store it". Check for NULL before dereferencing them.
+ * Reference implementation of the V_1_0 callback contract: `hess` and `third`
+ * may be NULL, meaning "do not compute this derivative", not merely "do not
+ * store it". Check for NULL before dereferencing them.
  *
- * The level set mirrors the diagonal-density case built by
- * test_isodensity_internal_cavity() exactly, so the two backends must agree:
+ * Mirrors the diagonal-density case built by test_isodensity_internal_cavity();
+ * the two backends must agree:
  *   rho(r) = sum_A c exp(-a |r - R_A|^2)
  *
- * The callback returns that density and its spatial derivatives; moist forms
- * S(r) = scale * (rho_iso - rho(r)) from the rho_iso passed to the factory.
+ * Returns that density and its spatial derivatives; moist forms
+ * S(r) = scale * (rho_iso - rho(r)) from the rho_iso passed to the factory,
  * with c = 2 coeff^2 and a = 2 alpha.
  * ------------------------------------------------------------------------- */
 
-/* moist_get_cavity_results writes every array unconditionally, so the caller
- * must size and allocate them even when only the scalars are wanted. */
+/* moist_get_cavity_results writes every array unconditionally; the caller
+ * must size and allocate them even when only the scalars are wanted */
 static int cavity_area_volume(moist_error error, moist_cavity cav,
                               double* area, double* volume, int* ngrid, int* nsph)
 {
     moist_get_cavity_sizes(error, cav, ngrid, nsph);
     if (moist_check_error(error)) return 1;
-    /* Failing without setting the error handle would leave the caller with
-     * nothing to report, so say what went wrong here. */
+    /* This failure path does not set the error handle; report what went
+     * wrong here */
     if (*ngrid <= 0 || *nsph <= 0) {
         printf("  Error: cavity reports empty sizes (ngrid = %d, nsph = %d)\n",
                *ngrid, *nsph);
@@ -1418,8 +1392,8 @@ struct iso_callback_ctx {
     double a;                /* Gaussian exponent  */
     double rho_iso;
     /* Contract instrumentation: how often each derivative order was requested.
-     * The projection evaluates its grid points in an OpenMP loop, so every
-     * counter the callback touches is shared across threads. */
+     * The projection evaluates grid points in an OpenMP loop; every counter
+     * here is shared across threads */
     atomic_int calls;
     atomic_int calls_with_hess;
     atomic_int calls_with_third;
@@ -1481,8 +1455,8 @@ static int iso_gaussian_callback(void* context, const double* point,
         }
     }
 
-    /* The bare density: moist subtracts ctx->rho_iso (which it was handed at
-     * construction) and applies the DROP sign convention itself. */
+    /* Bare density; moist subtracts ctx->rho_iso (handed at construction) and
+     * applies the DROP sign convention itself */
     *rho_out = rho;
     for (int i = 0; i < 3; i++) drho_out[i] = drho[i];
     if (want_hess) for (int i = 0; i < 9; i++) d2rho_out[i] = d2rho[i];
@@ -1551,8 +1525,8 @@ int test_isodensity_callback_cavity(void)
     printf("  ngrid = %d, nsph = %d, area = %.10f, volume = %.10f\n",
            ngrid, nsph, area, volume);
 
-    /* Snapshot the counters once: the build is over, so they are stable, and
-     * the report and the assertions below must agree on the same numbers. */
+    /* Snapshot the counters once, after the build; the report and the
+     * assertions below use the same numbers */
     const int n_calls = atomic_load(&ctx.calls);
     const int n_hess = atomic_load(&ctx.calls_with_hess);
     const int n_third = atomic_load(&ctx.calls_with_third);
@@ -1565,25 +1539,24 @@ int test_isodensity_callback_cavity(void)
         result = 1;
     }
 
-    /* The contract is only exercised if both phases actually occurred: some
-     * calls must have skipped the higher derivatives and some must not have. */
+    /* The contract is only exercised if both phases occurred: some calls
+     * skipped the higher derivatives, some did not */
     if (n_hess <= 0 || n_hess >= n_calls) {
         printf("  FAIL: the value+gradient-only phase was never exercised\n");
         result = 1;
     }
 
-    /* The third-derivative channel is only requested at max_deriv >= 3, which a
-     * plain cavity build never reaches -- see the dedicated coverage in
-     * test_isodensity_callback_third_derivative(). What must hold here is the
-     * nesting of the phases: third derivatives are never requested without a
-     * Hessian alongside them. */
+    /* Third-derivative channel only requested at max_deriv >= 3, which a plain
+     * cavity build never reaches (see test_isodensity_callback_third_derivative()).
+     * Assert the nesting: third derivatives are never requested without a
+     * Hessian alongside them */
     if (n_third > n_hess) {
         printf("  FAIL: third derivatives were requested without a Hessian\n");
         result = 1;
     }
 
-    /* Cross-check against the internal backend built from the equivalent basis:
-     * same level set, so the same surface. */
+    /* Cross-check against the internal backend built from the equivalent
+     * basis: same level set, same surface */
     const int nshell_in = 3;
     int shell_atom[3] = {0, 1, 2};
     int shell_l[3] = {0, 0, 0};
@@ -1657,17 +1630,15 @@ cleanup:
     return result;
 }
 
-/* The third-derivative channel of the V_1_0 callback contract.
+/* Third-derivative channel of the V_1_0 callback contract.
  *
  * A plain cavity build never reaches it: the projection runs the level-set
- * model at max_deriv 1 and 2, so `third` is always NULL and the d3rho branch of
- * iso_gaussian_callback -- which moist.h advertises as the reference
- * implementation of this contract -- would otherwise never execute.
+ * model at max_deriv 1 and 2, so `third` is always NULL there and the d3rho
+ * branch of iso_gaussian_callback never executes.
  *
- * The surface-to-LSF contraction is the path that raises the model to
- * max_deriv = 3 (see src/moist/cavity/drop/derivatives/potential.f90), so
- * running it against a callback-backed cavity is what puts the remaining half
- * of the reference implementation under test. */
+ * The surface-to-LSF contraction raises the model to max_deriv = 3 (see
+ * src/moist/cavity/drop/derivatives/potential.f90); running it against a
+ * callback-backed cavity exercises that branch */
 int test_isodensity_callback_third_derivative(void)
 {
     printf("Start test: callback isodensity third-derivative channel\n");
@@ -1746,8 +1717,8 @@ int test_isodensity_callback_third_derivative(void)
         goto cleanup;
     }
 
-    /* Nonzero surface adjoints, so the contraction has something to propagate
-     * and cannot short-circuit before touching the level-set model. */
+    /* Nonzero surface adjoints; zero values would let the contraction
+     * short-circuit before touching the level-set model */
     for (int i = 0; i < ngrid; i++) {
         w_xi[i] = 1.0e-3 * (double)(i + 1);
         w_f[i] = 2.0e-3;
@@ -1756,8 +1727,8 @@ int test_isodensity_callback_third_derivative(void)
         }
     }
 
-    /* Count only what the contraction itself asks for: the build above already
-     * ran the value/gradient and Hessian phases. */
+    /* Count only what the contraction asks for; the build above already ran
+     * the value/gradient and Hessian phases */
     atomic_store(&ctx.calls, 0);
     atomic_store(&ctx.calls_with_hess, 0);
     atomic_store(&ctx.calls_with_third, 0);
@@ -1782,14 +1753,14 @@ int test_isodensity_callback_third_derivative(void)
         result = 1;
     }
 
-    /* max_deriv = 3 implies max_deriv >= 2, so every call that got a third
-     * derivative must have got a Hessian with it. */
+    /* max_deriv = 3 implies max_deriv >= 2: every call that got a third
+     * derivative also got a Hessian */
     if (n_third > n_hess) {
         printf("  FAIL: third derivatives were requested without a Hessian\n");
         result = 1;
     }
 
-    /* The weights the third-derivative channel feeds must be usable numbers. */
+    /* The weights the third-derivative channel feeds must be usable numbers */
     double w_norm = 0.0;
     int finite_ok = 1;
     for (int i = 0; i < ngrid && finite_ok; i++) {
@@ -1827,11 +1798,8 @@ cleanup:
 }
 /* A callback that cannot evaluate must be able to say so.
  *
- * The failure is reported on the 51st evaluation rather than the first: the
- * projection runs its grid points in an OpenMP loop, so an abort raised from
- * the middle of the loop is the case that actually exercises the shared
- * failure flag. A first-evaluation failure would pass even if the parallel
- * handling were wrong. */
+ * Grid points run in an OpenMP loop; failing on the 51st evaluation aborts
+ * from the middle of the loop, exercising the shared failure flag */
 struct iso_fail_ctx {
     struct iso_callback_ctx base;
     /* Number of successful evaluations before the callback starts failing */
@@ -1913,15 +1881,15 @@ int test_isodensity_callback_failure(void)
             printf("  FAIL: the error does not identify the callback status\n");
             result = 1;
         }
-        /* Reading a message does not clear the handle, so swap in a fresh one
-         * before the recovery build below. */
+        /* Reading a message does not clear the handle; swap in a fresh one
+         * before the recovery build below */
         moist_delete_error(&error);
         error = moist_new_error();
     }
 
-    /* The callback must not have been re-entered indefinitely: once it reports
-     * failure moist stops calling it, so the count stays close to the point of
-     * failure rather than covering the whole grid. */
+    /* The callback must not be re-entered indefinitely: once it reports
+     * failure, moist stops calling it, and the count stays close to the point
+     * of failure, not the whole grid */
     const int total_calls = atomic_load(&ctx.calls);
     printf("  callback invocations: %d (failure requested after %d)\n",
            total_calls, ctx.fail_after);
@@ -1931,7 +1899,7 @@ int test_isodensity_callback_failure(void)
     }
 
     /* The build must also be repeatable: a callback that stops failing has to
-     * produce a normal cavity, i.e. the failure latch is per-build state. */
+     * produce a normal cavity, i.e. the failure latch is per-build state */
     ctx.fail_after = INT_MAX;
     atomic_store(&ctx.calls, 0);
     moist_update_cavity(error, cav, mol);
@@ -1948,15 +1916,10 @@ int test_isodensity_callback_failure(void)
         }
     }
 
-    /* Upper bound on the aborted build.
-     *
-     * The lower bound above only proves the failing branch was entered; an
-     * implementation that reported the first error and then kept invoking the
-     * callback across the whole grid would satisfy it too, while breaking the
-     * latch contract. The recovery build just above is that same grid evaluated
-     * to completion, which makes it the natural yardstick: stopping at
-     * evaluation 51 must cost a small fraction of a full traversal, with only
-     * the calls already in flight on the other threads added on top. */
+    /* Upper bound on the aborted build: stopping at evaluation 51 must cost a
+     * small fraction of the full traversal (full_calls, from the recovery
+     * build above), with only the calls already in flight on other threads
+     * added on top */
     const int full_calls = atomic_load(&ctx.calls);
     printf("  full build for comparison: %d invocations\n", full_calls);
     if (result == 0 && total_calls >= full_calls / 2) {
@@ -1976,10 +1939,9 @@ cleanup:
     return result;
 }
 
-/* The deprecated moist_update_drop_cavity rebuilds the cavity from scratch to
- * honour a new Lebedev order. Rebuilding must not silently roll the cavity's
- * configured numerical settings back to their compiled defaults, which is what
- * re-running the constructor does unless they are carried across explicitly. */
+/* Deprecated moist_update_drop_cavity rebuilds the cavity from scratch to
+ * honour a new Lebedev order. Must not silently reset the cavity's configured
+ * numerical settings to their compiled defaults */
 int test_update_drop_cavity_keeps_params(void)
 {
     printf("Start test: update_drop_cavity preserves configured parameters\n");
@@ -1993,7 +1955,7 @@ int test_update_drop_cavity_keeps_params(void)
     const int natoms = H2O_NATOMS;
 
     int nleb = 26;
-    const double tolerance_in = 1.0e-8;   /* deliberately not the default 1e-10 */
+    const double tolerance_in = 1.0e-8;   /* not the default 1e-10 */
 
     mol = make_h2o(error);
     if (moist_check_error(error)) {
@@ -2015,7 +1977,7 @@ int test_update_drop_cavity_keeps_params(void)
         goto cleanup;
     }
 
-    /* Rebuild without changing the configured options. */
+    /* Rebuild without changing the configured options */
     moist_update_cavity(error, cav, mol);
     if (moist_check_error(error)) {
         show_error(error);
@@ -2036,9 +1998,9 @@ int test_update_drop_cavity_keeps_params(void)
         result = 1;
     }
 
-    /* The rebuilt cavity must still be usable. The models are re-sourced from
-     * detached copies, so a use-after-free here would surface as garbage sizes
-     * or a crash. */
+    /* The rebuilt cavity must still be usable; models are re-sourced from
+     * detached copies, so a use-after-free would surface as garbage sizes or
+     * a crash */
     int ngrid = 0, nsph = 0;
     moist_get_cavity_sizes(error, cav, &ngrid, &nsph);
     if (moist_check_error(error) || ngrid <= 0 || nsph != natoms) {
@@ -2058,31 +2020,22 @@ cleanup:
     return result;
 }
 
-/* The array-writing getters must refuse a capacity smaller than the cavity
- * needs, and must accept one that is larger. The undersized calls below are the
- * heap corruption this contract exists to prevent: without the capacity check
- * they write the cavity's full ngrid elements into a buffer the caller declared
- * smaller.
+/* Array-writing getters must refuse a capacity smaller than the cavity needs,
+ * and accept one that is larger. Without the check, an undersized call writes
+ * the cavity's full ngrid elements into a buffer the caller declared smaller.
  *
- * The buffers here are therefore allocated at *full* size and handed a smaller
- * *logical* capacity. That is the only arrangement in which the test can both
- * survive a missing check and detect it: a genuinely short allocation would
- * corrupt the heap before any assertion ran, and a single trailing canary would
- * miss a write that lands anywhere else. Every byte is stamped with a sentinel
- * beforehand and the whole region is verified afterwards, so a rejected call
- * has to have written nothing at all, anywhere. */
+ * Buffers here are allocated at full size and handed a smaller logical
+ * capacity: stamp every byte with a sentinel beforehand, then verify the
+ * whole region afterward. A rejected call must write nothing at all,
+ * anywhere */
 
 /* Not a value any getter would plausibly write: neither a small integer, nor a
- * zero double, nor a valid bool. */
+ * zero double, nor a valid bool */
 #define CAPACITY_SENTINEL 0xA5
 
-/* The named result field API.
- *
- * This is the general way to read a cavity: enumerate what it holds, then pull
- * fields by name. It replaces the per-field entry points, and it is what lets a
- * caller identify branched points without re-deriving anything -- anchor_id,
- * branch and branch_count come straight from the cavity, which is where they
- * are maintained. */
+/* Named result field API: enumerate what the cavity holds, then pull fields
+ * by name. Replaces the per-field entry points; anchor_id, branch and
+ * branch_count come straight from the cavity */
 int test_cavity_fields(void)
 {
     printf("\n=== Test: named cavity result fields ===\n");
@@ -2122,8 +2075,8 @@ int test_cavity_fields(void)
         goto cleanup;
     }
 
-    /* Every declared field has to describe itself consistently: the reported
-     * count is what an accessor writes, so it must equal the product of dims. */
+    /* Every declared field must describe itself consistently: the reported
+     * count is what an accessor writes, and must equal the product of dims */
     int saw_numbering = 0, saw_xyz = 0;
     for (int i = 0; i < nfield; i++) {
         char name[MOIST_FIELD_NAME_MAX + 1] = {0};
@@ -2183,7 +2136,7 @@ int test_cavity_fields(void)
     moist_get_cavity_field_about(error, cav, "absent", about, about_capacity, &copied_length);
     if (!moist_check_error(error) || about[0] != '\0' || copied_length != 123) goto cleanup;
 
-    /* The branching data the cavity maintains, read directly. */
+    /* The branching data the cavity maintains, read directly */
     numbering = (int*)malloc((size_t)ngrid * sizeof(int));
     anchor_id = (int*)malloc((size_t)ngrid * sizeof(int));
     branch = (int*)malloc((size_t)ngrid * sizeof(int));
@@ -2202,8 +2155,8 @@ int test_cavity_fields(void)
         goto cleanup;
     }
 
-    /* numbering is the packing of the other two, so the cavity's own arrays
-     * and the packed id have to agree point for point. */
+    /* numbering is the packing of the other two: the cavity's own arrays and
+     * the packed id must agree point for point */
     int nbranched = 0;
     for (int i = 0; i < ngrid; i++) {
         const int base = nsph * num_leb;
@@ -2221,9 +2174,9 @@ int test_cavity_fields(void)
     }
     printf("  %d of %d points are branched\n", nbranched, ngrid);
 
-    /* The logical accessor, the third of the three. Every value it can return
-     * is also a legal seed, so a buffer it never touched would pass unnoticed;
-     * reading into two oppositely seeded buffers proves it wrote every entry. */
+    /* Logical accessor, the third of the three: every value it can return is
+     * also a legal seed. Read into two oppositely seeded buffers to confirm
+     * every entry was written */
     converged = (bool*)malloc((size_t)ngrid * sizeof(bool));
     converged2 = (bool*)malloc((size_t)ngrid * sizeof(bool));
     if (!converged || !converged2) {
@@ -2248,7 +2201,7 @@ int test_cavity_fields(void)
     }
     printf("  %d of %d points converged\n", nconverged, ngrid);
 
-    /* A name the cavity does not hold is an error, never a buffer of zeros. */
+    /* A name the cavity does not hold is an error, never a buffer of zeros */
     double probe = 12345.0;
     moist_get_cavity_field_real(error, cav, "not_a_field", &probe);
     if (!moist_check_error(error)) {
@@ -2263,7 +2216,7 @@ int test_cavity_fields(void)
     error = moist_new_error();
 
     /* Same for a field whose optional property was never requested: the
-     * default cavity computes no curvature, so k1 is absent rather than zero. */
+     * default cavity computes no curvature, k1 is absent rather than zero */
     moist_get_cavity_field_real(error, cav, "k1", &probe);
     if (!moist_check_error(error)) {
         printf("  FAIL: a field that was never computed was handed out\n");
@@ -2294,7 +2247,7 @@ static void fill_sentinel(void* p, size_t nbytes)
     memset(p, CAPACITY_SENTINEL, nbytes);
 }
 
-/* Non-zero if every byte of the region still carries the sentinel. */
+/* Non-zero if every byte of the region still carries the sentinel */
 static int sentinel_intact(const void* p, size_t nbytes)
 {
     const unsigned char* b = (const unsigned char*)p;
@@ -2352,7 +2305,7 @@ int test_capacity_validation(void)
         goto cleanup;
     }
 
-    /* Physical extents: what an unchecked getter would write. */
+    /* Physical extents: what an unchecked getter would write */
     const size_t n_xyz = (size_t)3 * (size_t)ngrid * sizeof(double);
     const size_t n_a = (size_t)ngrid * sizeof(double);
     const size_t n_owner = (size_t)ngrid * sizeof(int);
@@ -2382,7 +2335,7 @@ int test_capacity_validation(void)
         goto cleanup;
     }
 
-    /* Logical capacity offered to the library: one short of the truth. */
+    /* Logical capacity offered to the library: one short of the truth */
     const int short_ngrid = ngrid - 1;
 
     double area = 0.0, volume = 0.0;
@@ -2417,8 +2370,8 @@ int test_capacity_validation(void)
     }
 
     if (result == 0) {
-        /* A short sphere capacity has to be caught just the same. The grid
-         * capacity is honest here so that only the sphere check can fire. */
+        /* A short sphere capacity has to be caught just the same; the grid
+         * capacity is honest here, isolating the sphere check */
         fill_sentinel(xyz, n_xyz); fill_sentinel(a, n_a);
         fill_sentinel(owner, n_owner); fill_sentinel(converged, n_conv);
         fill_sentinel(vradii, n_sph); fill_sentinel(asph, n_sph);
@@ -2443,10 +2396,9 @@ int test_capacity_validation(void)
         }
     }
 
-    /* Reading a real field through the logical accessor must be refused too.
-     * The tag check is not just contract hygiene here: the payload the accessor
-     * would copy out is the unallocated one, so this guard is what keeps a
-     * mistyped read from being a memory error. */
+    /* Reading a real field through the logical accessor must be refused too:
+     * the payload the accessor would copy out is the unallocated one, so a
+     * mistyped read must not become a memory error */
     if (result == 0) {
         fill_sentinel(converged, n_conv);
 
@@ -2465,7 +2417,7 @@ int test_capacity_validation(void)
     }
 
     /* Reading a real field through the integer accessor must be refused too:
-     * the type tag is part of the contract, not a hint. */
+     * the type tag is part of the contract, not a hint */
     if (result == 0) {
         fill_sentinel(numbering, n_owner);
 
@@ -2517,7 +2469,7 @@ int test_capacity_validation(void)
         }
     }
 
-    /* Oversized buffers are accepted; only the returned logical extent is valid. */
+    /* Oversized buffers are accepted; only the returned logical extent is valid */
     if (result == 0) {
         const int big_ngrid = ngrid + 17;
         const int big_nsph = nsph + 5;
@@ -2562,15 +2514,14 @@ cleanup:
     return result;
 }
 
-/* Registry rather than a running sum: the exit status alone tells you how many
- * tests failed but not which, and the "Start test:" lines are interleaved with
- * everything the tests print. */
+/* test_registry (below) records each test by name; "Start test:" lines
+ * interleave with everything else the tests print */
 /* ------------------------------------------------------------------------- */
 /* Host coupling protocol                                                    */
 /* ------------------------------------------------------------------------- */
 
 /* Raw Gaussian-potential primitives from the water nuclei. A QM host adds
- * the electronic integral contribution to each of these quantities. */
+ * the electronic integral contribution to each of these quantities */
 static void gaussian_nuclear_primitives(int ngrid, const double* xyz, const double* xi,
                                         double* phi, double* dphi, double* dxi)
 {
@@ -2597,7 +2548,7 @@ static void gaussian_nuclear_primitives(int ngrid, const double* xyz, const doub
 
 /* Consume an EXPECTED failure: the handle must carry an error whose message
  * names `fragment`; the handle is then replaced by a clean one so the test can
- * go on. Returns 1 when the failure did not happen or has the wrong wording. */
+ * go on. Returns 1 when the failure did not happen or has the wrong wording */
 static int expect_failure(moist_error* error, const char* fragment, const char* what)
 {
     if (!moist_check_error(*error)) {
@@ -2615,7 +2566,7 @@ static int expect_failure(moist_error* error, const char* fragment, const char* 
     return ok ? 0 : 1;
 }
 
-/* Every diagnostic identifies the function the C caller actually invoked. */
+/* Every diagnostic identifies the function the C caller actually invoked */
 static int error_has_origin(moist_error error, const char *function)
 {
     char message[512] = {0}, prefix[128];
@@ -2704,7 +2655,7 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_get_model_gradient");
     coupling = moist_new_coupling(error, NULL);
     REQUIRE_ORIGIN("moist_new_coupling");
-    /* A failing walk reports and still ends the host loop. */
+    /* A failing walk reports and still ends the host loop */
     if (moist_next_coupling_request(error, NULL)) goto cleanup;
     REQUIRE_ORIGIN("moist_next_coupling_request");
     moist_get_coupling_request_name(error, NULL, request_name);
@@ -2715,7 +2666,7 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_answer_coupling_request");
     moist_get_coupling_request_width(error, NULL, &value);
     REQUIRE_ORIGIN("moist_get_coupling_request_width");
-    /* So does a failing response walk. */
+    /* So does a failing response walk */
     if (moist_next_response_item(error, NULL)) goto cleanup;
     REQUIRE_ORIGIN("moist_next_response_item");
     moist_get_response_item_name(error, NULL, request_name);
@@ -2741,10 +2692,10 @@ cleanup:
 #undef REQUIRE_ORIGIN
 }
 
-/* The refusal of every request query outside a next() window. */
+/* The refusal of every request query outside a next() window */
 static const char no_current_request[] = "No current coupling request - call next() first";
 
-/* Native rejection invalidates model state even when Python would reject first. */
+/* Native rejection invalidates model state even when Python would reject first */
 int test_model_density_rejection(void)
 {
     moist_error error = moist_new_error();
@@ -2776,7 +2727,7 @@ int test_model_density_rejection(void)
     coupling = moist_new_coupling(error, model);
     moist_prepare_model_energy(error, model, coupling);
     if (moist_check_error(error)) goto cleanup;
-    /* Walk to the request, so that the rejection has a current one to end. */
+    /* Walk to the request; the rejection needs a current one to end */
     if (!moist_next_coupling_request(error, coupling) || moist_check_error(error)) goto cleanup;
     moist_set_model_isodensity_density(error, model, 2, bad_density);
     if (!error_has_origin(error, "moist_set_model_isodensity_density")) goto cleanup;
@@ -2786,7 +2737,7 @@ int test_model_density_rejection(void)
     if (expect_failure(&error, no_current_request,
                        "density rejection ends the walk")) goto cleanup;
     if (!missing) goto cleanup;
-    /* The staging went with it: nothing to walk until the next prepare. */
+    /* The staging went with it: nothing to walk until the next prepare */
     if (moist_next_coupling_request(error, coupling) || moist_check_error(error)) goto cleanup;
     moist_get_model_energy(error, model, coupling, &energy);
     if (!error_has_origin(error, "moist_get_model_energy") || energy != 2) goto cleanup;
@@ -2803,11 +2754,11 @@ cleanup:
 }
 
 /* Leave a protocol test at its `cleanup` label when an expectation fails,
- * naming the condition. Expected failures go through expect_failure. */
+ * naming the condition. Expected failures go through expect_failure */
 #define REQUIRE(cond) do { if (!(cond)) { \
     printf("  FAIL: %s (line %d)\n", #cond, __LINE__); goto cleanup; } } while (0)
 
-/* The current request carries the name `expected`. */
+/* The current request carries the name `expected` */
 static int request_is(moist_error error, moist_coupling cpl, const char* expected)
 {
     char name[MOIST_NAME_MAX + 1] = {0};
@@ -2820,7 +2771,7 @@ static int request_is(moist_error error, moist_coupling cpl, const char* expecte
     return 1;
 }
 
-/* The current response item carries the name `expected`. */
+/* The current response item carries the name `expected` */
 static int item_is(moist_error error, moist_response response, const char* expected)
 {
     char name[MOIST_NAME_MAX + 1] = {0};
@@ -2834,7 +2785,7 @@ static int item_is(moist_error error, moist_response response, const char* expec
 }
 
 /* Output `output` of the current request is missing exactly when `expected`.
- * The flag starts at the opposite value, so an unwritten result fails. */
+ * The flag starts at the opposite value; an unwritten result then fails */
 static int missing_is(moist_error error, moist_coupling cpl, const char* output, bool expected)
 {
     bool missing = !expected;
@@ -2849,7 +2800,7 @@ static int missing_is(moist_error error, moist_coupling cpl, const char* output,
 
 /* Everything the host computes on the cavity grid, by output name: the nuclear
  * potential primitives and stand-ins for the Gaussian moments of its density
- * (NULL when the model asks for no moments). */
+ * (NULL when the model asks for no moments) */
 struct host_outputs {
     int ngrid;
     const double *phi, *dphi_dr, *dphi_dxi;
@@ -2859,7 +2810,7 @@ struct host_outputs {
 /* One pass of the host loop as moist.h prints it: walk the requests, dispatch
  * on the name and answer every missing output. `visited` receives the request
  * names in visiting order, comma separated. Returns the number of requests
- * visited, or -1 on a failure. */
+ * visited, or -1 on a failure */
 static int answer_pass(moist_error error, moist_coupling cpl, const struct host_outputs* host,
                        char* visited, size_t visited_cap)
 {
@@ -2902,13 +2853,13 @@ static int answer_pass(moist_error error, moist_coupling cpl, const struct host_
     return moist_check_error(error) ? -1 : visits;
 }
 
-/* The refusal of every item query outside a next() window of the response. */
+/* The refusal of every item query outside a next() window of the response */
 static const char no_current_item[] = "No current response item - call next() first";
 
 /* One pass of the response walk as moist.h prints it: `names` receives the
  * item names in visiting order, comma separated. A pass left open is finished
- * first, so the listing always starts at the first item. Returns the number of
- * items visited, or -1 on a failure. */
+ * first; the listing always starts at the first item. Returns the number of
+ * items visited, or -1 on a failure */
 static int response_names(moist_error error, moist_response response, char* names,
                           size_t names_cap)
 {
@@ -2928,7 +2879,7 @@ static int response_names(moist_error error, moist_response response, char* name
 
 /* Walk the response to the item named `item`, as a host contracting it does.
  * A pass left open is finished first. Returns 1 with that item current, 0 when
- * the response has no such item (the pass then ended), -1 on a failure. */
+ * the response has no such item (the pass then ended), -1 on a failure */
 static int walk_to_item(moist_error error, moist_response response, const char* item)
 {
     while (moist_next_response_item(error, response)) {}
@@ -2946,7 +2897,7 @@ static int walk_to_item(moist_error error, moist_response response, const char* 
  * size contract on the way: a NULL buffer is refused by name, and moist writes
  * exactly the documented ngrid * per_point values -- never past them into a
  * larger buffer. `per_point` counts the values per grid point (1, 3 or 9);
- * `values` receives ngrid * per_point of them. */
+ * `values` receives ngrid * per_point of them */
 static int read_response_array(moist_error* error, moist_response response, const char* array,
                                int ngrid, int per_point, double* values)
 {
@@ -2987,7 +2938,7 @@ done:
 }
 
 /* One fixed cavity, one CPCM component, one request: the host walk through the
- * three phases, with every refusal the protocol promises on the way. */
+ * three phases, with every refusal the protocol promises on the way */
 static int run_coupling_protocol(const char* label, moist_cavity cav)
 {
     printf("Start test: raw coupling protocol (%s)\n", label);
@@ -3015,13 +2966,13 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     other = moist_new_coupling(error, model);
     response = moist_new_response(error);
     REQUIRE(cpl && other && response && !moist_check_error(error));
-    /* A response nothing has filled has nothing to walk, which is no error. */
+    /* A response nothing has filled has nothing to walk, which is no error */
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && !more);
     moist_get_model_energy(error, model, cpl, &energy);
     if (expect_failure(&error, "get_energy requires a coupling staged by prepare_energy; "
                        "this coupling is not staged", "evaluation before preparing")) goto cleanup;
-    /* Grid inputs are read from the model's cavity. */
+    /* Grid inputs are read from the model's cavity */
     borrowed = moist_get_model_cavity(error, model);
     moist_get_cavity_sizes(error, borrowed, &ngrid, &nsph);
     REQUIRE(!moist_check_error(error) && ngrid > 1);
@@ -3041,10 +2992,10 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     const struct host_outputs host = {ngrid, phi, dphi, dxi, NULL, NULL, NULL, NULL};
 
     /* Before a prepare there is nothing to walk. That is no error: the phase
-     * getters report the staging by name. */
+     * getters report the staging by name */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(!moist_check_error(error) && !more);
-    /* Without a current request nothing can be inspected or answered. */
+    /* Without a current request nothing can be inspected or answered */
     moist_get_coupling_request_name(error, cpl, name);
     if (expect_failure(&error, no_current_request, "name without a walk")) goto cleanup;
     moist_get_coupling_request_missing(error, cpl, "phi", &missing);
@@ -3055,7 +3006,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     moist_get_coupling_request_width(error, cpl, w_phi);
     if (expect_failure(&error, no_current_request, "width without a walk")) goto cleanup;
 
-    /* Every prepare restarts the walk, even in the middle of a pass. */
+    /* Every prepare restarts the walk, even in the middle of a pass */
     moist_prepare_model_energy(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, cpl);
@@ -3065,17 +3016,17 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     moist_answer_coupling_request(error, cpl, "phi", phi);
     if (expect_failure(&error, no_current_request, "answer after a new prepare")) goto cleanup;
 
-    /* The energy pass: one request, phi missing and nothing else. */
+    /* The energy pass: one request, phi missing and nothing else */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(!moist_check_error(error) && more && request_is(error, cpl, "gaussian_potential"));
     REQUIRE(missing_is(error, cpl, "phi", true) && missing_is(error, cpl, "dphi_dr", false));
-    /* A name the request does not declare is not missing; that is no error. */
+    /* A name the request does not declare is not missing; that is no error */
     REQUIRE(missing_is(error, cpl, "gt", false));
     moist_get_coupling_request_width(error, cpl, w_phi);
     if (expect_failure(&error, "gaussian_potential has no input 'width'",
                        "width of a potential request")) goto cleanup;
     /* Answers are checked by name and value; a refused answer drops the
-     * previous one. */
+     * previous one */
     moist_answer_coupling_request(error, cpl, "gt", phi);
     if (expect_failure(&error, "gaussian_potential has no output 'gt'",
                        "unknown output on answer")) goto cleanup;
@@ -3093,12 +3044,12 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     if (expect_failure(&error, "Output name is missing", "NULL output name")) goto cleanup;
     moist_answer_coupling_request(error, cpl, "phi", phi);
     REQUIRE(!moist_check_error(error) && missing_is(error, cpl, "phi", false));
-    /* One request, one visit: the pass ends, and the current request with it. */
+    /* One request, one visit: the pass ends, and the current request with it */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(!moist_check_error(error) && !more);
     moist_answer_coupling_request(error, cpl, "phi", phi);
     if (expect_failure(&error, no_current_request, "answer after the pass")) goto cleanup;
-    /* A second loop starts a new pass, which has nothing left to retry. */
+    /* A second loop starts a new pass, which has nothing left to retry */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(!moist_check_error(error) && !more);
     moist_get_model_energy(error, model, cpl, &energy);
@@ -3121,7 +3072,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     for (int k = 0; k < 3 * (H2O_NATOMS + 1); ++k) REQUIRE(gradient[k] == -12345.0);
 
     /* The response phase reuses the energy answer: on a fixed cavity there is
-     * nothing to walk, and the prepare ended the old walk. */
+     * nothing to walk, and the prepare ended the old walk */
     moist_prepare_model_response(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     moist_get_coupling_request_name(error, cpl, name);
@@ -3131,17 +3082,17 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     moist_get_model_response(error, model, cpl, response);
     REQUIRE(!moist_check_error(error));
     /* The response is walked like the coupling. A fixed cavity with CPCM
-     * hands back the potential adjoint alone. */
+     * hands back the potential adjoint alone */
     REQUIRE(response_names(error, response, visited, sizeof visited) == 1 &&
             strcmp(visited, "potential_adjoint") == 0);
-    /* Outside a pass nothing is current, and nothing is written. */
+    /* Outside a pass nothing is current, and nothing is written */
     fill_sentinel(w_phi, (size_t)ngrid * sizeof(double));
     moist_get_response_item_name(error, response, name);
     if (expect_failure(&error, no_current_item, "item name outside a pass")) goto cleanup;
     moist_get_response_array(error, response, "w_phi", w_phi);
     if (expect_failure(&error, no_current_item, "array outside a pass")) goto cleanup;
     /* Arrays are read by name from the current item: an array of another item
-     * and an unknown one are refused, and nothing is written. */
+     * and an unknown one are refused, and nothing is written */
     REQUIRE(walk_to_item(error, response, "potential_adjoint") == 1);
     moist_get_response_array(error, response, "w_rho", w_phi);
     if (expect_failure(&error, "potential_adjoint has no array 'w_rho'",
@@ -3151,20 +3102,20 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
                        "unknown array")) goto cleanup;
     REQUIRE(sentinel_intact(w_phi, (size_t)ngrid * sizeof(double)));
     REQUIRE(!read_response_array(&error, response, "w_phi", ngrid, 1, w_phi));
-    /* Past the only item the pass ends, and nothing is current any more. */
+    /* Past the only item the pass ends, and nothing is current any more */
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && !more);
     moist_get_response_array(error, response, "w_phi", w_phi);
     if (expect_failure(&error, no_current_item, "array after the pass")) goto cleanup;
     /* For CPCM E = q.phi / 2 with q = dE/dphi: the adjoint read back by name
-     * has to reproduce the energy of the answer. */
+     * has to reproduce the energy of the answer */
     double half_q_phi = 0.0;
     for (int i = 0; i < ngrid; ++i) half_q_phi += 0.5 * w_phi[i] * phi[i];
     printf("  q.phi/2 = %.12f\n", half_q_phi);
     REQUIRE(agrees_to(half_q_phi, contribution, 1e-10));
 
     /* The gradient phase keeps phi and adds the derivatives. A pass left early
-     * is resumed by the next call; past the only request, that ends it. */
+     * is resumed by the next call; past the only request, that ends it */
     moist_prepare_model_gradient(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     visits = 0;
@@ -3182,7 +3133,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     if (expect_failure(&error, "gaussian_potential: missing required outputs: dphi_dr, dphi_dxi",
                        "gradient with unanswered derivatives")) goto cleanup;
     for (int k = 0; k < 3 * (H2O_NATOMS + 1); ++k) REQUIRE(gradient[k] == -12345.0);
-    /* The next pass retries the request that still misses outputs. */
+    /* The next pass retries the request that still misses outputs */
     visits = answer_pass(error, cpl, &host, visited, sizeof visited);
     REQUIRE(visits == 1 && strcmp(visited, "gaussian_potential") == 0);
     moist_get_model_gradient(error, model, cpl, response, H2O_NATOMS - 1, gradient);
@@ -3202,7 +3153,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
                first_gradient[3 * a + 1], first_gradient[3 * a + 2]);
     /* The potential is the nuclear one, so this is the complete gradient and a
      * rigid translation leaves the energy alone. A slip in the [ngrid][3]
-     * layout of the dphi_dr answer breaks this by orders of magnitude. */
+     * layout of the dphi_dr answer breaks this by orders of magnitude */
     for (int k = 0; k < 3; ++k) {
         double net = 0.0;
         for (int a = 0; a < H2O_NATOMS; ++a) net += first_gradient[3 * a + k];
@@ -3211,7 +3162,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     REQUIRE(response_names(error, response, visited, sizeof visited) == 1 &&
             strcmp(visited, "potential_adjoint") == 0);
 
-    /* A model update ends the walk and the staging of every coupling. */
+    /* A model update ends the walk and the staging of every coupling */
     moist_prepare_model_energy(error, model, other);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, other);
@@ -3272,10 +3223,10 @@ int test_coupling_protocol_drop_cavity(void)
     return result;
 }
 
-/* A density-backed cavity follows the host density, so its geometry has a
- * response of its own: the response phase asks for the potential derivatives
+/* A density-backed cavity follows the host density: its geometry has a
+ * response of its own. The response phase asks for the potential derivatives
  * on top of the energy answer and returns the density weights next to the
- * potential adjoint, and the gradient phase then has nothing left to ask. */
+ * potential adjoint; the gradient phase then has nothing left to ask */
 int test_coupling_protocol_density_cavity(void)
 {
     printf("Start test: raw coupling protocol (isodensity DROP cavity, CPCM)\n");
@@ -3294,7 +3245,7 @@ int test_coupling_protocol_density_cavity(void)
     char visited[128];
     bool more = false;
     /* One normalized s primitive per atom and a diagonal density, as built by
-     * test_isodensity_internal_cavity. */
+     * test_isodensity_internal_cavity */
     const int shell_atom[3] = {0, 1, 2}, shell_l[3] = {0, 0, 0}, shell_nprim[3] = {1, 1, 1};
     const double alpha = 0.3;
     const double coeff = gto_s_norm(alpha);
@@ -3351,7 +3302,7 @@ int test_coupling_protocol_density_cavity(void)
     REQUIRE(!moist_check_error(error) && isfinite(energy));
     printf("  energy = %.12f\n", energy);
 
-    /* Unlike a fixed cavity, the response phase walks the potential again. */
+    /* Unlike a fixed cavity, the response phase walks the potential again */
     moist_prepare_model_response(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, cpl);
@@ -3368,8 +3319,8 @@ int test_coupling_protocol_density_cavity(void)
     moist_get_model_response(error, model, cpl, response);
     REQUIRE(!moist_check_error(error));
     /* Each item is visited once per pass, in the order the model produced
-     * them; the pass ends after the last and rewinds, so the next one starts
-     * over. */
+     * them; the pass ends after the last and rewinds, and the next one starts
+     * over */
     for (int pass = 0; pass < 2; ++pass) {
         more = moist_next_response_item(error, response);
         REQUIRE(!moist_check_error(error) && more && item_is(error, response, "potential_adjoint"));
@@ -3378,7 +3329,7 @@ int test_coupling_protocol_density_cavity(void)
         more = moist_next_response_item(error, response);
         REQUIRE(!moist_check_error(error) && !more);
     }
-    /* Refilling the response starts a new walk, even in the middle of one. */
+    /* Refilling the response starts a new walk, even in the middle of one */
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && more);
     moist_get_model_response(error, model, cpl, response);
@@ -3396,7 +3347,7 @@ int test_coupling_protocol_density_cavity(void)
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && !more);
     /* The adjoint still reproduces the energy, and the density weights carry
-     * the surface response, so they cannot all vanish. */
+     * the surface response and cannot all vanish */
     double half_q_phi = 0.0, density_norm = 0.0;
     for (int i = 0; i < ngrid; ++i) half_q_phi += 0.5 * w_phi[i] * phi[i];
     for (int i = 0; i < ngrid; ++i) density_norm += w_rho[i] * w_rho[i];
@@ -3407,7 +3358,7 @@ int test_coupling_protocol_density_cavity(void)
 
     /* The response answers cover the gradient phase too. No translation check
      * here: the host's share, the density weights contracted with its density
-     * derivatives, is not part of the model gradient. */
+     * derivatives, is not part of the model gradient */
     moist_prepare_model_gradient(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, cpl);
@@ -3434,7 +3385,7 @@ cleanup:
 /* Two requests in declaration order: GOSTSHYP adds its Gaussian moments after
  * the CPCM potential. A pass visits each request at most once, a pass left
  * early resumes where it was left, every prepare restarts the walk, and a later
- * pass retries only the requests that still miss an output. */
+ * pass retries only the requests that still miss an output */
 int test_coupling_protocol_gostshyp(void)
 {
     printf("Start test: raw coupling protocol (iSwiG cavity, CPCM + GOSTSHYP)\n");
@@ -3490,7 +3441,7 @@ int test_coupling_protocol_gostshyp(void)
     REQUIRE(!moist_check_error(error));
     moist_delete_cavity(&borrowed);
     gaussian_nuclear_primitives(ngrid, xyz, xi, phi, dphi, dxi);
-    /* Stand-ins for the density traces a QM host integrates. */
+    /* Stand-ins for the density traces a QM host integrates */
     for (int i = 0; i < ngrid; ++i) {
         gt[i] = 1.0e-3;
         for (int k = 0; k < 3; ++k) {
@@ -3502,7 +3453,7 @@ int test_coupling_protocol_gostshyp(void)
     const struct host_outputs host = {ngrid, phi, dphi, dxi, gt, pt, mt, rt};
 
     /* Declaration order: the potential, then the moments. A prepare in the
-     * middle of a pass restarts the walk at the first request. */
+     * middle of a pass restarts the walk at the first request */
     moist_prepare_model_energy(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, cpl);
@@ -3518,13 +3469,13 @@ int test_coupling_protocol_gostshyp(void)
         break;
     }
     REQUIRE(!moist_check_error(error) && visits == 1);
-    /* ...and the next call resumes at the moments instead of rewinding. */
+    /* ...and the next call resumes at the moments instead of rewinding */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(more && request_is(error, cpl, "gaussian_moments"));
     REQUIRE(missing_is(error, cpl, "gt", true) && missing_is(error, cpl, "pt", true));
     REQUIRE(missing_is(error, cpl, "mt", false) && missing_is(error, cpl, "rt", false));
     REQUIRE(missing_is(error, cpl, "phi", false));
-    /* The exponents are an input of this request: read them, never recompute. */
+    /* The exponents are an input of this request: read them, never recompute */
     const size_t width_bytes = (size_t)(ngrid + padding) * sizeof(double);
     fill_sentinel(width, width_bytes);
     moist_get_coupling_request_width(error, cpl, NULL);
@@ -3533,7 +3484,7 @@ int test_coupling_protocol_gostshyp(void)
     REQUIRE(!moist_check_error(error));
     REQUIRE(sentinel_intact(width + ngrid, (size_t)padding * sizeof(double)));
     for (int i = 0; i < ngrid; ++i) REQUIRE(isfinite(width[i]) && width[i] > 0.0);
-    /* gt is taken; pt is refused for a non-finite value and stays missing. */
+    /* gt is taken; pt is refused for a non-finite value and stays missing */
     moist_answer_coupling_request(error, cpl, "gt", gt);
     REQUIRE(!moist_check_error(error));
     const double saved_pt = pt[0];
@@ -3543,7 +3494,7 @@ int test_coupling_protocol_gostshyp(void)
     if (expect_failure(&error, "gaussian_moments: pt must be finite",
                        "non-finite moment answer")) goto cleanup;
     REQUIRE(missing_is(error, cpl, "gt", false) && missing_is(error, cpl, "pt", true));
-    /* Each request once per pass: the skipped potential is not revisited. */
+    /* Each request once per pass: the skipped potential is not revisited */
     more = moist_next_coupling_request(error, cpl);
     REQUIRE(!moist_check_error(error) && !more);
     energy = 3.0;
@@ -3551,7 +3502,7 @@ int test_coupling_protocol_gostshyp(void)
     if (expect_failure(&error, "gaussian_potential: missing required outputs: phi",
                        "energy with a skipped request")) goto cleanup;
     REQUIRE(energy == 3.0);
-    /* The next pass retries both requests; the one after has nothing left. */
+    /* The next pass retries both requests; the one after has nothing left */
     visits = answer_pass(error, cpl, &host, visited, sizeof visited);
     REQUIRE(visits == 2 && strcmp(visited, "gaussian_potential,gaussian_moments") == 0);
     visits = answer_pass(error, cpl, &host, visited, sizeof visited);
@@ -3562,7 +3513,7 @@ int test_coupling_protocol_gostshyp(void)
     printf("  energy = %.12f\n", energy);
 
     /* On a fixed cavity the response phase needs nothing new; the response
-     * carries the amplitudes next to the potential adjoint. */
+     * carries the amplitudes next to the potential adjoint */
     moist_prepare_model_response(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     visits = answer_pass(error, cpl, &host, visited, sizeof visited);
@@ -3584,7 +3535,7 @@ int test_coupling_protocol_gostshyp(void)
                        "array of another item")) goto cleanup;
 
     /* The gradient phase asks both requests for more. A refused output is
-     * retried alone: the next pass visits its request only. */
+     * retried alone: the next pass visits its request only */
     moist_prepare_model_gradient(error, model, cpl);
     REQUIRE(!moist_check_error(error));
     more = moist_next_coupling_request(error, cpl);
@@ -3641,7 +3592,7 @@ cleanup:
 
 #undef REQUIRE
 
-/* -1 selects version text; nonnegative values select one of the four banners. */
+/* -1 selects version text; nonnegative values select one of the four banners */
 static void query_text(moist_error error, int style, char *buffer,
                        size_t capacity, size_t *length)
 {
@@ -3699,7 +3650,7 @@ cleanup:
     return failed;
 }
 
-/* Historical 1.0 wire layout. Never append fields to this fixture. */
+/* Historical 1.0 wire layout. Never append fields to this fixture */
 struct drop_options_1_0 {
     size_t struct_size;
     int nleb;
@@ -3728,7 +3679,7 @@ struct pcm_options_1_0 {
     double solver_tol;
 };
 
-/* Simulate an old binary, even after the installed header gains fields. */
+/* Simulate an old binary, even after the installed header gains fields */
 int test_options_1_0_prefix(void)
 {
     moist_error error = moist_new_error();
@@ -3748,7 +3699,7 @@ int test_options_1_0_prefix(void)
     if (!lsf || moist_check_error(error)) goto cleanup;
     cavity = moist_new_drop_cavity(error, lsf, NULL, (const moist_drop_options *)&future.prefix);
     if (!cavity || moist_check_error(error)) goto cleanup;
-    /* Reserved inputs stay ignored, including residue from pre-reservation callers. */
+    /* Reserved inputs stay ignored, including residue from pre-reservation callers */
     moist_delete(cavity);
     future.prefix.reserved0 = 123;
     cavity = moist_new_drop_cavity(error, lsf, NULL, (const moist_drop_options *)&future.prefix);
@@ -3781,7 +3732,7 @@ cleanup:
     return failed;
 }
 
-/* Check every byte outside meaningful fields, including reserved members. */
+/* Check every byte outside meaningful fields, including reserved members */
 static int padding_is_zero(const void *value, const unsigned char *fields, size_t size)
 {
     const unsigned char *bytes = value;
@@ -3904,7 +3855,7 @@ cleanup:
     return failed;
 }
 
-/* Iterative-solver controls reach the native validator through the options struct. */
+/* Iterative-solver controls reach the native validator through the options struct */
 int test_pcm_solver_options(void)
 {
     moist_error error = moist_new_error();
@@ -3913,7 +3864,7 @@ int test_pcm_solver_options(void)
     int failed = 1;
     moist_init_pcm_options(error, &options, sizeof options);
     if (moist_check_error(error)) goto cleanup;
-    /* Defaults are the native ones: a positive threshold and a positive cap. */
+    /* Defaults are the native ones: a positive threshold and a positive cap */
     if (!(options.solver_tol > 0.0) || options.solver_maxiter < 1) goto cleanup;
     options.solver = moist_pcm_solver_iterative;
     options.solver_tol = 1.0e-8;
@@ -3924,7 +3875,7 @@ int test_pcm_solver_options(void)
     pcm = moist_new_cosmo_component(error, 78.4, &options);
     if (!pcm || moist_check_error(error)) goto cleanup;
     moist_delete(pcm);
-    /* A zero cap and a NaN threshold are rejected, for either variant. */
+    /* A zero cap and a NaN threshold are rejected, for either variant */
     options.solver_maxiter = 0;
     pcm = moist_new_cpcm_component(error, 78.4, &options);
     if (pcm || !moist_check_error(error)) goto cleanup;
@@ -3940,7 +3891,7 @@ cleanup:
     return failed;
 }
 
-/* ABI contracts independent of a particular numerical model. */
+/* ABI contracts independent of a particular numerical model */
 int test_v1_contract(void)
 {
     moist_error error = moist_new_error();
@@ -3974,7 +3925,7 @@ int test_v1_contract(void)
     moist_get_version_string(error, buffer, 1, &length);
     if (buffer[0] != '\0') goto cleanup;
 
-    /* Every C layout must match its frozen Fortran minimum, including padding. */
+    /* Every C layout must match its frozen Fortran minimum, including padding */
 #define CHECK_OPTIONS_LAYOUT(kind) do { \
     moist_##kind##_options value; \
     moist_init_##kind##_options(error, &value, sizeof value); \
@@ -4014,7 +3965,7 @@ int test_v1_contract(void)
     if (!lsf || moist_check_error(error)) goto cleanup;
     cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
     if (!cavity || moist_check_error(error)) goto cleanup;
-    moist_delete(lsf);  /* The cavity owns its LSF copy. */
+    moist_delete(lsf);  /* The cavity owns its LSF copy */
     mol = make_h2o(error);
     moist_update_cavity(error, cavity, mol);
     if (moist_check_error(error)) goto cleanup;
@@ -4026,7 +3977,7 @@ int test_v1_contract(void)
     if (!moist_check_error(error) || energy != 123.0) goto cleanup;
     moist_get_model_energy(error, NULL, NULL, NULL);
     if (!moist_check_error(error)) goto cleanup;
-    /* The coupling walk ends on any failure, even without an error handle. */
+    /* The coupling walk ends on any failure, even without an error handle */
     if (moist_next_coupling_request(NULL, NULL)) goto cleanup;
     if (moist_next_coupling_request(error, NULL) || !moist_check_error(error)) goto cleanup;
     moist_get_coupling_request_missing(error, NULL, "phi", &flag);
@@ -4035,7 +3986,7 @@ int test_v1_contract(void)
     if (!moist_check_error(error)) goto cleanup;
     moist_get_coupling_request_name(error, NULL, NULL);
     if (!moist_check_error(error)) goto cleanup;
-    /* So does the response walk. */
+    /* So does the response walk */
     if (moist_next_response_item(NULL, NULL)) goto cleanup;
     if (moist_next_response_item(error, NULL) || !moist_check_error(error)) goto cleanup;
     moist_get_response_item_name(error, NULL, NULL);
