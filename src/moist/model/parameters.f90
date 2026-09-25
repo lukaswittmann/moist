@@ -3,6 +3,12 @@
 !>
 !> Derived types declare their fields in register_entries and defaults in
 !> init_defaults
+!>
+!> Building, reading and writing a document is serialized by the named
+!> critical section `moist_parameter_documents`: toml-f and jonquil return
+!> deferred-length strings, and gfortran keeps their length in a static
+!> temporary that concurrent threads overwrite (jonquil then writes numbers
+!> truncated or empty)
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
@@ -130,6 +136,7 @@ contains
       call self%clear_document()
       call resolve_file_format(filepath, use_toml, error)
       if (allocated(error)) return
+      !$omp critical (moist_parameter_documents)
       if (use_toml) then
          call toml_load(table, filepath, error=format_error)
          call move_alloc(table, self%document)
@@ -150,6 +157,7 @@ contains
          end if
       end if
       call self%clear_document()
+      !$omp end critical (moist_parameter_documents)
       if (.not. allocated(error)) call self%validate(error)
    end subroutine read_file
 
@@ -190,6 +198,7 @@ contains
       call self%clear_document()
       call resolve_file_format(filepath, use_toml, error)
       if (allocated(error)) return
+      !$omp critical (moist_parameter_documents)
       call self%collect_document(error)
       if (.not. allocated(error)) then
          open(newunit=unit, file=filepath, status="replace", action="write", iostat=stat, iomsg=message)
@@ -207,6 +216,7 @@ contains
          end if
       end if
       call self%clear_document()
+      !$omp end critical (moist_parameter_documents)
    end subroutine write_file
 
    !> Print parameter values as formatted JSON
@@ -223,12 +233,14 @@ contains
 
       output = output_unit
       if (present(unit)) output = unit
+      !$omp critical (moist_parameter_documents)
       call self%collect_document(error)
       if (.not. allocated(error)) then
          call json_dump(self%document, output, format_error)
          if (allocated(format_error)) call fatal_error(error, format_error%message)
       end if
       call self%clear_document()
+      !$omp end critical (moist_parameter_documents)
    end subroutine print_parameters
 
    !> Resolve a dotted key; missing input fields keep their default values

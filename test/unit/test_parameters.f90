@@ -20,8 +20,8 @@ module test_parameters
    private
    public :: collect_parameters
 
-   !> Isolated temporary path for this suite
-   character(len=*), parameter :: parameter_file = "moist-test-parameters.json"
+   !> Temporary path of the copy test
+   character(len=*), parameter :: parameter_file = "moist-test-parameters-copies.json"
 
    !> Exercise less common registration helpers through the abstract interface
    type, extends(moist_model_parameters_type) :: vector_parameters_type
@@ -61,7 +61,7 @@ contains
 
       param%weights = [0.3_wp, -5.0_wp]
       param%label = 'a "quoted" name'
-      call roundtrip(param, error)
+      call roundtrip(param, "moist-test-parameters-vector", error)
       if (allocated(error)) return
       call check(error, maxval(abs(param%weights - [0.3_wp, -5.0_wp])), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
@@ -169,28 +169,29 @@ contains
       type(moist_cavity_drop_lsf_cfc_param_type) :: cfc
       type(moist_cavity_drop_lsf_isodensity_param_type) :: rho
       type(moist_pcm_parameters_type) :: pcm
+      character(len=*), parameter :: stem = "moist-test-parameters-roundtrip"
 
       drop%tolerance = 1.0e-8_wp
       drop%do_fine = .true.
-      call roundtrip(drop, error)
+      call roundtrip(drop, stem, error)
       if (allocated(error)) return
       call check(error, drop%proj_tol, 1.0e-8_wp)
       if (allocated(error)) return
       call check(error, drop%do_fine)
       if (allocated(error)) return
       iswig%cut_f = 0.02_wp
-      call roundtrip(iswig, error)
+      call roundtrip(iswig, stem, error)
       if (allocated(error)) return
       call check(error, iswig%cut_f, 0.02_wp)
       if (allocated(error)) return
       numsa%smoothing = 0.4_wp
-      call roundtrip(numsa, error)
+      call roundtrip(numsa, stem, error)
       if (allocated(error)) return
       call check(error, numsa%smoothing, 0.4_wp)
       if (allocated(error)) return
       mc%obj_file = 'path with "quotes" and \slash/mesh.obj'
       mc%spacing = 0.4_wp
-      call roundtrip(mc, error)
+      call roundtrip(mc, stem, error)
       if (allocated(error)) return
       call check(error, allocated(mc%obj_file))
       if (allocated(error)) return
@@ -199,24 +200,24 @@ contains
       call check(error, .not. allocated(mc%pqr_file))
       if (allocated(error)) return
       svdw%blend_k = 6.0_wp
-      call roundtrip(svdw, error)
+      call roundtrip(svdw, stem, error)
       if (allocated(error)) return
       call check(error, svdw%blend_k, 6.0_wp)
       if (allocated(error)) return
       cfc%a1 = -12.0_wp
-      call roundtrip(cfc, error)
+      call roundtrip(cfc, stem, error)
       if (allocated(error)) return
       call check(error, cfc%a1, -12.0_wp)
       if (allocated(error)) return
       rho%rho_iso = 0.005_wp
       rho%exclusion_cap = 3.0_wp
-      call roundtrip(rho, error)
+      call roundtrip(rho, stem, error)
       if (allocated(error)) return
       call check(error, rho%exclusion_cap, 3.0_wp)
       if (allocated(error)) return
       pcm%solver = solver_type%lu
       pcm%solver_maxiter = 42
-      call roundtrip(pcm, error)
+      call roundtrip(pcm, stem, error)
       if (allocated(error)) return
       call check(error, pcm%solver_maxiter, 42)
    end subroutine test_roundtrip
@@ -224,21 +225,22 @@ contains
    !> Exercise the abstract file/printing interface without knowing the concrete type
    !>
    !> @param[inout] param Parameter values
+   !> @param[in] stem File name without extension, owned by the calling test
    !> @param[out] error Test failure
-   subroutine roundtrip(param, error)
+   subroutine roundtrip(param, stem, error)
       class(moist_model_parameters_type), intent(inout) :: param
+      character(len=*), intent(in) :: stem
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       integer :: unit, stat, i
-      character(len=32), parameter :: files(2) = [character(len=32) :: &
-         "moist-test-parameters.json", "moist-test-parameters.toml"]
+      character(len=5), parameter :: extensions(2) = [".json", ".toml"]
 
-      do i = 1, size(files)
-         call param%write_file(trim(files(i)), err)
+      do i = 1, size(extensions)
+         call param%write_file(stem//extensions(i), err)
          call check(error, .not. allocated(err))
          if (allocated(error)) return
          call param%init_defaults()
-         call param%read_file(trim(files(i)), err)
+         call param%read_file(stem//extensions(i), err)
          call check(error, .not. allocated(err))
          if (allocated(error)) return
          open(newunit=unit, status="scratch", action="readwrite", iostat=stat)
@@ -250,7 +252,7 @@ contains
          if (allocated(error)) return
          call check(error, stat, 0)
          if (allocated(error)) return
-         open(newunit=unit, file=trim(files(i)), status="old", iostat=stat)
+         open(newunit=unit, file=stem//extensions(i), status="old", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
          close(unit, status="delete", iostat=stat)
@@ -268,10 +270,12 @@ contains
       type(moist_cavity_iswig_parameters_type) :: iswig
       integer :: unit, stat, close_stat, i
       character(len=40), parameter :: bad_paths(3) = [character(len=40) :: &
-         "moist-test-parameters.txt", "moist-test-parameters", "directory.json/no-extension"]
+         "moist-test-parameters-formats.txt", "moist-test-parameters-formats", "directory.json/no-extension"]
       logical :: exists
+      !> Uppercase extension; must not match another test's file on case-insensitive systems
+      character(len=*), parameter :: toml_file = "moist-test-parameters-formats.TOML"
 
-      open(newunit=unit, file="moist-test-parameters.TOML", status="replace", action="write", iostat=stat)
+      open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
       write(unit, '(a)', iostat=stat) '# Independently authored TOML', &
@@ -279,7 +283,7 @@ contains
       close(unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
-      call param%read_file("moist-test-parameters.TOML", err)
+      call param%read_file(toml_file, err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, param%num_leb, 110)
@@ -289,29 +293,29 @@ contains
       call check(error, param%proj_maxiter, 150)
       if (allocated(error)) return
       ! Uppercase output extensions select TOML too
-      call param%write_file("moist-test-parameters.TOML", err)
+      call param%write_file(toml_file, err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call param%read_file("moist-test-parameters.TOML", err)
+      call param%read_file(toml_file, err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      open(newunit=unit, file="moist-test-parameters.TOML", status="replace", action="write", iostat=stat)
+      open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
       write(unit, '(a)', iostat=stat) 'num_leb = ['
       close(unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
-      call iswig%read_file("moist-test-parameters.TOML", err)
+      call iswig%read_file(toml_file, err)
       call check(error, allocated(err))
       if (allocated(error)) return
-      open(newunit=unit, file="moist-test-parameters.TOML", status="old", iostat=stat)
+      open(newunit=unit, file=toml_file, status="old", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
       close(unit, status="delete", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      call iswig%read_file("moist-test-parameters.TOML", err)
+      call iswig%read_file(toml_file, err)
       call check(error, allocated(err))
       if (allocated(error)) return
       do i = 1, size(bad_paths)

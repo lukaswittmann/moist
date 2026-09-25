@@ -80,7 +80,7 @@ jobs:
         run: |
           export OMP_STACKSIZE=128M
           fflags="-fopenmp"
-          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
+          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise -fpscomp logicals"; fi
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
           fpm test --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
 
@@ -199,8 +199,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Pinned: 2.14.0 breaks UHF/UKS gradients over an atom subset (fixed on master)
       - name: Install Python dependencies
-        run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf
+        run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf==2.13.1
 
       - name: Verify pyscf is importable
         run: python -c "from pyscf import dft, grad, gto, scf; import pyscf; print(pyscf.__version__)"
@@ -249,8 +250,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Pinned: 2.14.0 breaks UHF/UKS gradients over an atom subset (fixed on master)
       - name: Install Python dependencies
-        run: python -m pip install --upgrade pip pytest numpy pyscf
+        run: python -m pip install --upgrade pip pytest numpy pyscf==2.13.1
 
       - name: Source distribution with subprojects
         run: |

@@ -1,5 +1,6 @@
 """Cross-language contracts exercised through public Python and C entry points."""
 
+import gc
 import numpy as np
 import pytest
 import moist
@@ -61,6 +62,30 @@ def test_model_accumulators():
         model.get_gradient(coupling, np.zeros((2, 6))[:, ::2])
     with pytest.raises(TypeError, match="float64"):
         model.get_gradient(coupling, np.zeros((2, 3), dtype=np.float32))
+
+
+def test_cyclic_garbage_deletes_coupling_before_model(monkeypatch):
+    """Deleting a coupling reaches into its model, whatever order GC finds them in."""
+    order = []
+    for kind in (library.ModelHandle, library.CouplingHandle):
+        delete = kind._delete
+        monkeypatch.setattr(kind, "_delete", staticmethod(
+            lambda handle, kind=kind, delete=delete: (order.append(kind), delete(handle))))
+    gc.disable()
+    try:
+        for _ in range(8):
+            model, _ = _model()
+            coupling = model.new_coupling()
+            box = {"model": model, "coupling": coupling}
+            box["box"] = box
+            del model, coupling, box
+        gc.collect()
+    finally:
+        gc.enable()
+    assert order.count(library.CouplingHandle) == 8
+    assert order.index(library.ModelHandle) > max(
+        i for i, kind in enumerate(order) if kind is library.CouplingHandle)
+    assert not library._COUPLING_PARENTS
 
 
 def test_independent_answers():

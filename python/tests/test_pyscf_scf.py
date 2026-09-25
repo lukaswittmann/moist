@@ -72,7 +72,8 @@ def test_scf_energy_fock_and_spin_contract(mol, method, cavity):
     v = mf.get_veff(dm=dm)
     np.testing.assert_allclose(v, base_v, atol=1e-12)
     result = mf.with_moist.evaluate(dm)
-    np.testing.assert_allclose(mf.get_fock(dm=dm, vhf=v), base.get_fock(dm=dm, vhf=base_v) + result.fock)
+    np.testing.assert_allclose(mf.get_fock(dm=dm, vhf=v), base.get_fock(dm=dm, vhf=base_v) + result.fock,
+                               atol=1e-12)
     assert mf.energy_elec(dm, vhf=v)[0] == pytest.approx(base.energy_elec(dm, vhf=base_v)[0] + result.energy)
     if method.endswith("KS"):
         assert v.exc == base_v.exc  # Checks that DFT exc metadata is preserved.

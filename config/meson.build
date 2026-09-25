@@ -33,11 +33,8 @@ if fc_id == 'gcc'
 elif fc_id == 'intel'
   add_project_arguments(
     '-traceback',
-    # ifx defaults to -fp-model=fast, which reassociates reductions and contracts
-    # FMAs aggressively. That diverges from gfortran's value-safe default and
-    # rounds the analytic-vs-reference / quadrature-identity tests over their
-    # tolerances. Pin a precise model so Intel numerics are reproducible.
     '-fp-model=precise',
+    '-fpscomp', 'logicals',
     language: 'fortran',
   )
   # Intel traceback support at runtime requires libunwind to be linked.

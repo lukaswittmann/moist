@@ -499,16 +499,23 @@ def new_general_model(
 # layout are checked here, which the pointer cast relies on.
 
 
+# Parent model of every live coupling, keyed by the native coupling address
+_COUPLING_PARENTS: dict[int, ModelHandle] = {}
+
+
+def _release_coupling(handle):
+    # Take the parent out first: the address may be reused once deleted
+    parent = _COUPLING_PARENTS.pop(int(ffi.cast("uintptr_t", handle)))
+    CouplingHandle._delete(handle)
+    del parent
+
+
 def new_coupling(model: ModelHandle) -> CouplingHandle:
     """Declare the host coupling of an updated general model."""
 
     handle = error_check(lib.moist_new_coupling)(model.handle)
-
-    def release(handle, owner=model):
-        # Keep the parent alive through native deletion, including cyclic GC.
-        CouplingHandle._delete(handle)
-
-    return CouplingHandle(ffi.gc(handle, release))
+    _COUPLING_PARENTS[int(ffi.cast("uintptr_t", handle))] = model
+    return CouplingHandle(ffi.gc(handle, _release_coupling))
 
 
 def new_response() -> ResponseHandle:
