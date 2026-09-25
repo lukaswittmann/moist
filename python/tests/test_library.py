@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pytest import approx, raises
 
-from moist import Isodensity
+from moist import DROPParameters, Isodensity, IsodensityParameters
 from moist.interface import (
     CavityDROP,
     ModelComponentPV,
@@ -39,19 +39,17 @@ def test_callback_arity_detection() -> None:
 
     assert not _callback_takes_order(legacy)
     assert _callback_takes_order(with_order)
-    # `order` is keyword-only here, so the two-positional-argument call would
-    # fail -- it must be treated as the legacy form
+    # A keyword-only `order` is treated as the legacy form.
     assert not _callback_takes_order(keyword_order)
-    # *args could accept anything; the safe assumption is the legacy form
+    # An arbitrary *args signature is treated as the legacy form.
     assert not _callback_takes_order(varargs)
-    # A bound partial that has already consumed `point` still exposes `order`
+    # A partial with `point` already bound still exposes `order`.
     assert _callback_takes_order(functools.partial(with_order))
-    # Builtins are not introspectable and must fall back, not raise
+    # Builtins are not introspectable and must fall back, not raise.
     assert not _callback_takes_order(len)
 
 
-#: Density contour the test surfaces follow, in electrons/Bohr^3.  moist owns it
-#: now, so it has to reach the cavity constructor rather than the callback.
+#: Density contour the test surfaces follow, in electrons/Bohr^3.
 _RHO_ISO = 1.0e-3
 
 
@@ -60,13 +58,13 @@ class _GaussianDensity:
 
     moist forms the level set S = scale (rho_iso - rho) from it.
 
-    Records which derivative orders it was asked for, so a test can tell that
-    moist really does skip the expensive orders during projection.
+    Records which derivative orders were requested; used to verify that
+    moist skips the expensive orders during projection.
     """
 
     def __init__(self, centers: np.ndarray, alpha: float = 0.3):
-        # Mirrors the diagonal single-s-per-atom density used by the C example
-        # in test/api/example.c, which is known to give a well-behaved surface.
+        # Diagonal single-s-per-atom density, matching the C example in
+        # test/api/example.c.
         coeff = (2.0 * alpha / np.pi) ** 0.75
         self.centers = np.asarray(centers, dtype=np.float64)
         self.c = 2.0 * coeff**2
@@ -136,10 +134,8 @@ def water() -> tuple[np.ndarray, np.ndarray]:
 def flaky_lsf(water) -> SimpleNamespace:
     """A density callback that can be switched to fail partway into a build.
 
-    ``arm(True)`` makes the callback raise once moist is 50 grid points in --
-    far enough that the abort has to unwind a partly built surface -- and resets
-    the call counter, so the trip point is always measured from the start of the
-    next build rather than from the fixture's lifetime.
+    ``arm(True)`` makes the callback raise once moist is 50 grid points in,
+    and resets the call counter.
     """
     _, positions = water
     lsf = _GaussianDensity(positions)
@@ -161,7 +157,8 @@ def flaky_lsf(water) -> SimpleNamespace:
 
 def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
     """A callback-backed DROP cavity; the contour is an LSF setting, not the source's."""
-    return CavityDROP(lsf=Isodensity(rho_iso=rho_iso), nleb=26, source=source, **kwargs)
+    return CavityDROP(lsf=Isodensity(parameters=IsodensityParameters(rho_iso=rho_iso)),
+                      parameters=DROPParameters(nleb=26), source=source, **kwargs)
 
 
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
@@ -182,7 +179,7 @@ def test_isodensity_cavity_accepts_a_density_source(water) -> None:
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
-    assert cavity.lsf == Isodensity(rho_iso=_RHO_ISO)
+    assert cavity.lsf == Isodensity(parameters=IsodensityParameters(rho_iso=_RHO_ISO))
     with raises(TypeError, match="callable source"):
         _isodensity(object())
 
@@ -191,8 +188,7 @@ def test_callback_both_forms_agree(water) -> None:
     """A legacy one-argument callback must still work and give the same cavity.
 
     The two forms differ only in whether moist can tell the callback to skip
-    computing derivatives it does not need, so they must describe the same
-    surface.
+    computing derivatives it does not need.
     """
     _, positions = water
 
@@ -215,8 +211,8 @@ def test_callback_order_override(water) -> None:
     """`pass_order` overrides introspection in both directions."""
     _, positions = water
 
-    # A two-argument callback forced into the legacy call form would raise
-    # TypeError inside the CFFI trampoline, so this must be rejected up front
+    # A two-argument callback forced into the legacy call form raises
+    # TypeError inside the CFFI trampoline.
     lsf = _GaussianDensity(positions)
     with raises(TypeError):
         _build(lsf.with_order, water, pass_order=False)
@@ -251,10 +247,7 @@ def test_callback_missing_derivative_is_reported(water) -> None:
 def test_callback_failure_aborts_build(water) -> None:
     """A raising callback must abort the build and surface the real exception.
 
-    The failure is raised on the 50th evaluation rather than the first: moist
-    evaluates the level set from inside OpenMP parallel loops, so a mid-loop
-    abort is what actually exercises the failure channel. A first-call failure
-    would pass even if the parallel handling were broken.
+    The failure is raised on the 50th evaluation rather than the first.
     """
     _, positions = water
     lsf = _GaussianDensity(positions)
@@ -270,8 +263,7 @@ def test_callback_failure_aborts_build(water) -> None:
     with raises(Boom, match="the host density is unavailable here"):
         _build(flaky, water)
 
-    # The exception must arrive with its own traceback, not as a moist error
-    # rewrapped around a downstream symptom.
+    # The exception must arrive with its own traceback.
     try:
         lsf.calls = 0
         _build(flaky, water)
@@ -301,8 +293,7 @@ def test_callback_failure_stops_further_calls(water) -> None:
     with raises(RuntimeError, match="no density here"):
         _build(flaky, water)
 
-    # A build that ignored the failure would keep calling for the whole grid;
-    # the abort has to unwind promptly instead.
+    # The abort unwinds well before the whole grid is evaluated.
     assert 50 < len(seen) < 500
 
 
@@ -380,10 +371,10 @@ def test_scalar_query_errors_preserve_outputs(name, args, ctype, initial):
 
 
 def test_next_coupling_request_fails_closed():
-    """The cursor entry returns false on every failure, so a host loop cannot spin.
+    """The cursor entry returns false on every failure.
 
-    False is also the ordinary end of a pass, which is why the wrapper checks
-    the error handle after every call and raises instead.
+    False is also the ordinary end of a pass; the wrapper checks the error
+    handle after every call and raises instead.
     """
     from moist.library import CouplingHandle, next_coupling_request, ffi, lib
 

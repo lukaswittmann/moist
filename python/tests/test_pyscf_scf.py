@@ -1,7 +1,7 @@
 """Public PySCF wrapper: variational SCF, gradients and state isolation."""
 
 import os
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 
 import numpy as np
 import pytest
@@ -13,17 +13,19 @@ except ImportError as exc:
         raise
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from . import ModelComponentCPCM, ModelComponentPV, ModelComponentGOSTSHYP
-from .interface import SolvationModel
-from .pyscf import CFC, DROP, ISwiG, Isodensity, SvdW  # registers .MOIST()
-from . import (
-    DROPParameters, IsodensityParameters, ModelParameters, PCMParameters, CustomRadii,
+from moist import ModelComponentCPCM, ModelComponentPV, ModelComponentGOSTSHYP
+from moist.interface import SolvationModel
+from moist.pyscf import CFC, DROP, ISwiG, Isodensity, SvdW  # registers .MOIST()
+from moist import (
+    DROPParameters, ISwiGParameters, IsodensityParameters, ModelParameters, PCMParameters,
+    CustomRadii,
 )
-from .pyscf import PySCFHost, PySCFSolvation
+from moist.pyscf import PySCFHost, PySCFSolvation
 
-CAVITIES = {"svdw-drop": DROP(lsf=SvdW(), nleb=26),
-            "cfc-drop": DROP(lsf=CFC(), nleb=26), "iswig": ISwiG(nleb=26),
-            "rho-drop": DROP(lsf=Isodensity(), nleb=26)}
+CAVITIES = {"svdw-drop": DROP(lsf=SvdW(), parameters=DROPParameters(nleb=26)),
+            "cfc-drop": DROP(lsf=CFC(), parameters=DROPParameters(nleb=26)),
+            "iswig": ISwiG(parameters=ISwiGParameters(nleb=26)),
+            "rho-drop": DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=26))}
 
 
 @pytest.fixture
@@ -73,7 +75,7 @@ def test_scf_energy_fock_and_spin_contract(mol, method, cavity):
     np.testing.assert_allclose(mf.get_fock(dm=dm, vhf=v), base.get_fock(dm=dm, vhf=base_v) + result.fock)
     assert mf.energy_elec(dm, vhf=v)[0] == pytest.approx(base.energy_elec(dm, vhf=base_v)[0] + result.energy)
     if method.endswith("KS"):
-        assert v.exc == base_v.exc  # Preserve PySCF's DFT array metadata.
+        assert v.exc == base_v.exc  # Checks that DFT exc metadata is preserved.
     assert mf.scf_summary["e_moist"] == result.energy
 
 
@@ -97,7 +99,9 @@ def test_cache_by_density_value_and_geometry(mol, monkeypatch, cavity, builds):
     mol.set_geom_(mol.atom_coords() + [0, 0, .1], unit="Bohr")
     assert mf.with_moist.evaluate(dm) is not second
     assert len(calls) == builds + 1
-    mf.with_moist.set(nleb=50)
+    current = mf.with_moist.cavity
+    mf.with_moist.set(cavity=replace(
+        current, parameters=replace(current.parameters, nleb=50)))
     assert mf.with_moist.result is None
     mf.with_moist.evaluate(dm)
     assert len(calls) == builds + 2
@@ -109,7 +113,9 @@ def test_copy_reset_and_configuration(mol):
     result = mf.with_moist.evaluate(dm)
     other = mf.copy()
     assert other.with_moist is not mf.with_moist
-    other.with_moist.set(lsf=Isodensity(rho_iso=8e-4))
+    other_current = other.with_moist.cavity
+    other.with_moist.set(cavity=replace(
+        other_current, lsf=Isodensity(parameters=IsodensityParameters(rho_iso=8e-4))))
     assert mf.with_moist.result is result
     assert mf.with_moist.cavity.lsf.parameters == Isodensity().parameters
     other.with_moist.evaluate(dm)
@@ -117,8 +123,8 @@ def test_copy_reset_and_configuration(mol):
     other.reset(mol.copy())
     assert other.with_moist.result is None
     assert mf.with_moist.result is result
-    with pytest.raises(TypeError):
-        mf.with_moist.cavity_options["nleb"] = 50
+    with pytest.raises(FrozenInstanceError):
+        mf.with_moist.cavity.parameters.nleb = 50
 
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "rho-drop"])
@@ -283,22 +289,20 @@ def test_explicit_molecule_does_not_poison_gradient(mol):
 
 def test_reusable_cavity_and_lsf_configuration(mol):
     surface = Isodensity()
-    config = DROP(lsf=surface, nleb=26)
+    config = DROP(lsf=surface, parameters=DROPParameters(nleb=26))
     first = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
     second = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
-    first.with_moist.set(nleb=50)
-    assert config.options["nleb"] == 26
-    assert second.with_moist.cavity_options["nleb"] == 26
-    with pytest.raises(TypeError):
-        config.options["nleb"] = 50
+    first.with_moist.set(cavity=replace(
+        config, parameters=replace(config.parameters, nleb=50)))
+    assert config.parameters.nleb == 26
+    assert second.with_moist.cavity.parameters.nleb == 26
+    with pytest.raises(FrozenInstanceError):
+        config.parameters.nleb = 50
 
 
 @pytest.mark.parametrize("make", [
     lambda: DROP(), lambda: DROP(SvdW()), lambda: DROP(lsf=None),
-    lambda: DROP(lsf="SvdW"), lambda: DROP(lsf=SvdW(), blend_k=4),
-    lambda: DROP(lsf=Isodensity(), rho_iso=8e-4),
-    lambda: SvdW(nleb=26), lambda: CFC(tolerance=1e-10),
-    lambda: Isodensity(nleb=26), lambda: ISwiG(lsf=SvdW()),
+    lambda: DROP(lsf="SvdW"), lambda: ISwiG(lsf=SvdW()),
 ])
 def test_cavity_and_lsf_settings_are_separate(make):
     with pytest.raises(TypeError):
@@ -309,14 +313,16 @@ def test_lsf_change_invalidates_results_and_preserves_grid_options(mol):
     mf = attach(mol.RHF(), "rho-drop")
     dm = mf.get_init_guess()
     old = mf.with_moist.evaluate(dm)
-    mf.with_moist.set(lsf=Isodensity(rho_iso=8e-4))
+    current = mf.with_moist.cavity
+    mf.with_moist.set(cavity=replace(
+        current, lsf=Isodensity(parameters=IsodensityParameters(rho_iso=8e-4))))
     assert mf.with_moist.result is None
-    assert mf.with_moist.cavity_options["nleb"] == 26
+    assert mf.with_moist.cavity.parameters.nleb == 26
     new = mf.with_moist.evaluate(dm)
     assert new.energy != pytest.approx(old.energy, abs=1e-8)
-    with pytest.raises(TypeError):
-        mf.with_moist.cavity.lsf.options["rho_iso"] = 4e-4
-    with pytest.raises(TypeError, match="LSF"):
+    with pytest.raises(FrozenInstanceError):
+        mf.with_moist.cavity.lsf.parameters.rho_iso = 4e-4
+    with pytest.raises(TypeError, match="keyword"):
         mf.with_moist.set(rho_iso=4e-4)
     assert mf.with_moist.result is new
 

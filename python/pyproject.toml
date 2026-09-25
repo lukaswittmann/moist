@@ -9,7 +9,7 @@ build-backend = "mesonpy"
 
 [project]
 name = "MOIST"
-version = "1.0.0a1"
+dynamic = ["version"]
 authors = [{"name" = "Lukas Wittmann"}]
 description = "Python API for MOIST"
 readme = "README.rst"
@@ -36,4 +36,9 @@ optional-dependencies.pyscf = ["pyscf"]
 optional-dependencies.test = [
   "pytest",
   "pytest-cov",
+  "pyscf",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib --strict-markers -p no:cacheprovider"
+testpaths = ["tests"]

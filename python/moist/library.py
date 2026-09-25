@@ -33,7 +33,7 @@ def _native_text(entry, *args):
 
 
 def get_version_string():
-    """Full native version, including prerelease information."""
+    """Return the full native version string, including prerelease information."""
     return _native_text(lib.moist_get_version_string)
 
 
@@ -270,22 +270,20 @@ def set_custom_radii_elements(radii, numbers, values):
 
 
 class CallbackState:
-    """Carries the *exception object* out of a CFFI callback frame.
+    """Carries the exception object out of a CFFI callback frame.
 
-    The callback ABI has a failure channel -- a nonzero return aborts the cavity
-    build with a proper moist error -- but a return code only says *that* the
-    callback failed. It cannot carry the Python exception, and CFFI will not let
-    one cross the C frame either. So the wrapper returns nonzero to stop moist
-    and stashes the exception here, and the wrapper that drove the C call
-    re-raises it afterwards, with its original traceback, in place of moist's
-    (correct but generic) "external LSF evaluation failed" error.
+    A nonzero return aborts the cavity build with a moist error, but that
+    error cannot carry the Python exception across the C frame. The wrapper
+    returns nonzero and stashes the exception here; the caller re-raises it
+    afterwards, with its original traceback, in place of moist's generic
+    "external LSF evaluation failed" error.
     """
 
     def __init__(self):
         self.exception: Optional[BaseException] = None
 
     def record(self, exc: BaseException) -> None:
-        """Keep the first failure; later ones are usually knock-on effects."""
+        """Record the first failure and discard the rest."""
         if self.exception is None:
             self.exception = exc
 
@@ -301,17 +299,16 @@ class CallbackState:
 
 
 def _callback_takes_order(callback) -> bool:
-    """Whether an isodensity callback accepts the derivative-order argument.
+    """Return whether an isodensity callback accepts the derivative-order argument.
 
-    Callbacks written before the order argument existed take ``point`` alone, so
-    calling them with two arguments raises ``TypeError`` *inside* the CFFI
-    trampoline, where it cannot become a moist error -- the Fortran caller would
-    simply read unwritten buffers. Deciding the arity once, here, keeps that
-    failure out of the hot path entirely.
+    A callback that takes ``point`` alone must not be called with two
+    arguments: the resulting ``TypeError`` is raised inside the CFFI
+    trampoline, where it cannot become a moist error, and the Fortran caller
+    reads unwritten buffers.
 
     Anything introspection cannot resolve (builtins, ``*args``, C callables) is
-    treated as the one-argument form: that form always works, it just forgoes
-    the skip-computation speedup.
+    treated as the one-argument form, which always works but forgoes the
+    skip-computation speedup.
     """
     try:
         params = inspect.signature(callback).parameters.values()
@@ -394,11 +391,8 @@ def new_drop_cavity_isodensity_callback(
                     order="C"
                 )
         except BaseException as exc:
-            # CFFI cannot propagate an exception through the C frame, but the
-            # callback ABI has a failure channel: returning nonzero aborts the
-            # build with a moist error. Keep the exception so the caller can
-            # re-raise the real cause (see CallbackState) and leave the output
-            # buffers alone -- moist ignores them once the status is nonzero.
+            # Record the exception and return nonzero to abort the build;
+            # moist ignores the output buffers once the status is nonzero.
             state.record(exc)
             return 1
         return 0
@@ -480,8 +474,7 @@ def new_general_model(
             parameters._as_options(),
         )
     )
-    # Native copies borrow Python callbacks. Retain their owning handle even
-    # when callers use this low-level constructor without a SolvationModel.
+    # Native copies borrow Python callbacks; keep the owning handle alive.
     model._source_cavity = cavity
     for component in components:
         error_check(lib.moist_add_model_component)(
@@ -498,11 +491,11 @@ def new_general_model(
 # handle receives what a phase hands back and carries a cursor over its items.
 # next_coupling_request() and next_response_item() move the cursors, and the
 # other request and response functions act on the request or item they stopped
-# at, failing by name when none is current.  Requests and response items are
-# identified by their scientific names, never by an index or a token.  Grid
-# inputs are read from the model's cavity.  Like the C entries they bind, these
+# at, failing by name when none is current. Requests and response items are
+# identified by their scientific names, never by an index or a token. Grid
+# inputs are read from the model's cavity. Like the C entries they bind, these
 # functions take no sizes: moist reads and writes exactly the documented
-# shape, so an array passed in has to have it.  Only the element type and the
+# shape, so an array passed in has to have it. Only the element type and the
 # layout are checked here, which the pointer cast relies on.
 
 
@@ -614,7 +607,7 @@ def next_coupling_request(coupling: CouplingHandle) -> bool:
 
 
 def get_coupling_request_name(coupling: CouplingHandle) -> str:
-    """Scientific name of the current request, e.g. ``"gaussian_potential"``."""
+    """Return the scientific name of the current request, e.g. ``"gaussian_potential"``."""
 
     buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
     error_check(lib.moist_get_coupling_request_name)(coupling.handle, buffer)
@@ -622,9 +615,10 @@ def get_coupling_request_name(coupling: CouplingHandle) -> str:
 
 
 def get_coupling_request_missing(coupling: CouplingHandle, name: str) -> bool:
-    """Whether an output of the current request is required by the staged phase and unanswered.
+    """Return whether an output of the current request is missing.
 
-    A name the request does not declare is not missing; ``answer_coupling_request``
+    Missing means required by the staged phase and not yet answered. A name
+    the request does not declare is not missing; ``answer_coupling_request``
     and the ``get_*`` accessors report a misspelt output by name.
     """
 
@@ -673,7 +667,7 @@ def next_response_item(response: ResponseHandle) -> bool:
 
 
 def get_response_item_name(response: ResponseHandle) -> str:
-    """Scientific name of the current item, e.g. ``"potential_adjoint"``."""
+    """Return the scientific name of the current item, e.g. ``"potential_adjoint"``."""
 
     buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
     error_check(lib.moist_get_response_item_name)(response.handle, buffer)
@@ -714,10 +708,9 @@ def get_cavity_sizes(cavity: CavityHandle) -> tuple[int, int]:
 def get_cavity_results(cavity: CavityHandle) -> dict:
     """Return the generic cavity results.
 
-    The buffers are allocated from the cavity's current sizes and those sizes
-    are handed to the C entry point as the array capacities, so a cavity
-    rebuilt between the two calls raises a clean API error instead of writing
-    past the buffers.
+    The buffers are allocated from the cavity's current sizes, and those sizes
+    are handed to the C entry point as the array capacities; a cavity rebuilt
+    between the two calls raises a clean API error.
     """
 
     ngrid, nsph = get_cavity_sizes(cavity)
@@ -938,8 +931,7 @@ def _tag_of(dtype: np.dtype) -> int:
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
     """Assemble the Gaussian CPCM A-matrix and return it with xi values.
 
-    No longer DROP-specific: the underlying C entry point now works for every
-    Gaussian-discretized cavity.
+    Works for every Gaussian-discretized cavity, not only DROP.
     """
 
     ngrid, _ = get_cavity_sizes(cavity)
@@ -988,7 +980,7 @@ def compute_cavity_gradient(cavity):
 
 
 def contract_amat_nuclear_gradient(cavity, q1, q2):
-    """Diagnostic forward contraction, after compute_cavity_gradient."""
+    """Contract diagnostic forward derivatives after compute_cavity_gradient."""
     ngrid, nsph = get_cavity_sizes(cavity)
     arrays = [np.asarray(q, dtype=np.float64, order="C") for q in (q1, q2)]
     if any(a.shape != (ngrid,) for a in arrays):
@@ -1000,7 +992,7 @@ def contract_amat_nuclear_gradient(cavity, q1, q2):
 
 
 def contract_pcm_nuclear_gradient(cavity, w_phi, w_xyz, charges):
-    """Diagnostic electrostatic contraction, after compute_cavity_gradient.
+    """Contract diagnostic electrostatic derivatives after compute_cavity_gradient.
 
     ``w_phi`` is the potential adjoint ``dE/dphi`` (the surface charge of a
     stationary PCM), ``charges`` the nuclear charges.
@@ -1021,13 +1013,13 @@ def get_anchor_gradient(cavity: CavityHandle) -> dict:
     """Return the anchor-channel nuclear derivatives in native cavity order.
 
     Requires a preceding :func:`compute_anchor_gradient`. The buffers are sized
-    from the cavity's current sizes and those same sizes are handed over as the
-    array capacities, so a cavity rebuilt in between fails with a clean API
-    error instead of writing past the buffers.
+    from the cavity's current sizes, and those same sizes are handed over as
+    the array capacities; a cavity rebuilt in between fails with a clean API
+    error.
 
-    The per-point area derivative ``a_i1_rA`` is the one a geometric surface
-    functional needs: the grid point area carries a switching-function dependence
-    (``a_i ~ f_i / xi_i**2``), so it is not recoverable from ``xi1_rA`` alone.
+    The grid point area carries a switching-function dependence
+    (``a_i ~ f_i / xi_i**2``), so ``a_i1_rA`` is not recoverable from
+    ``xi1_rA`` alone.
     """
 
     ngrid, nsph = get_cavity_sizes(cavity)

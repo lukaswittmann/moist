@@ -1,14 +1,13 @@
 """Host-independent surface configurations shared with PySCF.
 
-Configurations contain immutable settings, never a host density or native
-cavity. Calling ``build`` creates independent live state.
+A configuration holds immutable settings only, never a host density or
+native cavity. Calling ``build`` creates independent live state.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, fields
-from types import MappingProxyType
+from dataclasses import dataclass
 from typing import ClassVar
 
 from . import library
@@ -20,22 +19,10 @@ from .parameters import (
 from .radii import Radii, _resolve_radii
 
 
-_LSF_SETTINGS = frozenset(
-    item.name
-    for kind in (SvdWParameters, CFCParameters, IsodensityParameters)
-    for item in fields(kind)
-)
-
-
 class LevelSet(ABC):
     """Immutable surface definition; subclasses construct a native cavity."""
 
     density_dependent = False
-
-    @property
-    def options(self):
-        """Read-only compatibility view; prefer ``parameters``."""
-        return MappingProxyType(asdict(self.parameters))
 
     @abstractmethod
     def _new_cavity(self, parameters, radii, source, pass_order):
@@ -56,8 +43,8 @@ class SvdW(_GeometricLevelSet):
     parameters: SvdWParameters
     name: ClassVar[str] = "SvdW"
 
-    def __init__(self, *, parameters: SvdWParameters | None = None, **settings):
-        object.__setattr__(self, "parameters", _resolve(SvdWParameters, parameters, settings))
+    def __init__(self, *, parameters: SvdWParameters | None = None):
+        object.__setattr__(self, "parameters", _resolve(SvdWParameters, parameters))
 
 
 @dataclass(frozen=True, init=False)
@@ -67,8 +54,8 @@ class CFC(_GeometricLevelSet):
     parameters: CFCParameters
     name: ClassVar[str] = "CFC"
 
-    def __init__(self, *, parameters: CFCParameters | None = None, **settings):
-        object.__setattr__(self, "parameters", _resolve(CFCParameters, parameters, settings))
+    def __init__(self, *, parameters: CFCParameters | None = None):
+        object.__setattr__(self, "parameters", _resolve(CFCParameters, parameters))
 
 
 @dataclass(frozen=True, init=False)
@@ -85,8 +72,8 @@ class Isodensity(LevelSet):
     name: ClassVar[str] = "Isodensity"
     density_dependent: ClassVar[bool] = True
 
-    def __init__(self, *, parameters: IsodensityParameters | None = None, **settings):
-        object.__setattr__(self, "parameters", _resolve(IsodensityParameters, parameters, settings))
+    def __init__(self, *, parameters: IsodensityParameters | None = None):
+        object.__setattr__(self, "parameters", _resolve(IsodensityParameters, parameters))
 
     def _new_cavity(self, parameters, radii, source, pass_order):
         if isinstance(source, InternalDensity):
@@ -106,11 +93,6 @@ class CavityConfiguration(ABC):
 
     density_dependent = False
 
-    @property
-    def options(self):
-        """Read-only compatibility view; prefer ``parameters``."""
-        return MappingProxyType(asdict(self.parameters))
-
     @abstractmethod
     def build(self, *, source=None):
         """Create a live cavity, binding host data when required."""
@@ -126,15 +108,11 @@ class DROP(CavityConfiguration):
     name: ClassVar[str] = "DROP"
 
     def __init__(self, *, lsf: LevelSet, parameters: DROPParameters | None = None,
-                 radii: Radii | None = None, **settings):
+                 radii: Radii | None = None):
         if not isinstance(lsf, LevelSet):
             raise TypeError("DROP requires an LSF such as SvdW, CFC or Isodensity")
-        # Retain the helpful migration diagnostic for misplaced LSF settings.
-        misplaced = settings.keys() & _LSF_SETTINGS
-        if misplaced:
-            raise TypeError(f"Configure {', '.join(sorted(misplaced))} on the LSF")
         object.__setattr__(self, "lsf", lsf)
-        object.__setattr__(self, "parameters", _resolve(DROPParameters, parameters, settings))
+        object.__setattr__(self, "parameters", _resolve(DROPParameters, parameters))
         object.__setattr__(self, "radii", _resolve_radii(radii))
 
     @property
@@ -159,8 +137,8 @@ class ISwiG(CavityConfiguration):
     density_dependent: ClassVar[bool] = False
 
     def __init__(self, *, parameters: ISwiGParameters | None = None,
-                 radii: Radii | None = None, **settings):
-        object.__setattr__(self, "parameters", _resolve(ISwiGParameters, parameters, settings))
+                 radii: Radii | None = None):
+        object.__setattr__(self, "parameters", _resolve(ISwiGParameters, parameters))
         object.__setattr__(self, "radii", _resolve_radii(radii))
 
     def build(self, *, source=None):

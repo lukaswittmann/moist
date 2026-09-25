@@ -25,14 +25,14 @@ scale.  Units are atomic throughout.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 import math
 from typing import Optional
 
 import numpy as np
 
 from .configuration import (
-    CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, _LSF_SETTINGS,
+    CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration,
 )
 from .interface import (
     Coupling,
@@ -60,7 +60,7 @@ GPA_TO_AU = 1.0e9 * 5.29177210903e-11**3 / 4.3597447222071e-18
 
 
 def _component_index(axes: tuple[int, ...]) -> int:
-    """Index of a cartesian derivative in PySCF's ``GTOval_*_deriv`` output.
+    """Return the index of a cartesian derivative in PySCF's ``GTOval_*_deriv`` output.
 
     ``eval_gto`` returns the derivative orders concatenated, each block ordered
     by descending ``lx`` then descending ``ly``: order 1 is ``x, y, z`` and
@@ -101,14 +101,13 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
 #: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``.
-#: Nothing on the energy, Fock or gradient path reads this copy; it exists for
-#: the pressure-independent diagnostics of :class:`GaussianMoments`, which
-#: cannot recover the mask from amplitudes that vanish with the pressure.
+#: Only :class:`GaussianMoments` diagnostics read this copy; the energy, Fock
+#: and gradient paths do not.
 _OVERLAP_FLOOR = 1.0e-9
 
 
 def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
-    """One coefficient-1 GTO shell of angular momentum ``angl`` per grid point."""
+    """Build one coefficient-1 GTO shell of angular momentum ``angl`` per grid point."""
     from pyscf import gto
 
     coords = np.asarray(coords, dtype=np.float64)
@@ -137,7 +136,7 @@ def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
 
 
 def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
-    """Three-centre one-electron integrals over a Gaussian-per-grid-point fakemol."""
+    """Compute three-centre one-electron integrals over a Gaussian-per-grid-point fakemol."""
     fakemol = _fakemol_gaussians(centers, omega, angl)
     nbas = mol.nbas
     shls_slice = (0, nbas, 0, nbas, nbas, nbas + fakemol.nbas)
@@ -152,9 +151,9 @@ def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
 class PySCFHost:
     """The AO-basis half of the coupling for one PySCF molecule.
 
-    The density matrix is mutable state (:attr:`dm`) because the isodensity
-    surface follows the density: it must be current *before* every cavity
-    build, and the level-set callback reads it on every point evaluation.
+    The density matrix is mutable state (:attr:`dm`).  It must be current
+    *before* every cavity build, and the level-set callback reads it on every
+    point evaluation.
 
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     """
@@ -170,7 +169,7 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def structure(self) -> Structure:
-        """Molecular structure in moist's representation (bohr)."""
+        """Return the molecular structure in moist's representation (bohr)."""
         numbers = self.mol.atom_charges()
         if self.mol.has_ecp():
             raise ValueError("effective core potentials are not supported")
@@ -182,7 +181,7 @@ class PySCFHost:
         return np.asarray(self.dm)
 
     def _ao(self, coords: np.ndarray, order: int) -> np.ndarray:
-        """AO values and derivatives up to ``order``: ``(ncomp, ngrid, nao)``."""
+        """Return AO values and derivatives up to ``order``: ``(ncomp, ngrid, nao)``."""
         return self.mol.eval_gto(f"{self._gto_prefix}{order}", np.asarray(coords))
 
     # ------------------------------------------------------------------
@@ -190,13 +189,13 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def density(self, point: np.ndarray, order: int):
-        """Density callback of an isodensity cavity built with ``source=host``.
+        """Evaluate the density for an isodensity cavity built with ``source=host``.
 
         Returns the bare ``rho`` and its spatial derivatives up to ``order``
-        only, so the projection's value+gradient phase never pays for the
-        density Hessian.  moist owns the level set built from it: it subtracts
-        ``rho_iso`` and applies ``scale`` and the DROP sign convention.  Doing
-        any of that here as well would move the surface or square the scale.
+        only.  moist owns the level set built from it: it subtracts
+        ``rho_iso`` and applies ``scale`` and the DROP sign convention.
+        Applying either here as well would move the surface or square the
+        scale.
         """
         dm = self._density_matrix()
         ao = self._ao(np.asarray(point).reshape(1, 3), order)[:, 0, :]
@@ -205,9 +204,8 @@ class PySCFHost:
         # BLAS leaves dirty floating-point status flags behind for these shapes
         # -- the SIMD tail reads padding lanes -- so numpy reports divide-by-zero
         # and overflow from a product that performs neither.  The results agree
-        # with a BLAS-free einsum to rounding, which `test_density_callback_is_finite`
-        # pins, so the flags are suppressed here rather than paying the
-        # order-of-magnitude cost of the einsum path in the hottest callback.
+        # with a BLAS-free einsum to rounding, pinned by
+        # `test_density_callback_is_finite`.
         with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
             proj = ao @ dm
             t = proj @ np.ascontiguousarray(ao.T)
@@ -243,7 +241,7 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def _gaussian_integrals(self, coords, xi, intor="int3c2e"):
-        """Coulomb integrals against normalized Gaussian surface charges."""
+        """Compute Coulomb integrals against normalized Gaussian surface charges."""
         from pyscf import df, gto
 
         auxiliary = gto.fakemol_for_charges(np.asarray(coords), expnt=np.asarray(xi)**2)
@@ -253,7 +251,7 @@ class PySCFHost:
         )
 
     def surface_potential(self, coords: np.ndarray, xi=None) -> np.ndarray:
-        """Total molecular potential; ``xi`` selects the Gaussian charge operator."""
+        """Return the total molecular potential; ``xi`` selects the Gaussian charge operator."""
         from scipy.special import erf
 
         coords = np.asarray(coords)
@@ -271,7 +269,7 @@ class PySCFHost:
         return np.einsum("iA,A->i", kernel, self.mol.atom_charges()) - electronic
 
     def _grad_phi_elec(self, coords: np.ndarray, xi=None) -> np.ndarray:
-        """Electronic potential derivative with respect to surface centers, ``(3, ngrid)``."""
+        """Return the electronic potential derivative w.r.t. surface centers, ``(3, ngrid)``."""
         dm = self._density_matrix()
         if xi is not None:
             return np.einsum("kuvi,uv->ki", self._gaussian_integrals(coords, xi, "int3c2e_ip2"), dm)
@@ -279,7 +277,7 @@ class PySCFHost:
         return -2.0 * np.einsum("kiuv,uv->ki", tint, dm)
 
     def _grad_phi_nuc(self, coords: np.ndarray, xi=None) -> np.ndarray:
-        """Nuclear potential derivative with respect to surface centers, ``(3, ngrid)``."""
+        """Return the nuclear potential derivative w.r.t. surface centers, ``(3, ngrid)``."""
         from scipy.special import erf
 
         delta = np.asarray(coords)[:, None, :] - self.mol.atom_coords()[None, :, :]
@@ -296,11 +294,11 @@ class PySCFHost:
         return -np.einsum("A,iAk,iA->ki", self.mol.atom_charges(), delta, radial)
 
     def surface_potential_gradient(self, coords: np.ndarray, xi=None) -> np.ndarray:
-        """``dphi/dr`` at the grid points, ``(ngrid, 3)``: the ``dphi_dr`` output."""
+        """Return ``dphi/dr`` at the grid points, ``(ngrid, 3)``: the ``dphi_dr`` output."""
         return np.ascontiguousarray((self._grad_phi_nuc(coords, xi) + self._grad_phi_elec(coords, xi)).T)
 
     def _dphi_dxi(self, coords: np.ndarray, xi: np.ndarray) -> np.ndarray:
-        """Raw derivative of the Gaussian potential with respect to its width."""
+        """Return the raw derivative of the Gaussian potential with respect to its width."""
         delta = np.asarray(coords)[:, None, :] - self.mol.atom_coords()[None, :, :]
         nuclear = (2.0 / np.sqrt(np.pi)) * (np.exp(
             -np.asarray(xi)[:, None]**2 * np.sum(delta*delta, axis=2)) @ self.mol.atom_charges())
@@ -319,11 +317,11 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def fock_potential(self, coords: np.ndarray, xi: np.ndarray, w_phi: np.ndarray) -> np.ndarray:
-        """``sum_i w_phi_i dphi_i/dP``: the potential adjoint contracted with the Gaussian integrals."""
+        """Return ``sum_i w_phi_i dphi_i/dP``: potential adjoint times the Gaussian integrals."""
         return -np.einsum("i,uvi->uv", np.asarray(w_phi), self._gaussian_integrals(coords, xi))
 
     def _fock_lsf(self, coords: np.ndarray, density: DensityResponse) -> np.ndarray:
-        """``d rho/dP`` contracted with the density adjoints.
+        """Return ``d rho/dP`` contracted with the density adjoints.
 
         With ``rho = sum P_uv chi_u chi_v`` every term is a weighted outer
         product of AO derivative blocks summed over the grid.  Nothing here
@@ -355,7 +353,7 @@ class PySCFHost:
         return fock
 
     def _gradient_phi(self, coords: np.ndarray, q: np.ndarray, xi=None) -> np.ndarray:
-        """``sum_i q_i d(phi_elec)_i/dR_A`` at fixed grid points and fixed P, ``(natm, 3)``."""
+        """Return ``sum_i q_i d(phi_elec)_i/dR_A`` at fixed grid points and P, ``(natm, 3)``."""
         dm = self._density_matrix()
 
         # d(r_i|uv)/dR_A = -T[k,i,u,v] delta_{u in A} - T[k,i,v,u] delta_{v in A},
@@ -374,7 +372,7 @@ class PySCFHost:
         return np.ascontiguousarray(gradient.T)
 
     def _gradient_lsf(self, coords: np.ndarray, density: DensityResponse) -> np.ndarray:
-        """Density adjoints contracted with ``d rho/dR_A`` at fixed P, ``(natm, 3)``.
+        """Return density adjoints contracted with ``d rho/dR_A`` at fixed P, ``(natm, 3)``.
 
         Because ``d/dR_A`` commutes with the spatial derivatives, every order is
         a spatial derivative of the single "displaced density"
@@ -526,18 +524,16 @@ class GaussianMoments:
         return np.tensordot(c2s, out, axes=(0, 1)).swapaxes(0, 1)
 
     def _density_matrix_cart(self, dm: np.ndarray) -> np.ndarray:
-        """Density matrix in the cartesian AO basis the fakemol blocks use."""
+        """Return the density matrix in the cartesian AO basis the fakemol blocks use."""
         c2s = self._cart2sph
         # BLAS leaves dirty FP status flags for these shapes; see PySCFHost.density.
         with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
             return c2s @ np.asarray(dm) @ c2s.T
 
     def f_vector(self) -> np.ndarray:
-        """``grad_r g_uv,j`` before the normal projection, ``(nao, nao, ngrid, 3)``.
+        """Return ``grad_r g_uv,j`` before the normal projection, ``(nao, nao, ngrid, 3)``.
 
-        Recomputed rather than cached: only the projected ``f`` is needed to
-        build a Fock matrix, and this block is three times its size.  Kept as a
-        method because it is what pins the p-shell angular constant.
+        Recomputed on each call, not cached.
         """
         p_cart = _int3c1e(self.mol, self.centers, self.omega, 1)
         ncart = p_cart.shape[0]
@@ -550,7 +546,7 @@ class GaussianMoments:
         return self._to_spherical(fvec_cart)
 
     def _build_integrals(self) -> None:
-        """The dense ``g`` and ``f`` blocks the amplitudes are contracted with."""
+        """Build the dense ``g`` and ``f`` blocks the amplitudes are contracted with."""
         g_cart = _int3c1e(self.mol, self.centers, self.omega, 0)
         self._G = self._to_spherical(g_cart)
         self._F = np.einsum("uvja,ja->uvj", self.f_vector(), self.normals, optimize=True)
@@ -575,13 +571,13 @@ class GaussianMoments:
         return np.stack([raw[:, list(idx)].sum(axis=1) for idx in _F_RHO2_FIRST_MOMENT], axis=1)
 
     def _surface_moments(self, dm_cart: np.ndarray, centers=None, omega=None, *, required=None):
-        """``(gt, pt, mt, rt)`` -- the s/p/d/f Gaussian moments of the density.
+        """Return ``(gt, pt, mt, rt)`` -- the s/p/d/f Gaussian moments of the density.
 
         Numpy-ordered: ``(ngrid,)``, ``(ngrid, 3)``, ``(ngrid, 3, 3)`` and
         ``(ngrid, 3)``, the shapes the request takes.  Only the ``required``
         moments are built.  ``centers``/``omega`` default to the bound surface
-        and are overridable so a finite difference can rebuild the moments at
-        a displaced surface without touching cached state.
+        and are overridable without touching cached state, e.g. to rebuild the
+        moments at a displaced surface for a finite difference.
         """
         centers = self.centers if centers is None else centers
         omega = self.omega if omega is None else omega
@@ -609,7 +605,7 @@ class GaussianMoments:
     # ------------------------------------------------------------------
 
     def traces(self, dm: np.ndarray, *, centers=None, omega=None, normals=None):
-        """``(gtilde, ftilde)`` from this module's own moments.
+        """Return ``(gtilde, ftilde)`` from this module's own moments.
 
         The host's copy of the two traces moist works from -- a diagnostic and
         a self-check, never an input to the energy.  The surface parameters
@@ -636,15 +632,15 @@ class GaussianMoments:
     def inactive_count(self) -> int:
         """Grid points the component switched off, out of :attr:`ngrid`.
 
-        Derived from ``ftilde`` rather than from the amplitudes: the amplitudes
-        carry the pressure, so at ``p_inp = 0`` they report every point dropped.
+        Derived from ``ftilde``, not from the amplitudes: the amplitudes carry
+        the pressure, and at ``p_inp = 0`` they are zero for every point.
         """
         _, ftilde = self.live_traces
         floor = _OVERLAP_FLOOR * float(np.max(np.abs(ftilde), initial=0.0))
         return int(np.count_nonzero(np.abs(ftilde) <= floor))
 
     def effective_volume(self) -> float:
-        """``E / p_inp`` (eq 11), evaluated as ``sum_j a_j gtilde_j / ftilde_j``.
+        """Return ``E / p_inp`` (eq 11), evaluated as ``sum_j a_j gtilde_j / ftilde_j``.
 
         Not the cavity volume, and well defined at ``p_inp = 0`` where the
         energy vanishes with the pressure but the volume does not.
@@ -661,7 +657,7 @@ class GaussianMoments:
     # ------------------------------------------------------------------
 
     def fock(self, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
-        """``sum_j [w_overlap_j g_j + w_normal_deriv_j f_j]`` at a frozen surface."""
+        """Return ``sum_j [w_overlap_j g_j + w_normal_deriv_j f_j]`` at a frozen surface."""
         if self._G is None:
             self._build_integrals()
         fock = np.einsum("j,uvj->uv", amplitude.w_overlap, self._G, optimize=True)
@@ -669,7 +665,7 @@ class GaussianMoments:
         return 0.5 * (fock + fock.T)
 
     def nuclear_gradient(self, dm: np.ndarray, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
-        """AO centers move, surface frozen: the ``int3c1e_ip1`` route, ``(natm, 3)``."""
+        """Return the gradient with AO centers moving, surface frozen (``int3c1e_ip1``), ``(natm, 3)``."""
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
 
@@ -738,7 +734,7 @@ class PySCFSolvation:
         self.mol = mol
         self.configuration = cavity
         self.components = items
-        self.parameters = _resolve(ModelParameters, parameters, {})
+        self.parameters = _resolve(ModelParameters, parameters)
         self.host = PySCFHost(mol)
         self.host.structure()  # Validate the molecular representation before use.
         self.model = SolvationModel(
@@ -820,13 +816,12 @@ class PySCFSolvation:
             raise NotImplementedError(f"PySCF host cannot answer {request.name!r}")
 
     def _bound_moments(self) -> GaussianMoments:
-        """The GOSTSHYP half, bound to the current surface and density.
+        """Return the GOSTSHYP half, bound to the current surface and density.
 
-        Created on first demand -- a model without a moment request never makes
-        the host form the three-centre integrals -- and rebound whenever the
-        density changes.  A zero-pressure component asks for no moments but
-        still hands back (zero) amplitudes, so the response contraction binds
-        it as well; its diagnostics then describe the surface, not the pressure.
+        Created on first demand and rebound whenever the density changes.  A
+        zero-pressure component asks for no moments but still hands back
+        (zero) amplitudes, so the response contraction binds it as well; its
+        diagnostics then describe the surface, not the pressure.
         """
         if self.moments is None:
             self.moments = GaussianMoments(self.host)
@@ -835,7 +830,7 @@ class PySCFSolvation:
         return self.moments
 
     def _answer_requests(self) -> None:
-        """One pass over the staged phase, answering every request that misses an output."""
+        """Answer every request in the staged phase that misses an output."""
         for request in self.coupling:
             self._answer(request)
 
@@ -853,7 +848,7 @@ class PySCFSolvation:
         return _immutable_array(np.array(density, dtype=np.float64))
 
     def evaluate(self, dm) -> Result:
-        """Energy and Fock contribution at the density ``dm``.
+        """Return the energy and Fock contribution at the density ``dm``.
 
         Rebuilds a density-dependent cavity, then runs the energy and the
         response phase.  The result is cached until the density changes.
@@ -897,8 +892,7 @@ class PySCFSolvation:
             elif isinstance(item, GostshypAmplitudeResponse):
                 fock += self._bound_moments().fock(item)
             elif isinstance(item, DensityResponse):
-                # Present exactly when the surface follows the density; the
-                # frozen-surface Fock matrix leaves this route out on purpose.
+                # Present exactly when the surface follows the density.
                 if with_density:
                     fock += self.host._fock_lsf(coords, item)
             else:
@@ -906,7 +900,7 @@ class PySCFSolvation:
         return fock
 
     def frozen_fock(self) -> np.ndarray:
-        """The Fock contribution with the surface held fixed.
+        """Return the Fock contribution with the surface held fixed.
 
         Omits the density-weight contraction, so on a density-dependent cavity
         this is *not* ``dE/dP``: the surface moves with the density.
@@ -914,7 +908,7 @@ class PySCFSolvation:
         return self._fock(self.response, with_density=False)
 
     def gradient_channels(self, dm) -> dict[str, np.ndarray]:
-        """The nuclear gradient at fixed ``dm``, split by route, each ``(natm, 3)``.
+        """Return the nuclear gradient at fixed ``dm``, split by route, each ``(natm, 3)``.
 
         ``model``
             Cavity motion and every term moist owns, from the gradient phase.
@@ -957,7 +951,7 @@ class PySCFSolvation:
         return channels
 
     def gradient(self, dm) -> np.ndarray:
-        """Total nuclear gradient of the solvation energy at fixed ``dm``, ``(natm, 3)``."""
+        """Return the total solvation-energy nuclear gradient at fixed ``dm``, ``(natm, 3)``."""
         return sum(self.gradient_channels(dm).values())
 
 
@@ -977,7 +971,7 @@ class _MoistState:
         self.mol = mol
         self._cavity = None
         self._components = ()
-        self._parameters = _resolve(ModelParameters, parameters, {})
+        self._parameters = _resolve(ModelParameters, parameters)
         self.set(cavity=cavity, components=components)
 
     @property
@@ -991,10 +985,6 @@ class _MoistState:
     @property
     def parameters(self):
         return self._parameters
-
-    @property
-    def cavity_options(self):
-        return self._cavity.options
 
     @property
     def solvation(self) -> Optional[PySCFSolvation]:
@@ -1015,29 +1005,15 @@ class _MoistState:
         result = self.result
         return None if result is None else result.fock
 
-    def set(self, *, cavity=None, components=None, parameters=None, **options):
-        """Replace model settings or cavity configuration, clearing cached results.
-
-        Plain keywords are DROP/ISwiG parameters; ``lsf=`` replaces the level
-        set.  Prefer ``set(cavity=replace(config, parameters=...))``.
-        """
+    def set(self, *, cavity=None, components=None, parameters=None):
+        """Replace model settings or cavity configuration, clearing cached results."""
         config = self._cavity if cavity is None else cavity
         if not isinstance(config, CavityConfiguration):
             raise TypeError("cavity must be DROP(lsf=...) or ISwiG(...)")
         items = self._components if components is None else tuple(components)
         if not items or any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must be a nonempty sequence of MOIST components")
-        changes = {}
-        if "lsf" in options:
-            if not isinstance(config, DROP):
-                raise TypeError("ISwiG does not accept an LSF")
-            changes["lsf"] = options.pop("lsf")
-        if options:
-            if options.keys() & _LSF_SETTINGS:
-                raise TypeError("Configure surface settings on the LSF")
-            changes["parameters"] = replace(config.parameters, **options)
-        config = replace(config, **changes) if changes else config
-        model_parameters = self.parameters if parameters is None else _resolve(ModelParameters, parameters, {})
+        model_parameters = self.parameters if parameters is None else _resolve(ModelParameters, parameters)
         self._cavity, self._components, self._parameters = config, items, model_parameters
         return self.reset()
 

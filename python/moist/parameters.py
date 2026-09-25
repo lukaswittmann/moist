@@ -37,8 +37,8 @@ class _Parameters:
     _kind: ClassVar[str]
 
     def __post_init__(self):
-        # Check the ABI representation here; scientific constraints are checked
-        # by the native constructor, which remains their single authority.
+        # Validate the ABI representation only; the native constructor checks
+        # scientific constraints.
         options = self._as_options()
         for item in fields(self):
             value = getattr(options, item.name)
@@ -147,16 +147,10 @@ class ModelParameters(_Parameters):
     verbosity: int = _native_default("model", "verbosity")
 
 
-def _resolve(parameter_type, parameters, settings):
-    """Adapt legacy keyword settings without creating ambiguous precedence."""
-    unknown = settings.keys() - {item.name for item in fields(parameter_type)}
-    if unknown:
-        raise TypeError(f"{parameter_type.__name__}: unexpected keyword argument {sorted(unknown)[0]!r}")
-    settings = {key: value for key, value in settings.items() if value is not None}
-    if parameters is not None:
-        if not isinstance(parameters, parameter_type):
-            raise TypeError(f"parameters must be {parameter_type.__name__}")
-        if settings:
-            raise TypeError("Pass parameters or individual settings, not both")
-        return parameters
-    return parameter_type(**settings)
+def _resolve(parameter_type, parameters):
+    """Return ``parameters``, or the defaults of ``parameter_type`` for ``None``."""
+    if parameters is None:
+        return parameter_type()
+    if not isinstance(parameters, parameter_type):
+        raise TypeError(f"parameters must be {parameter_type.__name__}")
+    return parameters

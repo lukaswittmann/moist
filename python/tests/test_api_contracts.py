@@ -3,11 +3,11 @@
 import numpy as np
 import pytest
 import moist
-from . import library
+from moist import library
 
 
 def _model(components=None):
-    model = moist.SolvationModel(moist.CavityISwiG(nleb=26),
+    model = moist.SolvationModel(moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26)),
                                 components or [moist.ModelComponentPV(1e-4)])
     structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
     model.update(structure)
@@ -85,8 +85,8 @@ def test_independent_answers():
     assert list(coupling) == []
     gradient = np.zeros((2, 3))
     model.get_gradient(coupling, gradient)
-    # Staging again ends the walk: nothing answers into the new phase by
-    # accident, while the snapshots stay what they were.
+    # Staging again ends the walk: answering now raises, and the earlier
+    # snapshots stay what they were.
     model.prepare_energy(coupling)
     with pytest.raises(RuntimeError, match="No current coupling request"):
         coupling.answer(phi=np.zeros(ngrid))
@@ -163,14 +163,14 @@ def test_internal_basis_layout():
     basis = moist.GaussianBasis(shell_atom=[0, 0], shell_l=[0, 1], shell_nprim=[1, 1],
                                exponents=[.5, .5], coefficients=[1., 1.])
     source = moist.InternalDensity(basis, np.diag([1., .1, .2, .3]))
-    cavity = moist.DROP(lsf=moist.Isodensity(), nleb=26).build(source=source)
+    cavity = moist.DROP(lsf=moist.Isodensity(), parameters=moist.DROPParameters(nleb=26)).build(source=source)
     offsets, powers = cavity.isodensity_layout()
     np.testing.assert_array_equal(offsets, [0, 1, 4])
     assert {tuple(row) for row in powers} == {(0, 0, 0), (1, 0, 0), (0, 1, 0), (0, 0, 1)}
 
 
 def test_diagnostic_contractions_match_explicit_anchor_tensors():
-    cavity = moist.CavityDROP(nleb=26)
+    cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26))
     structure = moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]])
     cavity.update(structure)
     cavity.assemble_amat()
@@ -184,7 +184,7 @@ def test_diagnostic_contractions_match_explicit_anchor_tensors():
     for shift in (-h, h):
         xyz = structure.positions
         xyz[1, 2] += shift
-        moved = moist.CavityDROP(nleb=26)
+        moved = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26))
         moved.update(moist.Structure(structure.numbers, xyz))
         matrix, _ = moved.assemble_amat()
         energies.append(np.einsum("i,ij,j->", q, matrix, q))

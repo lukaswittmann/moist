@@ -1,10 +1,9 @@
 """Object-oriented Python interface for moist solvation models.
 
-The native C interface is intentionally procedural.  This module puts the
-Python objects around it: live cavity objects own their behaviour, snapshots
-are explicit values, and a model drives the same host coupling protocol as the
-Fortran interface -- create a coupling, prepare a phase, walk the requests
-with ``for request in coupling`` and answer the missing outputs of each with
+Live cavity objects own their behaviour, snapshots are explicit values, and a
+model drives the same host coupling protocol as the Fortran interface --
+create a coupling, prepare a phase, walk the requests with ``for request in
+coupling`` and answer the missing outputs of each with
 ``coupling.answer(...)``, then read the result and contract every item of the
 response with ``for item in response``.
 """
@@ -58,8 +57,7 @@ class _ImmutableArrayValue:
 class CavitySnapshot(_ImmutableArrayValue):
     """Generic cavity data copied from one successful update.
 
-    Field names are moist's own, so a value read here can be matched against the
-    native arrays without a translation step:
+    Field names match moist's own native names:
 
     ``xyz``
         ``(ngrid, 3)`` grid-point coordinates in bohr.
@@ -112,8 +110,7 @@ class CavitySnapshotDROP(CavitySnapshot):
     ``numbering``
         ``(ngrid,)`` stable point ids, packed as ``anchor_id + base*(branch-1)``
         with ``base = nsph * num_leb``.  The same physical point keeps its id
-        across rebuilds, which is what makes a surface comparable between
-        geometry steps.
+        across rebuilds.
     ``anchor_id``, ``branch``, ``branch_count``
         ``(ngrid,)`` the same information unpacked, as moist itself tracks it.
         Points sharing an ``anchor_id`` are branches of one anchor, ``branch``
@@ -198,19 +195,18 @@ class DensityResponse(_ImmutableArrayValue):
         level set in, so no level-set convention crosses the boundary.
 
     The item exists **only** for a cavity whose surface follows the density,
-    and **only in the response phase**.  A geometric cavity produces no density
-    item at all; that absence is the physics, and it is why a walk over such a
-    response never meets one rather than an item of zeros.
+    and **only in the response phase**.  A geometric cavity produces no
+    density item at all: iterating such a response never yields one, not even
+    an item of zeros.
 
     The weights are ``dE/drho`` at fixed nuclei, the same object in either
-    phase, so moist forms them once and the gradient phase leaves the
-    contraction out -- a host that does not need them would otherwise pay for
-    it.  On a density-backed cavity, run the response phase before the gradient
-    and reuse them: against your own ``d rho/dP`` they complete the Fock
-    matrix, against the basis-centre ``d rho/dR`` the nuclear gradient.  Going
-    straight to the gradient phase drops that term and nothing reports it.
-    Hessian weights use ``[point,b,a]`` for native ``(a,b,point)``.
-    They need not be symmetric; preserve both Cartesian axes in contractions.
+    phase; the gradient phase leaves the contraction out.  On a density-backed
+    cavity, run the response phase before the gradient and reuse them: against
+    your own ``d rho/dP`` they complete the Fock matrix, against the
+    basis-centre ``d rho/dR`` the nuclear gradient.  Going straight to the
+    gradient phase drops that term and nothing reports it.  Hessian weights
+    use ``[point,b,a]`` for native ``(a,b,point)``.  They need not be
+    symmetric; preserve both Cartesian axes in contractions.
     """
 
     #: Native item name
@@ -307,8 +303,8 @@ _RESPONSE_ITEMS = {
 }
 
 #: Extents after the grid axis of every response array, keyed by array name
-#: (unique across items), as moist.h documents them: moist writes exactly this
-#: shape, so the buffer is allocated to it
+#: (unique across items), as moist.h documents them; the buffer is allocated
+#: to exactly this shape
 _RESPONSE_ARRAYS = {
     "w_phi": (),
     "w_rho": (),
@@ -397,7 +393,7 @@ class Structure:
         return np.array(array, dtype=np.float64, order="C", copy=True)
 
     def _same_geometry(self, other: Structure) -> bool:
-        """Whether two structures describe exactly the same native update."""
+        """Return whether two structures describe exactly the same native update."""
         return (
             np.array_equal(self._numbers, other._numbers)
             and np.array_equal(self._positions, other._positions)
@@ -436,11 +432,6 @@ class Structure:
     def periodic(self) -> Optional[np.ndarray]:
         return None if self._periodic is None else self._periodic.copy()
 
-    @property
-    def _mol(self) -> library.StructureHandle:
-        """Compatibility name for package-internal pre-refactor callers."""
-        return self._handle
-
     def _as_handle(self) -> library.StructureHandle:
         return self._handle
 
@@ -463,10 +454,10 @@ def _guarded_native_update(cavity: Cavity, native: Callable[[], None]) -> None:
     """Run one native update, surfacing a Python callback failure either way.
 
     A callback-backed cavity records an exception raised inside its level-set
-    callback rather than letting it cross the native frames, so the recorded
-    failure has to be re-raised on both paths: after a native error, where it is
-    the more specific cause, and after an apparently successful call, which the
-    native side can report when the callback was the one that failed.  Both
+    callback instead of letting it cross the native frames.  The recorded
+    failure is re-raised on both paths: after a native error, where it is the
+    more specific cause, and after an apparently successful call, which the
+    native side reports when the callback was the one that failed.  Both
     :meth:`Cavity.update` and :meth:`SolvationModel.update` drive the same
     protocol; only the surrounding bookkeeping differs.
     """
@@ -691,8 +682,8 @@ class CavityISwiG(_CavityGenericBase):
     """iSwiG cavity built from shared parameters and a radius model."""
 
     def __init__(self, *, parameters: ISwiGParameters | None = None,
-                 radii: Radii | None = None, **settings) -> None:
-        self._configuration = ISwiG(parameters=parameters, radii=radii, **settings)
+                 radii: Radii | None = None) -> None:
+        self._configuration = ISwiG(parameters=parameters, radii=radii)
         super().__init__(library.new_iswig_cavity(
             self.parameters, self.radius_model._as_handle()
         ))
@@ -827,16 +818,15 @@ class _CavityDROPBorrowed(_CavityDROPBase):
 class CavityDROP(_CavityDROPBase):
     """DROP cavity composed from an LSF, parameters and radii.
 
-    Omitted ``lsf`` selects SvdW for compatibility. Density-backed surfaces
-    accept a live ``source`` separately from their immutable LSF parameters.
+    Omitted ``lsf`` selects SvdW.  Density-backed surfaces accept a live
+    ``source`` separately from their immutable LSF parameters.
     """
 
     def __init__(self, *, lsf: LevelSet | None = None,
                  parameters: DROPParameters | None = None, radii: Radii | None = None, source=None,
-                 pass_order=None, **settings) -> None:
+                 pass_order=None) -> None:
         self._configuration = DROP(
-            lsf=SvdW() if lsf is None else lsf,
-            parameters=parameters, radii=radii, **settings,
+            lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
         )
         self._density_source = source
         super().__init__(self.lsf._new_cavity(
@@ -859,8 +849,7 @@ class CavityDROP(_CavityDROPBase):
 
 
 #: ``(rho, drho)``, ``(rho, drho, d2rho)`` or ``(rho, drho, d2rho, d3rho)``:
-#: the tuple grows with the requested order so a caller never pays for a
-#: derivative it did not ask for.
+#: the tuple grows with the requested order.
 DensityDerivatives = tuple[Union[float, np.ndarray], ...]
 
 #: A raw density callback.  It takes ``(point, order)``, or just ``(point)``
@@ -886,8 +875,8 @@ class IsodensitySource(Protocol):
 # are missing in the phase it is driving.  One class per request kind, named
 # and addressed exactly as in the Fortran interface.  The output names and
 # their documented shapes are the contract: the native library reports a wrong
-# name by name and trusts the shape, as a pointer carries none; an ndarray
-# carries its shape, so :meth:`Coupling.answer` checks it before the call.
+# name by name and trusts the shape; :meth:`Coupling.answer` checks the shape
+# before the call.
 
 
 class CouplingRequest:
@@ -937,7 +926,7 @@ class CouplingRequest:
 
     @classmethod
     def _inputs(cls, coupling: Coupling) -> dict:
-        """Inputs of this kind beyond the grid, copied from the current request."""
+        """Return this kind's inputs beyond the grid, copied from the current request."""
         return {}
 
 
@@ -1031,7 +1020,7 @@ class Coupling:
             yield self._current_kind()._capture(self)
 
     def _current_kind(self) -> type[CouplingRequest]:
-        """Class of the current request; raises when no request is current."""
+        """Return the class of the current request; raise when none is current."""
         name = library.get_coupling_request_name(self._handle)
         try:
             return _REQUEST_CLASSES[name]
@@ -1093,8 +1082,8 @@ class SolvationModelComponent:
 class _ModelComponentPCMBase(SolvationModelComponent):
     """PCM physical input and immutable numerical parameters."""
 
-    def __init__(self, epsilon, solver, constructor, parameters) -> None:
-        self._parameters = _resolve(PCMParameters, parameters, dict(solver=solver))
+    def __init__(self, epsilon, constructor, parameters) -> None:
+        self._parameters = _resolve(PCMParameters, parameters)
         self._epsilon = float(epsilon)
         super().__init__(constructor(self._epsilon, self.parameters))
 
@@ -1114,15 +1103,15 @@ class _ModelComponentPCMBase(SolvationModelComponent):
 class ModelComponentCPCM(_ModelComponentPCMBase):
     """Conductor-like polarizable continuum component."""
 
-    def __init__(self, epsilon: float, solver=None, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, solver, library.new_cpcm_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
+        super().__init__(epsilon, library.new_cpcm_component, parameters)
 
 
 class ModelComponentCOSMO(_ModelComponentPCMBase):
     """Conductor-like screening-model component."""
 
-    def __init__(self, epsilon: float, solver=None, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, solver, library.new_cosmo_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
+        super().__init__(epsilon, library.new_cosmo_component, parameters)
 
 
 class ModelComponentPV(SolvationModelComponent):
@@ -1161,8 +1150,6 @@ class SolvationModel:
         self,
         cavity: Cavity,
         components: list[SolvationModelComponent] | tuple[SolvationModelComponent, ...],
-        debug: Optional[bool] = None,
-        verbosity: Optional[int] = None,
         *,
         parameters: Optional[ModelParameters] = None,
     ) -> None:
@@ -1174,7 +1161,7 @@ class SolvationModel:
         if any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must contain only SolvationModelComponent objects")
 
-        self._parameters = _resolve(ModelParameters, parameters, dict(debug=debug, verbosity=verbosity))
+        self._parameters = _resolve(ModelParameters, parameters)
         self._updated = False
         self._natoms: Optional[int] = None
         self._source_cavity = cavity
@@ -1274,7 +1261,7 @@ class SolvationModel:
         library.get_model_energy(self._model, coupling._handle, energy)
 
     def get_response(self, coupling: Coupling) -> Response:
-        """Host part of a staged response phase.
+        """Return the host part of a staged response phase.
 
         Exactly what this model produces in this phase and nothing else: the
         potential adjoint, the density weights of a density-backed cavity and
@@ -1287,7 +1274,7 @@ class SolvationModel:
         return Response._from_handle(handle, self._cavity.ngrid)
 
     def get_gradient(self, coupling: Coupling, gradient: np.ndarray) -> Response:
-        """Nuclear gradient of a staged gradient phase, plus its host part.
+        """Return the nuclear gradient of a staged gradient phase, plus its host part.
 
         Adds the model contribution to ``gradient[natoms, 3]`` and returns the
         response the host contracts with its own geometry derivatives.  The

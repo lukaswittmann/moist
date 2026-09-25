@@ -47,51 +47,27 @@ moist_pyext = python.extension_module(
   subdir: 'moist',
 )
 
-pysrcs = files(
+# Pure-Python modules of the package
+pysrcs = [
   '__init__.py',
-  'conftest.py',
-  'interface.py',
   'configuration.py',
   'density.py',
-  'parameters.py',
-  'radii.py',
+  'interface.py',
   'library.py',
+  'parameters.py',
   'pyscf.py',
-  'test_pyscf_scf.py',
-  'test_gostshyp.py',
-  'test_interface.py',
-  'test_configuration.py',
-  'test_api_contracts.py',
-  'test_library.py',
-  'test_pyscf.py',
-)
+  'radii.py',
+]
 
 if install
   python.install_sources(
-    pysrcs,
+    files(pysrcs),
     subdir: 'moist',
     pure: false,
   )
 endif
 
-foreach name : [
-  '__init__.py',
-  'conftest.py',
-  'interface.py',
-  'configuration.py',
-  'density.py',
-  'parameters.py',
-  'radii.py',
-  'library.py',
-  'pyscf.py',
-  'test_pyscf_scf.py',
-  'test_gostshyp.py',
-  'test_interface.py',
-  'test_configuration.py',
-  'test_api_contracts.py',
-  'test_library.py',
-  'test_pyscf.py',
-]
+foreach name : pysrcs
   configure_file(input: files(name), output: name, copy: true)
 endforeach
 
@@ -109,20 +85,21 @@ test(
   timeout: 60,
 )
 
+# pytest options
+tests_dir = meson.current_source_dir() / '..' / 'tests'
 pytest_args = [
   '-m', 'pytest',
   '--no-header', '-q',
-  '-p', 'no:cacheprovider',
 ]
 pytest_env = ['PYTHONPATH=' + meson.current_build_dir() / '..']
 coupling_env = pytest_env + ['MOIST_REQUIRE_PYSCF=1']
 bindings_srcs = [
-  meson.current_build_dir() / 'test_interface.py',
-  meson.current_build_dir() / 'test_configuration.py',
-  meson.current_build_dir() / 'test_api_contracts.py',
-  meson.current_build_dir() / 'test_library.py',
+  tests_dir / 'test_interface.py',
+  tests_dir / 'test_configuration.py',
+  tests_dir / 'test_api_contracts.py',
+  tests_dir / 'test_library.py',
 ]
-coupling_src = meson.current_build_dir() / 'test_pyscf.py'
+coupling_src = tests_dir / 'test_pyscf.py'
 
 # The CFFI bindings and the Python object model
 test(
@@ -169,7 +146,7 @@ endforeach
 #   gostshyp_fock        energy and dE/dP on the moving surface
 #   gostshyp_gradient    the three nuclear-gradient channels
 #   gostshyp_conventions channel semantics and the negative controls
-gostshyp_src = meson.current_build_dir() / 'test_gostshyp.py'
+gostshyp_src = tests_dir / 'test_gostshyp.py'
 foreach entry : [
   ['gostshyp_integrals', 'gostshyp_integrals', 300],
   ['gostshyp_params', 'gostshyp_params', 300],
@@ -188,11 +165,11 @@ foreach entry : [
   )
 endforeach
 
-# Public PySCF SCF/gradient wrapper, including cache and scanner lifetimes.
+# Public PySCF SCF/gradient wrapper, including cache and scanner lifetimes
 test(
   'pyscf_wrapper',
   python,
-  args: pytest_args + [meson.current_build_dir() / 'test_pyscf_scf.py'],
+  args: pytest_args + [tests_dir / 'test_pyscf_scf.py'],
   depends: moist_pyext,
   env: coupling_env,
   suite: 'python',

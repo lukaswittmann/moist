@@ -210,3 +210,15 @@ jobs:
           meson setup build -Dpython=true -Dapi=true -Dpython_version="$(command -v python)" -Dlapack=${{ matrix.lapack }}
           meson compile -C build
           meson test -C build --suite moist --print-errorlogs
+
+      - name: Build and test the wheel
+        env:
+          MOIST_REQUIRE_PYSCF: 1
+        run: |
+          meson setup dist -Dpython=false -Dapi=true -Dlapack=${{ matrix.lapack }}
+          meson dist -C dist --no-tests --include-subprojects
+          mkdir -p python/subprojects/moist
+          tar -xJf dist/meson-dist/moist-*.tar.xz --strip-components=1 -C python/subprojects/moist
+          python -m pip install -v ./python -Csetup-args=-Dlapack=${{ matrix.lapack }}
+          python -c "import moist; print(moist.__version__, moist.get_version_string())"
+          pytest python/tests
