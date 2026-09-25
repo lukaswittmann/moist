@@ -3,12 +3,6 @@
 !>
 !> Derived types declare their fields in register_entries and defaults in
 !> init_defaults
-!>
-!> Building, reading and writing a document is serialized by the named
-!> critical section `moist_parameter_documents`: toml-f and jonquil return
-!> deferred-length strings, and gfortran keeps their length in a static
-!> temporary that concurrent threads overwrite (jonquil then writes numbers
-!> truncated or empty)
 module moist_model_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
