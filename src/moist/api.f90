@@ -1263,7 +1263,7 @@ contains
       handle = new_cosmo_component_api(verror, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
    end function create_cosmo_component_api
 
-   !> API error helper - creates consistent error messages with routine context
+   !> Build a diagnostic tagged with its calling routine
    subroutine api_error(error, routine, msg)
       !> Diagnostic on failure
       type(error_type), allocatable, intent(out) :: error
@@ -1322,7 +1322,7 @@ contains
       call copy_string_output(version, buffer, capacity, length)
    end subroutine get_version_string_api
 
-   !> Create new error handle object
+   !> Create an error handle
    function new_error_api() &
          & result(verror) &
          & bind(C, name=namespace//"new_error")
@@ -1337,7 +1337,7 @@ contains
 
    end function new_error_api
 
-   !> Delete error handle object
+   !> Delete an error handle
    subroutine delete_error_api(verror) &
          & bind(C, name=namespace//"delete_error")
       !> Diagnostic handle
@@ -1354,7 +1354,7 @@ contains
 
    end subroutine delete_error_api
 
-   !> Check error handle status
+   !> Query error handle status
    function check_error_api(verror) result(status) &
          & bind(C, name=namespace//"check_error")
       !> Diagnostic handle
@@ -1853,8 +1853,8 @@ contains
 
    !> Point at the cavity a general solvation model owns, without taking it
    subroutine borrow_general_cavity(model, cavity_ptr, message)
-      !> Solvation model that may own a cavity. `intent(inout)` because the
-      !> borrowed pointer stays live and the handle it feeds is read-write
+      !> Solvation model that may own a cavity; borrowed pointer stays live,
+      !> feeding a read-write handle
       class(solvation_model_type), intent(inout), target :: model
       !> Borrowed cavity, left null unless the model exposes one
       class(cavity_type), pointer, intent(out) :: cavity_ptr
@@ -2314,7 +2314,7 @@ contains
 
    end subroutine api_copy_grid_matrix
 
-   !> Copy a rank-3 `(3, 3, ngrid)` grid array into a caller buffer of the same size
+   !> Copy a rank-3 `(3, 3, ngrid)` grid array into an equal-size caller buffer
    subroutine api_copy_grid_tensor(routine, label, src, c_dst, error)
       !> Calling entry point
       character(len=*), intent(in) :: routine
@@ -2743,7 +2743,7 @@ contains
    !> Advance to the next request with a missing output of the staged phase
    !>
    !> - false ends the pass and rewinds; the next call starts a new pass
-   !> - false on any failure too, so an error never keeps a host loop running
+   !> - false on any failure too
    function next_coupling_request_api(verror, vcpl) result(more) &
          & bind(C, name=namespace//"next_coupling_request")
       !> Error handle
@@ -2937,7 +2937,7 @@ contains
    !> Advance to the next item of the response
    !>
    !> - false ends the pass and rewinds; the next call starts a new pass
-   !> - false on any failure too, so an error never keeps a host loop running
+   !> - false on any failure too
    function next_response_item_api(verror, vresp) result(more) &
          & bind(C, name=namespace//"next_response_item")
       !> Error handle
@@ -3409,7 +3409,7 @@ contains
    !*                            Generic cavity API (Tier 1)                            *!
    !* ================================================================================= *!
 
-   !> Generic update cavity - works for all cavity types
+   !> Update a cavity of any concrete type
    subroutine update_cavity_api(verror, vcav, vmol) &
          & bind(C, name=namespace//"update_cavity")
       !> Diagnostic handle
@@ -3456,7 +3456,7 @@ contains
          return
       end if
 
-      ! Call deferred procedure - works for all cavity types
+      ! Dispatch through the deferred update procedure
       call cav%ptr%update(mol%ptr, error=cavity_error)
       if (allocated(cavity_error)) then
          call api_error(error%ptr, "update_cavity", cavity_error%message)
@@ -3465,7 +3465,7 @@ contains
 
    end subroutine update_cavity_api
 
-   !> Get generic cavity sizes - works for all cavity types
+   !> Report grid and sphere counts of a cavity of any concrete type
    subroutine get_cavity_sizes_api(verror, vcav, ngrid, nsph) &
          & bind(C, name=namespace//"get_cavity_sizes")
       !> Required diagnostic handle
@@ -3511,7 +3511,7 @@ contains
          return
       end if
 
-      ! These fields are in base cavity_type
+      ! Base cavity_type fields
       local_ngrid = cav%ptr%ngrid
       local_nsph = size(cav%ptr%radii)
       if (allocated(error%ptr)) return
@@ -3520,7 +3520,7 @@ contains
 
    end subroutine get_cavity_sizes_api
 
-   !> Get generic cavity results - works for all cavity types
+   !> Report cavity results common to any concrete cavity type
    !>
    !> - only fields from the base cavity_type
    !> - the caller passes the capacities it allocated the arrays with, at least
@@ -3708,10 +3708,11 @@ contains
 
    !> Describe one readable field by position
    !>
-   !> `dtype` is one of the MOIST_FIELD_* tags, `rank` is 0 for a scalar, and
-   !> `dims` holds the extents in C row-major order, slowest-varying first; `count` is the
-   !> number of elements a fetch writes. The name buffer holds
-   !> MOIST_FIELD_NAME_MAX + 1 characters
+   !> - `dtype` one of the MOIST_FIELD_* tags
+   !> - `rank` 0 for a scalar
+   !> - `dims` extents in C row-major order, slowest-varying first
+   !> - `count` number of elements a fetch writes
+   !> - name buffer holds MOIST_FIELD_NAME_MAX + 1 characters
    subroutine get_cavity_field_info_api(verror, vcav, ifield, name, &
          & dtype, rank, dims, count) &
          & bind(C, name=namespace//"get_cavity_field_info")
@@ -3829,8 +3830,8 @@ contains
 
    !> Read a real-valued field by name
    !>
-   !> The buffer is filled in Fortran order for rank-2 fields and receives the
-   !> `count` elements get_cavity_field_info reports
+   !> - buffer filled in Fortran order for rank-2 fields
+   !> - receives the `count` elements `get_cavity_field_info` reports
    subroutine get_cavity_field_real_api(verror, vcav, cname, values) &
          & bind(C, name=namespace//"get_cavity_field_real")
       !> Required diagnostic handle
@@ -3974,8 +3975,7 @@ contains
    !>
    !> - an undeclared name is an error, and so is a field whose optional
    !>   property was never requested
-   !> - the cavity does not declare an array it has not computed, so no caller
-   !>   can mistake absence for zeros
+   !> - the cavity does not declare an array it has not computed
    !>
    !> @return              Whether the field was found
    logical function fetch_cavity_field(error, cav, cname, origin, query) result(ok)
@@ -4163,8 +4163,8 @@ contains
    !>   counterparts of A_tot1_rA/V_tot1_rA; summing over the grid recovers the
    !>   totals
    !> - the area carries a switching-function dependence (a_i ~ f_i / xi_i^2),
-   !>   so a_i1_rA is NOT recoverable from xi1_rA alone; it is what a generic
-   !>   geometric surface functional (e.g. GOSTSHYP) needs for its area route
+   !>   so a_i1_rA is NOT recoverable from xi1_rA alone
+   !> - used by geometric surface functionals such as GOSTSHYP for their area route
    subroutine get_anchor_gradient_api(verror, vcav, nsph_cap, ngrid_cap, xyz1_rA, xi1_rA, &
          & a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA) &
          & bind(C, name=namespace//"get_anchor_gradient")
@@ -4874,7 +4874,7 @@ contains
 
    end subroutine contract_pcm_nuclear_gradient_api
 
-   !> Generic delete cavity - works for all cavity types
+   !> Delete a cavity of any concrete type
    subroutine delete_cavity_api(vcav) &
          & bind(C, name=namespace//"delete_cavity")
       !> Cavity handle
