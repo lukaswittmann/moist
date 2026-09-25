@@ -1,38 +1,27 @@
-"""End-to-end tests of the moist/host chain rule against PySCF
+"""End-to-end tests of the moist/host chain rule against PySCF.
 
-moist hands out adjoint weights and expects the host to finish the chain rule
-with its own density derivatives, so the correctness of an isodensity cavity is
-split across a language boundary.  These tests close that loop: every analytic
-quantity is checked against a finite difference of the energy that moist itself
-returns.
+moist hands out adjoint weights; the host finishes the chain rule with its
+own density derivatives. Every analytic quantity here is checked against a
+finite difference of the energy that moist returns.
 
 The suite is layered so a failure localises:
 
 ``L0``
-    Solute-vdW cavity, whose surface does not depend on the density.  The
-    level-set response is absent, so these tests pin the electrostatic
-    conventions (``phi``, ``w_xyz``, nuclear charges) on their own.
+    Solute-vdW cavity, whose surface does not depend on the density. Pins
+    the electrostatic conventions (``phi``, ``w_xyz``, nuclear charges) with
+    no level-set response.
 ``L1``
     Isodensity cavity at a *fixed* density matrix, over three component sets.
     Only the ``lsf`` routes are new relative to L0.
 ``L2``
     Self-consistent solvated SCF and its total nuclear gradient.
 
-Each layer also carries a negative control, because an FD test whose extra term
-is numerically negligible passes while testing nothing.  The PV component is
-what makes the level-set route dominant rather than a 7% correction: with PV
-alone the surface charges vanish and the *entire* Fock matrix is the level-set
-contraction.
+Each layer also carries a negative control. With PV alone the surface
+charges vanish and the entire Fock matrix is the level-set contraction.
 
-Tests carry one marker per concern, so each is a separate meson target under
-the ``moist_pyscf`` suite: ``host``, ``vdw``, ``isodensity`` (crossed with
-``cpcm`` / ``pv`` / ``cpcm_pv``), ``conventions`` and ``scf``.  A failure names
-the layer that broke.
-
-Mutation testing -- injecting sign flips, dropped terms, factor errors and index
-aliases into the analytic derivatives -- confirms this suite catches every such
-error down to ~1 part in 10^6 of the level-set term; below that the injected
-error falls under the finite-difference noise.
+Tests carry one marker per concern, one per meson target under the
+``moist_pyscf`` suite: ``host``, ``vdw``, ``isodensity`` (crossed with
+``cpcm`` / ``pv`` / ``cpcm_pv``), ``conventions`` and ``scf``.
 """
 
 import functools
@@ -49,7 +38,7 @@ except ImportError as exc:
         raise
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from .interface import (
+from moist.interface import (
     DensityResponse,
     GaussianMomentRequest,
     GaussianPotentialRequest,
@@ -59,10 +48,11 @@ from .interface import (
     ModelComponentPV,
     Response,
 )
-from .pyscf import (
+from moist.pyscf import (
     CFC, DROP, ISwiG, Isodensity, SvdW,
     GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
 )
+from moist.parameters import DROPParameters, ISwiGParameters
 
 #: Dielectric constant of water
 EPSILON = 80.0
@@ -75,22 +65,18 @@ PROJ_TOL = 1e-13
 
 #: FD step on the density matrix, in units of a unit-Frobenius-norm direction
 STEP_DM = 1e-4
-#: FD step on nuclear coordinates in bohr; matches test_helpers.f90's tuned value
+#: FD step on nuclear coordinates in bohr; matches test_helpers.f90
 STEP_R = 2.5e-4
 
 #: Tolerances
 REL_THR = 1e-9
 ABS_THR = REL_THR / 10.0
-#: Converged-SCF gradient tolerances
+#: Converged-SCF gradient tolerances.
 #:
-#: The absolute floor is deliberately not ``SCF_REL_THR / 10``.  These
-#: references are differences of total energies near -75 Ha, so each sample
-#: carries about an ULP of noise, and ``fd4`` multiplies that by ``18 / (12 h)``
-#: -- roughly 6e3 at this step.  The FD side therefore cannot be trusted below
-#: ~1e-10 no matter how tightly the SCF converges: it moves by that much merely
-#: from changing the OpenMP thread count, and neither a smaller nor a larger
-#: step reduces it.  1e-10 would be sitting on that floor, so the check would
-#: report the quadrature noise rather than the gradient.
+#: The absolute floor is not ``SCF_REL_THR / 10``. References are differences
+#: of total energies near -75 Ha, so each sample carries about an ULP of
+#: noise; ``fd4`` amplifies that by ``18 / (12 h)`` (~6e3 at this step),
+#: giving an FD noise floor of about 1e-10.
 SCF_REL_THR = 1e-10
 SCF_ABS_THR = 1e-9
 
@@ -102,7 +88,7 @@ MIN_SIGNAL = 1e-12
 
 @dataclass(frozen=True)
 class System:
-    """A test solute.  Geometries are in Angstrom."""
+    """A test solute. Geometries are in Angstrom."""
 
     atom: str
     charge: int = 0
@@ -116,7 +102,7 @@ SYSTEMS = {
            H  0.7629  0.0000  0.1947
            H -0.7991  0.0953  0.2223"""
     ),
-    # Glyciine zwitterion
+    # Glycine zwitterion
     "glycine_zwitterion": System(
         """C  0.000  0.000  0.000
            C  1.540  0.000  0.000
@@ -154,9 +140,9 @@ CASES = [
 #: The case used by tests that pin a convention once rather than sweeping.
 PRIMARY_CASE = CASES[0]
 
-#: Component sets driven on the isodensity cavity.  ``pv`` is the sharpest of
-#: the three: with no electrostatic component the surface charges are zero, so
-#: the whole Fock matrix is the level-set contraction.
+#: Component sets driven on the isodensity cavity. With no electrostatic
+#: component (``pv``), the surface charges are zero and the whole Fock matrix
+#: is the level-set contraction.
 COMPONENTS = {
     "cpcm": lambda: [ModelComponentCPCM(EPSILON)],
     "pv": lambda: [ModelComponentPV(PRESSURE)],
@@ -167,7 +153,7 @@ COMPONENTS = {
 CASE_PARAMS = [
     pytest.param(system, basis, id=f"{system}-{basis}") for system, basis in CASES
 ]
-#: One marker per component set so each can be its own meson target.
+#: One marker per component set.
 COMPONENT_PARAMS = [
     pytest.param("cpcm", id="cpcm", marks=pytest.mark.cpcm),
     pytest.param("pv", id="pv", marks=pytest.mark.pv),
@@ -176,13 +162,10 @@ COMPONENT_PARAMS = [
 
 
 def deviation(actual, reference, *, thr_abs=None, thr_rel=None) -> float:
-    """Deviation measured in units of the tolerance: ``<= 1`` passes.
+    """Return the deviation in units of the tolerance; ``<= 1`` passes.
 
     Combines the two thresholds the way test-drive's
-    ``check(..., thr_abs=, thr_rel=)`` does -- ``max(thr_abs, thr_rel*|ref|)`` --
-    so the absolute floor covers references near zero while the relative bound
-    scales with the magnitude.  Reporting the ratio rather than the raw
-    difference makes a failure message say how many tolerances were missed.
+    ``check(..., thr_abs=, thr_rel=)`` does: ``max(thr_abs, thr_rel * |ref|)``.
     """
     thr_abs = ABS_THR if thr_abs is None else thr_abs
     thr_rel = REL_THR if thr_rel is None else thr_rel
@@ -193,11 +176,10 @@ FD4_OFFSETS = (2, 1, -1, -2)
 
 
 def answer_with_zeros(coupling, request, ngrid) -> None:
-    """Answer the current request of ``coupling`` with zeros, whatever shape it wants.
+    """Answer the current request of ``coupling`` with zeros of the requested shape.
 
-    ``request`` is the snapshot the loop yielded for it.  Used by the negative
-    controls, which need every *other* request satisfied so the failure they
-    provoke is unambiguous.
+    ``request`` is the snapshot the loop yielded for it. Used by the negative
+    controls to satisfy every other request.
     """
     if isinstance(request, GaussianMomentRequest):
         coupling.answer(
@@ -251,8 +233,8 @@ def make_host(mol, *, dm):
 def cavity_config(isodensity):
     """The DROP configuration of one layer: isodensity or solute-vdW."""
     if isodensity:
-        return DROP(lsf=Isodensity(), nleb=NLEB, tolerance=PROJ_TOL)
-    return DROP(lsf=SvdW(), nleb=NLEB)
+        return DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=NLEB, tolerance=PROJ_TOL))
+    return DROP(lsf=SvdW(), parameters=DROPParameters(nleb=NLEB))
 
 
 def solve(mol, positions=None, *, dm, isodensity, components="cpcm"):
@@ -358,7 +340,11 @@ def sampled_coordinates(natm):
 @pytest.mark.vdw
 @pytest.mark.parametrize(
     "cavity",
-    [DROP(lsf=SvdW(), nleb=26), DROP(lsf=CFC(), nleb=26), ISwiG(nleb=26)],
+    [
+        DROP(lsf=SvdW(), parameters=DROPParameters(nleb=26)),
+        DROP(lsf=CFC(), parameters=DROPParameters(nleb=26)),
+        ISwiG(parameters=ISwiGParameters(nleb=26)),
+    ],
     ids=("svdw-drop", "cfc-drop", "iswig"),
 )
 @pytest.mark.parametrize(
@@ -410,9 +396,8 @@ def test_l0_gradient_requires_position_weight():
     """Without ``w_xyz`` the gradient is refused rather than silently wrong.
 
     The total surface-position weight carries the whole surface-motion term
-    of the gradient; read as zero it would leave a plausible, wrong gradient
-    (only the direct nuclear term).  The request is mandatory, so the
-    gradient is refused by name.
+    of the gradient. The request is mandatory: leaving it unanswered raises
+    by name instead of returning an incomplete gradient.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -438,8 +423,8 @@ def test_l0_gradient_requires_position_weight():
 def test_l1_density_callback_derivatives(system, basis):
     """The callback's own derivative orders are mutually consistent.
 
-    Validates the Leibniz expansion and the PySCF derivative-component ordering
-    independently of moist, so a failure here cannot be blamed on the cavity.
+    Checks the Leibniz expansion and the PySCF derivative-component ordering
+    independently of moist.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
@@ -468,12 +453,11 @@ def test_l1_density_callback_derivatives(system, basis):
 @pytest.mark.host
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_density_callback_is_finite(system, basis):
-    """Pins the suppressed BLAS status flags in the callback as false positives.
+    """The callback's suppressed BLAS status flags are false positives.
 
-    The products there raise spurious divide-by-zero and overflow, so the flags
-    are ignored; this asserts the values really are finite and identical to a
-    BLAS-free reference, both at a normal point and far into the tail where the
-    density underflows.
+    The products raise spurious divide-by-zero and overflow flags. Checks
+    the values are finite and match a BLAS-free reference, at a normal point
+    and far into the tail where the density underflows.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
@@ -489,8 +473,7 @@ def test_density_callback_is_finite(system, basis):
         reference = np.einsum("cu,uv->cv", ao, dm, optimize=False)
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             product = ao @ dm
-        # Not bitwise: BLAS and the einsum loop sum in different orders. Equal to
-        # rounding is all that is needed to show the flags carry no information.
+        # Compares to rounding, not bitwise equal.
         assert np.isfinite(product).all()
         np.testing.assert_allclose(product, reference, rtol=5e-12, atol=1e-16)
 
@@ -531,9 +514,7 @@ def test_l1_gradient_matches_fd(system, basis, components):
 def test_the_driver_stops_on_an_item_it_cannot_contract():
     """An item the driver does not know raises instead of dropping its term.
 
-    Unlike an unanswered request, which ``get_*`` reports, a skipped response
-    item fails nowhere: the Fock matrix and the gradient would silently lack
-    its contribution.
+    Checks both the Fock contraction and the gradient walk of the response.
     """
 
     class UnknownItem:
@@ -545,7 +526,7 @@ def test_the_driver_stops_on_an_item_it_cannot_contract():
     response = Response([*solvation.response, UnknownItem()])
     with pytest.raises(NotImplementedError, match="Unsupported response item 'unknown'"):
         solvation._fock(response)
-    # The gradient walks the response of the cached evaluation at this density.
+    # gradient_channels reads the response cached on solvation.
     solvation._response = response
     with pytest.raises(NotImplementedError, match="Unsupported response item 'unknown'"):
         solvation.gradient_channels(dm)
@@ -555,14 +536,13 @@ def test_the_driver_stops_on_an_item_it_cannot_contract():
 def test_pv_alone_makes_the_fock_purely_level_set():
     """With no electrostatic component the whole Fock is the ``lsf`` contraction.
 
-    A pv-only model produces no electrostatic channel at all, so nothing
-    survives except the cavity-shape response -- the sharpest available
-    isolation of the weights.
+    A pv-only model produces no electrostatic channel, so only the
+    cavity-shape response remains.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     solvation = solve(mol, dm=dm, isodensity=True, components="pv")
-    # The walk meets the density item alone: no potential adjoint, no amplitudes.
+    # The response contains only the density item: no potential adjoint, no amplitudes.
     (density,) = list(solvation.response)
     assert isinstance(density, DensityResponse)
     full = solvation.fock
@@ -596,8 +576,8 @@ def test_l1_fock_requires_lsf_term(components):
 def test_l1_gradient_requires_lsf_term(components):
     """The isodensity level set reports zero nuclear partials by construction.
 
-    moist therefore returns a gradient that is missing the density's own
-    dependence on the nuclei; the host has to add it.
+    The gradient moist returns lacks the density's own dependence on the
+    nuclei; the host adds it.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -616,11 +596,9 @@ def test_l1_gradient_requires_lsf_term(components):
 def test_l1_potential_requires_point_potentials():
     """``w_xyz`` carries the dominant part of the cavity response.
 
-    When the density changes the  grid points move and ``phi(r_i)`` moves with them.
-    moist cannot see that route -- ``phi`` is the host's function -- so it has to
-    arrive as ``w_xyz`` before the potential is read.  The request is
-    mandatory for a density-dependent cavity: omitting it is refused by name
-    rather than returning ``lsf`` weights that look healthy and are wrong.
+    The grid points move with the density, and ``phi`` is the host's
+    function, so moist reads it as ``w_xyz``. The request is mandatory for a
+    density-dependent cavity: omitting it raises by name.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -637,13 +615,9 @@ def test_l1_potential_requires_point_potentials():
 
 @pytest.mark.conventions
 def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
-    """``phi`` is not charge-dependent, so it is missing in the energy phase only.
+    """``phi`` is not charge-dependent, so it is requested once, in the energy phase.
 
-    The pre-protocol exchange supplied it twice -- once bare to obtain the
-    charges, then again alongside the position weights -- because the host had
-    to drive moist's ordering itself.  The phase loop owns that ordering now,
-    so the potential is asked for exactly once and only ``w_xyz`` comes back
-    for the response and the gradient.
+    The response and gradient phases receive only ``w_xyz``.
     """
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
@@ -670,7 +644,7 @@ def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
     assert potential_calls == [1]
     assert weight_calls == [1]
     solvation.gradient(dm)
-    # Raw derivatives remain valid when the gradient phase follows response.
+    # The gradient phase does not re-request the potential or the weights.
     assert potential_calls == [1]
     assert len(weight_calls) == 1
 
@@ -679,10 +653,9 @@ def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
 def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypatch):
     """A model that does not ask for moments never makes the host form them.
 
-    The Gaussian moments are dense three-centre AO integrals.  A host cannot
-    know whether they are wanted, so it used to be told by a hand-written table
-    on the Python side; now the model's own declaration decides, and a CPCM
-    model simply never produces the request that would trigger them.
+    The Gaussian moments are dense three-centre AO integrals. The model's
+    own declaration decides whether they are requested; a CPCM model never
+    requests them.
     """
     builds = []
     build_integrals = GaussianMoments._build_integrals
@@ -700,7 +673,7 @@ def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypat
     assert builds == []
     assert electrostatic.moments is None
 
-    # Vacuous unless the same driver does build them when a component asks.
+    # Positive control: GOSTSHYP requests moments.
     pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)])
     pressurised.evaluate(dm)
     assert builds == [1]
@@ -710,10 +683,9 @@ def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypat
 def test_gradient_path_reads_host_surface_weights():
     """The gradient contracts the same total ``w_xyz`` the response uses.
 
-    There is one surface-position weight, ``q_i grad phi_total(r_i)``, read by
-    both paths; moist adds no nuclear field of its own to it.  Scaling it
-    therefore scales the surface-motion term of the gradient: the difference
-    between the two gradients below is linear in the factor and nonzero.
+    The surface-position weight, ``q_i grad phi_total(r_i)``, is read by
+    both paths, and moist adds no nuclear field of its own to it. Scaling
+    the weight scales the gradient's surface-motion term linearly.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -766,9 +738,9 @@ def test_l2_scf_converges_and_stabilises():
 def test_l2_total_gradient_matches_fd():
     """Total solvated SCF energy gradient against FD of the converged energy.
 
-    The density response drops out at convergence, so the analytic gradient is
-    the ordinary RHF gradient built from the solvated orbitals plus the explicit
-    solvation terms evaluated at the converged density.
+    At convergence the density response drops out, and the analytic gradient
+    is the ordinary RHF gradient built from the solvated orbitals plus the
+    explicit solvation terms evaluated at the converged density.
     """
     mol = molecule(*PRIMARY_CASE)
     positions = mol.atom_coords()
@@ -788,8 +760,7 @@ def test_l2_total_gradient_matches_fd():
         assert deviation(analytic.flatten(order="C")[index], numerical,
                  thr_abs=SCF_ABS_THR, thr_rel=SCF_REL_THR) <= 1.0
 
-    # The solvated gradient must actually differ from the gas-phase one, or the
-    # solvation terms above are not being exercised.
+    # The solvated gradient differs from the gas-phase gradient.
     gas_gradient = grad.RHF(scf.RHF(mol).run()).kernel()
     assert np.abs(analytic - gas_gradient).max() > MIN_SIGNAL
 
@@ -820,10 +791,11 @@ def test_gaussian_raw_derivatives(cart):
 def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
     """Independent PCM matrix, RHS, energy and Fock on identical surface inputs."""
     from pyscf.solvent import pcm
-    from . import library
+    from moist import library
 
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    solvation = PySCFSolvation(mol, DROP(lsf=SvdW(), nleb=50), [ModelComponentCPCM(32.0)])
+    cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=50))
+    solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(32.0)])
     result = solvation.evaluate(dm)
     host, model = solvation.host, solvation.model
     coords = model.cavity.xyz
@@ -849,12 +821,13 @@ def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
 @pytest.mark.conventions
 def test_point_gaussian_mismatch_decreases_with_grid_order():
     """The operator difference is bounded and decreases with discretization error."""
-    from . import library
+    from moist import library
 
     mol, dm = molecule("water", "def2-svp"), reference_density("water", "def2-svp")
     differences = []
     for nleb in (50, 194, 770):
-        solvation = PySCFSolvation(mol, DROP(lsf=SvdW(), nleb=nleb), [ModelComponentCPCM(78.3553)])
+        cavity = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=nleb))
+        solvation = PySCFSolvation(mol, cavity, [ModelComponentCPCM(78.3553)])
         result = solvation.evaluate(dm)
         matrix, _ = library.assemble_drop_amat(solvation.model.cavity._handle)
         point_phi = solvation.host.surface_potential(solvation.model.cavity.xyz)
@@ -863,7 +836,7 @@ def test_point_gaussian_mismatch_decreases_with_grid_order():
         differences.append(abs(result.energy - point_energy) * 627.509474)
     assert differences[0] > differences[1] > differences[2] > 0
     assert differences[1] < 0.05  # kcal/mol, default 194-point grid
-    # A broad bound on inverse-grid-order convergence, independent of last bits.
+    # Broad bound on inverse-grid-order convergence.
     assert 3.0 < differences[0] / differences[2] < 40.0
 
 

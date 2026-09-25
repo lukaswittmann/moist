@@ -6,7 +6,10 @@ from pytest import approx, raises
 
 import moist
 from moist import library
-from moist import CFC, Isodensity, SvdW
+from moist import (
+    CFC, CFCParameters, DROPParameters, ISwiGParameters, Isodensity, PCMParameters,
+    SvdW, SvdWParameters,
+)
 from moist.interface import (
     Cavity,
     CavityDROP,
@@ -28,6 +31,12 @@ from moist.interface import (
     Structure,
 )
 
+#: Shared small-grid parameters for tests that only fix ``nleb``
+_DROP_NLEB26 = DROPParameters(nleb=26)
+_ISWIG_NLEB26 = ISwiGParameters(nleb=26)
+#: Small-grid parameters keyed by cavity type, for tests parametrized over it
+_NLEB26_PARAMETERS = {CavityDROP: _DROP_NLEB26, CavityISwiG: _ISWIG_NLEB26}
+
 
 @pytest.fixture
 def numbers() -> np.ndarray:
@@ -47,13 +56,7 @@ def positions() -> np.ndarray:
 
 @pytest.fixture
 def diatomic() -> Callable[..., Structure]:
-    """Factory for an H2 structure with the atoms ``bond`` bohr apart along z.
-
-    The model and coupling tests only need *a* valid structure, and two atoms
-    keep the surface small enough that building several models per test stays
-    cheap -- the ``numbers``/``positions`` fixtures above are water, which those
-    tests would pay for without testing anything more.
-    """
+    """Factory for an H2 structure with the atoms ``bond`` bohr apart along z."""
 
     def build(bond: float = 1.4) -> Structure:
         half = 0.5 * bond
@@ -71,18 +74,13 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     """The default cavity built through this API is the library's default surface.
 
     The C entry point takes the SvdW shape parameters as nullable pointers and
-    has to supply its own fallbacks.  Those fallbacks once drifted from the
-    defaults declared on ``moist_cavity_drop_lsf_svdw_param_type`` (k 2.0 vs
-    5.5, 2b 1.0 vs 0.0, 3b 1.0 vs 3.0), so a Fortran caller and a Python caller
-    asking for "the default cavity" got measurably different surfaces -- 23%
-    apart in total area for this molecule.
+    supplies its own fallbacks, which must match the defaults declared on
+    ``moist_cavity_drop_lsf_svdw_param_type``.
 
-    Nothing caught it: every other cavity test is a finite difference or an
-    internal consistency check, and those follow whichever surface is built.
-    Only an absolute value can see a changed default, which is what this is.
-    Regenerate deliberately if the default surface is ever meant to change.
+    Checks absolute area, volume, and point count for a fixed water geometry.
+    Regenerate deliberately if the default surface is meant to change.
     """
-    cavity = CavityDROP(nleb=26)
+    cavity = CavityDROP(parameters=_DROP_NLEB26)
     cavity.update(Structure(numbers, positions))
     result = cavity.cavity
 
@@ -96,43 +94,51 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     [
         (
             CavityDROP(
-                lsf=SvdW(blend_k=5.5, blend_1b=1.0, blend_2b=0.0, blend_3b=3.0),
-                nleb=26,
-                debug=False,
-                verbosity=0,
-                do_fine=True,
-                tolerance=1.0e-10,
-                proj_maxiter=200,
-                proj_level=2,
-                branch_weight_s=0.08,
-                rho_grid_h=0.8,
-                wleb_prune_level=1,
+                lsf=SvdW(parameters=SvdWParameters(
+                    blend_k=5.5, blend_1b=1.0, blend_2b=0.0, blend_3b=3.0
+                )),
+                parameters=DROPParameters(
+                    nleb=26,
+                    debug=False,
+                    verbosity=0,
+                    do_fine=True,
+                    tolerance=1.0e-10,
+                    proj_maxiter=200,
+                    proj_level=2,
+                    branch_weight_s=0.08,
+                    rho_grid_h=0.8,
+                    wleb_prune_level=1,
+                ),
             ),
             CavitySnapshotDROP,
         ),
         (
             CavityDROP(
-                lsf=CFC(a1=-15.0, a2=-9.0, c=5.0, m=4),
-                nleb=26,
-                debug=False,
-                verbosity=0,
-                do_fine=True,
-                tolerance=1.0e-10,
-                proj_maxiter=200,
-                proj_level=2,
-                branch_weight_s=0.08,
-                rho_grid_h=0.8,
-                wleb_prune_level=1,
+                lsf=CFC(parameters=CFCParameters(a1=-15.0, a2=-9.0, c=5.0, m=4)),
+                parameters=DROPParameters(
+                    nleb=26,
+                    debug=False,
+                    verbosity=0,
+                    do_fine=True,
+                    tolerance=1.0e-10,
+                    proj_maxiter=200,
+                    proj_level=2,
+                    branch_weight_s=0.08,
+                    rho_grid_h=0.8,
+                    wleb_prune_level=1,
+                ),
             ),
             CavitySnapshotDROP,
         ),
         (
             CavityISwiG(
-                nleb=26,
-                cut_a=0.0,
-                cut_f=1.0e-10,
-                debug=False,
-                verbosity=0,
+                parameters=ISwiGParameters(
+                    nleb=26,
+                    cut_a=0.0,
+                    cut_f=1.0e-10,
+                    debug=False,
+                    verbosity=0,
+                ),
             ),
             CavitySnapshot,
         ),
@@ -159,9 +165,8 @@ def test_public_cavity_types_accept_their_optional_arguments(
 def branching_cross() -> Structure:
     """Five-carbon cross whose concave seams branch at ``proj_level=7``.
 
-    The same fixture the Fortran suite uses (``get_test_cross``); the default
-    projection level finds no second solution on it, which is why the branching
-    tests below raise the level rather than the geometry.
+    Same fixture as the Fortran suite's ``get_test_cross``. The default
+    projection level finds no second solution on it.
     """
 
     aatoau = 1.8897261246257702
@@ -232,7 +237,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
     with raises(KeyError, match="k1"):
         plain.get("k1")
 
-    fine = CavityDROP(do_fine=True)
+    fine = CavityDROP(parameters=DROPParameters(do_fine=True))
     fine.update(structure)
     curvature = fine.get("k1")
     assert curvature.shape == (fine.ngrid,)
@@ -244,7 +249,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
 
 def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
     """Branch data comes from moist's own arrays, not from unpacking an id."""
-    cavity = CavityDROP(proj_level=7)
+    cavity = CavityDROP(parameters=DROPParameters(proj_level=7))
     cavity.update(branching_cross)
     snapshot = cavity.snapshot()
 
@@ -295,7 +300,7 @@ def test_cavity_drop_is_the_svdw_surface() -> None:
 @pytest.mark.parametrize("lsf", [SvdW(), CFC()])
 def test_drop_constructor_controls_are_validated_natively(lsf) -> None:
     with raises(RuntimeError, match="wleb_prune_level.*0-6"):
-        CavityDROP(lsf=lsf, wleb_prune_level=7)
+        CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7))
 
 
 def test_cavity_specific_options_reach_the_native_implementations(
@@ -308,16 +313,21 @@ def test_cavity_specific_options_reach_the_native_implementations(
         cavity.update(structure)
         return cavity.snapshot()
 
-    svdw_default = surface(CavityDROP(lsf=SvdW(), nleb=26))
-    svdw_custom = surface(CavityDROP(lsf=SvdW(blend_k=4.0), nleb=26))
+    svdw_default = surface(CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26))
+    svdw_custom = surface(CavityDROP(
+        lsf=SvdW(parameters=SvdWParameters(blend_k=4.0)), parameters=_DROP_NLEB26
+    ))
     assert svdw_custom.area != approx(svdw_default.area, rel=1.0e-6)
 
-    cfc_default = surface(CavityDROP(lsf=CFC(), nleb=26))
-    cfc_custom = surface(CavityDROP(lsf=CFC(a1=-12.0, a2=-8.0, c=4.0, m=4), nleb=26))
+    cfc_default = surface(CavityDROP(lsf=CFC(), parameters=_DROP_NLEB26))
+    cfc_custom = surface(CavityDROP(
+        lsf=CFC(parameters=CFCParameters(a1=-12.0, a2=-8.0, c=4.0, m=4)),
+        parameters=_DROP_NLEB26,
+    ))
     assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)
 
-    iswig_default = surface(CavityISwiG(nleb=26))
-    iswig_custom = surface(CavityISwiG(nleb=26, cut_f=1.0e-2))
+    iswig_default = surface(CavityISwiG(parameters=_ISWIG_NLEB26))
+    iswig_custom = surface(CavityISwiG(parameters=ISwiGParameters(nleb=26, cut_f=1.0e-2)))
     assert iswig_custom.ngrid < iswig_default.ngrid
 
 
@@ -373,7 +383,7 @@ def _answer_potential(coupling, phi):
 
 
 def _solve(model, phi):
-    """Energy and potential adjoint of a potential-only model, the Fortran way."""
+    """Return energy and potential adjoint of a potential-only model."""
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
     _answer_potential(coupling, phi)
@@ -385,7 +395,7 @@ def _solve(model, phi):
 
 
 def _item(response, kind):
-    """The item of class ``kind`` the walk over ``response`` meets, or None."""
+    """Return the item of class ``kind`` found by walking ``response``, or None."""
     found = [item for item in response if isinstance(item, kind)]
     assert len(found) <= 1, found
     return found[0] if found else None
@@ -400,7 +410,7 @@ def _answer_zeros(model, coupling):
 
 
 def _still_missing(coupling, request):
-    """Live native requirement state of the current request, unlike its snapshot."""
+    """Return the current request's live missing outputs, not its snapshot's."""
     return {name for name in request._outputs
             if library.get_coupling_request_missing(coupling._handle, name)}
 
@@ -411,7 +421,7 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(nleb=26),
+        CavityDROP(parameters=_DROP_NLEB26),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -443,8 +453,8 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
 
 
 def test_cosmo_is_a_standalone_pcm_component() -> None:
-    cpcm = ModelComponentCPCM(32.0, solver="lu")
-    cosmo = ModelComponentCOSMO(32.0, solver="lu")
+    cpcm = ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu"))
+    cosmo = ModelComponentCOSMO(32.0, parameters=PCMParameters(solver="lu"))
 
     assert cpcm.epsilon == cosmo.epsilon == 32.0
     assert cpcm.solver is cosmo.solver is PCMSolver.LU
@@ -465,7 +475,7 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     results = {}
 
     for component_type in (ModelComponentCPCM, ModelComponentCOSMO):
-        model = SolvationModel(CavityDROP(nleb=26), [component_type(epsilon)])
+        model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [component_type(epsilon)])
         model.update(structure)
         phi = np.linspace(-0.2, 0.3, model.cavity.ngrid)
         results[component_type] = _solve(model, phi)
@@ -490,7 +500,7 @@ def test_model_drives_the_three_phases(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(nleb=26),
+        CavityDROP(parameters=_DROP_NLEB26),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -533,7 +543,7 @@ def test_general_model_names_the_request_no_host_answered(diatomic) -> None:
     required output left unanswered is reported by name.
     """
     structure = diatomic()
-    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -546,7 +556,7 @@ def test_staging_a_phase_drops_the_previous_answers(diatomic) -> None:
     """Staging clears the answers; nothing survives into the next phase or update."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     coupling = model.new_coupling()
@@ -576,7 +586,7 @@ def test_staging_ends_the_current_request(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -607,7 +617,7 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
     """The width is the input of one request kind, never a cavity field."""
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
 
@@ -627,7 +637,7 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
 def test_request_outputs_are_named_and_ordered(diatomic) -> None:
     """Outputs are the contract; answer takes them by keyword only."""
 
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -665,7 +675,9 @@ def test_grid_inputs_come_from_the_cavity(diatomic, cavity_type) -> None:
     same arrays as the named-field catalogue.
     """
 
-    model = SolvationModel(cavity_type(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(
+        cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), [ModelComponentCPCM(32.0)]
+    )
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -694,7 +706,7 @@ def test_native_coupling_retains_model_until_release(diatomic) -> None:
     import gc
     import weakref
 
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     owner = weakref.ref(model._model)
     coupling = library.new_coupling(model._model)
@@ -714,13 +726,12 @@ def test_getters_require_the_phase_they_were_staged_for(diatomic) -> None:
     """A ``get_*`` reads its own phase, never whichever answers happen to be fresh.
 
     ``prepare_response`` and ``prepare_gradient`` leave overlapping answers
-    behind, so reading the wrong accessor used to succeed by accident.  The
-    guard names both the phase the accessor needs and the one the coupling
-    actually carries.
+    behind. The guard names both the phase the accessor needs and the one the
+    coupling actually carries.
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     unstaged = model.new_coupling()
@@ -754,7 +765,7 @@ def test_each_phase_walks_what_it_still_owes(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -788,7 +799,7 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -827,9 +838,9 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
 
 
 def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
-    """Absence is physics: a model without an item to hand back yields none."""
+    """A model with no item to hand back yields none; the walk ends immediately."""
 
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentPV(1.0e-4)])
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -853,7 +864,7 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
     """The cursor walks the items; each array of the current one is read by name, grid axis first."""
 
     model = SolvationModel(
-        CavityDROP(lsf=Isodensity(), nleb=26, source=gaussian_density),
+        CavityDROP(lsf=Isodensity(), parameters=_DROP_NLEB26, source=gaussian_density),
         [ModelComponentCPCM(32.0), ModelComponentPV(1.0e-4)],
     )
     model.update(Structure(np.array([1]), np.zeros((1, 3))))
@@ -913,14 +924,14 @@ def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
     """A model-owned cavity may be inspected but not rebuilt out of band."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(nleb=26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentPV(1.0e-4)])
     model.update(structure)
     original_area = model.cavity.area
 
     with raises(RuntimeError, match="model-owned cavity"):
         model.cavity.update(structure)
     with raises(RuntimeError, match="borrowed cavity"):
-        library.update_cavity(model.cavity._as_handle(), structure._mol)
+        library.update_cavity(model.cavity._as_handle(), structure._as_handle())
 
     borrowed = library.error_check(library.lib.moist_get_model_cavity)(
         model._model.handle
@@ -944,7 +955,7 @@ def _gaussian_answers(ngrid):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
     """A value that is no number never reaches the library, so nothing stored changes."""
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -963,7 +974,7 @@ def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_native_rejection_leaves_the_output_missing(diatomic, output):
     """A native rejection un-answers exactly that output; the others survive."""
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -987,7 +998,7 @@ def test_native_rejection_leaves_the_output_missing(diatomic, output):
 
 
 def test_rejected_replacement_is_missing_and_retryable(diatomic):
-    model = SolvationModel(CavityISwiG(nleb=26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -1030,7 +1041,7 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         components.append(ModelComponentGOSTSHYP(0.0 if component == "disabled" else 1e-5))
         if component != "disabled":
             expected.append("gaussian_moments")
-    model = SolvationModel(cavity_type(nleb=26), components)
+    model = SolvationModel(cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), components)
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -1101,14 +1112,14 @@ BOTH = ["gaussian_potential", "gaussian_moments"]
 def two_requests(diatomic) -> SolvationModel:
     """ISwiG model whose phases walk a potential request, then a moment request."""
     model = SolvationModel(
-        CavityISwiG(nleb=26), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
+        CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
     )
     model.update(diatomic())
     return model
 
 
 def _walk(coupling):
-    """Names of the requests one loop over ``coupling`` visits, answering none."""
+    """Return the requests one loop over ``coupling`` visits, answering none."""
     return [request.name for request in coupling]
 
 

@@ -1,5 +1,7 @@
 """Python API for moist solvation models."""
 
+import re
+
 from .density import GaussianBasis, InternalDensity
 from .library import get_version_string, get_banner
 
@@ -92,4 +94,18 @@ __all__ = [
     "SolvationModelComponent",
     "Structure",
 ]
-__version__ = "1.0.0a1"
+
+
+def _pep440(version: str) -> str:
+    """Map the native ``1.0.0-alpha.1`` style tag to PEP 440 (``1.0.0a1``)."""
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-(alpha|beta|rc)\.?(\d+))?", version)
+    if match is None:
+        return version
+    base, stage, number = match.groups()
+    if stage is None:
+        return base
+    return base + {"alpha": "a", "beta": "b", "rc": "rc"}[stage] + number
+
+
+#: Version of the linked native library, the single source of truth.
+__version__ = _pep440(get_version_string())

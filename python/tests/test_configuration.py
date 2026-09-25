@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import moist
-from . import library
+from moist import library
 
 
 @pytest.mark.parametrize("kind", [
@@ -35,11 +35,6 @@ def test_parameters_cover_native_options_and_defaults(kind):
 @pytest.mark.parametrize("make", [
     lambda: moist.DROPParameters(nlebb=26),
     lambda: moist.CavityDROP(parameters=moist.ISwiGParameters()),
-    lambda: moist.CavityDROP(parameters=moist.DROPParameters(), nleb=26),
-    lambda: moist.SvdW(parameters=moist.SvdWParameters(), blend_k=4),
-    lambda: moist.ModelComponentCPCM(32, "lu", parameters=moist.PCMParameters()),
-    lambda: moist.SolvationModel(moist.CavityDROP(), [moist.ModelComponentPV(1e-5)],
-                                verbosity=0, parameters=moist.ModelParameters()),
 ])
 def test_configuration_errors_are_explicit(make):
     with pytest.raises(TypeError):
@@ -97,14 +92,17 @@ def test_all_drop_surfaces_share_parameters(lsf, gaussian_density):
         invalid.build(source=source)
 
 
-@pytest.mark.parametrize("factory", [moist.CavityDROP, moist.CavityISwiG])
-def test_custom_radii_are_copied_and_control_native_surface(factory):
+@pytest.mark.parametrize("factory,params", [
+    (moist.CavityDROP, moist.DROPParameters(nleb=26)),
+    (moist.CavityISwiG, moist.ISwiGParameters(nleb=26)),
+])
+def test_custom_radii_are_copied_and_control_native_surface(factory, params):
     values = np.array([2.5])
     radii = moist.CustomRadii(values)
     values[:] = 7
     by_element = moist.CustomRadii([2.5], numbers=[1])
     structure = moist.Structure([1], [[0., 0., 0.]])
-    cavities = [factory(nleb=26, radii=item) for item in (radii, by_element)]
+    cavities = [factory(parameters=params, radii=item) for item in (radii, by_element)]
     for cavity in cavities:
         cavity.update(structure)
         np.testing.assert_allclose(cavity.radii, [2.5])
@@ -118,7 +116,7 @@ def test_custom_radii_are_copied_and_control_native_surface(factory):
     moist.COSMORadii(), moist.BondiRadii(),
 ])
 def test_builtin_radius_models(radii):
-    cavity = moist.CavityISwiG(nleb=26, radii=radii)
+    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii)
     cavity.update(moist.Structure([1], [[0., 0., 0.]]))
     assert np.isfinite(cavity.area) and cavity.area > 0
 
@@ -174,25 +172,6 @@ def test_parameter_replacement_creates_independent_live_state():
     assert pickle.loads(pickle.dumps(config)) == config
 
 
-@pytest.mark.parametrize("component", [moist.ModelComponentCPCM, moist.ModelComponentCOSMO])
-def test_pcm_parameter_construction_matches_legacy_solver(component):
-    structure = moist.Structure([1], [[0., 0., 0.]])
-    energies = []
-    for term in (component(32, solver="lu"),
-                 component(32, parameters=moist.PCMParameters(solver=moist.PCMSolver.LU))):
-        model = moist.SolvationModel(moist.CavityISwiG(nleb=26), [term])
-        model.update(structure)
-        coupling = model.new_coupling()
-        model.prepare_energy(coupling)
-        for request in coupling:
-            coupling.answer(phi=np.ones(model.cavity.ngrid))
-        energy = np.array(0.)
-        model.get_energy(coupling, energy)
-        energies.append(float(energy))
-        assert term.parameters.solver is moist.PCMSolver.LU
-    assert energies[0] == pytest.approx(energies[1], abs=1e-14)
-
-
 def test_structure_owns_input_buffers_on_construction_and_update():
     numbers = np.array([1], dtype=np.int32)
     positions = np.array([[0., 0., 0.]])
@@ -207,7 +186,7 @@ def test_structure_owns_input_buffers_on_construction_and_update():
     np.testing.assert_array_equal(structure.positions, [[0., 0., 0.]])
     np.testing.assert_array_equal(structure.lattice, np.eye(3) * 20)
     np.testing.assert_array_equal(structure.periodic, [False, False, False])
-    cavity = moist.CavityISwiG(nleb=26)
+    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26))
     cavity.update(structure)
     np.testing.assert_allclose(cavity.xyz.mean(axis=0), structure.positions[0], atol=1e-14)
     updated = np.array([[2., 0., 0.]])

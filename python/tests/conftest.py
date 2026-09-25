@@ -1,5 +1,4 @@
-"""Pytest configuration shared by the moist test modules
-"""
+"""Pytest configuration shared by the moist test modules."""
 
 import numpy as np
 import pytest
@@ -36,9 +35,9 @@ def pytest_configure(config):
 
 @pytest.fixture
 def gaussian_density():
-    """Bare spherical Gaussian callback shared by API tests."""
+    """Return a bare spherical Gaussian callback shared by API tests."""
     def evaluate(point, order):
-        """Bare spherical Gaussian, with derivatives through third order."""
+        """Evaluate a spherical Gaussian and derivatives to third order."""
         rho = np.exp(-np.dot(point, point))
         eye = np.eye(3)
         result = [rho, -2 * point * rho]
