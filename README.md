@@ -29,8 +29,6 @@ Currently this project supports GCC and Intel compilers.
 #### Building with meson
 
 Optional dependencies are
-- [FFTW3](https://www.fftw.org) (version 3.3 or newer); required by the RISM models and any FFT-based routines; discovered via `pkg-config` (`fftw3`)
-- [HDF5](https://www.hdfgroup.org/solutions/hdf5) with Fortran bindings; for HDF5-based I/O of RISM results and caches
 - FORD to build the developer documentation
 - C compiler to test the C-API and compile the Python extension module
 - Python 3.6 or newer with the CFFI package installed to build the Python API
@@ -40,22 +38,18 @@ Optional dependencies are
 Several numerical features are disabled by default and are switched on through
 meson options passed to `meson setup`:
 
-| Option           | Default | Effect                                                           | Extra dependency                  |
-| ---------------- | ------- | ---------------------------------------------------------------- | --------------------------------- |
-| `-Drism=true`    | `false` | Build the RISM solvation model (defines `WITH_RISM`)             | FFTW3, HDF5 (added automatically) |
-| `-Dfftw=true`    | `false` | Link FFTW3 for FFT-based routines (defines `WITH_FFTW`)          | FFTW3                             |
-| `-Dhdf5=true`    | `false` | HDF5 I/O for RISM grids and large datasets (defines `WITH_HDF5`) | HDF5 with Fortran bindings        |
-| `-Dilp64=true`   | `false` | Use 64-bit-integer (ILP64) BLAS/LAPACK                           | ILP64 BLAS/LAPACK                 |
-| `-Dopenmp=true`  | `true`  | OpenMP parallelisation (enables threaded FFT, `fftw3_threads`)   | OpenMP runtime                    |
+| Option           | Default | Effect                                 | Extra dependency  |
+| ---------------- | ------- | -------------------------------------- | ----------------- |
+| `-Dilp64=true`   | `false` | Use 64-bit-integer (ILP64) BLAS/LAPACK | ILP64 BLAS/LAPACK |
+| `-Dopenmp=true`  | `true`  | OpenMP parallelisation                 | OpenMP runtime    |
 
-Because `-Drism=true` already requires FFTW3, `-Dfftw=true` is only needed when you want FFTW without the RISM module.
-For example, a RISM build with HDF5 output:
+For example, a default build:
 
 ```sh
-meson setup build -Drism=true -Dhdf5=true
+meson setup build
 ```
 
-These optional numerical features are available through the meson and cmake builds (the cmake build exposes the same toggles as `-DMOIST_*` options, see below); the fpm build always compiles the core configuration (no RISM/FFTW/HDF5).
+These optional numerical features are available through the meson and cmake builds (the cmake build exposes the same toggles as `-DMOIST_*` options, see below).
 
 Setup a default build with
 
@@ -125,19 +119,16 @@ The optional numerical features map onto `-DMOIST_<FEATURE>` cache variables, wi
 
 | cmake option         | meson equivalent | Default |
 | -------------------- | ---------------- | ------- |
-| `-DMOIST_RISM=ON`    | `-Drism=true`    | `OFF`   |
-| `-DMOIST_FFTW=ON`    | `-Dfftw=true`    | `OFF`   |
-| `-DMOIST_HDF5=ON`    | `-Dhdf5=true`    | `OFF`   |
 | `-DMOIST_ILP64=ON`   | `-Dilp64=true`   | `OFF`   |
 | `-DMOIST_OPENMP=OFF` | `-Dopenmp=false` | `ON`    |
 | `-DMOIST_API=OFF`    | `-Dapi=false`    | `ON`    |
 | `-DMOIST_LAPACK=...` | `-Dlapack=...`   | `auto`  |
 
 `-DMOIST_LAPACK` accepts `auto`, `mkl`, `openblas`, or `netlib`. For example, a
-RISM build with HDF5 output:
+build against ILP64 BLAS/LAPACK:
 
 ```sh
-cmake -B build -G Ninja -DMOIST_RISM=ON -DMOIST_HDF5=ON
+cmake -B build -G Ninja -DMOIST_ILP64=ON
 cmake --build build
 ```
 
@@ -200,9 +191,7 @@ The other cavity constructors are available as `moist cavity {numsa,iswig} <coor
 
 ### Other subcommands
 
-<!-- - `moist model <gems|alpb|rism1d|rism3d> <input>` runs a full solvation model
-  (the `rism1d`/`rism3d` models require the optional FFTW/RISM build described
-  above). -->
+<!-- - `moist model <gems|alpb|rism1d|rism3d> <input>` runs a full solvation model. -->
 - `moist solvent <name>` reports the tabulated properties of a solvent by name
   or alias.
 
@@ -258,24 +247,6 @@ The full, context-appropriate citation list is maintained inside the program and
 
 ```sh
 moist --citation
-```
-
-## Optional: Build FFTW With PIC For RISM
-
-If you enable RISM and shared library builds, FFTW should be available as a PIC/shared build.
-One working setup is:
-
-```sh
-./configure CFLAGS="-O2 -fPIC" --enable-shared --enable-static --prefix=$HOME/.local
-make -j
-make install
-```
-
-If installed into `$HOME/.local`, ensure your environment can find it, for example:
-
-```sh
-export PKG_CONFIG_PATH="$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH"
-export LD_LIBRARY_PATH="$HOME/.local/lib:$LD_LIBRARY_PATH"
 ```
 
 ## License
