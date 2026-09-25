@@ -34,15 +34,14 @@ module test_cavity_drop_nuclear_adjoint
    use moist_data_radii_legacy, only: get_radius_func
    use moist_context, only: moist_context_type, new_context
    use moist_channels_coupling, only: coupling_type
-   use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      & find_potential_adjoint
+   use moist_channels_response, only: response_type, potential_adjoint_response_type
    use moist_model_general, only: solvation_model_general, new_model_general
    use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
    use moist_model_component_pcm_type, only: solver_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use test_helpers, only: stage_model_point_charge_energy, fill_missing_with_zeros, &
       & fill_point_charge_field, &
-      & fill_legacy_radii
+      & fill_legacy_radii, copy_potential_adjoint
    implicit none(type, external)
    private
 
@@ -381,9 +380,9 @@ contains
       type(solvation_model_component_pv) :: pv_component
       type(coupling_type), pointer :: coupling
       !> Host part of the gradient phase from each path
-      type(response_type), target :: response_rev, response_fwd
-      !> Potential adjoint items published by each path
-      type(potential_adjoint_response_type), pointer :: charge_rev, charge_fwd
+      type(response_type) :: response_rev, response_fwd
+      !> Copies of the potential adjoint items published by each path
+      type(potential_adjoint_response_type), allocatable :: charge_rev, charge_fwd
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
 
@@ -426,7 +425,7 @@ contains
          call test_failed(error, "gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(coupling)
+      call fill_missing_with_zeros(model_rev%cavity, coupling)
       call fill_point_charge_field(model_rev%cavity, coupling, qat_vals, mol)
 
       allocate (grad_rev(3, nat), source=0.0_wp)
@@ -448,9 +447,9 @@ contains
       end if
 
       ! Both paths publish the host part of the phase
-      charge_rev => find_potential_adjoint(response_rev)
-      charge_fwd => find_potential_adjoint(response_fwd)
-      if (.not. associated(charge_rev) .or. .not. associated(charge_fwd)) then
+      call copy_potential_adjoint(response_rev, charge_rev)
+      call copy_potential_adjoint(response_fwd, charge_fwd)
+      if (.not. allocated(charge_rev) .or. .not. allocated(charge_fwd)) then
          call test_failed(error, "model gradient published no potential adjoint")
          return
       end if

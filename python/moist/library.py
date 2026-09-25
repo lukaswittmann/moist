@@ -23,6 +23,27 @@ def get_api_version() -> str:
     )
 
 
+def _native_text(entry, *args):
+    length = ffi.new("size_t *")
+    call = error_check(entry)
+    call(*args, ffi.NULL, 0, length)
+    buffer = ffi.new("char[]", length[0] + 1)
+    call(*args, buffer, length[0] + 1, length)
+    return ffi.string(buffer).decode("utf-8")
+
+
+def get_version_string():
+    """Full native version, including prerelease information."""
+    return _native_text(lib.moist_get_version_string)
+
+
+def get_banner(style="full"):
+    """Return native banner text; style is full, short, ascii or build."""
+    if style not in ("full", "short", "ascii", "build"):
+        raise ValueError("banner style must be full, short, ascii or build")
+    return _native_text(lib.moist_get_banner, getattr(lib, "moist_banner_" + style))
+
+
 class Handle:
     """Base wrapper for opaque C handles."""
 
@@ -55,7 +76,7 @@ class ModelHandle(Handle):
     def _delete(handle):
         ptr = ffi.new("moist_model *")
         ptr[0] = handle
-        lib.moist_delete_solvation_model(ptr)
+        lib.moist_delete_model(ptr)
 
 
 class ComponentHandle(Handle):
@@ -65,7 +86,7 @@ class ComponentHandle(Handle):
     def _delete(handle):
         ptr = ffi.new("moist_component *")
         ptr[0] = handle
-        lib.moist_delete_solvation_component(ptr)
+        lib.moist_delete_component(ptr)
 
 
 class CavityHandle(Handle):
@@ -74,6 +95,32 @@ class CavityHandle(Handle):
         ptr = ffi.new("moist_cavity *")
         ptr[0] = handle
         lib.moist_delete_cavity(ptr)
+
+
+class RadiiHandle(Handle):
+    @staticmethod
+    def _delete(handle):
+        lib.moist_delete_radii(ffi.new("moist_radii *", handle))
+
+
+class CouplingHandle(Handle):
+    """Owning handle for a model's host coupling: requests, answers and cursor."""
+
+    @staticmethod
+    def _delete(handle):
+        ptr = ffi.new("moist_coupling *")
+        ptr[0] = handle
+        lib.moist_delete_coupling(ptr)
+
+
+class ResponseHandle(Handle):
+    """Owning handle for the item list a phase hands back to the host."""
+
+    @staticmethod
+    def _delete(handle):
+        ptr = ffi.new("moist_response *")
+        ptr[0] = handle
+        lib.moist_delete_response(ptr)
 
 
 def _delete_error(error):
@@ -133,104 +180,92 @@ def update_structure(
     )
 
 
-def new_drop_cavity(
-    nleb: Optional[int] = None,
-    debug: bool = False,
-    verbosity: int = 0,
-    blend_k: Optional[float] = None,
-    blend_1b: Optional[float] = None,
-    blend_2b: Optional[float] = None,
-    blend_3b: Optional[float] = None,
-    do_fine: bool = False,
-    tolerance: Optional[float] = None,
-    proj_maxiter: Optional[int] = None,
-    proj_level: Optional[int] = None,
-    branch_weight_s: Optional[float] = None,
-    rho_grid_h: Optional[float] = None,
-    wleb_prune_level: Optional[int] = None,
-) -> CavityHandle:
-    """
-    Create a standard solute-vdW (SvdW) DROP cavity with default CPCM radii.
-
-    ``tolerance`` overrides the master numerical tolerance (``None`` keeps the
-    compiled DROP default).
-    """
-
-    return CavityHandle.with_gc(
-        error_check(lib.moist_new_drop_cavity)(
-            _ref("int", nleb),
-            _ref("bool", debug),
-            _ref("int", verbosity),
-            _ref("double", blend_k),
-            _ref("double", blend_1b),
-            _ref("double", blend_2b),
-            _ref("double", blend_3b),
-            _ref("bool", do_fine),
-            _ref("double", tolerance),
-            _ref("int", proj_maxiter),
-            _ref("int", proj_level),
-            _ref("double", branch_weight_s),
-            _ref("double", rho_grid_h),
-            _ref("int", wleb_prune_level),
-        )
+def _options(kind, **values):
+    """Initialize a typed options struct and apply explicit overrides."""
+    options = ffi.new(f"moist_{kind}_options *")
+    error_check(getattr(lib, f"moist_init_{kind}_options"))(
+        options, ffi.sizeof(options[0])
     )
+    for name, value in values.items():
+        if value is not None:
+            setattr(options, name, value)
+    return options
 
 
-def new_cfc_drop_cavity(
-    nleb: Optional[int] = None,
-    debug: bool = False,
-    verbosity: int = 0,
-    a1: Optional[float] = None,
-    a2: Optional[float] = None,
-    c: Optional[float] = None,
-    m: Optional[int] = None,
-    do_fine: bool = False,
-    tolerance: Optional[float] = None,
-    proj_maxiter: Optional[int] = None,
-    proj_level: Optional[int] = None,
-    branch_weight_s: Optional[float] = None,
-    rho_grid_h: Optional[float] = None,
-    wleb_prune_level: Optional[int] = None,
-) -> CavityHandle:
-    """Create a CFC-DROP cavity with default CPCM radii."""
-
-    return CavityHandle.with_gc(
-        error_check(lib.moist_new_cfc_drop_cavity)(
-            _ref("int", nleb),
-            _ref("bool", debug),
-            _ref("int", verbosity),
-            _ref("double", a1),
-            _ref("double", a2),
-            _ref("double", c),
-            _ref("int", m),
-            _ref("bool", do_fine),
-            _ref("double", tolerance),
-            _ref("int", proj_maxiter),
-            _ref("int", proj_level),
-            _ref("double", branch_weight_s),
-            _ref("double", rho_grid_h),
-            _ref("int", wleb_prune_level),
+def _drop_from_lsf(lsf, options, radii=None):
+    """Copy an LSF into a cavity and release the temporary LSF handle."""
+    try:
+        return CavityHandle.with_gc(
+            error_check(lib.moist_new_drop_cavity)(
+                lsf, ffi.NULL if radii is None else radii.handle, options
+            )
         )
-    )
+    finally:
+        ptr = ffi.new("moist_lsf *", lsf)
+        lib.moist_delete_lsf(ptr)
 
 
-def new_iswig_cavity(
-    nleb: Optional[int] = None,
-    debug: bool = False,
-    verbosity: int = 0,
-    cut_a: Optional[float] = None,
-    cut_f: Optional[float] = None,
-) -> CavityHandle:
-    """Create an iSwiG cavity with default CPCM radii."""
+def new_drop_cavity(parameters, lsf_parameters, radii=None) -> CavityHandle:
+    """Copy a geometric LSF and radii into a DROP cavity."""
+    options = parameters._as_options()
+    lsf_options = lsf_parameters._as_options()
+    constructor = getattr(lib, f"moist_new_{lsf_parameters._kind}_lsf")
+    return _drop_from_lsf(error_check(constructor)(lsf_options), options, radii)
 
+
+def new_internal_isodensity_cavity(source, parameters, lsf_parameters, radii=None):
+    basis = source.basis
+    arrays = [np.asarray(getattr(basis, name), dtype=dtype) for name, dtype in (
+        ("shell_atom", np.int32), ("shell_l", np.int32), ("shell_nprim", np.int32),
+        ("exponents", np.float64), ("coefficients", np.float64))]
+    lsf = error_check(lib.moist_new_isodensity_lsf)(
+        len(basis.shell_atom), *[_cast("int*" if i < 3 else "double*", a)
+                                 for i, a in enumerate(arrays)], lsf_parameters._as_options())
+    cavity = _drop_from_lsf(lsf, parameters._as_options(), radii)
+    set_isodensity_density(cavity, source.density_matrix)
+    return cavity
+
+
+def isodensity_layout(cavity):
+    ncart, nshell = ffi.new("int *"), ffi.new("int *")
+    entry = error_check(lib.moist_get_isodensity_cart_layout)
+    entry(cavity.handle, ncart, nshell, ffi.NULL, ffi.NULL, ffi.NULL, ffi.NULL)
+    offsets = np.empty(nshell[0] + 1, dtype=np.int32)
+    powers = [np.empty(ncart[0], dtype=np.int32) for _ in range(3)]
+    entry(cavity.handle, ncart, nshell, _cast("int*", offsets),
+          *[_cast("int*", a) for a in powers])
+    return offsets, np.stack(powers, axis=1)
+
+
+def set_isodensity_density(handle, density, *, model=False):
+    array = np.asarray(density, dtype=np.float64, order="C")
+    if array.ndim != 2 or array.shape[0] != array.shape[1]:
+        raise ValueError("density must be a square matrix")
+    entry = lib.moist_set_model_isodensity_density if model else lib.moist_set_isodensity_density
+    error_check(entry)(handle.handle, len(array), _cast("double*", array))
+
+
+def new_iswig_cavity(parameters, radii=None) -> CavityHandle:
     return CavityHandle.with_gc(
         error_check(lib.moist_new_iswig_cavity)(
-            _ref("int", nleb),
-            _ref("bool", debug),
-            _ref("int", verbosity),
-            _ref("double", cut_a),
-            _ref("double", cut_f),
+            ffi.NULL if radii is None else radii.handle, parameters._as_options()
         )
+    )
+
+
+def new_radii(kind: str) -> RadiiHandle:
+    return RadiiHandle.with_gc(error_check(getattr(lib, f"moist_new_{kind}_radii"))())
+
+
+def set_custom_radii_atoms(radii, values):
+    error_check(lib.moist_set_custom_radii_atoms)(
+        radii.handle, len(values), _cast("double*", values)
+    )
+
+
+def set_custom_radii_elements(radii, numbers, values):
+    error_check(lib.moist_set_custom_radii_elements)(
+        radii.handle, len(values), _cast("int*", numbers), _cast("double*", values)
     )
 
 
@@ -293,47 +328,14 @@ def _callback_takes_order(callback) -> bool:
 
 
 def new_drop_cavity_isodensity_callback(
-    callback,
-    rho_iso: float,
-    nleb: Optional[int] = None,
-    scale: float = 1000.0,
-    debug: bool = False,
-    verbosity: int = 0,
-    do_fine: bool = False,
-    wleb_prune_level: Optional[int] = None,
-    tolerance: Optional[float] = None,
-    pass_order: Optional[bool] = None,
-) -> tuple[CavityHandle, object]:
-    """Create a DROP cavity backed by a Python isodensity density callback.
+    callback, parameters, lsf_parameters, radii=None, *, pass_order=None,
+) -> CavityHandle:
+    """Build a callback cavity, retaining its callback and exception state.
 
-    Two callback forms are accepted:
-
-    * ``callback(point, order)`` -- ``point`` is a single point in Bohr and
-      ``order`` is the highest derivative moist needs (1, 2 or 3). moist passes
-      NULL Hessian/third-derivative buffers when it does not need them, so a
-      callback in this form can skip *computing* the expensive high-order
-      derivatives during the value+gradient-only projection phase.
-    * ``callback(point)`` -- the original form. It always computes everything,
-      which is correct but slower.
-
-    The form is detected from the callback's signature; pass ``pass_order``
-    explicitly to override that when introspection cannot decide (builtins,
-    ``*args``, :func:`functools.partial` over a C callable).
-
-    Either form must return ``(rho, drho[, d2rho[, d3rho]])`` or an object with
-    ``rho``, ``drho`` and optional ``d2rho``/``d3rho`` attributes. The returned
-    CFFI callback must be kept alive by the caller for at least as long as the
-    cavity handle.
-
-    ``tolerance`` overrides the master numerical tolerance (``None`` keeps the
-    compiled DROP default).
-
-    An exception raised by the callback aborts the cavity build: the wrapper
-    reports failure through the callback's return code, which moist turns into a
-    normal error on the update call. The exception object itself cannot cross
-    the C frame, so it is recorded on ``handle.callback_state``; whoever drives
-    the update calls :meth:`CallbackState.raise_if_failed` afterwards to re-raise
-    the real cause with its own traceback.
+    Callbacks accept ``(point, order)`` or ``(point)`` and return bare density
+    derivatives. The highest requested order is 1, 2 or 3; optional native
+    buffers are only written when requested. ``pass_order`` overrides signature
+    detection. Exceptions are retained for the high-level update guard.
     """
 
     if pass_order is None:
@@ -376,7 +378,7 @@ def new_drop_cavity_isodensity_callback(
                 if d2rho.shape != (3, 3):
                     raise ValueError("Isodensity callback density Hessian must have shape (3, 3)")
                 np.frombuffer(ffi.buffer(d2rho_ptr, 72), dtype=np.float64)[:] = d2rho.ravel(
-                    order="F"
+                    order="C"
                 )
             if want_third:
                 if d3rho is None:
@@ -389,7 +391,7 @@ def new_drop_cavity_isodensity_callback(
                         "Isodensity callback third derivative must have shape (3, 3, 3)"
                     )
                 np.frombuffer(ffi.buffer(d3rho_ptr, 216), dtype=np.float64)[:] = d3rho.ravel(
-                    order="F"
+                    order="C"
                 )
         except BaseException as exc:
             # CFFI cannot propagate an exception through the C frame, but the
@@ -401,61 +403,45 @@ def new_drop_cavity_isodensity_callback(
             return 1
         return 0
 
-    handle = CavityHandle.with_gc(
-        error_check(lib.moist_new_drop_cavity_isodensity_callback)(
-            c_callback,
-            ffi.NULL,
-            float(rho_iso),
-            _ref("double", scale),
-            _ref("int", nleb),
-            _ref("bool", debug),
-            _ref("int", verbosity),
-            _ref("bool", do_fine),
-            _ref("int", wleb_prune_level),
-            _ref("double", tolerance),
-        )
+    options = parameters._as_options()
+    lsf_options = lsf_parameters._as_options()
+    lsf = error_check(lib.moist_new_isodensity_callback_lsf)(
+        c_callback, ffi.NULL, lsf_options
     )
-    #: Attached rather than returned so the (handle, callback) result stays a
-    #: two-tuple; callers that drive an update read it back off the handle.
+    handle = _drop_from_lsf(lsf, options, radii)
     handle.callback_state = state
-    return handle, c_callback
+    handle.callback_ref = c_callback
+    return handle
 
 
 def update_model(model: ModelHandle, structure: StructureHandle) -> None:
-    return error_check(lib.moist_update_solvation_model)(
+    return error_check(lib.moist_update_model)(
         model.handle,
         structure.handle,
     )
 
 
-def get_model_energy(model: ModelHandle) -> float:
-    energy = np.array(0.0, dtype=np.float64)
-    error_check(lib.moist_get_solvation_model_energy)(
-        model.handle,
-        _cast("double*", energy),
-    )
-    return float(energy)
-
-
 def get_model_cavity(model: ModelHandle) -> CavityHandle:
-    return CavityHandle.with_gc(
-        error_check(lib.moist_get_solvation_model_cavity)(model.handle)
+    handle = CavityHandle.with_gc(
+        error_check(lib.moist_get_model_cavity)(model.handle)
     )
+    handle._owner = model
+    return handle
 
 
-def new_cpcm_component(epsilon: float, solver: int) -> ComponentHandle:
+def new_cpcm_component(epsilon: float, parameters) -> ComponentHandle:
     """Create a CPCM component for a general solvation model."""
 
     return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cpcm_component)(float(epsilon), int(solver))
+        error_check(lib.moist_new_cpcm_component)(float(epsilon), parameters._as_options())
     )
 
 
-def new_cosmo_component(epsilon: float, solver: int) -> ComponentHandle:
+def new_cosmo_component(epsilon: float, parameters) -> ComponentHandle:
     """Create a COSMO component for a general solvation model."""
 
     return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cosmo_component)(float(epsilon), int(solver))
+        error_check(lib.moist_new_cosmo_component)(float(epsilon), parameters._as_options())
     )
 
 
@@ -470,9 +456,10 @@ def new_pv_component(pressure: float) -> ComponentHandle:
 def new_gostshyp_component(pressure: float) -> ComponentHandle:
     """Create a GOSTSHYP hydrostatic-pressure component.
 
-    ``pressure`` is in Hartree/bohr^3.  The component needs Gaussian density
-    moments supplied through :func:`general_model_supply_gostshyp` after every
-    cavity update; it cannot form them itself.
+    ``pressure`` is in Hartree/bohr^3.  The component declares a Gaussian
+    moment request on every coupling and cannot form the moments itself; the
+    host answers it with :func:`answer_coupling_request` and reads the amplitudes back
+    with :func:`get_response_array`.
     """
 
     return ComponentHandle.with_gc(
@@ -483,220 +470,231 @@ def new_gostshyp_component(pressure: float) -> ComponentHandle:
 def new_general_model(
     cavity: CavityHandle,
     components: list[ComponentHandle],
-    debug: bool = False,
-    verbosity: int = 0,
+    parameters,
 ) -> ModelHandle:
     """Create a general model and append copies of the requested components."""
 
     model = ModelHandle.with_gc(
-        error_check(lib.moist_new_general_solvation_model)(
+        error_check(lib.moist_new_model)(
             cavity.handle,
-            bool(debug),
-            int(verbosity),
+            parameters._as_options(),
         )
     )
+    # Native copies borrow Python callbacks. Retain their owning handle even
+    # when callers use this low-level constructor without a SolvationModel.
+    model._source_cavity = cavity
     for component in components:
-        error_check(lib.moist_general_model_add_component)(
+        error_check(lib.moist_add_model_component)(
             model.handle, component.handle
         )
     return model
 
 
-def general_model_supply_electrostatics(
-    model: ModelHandle,
-    phi: np.ndarray,
-    w_xi: Optional[np.ndarray] = None,
-    w_f: Optional[np.ndarray] = None,
-    w_xyz: Optional[np.ndarray] = None,
-    w_n: Optional[np.ndarray] = None,
-    qefield: Optional[np.ndarray] = None,
+# -----------------------------------------------------------------------------
+# Host coupling protocol
+# -----------------------------------------------------------------------------
+#
+# A coupling carries the model's requests and a cursor over them; one response
+# handle receives what a phase hands back and carries a cursor over its items.
+# next_coupling_request() and next_response_item() move the cursors, and the
+# other request and response functions act on the request or item they stopped
+# at, failing by name when none is current.  Requests and response items are
+# identified by their scientific names, never by an index or a token.  Grid
+# inputs are read from the model's cavity.  Like the C entries they bind, these
+# functions take no sizes: moist reads and writes exactly the documented
+# shape, so an array passed in has to have it.  Only the element type and the
+# layout are checked here, which the pointer cast relies on.
+
+
+def new_coupling(model: ModelHandle) -> CouplingHandle:
+    """Declare the host coupling of an updated general model."""
+
+    handle = error_check(lib.moist_new_coupling)(model.handle)
+
+    def release(handle, owner=model):
+        # Keep the parent alive through native deletion, including cyclic GC.
+        CouplingHandle._delete(handle)
+
+    return CouplingHandle(ffi.gc(handle, release))
+
+
+def new_response() -> ResponseHandle:
+    """Create an empty response handle, reusable across phases and iterations."""
+
+    return ResponseHandle.with_gc(error_check(lib.moist_new_response)())
+
+
+def prepare_model_energy(
+    model: ModelHandle, coupling: CouplingHandle
 ) -> None:
-    """Supply CPCM traces and optional direct geometry-response arrays."""
-
-    _phi = np.ascontiguousarray(phi, dtype=np.float64).reshape(-1)
-    ngrid = int(_phi.size)
-
-    def scalar(name, value):
-        if value is None:
-            return None
-        array = np.ascontiguousarray(value, dtype=np.float64)
-        if array.shape != (ngrid,):
-            raise ValueError(f"{name} must have shape (ngrid,)")
-        return array
-
-    def vector(name, value):
-        if value is None:
-            return None
-        array = np.asarray(value, dtype=np.float64, order="F")
-        if array.shape != (3, ngrid):
-            raise ValueError(f"{name} must have shape (3, ngrid)")
-        return array
-
-    _w_xi = scalar("w_xi", w_xi)
-    _w_f = scalar("w_f", w_f)
-    _w_xyz = vector("w_xyz", w_xyz)
-    _w_n = vector("w_n", w_n)
-    _qefield = vector("qefield", qefield)
-    error_check(lib.moist_general_model_supply_electrostatics)(
-        model.handle,
-        ngrid,
-        _cast("double*", _phi),
-        _cast("double*", _w_xi),
-        _cast("double*", _w_f),
-        _cast("double*", _w_xyz),
-        _cast("double*", _w_n),
-        _cast("double*", _qefield),
+    error_check(lib.moist_prepare_model_energy)(
+        model.handle, coupling.handle
     )
 
 
-def general_model_supply_gostshyp(
-    model: ModelHandle,
-    gt: np.ndarray,
-    pt: np.ndarray,
-    mt: np.ndarray,
-    rt: np.ndarray,
+def prepare_model_response(
+    model: ModelHandle, coupling: CouplingHandle
 ) -> None:
-    """Supply the Gaussian density moments the GOSTSHYP component consumes.
+    error_check(lib.moist_prepare_model_response)(
+        model.handle, coupling.handle
+    )
 
-    Moments of the solute density against the unnormalized Gaussian
-    ``exp(-w_i |r - r_i|^2)`` on each grid point, in native cavity order:
-    ``gt = <G>``, ``pt = <(r-r_i) G>``, ``mt = <(r-r_i)(r-r_i) G>`` and
-    ``rt = <(r-r_i) |r-r_i|^2 G>``.  All four are required.
+
+def prepare_model_gradient(
+    model: ModelHandle, coupling: CouplingHandle
+) -> None:
+    error_check(lib.moist_prepare_model_gradient)(
+        model.handle, coupling.handle
+    )
+
+
+def _accumulator(value, shape, name):
+    """Require writable native buffers; never silently copy an accumulator."""
+    if not isinstance(value, np.ndarray) or value.dtype != np.dtype(np.float64):
+        raise TypeError(f"{name} must be a float64 NumPy array")
+    if value.shape != shape:
+        raise ValueError(f"{name} must have shape {shape}")
+    if not value.flags.c_contiguous or not value.flags.writeable or not value.flags.aligned:
+        raise ValueError(f"{name} must be writable, aligned and C-contiguous")
+    return value
+
+
+def _native_array(value, name, writable=False):
+    """Require a float64, aligned, C-contiguous array; its shape is trusted."""
+    if not isinstance(value, np.ndarray) or value.dtype != np.dtype(np.float64):
+        raise TypeError(f"{name} must be a float64 NumPy array")
+    if not value.flags.c_contiguous or not value.flags.aligned:
+        raise ValueError(f"{name} must be aligned and C-contiguous")
+    if writable and not value.flags.writeable:
+        raise ValueError(f"{name} must be writable")
+    return value
+
+
+def get_model_energy(model, coupling, energy) -> None:
+    """Accumulate staged energy into a writable float64 scalar array."""
+    _accumulator(energy, (), "energy")
+    error_check(lib.moist_get_model_energy)(
+        model.handle, coupling.handle, _cast("double*", energy)
+    )
+
+
+def get_model_response(
+    model: ModelHandle, coupling: CouplingHandle, response: ResponseHandle
+) -> None:
+    """Fill ``response`` with the host part of a staged response phase."""
+
+    error_check(lib.moist_get_model_response)(
+        model.handle, coupling.handle, response.handle
+    )
+
+
+def get_model_gradient(model, coupling, response, natoms, gradient) -> None:
+    """Accumulate the native contribution into ``gradient[natoms,3]``.
+
+    ``response`` is cleared and refilled with the host part of that phase.
     """
-
-    _gt = np.ascontiguousarray(gt, dtype=np.float64).reshape(-1)
-    ngrid = int(_gt.size)
-
-    def vector(name, value):
-        array = np.asarray(value, dtype=np.float64, order="F")
-        if array.shape != (3, ngrid):
-            raise ValueError(f"{name} must have shape (3, ngrid)")
-        return array
-
-    _pt = vector("pt", pt)
-    _rt = vector("rt", rt)
-    _mt = np.asarray(mt, dtype=np.float64, order="F")
-    if _mt.shape != (3, 3, ngrid):
-        raise ValueError("mt must have shape (3, 3, ngrid)")
-
-    error_check(lib.moist_general_model_supply_gostshyp)(
-        model.handle,
-        ngrid,
-        _cast("double*", _gt),
-        _cast("double*", _pt),
-        _cast("double*", _mt),
-        _cast("double*", _rt),
-    )
-
-
-def general_model_get_trace_response(
-    model: ModelHandle, ngrid: int
-) -> np.ndarray:
-    """Return the accumulated surface charges from all model components.
-
-    The surface charge ``q_i`` equals ``dE/dphi_i`` by stationarity; the host
-    contracts it as ``F += sum_i q_i V(r_i)``.  Requesting it from a model that
-    produces no surface charges raises rather than returning zeros.
-    """
-
-    surface_charge = np.zeros(ngrid, dtype=np.float64)
-    error_check(lib.moist_general_model_get_trace_response)(
-        model.handle,
-        int(ngrid),
-        _cast("double*", surface_charge),
-    )
-    return surface_charge
-
-
-def general_model_get_response(
-    model: ModelHandle,
-    ngrid: int,
-    *,
-    electrostatics: bool = True,
-    lsf: bool = True,
-    gostshyp: bool = False,
-) -> dict:
-    """Return the requested response channels from a general model.
-
-    Each keyword selects one channel group.  A group that is *not* requested is
-    skipped entirely (a NULL pointer at the C boundary) and comes back ``None``.
-    A group that *is* requested must be produced by the model configuration, or
-    the call raises: absence is a legitimate physical answer here -- a cavity
-    with field-independent geometry has no level-set response -- so zeros could
-    not be told apart from a genuine result and are never returned silently.
-
-    Requesting ``gostshyp`` uses the extended entry point, which reports the
-    amplitudes conjugate to the host's Gaussian integral blocks; the host
-    completes its Fock contribution as
-    ``F += sum_i [w_overlap[i] g[..., i] + w_normal_deriv[i] f[..., i]]``.
-
-    Prefer one call with every group you need: assembling a response contracts
-    the cavity surface adjoints once, and splitting the read pays that twice.
-    """
-
-    surface_charge = np.zeros(ngrid, dtype=np.float64) if electrostatics else None
-    w_value = np.zeros(ngrid, dtype=np.float64) if lsf else None
-    w_gradient = (
-        np.zeros((3, ngrid), dtype=np.float64, order="F") if lsf else None
-    )
-    w_hessian = (
-        np.zeros((3, 3, ngrid), dtype=np.float64, order="F") if lsf else None
-    )
-    w_overlap = np.zeros(ngrid, dtype=np.float64) if gostshyp else None
-    w_normal_deriv = np.zeros(ngrid, dtype=np.float64) if gostshyp else None
-
-    if gostshyp:
-        error_check(lib.moist_general_model_get_response_extended)(
-            model.handle,
-            int(ngrid),
-            _cast("double*", surface_charge),
-            _cast("double*", w_value),
-            _cast("double*", w_gradient),
-            _cast("double*", w_hessian),
-            _cast("double*", w_overlap),
-            _cast("double*", w_normal_deriv),
-        )
-    else:
-        error_check(lib.moist_general_model_get_response)(
-            model.handle,
-            int(ngrid),
-            _cast("double*", surface_charge),
-            _cast("double*", w_value),
-            _cast("double*", w_gradient),
-            _cast("double*", w_hessian),
-        )
-
-    return {
-        "electrostatics": (
-            {"surface_charge": surface_charge} if electrostatics else None
-        ),
-        "lsf": (
-            {
-                "w_value": w_value,
-                "w_gradient": w_gradient,
-                "w_hessian": w_hessian,
-            }
-            if lsf
-            else None
-        ),
-        "gostshyp": (
-            {"w_overlap": w_overlap, "w_normal_deriv": w_normal_deriv}
-            if gostshyp
-            else None
-        ),
-    }
-
-
-def general_model_get_gradient(model: ModelHandle, natoms: int) -> np.ndarray:
-    """Return the accumulated nuclear gradient with shape (3, natoms)."""
-
-    gradient = np.zeros((3, natoms), dtype=np.float64, order="F")
-    error_check(lib.moist_general_model_get_gradient)(
-        model.handle,
-        int(natoms),
+    _accumulator(gradient, (int(natoms), 3), "gradient")
+    error_check(lib.moist_get_model_gradient)(
+        model.handle, coupling.handle, response.handle, int(natoms),
         _cast("double*", gradient),
     )
-    return gradient
+
+
+def next_coupling_request(coupling: CouplingHandle) -> bool:
+    """Advance the cursor to the next request with a missing output of the staged phase.
+
+    Each request is visited at most once per pass.  False ends the pass and
+    rewinds the cursor, so the next call starts a new pass; an unstaged
+    coupling has nothing to visit.  Otherwise only staging and a model update
+    move the cursor back.  The native entry also returns false on a failure,
+    which is raised here instead.
+    """
+
+    return bool(error_check(lib.moist_next_coupling_request)(coupling.handle))
+
+
+def get_coupling_request_name(coupling: CouplingHandle) -> str:
+    """Scientific name of the current request, e.g. ``"gaussian_potential"``."""
+
+    buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
+    error_check(lib.moist_get_coupling_request_name)(coupling.handle, buffer)
+    return ffi.string(buffer).decode()
+
+
+def get_coupling_request_missing(coupling: CouplingHandle, name: str) -> bool:
+    """Whether an output of the current request is required by the staged phase and unanswered.
+
+    A name the request does not declare is not missing; ``answer_coupling_request``
+    and the ``get_*`` accessors report a misspelt output by name.
+    """
+
+    value = ffi.new("bool *")
+    error_check(lib.moist_get_coupling_request_missing)(
+        coupling.handle, name.encode(), value)
+    return bool(value[0])
+
+
+def get_coupling_request_width(coupling: CouplingHandle, width: np.ndarray) -> None:
+    """Copy the Gaussian moment exponents of the current request into ``width``.
+
+    ``width`` is a float64 array of the cavity's grid size, filled in bohr**-2.
+    """
+
+    _native_array(width, "width", writable=True)
+    error_check(lib.moist_get_coupling_request_width)(
+        coupling.handle, _cast("double*", width))
+
+
+def answer_coupling_request(coupling: CouplingHandle, name: str, values: np.ndarray) -> None:
+    """Submit one named output of the current request.
+
+    ``values`` is a C-contiguous float64 array ``(ngrid, ...)`` on the cavity
+    grid with the output's trailing extents; moist reads exactly that many
+    values.  A rejected output stays missing until a valid retry; the others
+    are unaffected.
+    """
+
+    _native_array(values, name)
+    error_check(lib.moist_answer_coupling_request)(
+        coupling.handle, name.encode(), _cast("double*", values))
+
+
+def next_response_item(response: ResponseHandle) -> bool:
+    """Advance the cursor to the next item of the response.
+
+    Every item the model produced is visited once per pass, in native order.
+    False ends the pass and rewinds the cursor, so the next call starts a new
+    pass; an empty response gives false at once.  Filling the response again
+    restarts the walk.  The native entry also returns false on a failure,
+    which is raised here instead.
+    """
+
+    return bool(error_check(lib.moist_next_response_item)(response.handle))
+
+
+def get_response_item_name(response: ResponseHandle) -> str:
+    """Scientific name of the current item, e.g. ``"potential_adjoint"``."""
+
+    buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
+    error_check(lib.moist_get_response_item_name)(response.handle, buffer)
+    return ffi.string(buffer).decode()
+
+
+def get_response_array(response: ResponseHandle, array: str, values: np.ndarray) -> None:
+    """Copy one named array of the current item into ``values``.
+
+    ``values`` is a C-contiguous float64 array ``(ngrid, ...)``: ``w_phi``,
+    ``w_rho``, ``w_overlap`` and ``w_normal_deriv`` are ``(ngrid,)``,
+    ``w_grad_rho`` is ``(ngrid, 3)`` and ``w_hess_rho`` is ``(ngrid, 3, 3)``
+    with indices ``[point, b, a]`` for native ``(a, b, point)``; moist writes
+    exactly that many values.  No current item and an array the current item
+    does not have are refused by name before anything is written.
+    """
+
+    _native_array(values, array, writable=True)
+    error_check(lib.moist_get_response_array)(
+        response.handle, array.encode(), _cast("double*", values)
+    )
 
 
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
@@ -728,7 +726,7 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
     volume = np.array(0.0, dtype=np.float64)
     out_ngrid = ffi.new("int *")
     out_nsph = ffi.new("int *")
-    xyz = np.zeros((3, ngrid), dtype=np.float64, order="F")
+    xyz = np.zeros((ngrid, 3), dtype=np.float64, order="C")
     weights = np.zeros(ngrid, dtype=np.float64)
     owner = np.zeros(ngrid, dtype=np.int32)
     converged = np.zeros(ngrid, dtype=np.bool_)
@@ -766,11 +764,10 @@ def get_cavity_results(cavity: CavityHandle) -> dict:
 
 
 # Element type tags from moist.h; a field is read with the accessor matching its
-# tag. Preprocessing strips the macros before cffi sees them, so the values are
-# mirrored here.
-FIELD_REAL = 1
-FIELD_INT = 2
-FIELD_BOOL = 3
+# tag. Macro values are supplied by the compiled cffi extension.
+FIELD_REAL = lib.MOIST_FIELD_REAL
+FIELD_INT = lib.MOIST_FIELD_INT
+FIELD_BOOL = lib.MOIST_FIELD_BOOL
 
 _FIELD_READER = {
     FIELD_REAL: ("moist_get_cavity_field_real", np.float64, "double*"),
@@ -778,11 +775,9 @@ _FIELD_READER = {
     FIELD_BOOL: ("moist_get_cavity_field_bool", np.bool_, "bool*"),
 }
 
-# Matches MOIST_FIELD_MAX_RANK
-_FIELD_MAX_RANK = 2
+_FIELD_MAX_RANK = lib.MOIST_FIELD_MAX_RANK
 
-_FIELD_NAME_CAP = 64
-_FIELD_ABOUT_CAP = 256
+_FIELD_NAME_CAP = lib.MOIST_FIELD_NAME_MAX + 1
 
 
 @dataclass(frozen=True)
@@ -790,8 +785,7 @@ class CavityField:
     """Shape and type of one readable cavity field.
 
     ``shape`` is empty for a scalar and otherwise carries the extents in
-    moist's own order, fastest-varying first -- so a ``(3, ngrid)`` array is
-    reported as ``(3, ngrid)`` and read back Fortran-ordered.
+    C order, slowest-varying first. Grid vectors have shape ``(ngrid, 3)``.
     """
 
     name: str
@@ -820,7 +814,6 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     error_check(lib.moist_get_cavity_field_info)(
         cavity.handle,
         int(index),
-        _FIELD_NAME_CAP,
         name,
         dtype,
         rank,
@@ -857,13 +850,12 @@ def list_cavity_fields(cavity: CavityHandle) -> tuple[CavityField, ...]:
 def get_cavity_field_about(cavity: CavityHandle, name: str) -> str:
     """Return the one-line description moist attaches to a field."""
 
-    about = ffi.new(f"char[{_FIELD_ABOUT_CAP}]")
-    error_check(lib.moist_get_cavity_field_about)(
-        cavity.handle,
-        _char(name),
-        _FIELD_ABOUT_CAP,
-        about,
-    )
+    length = ffi.new("size_t *")
+    get_about = error_check(lib.moist_get_cavity_field_about)
+    get_about(cavity.handle, _char(name), ffi.NULL, 0, length)
+    capacity = length[0] + 1
+    about = ffi.new("char[]", capacity)
+    get_about(cavity.handle, _char(name), about, capacity, length)
     return ffi.string(about).decode()
 
 
@@ -874,7 +866,7 @@ def get_cavity_field(
 ) -> np.ndarray:
     """Return one named cavity result.
 
-    Rank-2 fields come back Fortran-ordered with moist's own shape. A name the
+    Fields come back C-contiguous with the reported C shape. A name the
     cavity does not currently hold -- unknown, or an optional property that was
     not requested -- raises rather than returning zeros.
 
@@ -890,13 +882,12 @@ def get_cavity_field(
     error_check(getattr(lib, reader))(
         cavity.handle,
         _char(name),
-        info.count,
         _cast(ctype, values),
     )
 
     if not info.shape:
         return values[0]
-    return values.reshape(info.shape, order="F")
+    return values.reshape(info.shape, order="C")
 
 
 def get_cavity_fields(
@@ -952,7 +943,7 @@ def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:
     """
 
     ngrid, _ = get_cavity_sizes(cavity)
-    amat = np.zeros((ngrid, ngrid), dtype=np.float64, order="F")
+    amat = np.zeros((ngrid, ngrid), dtype=np.float64, order="C")
     xi = np.zeros(ngrid, dtype=np.float64)
 
     error_check(lib.moist_assemble_amat)(
@@ -991,6 +982,41 @@ def compute_anchor_gradient(cavity: CavityHandle) -> None:
     error_check(lib.moist_compute_anchor_gradient)(cavity.handle)
 
 
+def compute_cavity_gradient(cavity):
+    """Build diagnostic forward derivatives; normal model gradients avoid this."""
+    error_check(lib.moist_compute_cavity_gradient)(cavity.handle)
+
+
+def contract_amat_nuclear_gradient(cavity, q1, q2):
+    """Diagnostic forward contraction, after compute_cavity_gradient."""
+    ngrid, nsph = get_cavity_sizes(cavity)
+    arrays = [np.asarray(q, dtype=np.float64, order="C") for q in (q1, q2)]
+    if any(a.shape != (ngrid,) for a in arrays):
+        raise ValueError("q1 and q2 must have shape (ngrid,)")
+    gradient = np.zeros((nsph, 3))
+    error_check(lib.moist_contract_amat1_q1q2_rA)(cavity.handle,
+        *[_cast("double*", a) for a in arrays], _cast("double*", gradient))
+    return gradient
+
+
+def contract_pcm_nuclear_gradient(cavity, w_phi, w_xyz, charges):
+    """Diagnostic electrostatic contraction, after compute_cavity_gradient.
+
+    ``w_phi`` is the potential adjoint ``dE/dphi`` (the surface charge of a
+    stationary PCM), ``charges`` the nuclear charges.
+    """
+    ngrid, nsph = get_cavity_sizes(cavity)
+    arrays = [np.asarray(a, dtype=np.float64, order="C")
+              for a in (w_phi, w_xyz, charges)]
+    for a, shape in zip(arrays, ((ngrid,), (ngrid, 3), (nsph,))):
+        if a.shape != shape:
+            raise ValueError(f"contraction input must have shape {shape}")
+    gradient = np.zeros((nsph, 3))
+    error_check(lib.moist_contract_pcm_nuclear_gradient)(cavity.handle,
+        *[_cast("double*", a) for a in arrays], _cast("double*", gradient))
+    return gradient
+
+
 def get_anchor_gradient(cavity: CavityHandle) -> dict:
     """Return the anchor-channel nuclear derivatives in native cavity order.
 
@@ -1006,12 +1032,12 @@ def get_anchor_gradient(cavity: CavityHandle) -> dict:
 
     ngrid, nsph = get_cavity_sizes(cavity)
 
-    xyz1_rA = np.zeros((3, 3, nsph, ngrid), dtype=np.float64, order="F")
-    xi1_rA = np.zeros((3, nsph, ngrid), dtype=np.float64, order="F")
-    a_i1_rA = np.zeros((3, nsph, ngrid), dtype=np.float64, order="F")
-    v_i1_rA = np.zeros((3, nsph, ngrid), dtype=np.float64, order="F")
-    A_tot1_rA = np.zeros((3, nsph), dtype=np.float64, order="F")
-    V_tot1_rA = np.zeros((3, nsph), dtype=np.float64, order="F")
+    xyz1_rA = np.zeros((ngrid, nsph, 3, 3), dtype=np.float64, order="C")
+    xi1_rA = np.zeros((ngrid, nsph, 3), dtype=np.float64, order="C")
+    a_i1_rA = np.zeros((ngrid, nsph, 3), dtype=np.float64, order="C")
+    v_i1_rA = np.zeros((ngrid, nsph, 3), dtype=np.float64, order="C")
+    A_tot1_rA = np.zeros((nsph, 3), dtype=np.float64, order="C")
+    V_tot1_rA = np.zeros((nsph, 3), dtype=np.float64, order="C")
 
     # The capacity pair is (nsph, ngrid) -- the reverse of the order the grid
     # index appears in the array shapes above.
@@ -1051,7 +1077,7 @@ def contract_amat1_q1q2_surface_weights(
 
     w_xi = np.zeros(ngrid, dtype=np.float64)
     w_f = np.zeros(ngrid, dtype=np.float64)
-    w_xyz = np.zeros((3, ngrid), dtype=np.float64, order="F")
+    w_xyz = np.zeros((ngrid, 3), dtype=np.float64, order="C")
 
     error_check(lib.moist_contract_amat1_q1q2_surface_weights)(
         cavity.handle,
@@ -1069,13 +1095,13 @@ def contract_surface_lsf_weights(
     w_xi: np.ndarray,
     w_f: np.ndarray,
     w_xyz: np.ndarray,
-    w_n: Optional[np.ndarray] = None,
+    w_normal: Optional[np.ndarray] = None,
     w_k1: Optional[np.ndarray] = None,
     w_k2: Optional[np.ndarray] = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Contract DROP surface weights to LSF adjoint weights.
 
-    The outward-normal (``w_n``, shape ``(3, ngrid)``) and principal-curvature
+    The outward-normal (``w_normal``, shape ``(ngrid, 3)``) and principal-curvature
     (``w_k1``/``w_k2``, shape ``(ngrid,)``) channels are optional; ``None``
     skips the channel entirely.
     """
@@ -1083,23 +1109,25 @@ def contract_surface_lsf_weights(
     ngrid, _ = get_cavity_sizes(cavity)
     _w_xi = np.ascontiguousarray(w_xi, dtype=np.float64)
     _w_f = np.ascontiguousarray(w_f, dtype=np.float64)
-    _w_xyz = np.asarray(w_xyz, dtype=np.float64, order="F")
-    if _w_xi.shape != (ngrid,) or _w_f.shape != (ngrid,) or _w_xyz.shape != (3, ngrid):
-        raise ValueError("w_xi/w_f must have shape (ngrid,), w_xyz must have shape (3, ngrid)")
+    _w_xyz = np.asarray(w_xyz, dtype=np.float64, order="C")
+    if _w_xi.shape != (ngrid,) or _w_f.shape != (ngrid,) or _w_xyz.shape != (ngrid, 3):
+        raise ValueError("w_xi/w_f must have shape (ngrid,), w_xyz must have shape (ngrid, 3)")
 
-    _w_n = None if w_n is None else np.asarray(w_n, dtype=np.float64, order="F")
+    _w_normal = (
+        None if w_normal is None else np.asarray(w_normal, dtype=np.float64, order="C")
+    )
     _w_k1 = None if w_k1 is None else np.ascontiguousarray(w_k1, dtype=np.float64)
     _w_k2 = None if w_k2 is None else np.ascontiguousarray(w_k2, dtype=np.float64)
-    if _w_n is not None and _w_n.shape != (3, ngrid):
-        raise ValueError("w_n must have shape (3, ngrid)")
+    if _w_normal is not None and _w_normal.shape != (ngrid, 3):
+        raise ValueError("w_normal must have shape (ngrid, 3)")
     if _w_k1 is not None and _w_k1.shape != (ngrid,):
         raise ValueError("w_k1 must have shape (ngrid,)")
     if _w_k2 is not None and _w_k2.shape != (ngrid,):
         raise ValueError("w_k2 must have shape (ngrid,)")
 
     w_lsf0 = np.zeros(ngrid, dtype=np.float64)
-    w_lsf1 = np.zeros((3, ngrid), dtype=np.float64, order="F")
-    w_lsf2 = np.zeros((3, 3, ngrid), dtype=np.float64, order="F")
+    w_lsf1 = np.zeros((ngrid, 3), dtype=np.float64, order="C")
+    w_lsf2 = np.zeros((ngrid, 3, 3), dtype=np.float64, order="C")
 
     error_check(lib.moist_contract_surface_lsf_weights_extended)(
         cavity.handle,
@@ -1109,7 +1137,7 @@ def contract_surface_lsf_weights(
         _cast("double*", w_lsf0),
         _cast("double*", w_lsf1),
         _cast("double*", w_lsf2),
-        _cast("double*", _w_n),
+        _cast("double*", _w_normal),
         _cast("double*", _w_k1),
         _cast("double*", _w_k2),
     )

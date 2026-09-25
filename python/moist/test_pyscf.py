@@ -11,7 +11,7 @@ The suite is layered so a failure localises:
 ``L0``
     Solute-vdW cavity, whose surface does not depend on the density.  The
     level-set response is absent, so these tests pin the electrostatic
-    conventions (``phi``, ``qefield``, nuclear charges) on their own.
+    conventions (``phi``, ``w_xyz``, nuclear charges) on their own.
 ``L1``
     Isodensity cavity at a *fixed* density matrix, over three component sets.
     Only the ``lsf`` routes are new relative to L0.
@@ -50,17 +50,19 @@ except ImportError as exc:
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
 from .interface import (
-    CavityDROP,
-    CavityDROPCFC,
-    CavityDROPIsodensity,
-    CavityDROPSvdW,
-    CavityISwiG,
-    GeneralSolvationModel,
+    DensityResponse,
+    GaussianMomentRequest,
+    GaussianPotentialRequest,
     ModelComponentCOSMO,
     ModelComponentCPCM,
+    ModelComponentGOSTSHYP,
     ModelComponentPV,
+    Response,
 )
-from .pyscf import PySCFHost, PySCFIsodensityHost, solvated_rhf
+from .pyscf import (
+    CFC, DROP, ISwiG, Isodensity, SvdW,
+    GaussianMoments, PySCFHost, PySCFSolvation, moist_for_scf,
+)
 
 #: Dielectric constant of water
 EPSILON = 80.0
@@ -190,6 +192,26 @@ def deviation(actual, reference, *, thr_abs=None, thr_rel=None) -> float:
 FD4_OFFSETS = (2, 1, -1, -2)
 
 
+def answer_with_zeros(coupling, request, ngrid) -> None:
+    """Answer the current request of ``coupling`` with zeros, whatever shape it wants.
+
+    ``request`` is the snapshot the loop yielded for it.  Used by the negative
+    controls, which need every *other* request satisfied so the failure they
+    provoke is unambiguous.
+    """
+    if isinstance(request, GaussianMomentRequest):
+        coupling.answer(
+            gt=np.zeros(ngrid),
+            pt=np.zeros((ngrid, 3)),
+            mt=np.zeros((ngrid, 3, 3)),
+            rt=np.zeros((ngrid, 3)),
+        )
+    elif isinstance(request, GaussianPotentialRequest):
+        coupling.answer(**{name: np.zeros((ngrid, 3)) if name == "dphi_dr" else np.zeros(ngrid)
+                           for name in request.missing})
+
+
+
 def fd4(values, step: float) -> float:
     """4-point central difference from samples at ``(+2, +1, -1, -2) * step``."""
     fpp, fp, fm, fmm = values
@@ -219,81 +241,81 @@ def reference_density(system: str, basis: str):
     return mean_field.make_rdm1()
 
 
-def make_host(mol, positions=None, *, dm):
-    """Host bound to ``mol`` displaced to ``positions`` (bohr), at fixed ``dm``."""
-    if positions is not None:
-        mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
+def make_host(mol, *, dm):
+    """Host bound to ``mol`` at fixed ``dm``, for the host-only tests."""
     host = PySCFHost(mol)
     host.dm = dm
     return host
 
 
+def cavity_config(isodensity):
+    """The DROP configuration of one layer: isodensity or solute-vdW."""
+    if isodensity:
+        return DROP(lsf=Isodensity(), nleb=NLEB, tolerance=PROJ_TOL)
+    return DROP(lsf=SvdW(), nleb=NLEB)
+
+
+def solve(mol, positions=None, *, dm, isodensity, components="cpcm"):
+    """Driver for ``mol`` displaced to ``positions`` (bohr), evaluated at ``dm``."""
+    if positions is not None:
+        mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
+    solvation = PySCFSolvation(mol, cavity_config(isodensity), COMPONENTS[components]())
+    solvation.evaluate(dm)
+    return solvation
+
+
+def solvated_rhf(mol, epsilon):
+    """Converged solvated RHF on the isodensity cavity used by the L2 tier."""
+    mean_field = moist_for_scf(
+        scf.RHF(mol), cavity=cavity_config(True), components=[ModelComponentCPCM(epsilon)],
+    )
+    mean_field.conv_tol = 1e-13
+    mean_field.conv_tol_grad = 1e-9
+    mean_field.kernel()
+    return mean_field
+
+
 @pytest.mark.conventions
 def test_pyscf_host_is_an_isodensity_cavity_source():
-    mol = molecule(*PRIMARY_CASE)
-    host = PySCFHost(mol)
+    """A host is the density source of an isodensity cavity built from it."""
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = make_host(mol, dm=dm)
 
-    cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = cavity_config(True).build(source=host)
+    cavity.update(host.structure())
 
-    assert isinstance(cavity, CavityDROPIsodensity)
-    with pytest.deprecated_call(match="PySCFHost"):
-        legacy = PySCFIsodensityHost(mol)
-    with pytest.deprecated_call(match="CavityDROPIsodensity"):
-        compatibility_cavity = host.make_cavity(nleb=NLEB)
-    assert isinstance(legacy, PySCFHost)
-    assert isinstance(compatibility_cavity, CavityDROPIsodensity)
-
-
-def solve(host, *, isodensity, components="cpcm"):
-    """Build a cavity plus components and evaluate one coherent coupling."""
-    if isodensity:
-        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
-    else:
-        cavity = CavityDROP(nleb=NLEB)
-    model = GeneralSolvationModel(cavity, COMPONENTS[components]())
-    result = model.evaluate(coupling=host.coupling(host.dm))
-    return result.energy, result.response, result.cavity.xyz.T, model
+    assert cavity.density_dependent
+    assert cavity.ngrid > 0
 
 
 @pytest.mark.isodensity
 @pytest.mark.cpcm
-def test_evaluation_exposes_complete_pyscf_results():
-    """The evaluation owns the host Fock and complete nuclear gradient."""
+def test_results_are_immutable_and_independent_of_the_input_density():
+    """The driver's results are frozen values, not views of the caller's arrays."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    host = make_host(mol, dm=dm)
-    model = GeneralSolvationModel(
-        CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL),
-        COMPONENTS["cpcm"](),
-    )
-
     density = np.array(dm, copy=True)
-    coupling = host.coupling(density)
-    result = model.evaluate(coupling=coupling)
-    coords = result.cavity.xyz.T
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
 
-    np.testing.assert_allclose(
-        result.fock,
-        host.fock(coords, result.response, include_lsf=True),
-    )
-    with pytest.raises(ValueError, match="WRITEABLE"):
-        coupling.density_matrix.setflags(write=True)
-    with pytest.raises(AttributeError):
-        coupling.density_matrix = np.zeros_like(density)
+    result = solvation.evaluate(density)
+    gradient = solvation.gradient(density)
     density.fill(0.0)
-    np.testing.assert_allclose(
-        result.gradient,
-        model.gradient() + host.gradient(coords, result.response, include_lsf=True),
-    )
+
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        result.fock.setflags(write=True)
+    with pytest.raises(ValueError, match="WRITEABLE"):
+        solvation.density_matrix.setflags(write=True)
+    assert solvation.evaluate(dm) is result
+    np.testing.assert_allclose(solvation.gradient(dm), gradient)
 
 
 def fd_density(mol, dm, direction, *, isodensity, components="cpcm"):
     """dE/dt along ``dm + t * direction``, rebuilding the cavity each sample."""
     samples, grids = [], []
     for offset in FD4_OFFSETS:
-        host = make_host(mol, dm=dm + offset * STEP_DM * direction)
-        energy, _, _, model = solve(host, isodensity=isodensity, components=components)
-        samples.append(energy)
-        grids.append(model.ngrid)
+        solvation = solve(mol, dm=dm + offset * STEP_DM * direction,
+                          isodensity=isodensity, components=components)
+        samples.append(solvation.energy)
+        grids.append(solvation.model.cavity.ngrid)
     assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_DM)
 
@@ -304,10 +326,9 @@ def fd_position(mol, positions, dm, index, *, isodensity, components="cpcm"):
     for offset in FD4_OFFSETS:
         displaced = positions.copy()
         displaced.flat[index] += offset * STEP_R
-        host = make_host(mol, displaced, dm=dm)
-        energy, _, _, model = solve(host, isodensity=isodensity, components=components)
-        samples.append(energy)
-        grids.append(model.ngrid)
+        solvation = solve(mol, displaced, dm=dm, isodensity=isodensity, components=components)
+        samples.append(solvation.energy)
+        grids.append(solvation.model.cavity.ngrid)
     assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_R)
 
@@ -336,8 +357,8 @@ def sampled_coordinates(natm):
 
 @pytest.mark.vdw
 @pytest.mark.parametrize(
-    "cavity_type",
-    [CavityDROPSvdW, CavityDROPCFC, CavityISwiG],
+    "cavity",
+    [DROP(lsf=SvdW(), nleb=26), DROP(lsf=CFC(), nleb=26), ISwiG(nleb=26)],
     ids=("svdw-drop", "cfc-drop", "iswig"),
 )
 @pytest.mark.parametrize(
@@ -345,21 +366,17 @@ def sampled_coordinates(natm):
     [ModelComponentCPCM, ModelComponentCOSMO],
     ids=("cpcm", "cosmo"),
 )
-def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
-    cavity_type,
-    component_type,
-):
-    """Every PCM/cavity combination uses the same PySCF coupling."""
+def test_l0_pcm_components_and_cavity_types_share_the_pyscf_driver(cavity, component_type):
+    """Every PCM/cavity combination runs through the same driver."""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
-    host = PySCFHost(mol)
-    model = GeneralSolvationModel(cavity_type(nleb=26), [component_type(EPSILON)])
+    solvation = PySCFSolvation(mol, cavity, [component_type(EPSILON)])
 
-    result = model.evaluate(coupling=host.coupling(dm))
+    result = solvation.evaluate(dm)
 
     assert np.isfinite(result.energy)
     assert result.fock.shape == dm.shape
-    assert result.gradient.shape == (3, mol.natm)
-    assert result.cavity.ngrid > 0
+    assert solvation.gradient(dm).shape == (mol.natm, 3)
+    assert solvation.model.cavity.ngrid > 0
 
 
 @pytest.mark.vdw
@@ -367,9 +384,7 @@ def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
 def test_l0_fock_matches_fd(system, basis):
     """dE/dP through the surface potential alone, with a fixed surface."""
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, potential, coords, _ = solve(host, isodensity=False)
-    fock = host.fock(coords, potential, include_lsf=False)
+    fock = solve(mol, dm=dm, isodensity=False).fock
 
     for direction in symmetric_directions(dm.shape[0], 2):
         numerical = fd_density(mol, dm, direction, isodensity=False)
@@ -383,34 +398,34 @@ def test_l0_gradient_matches_fd(system, basis):
     """dE/dR at fixed P: moist's geometry terms plus the host's AO derivative."""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
-    host = make_host(mol, dm=dm)
-    _, potential, coords, model = solve(host, isodensity=False)
-    gradient = model.get_gradient(mol.natm) + host.gradient(
-        coords, potential, include_lsf=False
-    )
+    gradient = solve(mol, dm=dm, isodensity=False).gradient(dm)
 
     for index in sampled_coordinates(mol.natm):
         numerical = fd_position(mol, positions, dm, index, isodensity=False)
-        assert deviation(gradient.flatten(order="F")[index], numerical) <= 1.0
+        assert deviation(gradient.flatten(order="C")[index], numerical) <= 1.0
 
 
 @pytest.mark.conventions
-def test_l0_gradient_requires_qefield():
-    """Without ``qefield`` the gradient is refused rather than silently wrong.
+def test_l0_gradient_requires_position_weight():
+    """Without ``w_xyz`` the gradient is refused rather than silently wrong.
 
-    An unsupplied channel used to be read as zero, which kept only the nuclear
-    half of the surface motion and returned a plausible, wrong gradient.  The
-    external-potential gradient path now requires the channel outright.
+    The total surface-position weight carries the whole surface-motion term
+    of the gradient; read as zero it would leave a plausible, wrong gradient
+    (only the direct nuclear term).  The request is mandatory, so the
+    gradient is refused by name.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, _, coords, model = solve(host, isodensity=False)
+    model = solve(mol, dm=dm, isodensity=False).model
 
-    phi = host.surface_potential(coords)
-    model.supply_electrostatics(phi)  # no qefield
-    with pytest.raises(RuntimeError, match="electrostatics%qefield"):
-        model.get_gradient(mol.natm)
+    coupling = model.new_coupling()
+    model.prepare_gradient(coupling)
+    # Answer everything except the position weight.
+    for request in coupling:
+        if not (isinstance(request, GaussianPotentialRequest) and "dphi_dr" in request.missing):
+            answer_with_zeros(coupling, request, model.cavity.ngrid)
+    with pytest.raises(RuntimeError, match="gaussian_potential"):
+        _gradient(model, coupling)
 
 
 # ----------------------------------------------------------------------
@@ -486,9 +501,7 @@ def test_density_callback_is_finite(system, basis):
 def test_l1_fock_matches_fd(system, basis, components):
     """dE/dP with the surface following the density -- the headline Fock test."""
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, potential, coords, _ = solve(host, isodensity=True, components=components)
-    fock = host.fock(coords, potential, include_lsf=True)
+    fock = solve(mol, dm=dm, isodensity=True, components=components).fock
 
     for direction in symmetric_directions(dm.shape[0], 2):
         numerical = fd_density(
@@ -505,17 +518,37 @@ def test_l1_gradient_matches_fd(system, basis, components):
     """dE/dR at fixed P, including the level set's own basis-center derivative."""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
-    host = make_host(mol, dm=dm)
-    _, potential, coords, model = solve(host, isodensity=True, components=components)
-    gradient = model.get_gradient(mol.natm) + host.gradient(
-        coords, potential, include_lsf=True
-    )
+    gradient = solve(mol, dm=dm, isodensity=True, components=components).gradient(dm)
 
     for index in sampled_coordinates(mol.natm):
         numerical = fd_position(
             mol, positions, dm, index, isodensity=True, components=components
         )
-        assert deviation(gradient.flatten(order="F")[index], numerical) <= 1.0
+        assert deviation(gradient.flatten(order="C")[index], numerical) <= 1.0
+
+
+@pytest.mark.conventions
+def test_the_driver_stops_on_an_item_it_cannot_contract():
+    """An item the driver does not know raises instead of dropping its term.
+
+    Unlike an unanswered request, which ``get_*`` reports, a skipped response
+    item fails nowhere: the Fock matrix and the gradient would silently lack
+    its contribution.
+    """
+
+    class UnknownItem:
+        name = "unknown"
+
+    system, basis = PRIMARY_CASE
+    mol, dm = molecule(system, basis), reference_density(system, basis)
+    solvation = solve(mol, dm=dm, isodensity=False)
+    response = Response([*solvation.response, UnknownItem()])
+    with pytest.raises(NotImplementedError, match="Unsupported response item 'unknown'"):
+        solvation._fock(response)
+    # The gradient walks the response of the cached evaluation at this density.
+    solvation._response = response
+    with pytest.raises(NotImplementedError, match="Unsupported response item 'unknown'"):
+        solvation.gradient_channels(dm)
 
 
 @pytest.mark.conventions
@@ -528,12 +561,14 @@ def test_pv_alone_makes_the_fock_purely_level_set():
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, potential, coords, _ = solve(host, isodensity=True, components="pv")
-
-    assert potential.electrostatics is None
-    full = host.fock(coords, potential, include_lsf=True)
-    np.testing.assert_allclose(full, host._fock_lsf(coords, potential), atol=1e-14)
+    solvation = solve(mol, dm=dm, isodensity=True, components="pv")
+    # The walk meets the density item alone: no potential adjoint, no amplitudes.
+    (density,) = list(solvation.response)
+    assert isinstance(density, DensityResponse)
+    full = solvation.fock
+    np.testing.assert_allclose(
+        full, solvation.host._fock_lsf(solvation.model.cavity.xyz, density), atol=1e-14
+    )
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd_density(mol, dm, direction, isodensity=True, components="pv")
@@ -548,9 +583,7 @@ def test_l1_fock_requires_lsf_term(components):
     """Dropping the level-set response must break the Fock test outright."""
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, potential, coords, _ = solve(host, isodensity=True, components=components)
-    without = host.fock(coords, potential, include_lsf=False)
+    without = solve(mol, dm=dm, isodensity=True, components=components).frozen_fock()
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd_density(mol, dm, direction, isodensity=True, components=components)
@@ -569,72 +602,146 @@ def test_l1_gradient_requires_lsf_term(components):
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
-    host = make_host(mol, dm=dm)
-    _, potential, coords, model = solve(host, isodensity=True, components=components)
-    starved = model.get_gradient(mol.natm) + host.gradient(
-        coords, potential, include_lsf=False
-    )
+    channels = solve(mol, dm=dm, isodensity=True, components=components).gradient_channels(dm)
+    assert np.abs(channels["density"]).max() > MIN_SIGNAL
+    starved = channels["model"] + channels["potential"]
 
     numerical = fd_position(
         mol, positions, dm, 2, isodensity=True, components=components
     )
-    assert deviation(starved.flatten(order="F")[2], numerical) > VACUITY_FACTOR
+    assert deviation(starved.flatten(order="C")[2], numerical) > VACUITY_FACTOR
 
 
 @pytest.mark.conventions
-def test_l1_potential_requires_surface_position_weights():
+def test_l1_potential_requires_point_potentials():
     """``w_xyz`` carries the dominant part of the cavity response.
 
     When the density changes the  grid points move and ``phi(r_i)`` moves with them.
     moist cannot see that route -- ``phi`` is the host's function -- so it has to
-    arrive as ``w_xyz`` before the potential is read.  Omitting it returns
-    ``lsf`` weights that look perfectly healthy and are badly wrong.
+    arrive as ``w_xyz`` before the potential is read.  The request is
+    mandatory for a density-dependent cavity: omitting it is refused by name
+    rather than returning ``lsf`` weights that look healthy and are wrong.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, _, coords, model = solve(host, isodensity=True)
+    model = solve(mol, dm=dm, isodensity=True).model
 
-    phi = host.surface_potential(coords)
-    model.supply_electrostatics(phi)  # no w_xyz
-    starved = host.fock(coords, model.response(), include_lsf=True)
-
-    direction = next(iter(symmetric_directions(dm.shape[0], 1)))
-    numerical = fd_density(mol, dm, direction, isodensity=True)
-    analytic = float(np.einsum("uv,uv->", starved, direction))
-    assert deviation(analytic, numerical) > VACUITY_FACTOR
+    coupling = model.new_coupling()
+    model.prepare_response(coupling)
+    for request in coupling:
+        if not (isinstance(request, GaussianPotentialRequest) and "dphi_dr" in request.missing):
+            answer_with_zeros(coupling, request, model.cavity.ngrid)
+    with pytest.raises(RuntimeError, match="gaussian_potential"):
+        model.get_response(coupling)
 
 
 @pytest.mark.conventions
-def test_gradient_path_ignores_host_surface_weights():
-    """Documents an asymmetry between the potential and gradient paths.
+def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
+    """``phi`` is not charge-dependent, so it is missing in the energy phase only.
 
-    ``w_xyz`` is read when the potential is assembled but dropped when the
-    gradient is, so scaling it by a thousand leaves the gradient where it was.
-    That is what makes it safe for :meth:`PySCFHost.solve` to supply
-    ``w_xyz`` and ``qefield`` together: were the gradient path to start reading
-    ``w_xyz``, the surface-motion term would be counted twice and
-    ``test_l1_gradient_matches_fd`` would begin to fail.
+    The pre-protocol exchange supplied it twice -- once bare to obtain the
+    charges, then again alongside the position weights -- because the host had
+    to drive moist's ordering itself.  The phase loop owns that ordering now,
+    so the potential is asked for exactly once and only ``w_xyz`` comes back
+    for the response and the gradient.
+    """
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    host = solvation.host
 
-    The bound is tight rather than exact.
+    potential_calls = []
+    weight_calls = []
+    surface_potential = host.surface_potential
+    spatial_derivative = host._grad_phi_elec
+
+    def counted_potential(coords, xi=None):
+        potential_calls.append(1)
+        return surface_potential(coords, xi)
+
+    def counted_weights(coords, xi=None):
+        weight_calls.append(1)
+        return spatial_derivative(coords, xi)
+
+    monkeypatch.setattr(host, "surface_potential", counted_potential)
+    monkeypatch.setattr(host, "_grad_phi_elec", counted_weights)
+
+    solvation.evaluate(dm)
+
+    assert potential_calls == [1]
+    assert weight_calls == [1]
+    solvation.gradient(dm)
+    # Raw derivatives remain valid when the gradient phase follows response.
+    assert potential_calls == [1]
+    assert len(weight_calls) == 1
+
+
+@pytest.mark.conventions
+def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypatch):
+    """A model that does not ask for moments never makes the host form them.
+
+    The Gaussian moments are dense three-centre AO integrals.  A host cannot
+    know whether they are wanted, so it used to be told by a hand-written table
+    on the Python side; now the model's own declaration decides, and a CPCM
+    model simply never produces the request that would trigger them.
+    """
+    builds = []
+    build_integrals = GaussianMoments._build_integrals
+
+    def counted(self):
+        builds.append(1)
+        return build_integrals(self)
+
+    monkeypatch.setattr(GaussianMoments, "_build_integrals", counted)
+
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+
+    electrostatic = PySCFSolvation(mol, cavity_config(True), COMPONENTS["cpcm"]())
+    electrostatic.evaluate(dm)
+    assert builds == []
+    assert electrostatic.moments is None
+
+    # Vacuous unless the same driver does build them when a component asks.
+    pressurised = PySCFSolvation(mol, cavity_config(True), [ModelComponentGOSTSHYP(PRESSURE)])
+    pressurised.evaluate(dm)
+    assert builds == [1]
+
+
+@pytest.mark.conventions
+def test_gradient_path_reads_host_surface_weights():
+    """The gradient contracts the same total ``w_xyz`` the response uses.
+
+    There is one surface-position weight, ``q_i grad phi_total(r_i)``, read by
+    both paths; moist adds no nuclear field of its own to it.  Scaling it
+    therefore scales the surface-motion term of the gradient: the difference
+    between the two gradients below is linear in the factor and nonzero.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = make_host(mol, dm=dm)
-    _, _, coords, model = solve(host, isodensity=True)
-    phi = host.surface_potential(coords)
-    model.supply_electrostatics(phi)
-    charges = model.trace_response().electrostatics.surface_charge
+    solvation = solve(mol, dm=dm, isodensity=True)
+    host, model = solvation.host, solvation.model
+    coords, xi = model.cavity.xyz, model.cavity.xi0
 
+    coupling = model.new_coupling()
     gradients = []
-    for factor in (0.0, 1000.0):
-        model.supply_electrostatics(
-            phi,
-            w_xyz=factor * host.surface_position_weights(coords, charges),
-            qefield=host.qefield(coords, charges),
-        )
-        gradients.append(model.get_gradient(mol.natm))
-    np.testing.assert_allclose(gradients[0], gradients[1], rtol=1.0e-11, atol=1.0e-14)
+    for factor in (1.0, 2.0, 3.0):
+        model.prepare_energy(coupling)
+        for request in coupling:
+            if isinstance(request, GaussianPotentialRequest):
+                coupling.answer(phi=host.surface_potential(coords, xi))
+        _energy(model, coupling)
+        model.prepare_gradient(coupling)
+        for request in coupling:
+            if isinstance(request, GaussianPotentialRequest) and "dphi_dr" in request.missing:
+                coupling.answer(
+                    dphi_dr=factor * host.surface_potential_gradient(coords, xi),
+                    dphi_dxi=host._dphi_dxi(coords, xi),
+                )
+        gradients.append(_gradient(model, coupling)[0])
+    step = gradients[1] - gradients[0]
+    assert np.max(np.abs(step)) > 1.0e-6
+    np.testing.assert_allclose(
+        gradients[2] - gradients[1], step, rtol=1.0e-9, atol=1.0e-12
+    )
 
 
 # ----------------------------------------------------------------------
@@ -647,11 +754,11 @@ def test_l2_scf_converges_and_stabilises():
     """A solvated SCF converges, is stabilising, and reduces to gas phase."""
     mol = molecule(*PRIMARY_CASE)
     gas = scf.RHF(mol).run()
-    solvated = solvated_rhf(mol, EPSILON, nleb=NLEB, tolerance=PROJ_TOL)
+    solvated = solvated_rhf(mol, EPSILON)
     assert solvated.converged
     assert solvated.e_tot < gas.e_tot
 
-    vacuum = solvated_rhf(mol, 1.0, nleb=NLEB, tolerance=PROJ_TOL)
+    vacuum = solvated_rhf(mol, 1.0)
     assert vacuum.e_tot == pytest.approx(gas.e_tot, abs=1e-9)
 
 
@@ -665,16 +772,10 @@ def test_l2_total_gradient_matches_fd():
     """
     mol = molecule(*PRIMARY_CASE)
     positions = mol.atom_coords()
-    solvated = solvated_rhf(mol, EPSILON, nleb=NLEB, tolerance=PROJ_TOL)
+    solvated = solvated_rhf(mol, EPSILON)
     dm = solvated.make_rdm1()
 
-    host = make_host(mol, dm=dm)
-    _, potential, coords, model = solve(host, isodensity=True)
-    analytic = (
-        grad.RHF(solvated).kernel().T
-        + model.get_gradient(mol.natm)
-        + host.gradient(coords, potential, include_lsf=True)
-    )
+    analytic = grad.RHF(solvated).kernel() + solve(mol, dm=dm, isodensity=True).gradient(dm)
 
     for index in sampled_coordinates(mol.natm)[:3]:
         samples = []
@@ -682,14 +783,105 @@ def test_l2_total_gradient_matches_fd():
             displaced = positions.copy()
             displaced.flat[index] += offset * STEP_R
             moved = mol.set_geom_(displaced, unit="Bohr", inplace=False)
-            samples.append(
-                solvated_rhf(moved, EPSILON, nleb=NLEB, tolerance=PROJ_TOL).e_tot
-            )
+            samples.append(solvated_rhf(moved, EPSILON).e_tot)
         numerical = fd4(samples, STEP_R)
-        assert deviation(analytic.flatten(order="F")[index], numerical,
+        assert deviation(analytic.flatten(order="C")[index], numerical,
                  thr_abs=SCF_ABS_THR, thr_rel=SCF_REL_THR) <= 1.0
 
     # The solvated gradient must actually differ from the gas-phase one, or the
     # solvation terms above are not being exercised.
-    gas_gradient = grad.RHF(scf.RHF(mol).run()).kernel().T
+    gas_gradient = grad.RHF(scf.RHF(mol).run()).kernel()
     assert np.abs(analytic - gas_gradient).max() > MIN_SIGNAL
+
+
+@pytest.mark.host
+@pytest.mark.parametrize("cart", [False, True])
+def test_gaussian_raw_derivatives(cart):
+    """Spatial and inverse-length derivatives include the coincident-point limit."""
+    mol = molecule("water", "def2-svp").copy()
+    mol.cart = cart
+    host = make_host(mol, dm=scf.RHF(mol).run(verbose=0).make_rdm1())
+    coords = np.vstack([mol.atom_coords()[0], [0.2, -0.3, 0.1], [2.0, 1.0, 1.0]])
+    xi = np.array([0.5, 1.2, 2.0])
+    step = 1e-5
+    numerical = (host.surface_potential(coords, xi + step)
+                 - host.surface_potential(coords, xi - step)) / (2 * step)
+    np.testing.assert_allclose(host._dphi_dxi(coords, xi), numerical, atol=1e-8, rtol=1e-8)
+    spatial = host._grad_phi_nuc(coords, xi) + host._grad_phi_elec(coords, xi)
+    for axis in range(3):
+        shift = np.zeros_like(coords)
+        shift[:, axis] = step
+        numerical = (host.surface_potential(coords + shift, xi)
+                     - host.surface_potential(coords - shift, xi)) / (2 * step)
+        np.testing.assert_allclose(spatial[axis], numerical, atol=1e-8, rtol=1e-8)
+
+
+@pytest.mark.conventions
+def test_gaussian_pcm_matches_pyscf_on_the_same_cavity():
+    """Independent PCM matrix, RHS, energy and Fock on identical surface inputs."""
+    from pyscf.solvent import pcm
+    from . import library
+
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    solvation = PySCFSolvation(mol, DROP(lsf=SvdW(), nleb=50), [ModelComponentCPCM(32.0)])
+    result = solvation.evaluate(dm)
+    host, model = solvation.host, solvation.model
+    coords = model.cavity.xyz
+    native_matrix, xi = library.assemble_drop_amat(model.cavity._handle)
+    _, switch = library.get_cavity_gaussian(model.cavity._handle)
+    reference = pcm.PCM(mol)
+    reference.surface = dict(grid_coords=coords, charge_exp=xi, switch_fun=switch,
+                             norm_vec=np.zeros_like(coords), R_vdw=np.ones(len(xi)))
+    _, matrix = pcm.get_D_S(reference.surface, with_D=False)
+    np.testing.assert_allclose(native_matrix, matrix, atol=1e-12, rtol=1e-12)
+    auxiliary = gto.fakemol_for_charges(coords, expnt=xi**2)
+    nuclei = gto.fakemol_for_charges(mol.atom_coords())
+    reference.v_grids_n = mol.atom_charges() @ gto.mole.intor_cross(
+        mol._add_suffix("int2c2e"), nuclei, auxiliary)
+    reference._intermediates = {"K": matrix, "R": -(31.0 / 32.0) * np.eye(len(xi))}
+    energy, fock = reference._get_vind(dm)
+    np.testing.assert_allclose(result.energy, energy, atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(result.fock, fock, atol=1e-12, rtol=1e-10)
+    phi = reference.v_grids_n - reference._get_v(dm[None, :, :])[0]
+    np.testing.assert_allclose(host.surface_potential(coords, xi), phi, atol=1e-10, rtol=1e-10)
+
+
+@pytest.mark.conventions
+def test_point_gaussian_mismatch_decreases_with_grid_order():
+    """The operator difference is bounded and decreases with discretization error."""
+    from . import library
+
+    mol, dm = molecule("water", "def2-svp"), reference_density("water", "def2-svp")
+    differences = []
+    for nleb in (50, 194, 770):
+        solvation = PySCFSolvation(mol, DROP(lsf=SvdW(), nleb=nleb), [ModelComponentCPCM(78.3553)])
+        result = solvation.evaluate(dm)
+        matrix, _ = library.assemble_drop_amat(solvation.model.cavity._handle)
+        point_phi = solvation.host.surface_potential(solvation.model.cavity.xyz)
+        q = -(1.0 - 1.0 / 78.3553) * np.linalg.solve(matrix, point_phi)
+        point_energy = 0.5 * q @ point_phi
+        differences.append(abs(result.energy - point_energy) * 627.509474)
+    assert differences[0] > differences[1] > differences[2] > 0
+    assert differences[1] < 0.05  # kcal/mol, default 194-point grid
+    # A broad bound on inverse-grid-order convergence, independent of last bits.
+    assert 3.0 < differences[0] / differences[2] < 40.0
+
+
+@pytest.mark.host
+def test_ecp_molecule_is_rejected_before_element_lookup():
+    mol = gto.M(atom="I 0 0 0", basis="def2-svp", ecp="def2-svp", spin=1, verbose=0)
+    host = PySCFHost(mol)
+    with pytest.raises(ValueError, match="effective core potentials"):
+        host.structure()
+
+
+def _energy(model, coupling):
+    energy = np.array(0.0)
+    model.get_energy(coupling, energy)
+    return float(energy)
+
+
+def _gradient(model, coupling):
+    gradient = np.zeros((model._natoms, 3))
+    response = model.get_gradient(coupling, gradient)
+    return gradient, response

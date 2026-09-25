@@ -21,17 +21,10 @@ module moist
       solvation_model_component_cosmo, new_component_cosmo, &
       solvation_model_component_pv, new_component_pv, &
       solvation_model_component_gostshyp, new_component_gostshyp, solver_type
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      coupling_request_type, output_slot_type, point_potential_request_type, gaussian_potential_request_type, &
-      gaussian_moment_request_type, &
-      moist_phase_energy, moist_phase_response, moist_phase_gradient, moist_phase_none, moist_n_phases, &
-      request_name_len, output_name_len, grid_name_len
-   use moist_cavity_type, only: read_cavity_grid
-   use moist_channels_response, only: response_type, &
-      & response_channel_type, response_slot, &
-      & potential_adjoint_response_type, density_response_type, &
-      & gostshyp_amplitude_response_type, &
-      & find_potential_adjoint, find_density, find_gostshyp_amplitude, response_name_len
+   use moist_channels_coupling, only: coupling_type, coupling_request_type, &
+      point_potential_request_type, gaussian_potential_request_type, gaussian_moment_request_type
+   use moist_channels_response, only: response_type, response_item_type, &
+      & potential_adjoint_response_type, density_response_type, gostshyp_amplitude_response_type
    implicit none
    public
 

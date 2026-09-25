@@ -655,7 +655,7 @@ contains
          call test_failed(error, "PV potential failed: "//err%message)
          return
       end if
-      call check(error, response%n(), 0, &
+      call check(error, .not. response%next(), &
          & more="PV wrote to the host potential")
       if (allocated(error)) return
 

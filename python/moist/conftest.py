@@ -1,6 +1,9 @@
 """Pytest configuration shared by the moist test modules
 """
 
+import numpy as np
+import pytest
+
 #: Marker name -> description. Each is also a meson test target; see
 #: python/moist/meson.build.
 MARKERS = {
@@ -29,3 +32,24 @@ MARKERS = {
 def pytest_configure(config):
     for name, description in MARKERS.items():
         config.addinivalue_line("markers", f"{name}: {description}")
+
+
+@pytest.fixture
+def gaussian_density():
+    """Bare spherical Gaussian callback shared by API tests."""
+    def evaluate(point, order):
+        """Bare spherical Gaussian, with derivatives through third order."""
+        rho = np.exp(-np.dot(point, point))
+        eye = np.eye(3)
+        result = [rho, -2 * point * rho]
+        if order >= 2:
+            result.append((4 * np.outer(point, point) - 2 * eye) * rho)
+        if order >= 3:
+            third = -8 * np.einsum("i,j,k->ijk", point, point, point)
+            third += 4 * (np.einsum("ij,k->ijk", eye, point) +
+                          np.einsum("ik,j->ijk", eye, point) +
+                          np.einsum("jk,i->ijk", eye, point))
+            result.append(third * rho)
+        return tuple(result)
+
+    return evaluate

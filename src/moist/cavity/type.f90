@@ -8,21 +8,15 @@ module moist_cavity_type
    use moist_context, only: moist_context_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_response, only: response_type
-   use moist_channels_coupling, only: coupling_type, grid_name_len
-   use moist_cavity_fields, only: cavity_field_query_type, cavity_field_real
+   use moist_channels_coupling, only: coupling_type
+   use moist_cavity_fields, only: cavity_field_query_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none(type, external)
    private
 
    public :: cavity_type, list_cavity_fields_base
-   public :: snapshot_cavity_coupling, fetch_cavity_grid, read_cavity_grid
    public :: write_cavity_xyz_debug, write_cavity_csv_debug, write_cavity_pqr_debug
-
-   !> Copy one declared grid field by name; the rank of `values` selects the field's rank
-   interface read_cavity_grid
-      module procedure read_cavity_grid_1, read_cavity_grid_2
-   end interface read_cavity_grid
 
    !> Abstract base type containing minimal cavity/surface information
    !>
@@ -260,144 +254,6 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
    end subroutine declare_cavity_coupling_default
-
-   !> Mark the cavity's declared grid fields current on the coupling
-   !>
-   !> Grid fields are cavity fields by name; a declared one must be a real
-   !> array whose trailing extent is ngrid. The coupling copies no values;
-   !> hosts read them from the cavity through `read_cavity_grid`
-   !>
-   !> @param[in]    cavity   Updated cavity
-   !> @param[inout] coupling Coupling to mark current
-   !> @param[out]   error    Missing or unsuitable declared grid field
-   subroutine snapshot_cavity_coupling(cavity, coupling, error)
-      !> Updated cavity
-      class(cavity_type), intent(in) :: cavity
-      !> Coupling to mark current
-      type(coupling_type), intent(inout) :: coupling
-      !> Missing or unsuitable declared grid field
-      type(error_type), allocatable, intent(out) :: error
-      !> Enumeration of the cavity's fields
-      type(cavity_field_query_type) :: query
-      !> Declared and supplied field names
-      character(len=grid_name_len), allocatable :: declared(:), available(:)
-      integer :: i, k
-      call query%enumerate()
-      call cavity%list_fields(query)
-      declared = coupling%grid_fields()
-      allocate (available(0))
-      do i = 1, size(declared)
-         k = query%index_of(trim(declared(i)))
-         if (k == 0) cycle
-         if (query%info(k)%dtype /= cavity_field_real .or. query%info(k)%rank < 1) then
-            call fatal_error(error, "Grid field "//trim(declared(i))//" is not a real per-grid-point array")
-            return
-         end if
-         if (query%info(k)%dims(query%info(k)%rank) /= cavity%ngrid) then
-            call fatal_error(error, "Grid field "//trim(declared(i))//" is not indexed by grid point")
-            return
-         end if
-         available = [available, declared(i)]
-      end do
-      call coupling%snapshot(cavity%ngrid, available, error)
-   end subroutine snapshot_cavity_coupling
-
-   !> Fetch one grid field of the cavity behind a current coupling
-   !>
-   !> The single gate for every grid read: the coupling must hold a current
-   !> snapshot, a request must have declared the field, and the cavity must
-   !> supply it as a real array whose trailing extent is the coupling's ngrid
-   !>
-   !> @param[in]  cavity   Cavity the coupling was snapshotted from
-   !> @param[in]  coupling Current coupling
-   !> @param[in]  name     Cavity field name
-   !> @param[out] query    Shape and flattened values on success
-   !> @param[out] error    Stale snapshot, undeclared field or unsuitable array
-   subroutine fetch_cavity_grid(cavity, coupling, name, query, error)
-      !> Cavity the coupling was snapshotted from
-      class(cavity_type), intent(in) :: cavity
-      !> Current coupling
-      type(coupling_type), intent(in) :: coupling
-      !> Cavity field name
-      character(len=*), intent(in) :: name
-      !> Shape and flattened values
-      type(cavity_field_query_type), intent(out) :: query
-      !> Read error
-      type(error_type), allocatable, intent(out) :: error
-      if (.not. coupling%has_snapshot()) then
-         call fatal_error(error, "Grid snapshot is stale or unavailable")
-         return
-      else if (.not. coupling%uses_grid(name)) then
-         call fatal_error(error, "Grid field "//name//" is not declared or unavailable")
-         return
-      end if
-      call query%fetch(name)
-      call cavity%list_fields(query)
-      if (.not. query%found) then
-         call fatal_error(error, "Grid field "//name//" is not declared by the cavity")
-      else if (query%hit%dtype /= cavity_field_real .or. query%hit%rank < 1) then
-         call fatal_error(error, "Grid field "//name//" is not a real per-grid-point array")
-      else if (query%hit%dims(query%hit%rank) /= coupling%ngrid) then
-         call fatal_error(error, "Grid field "//name// &
-            & " no longer matches the coupling snapshot - prepare a phase again")
-      end if
-   end subroutine fetch_cavity_grid
-
-   !> Copy one vector grid field (ngrid) of the cavity behind a current coupling
-   !>
-   !> @param[in]  cavity   Cavity the coupling was snapshotted from
-   !> @param[in]  coupling Current coupling
-   !> @param[in]  name     Cavity field name
-   !> @param[out] values   Independent copy
-   !> @param[out] error    Stale snapshot, undeclared field or rank mismatch
-   subroutine read_cavity_grid_1(cavity, coupling, name, values, error)
-      !> Cavity the coupling was snapshotted from
-      class(cavity_type), intent(in) :: cavity
-      !> Current coupling
-      type(coupling_type), intent(in) :: coupling
-      !> Cavity field name
-      character(len=*), intent(in) :: name
-      !> Independent copy
-      real(wp), allocatable, intent(out) :: values(:)
-      !> Read error
-      type(error_type), allocatable, intent(out) :: error
-      type(cavity_field_query_type) :: query
-      call fetch_cavity_grid(cavity, coupling, name, query, error)
-      if (allocated(error)) return
-      if (query%hit%rank /= 1) then
-         call fatal_error(error, "Grid field "//name//" rank mismatch")
-         return
-      end if
-      values = query%rvals
-   end subroutine read_cavity_grid_1
-
-   !> Copy one (n, ngrid) grid field of the cavity behind a current coupling
-   !>
-   !> @param[in]  cavity   Cavity the coupling was snapshotted from
-   !> @param[in]  coupling Current coupling
-   !> @param[in]  name     Cavity field name
-   !> @param[out] values   Independent copy
-   !> @param[out] error    Stale snapshot, undeclared field or rank mismatch
-   subroutine read_cavity_grid_2(cavity, coupling, name, values, error)
-      !> Cavity the coupling was snapshotted from
-      class(cavity_type), intent(in) :: cavity
-      !> Current coupling
-      type(coupling_type), intent(in) :: coupling
-      !> Cavity field name
-      character(len=*), intent(in) :: name
-      !> Independent copy
-      real(wp), allocatable, intent(out) :: values(:, :)
-      !> Read error
-      type(error_type), allocatable, intent(out) :: error
-      type(cavity_field_query_type) :: query
-      call fetch_cavity_grid(cavity, coupling, name, query, error)
-      if (allocated(error)) return
-      if (query%hit%rank /= 2) then
-         call fatal_error(error, "Grid field "//name//" rank mismatch")
-         return
-      end if
-      values = reshape(query%rvals, query%hit%dims(1:2))
-   end subroutine read_cavity_grid_2
 
    !* ================================================================================= *!
    !*                                   Diagnostics                                   *!

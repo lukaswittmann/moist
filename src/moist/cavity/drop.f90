@@ -10,7 +10,7 @@ module moist_cavity_drop
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
-   use moist_channels_response, only: response_type, density_response_type
+   use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_context, only: moist_context_type

@@ -10,16 +10,14 @@
 !>
 module test_model_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use test_helpers, only: component_view, get_moment_request, submit, read_fixture_moments
+   use test_helpers, only: component_view, submit, read_fixture_moments, copy_gostshyp_amplitude
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type, &
-      & coupling_request_type
-   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type, &
-      & find_gostshyp_amplitude
+   use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type
+   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
    use moist_model_components, only: solvation_model_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop, only: cavity_type_drop
@@ -140,7 +138,7 @@ contains
 
    !> Answer the coupling's moment request for a whole grid
    !>
-   !> A grid that does not match the coupling snapshot is refused on
+   !> A grid that does not match the coupling's grid size is refused on
    !> submission, which stops the test
    !>
    !> @param[inout] coupling   Coupling whose moment request is answered
@@ -152,8 +150,6 @@ contains
       !> Grid-point centers and areas
       real(wp), intent(in) :: centers(:, :), areas(:)
 
-      !> The moment request
-      type(gaussian_moment_request_type) :: moments
       !> Moments of the model density on the grid
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Grid-point index and grid size
@@ -170,13 +166,44 @@ contains
             & gt(igrid), pt(:, igrid), mt(:, :, igrid), rt(:, igrid))
       end do
 
-      moments = get_moment_request(coupling)
-      call submit(coupling, moments%handle, "gt", gt)
-      call submit(coupling, moments%handle, "pt", pt)
-      call submit(coupling, moments%handle, "mt", mt)
-      call submit(coupling, moments%handle, "rt", rt)
+      call answer_moments(coupling, gt, pt, mt, rt)
 
    end subroutine set_model_moments
+
+   !> Walk to the moment request and answer all four outputs
+   !>
+   !> Two passes at most: a walk left mid-pass by the caller resumes first, and
+   !> its end rewinds, so the second pass starts from the first request
+   !>
+   !> @param[inout] coupling Coupling whose moment request is answered
+   !> @param[in]    gt       Overlap moments (ngrid)
+   !> @param[in]    pt       First moments (3, ngrid)
+   !> @param[in]    mt       Second moments (3, 3, ngrid)
+   !> @param[in]    rt       Contracted third moments (3, ngrid)
+   subroutine answer_moments(coupling, gt, pt, mt, rt)
+      !> Coupling whose moment request is answered
+      type(coupling_type), intent(inout) :: coupling
+      !> Moments on the grid
+      real(wp), intent(in) :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
+
+      !> Pass index
+      integer :: pass
+
+      do pass = 1, 2
+         do while (coupling%next())
+            select type (request => coupling%request())
+            type is (gaussian_moment_request_type)
+               call submit(coupling, "gt", gt)
+               call submit(coupling, "pt", pt)
+               call submit(coupling, "mt", mt)
+               call submit(coupling, "rt", rt)
+               return
+            end select
+         end do
+      end do
+      error stop "answer_moments: the coupling never asked for its moments"
+
+   end subroutine answer_moments
 
    !> The component's own width convention, `w = pi ln2 / a`
    !>
@@ -303,15 +330,14 @@ contains
       !> Synthetic DROP surface and its coupling moments
       type(cavity_type_drop) :: cavity
       type(coupling_type), target :: coupling
-      !> The moment request and the moments read back from it
-      type(gaussian_moment_request_type) :: moments
+      !> Moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
       type(solvation_model_component_gostshyp) :: component
       !> Response list receiving the amplitudes
-      type(response_type), target :: response
-      !> Amplitude item found in the response
-      type(gostshyp_amplitude_response_type), pointer :: amplitude
+      type(response_type) :: response
+      !> Copy of the amplitude item of the response
+      type(gostshyp_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -353,8 +379,8 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      amplitude => find_gostshyp_amplitude(response)
-      if (.not. associated(amplitude)) then
+      call copy_gostshyp_amplitude(response, amplitude)
+      if (.not. allocated(amplitude)) then
          call test_failed(error, "GOSTSHYP wrote no host amplitudes")
          return
       end if
@@ -636,9 +662,9 @@ contains
       !> Prefilled accumulator the component must not touch
       type(cavity_surface_adjoint_type) :: prefilled
       !> Response list receiving the zero amplitudes
-      type(response_type), target :: response
-      !> Amplitude item found in the response
-      type(gostshyp_amplitude_response_type), pointer :: amplitude
+      type(response_type) :: response
+      !> Copy of the amplitude item of the response
+      type(gostshyp_amplitude_response_type), allocatable :: amplitude
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
 
@@ -669,8 +695,8 @@ contains
       ! A switched-off component is present and contributing nothing, so it
       ! still publishes its item -- filled with exact zeros. Leaving it
       ! absent would be indistinguishable from having no GOSTSHYP at all
-      amplitude => find_gostshyp_amplitude(response)
-      call check(error, associated(amplitude), &
+      call copy_gostshyp_amplitude(response, amplitude)
+      call check(error, allocated(amplitude), &
          & more="GOSTSHYP dropped its host amplitudes at "//label)
       if (allocated(error)) return
       call check(error, allocated(amplitude%w_overlap), &
@@ -766,13 +792,12 @@ contains
       if (allocated(err)) deallocate (err)
 
       ! Moments supplied for a different grid size: the stale-cavity case
-      block
-         type(gaussian_moment_request_type) :: bad
-         bad = get_moment_request(coupling)
-         call coupling%answer(bad%handle, "gt", sw_areas(1:ngrid_sw - 1), err)
-         call check(error, allocated(err))
-         if (allocated(error)) return
-      end block
+      call check(error, coupling%next(), more="the energy walk skipped the moment request")
+      if (allocated(error)) return
+      call coupling%answer("gt", sw_areas(1:ngrid_sw - 1), err)
+      call check(error, allocated(err))
+      if (allocated(error)) return
+      deallocate (err)
       energy = 0.0_wp
       call component%get_energy(component_view(coupling), cavity, energy, err)
       call check(error, allocated(err), &
@@ -832,15 +857,14 @@ contains
       !> Synthetic DROP surface and its coupling moments
       type(cavity_type_drop) :: cavity
       type(coupling_type), target :: coupling
-      !> The moment request and the moments read back from it
-      type(gaussian_moment_request_type) :: moments
+      !> The moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
       type(solvation_model_component_gostshyp) :: component
       !> Response list receiving the amplitudes
-      type(response_type), target :: response
-      !> Amplitude item found in the response
-      type(gostshyp_amplitude_response_type), pointer :: amplitude
+      type(response_type) :: response
+      !> Copy of the amplitude item of the response
+      type(gostshyp_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -869,8 +893,13 @@ contains
          return
       end if
       pt = pt*1.0e-300_wp
-      moments = get_moment_request(coupling)
-      call submit(coupling, moments%handle, "pt", pt)
+      ! A new host evaluation: stage afresh and answer the scaled set
+      call component%prepare_energy(cavity, coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "GOSTSHYP energy restaging failed: "//err%message)
+         return
+      end if
+      call answer_moments(coupling, gt, pt, mt, rt)
 
       energy = 0.0_wp
       call component%get_energy(component_view(coupling), cavity, energy, err)
@@ -890,8 +919,8 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      amplitude => find_gostshyp_amplitude(response)
-      call check(error, associated(amplitude), &
+      call copy_gostshyp_amplitude(response, amplitude)
+      call check(error, allocated(amplitude), &
          & more="GOSTSHYP wrote no host amplitudes")
       if (allocated(error)) return
       call check(error, all(ieee_is_finite(amplitude%w_overlap)) &

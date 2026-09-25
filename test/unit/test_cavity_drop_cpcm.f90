@@ -1076,6 +1076,4 @@ contains
 
    end subroutine do_test
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
-
 end module test_cavity_drop_cpcm

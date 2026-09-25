@@ -3,11 +3,12 @@ module moist_model_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
-   use moist_cavity_type, only: cavity_type, snapshot_cavity_coupling
+   use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_response, only: response_type
-   use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & moist_phase_energy, moist_phase_response, moist_phase_gradient
+   use moist_channels_coupling, only: coupling_type, coupling_view_type, moist_phase_energy, &
+      & moist_phase_response, moist_phase_gradient, coupling_begin_registration, &
+      & coupling_set_scope, coupling_snapshot, coupling_arm, coupling_invalidate
 
    implicit none(type, external)
    private
@@ -136,7 +137,7 @@ module moist_model_type
       !> Build the coupling of a bare component driven without a model
       procedure :: new_coupling => new_component_coupling
       !> Stage one phase of a bare component's coupling
-      procedure :: update_coupling => update_component_coupling
+      procedure, private :: stage => stage_component_coupling
       !> Stage the energy phase
       procedure :: prepare_energy => prepare_component_energy
       !> Stage the response phase
@@ -370,7 +371,7 @@ contains
    !*                             Bare-component coupling                             *!
    !* ================================================================================= *!
 
-   !> Declare the cavity's and the component's requests, then snapshot the grid
+   !> Declare the cavity's and the component's requests, then record the grid size
    !>
    !> @param[in]    self     Solvation component
    !> @param[in]    cavity   Updated cavity
@@ -386,14 +387,14 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call coupling%begin_registration()
-      call coupling%set_scope(0)
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 0)
       call cavity%declare_coupling(coupling, error)
       if (allocated(error)) return
-      call coupling%set_scope(1)
+      call coupling_set_scope(coupling, 1)
       call self%declare_coupling(cavity, coupling, error)
       if (allocated(error)) return
-      call snapshot_cavity_coupling(cavity, coupling, error)
+      call coupling_snapshot(coupling, cavity%ngrid)
 
    end subroutine declare_component_pass
 
@@ -432,7 +433,7 @@ contains
    !> @param[in,out] coupling Coupling built by `new_coupling`
    !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
    !> @param[out]   error    Invalid phase or failed declaration
-   subroutine update_component_coupling(self, cavity, coupling, phase, error)
+   subroutine stage_component_coupling(self, cavity, coupling, phase, error)
       !> Solvation component
       class(solvation_model_component_type), intent(inout) :: self
       !> Live cavity
@@ -444,12 +445,12 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      if (phase == moist_phase_energy) call coupling%invalidate()
+      if (phase == moist_phase_energy) call coupling_invalidate(coupling)
       call declare_component_pass(self, cavity, coupling, error)
       if (allocated(error)) return
-      call coupling%arm(phase, error)
+      call coupling_arm(coupling, phase, error)
 
-   end subroutine update_component_coupling
+   end subroutine stage_component_coupling
 
    !> Stage the energy phase of a bare component's coupling
    !>
@@ -467,7 +468,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(cavity, coupling, moist_phase_energy, error)
+      call self%stage(cavity, coupling, moist_phase_energy, error)
 
    end subroutine prepare_component_energy
 
@@ -487,7 +488,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(cavity, coupling, moist_phase_response, error)
+      call self%stage(cavity, coupling, moist_phase_response, error)
 
    end subroutine prepare_component_response
 
@@ -507,7 +508,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call self%update_coupling(cavity, coupling, moist_phase_gradient, error)
+      call self%stage(cavity, coupling, moist_phase_gradient, error)
 
    end subroutine prepare_component_gradient
 

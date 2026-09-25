@@ -50,12 +50,18 @@ moist_pyext = python.extension_module(
 pysrcs = files(
   '__init__.py',
   'conftest.py',
-  'gostshyp.py',
   'interface.py',
+  'configuration.py',
+  'density.py',
+  'parameters.py',
+  'radii.py',
   'library.py',
   'pyscf.py',
+  'test_pyscf_scf.py',
   'test_gostshyp.py',
   'test_interface.py',
+  'test_configuration.py',
+  'test_api_contracts.py',
   'test_library.py',
   'test_pyscf.py',
 )
@@ -71,12 +77,18 @@ endif
 foreach name : [
   '__init__.py',
   'conftest.py',
-  'gostshyp.py',
   'interface.py',
+  'configuration.py',
+  'density.py',
+  'parameters.py',
+  'radii.py',
   'library.py',
   'pyscf.py',
+  'test_pyscf_scf.py',
   'test_gostshyp.py',
   'test_interface.py',
+  'test_configuration.py',
+  'test_api_contracts.py',
   'test_library.py',
   'test_pyscf.py',
 ]
@@ -106,6 +118,8 @@ pytest_env = ['PYTHONPATH=' + meson.current_build_dir() / '..']
 coupling_env = pytest_env + ['MOIST_REQUIRE_PYSCF=1']
 bindings_srcs = [
   meson.current_build_dir() / 'test_interface.py',
+  meson.current_build_dir() / 'test_configuration.py',
+  meson.current_build_dir() / 'test_api_contracts.py',
   meson.current_build_dir() / 'test_library.py',
 ]
 coupling_src = meson.current_build_dir() / 'test_pyscf.py'
@@ -173,3 +187,14 @@ foreach entry : [
     timeout: entry[2],
   )
 endforeach
+
+# Public PySCF SCF/gradient wrapper, including cache and scanner lifetimes.
+test(
+  'pyscf_wrapper',
+  python,
+  args: pytest_args + [meson.current_build_dir() / 'test_pyscf_scf.py'],
+  depends: moist_pyext,
+  env: coupling_env,
+  suite: 'python',
+  timeout: 600,
+)
