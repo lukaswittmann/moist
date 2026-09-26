@@ -2,6 +2,8 @@
 
 [check]
 line-length = 132
+# Template fragment with @placeholders@, not a standalone program unit
+extend-exclude = ["config/version.f90"]
 
 [check.per-file-ignores]
 # Vendored third-party solvers (see THIRD_PARTY_LICENSES.md): only fortitude's
