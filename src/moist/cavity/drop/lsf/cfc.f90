@@ -20,7 +20,7 @@ module moist_cavity_drop_lsf_cfc
       cfc_tangent_eval, cfc_hvp_eval, cfc_vjp_eval, &
       cfc_radius_eval, cfc_radius2_eval, cfc_nucrad_eval, cfc_radius_hvp_eval, &
       cfc_radius_vjp_eval
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Spatial dimension

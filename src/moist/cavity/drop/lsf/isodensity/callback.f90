@@ -23,7 +23,7 @@ module moist_cavity_drop_lsf_isodensity_callback
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
    use moist_output_format, only: format_string
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    integer, parameter :: ndim = 3
@@ -50,7 +50,7 @@ module moist_cavity_drop_lsf_isodensity_callback
       !> @returns             0 on success, nonzero host status on failure
       function isodensity_lsf_callback(context, point, rho, drho, d2rho, d3rho) result(status) bind(C)
          import :: c_double, c_int, c_ptr
-         implicit none (type, external)
+         implicit none(type, external)
          type(c_ptr), value :: context
          real(c_double), intent(in) :: point(3)
          real(c_double), intent(out) :: rho

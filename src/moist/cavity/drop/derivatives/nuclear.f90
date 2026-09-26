@@ -31,7 +31,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_nuclear
       & drop_surface_weights_type, build_seed_state, seed_state_ok, seed_weight_tol
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
       & seed_jet_basis, seed_anchor, degenerate_point_error
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 

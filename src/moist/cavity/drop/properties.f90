@@ -6,7 +6,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_properties
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter_quicksort, only: qsort
-   implicit none
+   implicit none(type, external)
 
 contains
 

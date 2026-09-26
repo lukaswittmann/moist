@@ -7,7 +7,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_projection
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_math_sorter, only: counting_argsort
-   implicit none
+   implicit none(type, external)
 
    !> Per-thread error slot
    type :: error_slot
@@ -162,7 +162,6 @@ contains
       integer :: iend, ibeg, nloc
       integer :: nmax_anchor, nout, n_branch
       integer :: n_branched_anchor, n_branched_points
-      integer :: nbranch_min, nbranch_max
       integer :: nthreads, thread_slot
       integer :: number_base
       integer :: local_branched_anchor, local_branched_points
@@ -724,14 +723,6 @@ contains
       type(drop_abort_latch_type) :: abort
       !> Per-thread LSF evaluation failure, handed to the latch
       type(error_type), allocatable :: lsf_error
-
-      ! Tangent-restricted KKT diagnostics (debug only)
-      logical :: do_diag
-      integer :: n_diag_points
-      type(prettyprinter) :: pp
-      type(prettylistprinter) :: plp_diag
-      logical, allocatable :: diag_mask(:)
-      integer :: c_critical, c_warning, c_safe
 
       call abort%reset()
 

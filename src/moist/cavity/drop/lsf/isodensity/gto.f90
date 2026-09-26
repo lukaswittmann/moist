@@ -28,7 +28,7 @@ module moist_cavity_drop_lsf_isodensity_gto
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_math_blas, only: symv, gemm
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_iso_gto_type

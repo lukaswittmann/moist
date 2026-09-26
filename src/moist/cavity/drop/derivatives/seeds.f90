@@ -27,7 +27,7 @@ module moist_cavity_drop_derivatives_seeds
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
       & drop_surface_weights_type, apply_seed, seed_weight_tol, seed_status_message
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: drop_kkt_solve, seed_normal_channel, seed_jet_basis, seed_anchor

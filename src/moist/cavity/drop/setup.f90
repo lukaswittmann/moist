@@ -3,7 +3,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_setup
    use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   implicit none
+   implicit none(type, external)
 
 contains
 
@@ -197,7 +197,6 @@ contains
       integer :: i
       integer :: cg_start, cg_n
       integer :: n_iswig_removed, n_anchor_additional
-      character(64) :: stat_line
 
       if (allocated(self%anchor_xi0)) deallocate (self%anchor_xi0)
       allocate (self%anchor_xi0(self%nmax), source=0.0_wp)

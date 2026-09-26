@@ -6,7 +6,7 @@ module moist_cavity_drop_request
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
-   implicit none
+   implicit none(type, external)
 
    public :: drop_property_request
    public :: drop_request_default

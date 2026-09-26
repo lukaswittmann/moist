@@ -104,11 +104,8 @@ contains
       !> swi: Rho derivatives
       real(wp) :: rho_unit(3), delta_matrix(3, 3)
 
-      !> swi: POU derivatives
-      real(wp) :: iswig_f0
-
       !> Point derivatives
-      real(wp) :: r_iI0, r_iI_vec(3), r_iI_unit(3), r_iI_norm
+      real(wp) :: r_iI_vec(3), r_iI_norm
 
       !> Volume derivatives
       real(wp) :: r_hat_dot_r, grad_r_hat_dot_r(3)

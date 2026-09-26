@@ -33,7 +33,7 @@ module moist_cavity_drop_switching
    use mctc_env_accuracy, only: wp
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_cavity_drop_swif_type
@@ -66,6 +66,7 @@ module moist_cavity_drop_switching
       !> @param[out] f2    Second derivative with respect to x0
       pure subroutine swif_eval_iface(self, x0, f0, f1, f2)
          import :: wp, moist_cavity_drop_swif_type
+         implicit none(type, external)
          class(moist_cavity_drop_swif_type), intent(in) :: self
          !> Input value
          real(wp), intent(in) :: x0

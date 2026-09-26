@@ -4,7 +4,7 @@
 module moist_cavity_drop_projector
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_io, only: structure_type
    use mctc_io_convert, only: aatoau
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -26,7 +26,7 @@ module moist_cavity_drop_projector
    use moist_math_cell_grid, only: moist_cell_grid_type
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   implicit none
+   implicit none(type, external)
    private
 
    public :: drop_projector_type
@@ -2440,7 +2440,7 @@ contains
       real(wp) :: lsf3_S(3, 3, 3)  ! Third derivative of LSF (3,3,3)
       real(wp) :: d_degen(3)    ! Degenerate direction lifted to 3D
       real(wp) :: D3_ddd        ! Third-order directional derivative D^3 L[d,d,d]
-      integer :: i, j, k, i_retract
+      integer :: i, j, k
 
       ! Tolerances for KKT verification
       real(wp), parameter :: tol_D3 = 1.0e-8_wp  ! Tolerance for third-order test

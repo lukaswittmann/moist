@@ -11,7 +11,7 @@ module moist_cli
    use moist_output_citations, only : print_citations
    use moist_output_license, only : print_license
    use fclap, only : ArgumentParser, Namespace, not_less_than
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: run_config, get_arguments
@@ -20,16 +20,17 @@ module moist_cli
       !> Callback signature for adding arguments to a subsubparser
       subroutine subsubparser_args_callback(p)
          import :: ArgumentParser
+         implicit none(type, external)
          type(ArgumentParser), intent(inout) :: p
       end subroutine subsubparser_args_callback
    end interface
 
    !> Declarative configuration for a subsubparser entry
    type :: subsubparser_spec
-      character(len=16) :: name = ''
-      character(len=64) :: help_text = ''
-      character(len=64) :: prog = ''
-      character(len=128) :: description = ''
+      character(len=16) :: name = ""
+      character(len=64) :: help_text = ""
+      character(len=64) :: prog = ""
+      character(len=128) :: description = ""
       procedure(subsubparser_args_callback), pointer, nopass :: add_specific_args => null()
    contains
       procedure :: init => subsubparser_spec_init
@@ -39,21 +40,21 @@ module moist_cli
    !> Configuration data for running stand-alone calculations
    type :: run_config
 
-      character(256) :: input = ''
+      character(256) :: input = ""
       integer, allocatable :: input_format
 
-      character(32) :: mode = ''
+      character(32) :: mode = ""
 
       ! System info
       real(wp), allocatable :: charge
       real(wp) :: temperature = 298.15_wp
       real(wp) :: pressure_si = 101325.0_wp
-      character(64) :: solvent = ''
+      character(64) :: solvent = ""
 
       ! RISM model selection (rism1d/rism3d subcommands)
-      character(32) :: closure = 'KH'
-      character(32) :: theory = 'DRISM'
-      character(32) :: solver = 'gmres'
+      character(32) :: closure = "KH"
+      character(32) :: theory = "DRISM"
+      character(32) :: solver = "gmres"
 
       logical :: json = .false.
 
@@ -61,7 +62,7 @@ module moist_cli
       logical :: numgrad = .false.
 
       logical :: read_parameters = .false.
-      character(256) :: parameters_path = ''
+      character(256) :: parameters_path = ""
 
       logical :: writeenergy = .false.
 
@@ -75,10 +76,10 @@ module moist_cli
       integer :: nleb = 194
 
       !> Radii set selection (cpcm, smd, d3, cosmo, bondi)
-      character(32) :: radii = 'cpcm'
+      character(32) :: radii = "cpcm"
 
       !> DROP cavity settings
-      character(32) :: drop_variant = ''
+      character(32) :: drop_variant = ""
       real(wp) :: drop_tol = 1.0E-10_wp
       integer :: drop_proj_level = 3
       integer :: drop_wleb_prune_level = 0
@@ -143,37 +144,37 @@ subroutine get_arguments(config, error)
    call get_moist_version(string=version_string)
 
    call parser%init( &
-      prog='moist', &
-      description='Modular and Open-source Implicit Solvation Toolkit', &
-      epilog='For more information, see the documentation at https://github.com/lukaswittmann/moist', &
-      version='v'//version_string)
+      prog="moist", &
+      description="Modular and Open-source Implicit Solvation Toolkit", &
+      epilog="For more information, see the documentation at https://github.com/lukaswittmann/moist", &
+      version="v"//version_string)
 
-   call parser%add_argument('--citation', action='store_true', dest='citation', &
-      help='Print citation information and exit')
-   call parser%add_argument('--license', action='store_true', dest='license', &
-      help='Print full license information and exit')
+   call parser%add_argument("--citation", action="store_true", dest="citation", &
+      help="Print citation information and exit")
+   call parser%add_argument("--license", action="store_true", dest="license", &
+      help="Print full license information and exit")
 
-   call parser%add_subparsers(title='subcommands', dest='command')
+   call parser%add_subparsers(title="subcommands", dest="command")
 
-   call model_specs(1)%init('gems', 'GEMS model', 'moist model gems', &
-      'Run the GEMS solvation model')
-   call model_specs(2)%init('alpb', 'ALPB model', 'moist model alpb', &
-      'Run the ALPB solvation model')
-   call model_specs(3)%init('rism1d', 'RISM1D model', 'moist model rism1d', &
-      'Run the RISM1D solvation model')
-   call model_specs(4)%init('rism3d', 'RISM3D model', 'moist model rism3d', &
-      'Run the RISM3D solvation model')
+   call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
+      "Run the GEMS solvation model")
+   call model_specs(2)%init("alpb", "ALPB model", "moist model alpb", &
+      "Run the ALPB solvation model")
+   call model_specs(3)%init("rism1d", "RISM1D model", "moist model rism1d", &
+      "Run the RISM1D solvation model")
+   call model_specs(4)%init("rism3d", "RISM3D model", "moist model rism3d", &
+      "Run the RISM3D solvation model")
    model_specs(3)%add_specific_args => add_model_rism_arguments
    model_specs(4)%add_specific_args => add_model_rism_arguments
 
-   call cavity_specs(1)%init('numsa', 'NUMSA cavity', 'moist cavity numsa', &
-      'Construct NUMSA cavities')
-   call cavity_specs(2)%init('iswig', 'ISWIG cavity', 'moist cavity iswig', &
-      'Construct ISWIG cavities')
-   call cavity_specs(3)%init('drop', 'DROP cavity', 'moist cavity drop', &
-      'Construct DROP/DROP cavities')
-   call cavity_specs(4)%init('mc', 'Marching cubes cavity', 'moist cavity mc', &
-      'Integrate a level set isosurface with marching cubes')
+   call cavity_specs(1)%init("numsa", "NUMSA cavity", "moist cavity numsa", &
+      "Construct NUMSA cavities")
+   call cavity_specs(2)%init("iswig", "ISWIG cavity", "moist cavity iswig", &
+      "Construct ISWIG cavities")
+   call cavity_specs(3)%init("drop", "DROP cavity", "moist cavity drop", &
+      "Construct DROP/DROP cavities")
+   call cavity_specs(4)%init("mc", "Marching cubes cavity", "moist cavity mc", &
+      "Integrate a level set isosurface with marching cubes")
 
    call setup_general_parent(general_parent)
    call setup_model_parser(model_parser, general_parent, model_specs, model_subparsers)
@@ -181,19 +182,19 @@ subroutine get_arguments(config, error)
       drop_parser, drop_subparsers, mc_parser, mc_subparsers)
    call setup_solvent_parser(solvent_parser, general_parent)
 
-   call parser%add_parser('model', model_parser, &
-      help_text='Run a full solvation model (gems, alpb, rism1d, rism3d)')
-   call parser%add_parser('cavity', cavity_parser, &
-      help_text='Construct a cavity (numsa, iswig, drop, mc)')
-   call parser%add_parser('solvent', solvent_parser, &
-      help_text='Inspect solvent properties by name or alias')
+   call parser%add_parser("model", model_parser, &
+      help_text="Run a full solvation model (gems, alpb, rism1d, rism3d)")
+   call parser%add_parser("cavity", cavity_parser, &
+      help_text="Construct a cavity (numsa, iswig, drop, mc)")
+   call parser%add_parser("solvent", solvent_parser, &
+      help_text="Inspect solvent properties by name or alias")
 
    args = parser%parse_args()
 
    show_citation = .false.
    show_license = .false.
-   if (args%has_key('citation')) call args%get('citation', show_citation)
-   if (args%has_key('license')) call args%get('license', show_license)
+   if (args%has_key("citation")) call args%get("citation", show_citation)
+   if (args%has_key("license")) call args%get("license", show_license)
 
    if (show_citation) then
       call print_citations(output_unit)
@@ -205,170 +206,170 @@ subroutine get_arguments(config, error)
       stop
    end if
 
-   if (.not. args%has_key('command')) then
-      call fatal_error(error, 'Select one of: model, cavity, solvent subcommands')
+   if (.not. args%has_key("command")) then
+      call fatal_error(error, "Select one of: model, cavity, solvent subcommands")
       return
    end if
 
-   call args%get('command', command)
+   call args%get("command", command)
 
    verbose_count = 0
    quiet_count = 0
-   if (args%has_key('verbose')) call args%get('verbose', verbose_count)
-   if (args%has_key('quiet')) call args%get('quiet', quiet_count)
-   if (args%has_key('debug')) call args%get('debug', config%debug)
-   if (args%has_key('threads')) call args%get('threads', config%num_threads)
+   if (args%has_key("verbose")) call args%get("verbose", verbose_count)
+   if (args%has_key("quiet")) call args%get("quiet", quiet_count)
+   if (args%has_key("debug")) call args%get("debug", config%debug)
+   if (args%has_key("threads")) call args%get("threads", config%num_threads)
    config%verbosity = config%verbosity + verbose_count - quiet_count
 
    select case(trim(command))
-   case('model')
-      if (.not. args%has_key('model_mode')) then
-         call fatal_error(error, 'Select one of: gems, alpb, rism1d, rism3d models')
+   case("model")
+      if (.not. args%has_key("model_mode")) then
+         call fatal_error(error, "Select one of: gems, alpb, rism1d, rism3d models")
          return
       end if
 
-      call args%get('model_mode', config%mode)
-      call args%get('input', config%input)
+      call args%get("model_mode", config%mode)
+      call args%get("input", config%input)
 
-      if (args%has_key('closure')) then
-         call args%get('closure', config%closure)
+      if (args%has_key("closure")) then
+         call args%get("closure", config%closure)
          config%closure = trim(adjustl(config%closure))
       end if
 
-      if (args%has_key('theory')) then
-         call args%get('theory', config%theory)
+      if (args%has_key("theory")) then
+         call args%get("theory", config%theory)
          config%theory = trim(adjustl(config%theory))
       end if
 
-      if (args%has_key('solver')) then
-         call args%get('solver', config%solver)
+      if (args%has_key("solver")) then
+         call args%get("solver", config%solver)
          config%solver = trim(adjustl(config%solver))
       end if
 
-      if (args%has_key('charge')) then
+      if (args%has_key("charge")) then
          allocate(config%charge)
-         call args%get('charge', config%charge)
+         call args%get("charge", config%charge)
       end if
 
-      if (args%has_key('solvent')) then
-         call args%get('solvent', config%solvent)
+      if (args%has_key("solvent")) then
+         call args%get("solvent", config%solvent)
          config%solvent = trim(adjustl(config%solvent))
       end if
 
-      if (args%has_key('temperature')) then
-         call args%get('temperature', config%temperature)
+      if (args%has_key("temperature")) then
+         call args%get("temperature", config%temperature)
       end if
 
-      if (args%has_key('pressure')) then
-         call args%get('pressure', config%pressure_si)
+      if (args%has_key("pressure")) then
+         call args%get("pressure", config%pressure_si)
       end if
 
-      if (args%has_key('numgrad')) then
-         call args%get('numgrad', config%numgrad)
+      if (args%has_key("numgrad")) then
+         call args%get("numgrad", config%numgrad)
       end if
       if (config%numgrad) config%grad = .true.
 
-      if (args%has_key('writeenergy')) then
-         call args%get('writeenergy', config%writeenergy)
+      if (args%has_key("writeenergy")) then
+         call args%get("writeenergy", config%writeenergy)
       end if
 
-      if (args%has_key('parameters_path')) then
-         call args%get('parameters_path', str_tmp)
+      if (args%has_key("parameters_path")) then
+         call args%get("parameters_path", str_tmp)
          config%parameters_path = trim(adjustl(str_tmp))
          if (len_trim(config%parameters_path) > 0) config%read_parameters = .true.
       end if
 
-   case('cavity')
-      if (.not. args%has_key('cavity_mode')) then
-         call fatal_error(error, 'Select one of: numsa, iswig, drop, or mc cavity types')
+   case("cavity")
+      if (.not. args%has_key("cavity_mode")) then
+         call fatal_error(error, "Select one of: numsa, iswig, drop, or mc cavity types")
          return
       end if
 
-      call args%get('cavity_mode', config%mode)
-      if (trim(config%mode) == 'drop' .or. trim(config%mode) == 'mc') then
-         if (.not. args%has_key('drop_variant')) then
-            call fatal_error(error, 'Select one of: svdw, cfc level set functions')
+      call args%get("cavity_mode", config%mode)
+      if (trim(config%mode) == "drop" .or. trim(config%mode) == "mc") then
+         if (.not. args%has_key("drop_variant")) then
+            call fatal_error(error, "Select one of: svdw, cfc level set functions")
             return
          end if
-         call args%get('drop_variant', config%drop_variant)
+         call args%get("drop_variant", config%drop_variant)
       end if
-      call args%get('input', config%input)
+      call args%get("input", config%input)
 
-      if (args%has_key('nleb')) then
-         call args%get('nleb', config%nleb)
+      if (args%has_key("nleb")) then
+         call args%get("nleb", config%nleb)
       end if
 
-      if (args%has_key('radii')) then
-         call args%get('radii', config%radii)
+      if (args%has_key("radii")) then
+         call args%get("radii", config%radii)
       end if
       config%radii = trim(adjustl(config%radii))
 
-      if (args%has_key('drop_tolerance')) then
-         call args%get('drop_tolerance', config%drop_tol)
+      if (args%has_key("drop_tolerance")) then
+         call args%get("drop_tolerance", config%drop_tol)
       end if
 
-      if (args%has_key('drop_proj_level')) then
-         call args%get('drop_proj_level', config%drop_proj_level)
+      if (args%has_key("drop_proj_level")) then
+         call args%get("drop_proj_level", config%drop_proj_level)
       end if
 
-      if (args%has_key('drop_wleb_prune_level')) then
-         call args%get('drop_wleb_prune_level', config%drop_wleb_prune_level)
+      if (args%has_key("drop_wleb_prune_level")) then
+         call args%get("drop_wleb_prune_level", config%drop_wleb_prune_level)
       end if
 
-      if (args%has_key('drop_blendk')) then
-         call args%get('drop_blendk', config%drop_blend_k)
+      if (args%has_key("drop_blendk")) then
+         call args%get("drop_blendk", config%drop_blend_k)
       end if
 
-      if (args%has_key('drop_blend1b')) then
-         call args%get('drop_blend1b', config%drop_blend_1b)
+      if (args%has_key("drop_blend1b")) then
+         call args%get("drop_blend1b", config%drop_blend_1b)
       end if
 
-      if (args%has_key('drop_blend2b')) then
-         call args%get('drop_blend2b', config%drop_blend_2b)
+      if (args%has_key("drop_blend2b")) then
+         call args%get("drop_blend2b", config%drop_blend_2b)
       end if
 
-      if (args%has_key('drop_blend3b')) then
-         call args%get('drop_blend3b', config%drop_blend_3b)
+      if (args%has_key("drop_blend3b")) then
+         call args%get("drop_blend3b", config%drop_blend_3b)
       end if
 
-      if (args%has_key('cfc_a1')) then
-         call args%get('cfc_a1', config%cfc_a1)
+      if (args%has_key("cfc_a1")) then
+         call args%get("cfc_a1", config%cfc_a1)
       end if
 
-      if (args%has_key('cfc_a2')) then
-         call args%get('cfc_a2', config%cfc_a2)
+      if (args%has_key("cfc_a2")) then
+         call args%get("cfc_a2", config%cfc_a2)
       end if
 
-      if (args%has_key('cfc_c')) then
-         call args%get('cfc_c', config%cfc_c)
+      if (args%has_key("cfc_c")) then
+         call args%get("cfc_c", config%cfc_c)
       end if
 
-      if (args%has_key('cfc_m')) then
-         call args%get('cfc_m', config%cfc_m)
+      if (args%has_key("cfc_m")) then
+         call args%get("cfc_m", config%cfc_m)
       end if
 
-      if (args%has_key('grad')) then
-         call args%get('grad', config%grad)
+      if (args%has_key("grad")) then
+         call args%get("grad", config%grad)
       end if
 
-      if (args%has_key('fine')) then
-         call args%get('fine', config%cavity_fine)
+      if (args%has_key("fine")) then
+         call args%get("fine", config%cavity_fine)
       end if
-      if (args%has_key('cavity_mc_spacing')) then
-         call args%get('cavity_mc_spacing', config%cavity_mc_spacing)
+      if (args%has_key("cavity_mc_spacing")) then
+         call args%get("cavity_mc_spacing", config%cavity_mc_spacing)
       end if
-      if (args%has_key('dump')) then
-         call args%get('dump', config%dump)
+      if (args%has_key("dump")) then
+         call args%get("dump", config%dump)
       end if
 
-   case('solvent')
-      call args%get('solvent', config%solvent)
+   case("solvent")
+      call args%get("solvent", config%solvent)
       config%solvent = trim(adjustl(config%solvent))
-      config%mode = 'solvent'
-      config%input = ''
+      config%mode = "solvent"
+      config%input = ""
 
    case default
-      call fatal_error(error, 'Unknown subcommand selected')
+      call fatal_error(error, "Unknown subcommand selected")
       return
    end select
 
@@ -376,7 +377,7 @@ subroutine get_arguments(config, error)
    config%drop_variant = trim(config%drop_variant)
    config%input = trim(config%input)
 
-   if (trim(command) /= 'solvent') then
+   if (trim(command) /= "solvent") then
       config%input_format = get_filetype(trim(config%input))
    end if
 
@@ -390,25 +391,25 @@ contains
 
       call parent%init(add_help=.false.)
 
-      grp_general = parent%add_argument_group('General settings', &
-         'Shared runtime configuration')
+      grp_general = parent%add_argument_group("General settings", &
+         "Shared runtime configuration")
 
-      call parent%add_argument('-v', '--verbose', action='count', dest='verbose', &
-         help='Increase output verbosity (repeatable)', &
+      call parent%add_argument("-v", "--verbose", action="count", dest="verbose", &
+         help="Increase output verbosity (repeatable)", &
          group_idx=grp_general)
 
-      call parent%add_argument('-q', '--quiet', action='count', dest='quiet', &
-         help='Decrease output verbosity (repeatable)', &
+      call parent%add_argument("-q", "--quiet", action="count", dest="quiet", &
+         help="Decrease output verbosity (repeatable)", &
          group_idx=grp_general)
 
-      call parent%add_argument('-d', '--debug', action='store_true', dest='debug', &
-         help='Enable debug output', &
+      call parent%add_argument("-d", "--debug", action="store_true", dest="debug", &
+         help="Enable debug output", &
          group_idx=grp_general)
 
-      call parent%add_argument('-t', '--threads', data_type='integer', &
+      call parent%add_argument("-t", "--threads", data_type="integer", &
          action=not_less_than(0), &
-         dest='threads', metavar='INT', &
-         help='Number of OpenMP threads (default: system setting)', &
+         dest="threads", metavar="INT", &
+         help="Number of OpenMP threads (default: system setting)", &
          group_idx=grp_general)
    end subroutine setup_general_parent
 
@@ -460,10 +461,10 @@ contains
       type(ArgumentParser), intent(inout) :: subparsers(:)
 
       call p%init_with_parents([parent], &
-         prog='moist model', &
-         description='Run solvation models with model-specific subcommands')
+         prog="moist model", &
+         description="Run solvation models with model-specific subcommands")
 
-      call setup_subsubparsers(p, parent, 'models', 'model_mode', specs, subparsers, add_model_shared_arguments)
+      call setup_subsubparsers(p, parent, "models", "model_mode", specs, subparsers, add_model_shared_arguments)
    end subroutine setup_model_parser
 
 
@@ -473,55 +474,55 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_system, grp_io, grp_advanced
 
-      grp_system = p%add_argument_group('System config', &
-         'Molecule and solvent thermodynamic settings')
-      grp_io = p%add_argument_group('Input/Output', &
-         'Input model and output behavior')
-      grp_advanced = p%add_argument_group('Advanced', &
-         'Advanced and developer options')
-      call p%add_argument('input', &
-         help='Input structure file', metavar='INPUT', &
+      grp_system = p%add_argument_group("System config", &
+         "Molecule and solvent thermodynamic settings")
+      grp_io = p%add_argument_group("Input/Output", &
+         "Input model and output behavior")
+      grp_advanced = p%add_argument_group("Advanced", &
+         "Advanced and developer options")
+      call p%add_argument("input", &
+         help="Input structure file", metavar="INPUT", &
          group_idx=grp_io)
 
-      call p%add_argument('-c', '--charge', &
-         data_type='real', &
-         metavar='REAL', &
-         help='Molecular charge, overwrites .CHRG file', &
+      call p%add_argument("-c", "--charge", &
+         data_type="real", &
+         metavar="REAL", &
+         help="Molecular charge, overwrites .CHRG file", &
          group_idx=grp_system)
-      call p%add_argument('-s', '--solvent', &
-         default_val='', &
+      call p%add_argument("-s", "--solvent", &
+         default_val="", &
          print_default=.false., &
-         metavar='SOLVENT', &
-         help='Solvent name', &
+         metavar="SOLVENT", &
+         help="Solvent name", &
          group_idx=grp_system)
-      call p%add_argument('--temperature', &
+      call p%add_argument("--temperature", &
          default_val=298.15_wp, &
          action=not_less_than(0.0_wp), &
-         data_type='real', &
-         metavar='REAL', &
-         help='Temperature in Kelvin', &
+         data_type="real", &
+         metavar="REAL", &
+         help="Temperature in Kelvin", &
          group_idx=grp_system)
-      call p%add_argument('--pressure', &
+      call p%add_argument("--pressure", &
          default_val=101325.0_wp, &
          action=not_less_than(0.0_wp), &
-         data_type='real', dest='pressure', &
-         metavar='REAL', &
-         help='Pressure in Pascal', &
+         data_type="real", dest="pressure", &
+         metavar="REAL", &
+         help="Pressure in Pascal", &
          group_idx=grp_system)
 
-      call p%add_argument('-w', '--writeenergy', action='store_true', &
-         help='Write energy to .GSOLV file', &
+      call p%add_argument("-w", "--writeenergy", action="store_true", &
+         help="Write energy to .GSOLV file", &
          group_idx=grp_io)
-      call p%add_argument('-p', '--parameters', &
-         default_val='', &
+      call p%add_argument("-p", "--parameters", &
+         default_val="", &
          print_default=.false., &
-         dest='parameters_path', &
-         metavar='PATH', &
-         help='Path to custom model parameters file', &
+         dest="parameters_path", &
+         metavar="PATH", &
+         help="Path to custom model parameters file", &
          group_idx=grp_io)
 
-      call p%add_argument('--numgrad', action='store_true', &
-         help='Calculate numerical gradients', &
+      call p%add_argument("--numgrad", action="store_true", &
+         help="Calculate numerical gradients", &
          group_idx=grp_advanced)
    end subroutine add_model_shared_arguments
 
@@ -532,27 +533,27 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_rism
 
-      grp_rism = p%add_argument_group('RISM settings', &
-         'RISM theory, closure relation, and iterative solver')
+      grp_rism = p%add_argument_group("RISM settings", &
+         "RISM theory, closure relation, and iterative solver")
 
-      call p%add_argument('--closure', default_val='KH', &
+      call p%add_argument("--closure", default_val="KH", &
          print_choices=.true., &
-         choices=[character(len=4) :: 'HNC', 'KH', 'PY', &
-                  'PSE1', 'PSE2', 'PSE3', 'PSE4'], &
-         metavar='CLOSURE', &
-         help='RISM closure relation', &
+         choices=[character(len=4) :: "HNC", "KH", "PY", &
+                  "PSE1", "PSE2", "PSE3", "PSE4"], &
+         metavar="CLOSURE", &
+         help="RISM closure relation", &
          group_idx=grp_rism)
-      call p%add_argument('--theory', default_val='DRISM', &
+      call p%add_argument("--theory", default_val="DRISM", &
          print_choices=.true., &
-         choices=[character(len=5) :: 'DRISM', 'XRISM'], &
-         metavar='THEORY', &
-         help='RISM theory variant', &
+         choices=[character(len=5) :: "DRISM", "XRISM"], &
+         metavar="THEORY", &
+         help="RISM theory variant", &
          group_idx=grp_rism)
-      call p%add_argument('--solver', default_val='gmres', &
+      call p%add_argument("--solver", default_val="gmres", &
          print_choices=.true., &
-         choices=[character(len=6) :: 'picard', 'mdiis', 'gmres', 'hybrid', 'lbfgs'], &
-         metavar='SOLVER', &
-         help='RISM iterative solver', &
+         choices=[character(len=6) :: "picard", "mdiis", "gmres", "hybrid", "lbfgs"], &
+         metavar="SOLVER", &
+         help="RISM iterative solver", &
          group_idx=grp_rism)
    end subroutine add_model_rism_arguments
 
@@ -579,19 +580,19 @@ contains
       integer :: i, n
 
       call p%init_with_parents([parent], &
-         prog='moist cavity', &
-         description='Run cavity-only workflows with cavity-type subcommands')
+         prog="moist cavity", &
+         description="Run cavity-only workflows with cavity-type subcommands")
 
-      call p%add_subparsers(title='cavity types', dest='cavity_mode')
+      call p%add_subparsers(title="cavity types", dest="cavity_mode")
 
       n = min(size(specs), size(subparsers))
       do i = 1, n
-         if (trim(specs(i)%name) == 'drop') then
+         if (trim(specs(i)%name) == "drop") then
             call setup_drop_parser(drop_parser, parent, drop_subparsers)
-            call p%add_parser('drop', drop_parser, help_text=trim(specs(i)%help_text))
-         else if (trim(specs(i)%name) == 'mc') then
+            call p%add_parser("drop", drop_parser, help_text=trim(specs(i)%help_text))
+         else if (trim(specs(i)%name) == "mc") then
             call setup_mc_parser(mc_parser, parent, mc_subparsers)
-            call p%add_parser('mc', mc_parser, help_text=trim(specs(i)%help_text))
+            call p%add_parser("mc", mc_parser, help_text=trim(specs(i)%help_text))
          else
             call subparsers(i)%init_with_parents([parent], &
                prog=trim(specs(i)%prog), &
@@ -618,26 +619,26 @@ contains
       type(ArgumentParser), intent(inout) :: subparsers(:)
 
       call p%init_with_parents([parent], &
-         prog='moist cavity drop', &
-         description='Construct DROP/DROP cavities with variant-specific level sets')
+         prog="moist cavity drop", &
+         description="Construct DROP/DROP cavities with variant-specific level sets")
 
-      call p%add_subparsers(title='DROP variants', dest='drop_variant')
+      call p%add_subparsers(title="DROP variants", dest="drop_variant")
 
       call subparsers(1)%init_with_parents([parent], &
-         prog='moist cavity drop svdw', &
-         description='Construct DROP/DROP cavities with the SvdW level set')
+         prog="moist cavity drop svdw", &
+         description="Construct DROP/DROP cavities with the SvdW level set")
       call add_cavity_shared_arguments(subparsers(1))
       call add_cavity_drop_arguments(subparsers(1))
       call add_cavity_drop_svdw_arguments(subparsers(1))
-      call p%add_parser('svdw', subparsers(1), help_text='SvdW DROP cavity')
+      call p%add_parser("svdw", subparsers(1), help_text="SvdW DROP cavity")
 
       call subparsers(2)%init_with_parents([parent], &
-         prog='moist cavity drop cfc', &
-         description='Construct DROP/DROP cavities with the CFC level set')
+         prog="moist cavity drop cfc", &
+         description="Construct DROP/DROP cavities with the CFC level set")
       call add_cavity_shared_arguments(subparsers(2))
       call add_cavity_drop_arguments(subparsers(2))
       call add_cavity_drop_cfc_arguments(subparsers(2))
-      call p%add_parser('cfc', subparsers(2), help_text='CFC DROP cavity')
+      call p%add_parser("cfc", subparsers(2), help_text="CFC DROP cavity")
    end subroutine setup_drop_parser
 
 
@@ -656,26 +657,26 @@ contains
       type(ArgumentParser), intent(inout) :: subparsers(:)
 
       call p%init_with_parents([parent], &
-         prog='moist cavity mc', &
-         description='Integrate a level set isosurface with marching cubes')
+         prog="moist cavity mc", &
+         description="Integrate a level set isosurface with marching cubes")
 
-      call p%add_subparsers(title='level set functions', dest='drop_variant')
+      call p%add_subparsers(title="level set functions", dest="drop_variant")
 
       call subparsers(1)%init_with_parents([parent], &
-         prog='moist cavity mc svdw', &
-         description='Integrate the SvdW level set isosurface')
+         prog="moist cavity mc svdw", &
+         description="Integrate the SvdW level set isosurface")
       call add_cavity_shared_arguments(subparsers(1), with_nleb=.false.)
       call add_cavity_mc_arguments(subparsers(1))
       call add_cavity_drop_svdw_arguments(subparsers(1))
-      call p%add_parser('svdw', subparsers(1), help_text='SvdW level set')
+      call p%add_parser("svdw", subparsers(1), help_text="SvdW level set")
 
       call subparsers(2)%init_with_parents([parent], &
-         prog='moist cavity mc cfc', &
-         description='Integrate the CFC level set isosurface')
+         prog="moist cavity mc cfc", &
+         description="Integrate the CFC level set isosurface")
       call add_cavity_shared_arguments(subparsers(2), with_nleb=.false.)
       call add_cavity_mc_arguments(subparsers(2))
       call add_cavity_drop_cfc_arguments(subparsers(2))
-      call p%add_parser('cfc', subparsers(2), help_text='CFC level set')
+      call p%add_parser("cfc", subparsers(2), help_text="CFC level set")
    end subroutine setup_mc_parser
 
 
@@ -692,34 +693,34 @@ contains
       offer_nleb = .true.
       if (present(with_nleb)) offer_nleb = with_nleb
 
-      grp_input = p%add_argument_group('Input/Output', &
-         'Input cavity model and structure')
-      grp_technical = p%add_argument_group('Technical settings', &
-         'Cavity discretization and numerical control')
+      grp_input = p%add_argument_group("Input/Output", &
+         "Input cavity model and structure")
+      grp_technical = p%add_argument_group("Technical settings", &
+         "Cavity discretization and numerical control")
 
-      call p%add_argument('input', &
-         help='Input coordinate file', metavar='COORD', &
+      call p%add_argument("input", &
+         help="Input coordinate file", metavar="COORD", &
          group_idx=grp_input)
       if (offer_nleb) then
-         call p%add_argument('--nleb', data_type='integer', &
+         call p%add_argument("--nleb", data_type="integer", &
             action=not_less_than(1), &
             default_val=194, &
-            metavar='INT', &
-            help='Lebedev grid points per atom', &
+            metavar="INT", &
+            help="Lebedev grid points per atom", &
             group_idx=grp_technical)
       end if
-      call p%add_argument('--radii', default_val='cpcm', &
+      call p%add_argument("--radii", default_val="cpcm", &
          print_choices=.true., &
-         choices=[character(len=5) :: 'cpcm', 'smd', 'd3', 'cosmo', 'bondi'], &
-         metavar='RADII', &
-         help='Atomic radii', &
+         choices=[character(len=5) :: "cpcm", "smd", "d3", "cosmo", "bondi"], &
+         metavar="RADII", &
+         help="Atomic radii", &
          group_idx=grp_technical)
-      call p%add_argument('-g', '--grad', action='store_true', &
-         help='Calculate cavity gradients', &
+      call p%add_argument("-g", "--grad", action="store_true", &
+         help="Calculate cavity gradients", &
          group_idx=grp_technical)
-      call p%add_argument('--dump', action='store_true', &
-         dest='dump', &
-         help='Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)', &
+      call p%add_argument("--dump", action="store_true", &
+         dest="dump", &
+         help="Write cavity files to disk (grid: xyz/csv/pqr, marching cubes: obj/pqr)", &
          group_idx=grp_input)
    end subroutine add_cavity_shared_arguments
 
@@ -730,20 +731,20 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_technical
 
-      grp_technical = p%add_argument_group('DROP settings', &
-         'DROP projection and property controls')
+      grp_technical = p%add_argument_group("DROP settings", &
+         "DROP projection and property controls")
 
-      call p%add_argument('--tol', data_type='real', &
+      call p%add_argument("--tol", data_type="real", &
          default_val=1.0E-10_wp, &
          action=not_less_than(0.0_wp), &
-         dest='drop_tolerance', metavar='REAL', &
-         help='Numerical tolerance', &
+         dest="drop_tolerance", metavar="REAL", &
+         help="Numerical tolerance", &
          group_idx=grp_technical)
-      call p%add_argument('--proj-level', data_type='integer', &
+      call p%add_argument("--proj-level", data_type="integer", &
          default_val=2, &
          action=not_less_than(1), &
-         dest='drop_proj_level', metavar='INT', &
-         help='Projection solver level', &
+         dest="drop_proj_level", metavar="INT", &
+         help="Projection solver level", &
          choices=[character(len=26) :: "1=SLSQP", "2=SLSQP+Newton", &
             "3=Cond. multi-tangent", "4=Cond. SLSQP-deflation", &
             "5=SLSQP-deflation", "6=Newton-deflation", &
@@ -751,18 +752,18 @@ contains
             "9=Certified octree"], &
          print_choices=.true., &
          group_idx=grp_technical)
-      call p%add_argument('--wleb-switch', data_type='integer', &
+      call p%add_argument("--wleb-switch", data_type="integer", &
          default_val=0, &
          action=not_less_than(0), &
-         dest='drop_wleb_prune_level', metavar='INT', &
-         help='Smooth weight switching level (0=off, 1-4=increasing)', &
+         dest="drop_wleb_prune_level", metavar="INT", &
+         help="Smooth weight switching level (0=off, 1-4=increasing)", &
          choices=[character(len=26) :: "0=off", "1=1E-12/1E-10", &
             "2=1E-10/1E-8", "3=1E-8/1E-6", "4=1E-6/1E-4"], &
          print_choices=.true., &
          group_idx=grp_technical)
-      call p%add_argument('--fine', action='store_true', &
-         dest='fine', &
-         help='Compute optional cavity properties (curvature, normals, etc.)', &
+      call p%add_argument("--fine", action="store_true", &
+         dest="fine", &
+         help="Compute optional cavity properties (curvature, normals, etc.)", &
          group_idx=grp_technical)
    end subroutine add_cavity_drop_arguments
 
@@ -773,14 +774,14 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_technical
 
-      grp_technical = p%add_argument_group('Marching cubes settings', &
-         'Isosurface integration control')
+      grp_technical = p%add_argument_group("Marching cubes settings", &
+         "Isosurface integration control")
 
-      call p%add_argument('--spacing', data_type='real', &
+      call p%add_argument("--spacing", data_type="real", &
          default_val=0.2_wp, &
          action=not_less_than(0.0_wp), &
-         dest='cavity_mc_spacing', metavar='REAL', &
-         help='Finest marching-cubes grid spacing in bohr', &
+         dest="cavity_mc_spacing", metavar="REAL", &
+         help="Finest marching-cubes grid spacing in bohr", &
          group_idx=grp_technical)
    end subroutine add_cavity_mc_arguments
 
@@ -791,29 +792,29 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_technical
 
-      grp_technical = p%add_argument_group('SvdW settings', &
-         'SvdW level set smoothing controls')
+      grp_technical = p%add_argument_group("SvdW settings", &
+         "SvdW level set smoothing controls")
 
-      call p%add_argument('--blendk', data_type='real', &
+      call p%add_argument("--blendk", data_type="real", &
          default_val=5.5_wp, &
          action=not_less_than(0.0_wp), &
-         dest='drop_blendk', metavar='REAL', &
-         help='DROP smoothing sharpness k', &
+         dest="drop_blendk", metavar="REAL", &
+         help="DROP smoothing sharpness k", &
          group_idx=grp_technical)
-      call p%add_argument('--blend1b', data_type='real', &
+      call p%add_argument("--blend1b", data_type="real", &
          default_val=1.0_wp, &
-         dest='drop_blend1b', metavar='REAL', &
-         help='DROP one-body contribution', &
+         dest="drop_blend1b", metavar="REAL", &
+         help="DROP one-body contribution", &
          group_idx=grp_technical)
-      call p%add_argument('--blend2b', data_type='real', &
+      call p%add_argument("--blend2b", data_type="real", &
          default_val=0.0_wp, &
-         dest='drop_blend2b', metavar='REAL', &
-         help='DROP two-body contribution', &
+         dest="drop_blend2b", metavar="REAL", &
+         help="DROP two-body contribution", &
          group_idx=grp_technical)
-      call p%add_argument('--blend3b', data_type='real', &
+      call p%add_argument("--blend3b", data_type="real", &
          default_val=3.0_wp, &
-         dest='drop_blend3b', metavar='REAL', &
-         help='DROP three-body contribution', &
+         dest="drop_blend3b", metavar="REAL", &
+         help="DROP three-body contribution", &
          group_idx=grp_technical)
    end subroutine add_cavity_drop_svdw_arguments
 
@@ -824,29 +825,29 @@ contains
       type(ArgumentParser), intent(inout) :: p
       integer :: grp_technical
 
-      grp_technical = p%add_argument_group('CFC settings', &
-         'CFC level set controls')
+      grp_technical = p%add_argument_group("CFC settings", &
+         "CFC level set controls")
 
-      call p%add_argument('--a1', data_type='real', &
+      call p%add_argument("--a1", data_type="real", &
          default_val=-15.0_wp, &
-         dest='cfc_a1', metavar='REAL', &
-         help='CFC atomic-term exponent', &
+         dest="cfc_a1", metavar="REAL", &
+         help="CFC atomic-term exponent", &
          group_idx=grp_technical)
-      call p%add_argument('--a2', data_type='real', &
+      call p%add_argument("--a2", data_type="real", &
          default_val=-9.0_wp, &
-         dest='cfc_a2', metavar='REAL', &
-         help='CFC pair-term exponent', &
+         dest="cfc_a2", metavar="REAL", &
+         help="CFC pair-term exponent", &
          group_idx=grp_technical)
-      call p%add_argument('--c', data_type='real', &
+      call p%add_argument("--c", data_type="real", &
          default_val=5.0_wp, &
-         dest='cfc_c', metavar='REAL', &
-         help='CFC pair-term coupling', &
+         dest="cfc_c", metavar="REAL", &
+         help="CFC pair-term coupling", &
          group_idx=grp_technical)
-      call p%add_argument('--m', data_type='integer', &
+      call p%add_argument("--m", data_type="integer", &
          default_val=4, &
          action=not_less_than(1), &
-         dest='cfc_m', metavar='INT', &
-         help='CFC pair-term power', &
+         dest="cfc_m", metavar="INT", &
+         help="CFC pair-term power", &
          group_idx=grp_technical)
    end subroutine add_cavity_drop_cfc_arguments
 
@@ -860,13 +861,13 @@ contains
       integer :: grp_system
 
       call p%init_with_parents([parent], &
-         prog='moist solvent', &
-         description='Inspect solvent parameters by name/alias')
+         prog="moist solvent", &
+         description="Inspect solvent parameters by name/alias")
 
-      grp_system = p%add_argument_group('System config', &
-         'Solvent query settings')
+      grp_system = p%add_argument_group("System config", &
+         "Solvent query settings")
 
-      call p%add_argument('solvent', help='Solvent name or alias', metavar='SOLVENT', &
+      call p%add_argument("solvent", help="Solvent name or alias", metavar="SOLVENT", &
          group_idx=grp_system)
    end subroutine setup_solvent_parser
 
@@ -884,10 +885,10 @@ subroutine subsubparser_spec_init(self, name, help_text, prog, description)
    class(subsubparser_spec), intent(inout) :: self
    character(len=*), intent(in) :: name, help_text, prog, description
 
-   self%name = ''
-   self%help_text = ''
-   self%prog = ''
-   self%description = ''
+   self%name = ""
+   self%help_text = ""
+   self%prog = ""
+   self%description = ""
    nullify(self%add_specific_args)
 
    self%name = trim(name)

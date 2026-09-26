@@ -3,7 +3,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_filter
    use mctc_env_accuracy, only: wp
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
@@ -20,8 +20,6 @@ contains
       class(cavity_type_drop), intent(inout) :: self
       integer, intent(in) :: nold, nvalid
       logical, intent(in) :: keep(:)
-      integer :: i, number_base
-      integer, allocatable :: expected_numbering(:)
 
       if (allocated(self%numbering)) then
          call filter_array(self%numbering, nold, keep, nvalid)

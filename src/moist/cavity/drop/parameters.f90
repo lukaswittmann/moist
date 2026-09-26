@@ -5,7 +5,7 @@ module moist_cavity_drop_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
-   implicit none
+   implicit none(type, external)
 
    !> Maximum supported atomic number
    integer, parameter :: maxAtomicNumbers = 118
@@ -99,7 +99,7 @@ module moist_cavity_drop_parameters
       integer :: octree_max_survivors = 200000
       !> Octree depth limit
       integer :: octree_max_depth = 12
-      !> Seed extraction: 
+      !> Seed extraction:
       !>   1 = one seed per discrete local minimum of the survivor set
       !>   2 = one seed per surviving leaf (slower reference)
       integer :: octree_seed_mode = 1

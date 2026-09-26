@@ -97,7 +97,7 @@ module moist_cavity_drop_lsf_base
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_math_sorter_counting_sort, only: counting_argsort
-   implicit none ()
+   implicit none(type, external)
    private
 
    public :: moist_cavity_drop_lsf_type
@@ -343,7 +343,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out]   error  Evaluation failure at this point
       subroutine lsf_prepare_iface(self, point, error)
          import :: wp, error_type, moist_cavity_drop_lsf_type
-         implicit none ()
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
          type(error_type), allocatable, intent(out) :: error
@@ -356,6 +356,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out]   error             Evaluation failure at this point
       subroutine lsf_prepare_subset_iface(self, point, candidate_indices, error)
          import :: wp, error_type, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          real(wp), intent(in) :: point(3)
          integer, intent(in) :: candidate_indices(:)
@@ -366,6 +367,7 @@ module moist_cavity_drop_lsf_base
       !> @param[in]    n    Requested max derivative order
       subroutine lsf_set_max_deriv_iface(self, n)
          import :: moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(inout) :: self
          integer, intent(in) :: n
       end subroutine lsf_set_max_deriv_iface
@@ -374,6 +376,7 @@ module moist_cavity_drop_lsf_base
       !> @returns         Number of currently active atoms
       pure function lsf_active_count_iface(self) result(n)
          import :: moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          integer :: n
       end function lsf_active_count_iface
@@ -383,6 +386,7 @@ module moist_cavity_drop_lsf_base
       !> @returns         User-space atom id of the i-th active atom
       pure function lsf_active_atom_iface(self, i) result(idx)
          import :: moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          integer, intent(in) :: i
          integer :: idx
@@ -392,6 +396,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out] val  LSF value at the current evaluation point
       subroutine lsf_f0_iface(self, val)
          import :: wp, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out) :: val
       end subroutine lsf_f0_iface
@@ -402,6 +407,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out] lsf2_rr  Hessian w.r.t. spatial coords (optional)
       subroutine lsf_f012_r_iface(self, lsf0, lsf1_r, lsf2_rr)
          import :: wp, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf0
          real(wp), intent(out), optional :: lsf1_r(:)
@@ -415,6 +421,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out] lsf3_rrr Third spatial derivative tensor [3, 3, 3]
       subroutine lsf_f3_rrr_iface(self, lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
          import :: wp, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf0
          real(wp), intent(out), optional :: lsf1_r(:)
@@ -432,6 +439,7 @@ module moist_cavity_drop_lsf_base
       !> @param[out] lsf3_rr_rA Mixed third derivative
       subroutine lsf_f3_rr_rA_iface(self, lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
          import :: wp, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(out), optional :: lsf1_rA(:, :)
          real(wp), intent(out), optional :: lsf2_r_rA(:, :, :)
@@ -458,6 +466,7 @@ module moist_cavity_drop_lsf_base
       !> @returns           Radial offset from the atom surface (Bohr)
       pure function lsf_screening_offset_iface(self, radius) result(offset)
          import :: wp, moist_cavity_drop_lsf_type
+         implicit none(type, external)
          class(moist_cavity_drop_lsf_type), intent(in) :: self
          real(wp), intent(in) :: radius
          real(wp) :: offset

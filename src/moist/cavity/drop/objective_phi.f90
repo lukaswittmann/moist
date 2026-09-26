@@ -8,7 +8,8 @@ module moist_cavity_drop_objective_phi
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   implicit none
+   implicit none(type, external)
+   private
 
    integer, parameter :: ndim = 3
 

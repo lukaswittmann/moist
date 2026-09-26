@@ -3,7 +3,8 @@ module moist_cavity_drop_types
    use mctc_env, only: error_type, fatal_error
    use moist_utils_mem, only: grow_array
 
-   implicit none
+   implicit none(type, external)
+   private
 
    public :: projection_workspace_type
    public :: projection_buffer_type

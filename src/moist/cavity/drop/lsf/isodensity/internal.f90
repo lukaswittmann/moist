@@ -27,7 +27,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    integer, parameter :: ndim = 3

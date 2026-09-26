@@ -90,7 +90,7 @@ module moist_cavity_drop_lsf_svdw
                                                 svdw_tangent_eval, svdw_hvp_eval, &
                                                 svdw_vjp_eval, svdw_radius_vjp_eval, &
                                                 svdw_normalized_eval, svdw_powersums
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Spatial dimension
@@ -1279,7 +1279,7 @@ contains
    !* ================================================================================= *!
    !*                     Two-radius and nuclear-radius derivatives                     *!
    !* ================================================================================= *!
-   
+
    !> Shared pair loop of the two-radius block
    !>
    !> @param[in]  self      LSF instance

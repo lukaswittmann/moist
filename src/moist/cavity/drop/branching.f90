@@ -1,6 +1,6 @@
 module moist_cavity_drop_branching
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: branch_weight_type

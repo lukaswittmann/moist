@@ -28,7 +28,7 @@ module moist_cavity_drop_threads
    use moist_cavity_drop_objective_phi, only: moist_cavity_drop_objective_phi_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: drop_worker_slots_type, drop_abort_latch_type

@@ -11,7 +11,7 @@ module moist_cavity_drop_gaussian
    use mctc_io_structure, only: structure_type
    use moist_math_adjacency_list, only: adjacency_list_type
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_cavity_drop_iswig, new_iswig

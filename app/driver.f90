@@ -24,7 +24,6 @@ module moist_driver
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
    use moist_cavity_type, only: cavity_type
-   use moist_model_type, only: solvation_model_type
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
 ! #ifdef WITH_MKL
@@ -61,9 +60,6 @@ contains
 
       type(structure_type) :: mol
 
-      !> Solvation model
-      class(solvation_model_type), allocatable :: sm
-
       !> Shared run context owned for the whole run borrowed by everything
       type(moist_context_type), target :: ctx
 
@@ -72,8 +68,6 @@ contains
 
       character(len=:), allocatable :: filename
       character(len=:), allocatable :: solvent
-
-      real(wp) :: energy
 
       integer :: solvent_id
 
@@ -93,7 +87,7 @@ contains
       !> run is actually using, and the pin is released again on `ctx%delete`.
       if (config%num_threads > 0) then
 !$       if (.false.) then
-            write (ctx%unit, '(a)') &
+            write (ctx%unit, "(a)") &
                "[Warn] Program compiled without OpenMP support, ignoring --threads"
 !$       else
 !$          call ctx%set_num_threads(config%num_threads)
@@ -151,10 +145,10 @@ contains
             read (unit, *, iostat=stat) tmp_wp
             if (stat == 0) then
                mol%charge = tmp_wp
-               if (config%verbosity > 0) write (output_unit, '(a)') &
+               if (config%verbosity > 0) write (output_unit, "(a)") &
                   "[Info] Molecular charge read from '"//filename//"'"
             else
-               if (config%verbosity > 0) write (output_unit, '(a)') &
+               if (config%verbosity > 0) write (output_unit, "(a)") &
                   "[Warn] Could not read molecular charge read from '"//filename//"'"
             end if
             close (unit)
@@ -290,11 +284,11 @@ contains
             ! Marching cubes has no grid points to dump; it already wrote its
             ! triangle mesh (cavity.obj/cavity.pqr) during update.
             if (config%dump .and. to_lower(config%mode) /= "mc") then
-               call cavity%write_xyz_debug('cavity.xyz', error=error)
+               call cavity%write_xyz_debug("cavity.xyz", error=error)
                if (allocated(error)) return
-               call cavity%write_csv_debug('cavity.csv', error=error)
+               call cavity%write_csv_debug("cavity.csv", error=error)
                if (allocated(error)) return
-               call cavity%write_pqr_debug('cavity.pqr', error=error)
+               call cavity%write_pqr_debug("cavity.pqr", error=error)
                if (allocated(error)) return
             end if
 
@@ -313,7 +307,7 @@ contains
          filename = join(dirname(config%input), ".SOLVENT")
          if (exists(filename)) then
             open (file=filename, newunit=unit)
-            read (unit, '(A)', iostat=stat) tmp
+            read (unit, "(A)", iostat=stat) tmp
             close (unit)
             if (stat == 0) then
                ! allocate exactly to the trimmed length
@@ -356,8 +350,9 @@ contains
       !> prints the full hierarchical breakdown for the run.
       subroutine report_run_timings()
          call ctx%timer%stop("total")
-         if (config%verbosity > 0) &
+         if (config%verbosity > 0) then
             call ctx%timer%write(output_unit, "moist", max_depth=ctx%report_depth())
+         end if
       end subroutine report_run_timings
 
    end subroutine run_main
@@ -387,7 +382,7 @@ contains
       if (dump) then
          call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
             error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing, &
-            obj_file='cavity.obj', pqr_file='cavity.pqr'))
+            obj_file="cavity.obj", pqr_file="cavity.pqr"))
       else
          call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
             error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing))
@@ -403,9 +398,9 @@ contains
       character :: filesep
 
       if (is_windows()) then
-         filesep = '\'
+         filesep = "\"
       else
-         filesep = '/'
+         filesep = "/"
       end if
 
       path = a1//filesep//a2
