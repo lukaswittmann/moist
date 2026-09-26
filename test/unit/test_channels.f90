@@ -29,6 +29,7 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [ &
          new_unittest("registry_release", test_registry_release), &
+         new_unittest("registry_release_tail_and_foreign", test_registry_release_tail), &
          new_unittest("shared_requests_and_compaction", test_shared_requests), &
          new_unittest("direct_potential_read", test_direct_potential_read), &
          new_unittest("partial_outputs_and_phase_reuse", test_partial), &
@@ -55,12 +56,18 @@ contains
          new_unittest("unknown_output_is_not_missing", test_unknown_not_missing), &
          new_unittest("staging_messages", test_staging_messages), &
          new_unittest("missing_outputs_named", test_missing_named), &
+         new_unittest("register_without_begin", test_register_unprepared), &
+         new_unittest("placeholder_request_not_registered", test_register_placeholder), &
+         new_unittest("view_errors_named", test_view_errors), &
          new_unittest("response_walk_empty", test_response_walk_empty), &
          new_unittest("response_accumulate", test_response_accumulate), &
          new_unittest("response_walk_rewinds_and_resumes", test_response_walk_passes), &
          new_unittest("response_walk_reset_by_accumulate_and_clear", test_response_walk_reset), &
          new_unittest("response_item_is_a_copy", test_response_item_copy), &
-         new_unittest("response_add_rejects_shape", test_response_add_rejects_shape)]
+         new_unittest("response_add_rejects_shape", test_response_add_rejects_shape), &
+         new_unittest("response_density_every_rank", test_response_density_ranks), &
+         new_unittest("response_add_rejects_vector_shape", test_response_vector_shape), &
+         new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -598,6 +605,162 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "missing required output phi") > 0)
    end subroutine test_empty_registration
+
+   !> A coupling that never began a registration pass still accepts one, and
+   !> an empty local name is refused like an overlong one
+   !>
+   !> @param[out] error Test failure
+   subroutine test_register_unprepared(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Collection never passed to coupling_begin_registration
+      type(coupling_type), target :: coupling
+      !> Scoped read interface
+      type(coupling_view_type) :: view
+      !> Calculation registered on it
+      type(point_potential_request_type) :: point
+      !> Answer read back through the view
+      real(wp), allocatable :: phi(:)
+      call request_require(point, moist_phase_energy, "phi", err)
+      call check_moist_error(error, err, "requirement")
+      if (allocated(error)) return
+      call coupling_register(coupling, "", point, err)
+      call check(error, allocated(err), more="an empty local name was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid local request name") > 0)
+      if (allocated(error)) return
+      call coupling_register(coupling, "potential", point, err)
+      call check_moist_error(error, err, "registration without a begun pass")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, 2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+      call check(error, count_visits(coupling), 1, more="the refused name left a request behind")
+      if (allocated(error)) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      call coupling%answer("phi", [5.0_wp, 6.0_wp], err)
+      call check_moist_error(error, err, "phi answer")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, view)
+      call view%read("potential", "phi", phi, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "phi read")
+      if (allocated(error)) return
+      call check(error, all(phi == [5.0_wp, 6.0_wp]), more="the read returned a different answer")
+   end subroutine test_register_unprepared
+
+   !> The placeholder returned outside a `next()` window cannot be registered,
+   !> and the refusal leaves neither a request nor a local name behind
+   !>
+   !> @param[out] error Test failure
+   subroutine test_register_placeholder(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Collection receiving the placeholder
+      type(coupling_type), target :: coupling
+      !> Scoped read interface
+      type(coupling_view_type) :: view
+      !> Placeholder request
+      class(coupling_request_type), allocatable :: placeholder
+      !> Read buffer
+      real(wp), allocatable :: phi(:)
+      call coupling_begin_registration(coupling)
+      placeholder = coupling%request()
+      call check(error, placeholder%name(), "no_current_request")
+      if (allocated(error)) return
+      call coupling_register(coupling, "ghost", placeholder, err)
+      call check(error, allocated(err), more="the placeholder was registered")
+      if (allocated(error)) return
+      call check(error, index(err%message, "placeholder request 'no_current_request'") > 0 &
+         & .and. index(err%message, "cannot be declared") > 0)
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, 1)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+      call check(error, count_visits(coupling), 0, more="the refused placeholder left a request")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, view)
+      call view%read("ghost", "phi", phi, err)
+      call coupling_close_view(coupling)
+      call check(error, allocated(err), more="the refused placeholder left a local name")
+      if (allocated(error)) return
+      call check(error, index(err%message, "did not register request 'ghost'") > 0)
+   end subroutine test_register_placeholder
+
+   !> Component reads name what went wrong: an unbound view, an invalid phase,
+   !> a name another scope registered and an output the request does not declare
+   !>
+   !> @param[out] error Test failure
+   subroutine test_view_errors(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Collection with one request per scope
+      type(coupling_type), target :: coupling
+      !> View bound to scope 1, and one never bound
+      type(coupling_view_type) :: view, unbound
+      !> Read buffer
+      real(wp), allocatable :: phi(:)
+      call unbound%check_mandatory(moist_phase_energy, err)
+      call check(error, allocated(err), more="an unbound view passed its check")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Unbound component coupling view") > 0)
+      if (allocated(error)) return
+      call unbound%read("point", "phi", phi, err)
+      call check(error, allocated(err), more="an unbound view was read")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Unbound component coupling view") > 0)
+      if (allocated(error)) return
+      call three_requests(coupling, err)
+      call check_moist_error(error, err, "three requests")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, 0, err)
+      call check(error, allocated(err), more="phase 0 passed the completeness check")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid coupling phase") > 0)
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+      do while (coupling%next())
+         call answer_energy_output(coupling, err)
+         call check_moist_error(error, err, "energy answer")
+         if (allocated(error)) return
+      end do
+      call coupling_make_view(coupling, 1, view)
+      call view%check_mandatory(4, err)
+      call check(error, allocated(err), more="phase 4 passed the view check")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Invalid coupling phase") > 0)
+      if (allocated(error)) return
+      call view%check_mandatory(moist_phase_energy, err)
+      call check_moist_error(error, err, "energy check through the view")
+      if (allocated(error)) return
+      ! "gaussian" is registered, but by scope 2
+      call view%read("gaussian", "phi", phi, err)
+      call check(error, allocated(err), more="scope 1 read another scope's request")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Component did not register request 'gaussian'") > 0)
+      if (allocated(error)) return
+      call view%read("point", "bogus", phi, err)
+      call check(error, allocated(err), more="an undeclared output was read")
+      if (allocated(error)) return
+      call check(error, index(err%message, "point_potential: unknown output 'bogus'") > 0)
+      if (allocated(error)) return
+      call view%read("point", "phi", phi, err)
+      call coupling_close_view(coupling)
+      call check_moist_error(error, err, "phi read")
+      if (allocated(error)) return
+      call check(error, all(phi == [1.0_wp, 2.0_wp]), more="the read returned a different answer")
+   end subroutine test_view_errors
 
    !* ================================================================================= *!
    !*                                     Host walk                                     *!
@@ -1158,6 +1321,161 @@ contains
 
    end subroutine test_response_add_rejects_shape
 
+   !> Density weights of every rank accumulate independently: an array absent
+   !> on the stored item is copied, one absent on the new item contributes
+   !> nothing, and a rank-3 shape mismatch is refused without touching the sums
+   !>
+   !> @param[out] error Test failure
+   subroutine test_response_density_ranks(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Density items, one per accumulation, so each carries only its own arrays
+      type(density_response_type) :: rho_only, full, hess_only, grad_only, bad_hess
+      !> Hessian weights of the full item
+      real(wp) :: hess(3, 3, 2)
+      !> Element index
+      integer :: i
+
+      allocate (rho_only%w_rho, source=[1.0_wp, 2.0_wp])
+      call response_accumulate(response, rho_only, err)
+      call check_moist_error(error, err, "density value weights")
+      if (allocated(error)) return
+
+      hess = reshape([(real(i, wp), i = 1, 18)], [3, 3, 2])
+      full%w_rho = [10.0_wp, 20.0_wp]
+      full%w_grad_rho = reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2])
+      full%w_hess_rho = hess
+      call response_accumulate(response, full, err)
+      call check_moist_error(error, err, "full density item")
+      if (allocated(error)) return
+
+      allocate (hess_only%w_hess_rho(3, 3, 2), source=1.0_wp)
+      call response_accumulate(response, hess_only, err)
+      call check_moist_error(error, err, "Hessian weights only")
+      if (allocated(error)) return
+
+      allocate (grad_only%w_grad_rho(3, 2), source=100.0_wp)
+      call response_accumulate(response, grad_only, err)
+      call check_moist_error(error, err, "gradient weights only")
+      if (allocated(error)) return
+
+      allocate (bad_hess%w_hess_rho(3, 3, 1), source=0.0_wp)
+      call response_accumulate(response, bad_hess, err)
+      call check(error, allocated(err), more="a differently shaped Hessian was accumulated")
+      if (allocated(error)) return
+      call check(error, index(err%message, "'density'") > 0 &
+         & .and. index(err%message, "'w_hess_rho'") > 0 &
+         & .and. index(err%message, "different shape than the stored one") > 0, &
+         & "error names item and array")
+      if (allocated(error)) return
+
+      call check(error, walk_names(response), "density,", more="density items were not merged")
+      if (allocated(error)) return
+      call check(error, response%next())
+      if (allocated(error)) return
+      select type (item => response%item())
+      type is (density_response_type)
+         call check(error, all(item%w_rho == [11.0_wp, 22.0_wp]), "value weights sum")
+         if (allocated(error)) return
+         call check(error, all(item%w_grad_rho == full%w_grad_rho + 100.0_wp), &
+            & "gradient weights copied, then summed")
+         if (allocated(error)) return
+         call check(error, all(shape(item%w_hess_rho) == [3, 3, 2]), "stored Hessian shape unchanged")
+         if (allocated(error)) return
+         call check(error, all(item%w_hess_rho == hess + 1.0_wp), "Hessian weights copied, then summed")
+      class default
+         call test_failed(error, "the stored item is not the density")
+      end select
+   end subroutine test_response_density_ranks
+
+   !> A differently sized rank-1 array is refused for the potential adjoint and
+   !> for the first GOSTSHYP amplitude, and the stored item is left unchanged
+   !>
+   !> @param[out] error Test failure
+   subroutine test_response_vector_shape(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Potential adjoint item
+      type(potential_adjoint_response_type) :: charge
+      !> GOSTSHYP amplitude item
+      type(gostshyp_amplitude_response_type) :: amplitude
+
+      allocate (charge%w_phi, source=[1.0_wp, 2.0_wp, 3.0_wp])
+      call response_accumulate(response, charge, err)
+      call check_moist_error(error, err, "first potential adjoint")
+      if (allocated(error)) return
+      charge%w_phi = [1.0_wp, 2.0_wp]
+      call response_accumulate(response, charge, err)
+      call check(error, allocated(err), more="a shorter w_phi was accumulated")
+      if (allocated(error)) return
+      call check(error, index(err%message, "'potential_adjoint'") > 0 &
+         & .and. index(err%message, "'w_phi'") > 0 &
+         & .and. index(err%message, "different shape than the stored one") > 0, &
+         & "error names item and array")
+      if (allocated(error)) return
+
+      amplitude%w_overlap = [1.0_wp, 2.0_wp]
+      amplitude%w_normal_deriv = [3.0_wp, 4.0_wp]
+      call response_accumulate(response, amplitude, err)
+      call check_moist_error(error, err, "first amplitude")
+      if (allocated(error)) return
+      amplitude%w_overlap = [1.0_wp]
+      call response_accumulate(response, amplitude, err)
+      call check(error, allocated(err), more="a shorter w_overlap was accumulated")
+      if (allocated(error)) return
+      call check(error, index(err%message, "'gostshyp_amplitude'") > 0 &
+         & .and. index(err%message, "'w_overlap'") > 0, "error names item and array")
+      if (allocated(error)) return
+
+      do while (response%next())
+         select type (item => response%item())
+         type is (potential_adjoint_response_type)
+            call check(error, all(item%w_phi == [1.0_wp, 2.0_wp, 3.0_wp]), "stored w_phi unchanged")
+         type is (gostshyp_amplitude_response_type)
+            ! The refusal stops before the normal derivative is summed
+            call check(error, all(item%w_overlap == [1.0_wp, 2.0_wp]) &
+               & .and. all(item%w_normal_deriv == [3.0_wp, 4.0_wp]), "stored amplitudes unchanged")
+         class default
+            call test_failed(error, "unexpected response item "//item%name())
+         end select
+         if (allocated(error)) return
+      end do
+   end subroutine test_response_vector_shape
+
+   !> The "no_current_item" placeholder stands for no item, so nothing
+   !> accumulates into it
+   !>
+   !> @param[out] error Test failure
+   subroutine test_response_placeholder_add(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Response under test
+      type(response_type) :: response
+      !> Placeholder returned outside a pass
+      class(response_item_type), allocatable :: placeholder
+
+      placeholder = response%item()
+      call check(error, trim(placeholder%name()), "no_current_item")
+      if (allocated(error)) return
+      ! The first accumulation stores a copy; the second has to add into it
+      call response_accumulate(response, placeholder, err)
+      call response_accumulate(response, placeholder, err)
+      call check(error, allocated(err), more="the placeholder accumulated an item")
+      if (allocated(error)) return
+      call check(error, index(err%message, "placeholder response item 'no_current_item'") > 0 &
+         & .and. index(err%message, "cannot accumulate 'no_current_item'") > 0)
+   end subroutine test_response_placeholder_add
+
    !* ================================================================================= *!
    !*                                   Model registry                                  *!
    !* ================================================================================= *!
@@ -1203,6 +1521,54 @@ contains
       end do
       call registry%clear()
    end subroutine test_registry_release
+
+   !> Releasing the oldest of three collections walks past the newer ones; a
+   !> collection the registry never minted is left alone
+   !>
+   !> @param[out] error Test failure
+   subroutine test_registry_release_tail(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Registry under test
+      type(coupling_registry_type), target :: registry
+      !> Borrowed collections, oldest first
+      type(coupling_type), pointer :: oldest, middle, newest
+      !> Collection minted elsewhere
+      type(coupling_type), target :: foreign
+      !> Pointer to the foreign collection
+      type(coupling_type), pointer :: stray
+      call registry%mint(oldest, err)
+      call check_moist_error(error, err, "mint oldest")
+      if (allocated(error)) return
+      call registry%mint(middle, err)
+      call check_moist_error(error, err, "mint middle")
+      if (allocated(error)) return
+      call registry%mint(newest, err)
+      call check_moist_error(error, err, "mint newest")
+      if (allocated(error)) return
+      ! The newest node is the head, so the oldest is two links down
+      call registry%release(oldest)
+      call check(error, .not. associated(oldest), more="the released tail kept its pointer")
+      if (allocated(error)) return
+      call check(error, registry%owns(middle) .and. registry%owns(newest), &
+         & more="releasing the tail dropped another collection")
+      if (allocated(error)) return
+      stray => foreign
+      call registry%release(stray)
+      call check(error, associated(stray, foreign), more="releasing a foreign collection nullified it")
+      if (allocated(error)) return
+      call check(error, .not. registry%owns(foreign), more="the registry claims a foreign collection")
+      if (allocated(error)) return
+      call check(error, registry%owns(middle) .and. registry%owns(newest), &
+         & more="releasing a foreign collection dropped an owned one")
+      if (allocated(error)) return
+      call fixture(middle, err)
+      call check_moist_error(error, err, "survivor still usable")
+      if (allocated(error)) return
+      call registry%clear()
+   end subroutine test_registry_release_tail
 
    !> Requests with matching inputs are shared across scopes, and a request no
    !> scope declares any more is dropped at the next grid snapshot

@@ -719,6 +719,42 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(prefilled%w_xyz - prefill)), 0.0_wp, thr=0.0_wp, &
          & more="GOSTSHYP wrote position weights at "//label)
+      if (allocated(error)) return
+
+      ! The gradient takes the response path: zero amplitudes, no nuclear term,
+      ! and no refusal of the forward mode it would otherwise raise
+      block
+         !> Nuclear-gradient accumulator carrying a sentinel
+         real(wp) :: gradient(3, 1)
+         !> Host part of the gradient phase
+         type(response_type) :: gradient_response
+         !> Copy of the gradient-phase amplitude item
+         type(gostshyp_amplitude_response_type), allocatable :: gradient_amplitude
+
+         gradient = sentinel
+         call component%get_gradient(component_view(coupling), cavity, gradient_response, &
+            & gradient, err)
+         call check(error, .not. allocated(err), &
+            & more="GOSTSHYP gradient failed at "//label)
+         if (allocated(error)) return
+         call check(error, maxval(abs(gradient - sentinel)), 0.0_wp, thr=0.0_wp, &
+            & more="GOSTSHYP moved the gradient at "//label)
+         if (allocated(error)) return
+         call copy_gostshyp_amplitude(gradient_response, gradient_amplitude)
+         call check(error, allocated(gradient_amplitude), &
+            & more="GOSTSHYP gradient dropped its host amplitudes at "//label)
+         if (allocated(error)) return
+         call check(error, allocated(gradient_amplitude%w_overlap) .and. &
+            & allocated(gradient_amplitude%w_normal_deriv), &
+            & more="GOSTSHYP gradient dropped its host amplitudes at "//label)
+         if (allocated(error)) return
+         call check(error, size(gradient_amplitude%w_overlap), size(amplitude%w_overlap), &
+            & more="GOSTSHYP gradient amplitudes differ from the response at "//label)
+         if (allocated(error)) return
+         call check(error, maxval(abs(gradient_amplitude%w_overlap)) + &
+            & maxval(abs(gradient_amplitude%w_normal_deriv)), 0.0_wp, thr=0.0_wp, &
+            & more="GOSTSHYP gradient wrote nonzero amplitudes at "//label)
+      end block
 
    end subroutine check_inert
 
@@ -766,6 +802,17 @@ contains
          & more="GOSTSHYP accepted a cavity without surface data")
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
+
+      ! Nor can it declare the moment widths, which follow from the areas
+      call component%new_coupling(bare, coupling, err)
+      if (.not. allocated(err)) then
+         call test_failed(error, "GOSTSHYP declared moments without cavity areas")
+         return
+      end if
+      call check(error, index(err%message, "GOSTSHYP requires cavity areas") > 0, &
+         & more="unexpected error message: "//err%message)
+      if (allocated(error)) return
+      deallocate (err)
 
       call component%update(mol, cavity, err)
       if (allocated(err)) then

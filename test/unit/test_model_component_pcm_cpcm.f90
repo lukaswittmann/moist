@@ -68,6 +68,7 @@ contains
          & new_unittest("pcm_rejects_dielectric_below_one", test_pcm_invalid_epsilon), &
          & new_unittest("cpcm_iterative_rejects_non_spd_matrix", test_cpcm_iterative_not_spd, should_fail=.true.), &
          & new_unittest("cpcm_reallocates_on_grid_change", test_cpcm_reallocate_on_ngrid_change), &
+         & new_unittest("cpcm_grid_mismatch_guards", test_cpcm_grid_mismatch_guards), &
          & new_unittest("cpcm_records_shared_timer_tree", test_cpcm_timer_tree), &
          & new_unittest("cpcm_stale_charge_regression", test_cpcm_stale_charge_regression), &
          & new_unittest("cpcm_surface_weights", test_cpcm_surface_weights), &
@@ -889,6 +890,123 @@ contains
       if (allocated(error)) return
 
    end subroutine test_cpcm_reallocate_on_ngrid_change
+
+!> Test that charges, host potentials and host derivatives from the wrong grid
+!> are refused by name rather than read
+   subroutine test_cpcm_grid_mismatch_guards(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+
+      !> Molecular structure
+      type(structure_type) :: mol
+      !> Component under test
+      type(solvation_model_component_cpcm) :: pcm_model
+      !> Two cavities of the same molecule on different Lebedev grids
+      type(cavity_type_iswig) :: cavity_small, cavity_large
+      !> One potential trace per cavity grid
+      type(coupling_type) :: coupling_small, coupling_large
+      !> Radius model storage of each cavity
+      type(radius_type_static) :: radius_small, radius_large
+      !> Surface adjoints offered to the refused host contraction
+      type(cavity_surface_adjoint_type) :: acc
+      !> Potential adjoint requested before any solve
+      real(wp), allocatable :: w_phi(:)
+      !> Atomic point charges
+      real(wp), parameter :: qat_vals(*) = [&
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
+         &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
+      !> Energy accumulator
+      real(wp) :: energy
+
+      !> Run context owned here and borrowed by the cavities and component
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+
+      call get_structure(mol, "MB16-43", "01")
+      call build_test_cavity(mol, 14, ctx, radius_small, cavity_small, err)
+      if (allocated(err)) then
+         call test_failed(error, "Small cavity setup failed: "//err%message)
+         return
+      end if
+      call build_test_cavity(mol, 26, ctx, radius_large, cavity_large, err)
+      if (allocated(err)) then
+         call test_failed(error, "Large cavity setup failed: "//err%message)
+         return
+      end if
+      call check(error, cavity_small%ngrid /= cavity_large%ngrid, &
+         & more="both cavities have the same grid size, the test is vacuous")
+      if (allocated(error)) return
+
+      call new_component_cpcm(pcm_model, ctx, epsilon=78.4_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      if (allocated(err)) then
+         call test_failed(error, "CPCM initialization failed: "//err%message)
+         return
+      end if
+
+      ! No charges have been solved yet
+      call pcm_model%potential_adjoint(w_phi, err)
+      call check_refusal("surface charges are unavailable")
+      if (allocated(error)) return
+
+      ! Matrix on the large grid, host potential answered on the small one
+      call pcm_model%update(mol, cavity_large, err)
+      if (allocated(err)) then
+         call test_failed(error, "CPCM update failed: "//err%message)
+         return
+      end if
+      call stage_point_charge_energy(error, pcm_model, cavity_small, qat_vals, mol, coupling_small)
+      if (allocated(error)) return
+      energy = 0.0_wp
+      call pcm_model%get_energy(component_view(coupling_small), cavity_large, energy, err)
+      call check_refusal("External potential size mismatch")
+      if (allocated(error)) return
+      call check(error, energy, 0.0_wp, thr=0.0_wp, &
+         & more="refused energy was accumulated")
+      if (allocated(error)) return
+
+      ! Valid charges on the large grid, host derivatives offered for another size
+      call stage_point_charge_energy(error, pcm_model, cavity_large, qat_vals, mol, coupling_large)
+      if (allocated(error)) return
+      call pcm_model%get_energy(component_view(coupling_large), cavity_large, energy, err)
+      if (allocated(err)) then
+         call test_failed(error, "CPCM energy failed: "//err%message)
+         return
+      end if
+      call pcm_model%prepare_gradient(cavity_large, coupling_large, err)
+      if (allocated(err)) then
+         call test_failed(error, "Gradient staging failed: "//err%message)
+         return
+      end if
+      call fill_missing_with_zeros(cavity_large, coupling_large)
+      call fill_point_charge_field(cavity_large, coupling_large, qat_vals, mol)
+      call pcm_model%get_host_surface_weights(component_view(coupling_large), acc, &
+         & cavity_large%ngrid + 1, err)
+      call check_refusal("PCM spatial derivative grid mismatch")
+
+   contains
+
+      !> Require a library error naming the expected refusal
+      !>
+      !> @param[in] expected Distinctive substring of the expected message
+      subroutine check_refusal(expected)
+         !> Distinctive substring of the expected message
+         character(len=*), intent(in) :: expected
+
+         if (.not. allocated(err)) then
+            call test_failed(error, "expected refusal was not raised: "//expected)
+            return
+         end if
+         call check(error, index(err%message, expected) > 0, &
+            & more="unexpected error message: "//err%message)
+         deallocate (err)
+      end subroutine check_refusal
+
+   end subroutine test_cpcm_grid_mismatch_guards
 
 !> Test that the component records its work on the run context's shared timer,
 !> nested under whatever the caller had open. This is the observable proof that

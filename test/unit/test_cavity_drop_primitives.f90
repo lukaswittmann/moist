@@ -37,7 +37,8 @@ contains
                   new_unittest("phi_f2_rarb", test_phi_f2_rArB), &
                   new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
                   new_unittest("phi_f012_r", test_phi_f012_r), &
-                  new_unittest("switching_f1_ra", test_switching_f1_rA) &
+                  new_unittest("switching_f1_ra", test_switching_f1_rA), &
+                  new_unittest("parameters_invalid", test_parameters_invalid) &
                   ]
    end subroutine collect_cavity_drop_primitives
 
@@ -679,5 +680,51 @@ contains
          deallocate (centers_base, centers_local)
       end do
    end subroutine test_switching_f1_rA
+
+   !> Derived DROP parameters refuse each out-of-range numerical control
+   subroutine test_parameters_invalid(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(mctc_error), allocatable :: err
+      !> Parameter set under test, reset to defaults per case
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Case index
+      integer :: icase
+      !> Number of invalid cases
+      integer, parameter :: ncase = 5
+
+      ! The defaults themselves derive cleanly, so each refusal below is the
+      ! single field changed for that case
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, "default DROP parameters were refused: "//err%message)
+         return
+      end if
+
+      do icase = 1, ncase
+         call param%init_defaults()
+         select case (icase)
+         case (1)
+            param%tolerance = 0.0_wp
+         case (2)
+            param%rho_grid_h = -1.0_wp
+         case (3)
+            param%proj_maxiter = 0
+         case (4)
+            param%proj_level = 0
+         case (5)
+            param%proj_level = 10
+         end select
+         call param%compute_derived(err)
+         if (.not. allocated(err)) then
+            call test_failed(error, "invalid DROP parameters were accepted")
+            return
+         end if
+         call check(error, index(err%message, "Invalid DROP numerical parameters") > 0, &
+                    more="unexpected error message: "//err%message)
+         if (allocated(error)) return
+      end do
+   end subroutine test_parameters_invalid
 
 end module test_cavity_drop_primitives

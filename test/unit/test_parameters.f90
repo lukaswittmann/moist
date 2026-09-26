@@ -68,6 +68,69 @@ contains
       call check(error, trim(param%label) == 'a "quoted" name')
    end subroutine test_vector_and_string
 
+   !> Structurally wrong fields are refused by name
+   !>
+   !> A group key holding a scalar, a vector of the wrong length and an
+   !> oversized fixed-length string each fail in their own registration helper
+   !>
+   !> @param[out] error Test failure
+   subroutine test_invalid_fields(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Parameter set with dotted group keys
+      type(moist_cavity_drop_parameters_type) :: drop
+      !> Fresh vector/string sets, one per refused field
+      type(vector_parameters_type) :: vector, label
+      !> Temporary path owned by this test
+      character(len=*), parameter :: path = "moist-test-parameters-invalid.json"
+
+      call read_invalid(drop, '{"grid": 110}', "Invalid parameter group: grid.", error)
+      if (allocated(error)) return
+      call read_invalid(vector, '{"weights": [1.0, 2.0, 3.0]}', &
+         "Invalid parameter vector: weights", error)
+      if (allocated(error)) return
+      call read_invalid(label, '{"label": "seventeen letters!"}', &
+         "Parameter string is too long: label", error)
+
+   contains
+
+      !> Write one document, read it back and require the named refusal
+      !>
+      !> @param[inout] param Parameter set reading the document
+      !> @param[in] text JSON document
+      !> @param[in] expected Distinctive substring of the expected message
+      !> @param[out] error Test failure
+      subroutine read_invalid(param, text, expected, error)
+         !> Parameter set reading the document
+         class(moist_model_parameters_type), intent(inout) :: param
+         !> JSON document
+         character(len=*), intent(in) :: text
+         !> Distinctive substring of the expected message
+         character(len=*), intent(in) :: expected
+         !> Test failure
+         type(error_type), allocatable, intent(out) :: error
+         !> Library error handling
+         type(moist_error), allocatable :: err
+         !> File unit and I/O status
+         integer :: unit, stat
+
+         open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         write(unit, '(a)', iostat=stat) text
+         close(unit)
+         call check(error, stat, 0)
+         if (allocated(error)) return
+         call param%read_file(path, err)
+         open(newunit=unit, file=path, status="old", iostat=stat)
+         if (stat == 0) close(unit, status="delete", iostat=stat)
+         call check(error, allocated(err), more="accepted "//text)
+         if (allocated(error)) return
+         call check(error, index(err%message, expected) > 0, more=err%message)
+      end subroutine read_invalid
+
+   end subroutine test_invalid_fields
+
    !> Collect parameter API regressions
    !>
    !> @param[out] testsuite Tests to run
@@ -77,6 +140,7 @@ contains
          new_unittest("file-roundtrip", test_roundtrip), &
          new_unittest("copies-and-errors", test_copies_and_errors), &
          new_unittest("vector-and-string", test_vector_and_string), &
+         new_unittest("invalid-fields", test_invalid_fields), &
          new_unittest("file-formats", test_file_formats)]
    end subroutine collect_parameters
 

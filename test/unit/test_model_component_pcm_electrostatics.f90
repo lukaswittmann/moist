@@ -294,6 +294,21 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(grad_small)), 0.0_wp, thr=0.0_wp, &
                  more="rejected direct kernel left the gradient untouched")
+      if (allocated(error)) return
+
+      ! Gaussian widths that do not match the surface
+      grad = 1.0_wp
+      call pcm_electrostatic_direct_gradient(xyz, sphxyz, surface_q, za, grad, err, &
+                                             xi=[1.0_wp, 1.0_wp])
+      if (.not. allocated(err)) then
+         call test_failed(error, "direct kernel accepted mis-shaped Gaussian widths")
+         return
+      end if
+      call check(error, index(err%message, "width shape mismatch") > 0, &
+                 more="unexpected error message: "//err%message)
+      if (allocated(error)) return
+      call check(error, maxval(abs(grad)), 0.0_wp, thr=0.0_wp, &
+                 more="rejected direct kernel left the gradient untouched")
 
    end subroutine test_rejects_invalid_shapes
 

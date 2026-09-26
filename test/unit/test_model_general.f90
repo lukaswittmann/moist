@@ -44,7 +44,8 @@ contains
 
       testsuite = [ &
          & new_unittest("general_model_cpcm", test_general_model_smoke), &
-         & new_unittest("general_model_cpcm_pv", test_general_model_pv_smoke) &
+         & new_unittest("general_model_cpcm_pv", test_general_model_pv_smoke), &
+         & new_unittest("general_model_guards", test_general_model_guards) &
          & ]
 
    end subroutine collect_model_general
@@ -401,6 +402,123 @@ contains
                  0.0_wp, thr=thr2, message="Repeated gradient getters must accumulate")
 
    end subroutine test_general_model_pv_smoke
+
+!> A coupling minted by one model is refused by every other model, and a model
+!> without an internal isodensity cavity refuses a density
+   subroutine test_general_model_guards(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+
+      !> Molecular structure
+      type(structure_type) :: mol
+      !> Owning model and a second, independent model
+      type(solvation_model_general), target :: model_a, model_b
+      !> Only component of both models
+      type(solvation_model_component_pv) :: pv_component
+      !> Cavity template copied into both models
+      type(cavity_type_iswig) :: cavity
+      !> Radius model storage
+      type(radius_type_static) :: radius_model
+      !> Coupling minted by `model_a`
+      type(coupling_type), pointer :: coupling
+      !> Response list handed to the refused gradient
+      type(response_type) :: response
+      !> Nuclear-gradient accumulator, must stay untouched
+      real(wp), allocatable :: gradient(:, :)
+      !> Density matrix offered to a model that cannot take one
+      real(wp) :: density(1, 1)
+
+      !> Run context owned here and borrowed by the cavity and models
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+      call get_structure(mol, "MB16-43", "01")
+
+      call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
+      if (allocated(err)) then
+         call test_failed(error, "Cavity setup failed: "//err%message)
+         return
+      end if
+      call new_component_pv(pv_component, 0.5_wp)
+      call build_model(model_a)
+      if (allocated(error)) return
+      call build_model(model_b)
+      if (allocated(error)) return
+
+      call model_a%new_coupling(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "Coupling setup failed: "//err%message)
+         return
+      end if
+
+      ! Both models are updated, so the ownership check is what refuses
+      call model_b%prepare_energy(coupling, err)
+      call check_foreign("staging")
+      if (allocated(error)) return
+
+      allocate (gradient(3, mol%nat), source=0.0_wp)
+      call model_b%get_gradient(coupling, response, gradient, err)
+      call check_foreign("gradient")
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient)), 0.0_wp, thr=0.0_wp, &
+         & more="refused gradient wrote into the accumulator")
+      if (allocated(error)) return
+
+      ! The owner itself stages the same coupling
+      call model_a%prepare_energy(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, "Owner staging failed: "//err%message)
+         return
+      end if
+      call model_a%release_coupling(coupling)
+
+      density = 0.0_wp
+      call model_b%set_isodensity_density(density, err)
+      if (.not. allocated(err)) then
+         call test_failed(error, "iSwiG model accepted an isodensity density")
+         return
+      end if
+      call check(error, index(err%message, "requires an internal isodensity cavity") > 0, &
+         & more="unexpected error message: "//err%message)
+      if (allocated(error)) return
+      call check(error, .not. model_b%updated, &
+         & more="a refused density left the model marked usable")
+
+   contains
+
+      !> Assemble and update a PV-only general model
+      !>
+      !> @param[out] model Model to build
+      subroutine build_model(model)
+         !> Model to build
+         type(solvation_model_general), intent(out) :: model
+
+         call new_model_general(model, cavity, ctx, err)
+         if (.not. allocated(err)) call model%add_component(pv_component, err)
+         if (.not. allocated(err)) call model%update(mol, err)
+         if (allocated(err)) call test_failed(error, "Model setup failed: "//err%message)
+      end subroutine build_model
+
+      !> Require the foreign-coupling refusal for one accessor
+      !>
+      !> @param[in] label Accessor name used in failure messages
+      subroutine check_foreign(label)
+         !> Accessor name used in failure messages
+         character(len=*), intent(in) :: label
+
+         if (.not. allocated(err)) then
+            call test_failed(error, "foreign coupling accepted by "//label)
+            return
+         end if
+         call check(error, index(err%message, "Coupling belongs to a different model") > 0, &
+            & more=label//": "//err%message)
+         deallocate (err)
+      end subroutine check_foreign
+
+   end subroutine test_general_model_guards
 
 !> Assemble an updated general model from a CPCM component and an optional
 !> PV component at the requested pressure
