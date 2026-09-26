@@ -4,7 +4,7 @@
 !> screening thresholds, and turns every quantity the LSF API exposes into a
 !> stream of labelled records. That stream is then either compared against the
 !> committed fixture (`test/unit/data/lsf_golden_*.txt`) or against a second
-!> traversal in the same process.
+!> traversal in the same process
 !>
 !> Record layout, one per line of the fixture:
 !>
@@ -21,14 +21,15 @@
 !>   * `value`    `es24.16`, an exact IEEE-754 double round trip
 !>
 !> Slots that are symmetric by construction are dumped once (j <= k <= l <= m);
-!> the discarded components are covered by the `*_tensor_symmetry` tests.
+!> the discarded components are covered by the `*_tensor_symmetry` tests
 !>
 !> The fixture is committed data and this module deliberately cannot write it:
 !> a golden reference the test can rewrite is one keystroke away from being
 !> "fixed" instead of investigated. If the LSF definition legitimately changes,
 !> regenerate deliberately - dump [[golden_stream_type]] from a throwaway patch
-!> - and review the numerical diff before committing it.
+!> - and review the numerical diff before committing it
 module test_cavity_drop_lsf_golden
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -39,7 +40,7 @@ module test_cavity_drop_lsf_golden
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_lsf_golden
@@ -75,7 +76,7 @@ module test_cavity_drop_lsf_golden
 
    !> Unnormalised offset directions, one per evaluation point. Deliberately
    !> off-axis and mutually non-parallel so no point lands on a symmetry
-   !> element of a symmetric fixture (which could put it on a nucleus).
+   !> element of a symmetric fixture (which could put it on a nucleus)
    real(wp), parameter :: raw_dirs(ndim, n_points) = reshape([ &
                           1.0_wp, 2.0_wp, 3.0_wp, &
                           -2.0_wp, 1.0_wp, 4.0_wp, &
@@ -84,17 +85,17 @@ module test_cavity_drop_lsf_golden
                           -1.0_wp, 3.0_wp, -2.0_wp], [ndim, n_points])
 
    !> Radial offsets applied to `raw_dirs`; see [[build_points]] for how each
-   !> is anchored. Point 5 is the deliberate near-nucleus probe.
+   !> is anchored. Point 5 is the deliberate near-nucleus probe
    real(wp), parameter :: point_offsets(n_points) = &
                           [13.0_wp, 1.25_wp, 0.10_wp, 0.40_wp, 0.05_wp]
 
    !> Smallest distance from any evaluation point to any nucleus that
    !> [[build_points]] tolerates. Several kernels guard on `x > 0`; pinning
-   !> the exactly-on-a-nucleus branch is not the intent here.
+   !> the exactly-on-a-nucleus branch is not the intent here
    real(wp), parameter :: min_nucleus_clearance = 4.0e-2_wp
 
    !> One fixture case: an mstore structure plus the SvdW blending weights it
-   !> is evaluated with. CFC has no analogous knob and ignores the weights.
+   !> is evaluated with. CFC has no analogous knob and ignores the weights
    type :: golden_case_type
       !> Short tag written into every record of this case
       character(len=12) :: tag
@@ -118,7 +119,7 @@ module test_cavity_drop_lsf_golden
    !> 16-atom mindless cage, and an amino acid. Cases 1-5 are also the CFC
    !> cases; case 6 repeats CH4 with the legacy SvdW weights, because the
    !> shipped defaults set `blend_2b = 0` and would otherwise leave the whole
-   !> two-body branch of the blending unpinned.
+   !> two-body branch of the blending unpinned
    integer, parameter :: n_svdw_cases = 6
    integer, parameter :: n_cfc_cases = 5
    type(golden_case_type), parameter :: golden_cases(n_svdw_cases) = [ &
@@ -135,7 +136,7 @@ module test_cavity_drop_lsf_golden
 
    !> What a record is about: the concrete, the case, the evaluation point and
    !> the screening flag. Every record of one block shares one of these, so it
-   !> travels through the emission routines as a single argument.
+   !> travels through the emission routines as a single argument
    type :: record_id_type
       !> `svdw` or `cfc`
       character(len=8) :: kind
@@ -164,7 +165,7 @@ module test_cavity_drop_lsf_golden
    !> Structural problems - a shape, an index space or an invariant that no
    !> longer matches what this harness understands - are collected here rather
    !> than raised on the spot, so the traversal always runs to completion and
-   !> the caller reports them through the same channel as a numerical mismatch.
+   !> the caller reports them through the same channel as a numerical mismatch
    type :: golden_stream_type
       !> Emitted records, valid entries `1:n`
       type(golden_record_type), allocatable :: rec(:)
@@ -240,7 +241,7 @@ contains
    end subroutine run_golden
 
    !> Path of a fixture file. meson exports `MOIST_SOURCE_ROOT`; fpm runs the
-   !> tester from the project root, which the `.` default covers.
+   !> tester from the project root, which the `.` default covers
    !>
    !> @param[in] kind  `svdw` or `cfc`
    !> @returns         Full path of the fixture
@@ -258,7 +259,7 @@ contains
    !* ================================================================================= *!
 
    !> Walk every case / point / screening flag of one concrete, emitting the
-   !> full record set in a fixed order.
+   !> full record set in a fixed order
    !>
    !> @param[in]  kind    `svdw` or `cfc`
    !> @param[out] stream  Emitted records
@@ -324,7 +325,7 @@ contains
       call get_test_radii(mol, radii)
    end subroutine load_case
 
-   !> Build the deterministic evaluation points of one structure.
+   !> Build the deterministic evaluation points of one structure
    !>
    !> All five are anchored on nuclei rather than on the bounding box, so
    !> their relation to the surface is the same for every structure:
@@ -374,7 +375,7 @@ contains
             dmin = min(dmin, norm2(points(:, ip) - mol%xyz(:, iat)))
          end do
          if (dmin < min_nucleus_clearance) then
-            write (tail, '(i0,a,es12.4)') ip, " sits ", dmin
+            write (tail, "(i0,a,es12.4)") ip, " sits ", dmin
             call test_failed(error, "evaluation point "//trim(tail)// &
                              " bohr from a nucleus - reference geometry changed?")
             return
@@ -383,7 +384,7 @@ contains
    end subroutine build_points
 
    !> Deterministic atom selection: first, middle and last centre, deduplicated
-   !> while keeping ascending order. Small structures simply yield fewer.
+   !> while keeping ascending order. Small structures simply yield fewer
    !>
    !> @param[in]  nat  Number of atoms
    !> @param[out] sel  Selected user-space atom indices, ascending
@@ -413,11 +414,11 @@ contains
    !* ================================================================================= *!
 
    !> Allocate a fresh LSF of the requested concrete kind, bind it to `mol` and
-   !> drive it to that kind's derivative cap.
+   !> drive it to that kind's derivative cap
    !>
    !> The screening threshold has to be set before `update`, which is what
    !> pushes it into the SSD system. Only the constructor differs between the
-   !> concretes; everything after it is base-class API.
+   !> concretes; everything after it is base-class API
    !>
    !> @param[out] lsf    Fresh LSF
    !> @param[in]  kind   `svdw` or `cfc`
@@ -447,8 +448,8 @@ contains
          select type (lsf)
          type is (moist_cavity_drop_lsf_svdw_type)
             lsf%screening_threshold = thr
-            call lsf%new(blend_k=gcase%blend_k, blend_1b=gcase%blend_1b, &
-                         blend_2b=gcase%blend_2b, blend_3b=gcase%blend_3b)
+            call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=gcase%blend_k, &
+               blend_1b=gcase%blend_1b, blend_2b=gcase%blend_2b, blend_3b=gcase%blend_3b))
          end select
          max_deriv = max_deriv_svdw
       case (kind_cfc)
@@ -491,7 +492,7 @@ contains
    !* ================================================================================= *!
 
    !> Emit every record of one case at one evaluation point: screened block
-   !> first, unscreened block second, difference record last.
+   !> first, unscreened block second, difference record last
    !>
    !> @param[in]    kind    `svdw` or `cfc`
    !> @param[in]    gcase   Case descriptor
@@ -547,7 +548,7 @@ contains
    !> The two concretes share the spatial and single-nucleus blocks; the pair
    !> and normalisation blocks, and everything of derivative order 4, are SvdW
    !> only, because CFC is capped at order 3 today and an accessor asked for an
-   !> order it was not prepared for is a hard failure by design.
+   !> order it was not prepared for is a hard failure by design
    !>
    !> @param[in]    lsf     Prepared LSF
    !> @param[in]    id      Concrete, case, point and screening flag
@@ -876,10 +877,10 @@ contains
    !> by indexing it directly. The rule the harness follows is: records are keyed
    !> by *user-space* atom id (so the fixture survives an index-space change in
    !> `src/`), while the slot to read is derived from the extent of the array the
-   !> routine actually returned. Nothing here assumes which space a routine uses.
+   !> routine actually returned. Nothing here assumes which space a routine uses
 
    !> Resolve the slot holding user-space atom `atom` in a nuclear dimension of
-   !> length `extent`.
+   !> length `extent`
    !>
    !> `extent == ncenters` means the routine is user-indexed and the slot is the
    !> atom id itself. `extent == active_count()` means it is active-indexed and
@@ -887,10 +888,10 @@ contains
    !> all-zero block, which is that atom's true derivative contribution. Any
    !> other extent is a structural change this harness does not understand and is
    !> reported rather than read; the returned slot is then 0, so a wrong guess can
-   !> never turn into an out-of-bounds access.
+   !> never turn into an out-of-bounds access
    !>
    !> When every atom is active the two spaces coincide, because [[active_map]]
-   !> asserts the active list is then in ascending user-space order.
+   !> asserts the active list is then in ascending user-space order
    !>
    !> @param[in]    extent  Length of the nuclear dimension as returned
    !> @param[in]    atom    User-space atom id
@@ -928,7 +929,7 @@ contains
    !> Read the nuclear slot of a rank-reduced slice, or 0 when the atom has none
    !>
    !> Call sites slice every fixed index away first - `t(j, k, s, :)` - so one
-   !> routine serves nuclear arrays of any rank.
+   !> routine serves nuclear arrays of any rank
    !>
    !> @param[in] v     Nuclear slice, one element per slot
    !> @param[in] slot  Slot from [[nuc_slot]]
@@ -962,13 +963,13 @@ contains
    end function slot_read2
 
    !> Guard a *caller-sized* nuclear output, whose extent cannot reveal its index
-   !> space because the harness chose it.
+   !> space because the harness chose it
    !>
    !> `f3_rr_rA`'s optional `lsf1_rA` (and `normalized_f01_rA`'s gradient) are
    !> passed in as `(3, ncenters)` buffers and scattered into by user-space atom
    !> id. If a future refactor made them active-indexed instead, the extent check
    !> in [[nuc_slot]] could not see it - but the columns of screened-away atoms
-   !> would stop being zero. That is what this asserts.
+   !> would stop being zero. That is what this asserts
    !>
    !> @param[in]    t       Caller-sized `(axis, A)` output
    !> @param[in]    act     Atom -> active index map (0 = dropped)
@@ -1003,7 +1004,7 @@ contains
 
    !> Guard the unscreened reference: `screening_threshold = 0` must leave
    !> every centre active. If a future change to the SSD screen invalidates
-   !> that, the fixture would silently stop being an unscreened reference.
+   !> that, the fixture would silently stop being an unscreened reference
    !>
    !> @param[in]  nact   Active count reported by the LSF
    !> @param[in]  nat    Number of centres
@@ -1034,7 +1035,7 @@ contains
    !> active list must be in ascending user-space order, so active index equals
    !> atom id. `lsf_base_rebuild_screening` guarantees this for a full `prepare`
    !> by walking the full scan through `orig_to_sorted`; if that ever changes,
-   !> this fires instead of the harness silently reading the wrong slot.
+   !> this fires instead of the harness silently reading the wrong slot
    !>
    !> @param[in]    lsf     Prepared LSF (either concrete)
    !> @param[out]   act     `act(atom)` = active index or 0
@@ -1070,7 +1071,7 @@ contains
    !* ================================================================================= *!
 
    !> Append one record. The traversal calls this and nothing else, so the
-   !> fixture's order is the traversal's order by construction.
+   !> fixture's order is the traversal's order by construction
    !>
    !> @param[inout] self      Record sink
    !> @param[in]    id        Concrete, case, point and screening flag
@@ -1103,11 +1104,11 @@ contains
    end subroutine stream_emit
 
    !> Record a *structural* problem - a shape, an index space or an invariant
-   !> that no longer matches what this harness understands.
+   !> that no longer matches what this harness understands
    !>
    !> Collected rather than raised so that the traversal always runs to
    !> completion; every caller of [[traverse]] reports a non-zero count as a
-   !> test failure before it looks at any number.
+   !> test failure before it looks at any number
    !>
    !> @param[inout] self  Record sink
    !> @param[in]    text  Message describing the problem
@@ -1176,7 +1177,7 @@ contains
          if (rel_deviation(got%rec(i)%val, ref(i)%val) <= golden_tol) cycle
          nfail = nfail + 1
          if (nfail == 1) then
-            write (values, '(a,es24.16,a,es24.16)') " golden ", ref(i)%val, " now ", &
+            write (values, "(a,es24.16,a,es24.16)") " golden ", ref(i)%val, " now ", &
                got%rec(i)%val
             first = "record "//itoa(i)//" "//record_label(ref(i))//values
          end if
@@ -1212,7 +1213,7 @@ contains
       character(len=:), allocatable :: text
       character(len=32) :: buf
 
-      write (buf, '(i0)') n
+      write (buf, "(i0)") n
       text = trim(buf)
    end function itoa
 
@@ -1235,7 +1236,7 @@ contains
    end function record_label
 
    !> Parse a fixture file into an array of records. `#` comments and blank
-   !> lines are skipped; everything else must parse as a record.
+   !> lines are skipped; everything else must parse as a record
    !>
    !> @param[in]  path   Fixture path
    !> @param[out] ref    Parsed records
@@ -1260,7 +1261,7 @@ contains
 
       n = 0
       do
-         read (unit, '(a)', iostat=stat) line
+         read (unit, "(a)", iostat=stat) line
          if (stat /= 0) exit
          if (is_record_line(line)) n = n + 1
       end do
@@ -1270,7 +1271,7 @@ contains
 
       n = 0
       do
-         read (unit, '(a)', iostat=stat) line
+         read (unit, "(a)", iostat=stat) line
          if (stat /= 0) exit
          if (.not. is_record_line(line)) cycle
          n = n + 1
@@ -1306,7 +1307,7 @@ contains
    !* ================================================================================= *!
 
    !> Evaluate everything twice in one process and require the two value streams
-   !> to be bit-identical.
+   !> to be bit-identical
    !>
    !> This is the standing guard against the class of bug that once hid here: the
    !> harness read a pair tensor past `n_active`, so its records came from
@@ -1315,10 +1316,10 @@ contains
    !> extent is now structurally impossible (see [[nuc_slot]]), and this check
    !> keeps *any* run-to-run instability - stale memory, a race, leftover
    !> accumulator state - a test failure rather than a flaky fixture. It also
-   !> catches a NaN, which can never compare equal to itself.
+   !> catches a NaN, which can never compare equal to itself
    !>
    !> The second pass runs against a heap the first pass has already churned, so
-   !> a read of uninitialised memory has every chance to return something else.
+   !> a read of uninitialised memory has every chance to return something else
    subroutine test_stream_reproducible(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1359,7 +1360,7 @@ contains
 
       do i = 1, first%n
          if (first%rec(i)%val == second%rec(i)%val) cycle
-         write (tail, '(a,es24.16,a,es24.16)') &
+         write (tail, "(a,es24.16,a,es24.16)") &
             " differs between two passes in one process: ", first%rec(i)%val, " then ", &
             second%rec(i)%val
          call test_failed(error, kind//" record "//itoa(i)//trim(tail))
@@ -1375,7 +1376,7 @@ contains
    !> symmetric by construction. These checks are the other half of that deal:
    !> they assert the full tensors really are symmetric in exactly those slots,
    !> so nothing is left unpinned. Tolerance is loose on purpose - the target is
-   !> a wrong permutation, not accumulated roundoff.
+   !> a wrong permutation, not accumulated roundoff
    subroutine test_svdw_symmetry(error)
       type(error_type), allocatable, intent(out) :: error
       call run_symmetry(error, kind_svdw)

@@ -5,7 +5,7 @@ module moist_cavity_drop_parameters
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
-   implicit none
+   implicit none(type, external)
 
    !> Maximum supported atomic number
    integer, parameter :: maxAtomicNumbers = 118
@@ -20,7 +20,7 @@ module moist_cavity_drop_parameters
                          1202, 1454, 1730, 2030, 2354, 2702, 3074, 3470, &
                          3890, 4334, 4802, 5294, 5810]
 
-   !> Fitted Born zeta values matching `iswig_xi_born_nleb`.
+   !> Fitted Born zeta values matching `iswig_xi_born_nleb`
    real(wp), parameter :: iswig_xi_born_zeta(29) = [ &
                           4.845184_wp, 4.864049_wp, 4.854249_wp, 4.900523_wp, &
                           4.891966_wp, 4.896867_wp, 4.900490_wp, 4.897689_wp, &
@@ -33,17 +33,20 @@ module moist_cavity_drop_parameters
 
    !> Parameter container for DROP
    !> Extends the base parameter type with DROP-specific settings for
-   !> grid generation, blending, barrier potentials, and optimization.
+   !> grid generation, blending, barrier potentials, and optimization
    type, extends(moist_model_parameters_type) :: moist_cavity_drop_parameters_type
 
-      !> ========== Grid Discretization ==========
+      !* ----------------------------- Grid Discretization ---------------------------- *!
 
       !> Number of Lebedev quadrature points per atomic sphere
       integer :: num_leb = 194
 
-      !> ========== Tolerance ==========
+      !> Compute all optional cavity properties
+      logical :: do_fine = .false.
 
-      !> Main tolerance controlling all numerical thresholds.
+      !* ---------------------------------- Tolerance --------------------------------- *!
+
+      !> Main tolerance controlling all numerical thresholds
       !>
       !> Derived tolerances (tightest to loosest):
       !>  - wleb_cut            = tolerance * 0.05 (quadrature weight cutoff)
@@ -55,18 +58,20 @@ module moist_cavity_drop_parameters
       !> Minimum weight cutoff (derived from tolerance)
       real(wp) :: wleb_cut = 5.0E-12_wp
 
-      !> LSF screening threshold (derived from `tolerance` in
-      !> `compute_drop_derived`). The DROP constructor pushes this value
-      !> into the polymorphic `lsf_model` so the LSF's own internal
-      !> screening caches use a value consistent with the cavity tolerance.
+      !> LSF screening threshold, derived from `tolerance` in
+      !> `compute_drop_derived`
+      !>
+      !> - the DROP constructor pushes this value into the polymorphic
+      !>   `lsf_model`, so the LSF's own screening caches stay consistent with
+      !>   the cavity tolerance
       real(wp) :: screening_threshold = 1.0E-11_wp
 
-      !> ========== Objective Function Weights ==========
+      !* ------------------------- Objective Function Weights ------------------------- *!
 
       !> Weight w_a for anchor term
       real(wp) :: phi_alpha = 0.5_wp
 
-      !> ========== Projection Optimization ==========
+      !* --------------------------- Projection Optimization -------------------------- *!
 
       !> Convergence tolerance for projection optimizer (derived from tolerance)
       real(wp) :: proj_tol = 1.0E-10_wp
@@ -84,7 +89,7 @@ module moist_cavity_drop_parameters
       !> 9 = Certified octree branch search
       integer :: proj_level = 3
 
-      !> ========== Certified octree branch search (level 9) ==========
+      !* ------------------ Certified octree branch search (level 9) ------------------ *!
 
       !> Edge length at which a surviving box stops splitting and becomes a seed candidate (Bohr)
       real(wp) :: octree_seed_size = 0.2_wp
@@ -94,31 +99,32 @@ module moist_cavity_drop_parameters
       integer :: octree_max_survivors = 200000
       !> Octree depth limit
       integer :: octree_max_depth = 12
-      !> Seed extraction: 
+      !> Seed extraction:
       !>   1 = one seed per discrete local minimum of the survivor set
       !>   2 = one seed per surviving leaf (slower reference)
       integer :: octree_seed_mode = 1
 
-      !> ========== Screening ==========
+      !* ---------------------------------- Screening --------------------------------- *!
 
       !> Distance cutoff for grid point adj. list
       real(wp) :: adj_list_grid_cutoff = 1.0_wp
-      !> Below this atom count, the cell grid collapses to a single
-      !> full-scan cell. For small systems the per-cell fan-out reduces
-      !> to "every atom in every cell" anyway, so we skip the build work
-      !> and let every query return the full atom list directly
+      !> Below this atom count, the cell grid collapses to a single full-scan cell
+      !>
+      !> - for small systems the per-cell fan-out reduces to "every atom in every
+      !>   cell" anyway, so the build work is skipped and every query returns the
+      !>   full atom list directly
       integer :: cell_grid_full_scan_below = 200
       !> Cell fraction for molecular cell grid
       !> (1.0 = no subdivision, 0.5 = halved cell,..)
       real(wp) :: cell_grid_fraction = 0.25_wp
 
-      !> ========== Hard-sphere reference cavity ========
+      !* ------------------------ Hard-sphere reference cavity ------------------------ *!
 
       !> Active iSwiG Gaussian zeta fitted to the analytical Born energy
       !> for the selected Lebedev grid size
-      real(wp) :: iswig_xi_born
+      real(wp) :: iswig_xi_born = 0.0_wp
 
-      !> ========== Switching Functions ==========
+      !* ----------------------------- Switching Functions ---------------------------- *!
 
       !> Start of critical level set weight switching transition
       real(wp) :: w_0ls_from = 0.25_wp
@@ -134,30 +140,25 @@ module moist_cavity_drop_parameters
       real(wp) :: w_0ls_p = 0.8_wp
       real(wp) :: w_0ls_a = 1.6_wp
 
-      !> ========== Grid point density ==========
+      !* ----------------------------- Grid point density ----------------------------- *!
 
       !> Grid density kernel length
       real(wp) :: rho_grid_h = 1.0_wp
 
-      !> ========== Branching ==========
+      !* ---------------------------------- Branching --------------------------------- *!
 
       !> Softmax scale parameter for branch weight model (smoothness)
       real(wp) :: branch_weight_s = 0.0025_wp
-      !> Branch weight below which a branch carries no quadrature contribution.
-      !> Zero (the default) means "follow `wleb_cut`", so a branch is admissible
-      !> exactly while its softmax weight can still reach the quadrature floor.
-      !> A positive value pins the floor independently of the quadrature cutoff.
+      !> Branch weight below which a branch carries no quadrature contribution
       real(wp) :: branch_weight_floor = 0.0_wp
-      !> Largest objective excess a branch may have over the closest one and still
-      !> clear `branch_weight_floor` (derived: `branch_weight_s * ln(1/branch_weight_floor)`).
-      !> Consumed through [[rho_max_from_rho_min]]; see there for the geometry.
+      !> Largest objective excess a branch may have over the closest one
       real(wp) :: branch_dphi_max = 0.0_wp
       !> Branch separation cutoff (derived from tolerance)
       real(wp) :: branch_sep_cut = 1.0E-8_wp
 
-      !> ========== Weight switching ==========
+      !* ------------------------------ Weight switching ------------------------------ *!
 
-      !> Smooth switching on final Lebedev weights to suppress near-zero contributions before the branch filter.
+      !> Smooth switching on final Lebedev weights to suppress near-zero contributions before the branch filter
       !>  - Level 0: disabled (default)
       !>  - Level 1: from 1E-12 to 1E-10
       !>  - Level 2: from 1E-10 to 1E-8
@@ -171,7 +172,7 @@ module moist_cavity_drop_parameters
       !> Upper bound of the weight switching region (above: fully on, derived)
       real(wp) :: wleb_prune_to = 0.0_wp
 
-      !> ========== Disconnected points ==========
+      !* ----------------------------- Disconnected points ---------------------------- *!
 
       !> Point disconnection distance threshold (times the average grid point spacing)
       real(wp) :: disconnection_thrs = 4.0_wp
@@ -179,19 +180,17 @@ module moist_cavity_drop_parameters
    contains
       !> Initialize parameters to compiled defaults
       procedure :: init_defaults => init_cavity_drop_defaults
-      !> Initialize parameters from constructor inputs.
+      !> Initialize parameters from constructor inputs
       procedure :: new => new_moist_cavity_drop_parameters_type
-      !> Register parameters for JSON configuration parsing
+      !> Register parameters for JSON/TOML configuration parsing
       procedure :: register_entries => register_cavity_drop_entries
-      !> Recompute all derived parameters from user-facing fields. Public so a
-      !> caller that pokes a user-facing field after construction (tests
-      !> widening the branch softmax, say) can restore consistency.
+      !> Recompute all derived parameters from user-facing fields
       procedure :: compute_derived => compute_drop_derived
-      !> Load parameters from JSON file and recompute derived values.
-      !> Use this instead of read_file to ensure derived parameters
-      !> (Born zeta, Jacobian regularization, etc.) stay consistent.
+      !> Validate input and recompute derived values after file input
+      procedure :: validate => compute_drop_derived
+      !> Load parameters from a JSON or TOML file and recompute derived values
       procedure :: load_file => load_drop_file
-      !> Select the fitted Born zeta value for the active Lebedev grid.
+      !> Select the fitted Born zeta value for the active Lebedev grid
       procedure :: select_born_zeta => select_born_zeta
       !> Print current parameter values to output
       procedure :: print => print_parameters
@@ -207,6 +206,7 @@ module moist_cavity_drop_parameters
 contains
 
    !> Construct a new DROP parameters instance
+   !>
    !> @param[inout] self Initialized parameter container
    !> @param[in]    nleb Number of Lebedev quadrature points
    !> @param[in]    tolerance main tolerance (derives proj_tol, wleb_cut, branch_sep)
@@ -249,9 +249,8 @@ contains
 
    end subroutine new_moist_cavity_drop_parameters_type
 
-   !> Reset all user-facing parameters to compiled default values.
-   !> Defaults are defined in the type declaration; this is called by
-   !> read_file before loading JSON to ensure a clean slate on re-reads.
+   !> Reset all user-facing parameters to compiled default values
+   !>
    !> @param[inout] self Parameter container to reset
    subroutine init_cavity_drop_defaults(self)
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
@@ -260,6 +259,7 @@ contains
 
       ! Grid
       self%num_leb = fresh%num_leb
+      self%do_fine = fresh%do_fine
       ! Tolerance (master; proj_tol, wleb_cut, branch_sep_cut are derived
       ! from this in compute_derived; LSF screening lives on the LSF concrete)
       self%tolerance = fresh%tolerance
@@ -294,12 +294,23 @@ contains
       self%branch_weight_floor = fresh%branch_weight_floor
       ! Disconnected points
       self%disconnection_thrs = fresh%disconnection_thrs
+      !> Reset derived values; construction and file input recompute them
+      self%wleb_cut = fresh%wleb_cut
+      self%screening_threshold = fresh%screening_threshold
+      self%proj_tol = fresh%proj_tol
+      self%adj_list_grid_cutoff = fresh%adj_list_grid_cutoff
+      self%iswig_xi_born = fresh%iswig_xi_born
+      self%branch_dphi_max = fresh%branch_dphi_max
+      self%branch_sep_cut = fresh%branch_sep_cut
+      self%wleb_prune_from = fresh%wleb_prune_from
+      self%wleb_prune_to = fresh%wleb_prune_to
    end subroutine init_cavity_drop_defaults
 
    !> Compute all derived parameters from the current user-facing fields
    !>
    !> Must be called after any modification of user-facing parameters
    !> (constructor or file load) to keep derived values consistent
+   !>
    !> @param[inout] self Parameter container
    !> @param[out]   error Error if no fitted Born zeta exists for `num_leb`
    subroutine compute_drop_derived(self, error)
@@ -309,6 +320,12 @@ contains
       !> Effective branch weight floor for this parameter set
       real(wp) :: weight_floor
 
+      if (self%tolerance <= 0.0_wp .or. self%rho_grid_h <= 0.0_wp .or. &
+          self%proj_maxiter < 1 .or. self%proj_level < 1 .or. self%proj_level > 9) then
+         call fatal_error(error, "Invalid DROP numerical parameters")
+         return
+      end if
+
       !> Derive tolerance hierarchy from master tolerance
       !> (tightest to loosest: wleb_cut < screening < proj_tol < branch_sep)
       self%wleb_cut = self%tolerance*0.05_wp
@@ -316,17 +333,18 @@ contains
       self%proj_tol = self%tolerance
       self%branch_sep_cut = self%tolerance*10.0_wp
 
-      !> Branch admissibility from the softmax weight floor. A branch is kept
-      !> while its weight can still reach the floor, which tracks the
-      !> quadrature cutoff unless the user pinned it explicitly. The user field
-      !> is left alone so it keeps meaning "follow wleb_cut" across a later
-      !> tolerance change.
+      !> Branch admissibility from the softmax weight floor
+      !>
+      !> - a branch is kept while its weight can still reach the floor, which
+      !>   tracks the quadrature cutoff unless the user pinned it explicitly
+      !> - the user field is left alone, so it keeps meaning "follow wleb_cut"
+      !>   across a later tolerance change
       !>
       !> The admissible radius is `sqrt(rho_min^2 + 2*branch_dphi_max/phi_alpha)`,
       !> so a floor at or above one -- or a non-positive alpha -- makes every
-      !> consumer of that formula take the square root of a negative number.
+      !> consumer of that formula take the square root of a negative number
       !> Rejecting both here covers `rho_max_from_rho_min`, `filter_candidates`
-      !> and the two deflation ball caps at once.
+      !> and the two deflation ball caps at once
       weight_floor = self%branch_weight_floor
       if (weight_floor <= 0.0_wp) weight_floor = self%wleb_cut
       if (weight_floor >= 1.0_wp) then
@@ -385,15 +403,17 @@ contains
 
    end subroutine compute_drop_derived
 
-   !> Register all user-facing parameter entries for JSON configuration.
+   !> Register all user-facing parameter entries for JSON/TOML configuration
    !>
    !> Connects parameter fields to their dotted key names for
-   !> automatic parsing from configuration files via read_file/write_file.
-   !> Derived parameters are not registered (they are recomputed).
+   !> automatic parsing from configuration files via read_file/write_file
+   !> Derived parameters are not registered (they are recomputed)
+   !>
    !> @param[inout] self Parameter container
    subroutine register_cavity_drop_entries(self)
-      class(moist_cavity_drop_parameters_type), intent(inout) :: self
+      class(moist_cavity_drop_parameters_type), intent(inout), target :: self
 
+      call self%register_logical("do_fine", self%do_fine)
       ! Grid
       call self%register_int_scalar("grid.num_leb", self%num_leb)
       ! Tolerance (master; wleb_cut, proj_tol, branch_sep are derived;
@@ -434,26 +454,24 @@ contains
 
    end subroutine register_cavity_drop_entries
 
-   !> Load parameters from a JSON file and recompute derived values
+   !> Load parameters from a JSON or TOML file and recompute derived values
    !>
    !> Wraps the inherited read_file (ensure_entries -> init_defaults ->
-   !> read JSON), then recomputes derived parameters
+   !> read a file), then recomputes derived parameters
+   !>
    !> @param[inout] self Parameter container
-   !> @param[in]    filepath Path to the JSON parameter file
+   !> @param[in]    filepath Path to the JSON or TOML parameter file
    !> @param[out]   error Error if no fitted Born zeta exists for loaded num_leb
    subroutine load_drop_file(self, filepath, error)
       class(moist_cavity_drop_parameters_type), intent(inout) :: self
       character(len=*), intent(in) :: filepath
       type(error_type), allocatable, intent(out) :: error
 
-      ! Delegate to inherited read_file: ensure_entries -> init_defaults -> read JSON
-      call self%read_file(filepath)
-
-      ! Recompute derived parameters from loaded values
-      call self%compute_derived(error)
+      call self%read_file(filepath, error)
    end subroutine load_drop_file
 
    !> Select the fitted iSwiG Born zeta parameter for the active Lebedev grid
+   !>
    !> @param[inout] self Parameter container
    !> @param[out]   error Error if no fitted value exists for `num_leb`
    subroutine select_born_zeta(self, error)
@@ -473,6 +491,7 @@ contains
    end subroutine select_born_zeta
 
    !> Return a human-readable label for the current projection level
+   !>
    !> @param[in] self Parameter container
    !> @return    label Description of the active projection level
    pure function get_proj_level_label(self) result(label)
@@ -516,7 +535,7 @@ contains
    !>
    !> At the default parameters this is `sqrt(rho_min^2 + 0.260)`, i.e. a shell
    !> only ~0.12 Bohr thick at `rho_min = 1` and thinner still further out --
-   !> which is what makes a certified search over that volume affordable.
+   !> which is what makes a certified search over that volume affordable
    !>
    !> @param[in] self    Parameter container
    !> @param[in] rho_min Projection distance of the closest branch found so far
@@ -541,6 +560,7 @@ contains
    end function branch_rho2_slack_value
 
    !> Print current parameter values
+   !>
    !> @param[in] self Parameter container to display
    !> @param[in] unit Output unit (default `output_unit`); callers holding a run
    !>                 context pass `ctx%unit` so this honours a log file

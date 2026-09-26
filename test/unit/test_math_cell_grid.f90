@@ -30,7 +30,7 @@ contains
 
    !> For a heterogeneous cluster of atoms and a lattice of query points
    !> spanning the bounding box, assert the cell-grid list is a superset of the
-   !> brute-force candidate set for every point.
+   !> brute-force candidate set for every point
    subroutine test_query_covers_bruteforce(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -69,7 +69,7 @@ contains
 
          call grid%query(point, start, n)
 
-         ! For every atom, check that brute-force membership implies grid membership.
+         ! For every atom, check that brute-force membership implies grid membership
          ! (Points outside the bbox are strictly clamped, so this check only applies
          !  to points inside the bbox.)
          if (.not. point_inside_bbox(point, minval(xyz, dim=2), maxval(xyz, dim=2))) cycle
@@ -97,7 +97,7 @@ contains
       call grid%destroy()
    end subroutine test_query_covers_bruteforce
 
-   !> Degenerate single-atom case.
+   !> Degenerate single-atom case
    subroutine test_single_atom(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -123,7 +123,7 @@ contains
       call grid%destroy()
    end subroutine test_single_atom
 
-   !> All atoms at the same position.
+   !> All atoms at the same position
    subroutine test_coincident_atoms(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -153,7 +153,7 @@ contains
    end subroutine test_coincident_atoms
 
    !> Points outside the bounding box must still return a valid (possibly empty)
-   !> list; the strict clamp policy forbids out-of-range cell indices.
+   !> list; the strict clamp policy forbids out-of-range cell indices
    subroutine test_query_outside_bbox(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -181,7 +181,7 @@ contains
    end subroutine test_query_outside_bbox
 
    !> When natoms < full_scan_below, build must collapse to a single cell
-   !> and every query must return the full atom list regardless of geometry.
+   !> and every query must return the full atom list regardless of geometry
    subroutine test_full_scan_below_threshold(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -205,7 +205,7 @@ contains
       call check(error, grid%ncells == 1, "full-scan path must yield one cell")
       if (allocated(error)) return
 
-      ! Query at a point far from any atom - full scan must still return all.
+      ! Query at a point far from any atom - full scan must still return all
       call grid%query([100.0_wp, -100.0_wp, 200.0_wp], start, n)
       call check(error, n == 6, "full scan must return every atom")
       if (allocated(error)) return
@@ -220,7 +220,7 @@ contains
    end subroutine test_full_scan_below_threshold
 
    !> Above the threshold, the spatial-binning path must run (full_scan stays
-   !> false) so callers still get the usual per-cell fan-out.
+   !> false) so callers still get the usual per-cell fan-out
    subroutine test_full_scan_not_triggered(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -233,7 +233,7 @@ contains
       xyz(:, 4) = [5.0_wp, 5.0_wp, 0.0_wp]
       r_eff = 1.0_wp
 
-      ! natoms (4) >= full_scan_below (3) - spatial path must run.
+      ! natoms (4) >= full_scan_below (3) - spatial path must run
       call grid%build(xyz, r_eff, full_scan_below=3)
 
       call check(error,.not. grid%full_scan, &
@@ -244,7 +244,7 @@ contains
    end subroutine test_full_scan_not_triggered
 
    !> With cell_fraction < 1, the grid candidate list must still be a superset
-   !> of the brute-force set for every query point inside the bounding box.
+   !> of the brute-force set for every query point inside the bounding box
    subroutine test_cell_fraction_superset(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid
@@ -310,7 +310,7 @@ contains
    end subroutine test_cell_fraction_superset
 
    !> Verify that cell_fraction < 1 produces more cells and fewer candidates
-   !> per query than the default.
+   !> per query than the default
    subroutine test_cell_fraction_finer_cells(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid_default, grid_fine
@@ -344,7 +344,7 @@ contains
       call grid_fine%destroy()
    end subroutine test_cell_fraction_finer_cells
 
-   !> Explicit cell_fraction=1.0 must produce identical results to omitting it.
+   !> Explicit cell_fraction=1.0 must produce identical results to omitting it
    subroutine test_cell_fraction_default_identity(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cell_grid_type) :: grid_implicit, grid_explicit

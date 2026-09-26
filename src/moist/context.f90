@@ -1,15 +1,17 @@
 !> Shared run context for a moist calculation
 !>
 !> A single `moist_context_type` instance is constructed once at the top of a
-!> run (the C-API handle wrapper or the CLI driver) and then *borrowed* by every
-!> model and cavity through a non-owning pointer set at construction. It bundles
-!> the run-wide settings that were previously duplicated on each type:
+!> run (the C-API handle wrapper or the CLI driver) and then *borrowed* by
+!> every model and cavity through a non-owning pointer set at construction
+!>
+!> Bundles the run-wide settings that were previously duplicated on each
+!> type:
 !>
 !>   * `verbosity` - the project-wide output level (0=silent, 1=summary,
 !>     2=user events, 3=diagnostics),
 !>   * `debug`     - a diagnostic flag OR-ed with the top verbosity level,
 !>   * `timer`     - the profiling timer; because the context is shared by
-!>     pointer, every borrower appends into this one timer tree.
+!>     pointer, every borrower appends into this one timer tree
 !>
 module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
@@ -32,9 +34,11 @@ module moist_context
       integer :: verbosity = 1
       !> Debug flag; OR-ed with the top verbosity level at diagnostic sites
       logical :: debug = .false.
-      !> Detailed-profiling flag. When set, fine-grained (per-part) timers are
-      !> recorded in addition to the coarse module timings -- e.g. the individual
-      !> gradient sub-steps in the DROP hot loop. Defaults to verbosity >= 4
+      !> Detailed-profiling flag, default verbosity >= 4
+      !>
+      !> - when set, fine-grained (per-part) timers are recorded on top of the
+      !>   coarse module timings, e.g. the individual gradient sub-steps in
+      !>   the DROP hot loop
       logical :: do_profile = .false.
       !> Pinned OpenMP thread count; 0 means "follow the OpenMP environment"
       !> (the effective count is read live via `get_num_threads`)
@@ -66,7 +70,7 @@ module moist_context
       procedure :: message => context_message
       !> Write a debug message to the debug unit when debug is enabled
       procedure :: debug_message => context_debug_message
-      !> Set and apply the effective OpenMP thread count.
+      !> Set and apply the effective OpenMP thread count
       procedure :: set_num_threads => context_set_num_threads
       !> Effective OpenMP thread count (pinned value, or the live environment)
       procedure :: get_num_threads => context_get_num_threads
@@ -83,12 +87,13 @@ contains
    !> The effective thread count is resolved from three sources, in order of
    !> precedence: an explicit `nthreads` argument (a host/library caller deciding
    !> the budget), otherwise the OpenMP environment (`omp_get_max_threads`, which
-   !> honours `OMP_NUM_THREADS`), otherwise 1. When `nthreads` is given it is also
+   !> honours `OMP_NUM_THREADS`), otherwise 1; a given `nthreads` is also
    !> applied via `omp_set_num_threads` so the whole run uses it
    !>
    !> Passing `logfile` makes the context open and own that file as its main
-   !> output unit; `debugfile` likewise for the debug stream. Ownership follows
-   !> the single-owner contract: `delete` closes whatever `new_context` opened.
+   !> output unit, `debugfile` likewise for the debug stream; ownership follows
+   !> the single-owner contract, `delete` closes whatever `new_context` opened
+   !>
    !> @param[out] self       context to initialize
    !> @param[in]  verbosity  output level (default 1)
    !> @param[in]  debug      diagnostic flag (default .false.)
@@ -126,21 +131,21 @@ contains
       if (present(unit)) self%unit = unit
 
       !> Detailed profiling follows the verbosity by default (level >= 4, i.e.
-      !> the "show everything" band), but a caller may force it on/off.
+      !> the "show everything" band), but a caller may force it on/off
       self%do_profile = self%verbosity >= 4
       if (present(do_profile)) self%do_profile = do_profile
 
       !> Thread budget: an explicit request is pinned and applied here; otherwise
       !> the pin stays 0 ("follow the OpenMP environment") and the effective count
-      !> is resolved live in `get_num_threads`.
+      !> is resolved live in `get_num_threads`
       if (present(nthreads)) call self%set_num_threads(nthreads)
 
-      !> Run start timestamp.
+      !> Run start timestamp
       call date_and_time(date=date, time=time)
       self%start_time = date(1:4)//"-"//date(5:6)//"-"//date(7:8)//" "// &
          & time(1:2)//":"//time(3:4)//":"//time(5:6)
 
-      !> Own a main output file when a path is given (takes precedence over unit).
+      !> Own a main output file when a path is given (takes precedence over unit)
       if (present(logfile)) then
          open (newunit=iu, file=logfile, status="replace", action="write", iostat=stat)
          self%io_stat = stat
@@ -153,7 +158,7 @@ contains
 
       ! Debug output defaults to the main unit; a separate file splits the stream,
       ! but only when debug is actually enabled -- otherwise no orphan file is
-      ! created (nothing would ever be written to it).
+      ! created (nothing would ever be written to it)
       self%debug_unit = self%unit
       if (present(debugfile) .and. self%debug) then
          open (newunit=iu, file=debugfile, status="replace", action="write", iostat=stat)
@@ -201,6 +206,7 @@ contains
    !> Mirrors the established `if (verbosity >= level .or. debug)` guard: a
    !> message tagged with `level` prints when the run verbosity reaches it, and
    !> the debug flag additionally unlocks the diagnostic band (level <= 3)
+   !>
    !> @param[in]  level  verbosity level of the message
    pure function context_writes(self, level) result(do_write)
       !> Context instance
@@ -214,12 +220,12 @@ contains
 
    end function context_writes
 
-   !> Maximum timing-tree depth to print at the current verbosity. Verbosity
-   !> drives how much of the (fully recorded) tree is shown:
+   !> Maximum timing-tree depth to print at the current verbosity, which
+   !> drives how much of the fully recorded tree is shown:
    !>   1 -> top-level phases only (depth 0),
    !>   2 -> + their components (depth 1),
    !>   3 -> + subcomponents (depth 2),
-   !>   >= 4 -> everything (unbounded).
+   !>   >= 4 -> everything (unbounded)
    pure function context_report_depth(self) result(d)
       !> Context instance
       class(moist_context_type), intent(in) :: self
@@ -235,6 +241,7 @@ contains
    end function context_report_depth
 
    !> Write a message to the context output unit if the level is enabled
+   !>
    !> @param[in]  msg    message text
    !> @param[in]  level  verbosity level required to emit it (default 1)
    subroutine context_message(self, msg, level)
@@ -258,10 +265,11 @@ contains
 
    end subroutine context_message
 
-   !> Write a debug message to the debug unit when debug is enabled.
+   !> Write a debug message to the debug unit when debug is enabled
    !>
    !> Intended for diagnostic dumps that may originate inside parallel regions:
    !> the write is serialized with the same named critical as `message`
+   !>
    !> @param[in]  msg  message text
    subroutine context_debug_message(self, msg)
       !> Context instance
@@ -279,19 +287,21 @@ contains
 
    !> Pin (or release) the OpenMP thread budget for the run
    !>
-   !> This is the single place moist changes the thread budget, so a host using
-   !> moist as a library can retune it at any point (not only at construction)
+   !> The single place moist changes the thread budget, so a host using moist
+   !> as a library can retune it at any point, not only at construction
    !>
-   !> A positive `n` pins that many threads and applies it via `omp_set_num_threads`
-   !> in an OpenMP build so subsequent parallel regions honour it. A non-positive
-   !> `n` releases the pin (stored as 0), meaning "follow the OpenMP environment"
-   !> again
+   !> - a positive `n` pins that many threads and applies it via
+   !>   `omp_set_num_threads` in an OpenMP build, so subsequent parallel
+   !>   regions honour it
+   !> - a non-positive `n` releases the pin (stored as 0), meaning "follow
+   !>   the OpenMP environment" again
    !>
    !> `omp_set_num_threads` mutates a global runtime control, so a pin is not
    !> self-undoing: the budget observed just before the *first* pin is recorded in
-   !> `nthreads_env` and pushed back on release, otherwise releasing would leave
-   !> the host stuck at whatever moist last pinned. Releasing without an active
-   !> pin touches nothing.
+   !> `nthreads_env` and pushed back on release, otherwise releasing would
+   !> leave the host stuck at whatever moist last pinned; releasing without an
+   !> active pin touches nothing
+   !>
    !> @param[in]  n  requested thread count (<= 0 releases the pin / follows env)
    subroutine context_set_num_threads(self, n)
       !> Context instance
@@ -301,7 +311,7 @@ contains
 
       if (n > 0) then
          ! Capture the pre-pin budget once, before it is overwritten; a second
-         ! pin must not record moist's own value as the environment baseline.
+         ! pin must not record moist's own value as the environment baseline
 !$       if (self%nthreads_pin <= 0) self%nthreads_env = max(1, omp_get_max_threads())
          self%nthreads_pin = n
 !$       call omp_set_num_threads(n)
@@ -320,8 +330,8 @@ contains
    !> Returns the pinned count when one is set (via the constructor or
    !> `set_num_threads`); otherwise it reflects the OpenMP environment *live*
    !> (`omp_get_max_threads`, which tracks `OMP_NUM_THREADS` and any host
-   !> `omp_set_num_threads`). This is the value every kernel should size its
-   !> thread budget from. Without OpenMP it is `max(1, pin)` (always >= 1)
+   !> `omp_set_num_threads`) -- the value every kernel should size its thread
+   !> budget from; without OpenMP it is `max(1, pin)`, always >= 1
    function context_get_num_threads(self) result(nt)
       !> Context instance
       class(moist_context_type), intent(in) :: self
@@ -335,8 +345,9 @@ contains
 
    !> Render the run-wide settings through the pretty printer
    !>
-   !> Runs single-threaded at the top of a run, so it is not wrapped in the I/O
-   !> critical section.
+   !> Runs single-threaded at the top of a run, so it needs no I/O critical
+   !> section
+   !>
    !> @param[in]  unit  optional output unit override (default `self%unit`)
    subroutine context_print_settings(self, unit)
       !> Context instance

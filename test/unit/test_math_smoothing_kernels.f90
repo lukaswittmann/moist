@@ -1,11 +1,11 @@
-!> Test suite for the Wendland smoothing kernels in moist_math_smoothing_kernels.
+!> Test suite for the Wendland smoothing kernels in moist_math_smoothing_kernels
 !>
 !> `init` is the only fallible operation: it selects a normalization and binds
 !> the evaluation procedures for one (order, dimension) pair, and there is no
 !> kernel to bind for an unsupported combination or a non-positive smoothing
 !> length. Those used to terminate the process; they now report, which also
 !> makes the guarantee testable that a rejected `init` leaves the kernel
-!> detached rather than half-configured.
+!> detached rather than half-configured
 module test_math_smoothing_kernels
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -36,7 +36,7 @@ contains
 
    end subroutine collect_math_smoothing_kernels
 
-   !> Every documented (order, dimension) pair initializes and evaluates.
+   !> Every documented (order, dimension) pair initializes and evaluates
    subroutine test_supported_combinations(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -60,7 +60,7 @@ contains
 
             !> A Wendland kernel is positive at the origin and vanishes at its
             !> support radius of 2h, which is enough to tell a bound evaluator
-            !> from a stale one.
+            !> from a stale one
             call check(error, kernel%f0(0.0_wp) > 0.0_wp, "kernel is positive at r = 0")
             if (allocated(error)) return
             call check(error, kernel%f0(2.0_wp*h_ref), 0.0_wp, "kernel vanishes at r = 2h")
@@ -70,7 +70,7 @@ contains
 
    end subroutine test_supported_combinations
 
-   !> Each order rejects a dimension outside 1..3 and says which one.
+   !> Each order rejects a dimension outside 1..3 and says which one
    subroutine test_unsupported_dimension(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -94,7 +94,7 @@ contains
 
    end subroutine test_unsupported_dimension
 
-   !> An order with no Wendland form is rejected and named.
+   !> An order with no Wendland form is rejected and named
    subroutine test_unsupported_order(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -111,7 +111,7 @@ contains
 
    end subroutine test_unsupported_order
 
-   !> A non-positive smoothing length is refused rather than divided by.
+   !> A non-positive smoothing length is refused rather than divided by
    subroutine test_nonpositive_h(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -132,10 +132,10 @@ contains
 
    end subroutine test_nonpositive_h
 
-   !> A rejected re-init must not leave the previous kernel in place.
+   !> A rejected re-init must not leave the previous kernel in place
    !>
    !> Without this the caller could ignore the error and keep evaluating a
-   !> kernel whose normalization belongs to the previous, unrelated request.
+   !> kernel whose normalization belongs to the previous, unrelated request
    subroutine test_failed_init_detaches(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error

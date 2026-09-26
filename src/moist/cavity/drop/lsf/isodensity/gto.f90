@@ -1,90 +1,97 @@
 !> Cartesian-monomial Gaussian basis + density evaluator for the internal
-!> isodensity DROP level set function.
+!> isodensity DROP level set function
 !>
 !> The internal isodensity LSF needs the electron density rho(r) and its spatial
-!> derivatives (up to third order) at arbitrary points.  Rather than reproduce a
+!> derivatives, up to third order, at arbitrary points; rather than reproduce a
 !> host code's spherical-harmonic / normalization conventions, moist evaluates
 !> only bare cartesian monomial Gaussians
 !>
 !>    g_c(r) = (x-Rx)^lx (y-Ry)^ly (z-Rz)^lz * sum_p coeff_p exp(-a_p |r-R|^2),
 !>
-!> and consumes a density matrix that has already been transformed into this
-!> cartesian-monomial basis (D_cart).  The physical density
+!> and consumes a density matrix already transformed into this
+!> cartesian-monomial basis (D_cart), the physical density
 !>
 !>    rho(r) = sum_{c,c'} D_cart(c,c') g_c(r) g_c'(r)
 !>
-!> is representation-invariant, so the host builds the (fixed) transform once
-!> from its own basis metadata and passes D_cart each SCF step.  The cartesian
-!> component ordering used here is reported through the API so the host can match
-!> it exactly.
+!> being representation-invariant
+!>
+!> - the host builds the fixed transform once from its own basis metadata and
+!>   passes D_cart each SCF step
+!> - the cartesian component ordering used here is reported through the API, so
+!>   the host can match it exactly
 !>
 !> A single cartesian primitive factorizes as g = X(dx) Y(dy) Z(dz), so every
 !> spatial derivative is a product of the exp-stripped 1D factor derivatives
-!> tabulated by [[moist_iso_gto_poly1d]] (sympy-generated).
+!> tabulated by [[moist_iso_gto_poly1d]] (sympy-generated)
 module moist_cavity_drop_lsf_isodensity_gto
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_math_blas, only: symv, gemm
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_iso_gto_type
    public :: moist_iso_gto_ncart
    public :: moist_iso_gto_nslot
 
-   !> Highest supported angular momentum (s=0 .. l=8).  The parameter and the
-   !> [[moist_iso_gto_poly1d]] routine below are emitted by
-   !> `moist_dev/tools/gen_isodensity_gto.py` into the marked regions -- DO NOT
-   !> EDIT THEM BY HAND; regenerate with
-   !> `python3 moist_dev/tools/gen_isodensity_gto.py`.
+   !> Highest supported angular momentum (s=0 .. l=8)
+   !>
+   !> - emitted, with the [[moist_iso_gto_poly1d]] routine below, by
+   !>   `moist_dev/tools/gen_isodensity_gto.py` into the marked regions
+   !> - DO NOT EDIT THEM BY HAND; regenerate with
+   !>   `python3 moist_dev/tools/gen_isodensity_gto.py`
    ! >>> GENERATED lmax >>>
    integer, parameter :: moist_iso_gto_lmax = 8
    ! <<< GENERATED lmax <<<
 
    !> Cartesian-component count above which the dense density contraction routes
-   !> through BLAS dsymv rather than the matmul intrinsic.  For small solutes the
-   !> per-call BLAS overhead outweighs the tuned kernel; for large ones (the
-   !> compact-solute case where the dense contraction dominates) dsymv wins ~3x.
+   !> through BLAS dsymv rather than the matmul intrinsic
+   !>
+   !> - for small solutes the per-call BLAS overhead outweighs the tuned kernel
+   !> - for large ones, the compact-solute case where the dense contraction
+   !>   dominates, dsymv wins ~3x
    integer, parameter :: iso_blas_ncart_min = 96
 
-   !> Symmetric Hessian slot index (4..9) for spatial axis pair (i, j).
+   !> Symmetric Hessian slot index (4..9) for spatial axis pair (i, j)
    integer, parameter :: hess_slot(3, 3) = reshape([ &
                                                    4, 5, 6, &
                                                    5, 7, 8, &
                                                    6, 8, 9], [3, 3])
 
-   !> Symmetric third-derivative slot index (10..19) for axis triple (i, j, k).
-   !> Built column-major as third_slot(k, j, i); symmetric under any permutation.
+   !> Symmetric third-derivative slot index (10..19) for axis triple (i, j, k)
+   !> Built column-major as third_slot(k, j, i); symmetric under any permutation
    integer, parameter :: third_slot(3, 3, 3) = reshape([ &
                                                        10, 11, 12, 11, 13, 14, 12, 14, 15, &
                                                        11, 13, 14, 13, 16, 17, 14, 17, 18, &
                                                        12, 14, 15, 14, 17, 18, 15, 18, 19], [3, 3, 3])
 
-   !> Cumulative number of packed derivative slots through each order, 0..4.
+   !> Cumulative number of packed derivative slots through each order, 0..4
    integer, parameter :: moist_iso_gto_nslot(0:4) = [1, 4, 10, 20, 35]
 
-   !> Number of x derivatives represented by each packed slot, 0..34.
+   !> Number of x derivatives represented by each packed slot, 0..34
    integer, parameter :: deriv_x(0:34) = [ &
                          0, 1, 0, 0, 2, 1, 1, 0, 0, 0, &
                          3, 2, 2, 1, 1, 1, 0, 0, 0, 0, &
                          4, 3, 3, 2, 2, 2, 1, 1, 1, 1, 0, 0, 0, 0, 0]
 
-   !> Number of y derivatives represented by each packed slot, 0..34.
+   !> Number of y derivatives represented by each packed slot, 0..34
    integer, parameter :: deriv_y(0:34) = [ &
                          0, 0, 1, 0, 0, 1, 0, 2, 1, 0, &
                          0, 1, 0, 2, 1, 0, 3, 2, 1, 0, &
                          0, 1, 0, 2, 1, 0, 3, 2, 1, 0, 4, 3, 2, 1, 0]
 
-   !> Number of z derivatives represented by each packed slot, 0..34.
+   !> Number of z derivatives represented by each packed slot, 0..34
    integer, parameter :: deriv_z(0:34) = [ &
                          0, 0, 0, 1, 0, 0, 1, 0, 1, 2, &
                          0, 0, 1, 0, 1, 2, 0, 1, 2, 3, &
                          0, 0, 1, 0, 1, 2, 0, 1, 2, 3, 0, 1, 2, 3, 4]
 
    !> Cartesian-monomial Gaussian basis together with a density matrix expressed
-   !> in that basis.  Read-only after setup / set_density, so it is safe to share
-   !> across the cavity's per-thread LSF clones.
+   !> in that basis
+   !>
+   !> - read-only after `setup` / `set_density`, hence safe to share across the
+   !>   cavity's per-thread LSF clones
    type :: moist_iso_gto_type
       !> Number of shells
       integer :: nshell = 0
@@ -115,18 +122,22 @@ module moist_cavity_drop_lsf_isodensity_gto
       !> Highest owner-atom index present in the basis (= size of the CSR below)
       integer :: natom_grid = 0
       !> Atom -> shell CSR offsets, size natom_grid+1; atom A owns shells
-      !> atom_shell(atom_soff(A)+1 : atom_soff(A+1)).  Lets a candidate-atom list
-      !> (from the cavity cell grid) be turned into a shell list without a scan.
+      !> `atom_shell(atom_soff(A)+1 : atom_soff(A+1))`
+      !>
+      !> - turns a candidate-atom list from the cavity cell grid into a shell list
+      !>   without a scan
       integer, allocatable :: atom_soff(:)
       !> Flat-packed shell indices grouped by owner atom, size nshell
       integer, allocatable :: atom_shell(:)
-      !> Per-shell squared radial cutoff: the shell contributes nothing (to value
-      !> or derivatives through the order requested from [[gto_build_screening]])
-      !> beyond |r - center|^2 > sh_rcut2. Set by
-      !> [[gto_build_screening]]; huge (no screening) until then / when disabled.
+      !> Per-shell squared radial cutoff, beyond which the shell contributes
+      !> nothing to the value or to derivatives through the order requested from
+      !> [[gto_build_screening]], i.e. for `|r - center|^2 > sh_rcut2`
+      !>
+      !> - set by [[gto_build_screening]]
+      !> - huge, meaning no screening, until then and when disabled
       real(wp), allocatable :: sh_rcut2(:)
       !> Largest shell reach sqrt(max(sh_rcut2)); the radius the cavity cell grid
-      !> must span so no contributing atom is missed as a candidate.
+      !> must span so no contributing atom is missed as a candidate
       real(wp) :: max_rcut = 0.0_wp
    contains
       !> Configure the basis from per-shell primitive data
@@ -147,7 +158,7 @@ module moist_cavity_drop_lsf_isodensity_gto
 
 contains
 
-   !> Number of cartesian components for angular momentum l.
+   !> Number of cartesian components for angular momentum l
    !>
    !> @param[in] l  Angular momentum
    !> @returns      (l+1)(l+2)/2
@@ -159,14 +170,16 @@ contains
       n = (l + 1)*(l + 2)/2
    end function moist_iso_gto_ncart
 
-   !> Symmetric fourth-derivative slot index (20..34) for a spatial axis 4-tuple.
+   !> Symmetric fourth-derivative slot index (20..34) for a spatial axis 4-tuple
    !>
    !> The fourth-derivative table has the 15 unique cartesian components with
-   !> kx+ky+kz = 4, laid out (like the lower orders) in descending-kx-then-ky
-   !> order at phi columns 20..34.  This maps any axis quadruple (i, j, k, l),
-   !> each in 1..3, to its column by counting the per-axis derivative orders --
-   !> cheaper and less error-prone than a 3x3x3x3 lookup table, and only used on
-   !> the (non-hot) fourth-derivative path.
+   !> kx+ky+kz = 4, laid out like the lower orders in descending-kx-then-ky order
+   !> at phi columns 20..34
+   !>
+   !> - maps any axis quadruple (i, j, k, l), each in 1..3, to its column by
+   !>   counting the per-axis derivative orders
+   !> - cheaper and less error-prone than a 3x3x3x3 lookup table, and only used on
+   !>   the non-hot fourth-derivative path
    !>
    !> @param[in] i First spatial axis (1..3)
    !> @param[in] j Second spatial axis (1..3)
@@ -182,7 +195,7 @@ contains
       ax = [i, j, k, l]
       nx = count(ax == 1)
       ny = count(ax == 2)
-      !> 0-based position of (kx=nx, ky=ny) in the descending-kx-then-ky order.
+      !> 0-based position of (kx=nx, ky=ny) in the descending-kx-then-ky order
       slot = 4 - nx - ny
       do kx = nx + 1, 4
          slot = slot + (5 - kx)
@@ -190,7 +203,7 @@ contains
       slot = 20 + slot
    end function fourth_slot
 
-   !> Configure the basis and derive the cartesian-component layout.
+   !> Configure the basis and derive the cartesian-component layout
    !>
    !> @param[inout] self      Basis instance
    !> @param[in]    sh_atom   Per-shell owner atom index (1-based), size nshell
@@ -242,7 +255,7 @@ contains
       end if
 
       ! Reinitialization is supported: discard all storage derived from the
-      ! previous basis only after the new input has passed validation.
+      ! previous basis only after the new input has passed validation
       if (allocated(self%sh_poff)) deallocate (self%sh_poff)
       if (allocated(self%sh_coff)) deallocate (self%sh_coff)
       if (allocated(self%center)) deallocate (self%center)
@@ -274,7 +287,7 @@ contains
       self%ncart = self%sh_coff(self%nshell + 1)
 
       !> Canonical cartesian monomial ordering per shell: lx from l down to 0,
-      !> ly from (l-lx) down to 0, lz = l-lx-ly.  Matches the common CINT order.
+      !> ly from (l-lx) down to 0, lz = l-lx-ly, matching the common CINT order
       allocate (self%comp_l(3, self%ncart))
       do s = 1, self%nshell
          l = sh_l(s)
@@ -290,9 +303,10 @@ contains
 
       allocate (self%center(3, self%nshell), source=0.0_wp)
 
-      !> Atom -> shell CSR (counting sort on the owner atom).  Candidate atom
-      !> lists from the cavity cell grid index straight into this, so the hot
-      !> projection path visits only the shells on nearby atoms.
+      !> Atom -> shell CSR, a counting sort on the owner atom
+      !>
+      !> - candidate atom lists from the cavity cell grid index straight into it,
+      !>   so the hot projection path visits only the shells on nearby atoms
       self%natom_grid = maxval(sh_atom)
       allocate (self%atom_soff(self%natom_grid + 1), source=0)
       do s = 1, self%nshell
@@ -312,12 +326,12 @@ contains
       end block
 
       !> Default to "no screening" (huge cutoff) until build_screening runs, so a
-      !> direct user (no cavity / zero threshold) evaluates every shell exactly.
+      !> direct user (no cavity / zero threshold) evaluates every shell exactly
       allocate (self%sh_rcut2(self%nshell), source=huge(1.0_wp))
       self%max_rcut = 0.0_wp
    end subroutine gto_init
 
-   !> Refresh the shell centers from a molecular structure.
+   !> Refresh the shell centers from a molecular structure
    !>
    !> @param[inout] self  Basis instance
    !> @param[in]    mol   Molecular structure (positions in Bohr)
@@ -333,7 +347,7 @@ contains
       end do
    end subroutine gto_refresh_centers
 
-   !> Install the cartesian-monomial density matrix.
+   !> Install the cartesian-monomial density matrix
    !>
    !> @param[inout] self   Basis instance
    !> @param[in]    dcart  Density matrix in the cartesian-monomial basis
@@ -354,7 +368,7 @@ contains
       self%dcart = dcart
    end subroutine gto_set_density
 
-   !> Whether a density matrix has been installed.
+   !> Whether a density matrix has been installed
    !>
    !> @param[in] self  Basis instance
    !> @returns         .true. once set_density has been called
@@ -366,14 +380,16 @@ contains
       ok = allocated(self%dcart)
    end function gto_has_density
 
-   !> Conservative squared amplitude bound for one primitive at radius ``r``.
+   !> Conservative squared amplitude bound for one primitive at radius `r`
    !>
-   !> Bounds the magnitude of any cartesian component of ``x^lx y^ly z^lz
-   !> exp(-a r^2)`` and of its spatial derivatives up to order ``k`` by
-   !> ``|c| (r+1)^l (2 a r + l + 1)^k exp(-a r^2)`` -- an over-estimate (the
-   !> monomial is <= r^l <= (r+1)^l and each differentiation multiplies the
-   !> bound by at most 2 a r + l), so screening on it never drops a shell that
-   !> still contributes above the threshold.
+   !> Bounds the magnitude of any cartesian component of `x^lx y^ly z^lz
+   !> exp(-a r^2)`, and of its spatial derivatives up to order `k`, by
+   !> `|c| (r+1)^l (2 a r + l + 1)^k exp(-a r^2)`
+   !>
+   !> - an over-estimate: the monomial is <= r^l <= (r+1)^l, and each
+   !>   differentiation multiplies the bound by at most 2 a r + l
+   !> - screening on it therefore never drops a shell still contributing above
+   !>   the threshold
    !>
    !> @param[in] c  Absolute contraction coefficient
    !> @param[in] a  Primitive exponent
@@ -389,13 +405,13 @@ contains
       b = c*(r + 1.0_wp)**l*(2.0_wp*a*r + real(l + 1, wp))**k*exp(-a*r*r)
    end function prim_amp_bound
 
-   !> Radius beyond which a whole shell's amplitude bound falls below ``tol``.
+   !> Radius beyond which a whole shell's amplitude bound falls below `tol`
    !>
-   !> Sums [[prim_amp_bound]] over the shell's primitives at ``max_deriv`` and
+   !> Sums [[prim_amp_bound]] over the shell's primitives at `max_deriv` and
    !> bisects for the single outer crossing of
-   !> ``tol``; the bound is large at r=0 and decays monotonically past its peak,
-   !> so the crossing is unique.  ``tol <= 0`` disables screening (returns a huge
-   !> reach).
+   !> `tol`; the bound is large at r=0 and decays monotonically past its peak,
+   !> so the crossing is unique.  `tol <= 0` disables screening (returns a huge
+   !> reach)
    !>
    !> @param[in] l      Shell angular momentum
    !> @param[in] exps   Primitive exponents
@@ -424,7 +440,7 @@ contains
          return
       end if
 
-      !> Expand hi until the bound is below tol (or the cap is hit).
+      !> Expand hi until the bound is below tol (or the cap is hit)
       hi = 1.0_wp
       do
          if (shell_amp(hi) <= tol .or. hi >= r_cap) exit
@@ -435,7 +451,7 @@ contains
          return
       end if
 
-      !> Bisect [lo, hi] with amp(lo) > tol >= amp(hi) for the outer crossing.
+      !> Bisect [lo, hi] with amp(lo) > tol >= amp(hi) for the outer crossing
       lo = 0.0_wp
       do it = 1, nbisect
          mid = 0.5_wp*(lo + hi)
@@ -461,8 +477,8 @@ contains
 
    !> Recompute the per-shell squared radial cutoffs for a screening threshold
    !>
-   !> ``threshold`` is an absolute amplitude cutoff on the (bounded) AO product contribution;
-   !> ``threshold <= 0`` disables screening
+   !> `threshold` is an absolute amplitude cutoff on the (bounded) AO product contribution;
+   !> `threshold <= 0` disables screening
    !>
    !> @param[inout] self      Basis instance
    !> @param[in]    threshold Amplitude screening threshold
@@ -515,23 +531,26 @@ contains
       end do
    end function gto_reach
 
-   !> Evaluate the electron density and its spatial derivatives at one point.
+   !> Evaluate the electron density and its spatial derivatives at one point
    !>
    !> The derivative order is set by *which* outputs the caller passes: only the
    !> orders whose output argument is present are computed, so the hot
-   !> value+gradient path never pays for the Hessian or the third derivative.
+   !> value+gradient path never pays for the Hessian or the third derivative
    !> The caller supplies persistent per-thread scratch so that path performs no
-   !> heap allocation either.
+   !> heap allocation either
    !>
    !> Two levels of screening keep the cost proportional to the *nearby* basis
-   !> rather than the whole molecule: when ``cand_atoms`` is present only the
-   !> shells owned by those atoms (the cavity cell grid's candidate list) are
-   !> visited, and every shell is further skipped when the point lies beyond its
-   !> radial cutoff [[gto_type:sh_rcut2]].  The density contraction then runs over
-   !> only the surviving ("active") cartesian components -- ``nact`` of them --
-   !> so it is O(nact^2) instead of dense O(ncart^2).  With screening disabled
-   !> (huge cutoffs) every component is active and the result is the exact dense
-   !> contraction.
+   !> rather than the whole molecule:
+   !>
+   !> - with `cand_atoms` present, only the shells owned by those atoms (the
+   !>   cavity cell grid's candidate list) are visited
+   !> - every shell is further skipped when the point lies beyond its radial
+   !>   cutoff [[gto_type:sh_rcut2]]
+   !> - the density contraction then runs over only the surviving "active"
+   !>   cartesian components, `nact` of them, so it is O(nact^2) instead of the
+   !>   dense O(ncart^2)
+   !> - with screening disabled (huge cutoffs) every component is active and the
+   !>   result is the exact dense contraction
    !>
    !> @param[in]    self       Basis instance (read-only)
    !> @param[in]    point      Evaluation point in Bohr
@@ -547,9 +566,9 @@ contains
    !> @param[in]    cand_atoms Optional candidate owner-atom list; when present,
    !>                          only shells on these atoms are considered
    !> @param[out]   d4rho      Optional density fourth derivative (3, 3, 3, 3);
-   !>                          requires the ``tmm`` scratch
+   !>                          requires the `tmm` scratch
    !> @param[inout] tmm        Optional scratch, shape (ncart, 6): dcart . phi(:,Hess);
-   !>                          required when ``d4rho`` is present
+   !>                          required when `d4rho` is present
    subroutine gto_eval(self, point, phi, t0, tm, act, &
                        rho, drho, d2rho, d3rho, &
                        cand_atoms, d4rho, tmm)
@@ -589,9 +608,9 @@ contains
       want_d3 = present(d3rho)
       want_d4 = present(d4rho)
 
-      ! The requested order is exactly the highest order the caller asked back.
+      ! The requested order is exactly the highest order the caller asked back
       ! The fourth derivative additionally needs the extra density-weighted
-      ! Hessian scratch.
+      ! Hessian scratch
       ndloc = 1
       if (want_d2) ndloc = 2
       if (want_d3) ndloc = 3
@@ -629,19 +648,21 @@ contains
 
       if (nact == 0) return
 
-      ! Contract with the cartesian-monomial density matrix.  rho = a^T D a,
-      ! d_i rho = 2 (D a) . a^i, and the higher orders follow by the product
-      ! rule (see module header), tm(:,j) = D a^j.
+      ! Contract with the cartesian-monomial density matrix: rho = a^T D a and
+      ! d_i rho = 2 (D a) . a^i, higher orders following by the product rule
+      ! (see module header), tm(:,j) = D a^j
       !
-      ! Two regimes: when screening left most components active a dense matmul
-      ! over the (zeroed) full table is more cache-friendly than gathering the
-      ! active block; once screening removes the bulk (nact well below ncart)
-      ! the O(nact^2) active-only contraction wins.  Both give the same result.
+      ! Two regimes, both giving the same result:
+      !
+      ! - when screening left most components active, a dense matmul over the
+      !   zeroed full table is more cache-friendly than gathering the active block
+      ! - once screening removes the bulk (nact well below ncart), the O(nact^2)
+      !   active-only contraction wins
       if (3*nact > self%ncart) then
-         ! Dense contraction (little screened).  dcart is symmetric and the
-         ! inactive components are zero, so the full matvec ``D a`` is exact;
-         ! [[dcart_matvec]] routes it through BLAS dsymv for large solutes (where
-         ! this path dominates) and the matmul intrinsic for small ones.
+         ! Dense contraction, little screened; dcart is symmetric and the
+         ! inactive components are zero, so the full matvec `D a` is exact,
+         ! with [[dcart_matvec]] routing it through BLAS dsymv for large solutes,
+         ! where this path dominates, and the matmul intrinsic for small ones
          use_blas = self%ncart >= iso_blas_ncart_min
          call dcart_matvec(phi(:, 0), t0)
          rho = dot_product(phi(:, 0), t0)
@@ -650,7 +671,7 @@ contains
          drho(3) = 2.0_wp*dot_product(phi(:, 3), t0)
 
          ! The gradient weights tm are needed by every order above the first,
-         ! so they follow ndloc rather than the presence of d2rho itself.
+         ! so they follow ndloc rather than the presence of d2rho itself
          if (ndloc >= 2) then
             call dcart_matvec(phi(:, 1), tm(:, 1))
             call dcart_matvec(phi(:, 2), tm(:, 2))
@@ -742,11 +763,11 @@ contains
          end if
       end if
 
-      ! Fourth derivative (optional).  Reuses the active list, so it is correct
-      ! after either contraction branch (inactive phi are zero).  First form the
-      ! density-weighted Hessian vectors tmm(:,m) = D phi(:,Hess m), then the
+      ! Fourth derivative, optional; reuses the active list, so it is correct
+      ! after either contraction branch (inactive phi are zero), first forming
+      ! the density-weighted Hessian vectors tmm(:,m) = D phi(:,Hess m), then the
       ! Leibniz expansion of the fourth derivative of rho = phi^T D phi: one
-      ! 4th-order term, four (3rd x 1st) terms, and three (Hess x Hess) terms.
+      ! 4th-order term, four (3rd x 1st) terms, and three (Hess x Hess) terms
       if (want_d4) then
          do m = 1, 6
             do ii = 1, nact
@@ -783,11 +804,13 @@ contains
 
    contains
 
-      !> Accumulate one shell's cartesian AO-derivative contributions into phi
-      !> (skipping shells beyond their radial cutoff) and append its components
-      !> to the active list.  Host-associated: reads point/ndloc/self, writes
-      !> phi/act/nact.  Delegates the actual slot fills to the shared module
-      !> routine [[gto_assemble_shell]] so the batched evaluator stays in sync.
+      !> Accumulate one shell's cartesian AO-derivative contributions into phi,
+      !> skipping shells beyond their radial cutoff, and append its components to
+      !> the active list
+      !>
+      !> - host-associated: reads point/ndloc/self, writes phi/act/nact
+      !> - delegates the slot fills to the shared module routine
+      !>   [[gto_assemble_shell]], so the batched evaluator stays in sync
       subroutine assemble_shell(sh)
          integer, intent(in) :: sh
          integer :: c, cbase, ncc
@@ -804,9 +827,10 @@ contains
          end do
       end subroutine assemble_shell
 
-      !> Dense density matvec ``y = dcart . x`` over all ncart components, via
-      !> BLAS dsymv (large solutes) or the matmul intrinsic (small).  Host
-      !> associated: reads self%dcart and the host-set ``use_blas`` flag.
+      !> Dense density matvec `y = dcart . x` over all ncart components, via BLAS
+      !> dsymv (large solutes) or the matmul intrinsic (small)
+      !>
+      !> - host-associated: reads self%dcart and the host-set `use_blas` flag
       subroutine dcart_matvec(x, y)
          real(wp), intent(in) :: x(:)
          real(wp), intent(inout) :: y(:)
@@ -821,13 +845,15 @@ contains
    end subroutine gto_eval
 
    !> Accumulate one shell's cartesian AO-derivative contributions for a single
-   !> point into the (single-point) derivative table ``phi(ncart, 0:nslot-1)``
+   !> point into the (single-point) derivative table `phi(ncart, 0:nslot-1)`
    !>
-   !> Shared by the single-point [[gto_eval]] and the batched [[gto_eval_batch]]
-   !> so the (screening + primitive loop + per-slot factor products) live in one
-   !> place.  Skips the shell when the point is beyond its squared radial cutoff,
-   !> reporting that through ``contributed`` so the caller can decide whether to
-   !> record the shell's components in an active list.
+   !> Shared by the single-point [[gto_eval]] and the batched [[gto_eval_batch]],
+   !> so screening, the primitive loop and the per-slot factor products live in
+   !> one place
+   !>
+   !> - skips the shell when the point is beyond its squared radial cutoff
+   !> - reports that through `contributed`, so the caller can decide whether to
+   !>   record the shell's components in an active list
    !>
    !> @param[in]    self        Basis instance
    !> @param[in]    sh          Shell index

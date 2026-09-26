@@ -2,7 +2,7 @@ module moist_data_en
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
-   implicit none
+   implicit none(type, external)
    private
 
    public :: get_electronegativity
@@ -16,7 +16,7 @@ module moist_data_en
    !> Highest atomic number this table covers
    integer, parameter :: max_elem = 118
 
-   !> Pauling electronegativities, used for the covalent coordination number.
+   !> Pauling electronegativities, used for the covalent coordination number
    real(wp), parameter :: pauling_en(max_elem) = [ &
       & 2.20_wp, 3.00_wp, & ! H,He
       & 0.98_wp, 1.57_wp, 2.04_wp, 2.55_wp, 3.04_wp, 3.44_wp, 3.98_wp, 4.50_wp, & ! Li-Ne
@@ -88,7 +88,7 @@ contains
       en = 0.0_wp
 
       if (num < 1 .or. num > max_elem) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", max_elem, "]"
          call fatal_error(error, trim(msg))
          return

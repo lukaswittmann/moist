@@ -4,33 +4,34 @@ module moist_radii_custom
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_io, only: structure_type
    use moist_radius_type, only: radius_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: radius_type_custom
    public :: new_custom_radii_atoms
    public :: new_custom_radii_elements
 
-   !> Custom radii model with user-supplied, geometry-invariant radii.
+   !> Custom radii model with user-supplied, geometry-invariant radii
    type, extends(radius_type) :: radius_type_custom
-      !> If true, radii are supplied per atom in molecular order.
+      !> If true, radii are supplied per atom in molecular order
       logical :: has_atom_radii = .false.
-      !> If true, radii are supplied per element by atomic number.
+      !> If true, radii are supplied per element by atomic number
       logical :: has_element_radii = .false.
-      !> Stored per-atom radii.
+      !> Stored per-atom radii
       real(wp), allocatable :: atom_radii(:)
-      !> Lookup table for per-element radii indexed by atomic number.
+      !> Lookup table for per-element radii indexed by atomic number
       real(wp), allocatable :: element_radii(:)
    contains
-      !> Update cached custom radii and zero derivatives.
+      !> Update cached custom radii and zero derivatives
       procedure :: update => update_custom_radii
-      !> Print custom radii model status.
+      !> Print custom radii model status
       procedure :: print => print_custom_radii
    end type radius_type_custom
 
 contains
 
-   !> Build a custom model from per-atom radii.
+   !> Build a custom model from per-atom radii
+   !>
    !> @param[in]  radii  per-atom radii (bohr)
    !> @param[out] self       custom radii model
    !> @param[out] error      error on invalid radii input
@@ -73,7 +74,8 @@ contains
       self%has_atom_radii = .true.
    end subroutine new_custom_radii_atoms
 
-   !> Build a custom model from per-element radii.
+   !> Build a custom model from per-element radii
+   !>
    !> @param[in]  atomic_numbers  atomic numbers for supplied radii
    !> @param[in]  radii           radii matching atomic_numbers (bohr)
    !> @param[out] self            custom radii model
@@ -143,7 +145,8 @@ contains
       self%has_element_radii = .true.
    end subroutine new_custom_radii_elements
 
-   !> Print custom radii model status.
+   !> Print custom radii model status
+   !>
    !> @param[in] self  custom radii model
    !> @param[in] unit  optional output unit
    subroutine print_custom_radii(self, unit)
@@ -170,7 +173,8 @@ contains
       end if
    end subroutine print_custom_radii
 
-   !> Update cached radii for a molecular structure.
+   !> Update cached radii for a molecular structure
+   !>
    !> @param[inout] self   custom radii model
    !> @param[in]    mol    molecular structure
    !> @param[out]   error  error handle on invalid setup/input

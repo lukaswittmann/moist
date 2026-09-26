@@ -1,11 +1,11 @@
 !> @file moist/blas/level2.f90
-!> Provides interfactes to level 2 BLAS routines
+!> Provides interfaces to level 2 BLAS routines
 
 !> High-level interface to level 2 basic linear algebra subprogram operations
 module moist_math_blas_level2
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_gemv, wrap_symv, wrap_ger
@@ -15,7 +15,7 @@ module moist_math_blas_level2
    !>    A := alpha*x*y**T + A,
    !>
    !> where alpha is a scalar, x is an m element vector, y is an n element
-   !> vector and A is an m by n matrix.
+   !> vector and A is an m by n matrix
    interface wrap_ger
       module procedure :: wrap_sger
       module procedure :: wrap_dger
@@ -26,7 +26,7 @@ module moist_math_blas_level2
    !>    y := alpha*A*x + beta*y,   or   y := alpha*A**T*x + beta*y,
    !>
    !> where alpha and beta are scalars, x and y are vectors and A is an
-   !> m by n matrix.
+   !> m by n matrix
    interface wrap_gemv
       module procedure :: wrap_sgemv
       module procedure :: wrap_dgemv
@@ -43,7 +43,7 @@ module moist_math_blas_level2
    !>    y := alpha*A*x + beta*y,
    !>
    !> where alpha and beta are scalars, x and y are n element vectors and
-   !> A is an n by n symmetric matrix.
+   !> A is an n by n symmetric matrix
    interface wrap_symv
       module procedure :: wrap_ssymv
       module procedure :: wrap_dsymv
@@ -54,10 +54,11 @@ module moist_math_blas_level2
    !>    y := alpha*A*x + beta*y,   or   y := alpha*A**T*x + beta*y,
    !>
    !> where alpha and beta are scalars, x and y are vectors and A is an
-   !> m by n matrix.
+   !> m by n matrix
    interface blas_gemv
       pure subroutine sgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: m
@@ -72,6 +73,7 @@ module moist_math_blas_level2
       end subroutine sgemv
       pure subroutine dgemv(trans, m, n, alpha, a, lda, x, incx, beta, y, incy)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: m
@@ -91,10 +93,11 @@ module moist_math_blas_level2
    !>    y := alpha*A*x + beta*y,
    !>
    !> where alpha and beta are scalars, x and y are n element vectors and
-   !> A is an n by n symmetric matrix.
+   !> A is an n by n symmetric matrix
    interface blas_symv
       pure subroutine ssymv(uplo, n, alpha, a, lda, x, incx, beta, y, incy)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: n
@@ -108,6 +111,7 @@ module moist_math_blas_level2
       end subroutine ssymv
       pure subroutine dsymv(uplo, n, alpha, a, lda, x, incx, beta, y, incy)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: n
@@ -126,10 +130,11 @@ module moist_math_blas_level2
    !>    A := alpha*x*y**T + A,
    !>
    !> where alpha is a scalar, x is an m element vector, y is an n element
-   !> vector and A is an m by n matrix.
+   !> vector and A is an m by n matrix
    interface blas_ger
       pure subroutine sger(m, n, alpha, x, incx, y, incy, a, lda)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: m
@@ -142,6 +147,7 @@ module moist_math_blas_level2
       end subroutine sger
       pure subroutine dger(m, n, alpha, x, incx, y, incy, a, lda)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: incx
          integer(blas_ik), intent(in) :: incy
          integer(blas_ik), intent(in) :: m

@@ -1,10 +1,10 @@
-!> Geometric helpers and numerically stable scalar utilities.
+!> Geometric helpers and numerically stable scalar utilities
 !>
 !> Tangent-frame construction on a sphere and the softplus (smooth maximum)
-!> function used by the smooth cavity construction.
+!> function used by the smooth cavity construction
 module moist_math_linalg_geometry
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: cross_product
@@ -13,11 +13,13 @@ module moist_math_linalg_geometry
 
 contains
 
-   !> Right-handed cross product of two 3-vectors, c = a x b.
+   !> Right-handed cross product of two 3-vectors, c = a x b
    !>
-   !> Direct 6-multiply/3-subtract implementation. At this fixed size a hand
-   !> written kernel beats any BLAS call (no general-n analogue exists anyway)
-   !> and stays inlinable by the compiler.
+   !> Direct 6-multiply/3-subtract implementation
+   !>
+   !> - at this fixed size a hand-written kernel beats any BLAS call (no
+   !>   general-n analogue exists anyway) and stays inlinable by the compiler
+   !>
    !> @param[in] a  First vector [3]
    !> @param[in] b  Second vector [3]
    !> @returns   c  Cross product a x b [3]
@@ -38,8 +40,8 @@ contains
    !>
    !> Given a normal vector n (e.g., radial direction on sphere), constructs
    !> two orthonormal tangent vectors t1, t2 such that {t1, t2, n} form a
-   !> right-handed orthonormal basis. Uses Gram-Schmidt orthogonalization
-   !> starting from the coordinate axis least aligned with n.
+   !> right-handed orthonormal basis, via Gram-Schmidt orthogonalization
+   !> starting from the coordinate axis least aligned with n
    !>
    !> @param[in]  normal Normal vector (will be normalized internally)
    !> @param[out] t1     First tangent vector (orthogonal to normal)
@@ -76,8 +78,7 @@ contains
 
    end subroutine setup_tangent_frame
 
-   !> Numerically stable computation of the softplus function
-   !> Computes the smooth maximum (softplus) function
+   !> Numerically stable softplus, the smooth maximum
    !>
    !> f(x) = \log(1 + e^x)
    !>

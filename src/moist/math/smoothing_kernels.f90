@@ -1,4 +1,5 @@
-!> Implementation of various smoothing Kernels
+!> Various smoothing kernels
+!>
 !> References:
 !> https://pysph.readthedocs.io/en/main/reference/kernels.html
 !> https://ludwigboess.github.io/SPHKernels.jl/stable/kernels/
@@ -7,7 +8,7 @@ module moist_math_smoothing_kernels
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_constants, only: pi
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: smoothing_kernel_wendland_type
@@ -43,7 +44,7 @@ module moist_math_smoothing_kernels
       !> Function signature for dimension-specific kernel computation
       pure function wendland_compute_interface(q) result(val)
          import :: wp
-         implicit none (type, external)
+         implicit none(type, external)
          real(wp), intent(in) :: q
          real(wp) :: val
       end function wendland_compute_interface
@@ -59,7 +60,7 @@ module moist_math_smoothing_kernels
       !> @param[out]   error     Unsupported order/dimension, or invalid `h`
       subroutine init_interface(self, order, dimension, h, error)
          import :: smoothing_kernel_type, wp, error_type
-         implicit none (type, external)
+         implicit none(type, external)
          class(smoothing_kernel_type), intent(inout) :: self
          integer, intent(in) :: order
          integer, intent(in) :: dimension
@@ -70,7 +71,7 @@ module moist_math_smoothing_kernels
       !> Kernel evaluation interface
       pure function f0_interface(self, r) result(kernel_val)
          import :: smoothing_kernel_type, wp
-         implicit none (type, external)
+         implicit none(type, external)
          class(smoothing_kernel_type), intent(in) :: self
          real(wp), intent(in) :: r
          real(wp) :: kernel_val
@@ -79,7 +80,7 @@ module moist_math_smoothing_kernels
       !> Kernel derivative interface (dW/dr)
       pure function f1_interface(self, r) result(derivative)
          import :: smoothing_kernel_type, wp
-         implicit none (type, external)
+         implicit none(type, external)
          class(smoothing_kernel_type), intent(in) :: self
          real(wp), intent(in) :: r
          real(wp) :: derivative
@@ -279,7 +280,7 @@ contains
       self%compute_deriv => null()
 
       !> Guard the reciprocal below; a zero or negative smoothing length has no
-      !> kernel and would otherwise divide by zero.
+      !> kernel and would otherwise divide by zero
       if (h <= 0.0_wp) then
          call fatal_error(error, "wendland_init: smoothing length must be positive")
          return

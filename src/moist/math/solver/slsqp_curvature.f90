@@ -1,7 +1,7 @@
 !> Curvature-guided multi-start SLSQP solver
 !>
 !> Analyzes the constraint surface curvature at the anchor point to
-!> generate targeted seed directions for multi-start SLSQP optimization.
+!> generate targeted seed directions for multi-start SLSQP optimization
 !>
 !> Instead of scattering seeds uniformly on concentric Lebedev shells
 !> (O(50) SLSQP solves), this solver:
@@ -18,17 +18,18 @@
 !>   where P = I - n_hat n_hat^T is the tangent-plane projector and
 !>   n_hat = nabla S / ||nabla S||.  When |kappa_i| is small, the surface
 !>   is locally flat in the i-th principal direction, creating ambiguity
-!>   in the closest-point projection (multiple branches may exist).
+!>   in the closest-point projection (multiple branches may exist)
 !>
 !> Typical seed count: 4-12 (vs 46 for uniform Lebedev), targeting only
-!> the directions where projection ambiguity actually arises.
+!> the directions where projection ambiguity actually arises
 module moist_math_solver_slsqp_curvature
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
-   use moist_type, only: solver_base_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_slsqp, only: new_slsqp_solver
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_curvature_type
@@ -41,6 +42,7 @@ module moist_math_solver_slsqp_curvature
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -48,6 +50,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -55,6 +58,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -62,6 +66,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
@@ -69,6 +74,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(in) :: f
@@ -144,10 +150,11 @@ module moist_math_solver_slsqp_curvature
 
 contains
 
-   !> Build an orthonormal tangent-plane basis for a given unit normal.
+   !> Build an orthonormal tangent-plane basis for a given unit normal
    !>
    !> Uses Gram-Schmidt on the coordinate axis least parallel to the normal
-   !> to ensure numerical stability.
+   !> to ensure numerical stability
+   !>
    !> @param[in]  normal  Unit normal vector (3)
    !> @param[out] t1      First tangent vector (3)
    !> @param[out] t2      Second tangent vector (3), equals normal x t1
@@ -178,11 +185,12 @@ contains
       t2(3) = normal(1)*t1(2) - normal(2)*t1(1)
    end subroutine build_tangent_basis
 
-   !> Eigendecompose a 2x2 symmetric matrix analytically.
+   !> Eigendecompose a 2x2 symmetric matrix analytically
    !>
-   !> For [[a11, a12], [a12, a22]], computes eigenvalues and unit
-   !> eigenvectors.  Returns eigenvalues sorted by magnitude
-   !> (|lam1| >= |lam2|) with corresponding eigenvectors.
+   !> For [[a11, a12], [a12, a22]], computes the eigenvalues and unit
+   !> eigenvectors, eigenvalues sorted by magnitude (|lam1| >= |lam2|) and
+   !> eigenvectors in the matching order
+   !>
    !> @param[in]  a11, a12, a22  Matrix elements
    !> @param[out] lam1           Eigenvalue with larger magnitude
    !> @param[out] lam2           Eigenvalue with smaller magnitude
@@ -211,8 +219,8 @@ contains
          lam2 = e1
       end if
 
-      !> Compute eigenvectors using (A - lam*I)v = 0
-      !> From first row: (a11 - lam)*v1 + a12*v2 = 0  =>  v = [a12, lam - a11]
+      !> Eigenvectors from (A - lam*I)v = 0
+      !>   first row: (a11-lam)*v1 + a12*v2 = 0  =>  v = [a12, lam-a11]
       if (abs(a12) > 1.0e-14_wp) then
          v1 = [a12, lam1 - a11]
          inv_norm = 1.0_wp/sqrt(v1(1)**2 + v1(2)**2)
@@ -233,15 +241,16 @@ contains
       end if
    end subroutine eig_2x2_sym
 
-   !> Generate curvature-guided seed points around the anchor.
+   !> Generate curvature-guided seed points around the anchor
    !>
-   !> Analyzes the constraint Hessian projected onto the tangent plane
-   !> of the constraint surface at the anchor.  Seeds are placed along
-   !> principal curvature directions where the curvature is small (the
-   !> surface is locally flat and projection branches may exist).
-   !> Directions with large curvature receive only a minimal perturbation.
-   !> Falls back to a small Lebedev shell when the gradient norm is too
-   !> small to define a reliable surface normal.
+   !> - analyzes the constraint Hessian projected onto the tangent plane of
+   !>   the constraint surface at the anchor
+   !> - seeds are placed along principal curvature directions where the
+   !>   curvature is small (the surface is locally flat and projection
+   !>   branches may exist)
+   !> - directions with large curvature receive only a minimal perturbation
+   !> - falls back to a small Lebedev shell when the gradient norm is too
+   !>   small to define a reliable surface normal
    !>
    !> @param[in]    anchor     Anchor point (3)
    !> @param[in]    grad_s     Constraint gradient at anchor (3)
@@ -289,12 +298,12 @@ contains
          call build_tangent_basis(normal, t1, t2)
 
          if (debug) then
-            write (output_unit, '(x,a,es10.3,a,es10.3)') &
-               '[curvature] Gradient norm ', grad_norm, ' < threshold ', grad_thr
-            write (output_unit, '(x,a)') &
-               '[curvature] Using atom-anchor fallback normal'
-            write (output_unit, '(x,a,3f10.5)') &
-               '[curvature] Fallback normal: ', normal
+            write (output_unit, "(x,a,es10.3,a,es10.3)") &
+               "[curvature] Gradient norm ", grad_norm, " < threshold ", grad_thr
+            write (output_unit, "(x,a)") &
+               "[curvature] Using atom-anchor fallback normal"
+            write (output_unit, "(x,a,3f10.5)") &
+               "[curvature] Fallback normal: ", normal
          end if
 
          !> Both tangent directions are ambiguous - seed along both at all radii
@@ -342,20 +351,20 @@ contains
       flat2 = (kappa2 < kappa_thr)
 
       if (debug) then
-         write (output_unit, '(x,a)') &
-            '========== Curvature-guided seeding ========='
-         write (output_unit, '(x,a,es12.4)') &
-            'Gradient norm:  ', grad_norm
-         write (output_unit, '(x,a,3f10.5)') &
-            'Normal:         ', normal
-         write (output_unit, '(x,a,es12.4,a,l3)') &
-            'kappa_1:        ', kappa1, '  flat:', flat1
-         write (output_unit, '(x,a,3f10.5)') &
-            'Direction 1:    ', dir1
-         write (output_unit, '(x,a,es12.4,a,l3)') &
-            'kappa_2:        ', kappa2, '  flat:', flat2
-         write (output_unit, '(x,a,3f10.5)') &
-            'Direction 2:    ', dir2
+         write (output_unit, "(x,a)") &
+            "========== Curvature-guided seeding ========="
+         write (output_unit, "(x,a,es12.4)") &
+            "Gradient norm:  ", grad_norm
+         write (output_unit, "(x,a,3f10.5)") &
+            "Normal:         ", normal
+         write (output_unit, "(x,a,es12.4,a,l3)") &
+            "kappa_1:        ", kappa1, "  flat:", flat1
+         write (output_unit, "(x,a,3f10.5)") &
+            "Direction 1:    ", dir1
+         write (output_unit, "(x,a,es12.4,a,l3)") &
+            "kappa_2:        ", kappa2, "  flat:", flat2
+         write (output_unit, "(x,a,3f10.5)") &
+            "Direction 2:    ", dir2
       end if
 
       !> Compute seed count:
@@ -409,19 +418,19 @@ contains
       n_seeds = offset
 
       if (debug) then
-         write (output_unit, '(x,a,i0,a)') &
-            '[curvature] Generated ', n_seeds, ' seeds'
-         write (output_unit, '(x,a)') &
-            '============================================='
+         write (output_unit, "(x,a,i0,a)") &
+            "[curvature] Generated ", n_seeds, " seeds"
+         write (output_unit, "(x,a)") &
+            "============================================="
       end if
    end subroutine generate_curvature_seeds
 
-   !> Factory function to create a curvature-guided multi-start SLSQP solver.
+   !> Factory function to create a curvature-guided multi-start SLSQP solver
    !>
    !> Accepts the constraint gradient and Hessian at the anchor to perform
-   !> curvature analysis and generate targeted seeds.  Interface mirrors
+   !> curvature analysis and generate targeted seeds; the interface mirrors
    !> new_slsqp_multistart_solver but replaces Lebedev shell parameters
-   !> with grad_s, hess_s, and optional curvature thresholds.
+   !> with grad_s, hess_s, and optional curvature thresholds
    !>
    !> @param[in]    anchor     Anchor point for projection (3)
    !> @param[out]   solver     Allocated solver instance
@@ -521,8 +530,8 @@ contains
       end if
 
       if (debug_use) then
-         write (output_unit, '(x,a)') &
-            '========== Curvature SLSQP startup =========='
+         write (output_unit, "(x,a)") &
+            "========== Curvature SLSQP startup =========="
       end if
 
       !> Generate curvature-guided seeds
@@ -569,11 +578,12 @@ contains
       call move_alloc(tmp, solver)
    end subroutine new_slsqp_curvature_solver
 
-   !> Solve the constrained projection using curvature-guided multi-start SLSQP.
+   !> Solve the constrained projection using curvature-guided multi-start SLSQP
    !>
    !> Iterates over all seed points, runs SLSQP from each, and returns the
-   !> feasible solution closest to the anchor.  All converged results are
-   !> stored as raw candidates for downstream filtering.
+   !> feasible solution closest to the anchor; all converged results are
+   !> stored as raw candidates for downstream filtering
+   !>
    !> @param[inout] x      Initial guess in, best solution out (3)
    !> @param[out]   error  Error status
    subroutine slsqp_curvature_solve(self, x, error)
@@ -615,8 +625,8 @@ contains
          call self%slsqp_solver%solve(x_trial, solver_error)
          if (allocated(solver_error)) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,a)') &
-                  'Seed ', i, ' failed: ', trim(solver_error%message)
+               write (output_unit, "(x,a,i0,a,a)") &
+                  "Seed ", i, " failed: ", trim(solver_error%message)
             end if
             deallocate (solver_error)
             cycle
@@ -645,16 +655,17 @@ contains
       x = best_x
 
       if (self%debug) then
-         write (output_unit, '(x,a,i0,a,i0,a)') &
-            '[curvature] ', n_converged, '/', self%n_seeds, ' seeds converged'
-         write (output_unit, '(x,a,es12.4)') &
-            '[curvature] Best distance: ', sqrt(best_dist2)
+         write (output_unit, "(x,a,i0,a,i0,a)") &
+            "[curvature] ", n_converged, "/", self%n_seeds, " seeds converged"
+         write (output_unit, "(x,a,es12.4)") &
+            "[curvature] Best distance: ", sqrt(best_dist2)
       end if
 
       deallocate (converged)
    end subroutine slsqp_curvature_solve
 
-   !> Get raw SLSQP candidates converged from curvature-guided seeds.
+   !> Get raw SLSQP candidates converged from curvature-guided seeds
+   !>
    !> @param[out] candidates   Raw candidate points (3, n_candidates)
    !> @param[out] n_candidates Number of available candidates
    subroutine slsqp_curvature_get_raw_candidates(self, candidates, n_candidates)

@@ -1,17 +1,21 @@
 module test_cavity_iswig
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io_constants, only: pi
+   use mctc_io_convert, only: autoaa
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
+   use moist_cavity_diagnostic, only: find_disconnected_cavities
+   use moist_cavity_type, only: write_cavity_csv_debug
    use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_iswig
@@ -32,6 +36,10 @@ contains
 
       testsuite = [ &
          & new_unittest("spherical_cavity", test_spherical_cavity), &
+         & new_unittest("islands", test_islands), &
+         & new_unittest("islands_guards_and_order", test_islands_guards_and_order), &
+         & new_unittest("debug_writers", test_debug_writers), &
+         & new_unittest("debug_writer_guards", test_debug_writer_guards), &
          & new_unittest("molecular_cavity", test_molecular_cavity), &
          & new_unittest("area_sum", test_area_summation), &
          & new_unittest("area_variants", test_area_variants), &
@@ -76,8 +84,8 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, nleb=1202, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=1202))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -107,6 +115,454 @@ contains
          & more="Single-atom switching function does not match")
 
    end subroutine test_spherical_cavity
+
+   !> Island count: one sphere is one island, two far spheres are two
+   subroutine test_islands(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+      type(cavity_type_iswig), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+      integer, allocatable :: islands(:)
+      real(wp) :: xyz(3, 2)
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+      call new_radii_custom_atoms([3.0_wp, 3.0_wp], radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=302))
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      xyz = 0.0_wp
+      xyz(1, 2) = 40.0_wp
+      call new(mol, [1, 1], xyz)
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, size(islands), 2, more="two far spheres are two islands")
+      if (allocated(error)) return
+      call check(error, sum(islands), cav%ngrid, more="island sizes sum to ngrid")
+      if (allocated(error)) return
+      call check(error, islands(1) >= islands(2), more="islands are sorted largest first")
+      if (allocated(error)) return
+
+      xyz(1, 2) = 2.0_wp
+      call new(mol, [1, 1], xyz)
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, size(islands), 1, more="two overlapping spheres are one island")
+      if (allocated(error)) return
+      call check(error, islands(1), cav%ngrid, more="the single island holds every point")
+
+   end subroutine test_islands
+
+   !> Island search refuses unusable grids and reorders islands largest first
+   !>
+   !> Driven on a bare cavity whose grid is set by hand: the first point sits
+   !> alone and is labelled first, so the expected `[8, 1]` only comes out of
+   !> the descending sort actually moving an entry
+   subroutine test_islands_guards_and_order(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Never constructed cavity carrying a hand-made grid
+      type(cavity_type_iswig) :: cav
+      !> Library error handling
+      type(mctc_error), allocatable :: cavity_error
+      !> Points per island
+      integer, allocatable :: islands(:)
+      !> Cube-corner index
+      integer :: i
+
+      ! No grid at all
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      call check_message(error, cavity_error, "no grid points")
+      if (allocated(error)) return
+
+      ! A single point has no neighbour to measure a spacing against
+      cav%ngrid = 1
+      allocate (cav%xyz(3, 1), source=0.0_wp)
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      call check_message(error, cavity_error, "could not estimate grid spacing")
+      if (allocated(error)) return
+
+      ! One isolated point, then a 0.5 bohr cube of eight points far away
+      deallocate (cav%xyz)
+      cav%ngrid = 9
+      allocate (cav%xyz(3, 9), source=0.0_wp)
+      do i = 0, 7
+         cav%xyz(:, i + 2) = 30.0_wp + 0.5_wp*real([ibits(i, 0, 1), ibits(i, 1, 1), &
+            & ibits(i, 2, 1)], wp)
+      end do
+      call find_disconnected_cavities(cav, islands, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, size(islands), 2, more="isolated point and cube are two islands")
+      if (allocated(error)) return
+      call check(error, islands(1), 8, more="the larger, later island is not sorted first")
+      if (allocated(error)) return
+      call check(error, islands(2), 1, more="the isolated point is not the second island")
+
+   end subroutine test_islands_guards_and_order
+
+   !> Debug writers produce one record per grid point and report to the context
+   !>
+   !> The context owns a scratch unit, so the `[Info]` lines and the default
+   !> `print` target are observable without touching standard output; every
+   !> named file is read back and deleted before any assertion can return.
+   !> iSwiG overrides the CSV writer with its own column set, so the base
+   !> writer is called directly
+   subroutine test_debug_writers(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Two overlapping hydrogen atoms
+      type(structure_type) :: mol
+      !> Cavity under test
+      type(cavity_type_iswig), allocatable :: cav
+      !> Library errors of the three writers
+      type(mctc_error), allocatable :: cavity_error, xyz_error, csv_error, pqr_error
+      !> Radius model of the cavity
+      class(radius_type), allocatable :: radius_model
+      !> Run context writing to a scratch unit
+      type(moist_context_type), target :: ctx
+      !> Lines read back from the written files and the scratch units
+      character(len=256), allocatable :: xyz_lines(:), csv_lines(:), pqr_lines(:)
+      character(len=256), allocatable :: log_lines(:), print_lines(:)
+      !> Context scratch unit and explicit print unit
+      integer :: log_unit, print_unit
+      !> I/O status, grid index, parsed count and owner
+      integer :: stat, i, n, owner
+      !> Atom positions, parsed point and parsed area
+      real(wp) :: xyz(3, 2), point(3), area
+      !> Parsed element symbol
+      character(len=2) :: symbol
+      !> File name stem owned by this test
+      character(len=*), parameter :: stem = "moist-test-cavity_iswig-debug_writers"
+
+      open (newunit=log_unit, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat, 0, more="could not open the context scratch unit")
+      if (allocated(error)) return
+      call new_context(ctx, unit=log_unit)
+
+      xyz = 0.0_wp
+      xyz(3, 2) = 1.4_wp
+      call new(mol, [1, 1], xyz)
+      call new_radii_custom_atoms([2.0_wp, 2.0_wp], radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=14))
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cav%ngrid > 0, more="cavity has no grid points, the test is vacuous")
+      if (allocated(error)) return
+
+      call cav%write_xyz_debug(stem//".xyz", xyz_error)
+      call read_and_delete(stem//".xyz", xyz_lines)
+      call write_cavity_csv_debug(cav, stem//".csv", csv_error)
+      call read_and_delete(stem//".csv", csv_lines)
+      call cav%write_pqr_debug(stem//".pqr", pqr_error)
+      call read_and_delete(stem//".pqr", pqr_lines)
+      ! Default target is the context unit, an explicit one overrides it
+      call cav%print()
+      open (newunit=print_unit, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat, 0, more="could not open the print scratch unit")
+      if (allocated(error)) return
+      call cav%print(unit=print_unit)
+      call read_scratch(print_unit, print_lines)
+      call read_scratch(log_unit, log_lines)
+
+      call check(error, .not. allocated(xyz_error), more="XYZ writer failed")
+      if (allocated(error)) return
+      call check(error, .not. allocated(csv_error), more="CSV writer failed")
+      if (allocated(error)) return
+      call check(error, .not. allocated(pqr_error), more="PQR writer failed")
+      if (allocated(error)) return
+
+      ! XYZ: count, title, then one helium per point in Angstrom
+      call check(error, size(xyz_lines), cav%ngrid + 2, more="XYZ record count")
+      if (allocated(error)) return
+      read (xyz_lines(1), *, iostat=stat) n
+      call check(error, stat == 0 .and. n == cav%ngrid, more="XYZ atom count line")
+      if (allocated(error)) return
+      call check(error, index(xyz_lines(2), "cavity grid points") > 0, more="XYZ title line")
+      if (allocated(error)) return
+      do i = 1, cav%ngrid
+         read (xyz_lines(i + 2), *, iostat=stat) symbol, point
+         call check(error, stat == 0 .and. symbol == "He", more="XYZ record does not parse")
+         if (allocated(error)) return
+         call check(error, maxval(abs(point - cav%xyz(:, i)*autoaa)), 0.0_wp, thr=1.0e-7_wp, &
+            & more="XYZ record does not hold the grid point")
+         if (allocated(error)) return
+      end do
+
+      ! CSV: header, then index, bohr coordinates, owner and area per point
+      call check(error, size(csv_lines), cav%ngrid + 1, more="CSV record count")
+      if (allocated(error)) return
+      call check(error, trim(csv_lines(1)) == "ngrid,x,y,z,owner,area", more="CSV header")
+      if (allocated(error)) return
+      do i = 1, cav%ngrid
+         read (csv_lines(i + 1), *, iostat=stat) n, point, owner, area
+         call check(error, stat == 0 .and. n == i, more="CSV record does not parse")
+         if (allocated(error)) return
+         call check(error, maxval(abs(point - cav%xyz(:, i))), 0.0_wp, thr=1.0e-12_wp, &
+            & more="CSV record does not hold the grid point")
+         if (allocated(error)) return
+         call check(error, owner, cav%owner(i), more="CSV owner column")
+         if (allocated(error)) return
+         call check(error, area, cav%a(i), thr=1.0e-12_wp, more="CSV area column")
+         if (allocated(error)) return
+      end do
+
+      ! PQR: one HETATM record per point, positions in Angstrom, then END
+      call check(error, size(pqr_lines), cav%ngrid + 1, more="PQR record count")
+      if (allocated(error)) return
+      do i = 1, cav%ngrid
+         call check(error, pqr_lines(i)(1:6) == "HETATM", more="PQR record type")
+         if (allocated(error)) return
+         read (pqr_lines(i)(23:54), "(i4,4x,3f8.3)", iostat=stat) owner, point
+         call check(error, stat == 0 .and. owner == cav%owner(i), more="PQR owner column")
+         if (allocated(error)) return
+         call check(error, maxval(abs(point - cav%xyz(:, i)*autoaa)), 0.0_wp, thr=1.0e-3_wp, &
+            & more="PQR record does not hold the grid point")
+         if (allocated(error)) return
+      end do
+      call check(error, trim(pqr_lines(cav%ngrid + 1)) == "END", more="PQR terminator")
+      if (allocated(error)) return
+
+      ! Context unit: three writer notices, then the default print
+      call check(error, count(index(log_lines, "[Info] Wrote cavity") > 0), 3, &
+         & more="writers did not report to the context unit")
+      if (allocated(error)) return
+      call check(error, any(index(log_lines, stem//".pqr") > 0), &
+         & more="PQR notice does not name the file")
+      if (allocated(error)) return
+      call check(error, any(index(log_lines, "Cavity points") > 0), &
+         & more="print without a unit did not reach the context unit")
+      if (allocated(error)) return
+      call check(error, any(index(print_lines, "Total volume") > 0), &
+         & more="print did not reach the explicit unit")
+      if (allocated(error)) return
+      call check(error, .not. any(index(print_lines, "[Info]") > 0), &
+         & more="explicit print unit received writer notices")
+
+   end subroutine test_debug_writers
+
+   !> Debug writers and print refuse a cavity that is missing grid data
+   !>
+   !> The cavity is never constructed, so it also has no run context and
+   !> `print` resolves its default unit without one; the CSV guards are the
+   !> base writer's, which iSwiG overrides
+   subroutine test_debug_writer_guards(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Never constructed cavity, filled field by field
+      type(cavity_type_iswig) :: cav
+      !> Library error handling
+      type(mctc_error), allocatable :: cavity_error
+      !> Lines printed to the scratch unit
+      character(len=256), allocatable :: lines(:)
+      !> Scratch unit and I/O status
+      integer :: unit, stat
+      !> Whether a writer left a file behind
+      logical :: exists
+      !> File name stem owned by this test
+      character(len=*), parameter :: stem = "moist-test-cavity_iswig-debug_writer_guards"
+
+      call check(error, .not. associated(cav%ctx), more="bare cavity borrows a context")
+      if (allocated(error)) return
+
+      call cav%write_xyz_debug(stem//".xyz", cavity_error)
+      call check_message(error, cavity_error, "write_xyz_debug: cavity grid not allocated")
+      if (allocated(error)) return
+      call write_cavity_csv_debug(cav, stem//".csv", cavity_error)
+      call check_message(error, cavity_error, "write_csv_debug: cavity grid not allocated")
+      if (allocated(error)) return
+      call cav%write_pqr_debug(stem//".pqr", cavity_error)
+      call check_message(error, cavity_error, "write_pqr_debug: cavity grid not allocated")
+      if (allocated(error)) return
+
+      allocate (cav%xyz(3, 0))
+      call cav%write_xyz_debug(stem//".xyz", cavity_error)
+      call check_message(error, cavity_error, "write_xyz_debug: no grid points")
+      if (allocated(error)) return
+      call write_cavity_csv_debug(cav, stem//".csv", cavity_error)
+      call check_message(error, cavity_error, "write_csv_debug: point areas not allocated")
+      if (allocated(error)) return
+      call cav%write_pqr_debug(stem//".pqr", cavity_error)
+      call check_message(error, cavity_error, "write_pqr_debug: point areas not allocated")
+      if (allocated(error)) return
+
+      allocate (cav%a(0))
+      call write_cavity_csv_debug(cav, stem//".csv", cavity_error)
+      call check_message(error, cavity_error, "write_csv_debug: point owners not allocated")
+      if (allocated(error)) return
+      call cav%write_pqr_debug(stem//".pqr", cavity_error)
+      call check_message(error, cavity_error, "write_pqr_debug: point owners not allocated")
+      if (allocated(error)) return
+
+      allocate (cav%owner(0))
+      call write_cavity_csv_debug(cav, stem//".csv", cavity_error)
+      call check_message(error, cavity_error, "write_csv_debug: no grid points")
+      if (allocated(error)) return
+      call cav%write_pqr_debug(stem//".pqr", cavity_error)
+      call check_message(error, cavity_error, "write_pqr_debug: no grid points")
+      if (allocated(error)) return
+
+      inquire (file=stem//".xyz", exist=exists)
+      call check(error, .not. exists, more="refused XYZ writer created a file")
+      if (allocated(error)) return
+      inquire (file=stem//".csv", exist=exists)
+      call check(error, .not. exists, more="refused CSV writer created a file")
+      if (allocated(error)) return
+      inquire (file=stem//".pqr", exist=exists)
+      call check(error, .not. exists, more="refused PQR writer created a file")
+      if (allocated(error)) return
+
+      ! No totals yet: print warns instead of reporting
+      open (newunit=unit, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat, 0, more="could not open the print scratch unit")
+      if (allocated(error)) return
+      call cav%print(unit=unit)
+      call read_scratch(unit, lines)
+      call check(error, size(lines), 1, more="print of an incomplete cavity wrote more than a warning")
+      if (allocated(error)) return
+      call check(error, trim(lines(1)) == "[Warning] Cavity not fully initialized", &
+         & more="print of an incomplete cavity did not warn")
+
+   end subroutine test_debug_writer_guards
+
+   !> Assert that a library error was raised and names the expected branch
+   !>
+   !> @param[out]   error    Test failure
+   !> @param[inout] err      Library error, cleared on return
+   !> @param[in]    expected Distinctive substring of the expected message
+   subroutine check_message(error, err, expected)
+
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, cleared on return
+      type(mctc_error), allocatable, intent(inout) :: err
+      !> Distinctive substring of the expected message
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) then
+         call test_failed(error, "expected error was not raised: "//expected)
+         return
+      end if
+      call check(error, index(err%message, expected) > 0, &
+         & more="unexpected error message: "//err%message)
+      deallocate (err)
+
+   end subroutine check_message
+
+   !> Read a written file line by line, then delete it
+   !>
+   !> A missing file yields no lines
+   !>
+   !> @param[in]  filename Path of the file
+   !> @param[out] lines    File contents
+   subroutine read_and_delete(filename, lines)
+
+      !> Path of the file
+      character(len=*), intent(in) :: filename
+      !> File contents
+      character(len=256), allocatable, intent(out) :: lines(:)
+
+      !> Unit and I/O status
+      integer :: unit, stat
+
+      open (newunit=unit, file=filename, status="old", action="read", iostat=stat)
+      if (stat /= 0) then
+         allocate (lines(0))
+         return
+      end if
+      call read_unit(unit, lines)
+      close (unit, status="delete")
+
+   end subroutine read_and_delete
+
+   !> Rewind a scratch unit, read it line by line and close it
+   !>
+   !> @param[in]  unit  Open scratch unit
+   !> @param[out] lines Unit contents
+   subroutine read_scratch(unit, lines)
+
+      !> Open scratch unit
+      integer, intent(in) :: unit
+      !> Unit contents
+      character(len=256), allocatable, intent(out) :: lines(:)
+
+      rewind (unit)
+      call read_unit(unit, lines)
+      close (unit)
+
+   end subroutine read_scratch
+
+   !> Read every line of an open unit from its current position
+   !>
+   !> @param[in]  unit  Open unit
+   !> @param[out] lines Remaining lines
+   subroutine read_unit(unit, lines)
+
+      !> Open unit
+      integer, intent(in) :: unit
+      !> Remaining lines
+      character(len=256), allocatable, intent(out) :: lines(:)
+
+      !> Current line
+      character(len=256) :: line
+      !> I/O status
+      integer :: stat
+
+      allocate (lines(0))
+      do
+         read (unit, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         lines = [lines, line]
+      end do
+
+   end subroutine read_unit
 
    !> Smoke test for molecular cavity
    subroutine test_molecular_cavity(error)
@@ -215,7 +671,7 @@ contains
    subroutine test_area_variants(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      integer :: nsph, ngrid
+      integer :: nsph
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: asph_full(:), asph_eff(:)
       integer :: num_leb
@@ -243,8 +699,8 @@ contains
       allocate (asph_full(nsph), asph_eff(nsph))
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -258,8 +714,8 @@ contains
       deallocate (cav)
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, num_leb, 0.0_wp, 0.0_wp, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=num_leb, cut_a=0.0_wp, cut_f=0.0_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -356,7 +812,7 @@ contains
       class(radius_type), allocatable :: radius_model
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: num2d(:, :), ana2d(:, :)
-      real(wp) :: h, fwd, bwd, ffwd, bbwd, cut_a, cut_f, s
+      real(wp) :: h, fwd, bwd, ffwd, bbwd, cut_a, cut_f
       integer :: i, j, nleb, nlebs(5)
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
@@ -390,9 +846,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -407,9 +862,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -424,9 +878,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - 2.0_wp*STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -441,9 +894,8 @@ contains
                mol%xyz(j, i) = mol%xyz(j, i) - STEP_SIZE
                if (allocated(cav)) deallocate (cav)
                allocate (cav)
-               call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-                  & cut_a=cut_a, cut_f=cut_f, &
-                  & radius_model=radius_model, error=cavity_error)
+               call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+                  param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
@@ -464,9 +916,8 @@ contains
          ! Use type-bound gradient on the cavity (3, nat)
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, nleb=nlebs(nleb), &
-            & cut_a=cut_a, cut_f=cut_f, &
-            & radius_model=radius_model, error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(num_leb=nlebs(nleb), cut_a=cut_a, cut_f=cut_f))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -1329,9 +1780,9 @@ contains
 
    end subroutine test_amat_orca_reference
 
-   !> Numerical vs analytical test for the contracted A-matrix derivative.
+   !> Numerical vs analytical test for the contracted A-matrix derivative
    !> Uses 5-point finite differences on q1^T A q2 to verify the
-   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain.
+   !> `pcm_amat_surface_weights` + `pcm_amat_nuclear_gradient` chain
    subroutine test_amat_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1364,8 +1815,8 @@ contains
 
       ! Build reference cavity to set up charge vectors
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
-         & error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1468,8 +1919,8 @@ contains
          value = 0.0_wp
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, cut_f=0.01_wp, radius_model=radius_model, &
-            & error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(cut_f=0.01_wp))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return
@@ -1508,12 +1959,12 @@ contains
    !> re-evaluated on a cavity rebuilt at each displaced geometry. Every channel
    !> is driven at once, including the four the contraction drops as
    !> geometry-independent: if any of them did move with the nuclei, the
-   !> numerical derivative would see it and the analytic one would not.
+   !> numerical derivative would see it and the analytic one would not
    !>
    !> Weights are pinned to the *raw* Lebedev index rather than the filtered
    !> grid index, so a rebuilt grid keeps assigning the same weight to the same
    !> point; the energy helper additionally refuses to run if the surviving set
-   !> changes at all, which would put a step into the finite difference.
+   !> changes at all, which would put a step into the finite difference
    subroutine test_surface_gradient(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -1557,8 +2008,8 @@ contains
       end if
 
       allocate (cav)
-      call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
-         & radius_model=radius_model, error=cavity_error)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F))
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -1690,8 +2141,8 @@ contains
          value = 0.0_wp
          if (allocated(cav)) deallocate (cav)
          allocate (cav)
-         call new_cavity_iswig(cav, ctx, nleb=NLEB, cut_f=CUT_F, &
-            & radius_model=radius_model, error=cavity_error)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(num_leb=NLEB, cut_f=CUT_F))
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
             return

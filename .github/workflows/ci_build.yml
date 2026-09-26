@@ -80,7 +80,7 @@ jobs:
         run: |
           export OMP_STACKSIZE=128M
           fflags="-fopenmp"
-          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise"; fi
+          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise -fpscomp logicals"; fi
           fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
           fpm test --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
 
@@ -200,7 +200,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf
+        run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf==2.13.1
 
       - name: Verify pyscf is importable
         run: python -c "from pyscf import dft, grad, gto, scf; import pyscf; print(pyscf.__version__)"
@@ -210,3 +210,61 @@ jobs:
           meson setup build -Dpython=true -Dapi=true -Dpython_version="$(command -v python)" -Dlapack=${{ matrix.lapack }}
           meson compile -C build
           meson test -C build --suite moist --print-errorlogs
+
+  wheel:
+    name: wheel (${{ matrix.name }}, gnu14, pyscf)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: ubuntu, os: ubuntu-24.04, lapack: auto}
+          - {name: macos,  os: macos-14,     lapack: accelerate}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install compiler
+        id: setup-fortran
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: '14'
+
+      - name: Set compiler environment
+        run: |
+          echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
+          echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install meson ninja
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip pytest numpy pyscf==2.13.1
+
+      - name: Source distribution with subprojects
+        run: |
+          meson setup dist -Dpython=false -Dapi=true -Dlapack=${{ matrix.lapack }}
+          meson dist -C dist --no-tests --include-subprojects
+          mkdir -p python/subprojects/moist
+          tar -xJf dist/meson-dist/moist-*.tar.xz --strip-components=1 -C python/subprojects/moist
+
+      - name: Build and install the wheel
+        run: |
+          python -m pip install -v ./python -Csetup-args=-Dlapack=${{ matrix.lapack }}
+          python -c "import moist; print(moist.__version__, moist.get_version_string())"
+
+      - name: Test the installed package
+        env:
+          MOIST_REQUIRE_PYSCF: 1
+        run: pytest python/tests

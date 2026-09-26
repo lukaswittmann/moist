@@ -1,11 +1,13 @@
-!> Module implementing the fast algorithm for computing the Boys function:
-!> Beylkin, G. & Sharma, S., J. Chem. Phys. 155, 174117 (2021).
+!> Fast algorithm for computing the Boys function:
+!> Beylkin, G. & Sharma, S., J. Chem. Phys. 155, 174117 (2021)
 
 module moist_math_boys
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none(type, external)
+   private
+
    public :: dboysfun1, dboysfun12, zboysfun00
 
    real(wp), parameter :: tol = 1.0E-03_wp
@@ -140,7 +142,7 @@ contains
    !> Uses a short Taylor expansion near x=0 to avoid cancellation in F1, and
    !> an erf-based closed form otherwise
    subroutine dboysfun1(x, vals)
-      implicit none
+      implicit none(type, external)
 
       real(wp), intent(in) :: x
       real(wp), intent(out) :: vals(0:1)
@@ -148,7 +150,7 @@ contains
       real(wp) :: x2, x3, x4, x5, x6, sqrtx, invx, expx
 
       if (x < 0.0_wp) then
-         ! CPCM kernels pass x >= 0. Keep a safe fallback for unexpected values.
+         ! CPCM kernels pass x >= 0; safe fallback for unexpected values
          vals(0) = 1.0_wp
          vals(1) = 1.0_wp/3.0_wp
          return
@@ -189,13 +191,13 @@ contains
    !> Computes real Boys functions F_n(x) for n=0..12 via quadrature and
    !> upward recursion, switching to asymptotic forms for large |x|
    subroutine dboysfun12(x, vals)
-      implicit none
+      implicit none(type, external)
 
       real(wp), intent(in) :: x
       real(wp), intent(out) :: vals(0:12)
       real(wp) :: y, yy, rtmp
       real(wp) ::   p, q, tmp
-      integer*4 :: n, k
+      integer :: n, k
 !
       ! Precompute the exponential factor used throughout the recurrence
       y = exp(-x)
@@ -243,12 +245,12 @@ contains
    !> Evaluates the complex Boys F_0(z) using asymptotic, Taylor, or
    !> quadrature expansions depending on |z| for numerical stability
    subroutine zboysfun00(z, val)
-      implicit none
+      implicit none(type, external)
 
       complex(wp), intent(in) :: z
       complex(wp), intent(out) :: val
       complex(wp) :: z1, ez, y
-      integer*4 ::  k
+      integer :: k
 
       ! z may be complex, so keep the exponential explicit for clarity
       ez = exp(-z)
@@ -276,7 +278,7 @@ contains
          return
       end if
 
-      ! Intermediate |z| uses the Padé-quadrature rational approximation
+      ! Intermediate |z| uses the Pade-quadrature rational approximation
       val = sqpio2/sqrt(z) - 0.5_wp*ez*sum(ff(1:22)/(z + pp(1:22)))
 
       return

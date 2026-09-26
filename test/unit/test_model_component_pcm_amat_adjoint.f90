@@ -155,7 +155,7 @@ contains
       call center_at_origin(mols(1))
       ! `cut_f` drops the buried  grid points at construction: their near-zero
       ! switching factor makes both the contracted energy and the relative FD
-      ! step degenerate. The working copies below are what the stencils poke.
+      ! step degenerate. The working copies below are what the stencils poke
       call get_test_cavity_iswig(mols(1), cavity, err, nleb=nleb_survey, &
                                  cut_f=fd_min_f)
       if (allocated(err)) then
@@ -190,7 +190,7 @@ contains
          ig = 1 + (ip - 1)*stride
          if (ig > ngrid) exit
 
-         ! Gaussian width channel.
+         ! Gaussian width channel
          step = rel_step*xi(ig)
          saved = xi(ig)
          do k = 1, 4
@@ -209,7 +209,7 @@ contains
          if (allocated(error)) return
 
          ! Switching-factor channel. It enters only through the diagonal, so a
-         ! sign or prefactor slip there shows up here and nowhere else.
+         ! sign or prefactor slip there shows up here and nowhere else
          step = rel_step*f(ig)
          saved = f(ig)
          do k = 1, 4
@@ -227,7 +227,7 @@ contains
                     more=trim(context))
          if (allocated(error)) return
 
-         ! Position channel.
+         ! Position channel
          do iax = 1, 3
             step = xyz_step
             saved = xyz(iax, ig)
@@ -274,10 +274,10 @@ contains
       !> Matrix, atom, axis indices and extents
       integer :: i, j, iatom, iaxis, ngrid, nsph
       !> Largest deviations of the matrix and of the gradient
-      real(wp) :: dev_amat, dev_grad, scale
+      real(wp) :: dev_grad, scale
 
       !> The dense tensor is (3, nsph, ngrid, ngrid), so this test only runs on
-      !> the coarsest iSwiG grid; nleb 14 keeps it in the tens of megabytes.
+      !> the coarsest iSwiG grid; nleb 14 keeps it in the tens of megabytes
       integer, parameter :: nleb_dense_tensor = 14
 
       call get_test_structures(mols, nmol)

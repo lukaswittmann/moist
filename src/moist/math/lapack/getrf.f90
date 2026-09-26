@@ -4,35 +4,36 @@
 module moist_math_lapack_getrf
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_getrf
 
    !> Computes an LU factorization of a general M-by-N matrix A
-   !> using partial pivoting with row interchanges.
+   !> using partial pivoting with row interchanges
    !>
    !> The factorization has the form
    !>    A = P * L * U
    !> where P is a permutation matrix, L is lower triangular with unit
    !> diagonal elements (lower trapezoidal if m > n), and U is upper
-   !> triangular (upper trapezoidal if m < n).
+   !> triangular (upper trapezoidal if m < n)
    interface wrap_getrf
       module procedure :: wrap_sgetrf
       module procedure :: wrap_dgetrf
    end interface wrap_getrf
 
    !> Computes an LU factorization of a general M-by-N matrix A
-   !> using partial pivoting with row interchanges.
+   !> using partial pivoting with row interchanges
    !>
    !> The factorization has the form
    !>    A = P * L * U
    !> where P is a permutation matrix, L is lower triangular with unit
    !> diagonal elements (lower trapezoidal if m > n), and U is upper
-   !> triangular (upper trapezoidal if m < n).
+   !> triangular (upper trapezoidal if m < n)
    interface lapack_getrf
       pure subroutine sgetrf(m, n, a, lda, ipiv, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: m
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
@@ -42,6 +43,7 @@ module moist_math_lapack_getrf
       end subroutine sgetrf
       pure subroutine dgetrf(m, n, a, lda, ipiv, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: m
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda

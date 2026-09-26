@@ -1,17 +1,18 @@
 
-!> Citation registry for moist and its sub-models.
+!> Citation registry for moist and its sub-models
+!>
 !> Each citation is stored as a typed entry with category, label,
 !> authors, title, journal line, and DOI. The registry can be
-!> printed in full or filtered by category/label.
+!> printed in full or filtered by category/label
 module moist_output_citations
    use moist_output_format, only: print_wrapped
-   implicit none
+   implicit none(type, external)
    private
 
    public :: citation_entry_type, moist_citations, num_citations
    public :: print_citations, print_citations_by_category, print_citations_by_label
 
-   !> A single literature reference.
+   !> A single literature reference
    type :: citation_entry_type
       !> Broad grouping: "General", "Cavities", "Models", or "Solvers"
       character(len=:), allocatable :: category
@@ -30,22 +31,22 @@ module moist_output_citations
    !> Number of entries in the registry
    integer, parameter :: num_citations = 20
 
-   !> The global citation registry, populated in init_citations().
+   !> The global citation registry, populated in init_citations()
    type(citation_entry_type), target :: moist_citations(num_citations)
 
    !> Guard against repeated initialisation
    logical :: initialised = .false.
 
-   !> Maximum line width for word-wrapped output (excluding indent).
+   !> Maximum line width for word-wrapped output (excluding indent)
    integer, parameter :: wrap_width = 57
 
 contains
 
-   !> Populate the registry (called lazily on first access).
+   !> Populate the registry (called lazily on first access)
    subroutine init_citations()
       if (initialised) return
 
-      ! No dedicated toolkit paper yet; cite the DROP cavity work for now.
+      ! No dedicated toolkit paper yet; cite the DROP cavity work for now
       moist_citations(1) = citation_entry_type( &
                            category="General", &
                            label="moist", &
@@ -231,12 +232,13 @@ contains
       character(len=*), intent(in) :: category
 
       write (unit, '(a,a,":")') "", category
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
 
    end subroutine print_category_header
 
-   !> Print a single citation entry with consistent formatting.
-   !> Long lines are word-wrapped at wrap_width characters.
+   !> Print a single citation entry with consistent formatting
+   !>
+   !> - long lines are word-wrapped at wrap_width characters
    subroutine print_entry(unit, entry)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -250,18 +252,18 @@ contains
       else
          call print_wrapped(unit, entry%journal, "    ", wrap_width)
       end if
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
    end subroutine print_entry
 
-   !> Print all citations, grouped by category.
+   !> Print all citations, grouped by category
    subroutine print_citations(unit)
       !> Fortran I/O unit
       integer, intent(in) :: unit
 
       call init_citations()
 
-      write (unit, '(a)') "Please include the appropriate citations when using our work:"
-      write (unit, '(a)') ""
+      write (unit, "(a)") "Please include the appropriate citations when using our work:"
+      write (unit, "(a)") ""
 
       call print_citations_by_category(unit, "General")
       call print_citations_by_category(unit, "Cavities")
@@ -270,8 +272,9 @@ contains
 
    end subroutine print_citations
 
-   !> Print all citations matching a given category.
-   !> Entries are grouped under their label as sub-header.
+   !> Print all citations matching a given category
+   !>
+   !> - entries are grouped under their label as sub-header
    subroutine print_citations_by_category(unit, category)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -291,7 +294,7 @@ contains
          ! Print label sub-header when it changes
          if (moist_citations(i)%label /= last_label) then
             write (unit, '(2x,a,a,":")') "", moist_citations(i)%label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             last_label = moist_citations(i)%label
          end if
          call print_entry(unit, moist_citations(i))
@@ -299,7 +302,7 @@ contains
 
    end subroutine print_citations_by_category
 
-   !> Print all citations matching a given label (e.g. "iSwiG", "GEMS").
+   !> Print all citations matching a given label (e.g. "iSwiG", "GEMS")
    subroutine print_citations_by_label(unit, label)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -316,7 +319,7 @@ contains
          if (moist_citations(i)%label /= label) cycle
          if (.not. found) then
             write (unit, '(a,a,":")') "", label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             found = .true.
          end if
          call print_entry(unit, moist_citations(i))

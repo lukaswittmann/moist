@@ -2,7 +2,7 @@
 !>
 !> The mathematics lives in the code-generated module
 !> [[moist_cavity_drop_lsf_svdw_kernel]]; this module is the orchestration layer
-!> between it and the LSF contract of [[moist_cavity_drop_lsf_base]].
+!> between it and the LSF contract of [[moist_cavity_drop_lsf_base]]
 !>
 !> Division of labour
 !> ------------------
@@ -11,56 +11,67 @@
 !>    u_A = exp(-(k/3)(||r - R_A|| - R_a)) ,   P_m = sum_A u_A**m ,
 !>
 !> for m = 1, 2, 3 and 3/2, from which `Z` (and hence `S = -(1/k) log Z`) and
-!> every derivative follow in O(n_active) work. So:
+!> every derivative follow in O(n_active) work, so:
 !>
 !>   - `prepare` / `prepare_subset` run the base screening gate and cache the
-!>     *minimum*: per active atom its user-space id, its displacement `r - R_A`,
+!>     *minimum* -- per active atom its user-space id, its displacement `r - R_A`,
 !>     its radius and the distance `||r - R_A||`, plus the accumulated power-sum
-!>     tensors. Every one of those buffers is sized once per `update` and never
-!>     reallocated per point.
+!>     tensors
+!>   - each of those buffers is sized once per `update` and never reallocated
+!>     per point
 !>   - every accessor rebuilds whatever tensors it needs on demand by calling the
-!>     kernel. Nothing derivative-shaped is stored between points, which is why
-!>     this module no longer owns an SSD derivative cache.
+!>     kernel
+!>   - nothing derivative-shaped is stored between points, which is why this
+!>     module no longer owns an SSD derivative cache
 !>
 !> Buffers, never allocations
 !> --------------------------
-!> No accessor returns an `allocatable, intent(out)` result. Every result is a
-!> caller-provided buffer whose nuclear extent the caller sizes from
-!> [[active_count]]; the accessor writes its first `active_count()` slots and
-!> leaves the rest alone. This is what keeps the OpenMP projection path free of
-!> per-call heap traffic.
+!> No accessor returns an `allocatable, intent(out)` result:
+!>
+!>   - every result is a caller-provided buffer whose nuclear extent the caller
+!>     sizes from [[active_count]]
+!>   - the accessor writes its first `active_count()` slots and leaves the rest
+!>     alone
+!>   - that is what keeps the OpenMP projection path free of per-call heap traffic
 !>
 !> Index space of the nuclear outputs
 !> ----------------------------------
-!> Every nuclear index is an *active-list* index: slot `i` belongs to the atom
-!> `active_atom(i)`. Screened-away atoms have no slot at all, which is also why
-!> the outputs no longer have to be zeroed over the whole molecule on entry.
+!> Every nuclear index is an *active-list* index, slot `i` belonging to the atom
+!> `active_atom(i)`
+!>
+!>   - screened-away atoms have no slot at all, which is also why the outputs no
+!>     longer have to be zeroed over the whole molecule on entry
 !>
 !> Derivative-order contract
 !> -------------------------
 !> `prepare` is the only thing that can be under-provisioned, and the only thing
-!> it provisions is the power sums, up to `max_deriv`. Each accessor therefore
-!> asks [[require_deriv]] for exactly the power-sum order the kernel routine it
-!> calls reads -- not for the order of the tensor it returns, which it rebuilds
-!> itself. `f4_rrr_rA`, for instance, needs `ps3` and builds the order-4 per-atom
-!> tensors on the spot, so it runs correctly at `set_max_deriv(3)`.
+!> it provisions is the power sums, up to `max_deriv`, so:
+!>
+!>   - each accessor asks [[require_deriv]] for exactly the power-sum order the
+!>     kernel routine it calls reads, not for the order of the tensor it returns
+!>   - the returned tensor it rebuilds itself
+!>   - `f4_rrr_rA`, for instance, needs `ps3` and builds the order-4 per-atom
+!>     tensors on the spot, so it runs correctly at `set_max_deriv(3)`
 !>
 !> Two things the kernel deliberately does not handle, and are handled here
 !> ------------------------------------------------------------------------
-!>   1. **A point exactly on a nucleus.** `svdw_atom_eval` divides by
-!>      `||r - R_A||`. [[atom_tensors]] and [[atom_tangent_tensors]] intercept
-!>      that: at `x == 0` the value tensor is still the kernel's own `u_A`, and
-!>      every derivative order is zero -- the same convention the retired SSD
-!>      fill used (`n = (r - R_A)/x` taken as zero).
-!>   2. **The low-`n_active` guards.** The historical Z assembly switched the
-!>      two- and three-body blocks off below two and three active atoms. Those
-!>      elementary symmetric polynomials vanish *identically* there, so the
-!>      guards never changed a value in exact arithmetic -- but they did suppress
-!>      the floating-point residue of `q**2 - p3` and `p1**3 - 3 p1 p2 + 2 p3`
-!>      cancelling to zero. [[svdw_weights]] reproduces them exactly and for free
-!>      by handing the kernel `s_2 = 0` below two atoms and `s_3 = 0` below three:
-!>      multiplying the vanishing block by an exact zero is the same arithmetic as
-!>      skipping it.
+!>   1. **A point exactly on a nucleus**, where `svdw_atom_eval` divides by
+!>      `||r - R_A||`
+!>      - [[atom_tensors]] and [[atom_tangent_tensors]] intercept it
+!>      - at `x == 0` the value tensor is still the kernel's own `u_A`, and every
+!>        derivative order is zero
+!>      - the same convention the retired SSD fill used, `n = (r - R_A)/x` taken
+!>        as zero
+!>   2. **The low-`n_active` guards**, which in the historical Z assembly switched
+!>      the two- and three-body blocks off below two and three active atoms
+!>      - those elementary symmetric polynomials vanish *identically* there, so
+!>        the guards never changed a value in exact arithmetic
+!>      - they did suppress the floating-point residue of `q**2 - p3` and
+!>        `p1**3 - 3 p1 p2 + 2 p3` cancelling to zero
+!>      - [[svdw_weights]] reproduces them exactly and for free by handing the
+!>        kernel `s_2 = 0` below two atoms and `s_3 = 0` below three, multiplying
+!>        the vanishing block by an exact zero being the same arithmetic as
+!>        skipping it
 module moist_cavity_drop_lsf_svdw
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
@@ -79,7 +90,7 @@ module moist_cavity_drop_lsf_svdw
                                                 svdw_tangent_eval, svdw_hvp_eval, &
                                                 svdw_vjp_eval, svdw_radius_vjp_eval, &
                                                 svdw_normalized_eval, svdw_powersums
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Spatial dimension
@@ -90,8 +101,10 @@ module moist_cavity_drop_lsf_svdw
    !> Concrete level set function: takes its blending parameters directly through
    !> [[new]], caches the screened per-atom geometry and the power sums via
    !> [[prepare]], and rebuilds every derivative tensor on demand from the
-   !> generated kernel. Inherits the common atom-LSF state (ncenters, mol, radii,
-   !> screening caches) from [[moist_cavity_drop_lsf_type]].
+   !> generated kernel
+   !>
+   !> - inherits the common atom-LSF state (ncenters, mol, radii, screening
+   !>   caches) from [[moist_cavity_drop_lsf_type]]
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_svdw_type
 
       !> SvdW blending parameters (k, one-, two- and three-body weights)
@@ -102,7 +115,7 @@ module moist_cavity_drop_lsf_svdw
 
       !* --------------------------- Per-point active list -------------------------- *!
 
-      !? These should be in the base lsf type (we need to add these to the isodensity ones)
+      !? Belongs in the base LSF type; the isodensity LSFs still need them added
 
       !> Number of atoms that survived screening at the cached point
       integer :: n_active = 0
@@ -117,21 +130,22 @@ module moist_cavity_drop_lsf_svdw
       !> Distance `||r - R_A||` of active slot i [ncenters]
       !>
       !> The reciprocal distance, the unit vector `(r - R_A)/x` and the screening
-      !> factor `u_A` used to be cached next to it. They are deliberately not:
-      !> the generated kernel takes `(d, R_a, k)` and recomputes `x` and `u_A`
-      !> from them, so caching those three bought nothing and cost an extra
-      !> `exp`, a division and three multiplies per atom on the single hottest
-      !> loop in the projection. `act_x` stays because the on-nucleus guard
-      !> reads it.
+      !> factor `u_A` used to be cached next to it, and deliberately are not:
+      !>
+      !> - the generated kernel takes `(d, R_a, k)` and recomputes `x` and `u_A`
+      !>   from them
+      !> - caching those three bought nothing and cost an extra `exp`, a division
+      !>   and three multiplies per atom on the hottest loop in the projection
+      !> - `act_x` stays because the on-nucleus guard reads it
       real(wp), allocatable :: act_x(:)
 
       !* ------------------------------- Power sums ---------------------------------- *!
-      !> Orders above `max_deriv` are stale after `prepare`; the accessors guard
-      !> on [[require_deriv]] rather than on the contents.
+      !> Orders above `max_deriv` are stale after `prepare`, the accessors guarding
+      !> on [[require_deriv]] rather than on the contents
 
       !? Why save these always?
 
-      !> Order-0 power sums; last index selects the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
+      !> Order-0 power sums, last index the kind (1 = p1, 2 = p2, 3 = p3, 4 = q)
       real(wp) :: ps0(nkind) = 0.0_wp
       !> Order-1 power-sum tensors
       real(wp) :: ps1(ndim, nkind) = 0.0_wp
@@ -226,42 +240,29 @@ module moist_cavity_drop_lsf_svdw
 
 contains
 
-   !* ================================================================================= *!
-   !*                              LSF lifecycle methods                                *!
-   !* ================================================================================= *!
-
-   !> Configure LSF blending parameters and declare the candidate index space
+   !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self     LSF instance
-   !> @param[in]    blend_k  Blending sharpness k (optional)
-   !> @param[in]    blend_1b One-body weight (optional)
-   !> @param[in]    blend_2b Two-body weight (optional)
-   !> @param[in]    blend_3b Three-body weight (optional)
-   subroutine lsf_new(self, blend_k, blend_1b, blend_2b, blend_3b)
-      !> LSF instance
+   !> @param[inout] self Object to initialize
+   !> @param[in] param Configuration copied by value
+   subroutine lsf_new(self, param)
+      !> LSF to initialize
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
-      !> Blending sharpness k (optional override)
-      real(wp), intent(in), optional :: blend_k
-      !> One-body weight (optional override)
-      real(wp), intent(in), optional :: blend_1b
-      !> Two-body weight (optional override)
-      real(wp), intent(in), optional :: blend_2b
-      !> Three-body weight (optional override)
-      real(wp), intent(in), optional :: blend_3b
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_drop_lsf_svdw_param_type), intent(in), optional :: param
 
       ! The screen loop indexes the base's candidate-space geometry mirror
-      ! directly, so candidate ids must arrive spatially sorted.
+      ! directly, so candidate ids must arrive spatially sorted
       self%candidate_space = lsf_candidate_space_sorted
 
-      call self%param%new(blend_k=blend_k, blend_1b=blend_1b, &
-                          blend_2b=blend_2b, blend_3b=blend_3b)
+      self%param = moist_cavity_drop_lsf_svdw_param_type()
+      if (present(param)) self%param = param
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
    !>
    !> The base handles the spatial sort, the candidate-space geometry mirror and
    !> the screening bounds; this override only sizes the per-point buffers, once,
-   !> to the molecule's atom count.
+   !> to the molecule's atom count
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    mol    Molecular structure
@@ -299,7 +300,7 @@ contains
    !> Configure the highest power-sum order `prepare` accumulates
    !>
    !> Nothing is allocated here: the power sums are fixed-size components and the
-   !> per-atom buffers are sized by [[update]].
+   !> per-atom buffers are sized by [[update]]
    !>
    !> @param[inout] self LSF instance
    !> @param[in]    n    Requested max derivative order (0..4)
@@ -351,20 +352,23 @@ contains
    !>
    !> Pass one is the base's allocation-free reject test; pass two touches only
    !> the survivors and fills the per-atom geometry; pass three accumulates the
-   !> power-sum tensors up to `max_deriv`.
+   !> power-sum tensors up to `max_deriv`
    !>
-   !> The accumulation has two spellings of the same sum. The fast one is the
-   !> kernel's own [[svdw_powersums]], a *fused* accumulator: it never
-   !> materialises a per-atom tensor, keeps one scalar per independent tensor
-   !> component for the whole loop, and skips the `q` kind when the two-body
-   !> weight is zero. That matters because this is the single hottest thing the
-   !> projection does -- the unfused spelling below writes and re-reads 52
-   !> doubles per atom at `max_deriv = 2` alone, and `svdw_atom_eval` is far too
-   !> large for gfortran to inline, so those buffers cannot be optimised away.
-   !> The fused form cannot handle a point sitting exactly on a nucleus, so the
-   !> fill records whether any survivor is at zero distance and only then falls
-   !> back to the guarded loop below. That branch is taken per *point*, not per
-   !> atom, and in production it is never taken at all.
+   !> The accumulation has two spellings of the same sum:
+   !>
+   !> - the fast one is the kernel's own [[svdw_powersums]], a *fused*
+   !>   accumulator that never materialises a per-atom tensor, keeps one scalar
+   !>   per independent tensor component for the whole loop, and skips the `q`
+   !>   kind when the two-body weight is zero
+   !> - that matters because this is the single hottest thing the projection does
+   !> - the unfused spelling below writes and re-reads 52 doubles per atom at
+   !>   `max_deriv = 2` alone, and `svdw_atom_eval` is far too large for gfortran
+   !>   to inline, so those buffers cannot be optimised away
+   !> - the fused form cannot handle a point sitting exactly on a nucleus, so the
+   !>   fill records whether any survivor is at zero distance and only then falls
+   !>   back to the guarded loop below
+   !> - that branch is taken per *point*, not per atom, and in production it is
+   !>   never taken at all
    !>
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point [ndim]
@@ -426,13 +430,14 @@ contains
    !> Accumulate the power sums with the on-nucleus guard in the loop
    !>
    !> Only reached when some active atom sits exactly at the evaluation point;
-   !> see [[atom_tensors]] for the convention applied there.
+   !> see [[atom_tensors]] for the convention applied there
    !>
    !> Unlike the fused path this always accumulates the `q` kind, even when the
-   !> two-body weight is zero and the fused path would leave those slots at zero.
-   !> Both are correct: every consumer reaches that kind only through the
-   !> two-body weight, so the slots are multiplied by zero either way. Computing
-   !> them here keeps the cold path free of one more special case.
+   !> two-body weight is zero and the fused path would leave those slots at zero:
+   !>
+   !> - both are correct, every consumer reaching that kind only through the
+   !>   two-body weight, so the slots are multiplied by zero either way
+   !> - computing them here keeps the cold path free of one more special case
    !>
    !> @param[inout] self      LSF instance with the per-atom geometry filled
    !> @param[in]    max_deriv Highest spatial-derivative order to accumulate
@@ -490,7 +495,7 @@ contains
    !> See the module header: below two (three) active atoms the two-body
    !> (three-body) elementary symmetric polynomial vanishes identically, so
    !> switching the weight to an exact zero is the same value as skipping the
-   !> block -- and, unlike evaluating it, carries none of its cancellation noise.
+   !> block -- and, unlike evaluating it, carries none of its cancellation noise
    !>
    !> @param[in]  self LSF instance
    !> @param[out] s_1  One-body weight
@@ -515,11 +520,13 @@ contains
 
    !> Per-atom kind tensors of active slot `ia`, guarded against `x == 0`
    !>
-   !> The kernel divides by the distance from the first derivative onwards. On a
-   !> nucleus that distance is zero and the direction `(r - R_A)/x` is undefined;
-   !> the convention here -- the same one the retired SSD fill used -- is to take
-   !> it as zero, so the value tensor still carries `u_A = exp(k R_a/3)` while
-   !> every derivative order of this atom drops out of the power sums.
+   !> The kernel divides by the distance from the first derivative onwards, and on
+   !> a nucleus that distance is zero with the direction `(r - R_A)/x` undefined:
+   !>
+   !> - the convention here, the same one the retired SSD fill used, takes it as
+   !>   zero
+   !> - the value tensor still carries `u_A = exp(k R_a/3)`, while every
+   !>   derivative order of this atom drops out of the power sums
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  ia        Active-list index
@@ -565,7 +572,7 @@ contains
    !> Direction-contracted per-atom kind tensors of active slot `ia`
    !>
    !> Same `x == 0` convention as [[atom_tensors]]: every order of the contracted
-   !> tensor carries a nuclear derivative, so all of them vanish there.
+   !> tensor carries a nuclear derivative, so all of them vanish there
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  ia        Active-list index
@@ -610,7 +617,7 @@ contains
    !> The radius half of the joint `(v, vr)` contraction:
    !> `awr{n} = (blend_k m_kind / 3) vr_a at{n}`. It lands in the same family as
    !> [[atom_tangent_tensors]], so the caller accumulates both into one `ws*` and
-   !> every aggregate kernel routine picks the radius term up unchanged.
+   !> every aggregate kernel routine picks the radius term up unchanged
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  ia        Active-list index
@@ -680,7 +687,7 @@ contains
       real(wp), intent(out) :: ws2(ndim, ndim, nkind)
       !> Order-3 contracted power sums
       real(wp), intent(out) :: ws3(ndim, ndim, ndim, nkind)
-      !> Radius half of the joint direction. Absent leaves every operation below
+      !> Radius half of the joint direction; absent leaves every operation below
       !> untouched, so a geometry-independent radius model stays bit-for-bit
       real(wp), intent(in), optional :: vrad(:)
 
@@ -719,10 +726,13 @@ contains
    !> Build the per-atom kind-tensor cache the pair loops consume
    !>
    !> The pair kernels read atom A's tensors once per partner, so the cache turns
-   !> an O(n_active**2) exponential count back into O(n_active). It is a local
-   !> allocation rather than a persistent buffer because only the three pair
-   !> accessors need it, none of them sits on the projection hot path, and a
-   !> persistent order-4 cache would cost 3.9 kB per atom per thread.
+   !> an O(n_active**2) exponential count back into O(n_active)
+   !>
+   !> A local allocation rather than a persistent buffer, because:
+   !>
+   !> - only the three pair accessors need it
+   !> - none of them sits on the projection hot path
+   !> - a persistent order-4 cache would cost 3.9 kB per atom per thread
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  max_deriv Highest spatial-derivative order to fill (2..4)
@@ -909,7 +919,7 @@ contains
 
    !> Mixed third derivative d^3S / (dr^2 dR_A) and its lower orders
    !>
-   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`.
+   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`
    !>
    !> @param[in]  self       LSF instance
    !> @param[out] lsf1_rA    dS/dR_A [3, >= active_count()] (optional)
@@ -985,9 +995,9 @@ contains
 
       if (self%n_active == 0) then
          ! Nothing is active, so no slot is owned and "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather
-         ! than return bare: the results are `intent(out)`, so a bare return
-         ! hands the caller a buffer it is not allowed to read.
+         ! `active_count()` slots" degenerates to writing none; zero rather
+         ! than return bare, since the results are `intent(out)` and a bare
+         ! return hands the caller a buffer it is not allowed to read
          if (present(lsf1_rad)) lsf1_rad = 0.0_wp
          if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
          lsf3_rr_rad = 0.0_wp
@@ -1002,7 +1012,7 @@ contains
          ! `at3` `intent(out)` and then leaves it unset at `max_deriv = 2`;
          ! `svdw_radius_eval` never reads it, but it is still passed by
          ! reference, so define it rather than hand an `intent(in)` dummy
-         ! undefined memory.
+         ! undefined memory
          call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
          at3 = 0.0_wp
          call svdw_radius_eval(self%param%blend_k, s_1, s_2, s_3, &
@@ -1269,7 +1279,7 @@ contains
    !* ================================================================================= *!
    !*                     Two-radius and nuclear-radius derivatives                     *!
    !* ================================================================================= *!
-   
+
    !> Shared pair loop of the two-radius block
    !>
    !> @param[in]  self      LSF instance
@@ -1304,9 +1314,9 @@ contains
 
       if (self%n_active == 0) then
          ! Nothing is active, so no slot is owned and "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather
-         ! than return bare: the results are `intent(out)`, so a bare return
-         ! hands the caller a buffer it is not allowed to read.
+         ! `active_count()` slots" degenerates to writing none; zero rather
+         ! than return bare, since the results are `intent(out)` and a bare
+         ! return hands the caller a buffer it is not allowed to read
          if (present(res2)) res2 = 0.0_wp
          if (present(res3)) res3 = 0.0_wp
          if (present(res4)) res4 = 0.0_wp
@@ -1343,7 +1353,7 @@ contains
    !>
    !> The first atom index carries the *position* derivative and the second the
    !> *radius* one, so unlike [[svdw_radpair_block]] the result is not symmetric
-   !> under exchanging them; the loop therefore visits every ordered pair.
+   !> under exchanging them; the loop therefore visits every ordered pair
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  max_deriv Spatial-derivative order of the requested output
@@ -1377,9 +1387,9 @@ contains
 
       if (self%n_active == 0) then
          ! Nothing is active, so no slot is owned and "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather
-         ! than return bare: the results are `intent(out)`, so a bare return
-         ! hands the caller a buffer it is not allowed to read.
+         ! `active_count()` slots" degenerates to writing none; zero rather
+         ! than return bare, since the results are `intent(out)` and a bare
+         ! return hands the caller a buffer it is not allowed to read
          if (present(res2)) res2 = 0.0_wp
          if (present(res3)) res3 = 0.0_wp
          if (present(res4)) res4 = 0.0_wp
@@ -1623,7 +1633,7 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^2S/(dR_A dR_B) [3, >= active_count()]
-   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !> @param[in]  vrad Radius directions [ncenters], optional; supplying them
    !>                  promotes the contraction to the joint direction
    !>                  `(v_B, vr_B)`, turning `res` from the nuclear-nuclear
    !>                  block into the nuclear row of the joint Hessian
@@ -1682,7 +1692,7 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^3S/(dr dR_A dR_B) [3, 3, >= active_count()]
-   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !> @param[in]  vrad Radius directions [ncenters], optional; supplying them
    !>                  promotes the contraction to the joint direction
    !>                  `(v_B, vr_B)`, exactly as for [[lsf_hvp_f1_rA]]
    subroutine lsf_hvp_f2_r_rA(self, v, res, vrad)
@@ -1741,7 +1751,7 @@ contains
    !> @param[in]  self LSF instance
    !> @param[in]  v    Nuclear displacement directions [3, ncenters]
    !> @param[out] res  sum_B v_B . d^4S/(dr^2 dR_A dR_B) [3, 3, 3, >= active_count()]
-   !> @param[in]  vrad Radius directions [ncenters] (optional). Supplying them
+   !> @param[in]  vrad Radius directions [ncenters], optional; supplying them
    !>                  promotes the contraction to the joint direction
    !>                  `(v_B, vr_B)`, exactly as for [[lsf_hvp_f1_rA]]
    subroutine lsf_hvp_f3_rr_rA(self, v, res, vrad)
@@ -1860,10 +1870,11 @@ contains
 
    !> Shared driver of the three radius-row Hessian-vector products
    !>
-   !> The three public entry points differ only in `max_deriv` and in which
-   !> output they keep, and unlike the `_rA` ladder there is no reason to spell
-   !> the loop out three times: the radius channel has one code path. Exactly one
-   !> of `res1`/`res2`/`res3` must be present, matching `max_deriv`.
+   !> The three public entry points differ only in `max_deriv` and in which output
+   !> they keep, and unlike the `_rA` ladder there is no reason to spell the loop
+   !> out three times, the radius channel having one code path
+   !>
+   !> - exactly one of `res1`/`res2`/`res3` must be present, matching `max_deriv`
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  v         Nuclear displacement directions [3, ncenters]
@@ -1909,9 +1920,9 @@ contains
 
       if (self%n_active == 0) then
          ! Nothing is active, so no slot is owned and "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather
-         ! than return bare: the results are `intent(out)`, so a bare return
-         ! hands the caller a buffer it is not allowed to read.
+         ! `active_count()` slots" degenerates to writing none; zero rather
+         ! than return bare, since the results are `intent(out)` and a bare
+         ! return hands the caller a buffer it is not allowed to read
          if (present(res1)) res1 = 0.0_wp
          if (present(res2)) res2 = 0.0_wp
          if (present(res3)) res3 = 0.0_wp
@@ -1923,7 +1934,7 @@ contains
       call tangent_powersums(self, v, max_deriv, ws0, ws1, ws2, ws3, vrad)
       do ia = 1, self%n_active
          ! `d/dR_a` adds no index, so unlike the `_rA` ladder the per-atom
-         ! tensors are needed only to `max_deriv`, not `max_deriv + 1`.
+         ! tensors are needed only to `max_deriv`, not `max_deriv + 1`
          call atom_tensors(self, ia, max_deriv, at0, at1, at2, at3, at4)
          call atom_tangent_tensors(self, ia, v(:, self%act_atom(ia)), max_deriv, &
                                    aw0, aw1, aw2, aw3)
@@ -1934,7 +1945,7 @@ contains
          if (max_deriv >= 2) aw2 = aw2 + awr2
          ! `at3`/`at4`/`aw3`/`awr3` exist only because the three tensor
          ! builders take them as non-optional `intent(out)` dummies; the eval
-         ! below never sees them, so they are left undefined on purpose.
+         ! below never sees them, so they are left undefined on purpose
          call svdw_radius_hvp_eval(self%param%blend_k, s_1, s_2, s_3, &
                                    self%ps0, self%ps1, self%ps2, ws0, ws1, ws2, &
                                    at0, at1, at2, aw0, aw1, aw2, max_deriv, &
@@ -1955,21 +1966,22 @@ contains
    !> ladder and keeps only the nuclear index:
    !>
    !>    res(s, i) = w0*lsf1_rA(s, i) + sum_a w1(a)*lsf2_r_rA(a, s, i)
-   !>                + sum_a sum_b w2(a, b)*lsf3_rr_rA(a, b, s, i) .
+   !>                + sum_a sum_b w2(a, b)*lsf3_rr_rA(a, b, s, i)
    !>
-   !> This is the `f1_rA` rung with the jet indices contracted away, exactly as
+   !> The `f1_rA` rung with the jet indices contracted away, exactly as
    !> [[lsf_hvp_f1_rA]] is that same rung contracted with a nuclear direction --
    !> the reverse-mode mirror of the `tangent_*` family, which contracts the
-   !> nuclear index and keeps the spatial ones.
+   !> nuclear index and keeps the spatial ones
    !>
    !> `w2` is a general 3x3: all nine entries are contracted, no symmetry is
-   !> assumed and no factor of two is folded into the off-diagonals.
+   !> assumed and no factor of two is folded into the off-diagonals
    !>
    !> The contraction happens inside the kernel, on the weighted jet rather than
    !> on its 3 + 9 + 27 components, so an adjoint pass never has to materialize
-   !> the `(3, 3, 3, >= active_count())` tensor [[lsf_f3_rr_rA]] would hand it.
-   !> The prepared order is the same as for [[lsf_f3_rr_rA]], since the same
-   !> `lsf3_rr_rA` rung enters the contraction.
+   !> the `(3, 3, 3, >= active_count())` tensor [[lsf_f3_rr_rA]] would hand it
+   !>
+   !> - the prepared order is the same as for [[lsf_f3_rr_rA]], the same
+   !>   `lsf3_rr_rA` rung entering the contraction
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the level-set value
@@ -2017,20 +2029,22 @@ contains
    !> weights, contracted against the radius ladder instead of the nuclear one,
    !>
    !>    res(i) = w0*lsf1_rad(i) + sum_a w1(a)*lsf2_r_rad(a, i)
-   !>             + sum_a sum_b w2(a, b)*lsf3_rr_rad(a, b, i) .
+   !>             + sum_a sum_b w2(a, b)*lsf3_rr_rad(a, b, i)
    !>
    !> A radius is a scalar, so -- exactly as [[lsf_f3_rr_rad]] carries one rank
    !> less than [[lsf_f3_rr_rA]] -- there is no index left once the jet indices
    !> are contracted away: one number per active atom, against the three of
-   !> [[lsf_vjp_f1_rA]] and the 1 + 3 + 9 of [[lsf_f3_rr_rad]].
+   !> [[lsf_vjp_f1_rA]] and the 1 + 3 + 9 of [[lsf_f3_rr_rad]]
    !>
    !> `w2` is a general 3x3: all nine entries are contracted, no symmetry is
-   !> assumed and no factor of two is folded into the off-diagonals.
+   !> assumed and no factor of two is folded into the off-diagonals
    !>
    !> The contraction happens inside the kernel, on the weighted jet rather than
-   !> on its components. The prepared order is the same as for [[lsf_f3_rr_rad]]:
-   !> `d/dR_a` consumes no derivative order, so the kernel reads the power sums
-   !> and per-atom tensors only up to order 2.
+   !> on its components
+   !>
+   !> - the prepared order is the same as for [[lsf_f3_rr_rad]], since `d/dR_a`
+   !>   consumes no derivative order, so the kernel reads the power sums and
+   !>   per-atom tensors only up to order 2
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of the level-set value
@@ -2066,7 +2080,7 @@ contains
       do ia = 1, self%n_active
          ! Order 2 is enough: the radius derivative bumps no index, so the kernel
          ! never reaches `at3`/`at4` and does not take them as arguments -- unlike
-         ! `svdw_radius_eval`, which does and therefore needs `at3` defined.
+         ! `svdw_radius_eval`, which does and therefore needs `at3` defined
          call atom_tensors(self, ia, 2, at0, at1, at2, at3, at4)
          call svdw_radius_vjp_eval(self%param%blend_k, s_1, s_2, s_3, &
                                    self%ps0, self%ps1, self%ps2, &
@@ -2086,12 +2100,12 @@ contains
    !>
    !>    `x - R = -3*ln(threshold)/k`
    !>
-   !> which is independent of the radius.
+   !> which is independent of the radius
    !>
-   !> This is the *screening* bound query. The companion `exclusion_radius` below is
-   !> the *surface* bound query; see the module header of
-   !> [[moist_cavity_drop_lsf_base]] for why the two cannot be expressed in terms of
-   !> each other.
+   !> The *screening* bound query, whose companion `exclusion_radius` below is the
+   !> *surface* bound query; see the module header of
+   !> [[moist_cavity_drop_lsf_base]] for why the two cannot be expressed in terms
+   !> of each other
    !>
    !> @param[in] self    SvdW LSF instance (reads param%blend_k, screening_threshold)
    !> @param[in] radius  Atom radius (Bohr, unused: the SvdW offset is radius-independent)
@@ -2111,7 +2125,7 @@ contains
       threshold = self%screening_threshold
 
       ! With threshold <= 0, k <= 0 or a nonsensical radius the criterion is
-      ! ill-defined; report an unbounded reach so screening is effectively disabled.
+      ! ill-defined; report an unbounded reach so screening is effectively disabled
       if (threshold <= 0.0_wp .or. k_local <= 0.0_wp .or. radius < 0.0_wp) then
          offset = huge(0.0_wp)
          return
@@ -2126,20 +2140,24 @@ contains
 
    !> Exact surface-free radius from the 1-Lipschitz property
    !>
-   !> `S = -(1/k) ln Z` is a log-sum-exp soft minimum of atomic signed
-   !> distances. Its gradient is the blend-weighted mean of the gradients of
-   !> the per-term exponents, and each of those is itself an average of unit
-   !> vectors `(r - r_I)/||r - r_I||`, so every term contributes a vector of
-   !> norm at most one. The blend weights sum to one, hence `||grad S|| <= 1`
-   !> and `S` cannot reach zero from `S(x)` in less than `|S(x)|`: the ball
-   !> `B(x, |S(x)|)` contains no point of the zero level set. This is the
-   !> tightest radius a Lipschitz argument can give, and it costs nothing
-   !> beyond the value the caller already holds.
+   !> `S = -(1/k) ln Z` is a log-sum-exp soft minimum of atomic signed distances:
+   !>
+   !> - its gradient is the blend-weighted mean of the gradients of the per-term
+   !>   exponents
+   !> - each of those is itself an average of unit vectors `(r - r_I)/||r - r_I||`,
+   !>   so every term contributes a vector of norm at most one
+   !> - the blend weights sum to one, hence `||grad S|| <= 1`
+   !> - `S` therefore cannot reach zero from `S(x)` in less than `|S(x)|`, so the
+   !>   ball `B(x, |S(x)|)` contains no point of the zero level set
+   !> - the tightest radius a Lipschitz argument can give, costing nothing beyond
+   !>   the value the caller already holds
    !>
    !> The bound needs the blend weights to be non-negative, which holds exactly
-   !> when the many-body coefficients are. A negative coefficient turns the
-   !> weighted mean into an extrapolation and the bound is lost, so such a
-   !> parameterization certifies nothing and gets the safe answer of zero.
+   !> when the many-body coefficients are
+   !>
+   !> - a negative coefficient turns the weighted mean into an extrapolation and
+   !>   the bound is lost
+   !> - such a parameterization certifies nothing and gets the safe answer of zero
    !>
    !> @param[in] self LSF instance
    !> @param[in] lsf0 LSF value at the evaluation point

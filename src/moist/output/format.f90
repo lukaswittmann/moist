@@ -1,7 +1,7 @@
 module moist_output_format
    use mctc_env, only: wp
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: format_string, getline, print_wrapped
@@ -56,9 +56,9 @@ contains
       integer :: size
       integer :: stat
 
-      line = ''
+      line = ""
       do
-         read (unit, '(a)', advance='no', iostat=stat, size=size)  &
+         read (unit, "(a)", advance="no", iostat=stat, size=size)  &
          &    buffer
          if (stat > 0) then
             if (present(iostat)) iostat = stat
@@ -74,8 +74,10 @@ contains
 
    end subroutine getline
 
-   !> Print a string with word-wrapping at a given width.
-   !> Words are never split; breaks occur at spaces only.
+   !> Print a string with word-wrapping at a given width
+   !>
+   !> - words are never split; breaks occur at spaces only
+   !>
    !> @param[in] unit   Fortran I/O unit
    !> @param[in] text   String to print
    !> @param[in] indent Prefix for every line (e.g. "  ")
@@ -90,7 +92,7 @@ contains
 
       text_len = len_trim(text)
       if (text_len == 0) then
-         write (unit, '(a)') indent
+         write (unit, "(a)") indent
          return
       end if
 
@@ -98,30 +100,30 @@ contains
       do while (line_start <= text_len)
          ! If remainder fits on one line, print it and exit
          if (line_start + width - 1 >= text_len) then
-            write (unit, '(a,a)') indent, text(line_start:text_len)
+            write (unit, "(a,a)") indent, text(line_start:text_len)
             return
          end if
 
          ! Find the last space within the allowed width
          last_space = 0
          do pos = line_start, min(line_start + width - 1, text_len)
-            if (text(pos:pos) == ' ') last_space = pos
+            if (text(pos:pos) == " ") last_space = pos
          end do
 
          if (last_space > line_start) then
             ! Break at the last space within width
-            write (unit, '(a,a)') indent, text(line_start:last_space - 1)
+            write (unit, "(a,a)") indent, text(line_start:last_space - 1)
             line_start = last_space + 1
          else
             ! No space found within width - find the next space beyond width
-            last_space = index(text(line_start:text_len), ' ')
+            last_space = index(text(line_start:text_len), " ")
             if (last_space > 0) then
                last_space = line_start + last_space - 1
-               write (unit, '(a,a)') indent, text(line_start:last_space - 1)
+               write (unit, "(a,a)") indent, text(line_start:last_space - 1)
                line_start = last_space + 1
             else
                ! No more spaces at all - print the rest
-               write (unit, '(a,a)') indent, text(line_start:text_len)
+               write (unit, "(a,a)") indent, text(line_start:text_len)
                return
             end if
          end if

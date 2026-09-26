@@ -9,7 +9,7 @@ build-backend = "mesonpy"
 
 [project]
 name = "MOIST"
-version = "0.6.0a1"
+dynamic = ["version"]
 authors = [{"name" = "Lukas Wittmann"}]
 description = "Python API for MOIST"
 readme = "README.rst"
@@ -20,8 +20,6 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Programming Language :: Fortran",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -29,7 +27,7 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Chemistry",
   "Topic :: Scientific/Engineering :: Physics",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
   "cffi",
   "numpy",
@@ -38,4 +36,9 @@ optional-dependencies.pyscf = ["pyscf"]
 optional-dependencies.test = [
   "pytest",
   "pytest-cov",
+  "pyscf",
 ]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib --strict-markers -p no:cacheprovider"
+testpaths = ["tests"]

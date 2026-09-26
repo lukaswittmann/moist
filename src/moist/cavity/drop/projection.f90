@@ -7,7 +7,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_projection
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_math_sorter, only: counting_argsort
-   implicit none
+   implicit none(type, external)
 
    !> Per-thread error slot
    type :: error_slot
@@ -22,7 +22,7 @@ contains
    !> Wall-clock seconds for the projector's progress report
    !>
    !> `omp_get_wtime` when the build has OpenMP, `system_clock` otherwise, so a
-   !> serial build neither references the OpenMP runtime nor loses its timings.
+   !> serial build neither references the OpenMP runtime nor loses its timings
    function drop_wall_time() result(seconds)
       !> Elapsed wall time in seconds, measured from an unspecified origin
       real(wp) :: seconds
@@ -58,11 +58,13 @@ contains
 
    !> Ensure all projection-coupled arrays share at least the requested capacity
    !>
-   !> `grow_array` refuses to shrink, so a request below the capacity these
-   !> arrays already hold is reported rather than acted on. Each call is checked
-   !> individually because they do not all start from the same size: `fill_arrays`
-   !> releases `phi0` without reallocating it, so it is grown from zero here
-   !> while its neighbours are grown from the pre-filter grid size.
+   !> `grow_array` refuses to shrink, so a request below the capacity these arrays
+   !> already hold is reported rather than acted on
+   !>
+   !> - each call is checked individually because they do not all start from the
+   !>   same size
+   !> - `fill_arrays` releases `phi0` without reallocating it, so it is grown from
+   !>   zero here while its neighbours are grown from the pre-filter grid size
    !>
    !> @param[inout] self         Cavity instance
    !> @param[in]    new_capacity Capacity every coupled array must reach
@@ -124,9 +126,11 @@ contains
    !> Promote a fatal per-thread error into a loop-wide abort request
    !>
    !> Returns `.true.` when `slot` carries an error, so the caller can leave the
-   !> iteration. The flag is what actually stops the loop: `!$omp cancel` is a
-   !> no-op unless cancellation is enabled in the runtime, so every iteration
-   !> re-reads `abort_requested` and skips its body
+   !> iteration
+   !>
+   !> - the flag is what actually stops the loop, `!$omp cancel` being a no-op
+   !>   unless cancellation is enabled in the runtime
+   !> - every iteration therefore re-reads `abort_requested` and skips its body
    !>
    !> @param[inout] slot            Calling thread's error slot
    !> @param[in]    ianchor         Anchor index that failed (0 for setup failures)
@@ -158,7 +162,6 @@ contains
       integer :: iend, ibeg, nloc
       integer :: nmax_anchor, nout, n_branch
       integer :: n_branched_anchor, n_branched_points
-      integer :: nbranch_min, nbranch_max
       integer :: nthreads, thread_slot
       integer :: number_base
       integer :: local_branched_anchor, local_branched_points
@@ -238,7 +241,7 @@ contains
       end if
 
       ! A thread that failed setup must not touch its buffers below, and it cannot
-      ! leave the region either, so it raises the flag and idles through the loop.
+      ! leave the region either, so it raises the flag and idles through the loop
       if (.not. abort_on_error(thread_error(thread_slot), 0, abort_requested)) then
          !init_primitives() binds the objective/LSF to this molecule, radii and screening grid
          call projectors(thread_slot)%init_primitives(self%mol, self%radii, self%mol_cell_grid)
@@ -308,8 +311,8 @@ contains
                   print "(a,3(es12.4))", "  anchor: ", self%anchorxyz(:, i)
                   !$omp end critical (projection_warning_print)
                   ! A failed projection is not fatal: keep the anchor but flag it not
-                  ! converged so it is later assigned f=0 and excluded from the quadrature.
-                  ! Only the workspace write below can abort the run.
+                  ! converged so it is later assigned f=0 and excluded from the quadrature
+                  ! Only the workspace write below can abort the run
                   call works(thread_slot)%set_single(self%anchorxyz(:, i), .false., thread_error(thread_slot)%e)
                   append_ok = .not. abort_on_error(thread_error(thread_slot), i, abort_requested)
                end if
@@ -409,9 +412,9 @@ contains
 
       wall_end = drop_wall_time()
 
-      ! Re-raise the first fatal error the loop hit. The lowest anchor index wins so
-      ! the reported failure does not depend on the thread schedule; setup failures
-      ! carry index 0 and therefore outrank any per-anchor error.
+      ! Re-raise the first fatal error the loop hit; the lowest anchor index wins,
+      ! so the reported failure does not depend on the thread schedule, and setup
+      ! failures carry index 0 and therefore outrank any per-anchor error
       if (abort_requested) then
          ifail = 0
          do ithread = 1, nthreads
@@ -513,8 +516,8 @@ contains
       self%ngrid = nout
 
       ! Build numbering array for all points:
-      !   This is a unique global id = anchor_id + number_base*(branch-1) and is (has been) very helpful
-      !   for debugging and tracking grid points through displacements
+      !   a unique global id = anchor_id + number_base*(branch-1), very helpful
+      !   for debugging and for tracking grid points through displacements
       if (allocated(self%numbering)) deallocate (self%numbering)
       allocate (self%numbering(nout), source=-1)
       number_base = max(1, self%nsph*self%param%num_leb)
@@ -540,9 +543,9 @@ contains
    !> Sort the flat projection arrays into ascending anchor order
    !>
    !> `counting_argsort` is stable, so points sharing an `anchor_id` keep the
-   !> relative order they were appended in, which is ascending branch index.
+   !> relative order they were appended in, which is ascending branch index
    !> Anchor ids are the one-based positions assigned in `fill_arrays`, so they
-   !> are their own bucket indices.
+   !> are their own bucket indices
    !>
    !> @param[inout] self  Cavity whose projection arrays are reordered
    !> @param[in]    nout  Number of projected points
@@ -588,20 +591,22 @@ contains
 
    !> Put one anchor's branches into a canonical, geometry-derived order
    !>
-   !> The multistart refinement returns an anchor's branches in whatever order
-   !> its seeds happened to converge and deduplicate, which is decided by
-   !> rounding once two minima are related by a symmetry of the molecule. The
-   !> branch index feeds `numbering`, the identity a point is tracked by across
-   !> displaced geometries, so an order that rounding can permute makes that
-   !> identity meaningless: the same physical branch answers to different
-   !> numbers on two builds of the same code, and a caller correlating a
-   !> displaced surface with the undisplaced one silently pairs up the wrong
-   !> branches.
+   !> The multistart refinement returns an anchor's branches in whatever order its
+   !> seeds happened to converge and deduplicate, decided by rounding once two
+   !> minima are related by a symmetry of the molecule
    !>
-   !> Ordering by position instead makes the index a property of the surface.
+   !> - the branch index feeds `numbering`, the identity a point is tracked by
+   !>   across displaced geometries
+   !> - an order that rounding can permute therefore makes that identity
+   !>   meaningless: the same physical branch answers to different numbers on two
+   !>   builds of the same code, and a caller correlating a
+   !> displaced surface with the undisplaced one silently pairs up the wrong
+   !> branches
+   !>
+   !> Ordering by position instead makes the index a property of the surface
    !> Coordinates are compared with a tolerance so that components equal by
    !> symmetry -- which agree only to rounding -- fall through to the next
-   !> component rather than deciding the order by their noise.
+   !> component rather than deciding the order by their noise
    !>
    !> @param[inout] work     Workspace holding one anchor's branches
    !> @param[in]    n_branch Number of branches stored in `work`
@@ -670,8 +675,8 @@ contains
    !> Compute closest-point Jacobian scaling
    !>
    !> Computes the area scaling factor J_i for each projected grid point by
-   !> evaluating the Jacobian of the projection map from the anchor sphere to
-   !> the SDF surface. Works entirely in the tangent basis as
+   !> evaluating the Jacobian of the projection map from the anchor sphere to the
+   !> SDF surface, working entirely in the tangent basis as
    !>
    !>   Q = [q1, q2]                     surface tangent frame  (from n = g/|g|)
    !>   B = Q^T A Q                      tangent-restricted KKT matrix  (2x2 symmetric)
@@ -719,19 +724,11 @@ contains
       !> Per-thread LSF evaluation failure, handed to the latch
       type(error_type), allocatable :: lsf_error
 
-      ! Tangent-restricted KKT diagnostics (debug only)
-      logical :: do_diag
-      integer :: n_diag_points
-      type(prettyprinter) :: pp
-      type(prettylistprinter) :: plp_diag
-      logical, allocatable :: diag_mask(:)
-      integer :: c_critical, c_warning, c_safe
-
       call abort%reset()
 
-      ! Initialize SSD systems and thread-local SSD evaluators.
-      ! This loop reads the LSF Hessian (lsf2_rr) below, so the cached callback
-      ! LSF must be told to compute up to second order.
+      ! Initialize SSD systems and thread-local SSD evaluators; the loop reads the
+      ! LSF Hessian (lsf2_rr) below, so the cached callback LSF must be told to
+      ! compute up to second order
       call slots%init(self%ctx, self%lsf_model, 2)
       allocate (lsf1_r_threads(3, slots%nthreads), source=0.0_wp)
       allocate (lsf2_rr_threads(3, 3, slots%nthreads), source=0.0_wp)
@@ -761,7 +758,7 @@ contains
          !$omp cancellation point do
          if (abort%requested) cycle
 
-         ! Skip if below switching cutoff.
+         ! Skip if below switching cutoff
          if (self%f(igrid) < self%param%wleb_cut) then
             self%w_f0(igrid) = 0.0_wp
             cycle
@@ -775,8 +772,8 @@ contains
          call slots%lsf(thread_slot)%lsf%prepare(proj_point, lsf_error)
 
          ! The failure cannot be returned from inside this worksharing construct,
-         ! so hand it to the shared `error` slot and let the flag drain the loop.
-         ! The LSF's cached derivatives are substitutes; stop before reading them.
+         ! so hand it to the shared `error` slot and let the flag drain the loop
+         ! The LSF's cached derivatives are substitutes; stop before reading them
          if (allocated(lsf_error)) then
             call abort%latch_error(lsf_error, igrid)
             !$omp cancel do
@@ -893,8 +890,10 @@ contains
    !*                              Gaussian surface charges                             *!
    !* ================================================================================= *!
 
-   !> Recompute gaussian surface charge widths with projected wleb (after CP Jacobian scaling)
-   !> This is the "true" xi used for cpcm energy and gradients.
+   !> Recompute gaussian surface charge widths with projected wleb, after CP
+   !> Jacobian scaling
+   !>
+   !> - the "true" xi used for CPCM energy and gradients
    module subroutine compute_gaussians(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error

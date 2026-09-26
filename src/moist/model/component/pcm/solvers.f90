@@ -1,14 +1,15 @@
 !> PCM-specific solver wrappers
-!> This module provides solver routines for the PCM linear system A*q = rhs.
-!> It wraps general moist linear algebra routines (LAPACK) and can be extended
-!> with iterative solvers in the future.
+!>
+!> - solver routines for the PCM linear system A*q = rhs
+!> - wraps the general moist linear algebra routines (LAPACK) and can be
+!>   extended with iterative solvers later
 module moist_model_component_pcm_solvers
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs
    use moist_math_blas, only: dot, gemv
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solve_pcm_lu
@@ -19,7 +20,8 @@ module moist_model_component_pcm_solvers
 contains
 
    !> Solve PCM system using LU factorization
-   !> Solves A*q = rhs via LAPACK's LU decomposition (DGETRF + DGETRS).
+   !>
+   !> - A*q = rhs via LAPACK's LU decomposition (DGETRF + DGETRS)
    subroutine solve_pcm_lu(amat, rhs, q, error, unit)
       !> System matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
@@ -74,8 +76,10 @@ contains
    end subroutine solve_pcm_lu
 
    !> Solve PCM system using Cholesky factorization
-   !> Solves A*q = rhs via LAPACK's Cholesky decomposition (DPOTRF + DPOTRS).
-   !> Assumes A is symmetric positive definite - faster than LU for such matrices.
+   !>
+   !> - A*q = rhs via LAPACK's Cholesky decomposition (DPOTRF + DPOTRS)
+   !> - assumes A symmetric positive definite, faster than LU for such
+   !>   matrices
    subroutine solve_pcm_cholesky(amat, rhs, q, error)
       !> System matrix (ngrid, ngrid) - must be symmetric positive definite
       real(wp), intent(in) :: amat(:, :)
@@ -123,7 +127,9 @@ contains
    end subroutine solve_pcm_cholesky
 
    !> Solve PCM system using matrix inversion
-   !> Computes A^(-1) and then q = A^(-1)*rhs. Efficient if matrix is reused many times.
+   !>
+   !> - A^(-1) first, then q = A^(-1)*rhs
+   !> - efficient when the matrix is reused many times
    subroutine solve_pcm_inversion(amat, rhs, q, error)
       !> System matrix (ngrid, ngrid)
       real(wp), intent(in) :: amat(:, :)
@@ -210,7 +216,7 @@ contains
 
       do restart = 0, 1
 
-         ! True residual: r = b - A*q (first pass: r = b since q = 0)
+         ! True residual r = b - A*q, or just b on the first pass
          if (restart == 0) then
             r = rhs
          else
@@ -230,9 +236,10 @@ contains
 
             call gemv(amat, p, Ap)
 
-            ! Step size: alpha = (r, z) / (p, A*p).
-            ! For SPD A and p /= 0, pAp > 0; a non-positive value means the
-            ! matrix is not positive definite (or rounding destroyed it).
+            ! Step size alpha = (r, z) / (p, A*p)
+            !
+            ! For SPD A and p /= 0, pAp > 0, so a non-positive value means
+            ! the matrix is not positive definite (or rounding destroyed it)
             pAp = dot(p, Ap)
             if (pAp <= 0.0_wp) then
                call fatal_error(error, "[CG] Matrix is not positive definite")

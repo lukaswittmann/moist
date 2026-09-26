@@ -20,15 +20,14 @@ flags:
   coupling:
     paths:
       - src/
+      - python/moist/
     carryforward: false
 
-# Vendored subprojects, the test suite, the CLI driver and the Python wrapper
-# are not part of the core library coverage.
 ignore:
   - "subprojects"
   - "test"
   - "app"
-  - "python"
+  - "python/tests"
   - "config"
   - "build"
 

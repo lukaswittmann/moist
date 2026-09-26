@@ -70,6 +70,12 @@ else:
 ffibuilder = cffi.FFI()
 ffibuilder.set_source(module_name, include_header, **kwargs)
 ffibuilder.cdef(cdefs)
+# Preprocessing removes macros; let CFFI obtain these bounds from the compiler.
+ffibuilder.cdef(
+    "#define MOIST_FIELD_REAL ...\n#define MOIST_FIELD_INT ...\n"
+    "#define MOIST_FIELD_BOOL ...\n#define MOIST_FIELD_NAME_MAX ...\n"
+    "#define MOIST_FIELD_MAX_RANK ...\n#define MOIST_NAME_MAX ..."
+)
 
 if __name__ == "__main__":
     ffibuilder.distutils_extension(".")

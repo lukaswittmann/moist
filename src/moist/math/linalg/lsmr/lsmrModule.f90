@@ -292,17 +292,17 @@ contains
 
       ! Local constants
       real(wp), parameter :: zero = 0.0_wp, one = 1.0_wp
-      character(len=*), parameter :: enter = ' Enter LSMR.  '
-      character(len=*), parameter :: exitt = ' Exit  LSMR.  '
+      character(len=*), parameter :: enter = " Enter LSMR.  "
+      character(len=*), parameter :: exitt = " Exit  LSMR.  "
       character(len=*), parameter :: msg(0:7) = &
-                                     ['The exact solution is  x = 0                         ', &
-                                      'Ax - b is small enough, given atol, btol             ', &
-                                      'The least-squares solution is good enough, given atol', &
-                                      'The estimate of cond(Abar) has exceeded conlim       ', &
-                                      'Ax - b is small enough for this machine              ', &
-                                      'The LS solution is good enough for this machine      ', &
-                                      'Cond(Abar) seems to be too large for this machine    ', &
-                                      'The iteration limit has been reached                 ']
+                                     ["The exact solution is  x = 0                         ", &
+                                      "Ax - b is small enough, given atol, btol             ", &
+                                      "The least-squares solution is good enough, given atol", &
+                                      "The estimate of cond(Abar) has exceeded conlim       ", &
+                                      "Ax - b is small enough for this machine              ", &
+                                      "The LS solution is good enough for this machine      ", &
+                                      "Cond(Abar) seems to be too large for this machine    ", &
+                                      "The iteration limit has been reached                 "]
       !-------------------------------------------------------------------
 
       ! Initialize.
@@ -340,7 +340,7 @@ contains
       end if
 
       normAr = alpha*beta
-      if (normAr == zero) go to 800
+      if (normAr == zero) goto 800
 
       ! Initialization for local reorthogonalization.
 
@@ -394,7 +394,7 @@ contains
       normAr = alpha*beta
       if (normAr == 0) then
          if (show) then
-            write (nout, '(a)') msg(1)
+            write (nout, "(a)") msg(1)
          end if
          return
       end if
@@ -604,21 +604,21 @@ contains
 
       return
 
-1000  format(//a, '     Least-squares solution of  Ax = b' &
-              /' The matrix  A  has', i7, ' rows   and', i7, ' columns' &
-              /' damp   =', es22.14 &
-              /' atol   =', es10.2, 15x, 'conlim =', es10.2 &
-              /' btol   =', es10.2, 15x, 'itnlim =', i10 &
-              /' localSize (no. of vectors for local reorthogonalization) =', i7)
+1000  format(//a, "     Least-squares solution of  Ax = b" &
+              /" The matrix  A  has", i7, " rows   and", i7, " columns" &
+              /" damp   =", es22.14 &
+              /" atol   =", es10.2, 15x, "conlim =", es10.2 &
+              /" btol   =", es10.2, 15x, "itnlim =", i10 &
+              /" localSize (no. of vectors for local reorthogonalization) =", i7)
 1200  format(/"   Itn       x(1)            norm r         A'r   ", &
-              ' Compatible    LS      norm A    cond A')
+              " Compatible    LS      norm A    cond A")
 1300  format(/"   Itn       x(1)           norm rbar    Abar'rbar", &
-              ' Compatible    LS    norm Abar cond Abar')
+              " Compatible    LS    norm Abar cond Abar")
 1500  format(i6, 2es17.9, 5es10.2)
-2000  format(/a, 5x, 'istop  =', i2, 15x, 'itn    =', i8 &
-              /a, 5x, 'normA  =', es12.5, 5x, 'condA  =', es12.5 &
-              /a, 5x, 'normb  =', es12.5, 5x, 'normx  =', es12.5 &
-              /a, 5x, 'normr  =', es12.5, 5x, 'normAr =', es12.5)
+2000  format(/a, 5x, "istop  =", i2, 15x, "itn    =", i8 &
+              /a, 5x, "normA  =", es12.5, 5x, "condA  =", es12.5 &
+              /a, 5x, "normb  =", es12.5, 5x, "normx  =", es12.5 &
+              /a, 5x, "normr  =", es12.5, 5x, "normAr =", es12.5)
 3000  format(a, 5x, a)
 
    contains
@@ -728,7 +728,7 @@ contains
                    x, istop, itn, normA, condA, normr, normAr, normx)
 
       else
-         error stop 'inconsistent sizes of input arrays irow, icol, a'
+         error stop "inconsistent sizes of input arrays irow, icol, a"
       end if
 
    contains

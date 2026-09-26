@@ -1,4 +1,4 @@
-!> Assembly of the Gaussian PCM interaction matrix and dense derivatives.
+!> Assembly of the Gaussian PCM interaction matrix and dense derivatives
 submodule(moist_model_component_pcm_amat) moist_model_component_pcm_amat_assembly
    use mctc_env, only: fatal_error
    use moist_model_component_pcm_amat_kernel, only: pcm_amat_x_far, &
@@ -113,8 +113,8 @@ contains
       !> Per-thread squared-separation scratch for one matrix row
       real(wp), allocatable :: r2(:)
 
-      ! Every matrix element is written on the success path. Avoiding an
-      ! initial zeroing pass preserves first-touch performance.
+      ! Every matrix element is written on the success path, so avoiding an
+      ! initial zeroing pass preserves first-touch performance
       call validate_pcm_surface(xi, f, xyz, error)
       if (allocated(error)) then
          amat = 0.0_wp
@@ -132,8 +132,8 @@ contains
       call saturation_bounds(xi, bound)
 
       ! The scratch row is a private allocatable: each thread allocates its own
-      ! copy inside the region. A block-local declaration would be cleaner, but
-      ! ifx rejects it under default(none).
+      ! copy inside the region; a block-local declaration would be cleaner, but
+      ! ifx rejects it under default(none)
       !$omp parallel default(none) shared(xi, f, xyz, amat, bound, ngrid) &
       !$omp private(i, j, xi_i, xyz_i, bound_i, r2)
       allocate (r2(ngrid))

@@ -1,6 +1,6 @@
 module moist_math_lapack_type
    use mctc_env, only: sp, dp, error_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: eigen_solver_type, context_solver
@@ -16,6 +16,7 @@ module moist_math_lapack_type
    abstract interface
       subroutine solve_sp(self, hmat, smat, eval, error)
          import :: eigen_solver_type, error_type, sp
+         implicit none(type, external)
          class(eigen_solver_type), intent(inout) :: self
          real(sp), contiguous, intent(inout) :: hmat(:, :)
          real(sp), contiguous, intent(in) :: smat(:, :)
@@ -24,6 +25,7 @@ module moist_math_lapack_type
       end subroutine solve_sp
       subroutine solve_dp(self, hmat, smat, eval, error)
          import :: eigen_solver_type, error_type, dp
+         implicit none(type, external)
          class(eigen_solver_type), intent(inout) :: self
          real(dp), contiguous, intent(inout) :: hmat(:, :)
          real(dp), contiguous, intent(in) :: smat(:, :)
@@ -45,6 +47,7 @@ module moist_math_lapack_type
       !> Create new solver
       subroutine new(self, solver, ndim)
          import :: context_solver, eigen_solver_type
+         implicit none(type, external)
          !> Instance of the solver factory
          class(context_solver), intent(inout) :: self
          !> New solver
@@ -56,6 +59,7 @@ module moist_math_lapack_type
       !> Delete solver instance
       subroutine delete(self, solver)
          import :: context_solver, eigen_solver_type
+         implicit none(type, external)
          !> Instance of the solver factory
          class(context_solver), intent(inout) :: self
          !> Solver instance

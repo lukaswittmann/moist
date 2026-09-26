@@ -5,7 +5,7 @@ module moist_data_radii_legacy
    use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: symbol_to_number
    use mctc_io_utils, only: to_lower
-   implicit none
+   implicit none(type, external)
    private
 
    integer :: i
@@ -132,10 +132,12 @@ module moist_data_radii_legacy
       & 2.2230_wp, 2.2230_wp]                           ! Np-Pu
 
    !> Gaussian charge scheme radii (Bondi-based, uniformly scaled by 1.2)
-   !> Ref: J. Phys. Chem. 2010, 133, 244111
-   !> Base: Bondi radii (J. Phys. Chem. 1964, 68, 441-451) with H = 1.1 A,
-   !> Mantina et al. (J. Phys. Chem. A 2009, 113, 5806-5812) for 16 missing
-   !> main-group elements, and 2.0 A fallback for remaining elements.
+   !>
+   !> - Ref: J. Phys. Chem. 2010, 133, 244111
+   !> - base: Bondi radii (J. Phys. Chem. 1964, 68, 441-451) with H = 1.1 A
+   !> - Mantina et al. (J. Phys. Chem. A 2009, 113, 5806-5812) for 16 missing
+   !>   main-group elements
+   !> - 2.0 A fallback for the remaining elements
    real(wp), parameter :: gauss_vdw_rad(max_elem_gauss) = (aatoau*1.2_wp)*[ &
       & 1.100_wp, 1.400_wp, &                                                       ! H -He
       & 1.820_wp, 1.530_wp, 1.920_wp, 1.700_wp, 1.550_wp, 1.520_wp, &              ! Li-O
@@ -178,8 +180,9 @@ module moist_data_radii_legacy
       & 1.96_wp, 2.02_wp, 2.07_wp, 1.97_wp, 2.02_wp, 2.20_wp, 3.48_wp, 2.83_wp]    ! Tl-Ra
 
    !> Rahm, Hoffmann & Ashcroft (2016) atomic radii
-   !> 0.001 e/bohr^3 isodensity surface of free atoms (DFT PBE0)
-   !> Ref: Chem. Eur. J. 22, 14625 (2016)
+   !>
+   !> - 0.001 e/bohr^3 isodensity surface of free atoms (DFT PBE0)
+   !> - Ref: Chem. Eur. J. 22, 14625 (2016)
    real(wp), parameter :: rahm_vdw_rad(1:96) = aatoau*[ &
       & 1.54_wp, 1.34_wp, 2.20_wp, 2.19_wp, 2.05_wp, 1.90_wp, 1.79_wp, 1.71_wp, &  ! H-O
       & 1.63_wp, 1.56_wp, 2.25_wp, 2.40_wp, 2.39_wp, 2.32_wp, 2.23_wp, 2.14_wp, &  ! F-S
@@ -236,14 +239,15 @@ contains
       case (rad_type%rahm); upper = max_elem_rahm
       case (rad_type%gauss); upper = max_elem_gauss
       case default
-         write (msg, '(a,i0)') "Unknown radius type: ", model
+         write (msg, "(a,i0)") "Unknown radius type: ", model
          call fatal_error(error, trim(msg))
       end select
    end subroutine get_upper_bound
 
    !> Resolve a model name string to its integer tag
    !>
-   !> Matching is case-insensitive and ignores surrounding blanks.
+   !> Matching is case-insensitive and ignores surrounding blanks
+   !>
    !> @param[in]  name   model name
    !> @param[out] tag    integer tag, or -1 if the name was not recognised
    !> @param[out] error  error on an unrecognised model name
@@ -271,10 +275,12 @@ contains
 
    !> Retrieve a radius from the raw data arrays for a validated (num, model) pair
    !>
-   !> `num` is assumed to have been range-checked against get_upper_bound for
-   !> this model already; no bounds checking is done here. The model tag is
-   !> checked, so an unrecognised one is an error rather than silently yielding
-   !> a CPCM radius.
+   !> `num` is assumed already range-checked against get_upper_bound for the
+   !> model, so no bounds checking happens here
+   !>
+   !> - the model tag *is* checked, so an unrecognised one is an error rather
+   !>   than silently yielding a CPCM radius
+   !>
    !> @param[in]  num    atomic number (must be in range)
    !> @param[in]  model  radius type tag
    !> @param[out] rad    van-der-Waals radius
@@ -297,14 +303,15 @@ contains
       case (rad_type%rahm); rad = rahm_vdw_rad(num)
       case (rad_type%gauss); rad = gauss_vdw_rad(num)
       case default
-         write (msg, '(a,i0)') "Unknown radius type: ", model
+         write (msg, "(a,i0)") "Unknown radius type: ", model
          call fatal_error(error, trim(msg))
       end select
    end subroutine fetch_radius
 
    !> Get van-der-Waals radius for an atomic number using the default
    !>
-   !> (CPCM) radii set.
+   !> (CPCM) radii set
+   !>
    !> @param[in]  num    atomic number
    !> @param[out] rad    radius in atomic units
    !> @param[out] error  error on invalid atomic number
@@ -316,7 +323,7 @@ contains
 
       if (num < 1 .or. num > max_elem_cpcm) then
          rad = 0.0_wp
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", max_elem_cpcm, "]"
          call fatal_error(error, trim(msg))
          return
@@ -325,7 +332,7 @@ contains
       rad = cpcm_vdw_rad(num)
 
       if (rad < 0.0_wp) then
-         write (msg, '(a,i0,a)') &
+         write (msg, "(a,i0,a)") &
             "No valid CPCM radius for atomic number ", num, ""
          call fatal_error(error, trim(msg))
       end if
@@ -351,7 +358,7 @@ contains
       if (allocated(error)) return
 
       if (num < 1 .or. num > upper) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", upper, "]"
          call fatal_error(error, trim(msg))
          return
@@ -361,7 +368,7 @@ contains
       if (allocated(error)) return
 
       if (rad < 0.0_wp) then
-         write (msg, '(a,i0)') &
+         write (msg, "(a,i0)") &
             "No valid radius for atomic number ", num
          call fatal_error(error, trim(msg))
       end if
@@ -405,7 +412,7 @@ contains
       call symbol_to_number(num, trim(sym))
       if (num < 1) then
          rad = 0.0_wp
-         write (msg, '(a,a,a)') &
+         write (msg, "(a,a,a)") &
             "Unknown element symbol: '", trim(sym), "'"
          call fatal_error(error, trim(msg))
          return
@@ -435,7 +442,7 @@ contains
 
       call symbol_to_number(num, trim(sym))
       if (num < 1) then
-         write (msg, '(a,a,a)') &
+         write (msg, "(a,a,a)") &
             "Unknown element symbol: '", trim(sym), "'"
          call fatal_error(error, trim(msg))
          return

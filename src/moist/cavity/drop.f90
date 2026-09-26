@@ -9,8 +9,8 @@ module moist_cavity_drop
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base
-   use moist_channels, only: response_type
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
+   use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_context, only: moist_context_type
@@ -39,7 +39,7 @@ module moist_cavity_drop
    use moist_cavity_drop_request, only: drop_property_request, &
                                         drop_request_default, drop_request_diagnostics, drop_request_fine
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: cavity_type_drop
@@ -126,9 +126,9 @@ module moist_cavity_drop
       !> Gaussian curvature
       real(wp), allocatable :: KG(:)
 
-      !> Nuclear gradient of the first principal curvature (3, nsph, ngrid).
+      !> Nuclear gradient of the first principal curvature (3, nsph, ngrid)
       !> Mean/Gaussian curvature gradients are derived from k1_rA/k2_rA
-      !> downstream: dKM = (k1_rA + k2_rA)/2, dKG = k2*k1_rA + k1*k2_rA.
+      !> downstream: dKM = (k1_rA + k2_rA)/2, dKG = k2*k1_rA + k1*k2_rA
       real(wp), allocatable :: k1_rA(:, :, :)
       !> Nuclear gradient of the second principal curvature (3, nsph, ngrid)
       real(wp), allocatable :: k2_rA(:, :, :)
@@ -197,9 +197,9 @@ module moist_cavity_drop
       logical, allocatable :: converged(:)
       !> Branch weight per grid point (ngrid) (1 = default/unbranched)
       real(wp), allocatable :: wbranch(:)
-      !> Projection-objective value phi at each surviving grid point (ngrid).
+      !> Projection-objective value phi at each surviving grid point (ngrid)
       !> Used by the branch-weight softmax gradient to recover per-branch
-      !> phi values once the main-loop KKT solve has produced dr/dR_A.
+      !> phi values once the main-loop KKT solve has produced dr/dR_A
       real(wp), allocatable :: phi0(:)
 
       real(wp), allocatable :: lambda0(:)
@@ -229,6 +229,9 @@ module moist_cavity_drop
       procedure :: contract_surface_lsf_weights
       !> Map surface-coordinate weights into generic response channels
       procedure :: get_surface_response => get_surface_response_drop
+      !> The DROP surface responds to the host field: host surface weights are
+      !> consumed in the response phase, not only in the gradient
+      procedure :: has_field_dependent_geometry => drop_field_dependent
       !> Contract surface-coordinate weights into the nuclear gradient
       procedure :: get_surface_gradient => get_surface_gradient_drop
 
@@ -252,8 +255,8 @@ module moist_cavity_drop
       !> Remove points below switching cutoff (after projection)
       procedure :: filter_arrays
 
-      !> Compute branch weights on the final surviving set and fold
-      !> them into wleb. Runs once, after all filter passes.
+      !> Compute branch weights on the final surviving set and fold them into
+      !> wleb, once, after all filter passes
       procedure :: compute_branch_weights
 
       !> Compute surface area from projected grid
@@ -289,14 +292,14 @@ module moist_cavity_drop
 
       !> [projection.f90] Compute the next capacity for projection work arrays
       module pure integer function projection_grow_capacity(current_capacity, required_capacity) result(new_capacity)
-         implicit none (type, external)
+         implicit none(type, external)
          integer, intent(in) :: current_capacity
          integer, intent(in) :: required_capacity
       end function projection_grow_capacity
 
       !> [projection.f90] Ensure projection arrays are allocated for `new_capacity`
       module subroutine ensure_projection_capacity(self, new_capacity, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          integer, intent(in) :: new_capacity
          type(error_type), allocatable, intent(out) :: error
@@ -304,56 +307,56 @@ module moist_cavity_drop
 
       !> [projection.f90] Project all current grid points onto the LSF surface
       module subroutine project_all_points(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine project_all_points
 
       !> [setup.f90] Evaluate switching weights for all grid points
       module subroutine compute_switching_function(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_switching_function
 
       !> [properties.f90] Compute local grid point density values
       module subroutine compute_grid_point_density(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_grid_point_density
 
       !> [properties.f90] Check cavity diagnostics
       module subroutine analyze_cavity(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine analyze_cavity
 
       !> [setup.f90] Fill initial DROP arrays from per-atom Lebedev grids
       module subroutine fill_arrays(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine fill_arrays
 
       !> [setup.f90] Build per-cell atom screening grid
       module subroutine setup_mol_cell_grid(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine setup_mol_cell_grid
 
       !> [setup.f90] Build grid point neighbour list for density computation
       module subroutine setup_grid_adj_list(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine setup_grid_adj_list
 
       !> [filter.f90] Filter and compact points after projection
       module subroutine filter_arrays(self, name, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          character(len=*), intent(in) :: name
          type(error_type), allocatable, intent(out) :: error
@@ -361,54 +364,55 @@ module moist_cavity_drop
 
       !> [filter.f90] Compute branch weights on the final surviving set
       module subroutine compute_branch_weights(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_branch_weights
 
       !> [properties.f90] Compute total/atomic area and volume contributions
       module subroutine compute_area_volume(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_area_volume
 
       !> [properties.f90] Compute mean and Gaussian curvature on the surface grid
       module subroutine compute_curvature(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_curvature
 
-      !> [projection.f90] Compute closest-point Jacobian scaling factors.
+      !> [projection.f90] Compute closest-point Jacobian scaling factors
       module subroutine compute_cp_jacobian_scaling(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_cp_jacobian_scaling
 
       !> [projection.f90] Compute CPCM Gaussian width parameters for grid points
       module subroutine compute_gaussians(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_gaussians
 
       !> [deriv/forward.f90] Compute first nuclear derivatives for DROP quantities
       module subroutine compute_gradient_drop(self, error, anchor_only)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
          !> Restrict each grid point's active atom to its owner (anchor motion
          !> only); used for callback/isodensity LSFs whose field nuclear
-         !> derivatives are identically zero.
+         !> derivatives are identically zero
          logical, intent(in), optional :: anchor_only
       end subroutine compute_gradient_drop
 
       !> [deriv/forward.f90] Compute anchor-only nuclear derivatives (owner motion,
-      !> frozen field).  Thin wrapper over compute_gradient_drop(anchor_only=.true.).
+      !> frozen field), a thin wrapper over
+      !> `compute_gradient_drop(anchor_only=.true.)`
       module subroutine compute_anchor_gradient(self, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(error_type), allocatable, intent(out) :: error
       end subroutine compute_anchor_gradient
@@ -420,7 +424,7 @@ module moist_cavity_drop
       !> @param[in]  context Calling routine, used to prefix the diagnostics
       !> @param[out] error   Error object
       module subroutine check_surface_adjoint(self, acc, context, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          character(len=*), intent(in) :: context
@@ -435,7 +439,7 @@ module moist_cavity_drop
       !> @param[in]  fold_switching Whether to fold the area channel into `w_f`
       !> @param[out] eff            Folded weights and the branch adjoint
       module subroutine prepare_surface_weights(self, acc, fold_switching, eff)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          logical, intent(in) :: fold_switching
@@ -449,7 +453,7 @@ module moist_cavity_drop
       !> @param[in]    want_curvature Whether the curvature invariants are needed
       !> @param[inout] state          Seed state
       module subroutine fill_seed_state(self, igrid, want_curvature, state)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          integer, intent(in) :: igrid
          logical, intent(in) :: want_curvature
@@ -465,7 +469,7 @@ module moist_cavity_drop
       !> @param[out] w_lsf2     Adjoint weights for LSF Hessians (3, 3, ngrid)
       !> @param[out] error      Error object
       module subroutine contract_surface_lsf_weights(self, acc, w_lsf0, w_lsf1, w_lsf2, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          real(wp), intent(out) :: w_lsf0(:)
@@ -476,7 +480,7 @@ module moist_cavity_drop
 
       !> [deriv/potential.f90] Map accumulated surface adjoints into the generic response
       module subroutine get_surface_response_drop(self, acc, response, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(inout) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          type(response_type), intent(inout) :: response
@@ -490,7 +494,7 @@ module moist_cavity_drop
       !> @param[inout] gradient Nuclear-gradient accumulator (3, nsph)
       !> @param[out]   error    Error object
       module subroutine get_surface_gradient_drop(self, acc, gradient, error)
-         implicit none (type, external)
+         implicit none(type, external)
          class(cavity_type_drop), intent(in) :: self
          type(cavity_surface_adjoint_type), intent(in) :: acc
          real(wp), intent(inout) :: gradient(:, :)
@@ -501,93 +505,55 @@ module moist_cavity_drop
 
 contains
 
-   !* ================================================================================= *!
-   !*                                    Constructor                                    *!
-   !* ================================================================================= *!
+   !> The DROP surface geometry depends on the host field
+   !>
+   !> `get_surface_response_drop` maps the accumulated surface weights to a
+   !> level-set response, so the host surface weights are consumed in the
+   !> response phase and must be declared for it
+   !>
+   !> @param[in] self Cavity instance
+   function drop_field_dependent(self) result(field_dependent)
+      !> Cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Whether the live level set has a density adjoint
+      logical :: field_dependent
+      real(wp) :: factor
+      field_dependent = .false.
+      if (allocated(self%lsf_model)) field_dependent = self%lsf_model%density_adjoint_factor(factor)
 
-   !> Initialize DROP model
+   end function drop_field_dependent
+
+   !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> Sets up a DROP cavity instance with optional settings/configuration
-   !>
-   !> The LSF model is *required*; callers build their LSF concrete (e.g. `svdw%new(...)`)
-   !> and pass it as `lsf_model`
-   !>
-   !> The cavity pushes its derived `screening_threshold` into the LSF so the LSF's internal screening
-   !> caches stay consistent with the cavity tolerance
-   !>
-   !>
-   !> @param[inout] self          Cavity instance to initialize
-   !> @param[in]    ctx           Shared run context (borrowed; must outlive the cavity)
-   !> @param[in]    nleb          Number of Lebedev points per sphere for angular grid (optional)
-   !> @param[in]    tolerance     Master numerical tolerance (optional)
-   !> @param[in]    proj_maxiter  Maximum number of projection iterations (optional)
-   !> @param[in]    proj_level    Projection refinement level (optional)
-   !> @param[in]    branch_weight_s Softmax scale for competing projection branches (optional, for testing)
-   !> @param[in]    rho_grid_h    Grid-density kernel length (optional)
-   !> @param[in]    wleb_prune_level Smooth Lebedev-weight pruning level (optional)
-   !> @param[in]    radius_model  Atomic radius model to use for cavity construction
-   !> @param[in]    lsf_model     LSF template (required; cavity stores a copy)
-   !> @param[in]    do_fine      Enable all optional properties (optional)
-   !> @param[out]   error         Error handling structure (optional)
-   !> Initialize DROP cavity
-   ! TODO: Unify use of constructor optional arguments for parameters
-   subroutine new_cavity_drop(self, &
-                              ctx, &
-                              nleb, &
-                              tolerance, proj_maxiter, proj_level, &
-                              branch_weight_s, rho_grid_h, wleb_prune_level, &
-                              do_fine, &
-                              radius_model, &
-                              lsf_model, &
-                              error)
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radius_model Atomic radius model to copy
+   !> @param[in] lsf_model Level set function to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_drop(self, ctx, radius_model, lsf_model, error, param)
+      !> Cavity to initialize
       type(cavity_type_drop), intent(inout) :: self
-
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      !> Borrowed context; must outlive the cavity
       type(moist_context_type), intent(in), target :: ctx
-
-      !> Grid settings
-      integer, intent(in), optional :: nleb
-
-      !> Master numerical tolerance
-      real(wp), intent(in), optional :: tolerance
-      integer, intent(in), optional :: proj_maxiter
-      integer, intent(in), optional :: proj_level
-
-      !> Branch weighting and grid-density settings
-      real(wp), intent(in), optional :: branch_weight_s
-      real(wp), intent(in), optional :: rho_grid_h
-
-      !> Weight switching level (0=off, 1-6=increasing aggressiveness)
-      integer, intent(in), optional :: wleb_prune_level
-
-      !> Enable all optional properties
-      logical, intent(in), optional :: do_fine
-
-      !> Radius model to use for cavity construction (provided by caller)
+      !> Atomic radius model to copy
       class(radius_type), intent(in) :: radius_model
-
-      !> LSF model template (provided by caller)
+      !> Level set function to copy
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
-
-      !> Error handling
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_drop_parameters_type), intent(in), optional :: param
 
       !> Borrow the shared run context (owns verbosity/debug/timer)
       self%ctx => ctx
 
-      !> Convenience property shortcuts
-      if (present(do_fine)) then
-         if (do_fine) self%request = drop_request_fine()
-      end if
-
-      !> Parameter setup
-      call self%param%new( &
-         nleb=nleb, &
-         tolerance=tolerance, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-         branch_weight_s=branch_weight_s, rho_grid_h=rho_grid_h, &
-         wleb_prune_level=wleb_prune_level, &
-         error=error)
+      call self%param%init_defaults()
+      if (present(param)) self%param = param
+      call self%param%compute_derived(error)
       if (allocated(error)) return
+      self%request = drop_property_request()
+      if (self%param%do_fine) self%request = drop_request_fine()
 
       !> Radius model setup
       if (allocated(self%radius_model)) deallocate (self%radius_model)
@@ -683,7 +649,7 @@ contains
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
 
-      !> Timer stack depth at entry; error paths unwind back to it (below).
+      !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
 
       !> Set number of spheres
@@ -821,15 +787,6 @@ contains
       end if
       call self%ctx%timer%stop("Grid adj. list")
 
-      !> Nearest neighbour search to find disconnected cavities
-      call self%ctx%timer%start("Disconnected cav.")
-      call self%find_disconnected_cavities(error=error)
-      if (allocated(error)) then
-         call self%ctx%timer%unwind(d0)
-         return
-      end if
-      call self%ctx%timer%stop("Disconnected cav.")
-
       call self%ctx%timer%stop("Post processing")
 
       !* ------------------------------ Properties phase ------------------------------ *!
@@ -894,14 +851,15 @@ contains
    !*                                 First derivatives                                 *!
    !* ================================================================================= *!
 
-   !> Compute and store all requested DROP nuclear derivatives.
+   !> Compute and store all requested DROP nuclear derivatives
+   !>
    !> @param[inout] self  Cavity instance receiving the derivatives
    !> @param[out]   error Error handling
    subroutine get_gradient_drop(self, error)
       class(cavity_type_drop), intent(inout) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Timer stack depth at entry; error paths unwind back to it (below).
+      !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
 
       d0 = self%ctx%timer%current_depth()
@@ -934,7 +892,7 @@ contains
    subroutine ensure_lebedev_cache(self, error)
       class(cavity_type_drop), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
-      integer :: oleb, i
+      integer :: oleb
 
       ! Map requested num_leb to Lebedev order index
       call lebedev_order_from_num(self%param%num_leb, oleb, error)
@@ -944,9 +902,11 @@ contains
           .and. allocated(self%ang_weight) &
           .and. allocated(self%oleb) &
           ) then
-         if (.not. allocated(self%nmax)) allocate (self%nmax)
-         self%nmax = self%param%num_leb*self%nsph
-         return
+         if (self%oleb == oleb .and. size(self%ang_weight) == self%param%num_leb) then
+            if (.not. allocated(self%nmax)) allocate (self%nmax)
+            self%nmax = self%param%num_leb*self%nsph
+            return
+         end if
       end if
 
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
@@ -984,13 +944,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       integer :: unit, stat, i
-      real(wp) :: val_wleb, val_r_iI0, val_rho
-      real(wp) :: val_anch_x, val_anch_y, val_anch_z
-      real(wp) :: val_n_x, val_n_y, val_n_z
       real(wp) :: val_rho_grid, val_rho_grid_anchor, val_KM, val_KG, val_cpjac
-      real(wp) :: val_sigma_max, val_sigma_min, val_sigma_chi
-      real(wp) :: val_risk_score, val_gamma_tilde, val_det_B, val_kappa_B
-      logical :: val_converged
+      real(wp) :: val_kappa_B
 
       if (.not. allocated(self%xyz)) then
          call fatal_error(error, "write_csv_debug: cavity grid not allocated")
@@ -1058,7 +1013,7 @@ contains
    !>
    !> Arrays gated by `drop_property_request` are simply not allocated when they
    !> were not asked for, so they are not declared and a caller asking for one
-   !> gets an error rather than zeros.
+   !> gets an error rather than zeros
    !>
    !> @param[in]    self   DROP cavity instance
    !> @param[inout] query  Walker collecting or fetching the declarations
@@ -1124,14 +1079,15 @@ contains
    !*                                     Finalizer                                     *!
    !* ================================================================================= *!
 
-   !> Finalizer for cavity_type_drop to properly deallocate all allocatable components
-   !> This ensures proper cleanup when the cavity is deleted through the C API
+   !> Finalizer deallocating every allocatable component of `cavity_type_drop`
+   !>
+   !> - ensures proper cleanup when the cavity is deleted through the C API
    subroutine finalize_cavity_drop(self)
       type(cavity_type_drop), intent(inout) :: self
 
       !> The profiling timer lives on the borrowed run context (self%ctx) and is
-      !> owned by the top-level caller, so it is not torn down here. Callers that
-      !> want the accumulated tree call self%ctx%timer%write(...) before teardown.
+      !> owned by the top-level caller, so it is not torn down here; callers
+      !> wanting the accumulated tree call self%ctx%timer%write(...) beforehand
 
       ! Deallocate grid point data arrays
       if (allocated(self%xi0)) deallocate (self%xi0)

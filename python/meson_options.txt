@@ -4,3 +4,10 @@ option(
   value: 'python3',
   description: 'Python version to link against.',
 )
+option(
+  'lapack',
+  type: 'combo',
+  value: 'auto',
+  choices: ['auto', 'mkl', 'mkl-rt', 'openblas', 'netlib', 'accelerate', 'custom'],
+  description : 'linear algebra backend, passed to the moist subproject',
+)

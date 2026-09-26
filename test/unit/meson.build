@@ -6,11 +6,12 @@
 #   test_timeouts suite id -> timeout, for suites needing more than the default
 tests = [
   'api',
-  'utils',
+  'parameters',
   'utils_timer',
   'utils_context',
   'utils_mem',
   'utils_prettylistprint',
+  'channels',
   'data',
   'radii',
   'math_linalg',
@@ -43,11 +44,8 @@ tests = [
   'model_component_gostshyp',
   'model_component_pv',
   'model_general',
+  'model_coupling',
 ]
-if use_hdf5
-  tests += 'utils_hdf5'
-endif
-
 test_timeouts = {}
 
 # Driver plus the shared fixture modules, which register no suite of their own.

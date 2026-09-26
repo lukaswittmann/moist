@@ -7,7 +7,7 @@ module test_cavity_drop_cfc
                                                cfc_tangent_eval, cfc_hvp_eval
    use test_helpers, only: fd4_scalar
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_cfc
@@ -96,7 +96,7 @@ contains
 
    !> Evaluate the atomic-term kernel at one point, returning a fresh
    !> tensor stack (initialised to zero so the kernel's accumulator
-   !> semantics produce the single-point value).
+   !> semantics produce the single-point value)
    subroutine eval_atom(d_a, R_a, a1, max_deriv, pd0, pd1_r, pd2_rr, pd3_rrr)
       real(wp), intent(in)  :: d_a(ndim), R_a, a1
       integer, intent(in)  :: max_deriv
@@ -117,7 +117,7 @@ contains
                                 pd4_rrrr)
    end subroutine eval_atom
 
-   !> Evaluate the pair-term kernel at one (d_a, d_b) configuration.
+   !> Evaluate the pair-term kernel at one (d_a, d_b) configuration
    subroutine eval_pair(d_a, d_b, R_a, R_b, a2, c_par, max_deriv, &
                         pd0, pd1_a, pd1_b, pd2_aa, pd2_ab, pd2_bb, &
                         pd3_aaa, pd3_aab, pd3_abb, pd3_bbb)
@@ -153,7 +153,7 @@ contains
    !> `S = -log PD` (the sign the LSF contract wants); the checks below are
    !> written against `+log PD`, so this wrapper negates. Orders above
    !> `max_deriv` come back as exact zeros from the kernel, not as garbage,
-   !> which is what lets this wrapper negate all four unconditionally.
+   !> which is what lets this wrapper negate all four unconditionally
    subroutine eval_log_lift(pd0, pd1_r, pd2_rr, pd3_rrr, max_deriv, &
                             lpd0, lpd1_r, lpd2_rr, lpd3_rrr)
       real(wp), intent(in)  :: pd0
@@ -824,7 +824,7 @@ contains
    end subroutine test_pair_pd3_abb_fd
 
    !> Verify the index-permutation symmetries of pd2_aa/pd2_bb (symmetric)
-   !> and pd3_aaa/pd3_aab/pd3_abb/pd3_bbb (fully or partly symmetric).
+   !> and pd3_aaa/pd3_aab/pd3_abb/pd3_bbb (fully or partly symmetric)
    subroutine test_pair_tensor_symmetries(error)
       type(error_type), allocatable, intent(out) :: error
       integer :: ipt, i, j, k
@@ -898,7 +898,7 @@ contains
    !> Swap-(a,b) invariance: swapping the two atoms in the pair kernel
    !> exchanges aa <-> bb tensors and transposes ab, with appropriate
    !> index re-labellings. Verifies the sympy expression respects the
-   !> (a,b) symmetry of the underlying K_pair.
+   !> (a,b) symmetry of the underlying K_pair
    subroutine test_pair_swap_invariance(error)
       type(error_type), allocatable, intent(out) :: error
       integer :: ipt, i, j, k
@@ -936,7 +936,7 @@ contains
                if (allocated(error)) return
                !* pd2_ab(i,j) under swap becomes pd2_ab(j,i): the a-index
                !* (now from the original b) lives in slot j of the swapped
-               !* expression, and vice versa.
+               !* expression, and vice versa
                call check(error, pd2ab_1(i, j), pd2ab_2(j, i), thr_abs=stol, thr_rel=stol)
                if (allocated(error)) return
             end do
@@ -951,7 +951,7 @@ contains
                              thr_abs=stol, thr_rel=stol)
                   if (allocated(error)) return
                   !* pd3_aab(i,j,k) (a-symmetric (i,j), b-singleton k) swaps to
-                  !* pd3_abb(k,i,j) (a-singleton k, b-symmetric (i,j)).
+                  !* pd3_abb(k,i,j) (a-singleton k, b-symmetric (i,j))
                   call check(error, pd3aab_1(i, j, k), pd3abb_2(k, i, j), &
                              thr_abs=stol, thr_rel=stol)
                   if (allocated(error)) return
@@ -968,9 +968,9 @@ contains
    !*                            log_lift FD tests                                      *!
    !* ================================================================================= *!
 
-   !> Reference scalar field PD(r) = sum of two atom-centered Gaussians.
+   !> Reference scalar field PD(r) = sum of two atom-centered Gaussians
    !> Used as a known smooth positive PD to verify the level-set lift against
-   !> finite differences of log(PD).
+   !> finite differences of log(PD)
    pure subroutine ref_pd(r, pd0, pd1, pd2, pd3)
       real(wp), intent(in) :: r(ndim)
       real(wp), intent(out) :: pd0, pd1(ndim), pd2(ndim, ndim), pd3(ndim, ndim, ndim)
@@ -1165,18 +1165,18 @@ contains
    !> unconditional zeroing prologue the higher-order dummies would come back
    !> undefined -- a value the caller cannot even inspect safely, and one that a
    !> `-finit-real=snan` build cannot catch because these are dummy arguments,
-   !> not locals.
+   !> not locals
    !>
    !> This is the standing enforcement of that contract, and it is a real test,
    !> not an assertion of intent: every result is poisoned with a sentinel before
    !> the call, so a routine that stopped zeroing would hand the sentinel straight
    !> back. The orders *at or below* `max_deriv` are additionally required to be
    !> non-zero somewhere, so the check cannot pass by the routine having become a
-   !> no-op that zeroes everything.
+   !> no-op that zeroes everything
    !>
    !> The `PD <= 0` early return (a fully screened-out point) is exercised too:
    !> it shares the same prologue, so all-zero is the correct answer there for
-   !> every order.
+   !> every order
    subroutine test_lift_defines_every_output(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1217,7 +1217,7 @@ contains
       hv2_rr = 0.17_wp
 
       ! Pass 1 runs the normal path; pass 2 drives PD to zero so the early
-      ! return is covered by exactly the same assertions.
+      ! return is covered by exactly the same assertions
       do ipass = 1, 2
          if (ipass == 2) pd0 = 0.0_wp
 

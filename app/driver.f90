@@ -1,6 +1,12 @@
 
 !> Entry point for running single point calculations with moist
 module moist_driver
+   use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
+   use moist_cavity_marchingcubes, only: moist_cavity_marchingcubes_parameters_type
+   use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
    use, intrinsic :: iso_fortran_env, only: output_unit, input_unit
    use mctc_env, only: error_type, fatal_error, wp
    use mctc_io, only: structure_type, read_structure, filetype
@@ -8,7 +14,7 @@ module moist_driver
    use moist_cli, only: run_config
    use moist_output_ascii, only: moist_header, moist_build_header, cavity_header
    use moist_data_solvents, only: get_solvent_id
-   use moist_data_solvents, only: solvation_system_parameters, new_solvation_system_parameters
+   use moist_data_solvents, only: solvation_system_type, new_solvation_system
    use moist_cavity_numsa, only: cavity_type_numsa, new_cavity_numsa
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
@@ -17,8 +23,7 @@ module moist_driver
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_radii, only: radius_type, new_radii
-   use moist_type, only: cavity_type, solvation_model_type
-   use moist_channels, only: coupling_type
+   use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib
 ! #ifdef WITH_MKL
@@ -55,20 +60,14 @@ contains
 
       type(structure_type) :: mol
 
-      !> Solvation model
-      class(solvation_model_type), allocatable :: sm
-
       !> Shared run context owned for the whole run borrowed by everything
       type(moist_context_type), target :: ctx
 
       !> Solvation system type
-      type(solvation_system_parameters), allocatable :: system
+      type(solvation_system_type), allocatable :: system
 
       character(len=:), allocatable :: filename
       character(len=:), allocatable :: solvent
-
-      real(wp) :: energy
-      type(coupling_type) :: coupling
 
       integer :: solvent_id
 
@@ -88,7 +87,7 @@ contains
       !> run is actually using, and the pin is released again on `ctx%delete`.
       if (config%num_threads > 0) then
 !$       if (.false.) then
-            write (ctx%unit, '(a)') &
+            write (ctx%unit, "(a)") &
                "[Warn] Program compiled without OpenMP support, ignoring --threads"
 !$       else
 !$          call ctx%set_num_threads(config%num_threads)
@@ -112,7 +111,7 @@ contains
          call get_solvent_id(trim(config%solvent), solvent_id, error)
          if (allocated(error)) return
          allocate (system)
-         call new_solvation_system_parameters(system, solvent_id, &
+         call new_solvation_system(system, solvent_id, &
                                               temperature=config%temperature, pressure_si=config%pressure_si, &
                                               error=error)
          if (allocated(error)) return
@@ -146,10 +145,10 @@ contains
             read (unit, *, iostat=stat) tmp_wp
             if (stat == 0) then
                mol%charge = tmp_wp
-               if (config%verbosity > 0) write (output_unit, '(a)') &
+               if (config%verbosity > 0) write (output_unit, "(a)") &
                   "[Info] Molecular charge read from '"//filename//"'"
             else
-               if (config%verbosity > 0) write (output_unit, '(a)') &
+               if (config%verbosity > 0) write (output_unit, "(a)") &
                   "[Warn] Could not read molecular charge read from '"//filename//"'"
             end if
             close (unit)
@@ -180,8 +179,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_numsa(tmp_cavity, ctx, nleb=config%nleb, &
-                                        radii=radius_model, error=error)
+                  call new_cavity_numsa(tmp_cavity, ctx, radii=radius_model, error=error, &
+                     param=moist_cavity_numsa_parameters_type(num_leb=config%nleb))
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -191,8 +190,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_iswig(tmp_cavity, ctx, nleb=config%nleb, &
-                                        radius_model=radius_model, error=error)
+                  call new_cavity_iswig(tmp_cavity, ctx, radius_model=radius_model, error=error, &
+                     param=moist_cavity_iswig_parameters_type(num_leb=config%nleb))
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -208,29 +207,25 @@ contains
                         !> The cavity couples the LSF screening threshold to
                         !> its own tolerance (passed below as `tolerance`),
                         !> so we only forward the shape parameters here.
-                        call svdw_template%new( &
-                           blend_k=config%drop_blend_k, &
-                           blend_1b=config%drop_blend_1b, &
-                           blend_2b=config%drop_blend_2b, &
-                           blend_3b=config%drop_blend_3b)
-                        call new_cavity_drop(tmp_cavity, ctx, &
-                                             nleb=config%nleb, &
-                                             tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                                             wleb_prune_level=config%drop_wleb_prune_level, &
-                                             radius_model=radius_model, &
-                                             lsf_model=svdw_template, error=error)
+                        call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=config%drop_blend_k, &
+                           blend_1b=config%drop_blend_1b, blend_2b=config%drop_blend_2b, &
+                           blend_3b=config%drop_blend_3b))
+                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                           lsf_model=svdw_template, error=error, &
+                           param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
+                           wleb_prune_level=config%drop_wleb_prune_level))
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-                        call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
-                                              c=config%cfc_c, m=config%cfc_m)
-                        call new_cavity_drop(tmp_cavity, ctx, &
-                                             nleb=config%nleb, &
-                                             tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                                             wleb_prune_level=config%drop_wleb_prune_level, &
-                                             radius_model=radius_model, &
-                                             lsf_model=cfc_template, error=error)
+                        call cfc_template%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=config%cfc_a1, &
+                           a2=config%cfc_a2, c=config%cfc_c, m=config%cfc_m))
+                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                           lsf_model=cfc_template, error=error, &
+                           param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
+                           wleb_prune_level=config%drop_wleb_prune_level))
                      end block
                   else
                      call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
@@ -250,19 +245,17 @@ contains
                   if (to_lower(config%drop_variant) == "svdw") then
                      block
                         type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                        call svdw_template%new( &
-                           blend_k=config%drop_blend_k, &
-                           blend_1b=config%drop_blend_1b, &
-                           blend_2b=config%drop_blend_2b, &
-                           blend_3b=config%drop_blend_3b)
+                        call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=config%drop_blend_k, &
+                           blend_1b=config%drop_blend_1b, blend_2b=config%drop_blend_2b, &
+                           blend_3b=config%drop_blend_3b))
                         call new_mc_cavity(tmp_cavity, ctx, radius_model, svdw_template, &
                                            config%cavity_mc_spacing, config%dump, error)
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
-                        call cfc_template%new(a1=config%cfc_a1, a2=config%cfc_a2, &
-                                              c=config%cfc_c, m=config%cfc_m)
+                        call cfc_template%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=config%cfc_a1, &
+                           a2=config%cfc_a2, c=config%cfc_c, m=config%cfc_m))
                         call new_mc_cavity(tmp_cavity, ctx, radius_model, cfc_template, &
                                            config%cavity_mc_spacing, config%dump, error)
                      end block
@@ -291,11 +284,11 @@ contains
             ! Marching cubes has no grid points to dump; it already wrote its
             ! triangle mesh (cavity.obj/cavity.pqr) during update.
             if (config%dump .and. to_lower(config%mode) /= "mc") then
-               call cavity%write_xyz_debug('cavity.xyz', error=error)
+               call cavity%write_xyz_debug("cavity.xyz", error=error)
                if (allocated(error)) return
-               call cavity%write_csv_debug('cavity.csv', error=error)
+               call cavity%write_csv_debug("cavity.csv", error=error)
                if (allocated(error)) return
-               call cavity%write_pqr_debug('cavity.pqr', error=error)
+               call cavity%write_pqr_debug("cavity.pqr", error=error)
                if (allocated(error)) return
             end if
 
@@ -314,7 +307,7 @@ contains
          filename = join(dirname(config%input), ".SOLVENT")
          if (exists(filename)) then
             open (file=filename, newunit=unit)
-            read (unit, '(A)', iostat=stat) tmp
+            read (unit, "(A)", iostat=stat) tmp
             close (unit)
             if (stat == 0) then
                ! allocate exactly to the trimmed length
@@ -331,7 +324,7 @@ contains
       call get_solvent_id(solvent, solvent_id, error)
       if (allocated(error)) return
       allocate (system)
-      call new_solvation_system_parameters(system, solvent_id, &
+      call new_solvation_system(system, solvent_id, &
                                            temperature=config%temperature, pressure_si=config%pressure_si, &
                                            error=error)
       if (allocated(error)) return
@@ -341,11 +334,8 @@ contains
       !* ================================================================================= *!
 
       ! Exit, no models implemented in the current preview version
-      if ((to_lower(config%mode) == "gems") .or. to_lower(config%mode) == "rism1d" .or. &
-          to_lower(config%mode) == "rism3d" .or. to_lower(config%mode) == "alpb") then
-         call fatal_error(error, "No solvation models implemented in the current preview version")
-         return
-      end if
+      call fatal_error(error, "No solvation models implemented in the current preview version")
+      return
 
       call report_run_timings()
       call ctx%delete()
@@ -357,8 +347,9 @@ contains
       !> prints the full hierarchical breakdown for the run.
       subroutine report_run_timings()
          call ctx%timer%stop("total")
-         if (config%verbosity > 0) &
+         if (config%verbosity > 0) then
             call ctx%timer%write(output_unit, "moist", max_depth=ctx%report_depth())
+         end if
       end subroutine report_run_timings
 
    end subroutine run_main
@@ -386,14 +377,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (dump) then
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, &
-                                       lsf_model=lsf_model, spacing=spacing, &
-                                       obj_file='cavity.obj', pqr_file='cavity.pqr', &
-                                       error=error)
+         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
+            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing, &
+            obj_file="cavity.obj", pqr_file="cavity.pqr"))
       else
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, &
-                                       lsf_model=lsf_model, spacing=spacing, &
-                                       error=error)
+         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
+            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing))
       end if
 
    end subroutine new_mc_cavity
@@ -406,9 +395,9 @@ contains
       character :: filesep
 
       if (is_windows()) then
-         filesep = '\'
+         filesep = "\"
       else
-         filesep = '/'
+         filesep = "/"
       end if
 
       path = a1//filesep//a2

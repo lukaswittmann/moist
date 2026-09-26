@@ -1,7 +1,7 @@
 project(
   'moist',
   'fortran',
-  version: '0.6.0-alpha.1',
+  version: '1.0.0-alpha.1',
   license: 'MPL-2.0',
   meson_version: '>=0.57',
   default_options: [

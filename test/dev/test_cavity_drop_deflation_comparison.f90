@@ -1,10 +1,12 @@
 !> End-to-end regression check: regular multistart (proj_level=7),
 !> SLSQP-deflation (proj_level=5), and Newton-deflation (proj_level=6)
-!> against the fine SLSQP multistart reference (proj_level=8).
+!> against the fine SLSQP multistart reference (proj_level=8)
 !> For each structure, aggregate area/volume must match the reference
-!> tightly; branched-point counts are checked with a secondary window.
+!> tightly; branched-point counts are checked with a secondary window
 
 module test_cavity_drop_deflation_comparison
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -16,7 +18,7 @@ module test_cavity_drop_deflation_comparison
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_deflation_comparison
@@ -25,25 +27,25 @@ module test_cavity_drop_deflation_comparison
    integer, parameter  :: PROJ_MAXITER = 500
    real(wp), parameter :: WLEB_CUT_TEST = 1.0e-12_wp
 
-   !> Absolute tolerance for total area/volume comparison (bohr^2 / bohr^3).
+   !> Absolute tolerance for total area/volume comparison (bohr^2 / bohr^3)
    real(wp), parameter :: TOT_ABS_THR = 1.0e-6_wp
-   !> Relative tolerance for total area/volume comparison.
+   !> Relative tolerance for total area/volume comparison
    real(wp), parameter :: TOT_REL_THR = 1.0e-6_wp
-   !> Relative tolerance for branched-point count comparison.
+   !> Relative tolerance for branched-point count comparison
    real(wp), parameter :: BRANCHED_POINT_REL_THR = 0.25_wp
 
-   !> L2 distance cap for "point matches" between the two cavities (bohr).
+   !> L2 distance cap for "point matches" between the two cavities (bohr)
    real(wp), parameter :: POINT_MATCH_TOL = 1.0e-6_wp
 
    !> Projection strategies compared here. Index 1 is the reference every other
    !> column is judged against; `METHOD_CHECKED` marks which of the rest are
-   !> asserted rather than only reported.
+   !> asserted rather than only reported
    integer, parameter :: N_METHODS = 5
    integer, parameter :: METHOD_LEVEL(N_METHODS) = [8, 7, 5, 6, 9]
    character(len=16), parameter :: METHOD_LABEL(N_METHODS) = &
                                    [character(len=16) :: "reference", "multistart", "SLSQP-defl", &
                                                           "Newton-defl", "octree"]
-   !> Newton-deflation is reported but not asserted; it does not yet pass.
+   !> Newton-deflation is reported but not asserted; it does not yet pass
    logical, parameter :: METHOD_CHECKED(N_METHODS) = &
                          [.false., .true., .true., .false., .true.]
 
@@ -62,7 +64,7 @@ module test_cavity_drop_deflation_comparison
       real(wp) :: frac_a = 0.0_wp
    end type branch_stats_type
 
-   !> Branched-point overlap counts between two point sets.
+   !> Branched-point overlap counts between two point sets
    type :: branch_overlap_type
       integer :: common = 0
       integer :: unique_a = 0
@@ -84,7 +86,7 @@ contains
    end subroutine collect_cavity_drop_deflation_comparison
 
    !> Carbon dimer near the dissociation limit. The xy perturbation breaks
-   !> axial symmetry while preserving the near-pinch branch topology.
+   !> axial symmetry while preserving the near-pinch branch topology
    subroutine test_dimer_branching(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -97,7 +99,7 @@ contains
                                          mol, 50, 0.8_wp)
    end subroutine test_dimer_branching
 
-   !> Five-carbon planar cross with an off-centers hub.
+   !> Five-carbon planar cross with an off-centers hub
    subroutine test_branching_xyz_cross(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -182,12 +184,12 @@ contains
 
    !> Build one DROP cavity per projection strategy for the same molecule and
    !> radii, print a side-by-side branching summary, then assert each strategy
-   !> agrees with the fine-multistart reference in column 1.
+   !> agrees with the fine-multistart reference in column 1
    !>
-   !> @param[in]    title         Header title for the printed section.
-   !> @param[in]    mol           Molecular structure.
-   !> @param[in]    nleb          Lebedev order for the cavity grid.
-   !> @param[in]    blend_k       DROP blending parameter.
+   !> @param[in]    title         Header title for the printed section
+   !> @param[in]    mol           Molecular structure
+   !> @param[in]    nleb          Lebedev order for the cavity grid
+   !> @param[in]    blend_k       DROP blending parameter
    subroutine compare_projection_strategies(error, title, mol, nleb, blend_k)
       type(error_type), allocatable, intent(inout) :: error
       character(len=*), intent(in) :: title
@@ -229,7 +231,7 @@ contains
       !    end if
       ! end do
 
-      ! The cavities borrow `ctx` by pointer, so they go first.
+      ! The cavities borrow `ctx` by pointer, so they go first
       deallocate (cavs)
    end subroutine compare_projection_strategies
 
@@ -252,12 +254,11 @@ contains
 
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k, blend_3b=1.0_wp)
-         call new_cavity_drop(cav, ctx, nleb=nleb, &
-                              do_fine=.true., tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, &
-                              proj_level=proj_level, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+            blend_3b=1.0_wp))
+         call new_cavity_drop(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, do_fine=.true., &
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level))
       end block
       if (allocated(cavity_error)) then
          write (msg, "(a,i0,a)") "cavity init at proj_level=", proj_level, ": "
@@ -265,7 +266,7 @@ contains
          return
       end if
       ! The branch admissibility radius follows wleb_cut, so the derived
-      ! parameters have to be refreshed alongside this override.
+      ! parameters have to be refreshed alongside this override
       cav%param%wleb_cut = WLEB_CUT_TEST
       call cav%param%compute_derived(cavity_error)
       if (allocated(cavity_error)) then
@@ -289,7 +290,7 @@ contains
       end if
    end subroutine build_cavity
 
-   !> Walk a cavity once and collect summary statistics.
+   !> Walk a cavity once and collect summary statistics
    function collect_stats(cav) result(s)
       type(cavity_type_drop), intent(in) :: cav
       type(branch_stats_type) :: s
@@ -323,7 +324,7 @@ contains
    end function collect_stats
 
    !> Compare each solver's branched grid points to the reference and print
-   !> how many were common or unique.
+   !> how many were common or unique
    subroutine print_branch_overlaps(title, cavs)
       character(len=*), intent(in) :: title
       type(cavity_type_drop), intent(in) :: cavs(:)
@@ -354,7 +355,7 @@ contains
       write (*, "(a)") ""
    end subroutine print_branch_overlaps
 
-   !> Extract xyz columns for points marked as belonging to a branched anchor.
+   !> Extract xyz columns for points marked as belonging to a branched anchor
    subroutine extract_branched_points(cav, points)
       type(cavity_type_drop), intent(in) :: cav
       real(wp), allocatable, intent(out) :: points(:, :)
@@ -379,7 +380,7 @@ contains
       end do
    end subroutine extract_branched_points
 
-   !> Compute and print one reference-centersd branched-point overlap row.
+   !> Compute and print one reference-centersd branched-point overlap row
    subroutine print_branch_overlap_row(label, points_ref, points_method)
       character(len=*), intent(in) :: label
       real(wp), intent(in) :: points_ref(:, :), points_method(:, :)
@@ -395,7 +396,7 @@ contains
          overlap%common, overlap%unique_a, overlap%unique_b
    end subroutine print_branch_overlap_row
 
-   !> Greedy one-to-one point matching within `tol`.
+   !> Greedy one-to-one point matching within `tol`
    subroutine match_branch_points(points_a, points_b, tol, overlap, matched_a, matched_b)
       real(wp), intent(in) :: points_a(:, :), points_b(:, :)
       real(wp), intent(in) :: tol
@@ -536,7 +537,7 @@ contains
       call pp%blank()
    end subroutine print_comparison_table
 
-   !> Assert one solver cavity matches the fine multistart reference.
+   !> Assert one solver cavity matches the fine multistart reference
    subroutine check_vs_reference(error, label, s_method, s_ref)
       type(error_type), allocatable, intent(inout) :: error
       character(len=*), intent(in) :: label

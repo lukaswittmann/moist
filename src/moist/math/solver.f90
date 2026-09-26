@@ -29,7 +29,7 @@ module moist_math_solver
       & lapack_algorithm, &
       & lapack_solver
 
-   implicit none
+   implicit none(type, external)
    private
 
    ! Re-export Newton solver

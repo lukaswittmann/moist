@@ -1,17 +1,17 @@
 
-!> Versioning information on this library.
+!> Versioning information on this library
 module moist_version
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_version_string, moist_version_compact
    public :: get_moist_version
 
    !> String representation of the moist version
-   character(len=*), parameter :: moist_version_string = "0.6.0-alpha.1"
+   character(len=*), parameter :: moist_version_string = "1.0.0-alpha.1"
 
    !> Numeric representation of the moist version
-   integer, parameter :: moist_version_compact(3) = [0, 6, 0]
+   integer, parameter :: moist_version_compact(3) = [1, 0, 0]
 
 contains
 

@@ -465,10 +465,10 @@ contains
       TRP = lPiv == 1  ! Threshold Rook      Pivoting
       TCP = lPiv == 2  ! Threshold Complete  Pivoting.
       TSP = lPiv == 3  ! Threshold Symmetric Pivoting.
-      kPiv(0) = 'PP'
-      kPiv(1) = 'RP'
-      kPiv(2) = 'CP'
-      kPiv(3) = 'SP'
+      kPiv(0) = "PP"
+      kPiv(1) = "RP"
+      kPiv(2) = "CP"
+      kPiv(3) = "SP"
 
       ! Initialize output parameters.
 
@@ -497,11 +497,11 @@ contains
       Akmax = zero
 
       if (m > n) then
-         mnkey = '>'
+         mnkey = ">"
       else if (m == n) then
-         mnkey = '='
+         mnkey = "="
       else
-         mnkey = '<'
+         mnkey = "<"
       end if
 
       ! Float version of dimensions.
@@ -513,7 +513,7 @@ contains
       ! Initialize workspace parameters.
 
       luparm(26) = 0             ! ncp
-      if (lena < minlen) go to 970
+      if (lena < minlen) goto 970
 
       !-------------------------------------------------------------------
       ! Organize the  aij's  in  a, indc, indr.
@@ -532,7 +532,7 @@ contains
          densty = 100.0_wp*delem/(dm*dn)
          write (nout, 1000) m, mnkey, n, numnz, Amax, densty
       end if
-      if (inform /= 0) go to 930
+      if (inform /= 0) goto 930
 
 !!! nelem  = numnz     !!! Don't change nelem.
 !!! nelem is now numnz below (it might be less than the input value).
@@ -540,7 +540,7 @@ contains
       call lu1or2(n, numnz, lena, a, indc, indr, lenc, locc)
       call lu1or3(m, n, lena, indc, lenc, locc, p, lerr, inform)
 
-      if (inform /= 0) go to 940
+      if (inform /= 0) goto 940
 
       call lu1or4(m, n, numnz, lena, indc, indr, lenc, lenr, locc, locr)
 
@@ -591,10 +591,10 @@ contains
 
       luparm(16) = nrank
       luparm(23) = lenL
-      if (inform == 7) go to 970
-      if (inform == 9) go to 985
-      if (inform == 10) go to 981
-      if (inform > 0) go to 980
+      if (inform == 7) goto 970
+      if (inform == 9) goto 985
+      if (inform == 10) goto 981
+      if (inform > 0) goto 980
 
       if (keepLU) then
          !---------------------------------------------------------------
@@ -720,29 +720,29 @@ contains
          DUmin = parmlu(14)
       end if
 
-      go to 990
+      goto 990
 
       !------------
       ! Error exits.
       !------------
 930   inform = 3
       if (lprint >= 0) write (nout, 1300) lerr, indc(lerr), indr(lerr)
-      go to 990
+      goto 990
 
 940   inform = 4
       if (lprint >= 0) write (nout, 1400) lerr, indc(lerr), indr(lerr)
-      go to 990
+      goto 990
 
 970   inform = 7
       if (lprint >= 0) write (nout, 1700) lena, minlen
-      go to 990
+      goto 990
 
 980   inform = 8
       if (lprint >= 0) write (nout, 1800)
-      go to 990
+      goto 990
 
 981   inform = 10
-      go to 990
+      goto 990
 
 985   inform = 9
       if (lprint >= 0) write (nout, 1900)
@@ -813,33 +813,33 @@ contains
 
       return
 
-1000  format(' m', i12, ' ', a, 'n', i12, '  Elems', i9, &
-             '  Amax', es10.1, '  Density', f7.2)
-1100  format(' Merit', f8.1, '  lenL', i9, '  L+U', i11, &
-             '  Cmpressns', i5, '  Incres', f8.2 &
-             /' Utri', i9, '  lenU', i9, '  Ltol', es10.2, &
-             '  Umax', es10.1, '  Ugrwth', es8.1 &
-             /' Ltri', i9, '  dense1', i7, '  Lmax', es10.2)
-1120  format(' Mer', a2, f8.1, '  lenL', i9, '  L+U', i11, &
-             '  Cmpressns', i5, '  Incres', f8.2 &
-             /' Utri', i9, '  lenU', i9, '  Ltol', es10.2, &
-             '  Umax', es10.1, '  Ugrwth', es8.1 &
-             /' Ltri', i9, '  dense1', i7, '  Lmax', es10.2, &
-             '  Akmax', es9.1, '  Agrwth', es8.1)
-1200  format(' bump', i9, '  dense2', i7, '  DUmax', es9.1, &
-             '  DUmin', es9.1, '  condU', es9.1)
-1300  format(/' lu1fac  error...  entry  a(', i8, ')  has an illegal', &
-              ' row or column index' &
-              //' indc, indr =', 2i8)
-1400  format(/' lu1fac  error...  entry  a(', i8, ')  has the same', &
-              ' indices as an earlier entry' &
-              //' indc, indr =', 2i8)
-1700  format(/' lu1fac  error...  insufficient storage' &
-              //' Increase  lena  from', i10, '  to at least', i10)
-1800  format(/' lu1fac  error...  fatal bug', &
-              '   (sorry --- this should never happen)')
-1900  format(/' lu1fac  error...  TSP used but', &
-              ' diagonal pivot could not be found')
+1000  format(" m", i12, " ", a, "n", i12, "  Elems", i9, &
+             "  Amax", es10.1, "  Density", f7.2)
+1100  format(" Merit", f8.1, "  lenL", i9, "  L+U", i11, &
+             "  Cmpressns", i5, "  Incres", f8.2 &
+             /" Utri", i9, "  lenU", i9, "  Ltol", es10.2, &
+             "  Umax", es10.1, "  Ugrwth", es8.1 &
+             /" Ltri", i9, "  dense1", i7, "  Lmax", es10.2)
+1120  format(" Mer", a2, f8.1, "  lenL", i9, "  L+U", i11, &
+             "  Cmpressns", i5, "  Incres", f8.2 &
+             /" Utri", i9, "  lenU", i9, "  Ltol", es10.2, &
+             "  Umax", es10.1, "  Ugrwth", es8.1 &
+             /" Ltri", i9, "  dense1", i7, "  Lmax", es10.2, &
+             "  Akmax", es9.1, "  Agrwth", es8.1)
+1200  format(" bump", i9, "  dense2", i7, "  DUmax", es9.1, &
+             "  DUmin", es9.1, "  condU", es9.1)
+1300  format(/" lu1fac  error...  entry  a(", i8, ")  has an illegal", &
+              " row or column index" &
+              //" indc, indr =", 2i8)
+1400  format(/" lu1fac  error...  entry  a(", i8, ")  has the same", &
+              " indices as an earlier entry" &
+              //" indc, indr =", 2i8)
+1700  format(/" lu1fac  error...  insufficient storage" &
+              //" Increase  lena  from", i10, "  to at least", i10)
+1800  format(/" lu1fac  error...  fatal bug", &
+              "   (sorry --- this should never happen)")
+1900  format(/" lu1fac  error...  TSP used but", &
+              " diagonal pivot could not be found")
 
    end subroutine lu1fac
 
@@ -1168,7 +1168,7 @@ contains
          call lu1mxr(mark, i1, m, m, n, lena, inform, &
                      a, indc, lenc, locc, indr, lenr, locr, &
                      p, markc, markr, Amaxr)
-         if (inform > 0) go to 981
+         if (inform > 0) goto 981
       end if
 
       if (TCP) then ! Set Ha(1:Hlen) = biggest element in each column,
@@ -1209,7 +1209,7 @@ contains
 
          ! Bail out if there are no nonzero rows left.
 
-         if (iploc(1) > m) go to 900
+         if (iploc(1) > m) goto 900
 
          ! For TCP, the largest Aij is at the top of the heap.
 
@@ -1243,7 +1243,7 @@ contains
                      ibest = indc(lc)
                      abest = a(lc)
                      mbest = 0
-                     go to 300
+                     goto 300
                   end if
                end do
 
@@ -1254,7 +1254,7 @@ contains
 
             else if (kslack == nslack) then  ! Maybe print msg
                if (lprint >= 50) then
-                  write (nout, *) 'Slacks ended.  nslack =', nslack
+                  write (nout, *) "Slacks ended.  nslack =", nslack
                end if
                kslack = nslack + 1          ! So print happens once
             end if
@@ -1285,7 +1285,7 @@ contains
 
                      if (amax >= aijtol) then
                         jbest = j
-                        go to 250
+                        goto 250
                      end if
                   end do
                end if
@@ -1294,7 +1294,7 @@ contains
                   lc = locc(jbest)
                   ibest = indc(lc)
                   mbest = 0
-                  go to 300
+                  goto 300
                end if
             end if
 
@@ -1304,7 +1304,7 @@ contains
             ! (to move biggest element to top of each column).
 
             if (lprint >= 50) then
-               write (nout, 1100) 'Utri ended.  spars1 = true'
+               write (nout, 1100) "Utri ended.  spars1 = true"
             end if
             Utri = .false.
             Ltri = .true.
@@ -1350,7 +1350,7 @@ contains
                            Ltol, maxcol, &
                            ibest, jbest, mbest, &
                            a, indc, q, locc, iqloc)
-               if (ibest == 0) go to 990
+               if (ibest == 0) goto 990
             end if
 
             if (Ltri) then
@@ -1363,7 +1363,7 @@ contains
                   Ltri = .false.
                   nLtri = nrowu - 1 - nUtri
                   if (lprint >= 50) then
-                     write (nout, 1100) 'Ltri ended.'
+                     write (nout, 1100) "Ltri ended."
                   end if
                end if
 
@@ -1375,7 +1375,7 @@ contains
                   ndens1 = nleft
                   maxrow = 0
                   if (lprint >= 50) then
-                     write (nout, 1100) 'spars1 ended.  spars2 = true'
+                     write (nout, 1100) "spars1 ended.  spars2 = true"
                   end if
                end if
             end if
@@ -1414,7 +1414,7 @@ contains
                            Ltol, maxcol, &
                            ibest, jbest, mbest, &
                            a, indc, q, locc, iqloc)
-               if (ibest == 0) go to 985
+               if (ibest == 0) goto 985
             end if
 
             ! See if what's left is as dense as dens2.
@@ -1426,7 +1426,7 @@ contains
                   ndens2 = nleft
                   maxcol = 1
                   if (lprint >= 50) then
-                     write (nout, 1100) 'spars2 ended.  dense = true'
+                     write (nout, 1100) "spars2 ended.  dense = true"
                   end if
                end if
             end if
@@ -1461,7 +1461,7 @@ contains
                   lfile = lcol
                end if
 
-               go to 900
+               goto 900
             end if
          end if
 
@@ -1479,7 +1479,7 @@ contains
          lenU = lenU + ncold
          if (lprint >= 50) then
             if (nrowu == 1) then
-               write (nout, 1100) 'lu1fad debug:'
+               write (nout, 1100) "lu1fad debug:"
             end if
             if (TPP .or. TRP .or. TSP) then
                write (nout, 1200) nrowu, ibest, jbest, nrowd, ncold
@@ -1537,7 +1537,7 @@ contains
                         lena, a, indc, lenc, locc)
             lfile = lcol
             nfree = lfree - lcol
-            if (nfree < minfre) go to 970
+            if (nfree < minfre) goto 970
          end if
 
          ! Make sure the row file has room.
@@ -1549,7 +1549,7 @@ contains
                         lena, a, indr, lenr, locr)
             lfile = lrow
             nfree = lfree - lrow
-            if (nfree < minfre) go to 970
+            if (nfree < minfre) goto 970
          end if
 
          !===============================================================
@@ -1649,7 +1649,7 @@ contains
          !          = -1, -2, -3, ... in mark(*).
          !===============================================================
          indc(lsave) = ncold
-         if (melim == 0) go to 700
+         if (melim == 0) goto 700
 
          ll = ll1 - 1
          ls = lsave
@@ -1700,7 +1700,7 @@ contains
          ! lu      points to off-diagonals of u.
          ! nfill   keeps track of pending fill-in in the row file.
          !===============================================================
-         if (nelim == 0) go to 700
+         if (nelim == 0) goto 700
          lfirst = lpivr1
          minfre = mleft + nspare
          lu = 1
@@ -1727,8 +1727,8 @@ contains
             lpivc1 = lpivc + 1
             lpivc2 = lpivc + melim
             nfree = lfree - lcol
-            if (nfree < minfre) go to 970
-            go to 400
+            if (nfree < minfre) goto 970
+            goto 400
          end if
 
          !===============================================================
@@ -1751,7 +1751,7 @@ contains
                lpivr1 = lpivr + 1
                lpivr2 = lpivr + nelim
                nfree = lfree - lrow
-               if (nfree < minfre) go to 970
+               if (nfree < minfre) goto 970
             end if
 
             ! Move rows that have pending fill-in to end of the row file.
@@ -1826,7 +1826,7 @@ contains
                            a, indc, lenc, locc, indr, lenr, locr, &
                            indc, markc, markr, Amaxr)
                ! ^^^^  Here are the p(k1:k2) needed by lu1mxr.
-               if (inform > 0) go to 981
+               if (inform > 0) goto 981
             end if
 
             if (nelim > 0) then
@@ -1858,8 +1858,8 @@ contains
 
          ! Test for fatal bug: row or column lists overwriting L and U.
 
-         if (lrow > lsave) go to 980
-         if (lcol > lsave) go to 980
+         if (lrow > lsave) goto 980
+         if (lcol > lsave) goto 980
 
          ! Reset the file lengths if pivot row or col was at the end.
 
@@ -1902,25 +1902,25 @@ contains
       end if
 
       minlen = lenL + lenU + 2*(m + n)
-      go to 990
+      goto 990
 
       ! Not enough space free after a compress.
       ! Set  minlen  to an estimate of the necessary value of  lena.
 
 970   inform = 7
       minlen = lena + lfile + 2*(m + n)
-      go to 990
+      goto 990
 
       ! Fatal error.  This will never happen!
       ! (Famous last words.)
 
 980   inform = 8
-      go to 990
+      goto 990
 
       ! Fatal error in lu1mxr.  This will never happen!
 
 981   inform = 10
-      go to 990
+      goto 990
 
       ! Fatal error with TSP.  Diagonal pivot not found.
 
@@ -1931,8 +1931,8 @@ contains
 990   return
 
 1100  format(/1x, a)
-1200  format(' nrowu', i7, '   i,jbest', 2i7, '   nrowd,ncold', 2i6, &
-             '   i,jmax', 2i7, '   aijmax', es10.2)
+1200  format(" nrowu", i7, "   i,jbest", 2i7, "   nrowd,ncold", 2i6, &
+             "   i,jmax", 2i7, "   aijmax", es10.2)
 
    end subroutine lu1fad
 
@@ -2023,7 +2023,7 @@ contains
          j = indr(lr)
          lenj = lenc(j)
          nfree = lfree - lcol
-         if (nfree < minfre) go to 900
+         if (nfree < minfre) goto 900
 
          !---------------------------------------------------------------
          ! Inner loop to modify existing nonzeros in column  j.
@@ -2038,7 +2038,7 @@ contains
          lc2 = lc1 + lenj - 1
          atend = j == jlast
          ndone = 0
-         if (lenj == 0) go to 500
+         if (lenj == 0) goto 500
 
          ndrop = 0
 
@@ -2059,7 +2059,7 @@ contains
          ! Remove any negligible modified nonzeros from both
          ! the column file and the row file.
          !---------------------------------------------------------------
-         if (ndrop == 0) go to 500
+         if (ndrop == 0) goto 500
          k = lc1
 
          do l = lc1, lc2
@@ -2097,21 +2097,21 @@ contains
          !---------------------------------------------------------------
          ! Deal with the fill-in in column j.
          !---------------------------------------------------------------
-500      if (ndone == melim) go to 590
+500      if (ndone == melim) goto 590
 
          ! See if column j already has room for the fill-in.
 
-         if (atend) go to 540
+         if (atend) goto 540
          last = lc1 + lenj - 1
          l1 = last + 1
          l2 = last + (melim - ndone)
          ! 27 Mar 2001: Be sure it's not at or past end of the col file.
-         if (l2 >= lcol) go to 520
+         if (l2 >= lcol) goto 520
 
          do l = l1, l2
-            if (indc(l) /= 0) go to 520
+            if (indc(l) /= 0) goto 520
          end do
-         go to 540
+         goto 540
 
          ! We must move column j to the end of the column file.
          ! First, leave some spare room at the end of the
@@ -2294,9 +2294,9 @@ contains
          ! if (mbest .le. nz1**2) go to 900
          if (kbest <= nz1) exit NZS
          if (ibest > 0) then
-            if (ncol >= maxcol) go to 200
+            if (ncol >= maxcol) goto 200
          end if
-         if (nz > m) go to 200
+         if (nz > m) goto 200
 
          !---------------------------------------------------------------
          ! Search the set of columns of length  nz.
@@ -2405,9 +2405,9 @@ contains
 ! 200  if (mbest .le. nz*nz1) go to 900
 200      if (kbest <= nz) exit NZS
          if (ibest > 0) then
-            if (nrow >= maxrow) go to 290
+            if (nrow >= maxrow) goto 290
          end if
-         if (nz > n) go to 290
+         if (nz > n) goto 290
 
          lp1 = iploc(nz)
          lp2 = m
@@ -2571,9 +2571,9 @@ contains
          ! if (mbest .le. nz1**2) go to 900
          if (kbest <= nz1) exit NZS
          if (ibest > 0) then
-            if (ncol >= maxcol) go to 200
+            if (ncol >= maxcol) goto 200
          end if
-         if (nz > m) go to 200
+         if (nz > m) goto 200
 
          !---------------------------------------------------------------
          ! Search the set of columns of length  nz.
@@ -2645,9 +2645,9 @@ contains
 ! 200  if (mbest .le. nz*nz1) go to 900
 200      if (kbest <= nz) exit NZS
          if (ibest > 0) then
-            if (nrow >= maxrow) go to 290
+            if (nrow >= maxrow) goto 290
          end if
-         if (nz > n) go to 290
+         if (nz > n) goto 290
 
          lp1 = iploc(nz)
          lp2 = m
@@ -2918,9 +2918,9 @@ contains
          ! if (mbest <= nz1**2) exit
          if (kbest <= nz1) exit NZS
          if (ibest > 0) then
-            if (ncol >= maxcol) go to 200
+            if (ncol >= maxcol) goto 200
          end if
-         if (nz > m) go to 200
+         if (nz > m) goto 200
 
          !---------------------------------------------------------------
          ! Search the set of columns of length  nz.
@@ -3314,8 +3314,8 @@ contains
             i = indc(l)
             j = indr(l)
             Amax = max(Amax, abs(a(l)))
-            if (i < 1 .or. i > m) go to 910
-            if (j < 1 .or. j > n) go to 910
+            if (i < 1 .or. i > m) goto 910
+            if (j < 1 .or. j > n) goto 910
             lenr(i) = lenr(i) + 1
             lenc(j) = lenc(j) + 1
          else
@@ -3471,7 +3471,7 @@ contains
 
             do l = l1, l2
                i = indc(l)
-               if (iw(i) == j) go to 910
+               if (iw(i) == j) goto 910
                iw(i) = j
             end do
          end if
@@ -3671,7 +3671,7 @@ contains
                l = lnew
                iqloc(next) = lnew
                nz = next
-               if (nz < nznew) go to 110
+               if (nz < nznew) goto 110
 
             else   ! Column j has to move toward the front of q.
 120            lnew = iqloc(nz)
@@ -3683,7 +3683,7 @@ contains
                l = lnew
                iqloc(nz) = lnew + 1
                nz = nz - 1
-               if (nz > nznew) go to 120
+               if (nz > nznew) goto 120
             end if
 
             q(lnew) = j
@@ -3845,7 +3845,7 @@ contains
       ! ind(ltop+1) = ilast
       return
 
-1000  format(' lu1rec.  File compressed from', i10, '   to', i10, l3, '  nempty =', i8)
+1000  format(" lu1rec.  File compressed from", i10, "   to", i10, l3, "  nempty =", i8)
 
    end subroutine lu1rec
 
@@ -4176,7 +4176,7 @@ contains
          end do
 
          last = last - 1
-         if (k <= last) go to 10
+         if (k <= last) goto 10
 
       else
          rankU = rankU + 1
@@ -4209,7 +4209,7 @@ contains
             end do
 
             k = k + 1
-            if (k <= last) go to 10
+            if (k <= last) goto 10
          end if
       end if
 
@@ -4337,8 +4337,8 @@ contains
                end do
 
                last = last - 1
-               if (j <= last) go to 10   ! repeat
-               go to 200                 ! break
+               if (j <= last) goto 10   ! repeat
+               goto 200                 ! break
             end if
 
             ! Check if this column has biggest aij so far.
@@ -4349,14 +4349,14 @@ contains
                jmax = j
             end if
 
-            if (j >= last) go to 200   ! break
+            if (j >= last) goto 200   ! break
          end do
 
 200      ipvt(k) = imax
 
          ! 21 Dec 2015: Exit if aijmax is essentially zero.
 
-         if (aijmax <= small) go to 500
+         if (aijmax <= small) goto 500
          rankU = rankU + 1
 
          if (jmax /= k) then   ! Do column interchange (k and jmax).
@@ -4397,10 +4397,10 @@ contains
             end do
 
          else
-            go to 500               ! break
+            goto 500               ! break
          end if
 
-         if (k >= last) go to 500 ! break
+         if (k >= last) goto 500 ! break
       end do
 
       ! Set ipvt(*) for singular rows.
@@ -5406,11 +5406,11 @@ contains
          ndefic = n - nrank
          if (nout > 0 .and. lprint >= 0) then
             if (m > n) then
-               mnkey = '>'
+               mnkey = ">"
             else if (m == n) then
-               mnkey = '='
+               mnkey = "="
             else
-               mnkey = '<'
+               mnkey = "<"
             end if
             write (nout, 1100) mnkey, nrank, ndefic, nsing
          end if
@@ -5421,7 +5421,7 @@ contains
       luparm(10) = inform
       return
 
-1100  format(' Singular(m', a, 'n)', '  rank', i9, '  n-rank', i8, '  nsing', i9)
+1100  format(" Singular(m", a, "n)", "  rank", i9, "  n-rank", i8, "  nsing", i9)
 
    end subroutine lu6chk
 
@@ -5485,7 +5485,7 @@ contains
             call lu1rec(m, .true., luparm, lrow, ilast, &
                         lena, a, indr, lenr, locr)
             nfree = lena - lenL - lrow
-            if (nfree < minfre) go to 970
+            if (nfree < minfre) goto 970
          end if
 
          ! Move row i to the end of the row file,
@@ -5495,8 +5495,8 @@ contains
          if (leni == 0) locr(i) = lrow + 1
          lr1 = locr(i)
          lr2 = lr1 + leni - 1
-         if (lr2 == lrow) go to 150
-         if (indr(lr2 + 1) == 0) go to 180
+         if (lr2 == lrow) goto 150
+         if (indr(lr2 + 1) == 0) goto 180
          locr(i) = lrow + 1
 
          do l = lr1, lr2
@@ -5522,7 +5522,7 @@ contains
       ! Normal exit.
 
       inform = 0
-      go to 990
+      goto 990
 
       ! Not enough storage.
 
@@ -5613,7 +5613,7 @@ contains
          call lu1rec(m, .true., luparm, lrow, ilast, &
                      lena, a, indr, lenr, locr)
          nfree = lena - lenL - lrow
-         if (nfree < minfre) go to 970
+         if (nfree < minfre) goto 970
       end if
 
       ! Pack the subdiagonals of  v  into  L,  and find the largest.
@@ -5635,7 +5635,7 @@ contains
          lmax = l
       end do
 
-      if (kmax == 0) go to 900
+      if (kmax == 0) goto 900
 
       !------------------------------------------------------------------
       ! Remove  vmax  by overwriting it with the last packed  v(i).
@@ -5674,12 +5674,12 @@ contains
       end if
 
       inform = 1
-      go to 990
+      goto 990
 
       ! No elements to eliminate.
 
 900   inform = 0
-      go to 990
+      goto 990
 
       ! Not enough storage.
 
@@ -5760,11 +5760,11 @@ contains
 
 100   iw = p(klast)
       lenw = lenr(iw)
-      if (lenw == 0) go to 910
+      if (lenw == 0) goto 910
       lw1 = locr(iw)
       lw2 = lw1 + lenw - 1
       jfirst = q(kbegin)
-      if (kbegin >= klast) go to 700
+      if (kbegin >= klast) goto 700
 
       ! Make sure there is room at the end of the row file
       ! in case row  iw  is moved there and fills in completely.
@@ -5777,7 +5777,7 @@ contains
          lw1 = locr(iw)
          lw2 = lw1 + lenw - 1
          nfree = lena - lenL - lrow
-         if (nfree < minfre) go to 970
+         if (nfree < minfre) goto 970
       end if
 
       ! Set markers on row iw.
@@ -5796,12 +5796,12 @@ contains
       do k = kstart, kstop
          jfirst = q(k)
          lfirst = locc(jfirst)
-         if (lfirst == 0) go to 490
+         if (lfirst == 0) goto 490
 
          ! Row  iw  has its first element in column  jfirst.
 
          wj = a(lfirst)
-         if (k == klast) go to 490
+         if (k == klast) goto 490
 
          !---------------------------------------------------------------
          ! We are about to use the first element of row iv
@@ -5813,13 +5813,13 @@ contains
          lenv = lenr(iv)
          lv1 = locr(iv)
          vj = zero
-         if (lenv == 0) go to 150
-         if (indr(lv1) /= jfirst) go to 150
+         if (lenv == 0) goto 150
+         if (indr(lv1) /= jfirst) goto 150
          vj = a(lv1)
-         if (swappd) go to 200
-         if (Ltol*abs(wj) < abs(vj)) go to 200
-         if (Ltol*abs(vj) < abs(wj)) go to 150
-         if (lenv <= lenw) go to 200
+         if (swappd) goto 200
+         if (Ltol*abs(wj) < abs(vj)) goto 200
+         if (Ltol*abs(vj) < abs(wj)) goto 150
+         if (lenv <= lenw) goto 200
 
          !---------------------------------------------------------------
          ! Interchange rows iv and iw.
@@ -5828,7 +5828,7 @@ contains
          p(k) = iw
          kbegin = k
          swappd = .true.
-         go to 600
+         goto 600
 
          !---------------------------------------------------------------
          ! Delete the eliminated element from row iw
@@ -5848,7 +5848,7 @@ contains
          !---------------------------------------------------------------
          ! Form the multiplier and store it in the L file.
          !---------------------------------------------------------------
-         if (abs(wj) <= small) go to 490
+         if (abs(wj) <= small) goto 490
          amult = -wj/vj
          l = lena - lenL
          a(l) = amult
@@ -5861,10 +5861,10 @@ contains
          ! We use two different inner loops.  The first one is for the
          ! case where row iw is not at the end of storage.
          !---------------------------------------------------------------
-         if (lenv == 1) go to 490
+         if (lenv == 1) goto 490
          lv2 = lv1 + 1
          lv3 = lv1 + lenv - 1
-         if (lw2 == lrow) go to 400
+         if (lw2 == lrow) goto 400
 
          !...............................................................
          ! This inner loop will be interrupted only if
@@ -5890,7 +5890,7 @@ contains
 
             else    ! Row iw doesn't have an element in column jv yet
                ! so there is a fill-in.
-               if (indr(lw2 + 1) /= 0) go to 360
+               if (indr(lw2 + 1) /= 0) goto 360
                lenU = lenU + 1
                lenw = lenw + 1
                lw2 = lw2 + 1
@@ -5900,7 +5900,7 @@ contains
             end if
          end do
 
-         go to 490
+         goto 490
 
          ! Fill-in interrupted the previous loop.
          ! Move row  iw  to the end of the row file.
@@ -5967,7 +5967,7 @@ contains
       ! Cancel markers on row iw.
 
 600   lenr(iw) = lenw
-      if (lenw == 0) go to 910
+      if (lenw == 0) goto 910
       do l = lw1, lw2
          j = indr(l)
          locc(j) = 0
@@ -5978,9 +5978,9 @@ contains
 
 700   do l = lw1, lw2
          ldiag = l
-         if (indr(l) == jfirst) go to 730  ! not exit !!!
+         if (indr(l) == jfirst) goto 730  ! not exit !!!
       end do
-      go to 910
+      goto 910
 
 730   diag = a(ldiag)
       a(ldiag) = a(lw1)
@@ -5991,9 +5991,9 @@ contains
       ! If an interchange is needed, repeat from the beginning with the
       ! new row iw, knowing that the opposite interchange cannot occur.
 
-      if (swappd) go to 100
+      if (swappd) goto 100
       inform = 0
-      go to 950
+      goto 950
 
       ! Singular
 
@@ -6010,7 +6010,7 @@ contains
          call lu1rec(m, .true., luparm, lrow, ilast, &
                      lena, a, indr, lenr, locr)
       end if
-      go to 990
+      goto 990
 
       ! Not enough storage.
 
@@ -6069,7 +6069,7 @@ contains
 
       iw = p(nrank)
       lenw = lenr(iw)
-      if (lenw == 0) go to 400
+      if (lenw == 0) goto 400
       l1 = locr(iw)
       l2 = l1 + lenw - 1
       Umax = zero
@@ -6097,7 +6097,7 @@ contains
          end if
       end do
 
-      if (l == 0) go to 800   ! Fatal error
+      if (l == 0) goto 800   ! Fatal error
 
       q(kmax) = q(nrank)
       q(nrank) = jmax
@@ -6108,14 +6108,14 @@ contains
 
       ! See if the new diagonal is big enough.
 
-      if (Umax <= Utol1) go to 400
-      if (jmax == jsing) go to 400
+      if (Umax <= Utol1) goto 400
+      if (jmax == jsing) goto 400
 
       !------------------------------------------------------------------
       ! The rank stays the same.
       !------------------------------------------------------------------
       inform = 0
-      go to 900
+      goto 900
 
       !------------------------------------------------------------------
       ! The rank decreases by one.
@@ -6137,18 +6137,18 @@ contains
             ! have to be prepared to go all the way back to 1.
 
             do l = 1, l2
-               if (indr(lrow) > 0) go to 900
+               if (indr(lrow) > 0) goto 900
                lrow = lrow - 1
             end do
          end if
       end if
-      go to 900
+      goto 900
 
       ! 15 Dec 2011: Fatal error (should never happen!).
       ! This is a safeguard during work on the f90 version.
 
 800   inform = 1
-      write (*, *) 'Fatal error in LUSOL lu7rnk.  Stopping now'
+      write (*, *) "Fatal error in LUSOL lu7rnk.  Stopping now"
       stop
 
 900   return
@@ -6182,13 +6182,13 @@ contains
       do k = 1, nrank
          i = p(k)
          leni = lenr(i)
-         if (leni == 0) go to 90
+         if (leni == 0) goto 90
          lr1 = locr(i)
          lr2 = lr1 + leni - 1
          do l = lr1, lr2
-            if (indr(l) == jzap) go to 60
+            if (indr(l) == jzap) goto 60
          end do
-         go to 90
+         goto 90
 
          ! Delete the old element.
 
@@ -6201,7 +6201,7 @@ contains
          ! Stop if we know there are no more rows containing  jzap.
 
 90       kzap = k
-         if (q(k) == jzap) go to 800
+         if (q(k) == jzap) goto 800
       end do
 
       ! nrank must be smaller than n because we haven't found kzap yet.
@@ -6308,8 +6308,8 @@ contains
       nrank0 = nrank
       diag = zero
       vnorm = zero
-      if (jrep < 1) go to 980
-      if (jrep > n) go to 980
+      if (jrep < 1) goto 980
+      if (jrep > n) goto 980
 
       !------------------------------------------------------------------
       ! If mode1 = 0, there are no elements to be removed from  U
@@ -6321,7 +6321,7 @@ contains
          krep = n + 1
 
 10       krep = krep - 1
-         if (q(krep) /= jrep) go to 10
+         if (q(krep) /= jrep) goto 10
       else
          call lu7zap(m, n, jrep, krep, lena, lenU, lrow, nrank, &
                      a, indr, p, q, lenr, locr)
@@ -6352,7 +6352,7 @@ contains
                      lenL, lenU, lrow, nrank, &
                      a, indr, p, lenr, locr, &
                      inform, klast, vnorm)
-         if (inform == 7) go to 970
+         if (inform == 7) goto 970
       end if
 
       !------------------------------------------------------------------
@@ -6378,7 +6378,7 @@ contains
       !------------------------------------------------------------------
 
       if (mode2 == 0) then
-         if (krep > nrank) go to 900
+         if (krep > nrank) goto 900
       else if (nrank < m) then
 
          ! Eliminate any "c"s (in either case).
@@ -6388,7 +6388,7 @@ contains
                      lenL, lenU, lrow, nrank, &
                      a, indc, indr, p, q, lenr, locc, locr, &
                      inform, diag)
-         if (inform == 7) go to 970
+         if (inform == 7) goto 970
 
          if (inform == 1) then
 
@@ -6455,13 +6455,13 @@ contains
                      lenL, lenU, lrow, &
                      a, indc, indr, p, q, lenr, locc, locr, &
                      inform, diag)
-         if (inform == 7) go to 970
+         if (inform == 7) goto 970
          krep = klast
 
          ! Test for instability (diag much bigger than vnorm).
 
          singlr = vnorm < Utol2*abs(diag)
-         if (singlr) go to 920
+         if (singlr) goto 920
       end if
 
       !------------------------------------------------------------------
@@ -6498,7 +6498,7 @@ contains
                      lenL, lenU, lrow, &
                      a, indc, indr, p, q, lenr, locc, locr, &
                      inform, diag)
-         if (inform == 7) go to 970
+         if (inform == 7) goto 970
       end if
 
       ! Find the best column to be in position nrank.
@@ -6528,19 +6528,19 @@ contains
       else
          inform = 1
       end if
-      go to 990
+      goto 990
 
       ! Instability.
 
 920   inform = 2
       if (nout > 0 .and. lprint >= 0) write (nout, 1200) jrep, diag
-      go to 990
+      goto 990
 
       ! Not enough storage.
 
 970   inform = 7
       if (nout > 0 .and. lprint >= 0) write (nout, 1700) lena
-      go to 990
+      goto 990
 
       ! jrep  is out of range.
 
@@ -6557,14 +6557,14 @@ contains
       luparm(25) = lrow
       return
 
-1100  format(/' lu8rpc  warning.  Singularity after replacing column.', &
-              '    jrep =', i8, '    diag =', es12.2)
-1200  format(/' lu8rpc  warning.  Instability after replacing column.', &
-              '    jrep =', i8, '    diag =', es12.2)
-1700  format(/' lu8rpc  error...  Insufficient storage.', &
-              '    lena =', i8)
-1800  format(/' lu8rpc  error...  jrep  is out of range.', &
-              '    m =', i8, '    n =', i8, '    jrep =', i8)
+1100  format(/" lu8rpc  warning.  Singularity after replacing column.", &
+              "    jrep =", i8, "    diag =", es12.2)
+1200  format(/" lu8rpc  warning.  Instability after replacing column.", &
+              "    jrep =", i8, "    diag =", es12.2)
+1700  format(/" lu8rpc  error...  Insufficient storage.", &
+              "    lena =", i8)
+1800  format(/" lu8rpc  error...  jrep  is out of range.", &
+              "    m =", i8, "    n =", i8, "    jrep =", i8)
 
    end subroutine lu8rpc
 
@@ -6609,7 +6609,7 @@ contains
                kmax = ix
             end if
          else
-            go to 800
+            goto 800
          end if
          ix = ix + incx
       end do

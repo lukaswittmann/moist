@@ -1,8 +1,9 @@
 !> Internal isodensity level set function for DROP
 !>
 !> Internal variant of [[moist_cavity_drop_lsf_isodensity_callback_type]]
-!> This LSF owns the cartesian-monomial Gaussian basis and the density matrix
-!> and evaluates the level set internally
+!>
+!> - owns the cartesian-monomial Gaussian basis and the density matrix, and
+!>   evaluates the level set internally
 !>
 !> Relies on the GTO code in [[moist_cavity_drop_lsf_isodensity_gto]]
 !>
@@ -14,9 +15,9 @@
 !> - Basis set (once)
 !> - Density matrix (once per SCF step)
 !>
-!> The isodensity surface is a level set of the density itself -> level set function carries no
-!> *explicit* nuclear-position dependence for the cavity chain rule
-!> -> The mixed spatial/nuclear derivatives therefore vanish here
+!> The isodensity surface is a level set of the density itself, so the level set
+!> function carries no *explicit* nuclear-position dependence for the cavity
+!> chain rule, and the mixed spatial/nuclear derivatives vanish here
 module moist_cavity_drop_lsf_isodensity_internal
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
@@ -26,14 +27,14 @@ module moist_cavity_drop_lsf_isodensity_internal
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_param, only: &
       moist_cavity_drop_lsf_isodensity_param_type, isodensity_exclusion_radius
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    integer, parameter :: ndim = 3
 
    public :: moist_cavity_drop_lsf_isodensity_internal_type
 
-   !> Isodensity LSF backed by an internal cartesian-monomial GTO evaluator.
+   !> Isodensity LSF backed by an internal cartesian-monomial GTO evaluator
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_isodensity_internal_type
       !> Cartesian-monomial Gaussian basis and density matrix
       type(moist_iso_gto_type) :: gto
@@ -83,31 +84,32 @@ module moist_cavity_drop_lsf_isodensity_internal
       procedure, public :: vjp_f1_rA => lsf_vjp_f1_rA
       procedure, public :: screening_offset => lsf_screening_offset
       procedure, public :: exclusion_radius => lsf_exclusion_radius
+      procedure, public :: density_adjoint_factor => lsf_density_adjoint_factor
    end type moist_cavity_drop_lsf_isodensity_internal_type
 
 contains
 
-   !> Configure the basis and level set parameters
+   !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self     LSF instance
-   !> @param[in]    sh_atom  Per-shell owner atom index (1-based)
-   !> @param[in]    sh_l     Per-shell angular momentum
-   !> @param[in]    sh_nprim Per-shell primitive count
-   !> @param[in]    exps     Primitive exponents
-   !> @param[in]    coeffs   Primitive contraction coefficients (host-normalized)
-   !> @param[in]    rho_iso  Density isovalue defining the surface
-   !> @param[in]    scale    Constant level set multiplier
-   !> @param[out]   error    Set on invalid basis input
-   subroutine lsf_new(self, sh_atom, sh_l, sh_nprim, exps, coeffs, rho_iso, scale, error)
+   !> @param[inout] self Object to initialize
+   !> @param[in]    sh_atom Shell atom indices
+   !> @param[in]    sh_l Shell angular momenta
+   !> @param[in]    sh_nprim Primitive count per shell
+   !> @param[in]    exps Gaussian exponents
+   !> @param[in]    coeffs Gaussian coefficients
+   !> @param[out]   error Construction error
+   !> @param[in]    param Configuration copied by value
+   subroutine lsf_new(self, sh_atom, sh_l, sh_nprim, exps, coeffs, error, param)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       integer, intent(in) :: sh_atom(:)
       integer, intent(in) :: sh_l(:)
       integer, intent(in) :: sh_nprim(:)
       real(wp), intent(in) :: exps(:)
       real(wp), intent(in) :: coeffs(:)
-      real(wp), intent(in) :: rho_iso
-      real(wp), intent(in), optional :: scale
       type(error_type), allocatable, intent(out) :: error
+
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_drop_lsf_isodensity_param_type), intent(in), optional :: param
 
       !> Candidate ids index this LSF's per-atom GTO shells
       self%candidate_space = lsf_candidate_space_user
@@ -116,15 +118,16 @@ contains
 
       call self%gto%init(sh_atom, sh_l, sh_nprim, exps, coeffs, error)
       if (allocated(error)) return
-      !> The per-instance scratch is sized from ``gto%ncart``, so a re-configured
-      !> basis invalidates it. Dropping it here makes ``lsf_prepare_impl`` size it
-      !> again; keeping it would let a larger basis write past its end.
+      !> The per-instance scratch is sized from `gto%ncart`, so a re-configured
+      !> basis invalidates it; dropping it here makes `lsf_prepare_impl` size it
+      !> again, while keeping it would let a larger basis write past its end
       if (allocated(self%phi)) deallocate (self%phi)
       if (allocated(self%t0)) deallocate (self%t0)
       if (allocated(self%tm)) deallocate (self%tm)
       if (allocated(self%tmm)) deallocate (self%tmm)
       if (allocated(self%act)) deallocate (self%act)
-      call self%param%new(rho_iso=rho_iso, scale=scale)
+      self%param = moist_cavity_drop_lsf_isodensity_param_type()
+      if (present(param)) self%param = param
    end subroutine lsf_new
 
    !> Install the cartesian-monomial density matrix for the current SCF step
@@ -140,7 +143,7 @@ contains
       call self%gto%set_density(dcart, error)
    end subroutine lsf_set_density
 
-   !> Bind molecular geometry and refresh the shell centers.
+   !> Bind molecular geometry and refresh the shell centers
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
@@ -162,7 +165,7 @@ contains
 
    !> Evaluate and cache the level set at one point via the internal GTO evaluator
    !>
-   !> Only the derivative orders demanded by ``max_deriv`` are computed
+   !> Only the derivative orders demanded by `max_deriv` are computed
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
@@ -173,9 +176,9 @@ contains
       call lsf_prepare_impl(self, point)
    end subroutine lsf_prepare
 
-   !> Shared prepare body: evaluate the level set at ``point`` and cache it
+   !> Shared prepare body: evaluate the level set at `point` and cache it
    !>
-   !> When ``cand_atoms`` is present only the shells owned by those atoms are computed
+   !> When `cand_atoms` is present only the shells owned by those atoms are computed
    !>
    !> @param[inout] self       LSF instance
    !> @param[in]    point      Evaluation point in Bohr
@@ -203,10 +206,6 @@ contains
       end if
       if (nderiv >= 4 .and. .not. allocated(self%tmm)) allocate (self%tmm(self%gto%ncart, 6))
 
-      ! The evaluator derives the derivative order from the outputs it is handed,
-      ! so the value+gradient phase passes neither the Hessian nor the third
-      ! derivative and never pays for them.  An absent ``cand_atoms`` stays absent
-      ! when forwarded, so both screening modes share one call per order
       select case (nderiv)
       case (:1)
          call self%gto%eval(point, self%phi, self%t0, self%tm, self%act, &
@@ -224,8 +223,7 @@ contains
       end select
 
       self%point = point
-      ! Record what this point's cache actually holds, so an accessor asked for
-      ! a higher order aborts instead of returning the zeros below
+
       self%prepared_deriv = nderiv
       self%value = self%param%scale*(self%param%rho_iso - rho)
       self%grad = -self%param%scale*drho
@@ -252,9 +250,7 @@ contains
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
-      !> The candidate atoms come from the cavity's molecular cell grid, whose
-      !> per-atom reach is sized by lsf_neighbor_cutoff to the shell reach, so no
-      !> contributing shell is missed.  Forward them straight to the evaluator.
+
       call lsf_prepare_impl(self, point, cand_atoms=candidate_indices)
    end subroutine lsf_prepare_subset
 
@@ -269,7 +265,7 @@ contains
       self%max_deriv = max(0, n)
    end subroutine lsf_set_max_deriv
 
-   !> Number of active atoms. True-density LSFs are not atom screened
+   !> Number of active atoms, true-density LSFs not being atom screened
    !>
    !> @param[in] self LSF instance
    pure function lsf_active_count(self) result(n)
@@ -283,7 +279,7 @@ contains
       n = 0
    end function lsf_active_count
 
-   !> Active atom lookup. Undefined for zero active atoms, returns zero sentinel
+   !> Active atom lookup, undefined for zero active atoms, returning a zero sentinel
    !>
    !> @param[in] self LSF instance
    !> @param[in] i    Active-list index
@@ -299,7 +295,7 @@ contains
       idx = 0
    end function lsf_active_atom
 
-   !> Return cached LSF value.
+   !> Return cached LSF value
    !>
    !> @param[in]  self LSF instance
    !> @param[out] val  LSF value
@@ -364,7 +360,7 @@ contains
    !> Return zero nuclear-derivative placeholders
    !>
    !> The isodensity surface tracks the density itself, so the level set field's
-   !> explicit nuclear derivatives vanish (they are carried by the density).
+   !> explicit nuclear derivatives vanish (they are carried by the density)
    !>
    !> @param[in]  self       LSF instance
    !> @param[out] lsf1_rA    Optional nuclear gradient placeholder
@@ -402,10 +398,10 @@ contains
    !> still contributes at the current screening threshold
    !>
    !> Reports the global shell reach for the current screening threshold, minus
-   !> the atom radius, so ``radius + screening_offset = max(radius, reach)``.
+   !> the atom radius, so `radius + screening_offset = max(radius, reach)`
    !> With screening disabled (threshold <= 0) the reach is huge and the cavity
    !> cell grid degrades to a full scan -- every atom is a candidate, i.e. exact
-   !> evaluation.
+   !> evaluation
    !>
    !> @param[in] self   LSF instance
    !> @param[in] radius Atom radius (Bohr)
@@ -424,7 +420,7 @@ contains
    !>
    !> Delegates to [[isodensity_exclusion_radius]], which carries the derivation
    !> and the caveats; the two isodensity variants share it because they share
-   !> the level set, differing only in where `rho` comes from.
+   !> the level set, differing only in where `rho` comes from
    !>
    !> @param[in] self  LSF instance
    !> @param[in] lsf0  LSF value at the evaluation point
@@ -438,5 +434,26 @@ contains
 
       r = isodensity_exclusion_radius(self%param, self%zmax, lsf0)
    end function lsf_exclusion_radius
+
+   !> Chain-rule factor between the level set and the density it is built from
+   !>
+   !> `S = scale * (rho_iso - rho)`, so `dS/drho = -scale` for the value and,
+   !> `scale` and `rho_iso` being constants, for every spatial derivative of it
+   !> as well; one factor therefore converts the whole level-set adjoint jet
+   !> into a density adjoint jet
+   !>
+   !> @param[in]  self    LSF instance
+   !> @param[out] factor  Chain-rule factor `dS/drho`
+   !> @returns            Always `.true.`: this level set is a density
+   function lsf_density_adjoint_factor(self, factor) result(available)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      !> Chain-rule factor `dS/drho`
+      real(wp), intent(out) :: factor
+      !> Whether this LSF is backed by a density
+      logical :: available
+
+      factor = -self%param%scale
+      available = .true.
+   end function lsf_density_adjoint_factor
 
 end module moist_cavity_drop_lsf_isodensity_internal

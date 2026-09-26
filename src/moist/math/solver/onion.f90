@@ -1,9 +1,10 @@
 !> Hierarchical Lebedev onion-shell global search solver for LSF surface
 !>
-!> Implements a hierarchical bisection algorithm that couples radial and angular
-!> refinement to find points where LSF ~= 0, starting from an anchor point.
-!> The Lebedev angular grid resolution is interpolated based on the current
-!> search radius-coarse grids for large radii, fine grids near the surface.
+!> Hierarchical bisection coupling radial and angular refinement to find
+!> points where LSF ~= 0, starting from an anchor point
+!>
+!> - the Lebedev angular grid resolution is interpolated from the current
+!>   search radius: coarse grids for large radii, fine grids near the surface
 !>
 !> Algorithm:
 !>   1. Start from small radius (near anchor) with coarse step, scan outward
@@ -14,15 +15,16 @@
 !>   6. Repeat until R_upper - R_lower < min_step or convergence
 !>   7. Return best point found within converged bracket
 !>
-!> Uses screened LSF evaluation for O(N) complexity with many atoms.
+!> Uses screened LSF evaluation for O(N) complexity with many atoms
 module moist_math_solver_onion
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_type, only: solver_base_type
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
-   use iso_fortran_env, only: output_unit
-   implicit none
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_onion_type
@@ -65,7 +67,7 @@ contains
    !> Factory function to create and initialize an onion solver
    !>
    !> Creates a hierarchical Lebedev global search solver for finding points
-   !> on the LSF=0 surface starting from an anchor point.
+   !> on the LSF=0 surface starting from an anchor point
    !>
    !> @param[in]  lsf           LSF primitive for function evaluation
    !> @param[in]  anchor         Starting point for radial search [3]
@@ -143,23 +145,22 @@ contains
    !> Solve the global search problem
    !>
    !> Performs hierarchical bisection with radius-dependent Lebedev refinement
-   !> by scanning forward from anchor and stopping at first positive LSF.
+   !> by scanning forward from anchor and stopping at first positive LSF
    !>
    !> @param[inout] self   Solver instance
-   !> @param[inout] x      On input: ignored. On output: best point found [3]
+   !> @param[inout] x      Ignored on input, best point found on output [3]
    !> @param[out]   error  Error handling
    subroutine onion_solve(self, x, error)
       class(moist_math_solver_onion_type), intent(inout), target :: self
       real(wp), dimension(:), intent(inout) :: x
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: oleb, num_leb, i_ang, i_shell, ierr
+      integer :: oleb, num_leb, i_ang
       real(wp), allocatable :: ang_grid(:, :), ang_weight(:)
       real(wp) :: r_curr, r_lower, r_upper, step_size
       real(wp) :: best_radius, best_lsf, shell_max_lsf, shell_max_point(3)
-      integer :: best_ang, total_evals, level, iter, step
-      integer, parameter :: max_refinements = 10
-      logical :: found_bracket, found_positive
+      integer :: best_ang, total_evals, iter, step
+      logical :: found_positive
 
       if (.not. associated(self%lsf)) then
          call fatal_error(error, "Onion solver: LSF primitive not associated")
@@ -171,8 +172,8 @@ contains
       end if
 
       if (self%debug) then
-         write (output_unit, '(x,a)') &
-            '==================================  Starting Onion Solver  =================================='
+         write (output_unit, "(x,a)") &
+            "==================================  Starting Onion Solver  =================================="
       end if
 
       ! Initialize
@@ -237,7 +238,7 @@ contains
       end do
 
       if (self%debug) then
-         write (output_unit, '(x,a)') 'Onion solver finished!'
+         write (output_unit, "(x,a)") "Onion solver finished!"
       end if
 
    end subroutine onion_solve
@@ -245,7 +246,7 @@ contains
    !> Perform single angular scan at given radius from anchor
    !>
    !> Evaluates LSF at all angular directions on a spherical shell and returns
-   !> the maximum LSF value and the point where it occurs.
+   !> the maximum LSF value and the point where it occurs
    !>
    !> @param[in]     self         Solver instance
    !> @param[in]     anchor       Center point for radial scan [3]
@@ -316,7 +317,7 @@ contains
       ierr = 0
       lsf_val = 0.0_wp
 
-      ! Refresh per-point screening, then evaluate value-only.
+      ! Refresh per-point screening, then evaluate value-only
       call self%lsf%prepare(point, lsf_error)
       if (allocated(lsf_error)) then
          ierr = 3
@@ -366,23 +367,23 @@ contains
 
       ! Flag for positive found
       if (shell_max_lsf > 0.0_wp) then
-         status_flag = 'U'
+         status_flag = "U"
       else if (shell_max_lsf < 0.0_wp) then
-         status_flag = 'L'
+         status_flag = "L"
       end if
 
       ! Print header on first iteration
       if (iter == 1) then
-         write (output_unit, '(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)') &
-            'Step', 'N_leb', 'R', 'maxLSF', 'R_lower', 'R_upper', 'Bracket', 'St'
-         write (output_unit, '(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)') &
-            '------', '-------', '--------------', '--------------', '--------------', &
-            '--------------', '--------------', '---'
+         write (output_unit, "(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)") &
+            "Step", "N_leb", "R", "maxLSF", "R_lower", "R_upper", "Bracket", "St"
+         write (output_unit, "(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)") &
+            "------", "-------", "--------------", "--------------", "--------------", &
+            "--------------", "--------------", "---"
       end if
 
       ! Print iteration data
-      write (output_unit, '(x,i6,1x,i7,1x,e14.4,1x,e14.4,1x,f14.8,1x,f14.8,1x,'// &
-             'es14.4,1x,a3)') &
+      write (output_unit, "(x,i6,1x,i7,1x,e14.4,1x,e14.4,1x,f14.8,1x,f14.8,1x,"// &
+             "es14.4,1x,a3)") &
          iter, num_leb, radius, shell_max_lsf, r_lower, r_upper, r_upper - r_lower, &
          status_flag
 

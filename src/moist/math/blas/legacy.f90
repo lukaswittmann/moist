@@ -1,12 +1,12 @@
-!> Classic-signature level-1 BLAS routines bound to the linked BLAS library.
+!> Classic-signature level-1 BLAS routines bound to the linked BLAS library
 !>
 !> moist always links an external BLAS/LAPACK backend; some solvers
 !> (slsqp, lbfgsb) call BLAS with the classic Fortran-77 convention (explicit
 !> length and increments, array offsets, non-unit/zero strides) that the
-!> whole-array, unit-stride wrappers in moist_math_blas cannot express. This
+!> whole-array, unit-stride wrappers in moist_math_blas cannot express; this
 !> module exposes the double-precision routines they need with that classic
-!> signature so the solvers use the optimized library instead of bundling their
-!> own copies.
+!> signature, so the solvers use the optimized library instead of bundling
+!> their own copies
 
 !> Raw interfaces to the linked BLAS library
 !>
@@ -17,7 +17,7 @@
 module moist_math_blas_legacy_raw
    use mctc_env_accuracy, only: wp
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: daxpy, dcopy, ddot, dnrm2, dscal
@@ -26,7 +26,7 @@ module moist_math_blas_legacy_raw
       !> Constant times a vector plus a vector: dy := dy + da*dx
       pure subroutine daxpy(n, da, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Scalar multiplier
@@ -44,7 +44,7 @@ module moist_math_blas_legacy_raw
       !> Copy a vector: dy := dx
       pure subroutine dcopy(n, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Source vector
@@ -60,7 +60,7 @@ module moist_math_blas_legacy_raw
       !> Dot product of two vectors
       pure real(wp) function ddot(n, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> First vector
@@ -76,7 +76,7 @@ module moist_math_blas_legacy_raw
       !> Euclidean (2-)norm of a vector
       pure function dnrm2(n, x, incx) result(norm)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Input vector
@@ -90,7 +90,7 @@ module moist_math_blas_legacy_raw
       !> Scale a vector by a constant: dx := da*dx
       pure subroutine dscal(n, da, dx, incx)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Scalar multiplier
@@ -110,7 +110,7 @@ module moist_math_blas_legacy
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
    use moist_math_blas_legacy_raw, only: blas_daxpy => daxpy, blas_dcopy => dcopy, &
       & blas_ddot => ddot, blas_dnrm2 => dnrm2, blas_dscal => dscal
-   implicit none
+   implicit none(type, external)
    private
 
    public :: daxpy, dcopy, ddot, dnrm2, dscal
@@ -134,7 +134,7 @@ contains
       call blas_daxpy(int(n, blas_ik), da, dx, int(incx, blas_ik), dy, int(incy, blas_ik))
    end subroutine daxpy
 
-   !> Copy a vector: dy := dx.
+   !> Copy a vector: dy := dx
    pure subroutine dcopy(n, dx, incx, dy, incy)
       !> Number of elements to process
       integer, intent(in) :: n

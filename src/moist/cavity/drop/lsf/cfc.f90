@@ -1,116 +1,4 @@
 !> COSMO Fine Cavity (CFC) level set function
-!>
-!> The mathematics lives in the code-generated module
-!> [[moist_cavity_drop_lsf_cfc_kernel]]; this module is the orchestration layer
-!> between it and the LSF contract of [[moist_cavity_drop_lsf_base]]. It is the
-!> CFC twin of [[moist_cavity_drop_lsf_svdw]] and follows the same division of
-!> labour.
-!>
-!> The Diedenhofen-Klamt 2018 pseudo-density is
-!>
-!>    PD(r) = sum_a       exp{ a1 (s_a - 1) }
-!>          + sum_{a<b} c (1 - vec(s_a).vec(s_b))^m exp{ a2 (s_a + s_b - 2) }
-!>
-!> with `s_a = ||r - r_a|| / R_a` and `vec(s_a) = (r - r_a) / R_a`, and the level
-!> set this module returns is
-!>
-!>    S(r) = -log PD(r)
-!>
-!> matching the SvdW sign convention (interior negative). The kernel returns
-!> derivatives of `S` itself, so nothing here negates anything.
-!>
-!> Why this one is O(n**2) and SvdW is not
-!> ---------------------------------------
-!> SvdW factorizes: its whole derivative set follows from power sums of a
-!> per-atom screening factor, so an evaluation point costs O(n_active). CFC does
-!> not. The `(1 - vec(s_a).vec(s_b))^m` factor couples the two centers of a pair,
-!> there is no power-sum rewrite, and the pair sweep is irreducibly a double
-!> loop. That is a property of the level set, not of this implementation. What
-!> the kernel *does* avoid is O(n**2) *storage*: the direction-contracted
-!> families (`tangent_*`, `hvp_*`) contract a nuclear index inside the kernel, so
-!> the pairwise nuclear tensors are never formed unless a caller explicitly asks
-!> for one of the uncontracted `f*_rArB` accessors -- whose result is itself
-!> O(n**2), so there the cost is the answer.
-!>
-!> Division of labour
-!> ------------------
-!>   - `prepare` / `prepare_subset` run the base screening gate, cache the
-!>     per-atom geometry of the survivors, and accumulate the two families that
-!>     need no direction vector: the spatial pseudo-density tensors `pd*`
-!>     (aggregate) and the one-nuclear-index tensors `qn*` (per active atom).
-!>     Both sweeps are fused into the same atom / pair loops.
-!>   - every accessor lifts those accumulators to derivatives of `S` on demand.
-!>     The direction-contracted families (`tg*`, `hvp*`) and the two-nucleus
-!>     family (`qq*`) depend on arguments `prepare` does not have, so those
-!>     accessors run their own sweep.
-!>
-!> Buffers, never allocations
-!> --------------------------
-!> No accessor returns an `allocatable, intent(out)` result. Every result is a
-!> caller-provided buffer whose nuclear extent the caller sizes from
-!> [[active_count]]; the accessor writes its first `active_count()` slots and
-!> leaves the rest alone. The per-point buffers are sized once per `update`.
-!>
-!> Index space of the nuclear outputs
-!> ----------------------------------
-!> Every nuclear index is an *active-list* index: slot `i` belongs to the atom
-!> `active_atom(i)`. Screened-away atoms have no slot at all.
-!>
-!> Derivative-order contract
-!> -------------------------
-!> `max_deriv` is the highest *total* derivative order `prepare` provisions. It
-!> buys the spatial family up to that order and the one-nuclear-index family up
-!> to one spatial order less, so both stop at the same total order and a
-!> spatial-only caller never pays for a nuclear ladder it will not read. Each
-!> accessor therefore asks [[require_deriv]] for the highest *total* order of the
-!> accumulator it reads, not for the order of the tensor it returns: `f3_rr_rA`
-!> returns a rank-3 object but reads `qn2_rr`, which is a total order 3, so it
-!> requires 3. Anything an accessor builds itself (`tg*`, `hvp*`, `qq*`, `rd*`,
-!> `rh*`) does not enter that count. An accessor asked for an order `prepare`
-!> did not provision aborts; none of them returns zeros, which a caller could
-!> not tell from a real answer.
-!>
-!> Cavity radii
-!> ------------
-!> The radii are parameters of the level set, so a model that ties them to the
-!> geometry differentiates through them as well. `f3_rr_rad` is that channel's
-!> gradient ladder and `hvp_*_rad` its Hessian row, the radius counterparts of
-!> `f3_rr_rA` and `hvp_*_rA`. Because a radius is a scalar parameter and not a
-!> coordinate, the `_rad` results carry no trailing derivative index -- their
-!> rank *is* the spatial order -- and the channel consumes no derivative order,
-!> so a `_rad` accessor requires one order less than its `_rA` twin.
-!>
-!> The direction of the `hvp_*` accessors correspondingly becomes a pair
-!> `(v, vrad)`: passing `vrad` to `hvp_*_rA` promotes its contraction from
-!> `sum_B v_B . d/dR_B` to `sum_B (v_B . d/dR_B + vr_B d/dRad_B)`, and
-!> `hvp_*_rad` is the row that retains a radius instead of a position. Between
-!> them the two cover all four blocks of the joint Hessian. A fixed-radius
-!> caller omits `vrad` and is unaffected, down to the bit -- the radius terms
-!> live in their own kernel routines and its sweeps are untouched.
-!>
-!> Reverse mode
-!> ------------
-!> `vjp_f1_rA` is the adjoint of the `f3_rr_rA` ladder: instead of returning the
-!> three mixed tensors it contracts their spatial indices against per-point
-!> adjoint weights `(w0, w1, w2)` and returns the nuclear gradient row alone,
-!> three numbers per atom instead of 3 + 9 + 27. It is a pure accessor like
-!> `f3_rr_rA` -- same cached `pd*` and `qn*`, same prepared order, no sweep of
-!> its own -- and the saving is entirely inside the generated kernel, where the
-!> weights are folded in before the common subexpressions are taken.
-!>
-!> `vjp_f1_rad` is the same adjoint on the radius channel, the twin of
-!> `vjp_f1_rA` exactly as `f3_rr_rad` is the twin of `f3_rr_rA`: one adjoint jet
-!> in, and the `f1_rad` / `f2_r_rad` / `f3_rr_rad` ladder collapsed to a single
-!> number per atom rather than 1 + 3 + 9. It carries the radius channel's two
-!> deviations with it -- no trailing derivative index, and one prepared order
-!> less than its `_rA` twin -- and, like `f3_rr_rad`, runs the `rd*` sweep
-!> itself.
-!>
-!> `rd*` is deliberately not cached by `prepare` even though it depends on
-!> nothing but the geometry: caching it would charge every fixed-radius caller
-!> an extra O(n_active**2) pair sweep at every grid point for a family it never
-!> reads.
-!>
 module moist_cavity_drop_lsf_cfc
    use mctc_env, only: error_type
    use mctc_env_accuracy, only: wp
@@ -132,15 +20,17 @@ module moist_cavity_drop_lsf_cfc
       cfc_tangent_eval, cfc_hvp_eval, cfc_vjp_eval, &
       cfc_radius_eval, cfc_radius2_eval, cfc_nucrad_eval, cfc_radius_hvp_eval, &
       cfc_radius_vjp_eval
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Spatial dimension
    integer, parameter :: ndim = 3
 
    !> Smallest spatial-gradient norm [[lsf_normalized_f01_rA]] treats as
-   !> non-degenerate. Below it the normalized level set has no defined value and
-   !> the routine reports zero, matching `svdw_normalized_eval`
+   !> non-degenerate
+   !>
+   !> - below it the normalized level set has no defined value and the routine
+   !>   reports zero, matching `svdw_normalized_eval`
    real(wp), parameter :: normalized_eps = 1.0e-14_wp
 
    !> COSMO Fine Cavity LSF
@@ -148,8 +38,10 @@ module moist_cavity_drop_lsf_cfc
    !> Concrete level set function: takes its four shape parameters through
    !> [[new]], caches the screened per-atom geometry plus the `pd*` / `qn*`
    !> accumulators via [[prepare]], and lifts every derivative tensor on demand
-   !> from the generated kernel. Inherits the common atom-LSF state (ncenters,
-   !> mol, radii, screening caches) from [[moist_cavity_drop_lsf_type]].
+   !> from the generated kernel
+   !>
+   !> - inherits the common atom-LSF state (ncenters, mol, radii, screening
+   !>   caches) from [[moist_cavity_drop_lsf_type]]
    type, extends(moist_cavity_drop_lsf_type) :: moist_cavity_drop_lsf_cfc_type
       !> CFC shape parameters (a1, a2, c, m)
       type(moist_cavity_drop_lsf_cfc_param_type) :: param
@@ -174,9 +66,8 @@ module moist_cavity_drop_lsf_cfc
       real(wp), allocatable :: act_radius(:)
 
       !* --------------------- Aggregate pseudo-density tensors ---------------------- *!
-      !> `d^k PD / dr^k` summed over every active atom and pair. Fixed-size
-      !> components, refreshed up to `max_deriv` by every `prepare`; the orders
-      !> above it are stale but defined, and no lift branch reads them.
+      !> `d^k PD / dr^k` summed over every active atom and pair; fixed-size
+      !> components, refreshed up to `max_deriv` by every `prepare`
 
       !> Pseudo-density value
       real(wp) :: pd0 = 0.0_wp
@@ -191,9 +82,12 @@ module moist_cavity_drop_lsf_cfc
 
       !* ------------------ Per-atom one-nuclear-index tensors (qn) ------------------ *!
       !> `d/dR_A of d^k PD / dr^k`, summed over atom A's own term and every pair
-      !> containing A. The trailing index is the active slot; the one before it
-      !> is the retained nuclear component. Filled to spatial order
-      !> `max_deriv - 1`, i.e. to the same *total* order as the `pd*` family.
+      !> containing A
+      !>
+      !> - trailing index is the active slot, the one before it the retained
+      !>   nuclear component
+      !> - filled to spatial order `max_deriv - 1`, i.e. to the same *total* order
+      !>   as the `pd*` family
 
       !> Order-0 nuclear tensor [ndim, ncenters]
       real(wp), allocatable :: qn0(:, :)
@@ -288,47 +182,33 @@ module moist_cavity_drop_lsf_cfc
 
 contains
 
-   !* ================================================================================= *!
-   !*                              LSF lifecycle methods                                *!
-   !* ================================================================================= *!
-
-   !> Configure CFC shape parameters and declare the candidate index space
+   !> Construct from parameter values; omission uses compiled defaults
    !>
-   !> @param[inout] self  LSF instance
-   !> @param[in]    a1    Atomic-term exponent (optional, default -15)
-   !> @param[in]    a2    Pair-term exponent (optional, default -9)
-   !> @param[in]    c     Pair-term coupling (optional, default 5)
-   !> @param[in]    m     Pair-term power (optional, default 4; the kernel bakes
-   !>                     m = 4 into its derivatives, so a different value is
-   !>                     only honoured by the screening offset)
-   subroutine lsf_new(self, a1, a2, c, m)
-      !> LSF instance
+   !> @param[inout] self Object to initialize
+   !> @param[in] param Configuration copied by value
+   subroutine lsf_new(self, param)
+      !> LSF to initialize
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
-      !> Atomic-term exponent override (optional)
-      real(wp), intent(in), optional :: a1
-      !> Pair-term exponent override (optional)
-      real(wp), intent(in), optional :: a2
-      !> Pair-term coupling override (optional)
-      real(wp), intent(in), optional :: c
-      !> Pair-term power override (optional; screening only)
-      integer, intent(in), optional :: m
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_drop_lsf_cfc_param_type), intent(in), optional :: param
 
       ! The atom / pair sweeps index the base's candidate-space geometry mirror
-      ! directly, so candidate ids must arrive spatially sorted.
+      ! directly, so candidate ids must arrive spatially sorted
       self%candidate_space = lsf_candidate_space_sorted
 
-      call self%param%new(a1=a1, a2=a2, c=c, m=m)
+      self%param = moist_cavity_drop_lsf_cfc_param_type()
+      if (present(param)) self%param = param
    end subroutine lsf_new
 
    !> Bind molecular geometry and resize the per-atom caches
    !>
    !> The base handles the spatial sort, the candidate-space geometry mirror and
    !> the screening bounds; this override only sizes the per-point buffers, once,
-   !> to the molecule's atom count.
+   !> to the molecule's atom count
    !>
-   !> The `qn*` buffers are zeroed here in full. Per point only the provisioned
+   !> The `qn*` buffers are zeroed here in full; per point only the provisioned
    !> orders are refreshed, so this is what keeps the unprovisioned ones exact
-   !> zeros instead of undefined memory.
+   !> zeros instead of undefined memory
    !>
    !> @param[inout] self   LSF instance
    !> @param[in]    mol    Molecular structure
@@ -374,7 +254,7 @@ contains
    !> Configure the highest total derivative order `prepare` provisions
    !>
    !> Nothing is allocated here: the aggregate tensors are fixed-size components
-   !> and the per-atom buffers are sized by [[update]] to the full order set.
+   !> and the per-atom buffers are sized by [[update]] to the full order set
    !>
    !> @param[inout] self LSF instance
    !> @param[in]    n    Requested max derivative order (0..4)
@@ -428,13 +308,15 @@ contains
    !> the survivors and fills the per-atom geometry; pass three is the atom sweep
    !> and pass four the pair sweep, each accumulating the spatial family and --
    !> when a nuclear order was provisioned -- the one-nuclear-index family in the
-   !> same iteration.
+   !> same iteration
    !>
-   !> The pair sweep is the O(n_active**2) part and is the single most expensive
-   !> thing the CFC level set does. It cannot be made linear (see the module
-   !> header); what it can be, and is, is a single kernel call per pair that
-   !> yields both families already assembled, with no split-to-spatial
-   !> recombination left to this module.
+   !> The pair sweep is the O(n_active**2) part and the single most expensive
+   !> thing the CFC level set does
+   !>
+   !> - cannot be made linear (see the module header)
+   !> - what it can be, and is, is a single kernel call per pair yielding both
+   !>   families already assembled, with no split-to-spatial recombination left
+   !>   to this module
    !>
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point [ndim]
@@ -671,9 +553,9 @@ contains
 
    !> Mixed third derivative d^3S / (dr^2 dR_A) and its lower orders
    !>
-   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`.
+   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`
    !> The order requirement is 3, not 2: the kernel reads `qn2_rr`, whose total
-   !> derivative order is three.
+   !> derivative order is three
    !>
    !> @param[in]  self       LSF instance
    !> @param[out] lsf1_rA    dS/dR_A [3, >= active_count()] (optional)
@@ -741,31 +623,36 @@ contains
    !*                               Radius derivatives                                  *!
    !* ================================================================================= *!
    !
-   ! The radii are parameters of the level set, so a model that ties them to the
-   ! geometry differentiates through them as well. Three things separate this
-   ! channel from the `_rA` one, all of them because `R_a` is a scalar parameter
-   ! and not a coordinate: no sign flip, no trailing derivative index (the rank
-   ! equals the spatial order), and no derivative order consumed.
+   ! The radii are parameters of the level set, so a model tying them to the
+   ! geometry differentiates through them as well, and three things separate
+   ! this channel from the `_rA` one, all because `R_a` is a scalar parameter
+   ! rather than a coordinate:
    !
-   ! Unlike `qn*`, the `rd*` family is *not* cached by `prepare`. It could be --
-   ! it depends on nothing but the geometry -- but that would charge every
+   ! - no sign flip
+   ! - no trailing derivative index, the rank equalling the spatial order
+   ! - no derivative order consumed
+   !
+   ! Unlike `qn*`, the `rd*` family is *not* cached by `prepare`; it could be,
+   ! depending on nothing but the geometry, but that would charge every
    ! fixed-radius caller an extra O(n_active**2) pair sweep at every grid point
-   ! for a family it never reads. It is accumulated on demand instead, the same
-   ! way `tg*` is.
+   ! for a family it never reads, so it is accumulated on demand instead, the
+   ! same way `tg*` is
 
    !> Accumulate the per-atom radius-derivative pseudo-density tensors
    !>
    !> The radius counterpart of the `qn*` sweep in [[lsf_cfc_screen]], run on
-   !> demand. Slot `i` of each output belongs to `active_atom(i)`.
+   !> demand, with slot `i` of each output belonging to `active_atom(i)`
    !>
-   !> `rd3_rrr` is optional because [[cfc_radius_hvp]] needs the family only up
-   !> to order two and would otherwise have to materialize an unread
-   !> `27 * n_active` buffer to satisfy the kernel signature. Omitting it sinks
-   !> the order-3 accumulation into two stack rows instead. The loops are spelled
-   !> out twice rather than once behind a pointer: the kernel arguments are
-   !> `intent(inout)` accumulators taken one atom at a time, so the only
-   !> single-body alternative is an aliasing-opaque pointer with `merge`-computed
-   !> slot indices in the pair loop.
+   !> `rd3_rrr` is optional because [[cfc_radius_hvp]] needs the family only up to
+   !> order two and would otherwise have to materialize an unread `27 * n_active`
+   !> buffer to satisfy the kernel signature:
+   !>
+   !> - omitting it sinks the order-3 accumulation into two stack rows instead
+   !> - the loops are spelled out twice rather than once behind a pointer, the
+   !>   kernel arguments being `intent(inout)` accumulators taken one atom at a
+   !>   time
+   !> - the only single-body alternative is an aliasing-opaque pointer with
+   !>   `merge`-computed slot indices in the pair loop
    !>
    !> @param[in]  self    LSF instance
    !> @param[in]  level   Highest spatial-derivative order to accumulate (0..3)
@@ -819,7 +706,7 @@ contains
          end do
       else
          ! Zeroed once, not per atom: the sinks are `intent(inout)` accumulators
-         ! and reading them undefined would trap under the debug FP settings.
+         ! and reading them undefined would trap under the debug FP settings
          sk3_a = 0.0_wp
          sk3_b = 0.0_wp
 
@@ -845,13 +732,13 @@ contains
 
    !> Radius derivative d^3S / (dr^2 dR_a) and its lower orders
    !>
-   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`.
+   !> All three outputs are active-indexed: slot `i` belongs to `active_atom(i)`
    !> `R_a` is the *radius* of that atom, so the results carry no trailing
-   !> derivative index and the rank equals the spatial order.
+   !> derivative index and the rank equals the spatial order
    !>
    !> The order requirement is 2, not 3: `d/dR_a` consumes no derivative order,
    !> so the deepest input is `rd2_rr`, whose total order is two -- one less than
-   !> `lsf_f3_rr_rA` needs for the same spatial order.
+   !> `lsf_f3_rr_rA` needs for the same spatial order
    !>
    !> @param[in]  self        LSF instance
    !> @param[out] lsf1_rad    dS/dR_a [>= active_count()] (optional)
@@ -877,10 +764,6 @@ contains
       integer :: ia
 
       if (self%n_active == 0) then
-         ! Nothing active means no owned slot, so "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather than
-         ! return bare: the outputs are `intent(out)`, and a bare return would
-         ! hand the caller a buffer it is not allowed to read.
          if (present(lsf1_rad)) lsf1_rad = 0.0_wp
          if (present(lsf2_r_rad)) lsf2_r_rad = 0.0_wp
          lsf3_rr_rad = 0.0_wp
@@ -910,7 +793,7 @@ contains
    !> The normalization itself is level-set agnostic -- it only combines outputs
    !> the kernel already returns -- so it is spelled out here rather than
    !> generated, matching `svdw_normalized_eval` term for term including the
-   !> degenerate-gradient guard.
+   !> degenerate-gradient guard
    !>
    !> @param[in]  self     LSF instance
    !> @param[out] val      S/||grad S||
@@ -936,8 +819,6 @@ contains
 
       val = 0.0_wp
       if (self%n_active == 0) return
-      ! The nuclear half reads qn1_r (total order 2); the value half only needs
-      ! pd1_r, but the two share one entry point so the stricter order rules.
       call self%require_deriv(2, "normalized_f01_rA")
 
       call cfc_spatial_eval(self%pd0, self%pd1_r, self%pd2_rr, self%pd3_rrr, &
@@ -973,20 +854,20 @@ contains
 
    !> Fill the uncontracted two-nucleus family at one spatial order
    !>
-   !> Shared body of the three `f*_rArB` accessors. Two sweeps:
+   !> Shared body of the three `f*_rArB` accessors, in two sweeps:
    !>
    !>   1. the *diagonal* `qq` blocks, one per active atom: atom A's own term
    !>      plus the `aa` / `bb` block of every pair containing A. One pass over
-   !>      the atoms and one over the unordered pairs.
+   !>      the atoms and one over the unordered pairs
    !>   2. the ordered-pair loop, which for `A /= B` gets its `qq` block from the
    !>      single pair term containing both centers (no other term survives two
    !>      derivatives with respect to two different nuclei) and for `A == B`
-   !>      reuses the diagonal accumulated in pass one, then lifts.
+   !>      reuses the diagonal accumulated in pass one, then lifts
    !>
    !> The `qq` scratch is a local allocation rather than a persistent buffer for
    !> the same reason SvdW's pair cache is: only these three accessors need it,
    !> none of them sits on the projection hot path, and a persistent order-2
-   !> two-nucleus cache would cost 936 bytes per atom per thread.
+   !> two-nucleus cache would cost 936 bytes per atom per thread
    !>
    !> @param[in]  self         LSF instance
    !> @param[in]  level        Spatial order to lift (0, 1 or 2)
@@ -1146,29 +1027,10 @@ contains
    !* ================================================================================= *!
    !*                     Two-radius and nuclear-radius derivatives                     *!
    !* ================================================================================= *!
-   !
-   ! The uncontracted second order of the joint position/radius derivative,
-   ! completing the four blocks whose contractions `hvp_*_rA` and `hvp_*_rad`
-   ! already supply. Structurally these are [[hessian_family]] with one or both
-   ! retained nuclear slots replaced by a retained radius, and cheaper for it: a
-   ! radius adds no Cartesian index and consumes no derivative order.
-   !
-   ! One difference in the loop shape. `hessian_family` visits every *ordered*
-   ! pair and re-evaluates the cross block each time, because the `ab` block
-   ! transposed is the `ba` one. That holds for the radius-radius family too, but
-   ! not for the nuclear-radius one -- its two slots carry different kinds of derivative --
-   ! so the kernel emits `ba` alongside `ab` and both families visit each
-   ! *unordered* pair once, filling the two ordered slots from a single call.
-   !
-   ! The six accessors below zero their result before the empty-active return,
-   ! matching the `tangent_*` family. Elsewhere they write only the first
-   ! `active_count()` slots and leave the rest alone, but with nothing active
-   ! there is no owned slot at all, and the results are `intent(out)`: a bare
-   ! return would hand the caller a buffer it is not allowed to read.
 
    !> Fill the uncontracted two-radius family at one spatial order
    !>
-   !> Shared body of the three `f*_radrad` accessors; see the section note above.
+   !> Shared body of the three `f*_radrad` accessors; see the section note above
    !>
    !> @param[in]  self           LSF instance
    !> @param[in]  level          Spatial order to lift (0, 1 or 2)
@@ -1192,8 +1054,8 @@ contains
       real(wp), allocatable :: rd3_rrr(:, :, :, :)
       !> Diagonal two-radius accumulators, one block per active atom
       real(wp), allocatable :: dd0(:), dd1(:, :), dd2(:, :, :)
-      !> Cross block of every unordered pair, cached by the single sweep below.
-      !> Only the orders `level` will actually lift are allocated.
+      !> Cross block of every unordered pair, cached by the single sweep below
+      !> Only the orders `level` will actually lift are allocated
       real(wp), allocatable :: cx0(:), cx1(:, :), cx2(:, :, :)
       !> Cross block of one pair
       real(wp) :: x0, x1(ndim), x2(ndim, ndim)
@@ -1222,9 +1084,6 @@ contains
                                       self%param%a1, &
                                       level, dd0(ia), dd1(:, ia), dd2(:, :, ia))
       end do
-      ! One `cfc_pair_radius2_eval` call yields both the diagonal contributions
-      ! and the cross block, so cache the cross here rather than repeating the
-      ! whole O(n^2) sweep in the output loop below.
       ip = 0
       do ia = 1, n
          do ib = ia + 1, n
@@ -1264,7 +1123,7 @@ contains
                                   rd0(ia), rd1_r(:, ia), rd2_rr(:, :, ia), &
                                   rd0(ib), rd1_r(:, ib), rd2_rr(:, :, ib), &
                                   x0, x1, x2, level, b2, b3, b4)
-            ! Symmetric in its two radii, so one lift fills both ordered slots.
+            ! Symmetric in its two radii, so one lift fills both ordered slots
             call radius2_store(ia, ib, b2, b3, b4, &
                                lsf2_radrad, lsf3_r_radrad, lsf4_rr_radrad)
             call radius2_store(ib, ia, b2, b3, b4, &
@@ -1309,10 +1168,12 @@ contains
 
    !> Fill the uncontracted nuclear-radius family at one spatial order
    !>
-   !> Shared body of the three `f*_rA_rad` accessors. The first atom index
-   !> carries the position derivative and the second the radius one, so the
-   !> result is *not* symmetric under exchanging them; each unordered pair is
-   !> visited once and its `ab` and `ba` kernel blocks fill the two ordered slots.
+   !> Shared body of the three `f*_rA_rad` accessors
+   !>
+   !> - the first atom index carries the position derivative and the second the
+   !>   radius one, so the result is *not* symmetric under exchanging them
+   !> - each unordered pair is visited once, its `ab` and `ba` kernel blocks
+   !>   filling the two ordered slots
    !>
    !> @param[in]  self           LSF instance
    !> @param[in]  level          Spatial order to lift (0, 1 or 2)
@@ -1337,7 +1198,7 @@ contains
       !> Diagonal nuclear-radius accumulators, one block per active atom
       real(wp), allocatable :: dd0(:, :), dd1(:, :, :), dd2(:, :, :, :)
       !> Both cross blocks of every unordered pair, cached by the single sweep
-      !> below. Only the orders `level` will actually lift are allocated.
+      !> below; only the orders `level` will actually lift are allocated
       real(wp), allocatable :: cx0(:, :), cx1(:, :, :), cx2(:, :, :, :)
       real(wp), allocatable :: cy0(:, :), cy1(:, :, :), cy2(:, :, :, :)
       !> The two cross blocks of one pair
@@ -1370,10 +1231,6 @@ contains
                                      self%param%a1, &
                                      level, dd0(:, ia), dd1(:, :, ia), dd2(:, :, :, ia))
       end do
-      ! `cfc_pair_nucrad_eval` is the most expensive routine in this family, and
-      ! one call yields *both* the two diagonal contributions and the two cross
-      ! blocks. Cache the cross blocks here so the output loop below can lift
-      ! them without a second, identical O(n^2) sweep.
       ip = 0
       do ia = 1, n
          do ib = ia + 1, n
@@ -1430,7 +1287,7 @@ contains
                x2 = cx2(:, :, :, ip)
                y2 = cy2(:, :, :, ip)
             end if
-            ! `ab` is position on ia and radius on ib; `ba` is the other way.
+            ! `ab` is position on ia and radius on ib; `ba` is the other way
             call cfc_nucrad_eval(self%pd0, self%pd1_r, self%pd2_rr, &
                                  self%qn0(:, ia), self%qn1_r(:, :, ia), &
                                  self%qn2_rr(:, :, :, ia), &
@@ -1497,7 +1354,7 @@ contains
          lsf2_radrad = 0.0_wp
          return
       end if
-      ! One order below `f2_rArB`: neither retained radius consumes one.
+      ! One order below `f2_rArB`: neither retained radius consumes one
       call self%require_deriv(0, "f2_radrad")
 
       call radius2_family(self, 0, lsf2_radrad=lsf2_radrad)
@@ -1555,8 +1412,8 @@ contains
          lsf2_rA_rad = 0.0_wp
          return
       end if
-      ! The retained *position* still costs an order; the radius does not, so
-      ! this matches `f2_rArB` rather than sitting one above it.
+      ! The retained *position* still costs an order while the radius does not,
+      ! so this matches `f2_rArB` rather than sitting one above it
       call self%require_deriv(1, "f2_rA_rad")
 
       call nucrad_family(self, 0, lsf2_rA_rad=lsf2_rA_rad)
@@ -1607,10 +1464,11 @@ contains
    !> Accumulate the direction-contracted pseudo-density tensors
    !>
    !> The `tg*` family depends on the caller's displacement field, so `prepare`
-   !> cannot own it; this is its atom-plus-pair sweep. It is used only by the
-   !> `tangent_*` accessors -- the `hvp_*` ones get the same family for free from
-   !> `cfc_*_hvp_eval` and must never call this as well, or every contribution
-   !> would be counted twice.
+   !> cannot own it and this is its atom-plus-pair sweep
+   !>
+   !> - used only by the `tangent_*` accessors
+   !> - the `hvp_*` ones get the same family for free from `cfc_*_hvp_eval` and
+   !>   must never call this as well, or every contribution is counted twice
    !>
    !> @param[in]  self    LSF instance
    !> @param[in]  v       Nuclear displacement directions [ndim, ncenters]
@@ -1770,26 +1628,31 @@ contains
    !> Fill the per-atom Hessian-vector-product family (and its tangent ladder)
    !>
    !> One atom sweep and one pair sweep of `cfc_*_hvp_eval`, which fills the
-   !> aggregate `tg*` accumulators and the per-atom `hvp*` ones together. The
-   !> tangent ladder comes out of the same derivative structure, so it is free
-   !> here -- and is exactly why [[tangent_tensors]] must not also run.
+   !> aggregate `tg*` accumulators and the per-atom `hvp*` ones together
+   !>
+   !> - the tangent ladder comes out of the same derivative structure, so it is
+   !>   free here, and is exactly why [[tangent_tensors]] must not also run
    !>
    !> Supplying `vrad` promotes the contraction from `sum_B v_B . d/dR_B` to
-   !> `sum_B (v_B . d/dR_B + vr_B d/dRad_B)`: a second kernel sweep adds the
-   !> radius half to `tg*` and `hvp*` and fills `rh*` in the same pass. `vrad`
-   !> is the switch: the three `rh*` buffers must be present whenever it is, and
-   !> supplying them without it is harmless (they come back zeroed). Without
-   !> `vrad` nothing changes, down to the bit -- the position-only sweep is
-   !> untouched.
+   !> `sum_B (v_B . d/dR_B + vr_B d/dRad_B)`:
    !>
-   !> The `hv*` family is optional for the mirror-image reason: [[cfc_radius_hvp]]
-   !> wants the joint `tg*` and `rh*` but not the position row, and materializing
-   !> `39 * n_active` doubles to throw away is the one part of that trade worth
-   !> avoiding. Absent, the row accumulates into stack scratch instead. That is
-   !> what doubles the sweeps below into `present`-guarded pairs; a single body
-   !> would need an aliasing-opaque pointer with `merge`-computed slot indices,
-   !> which is a worse thing to put in the `O(n_active**2)` pair loop than a
-   !> duplicated call statement. `hv0`, `hv1` and `hv2` are all-or-none.
+   !> - a second kernel sweep adds the radius half to `tg*` and `hvp*` and fills
+   !>   `rh*` in the same pass
+   !> - `vrad` is the switch, so the three `rh*` buffers must be present with it,
+   !>   while supplying them without it is harmless (they come back zeroed)
+   !> - without `vrad` nothing changes, down to the bit, the position-only sweep
+   !>   being untouched
+   !>
+   !> The `hv*` family is optional for the mirror-image reason:
+   !>
+   !> - [[cfc_radius_hvp]] wants the joint `tg*` and `rh*` but not the position
+   !>   row, and materializing `39 * n_active` doubles to throw away is the one
+   !>   part of that trade worth avoiding
+   !> - absent, the row accumulates into stack scratch instead
+   !> - that is what doubles the sweeps below into `present`-guarded pairs, a
+   !>   single body needing an aliasing-opaque pointer with `merge`-computed slot
+   !>   indices, worse in the `O(n_active**2)` pair loop than a duplicated call
+   !> - `hv0`, `hv1` and `hv2` are all-or-none
    !>
    !> @param[in]  self    LSF instance
    !> @param[in]  v       Nuclear displacement directions [ndim, ncenters]
@@ -1863,7 +1726,7 @@ contains
       else
          ! Zeroed once, not per atom: the kernel slots are `intent(inout)`
          ! accumulators, so leaving the sinks undefined would have the kernel
-         ! read uninitialized stack and trap under the debug FP settings.
+         ! read uninitialized stack and trap under the debug FP settings
          sk_a0 = 0.0_wp
          sk_a1 = 0.0_wp
          sk_a2 = 0.0_wp
@@ -1873,7 +1736,7 @@ contains
       end if
       ! Zeroed before the `vrad` gate, not after it: a caller may hand over the
       ! buffers without asking for the radius channel, and an untouched
-      ! `intent(out)` array is the one thing it could not inspect safely.
+      ! `intent(out)` array is the one thing it could not inspect safely
       if (present(rh0)) rh0 = 0.0_wp
       if (present(rh1_r)) rh1_r = 0.0_wp
       if (present(rh2_rr)) rh2_rr = 0.0_wp
@@ -1922,8 +1785,8 @@ contains
 
       if (.not. present(vrad)) return
       ! `vrad` is the switch, but the loops below write `rh*` unconditionally, so
-      ! a caller that turns the radius pass on without handing over all three
-      ! buffers would write through an absent dummy. Refuse instead.
+      ! a caller turning the radius pass on without handing over all three
+      ! buffers would write through an absent dummy -- refuse instead
       if (.not. (present(rh0) .and. present(rh1_r) .and. present(rh2_rr))) then
          error stop "moist DROP CFC LSF: hvp_tensors needs rh0, rh1_r and "// &
             "rh2_rr whenever vrad is supplied"
@@ -2139,27 +2002,19 @@ contains
    !* ================================================================================= *!
    !*                     Radius row of the joint Hessian-vector product                *!
    !* ================================================================================= *!
-   !
-   ! The `hvp_*_rA` procedures above retain a nuclear index; these three retain a
-   ! *radius* index, so between them they cover all four blocks of the joint
-   ! position/radius Hessian-vector product. Both rows read the same `tg*`
-   ! aggregate, because the joint direction lands in a single family: nothing in
-   ! the generated lift distinguishes its two halves.
-   !
-   ! The radius-radius coupling between *different* atoms is nonzero and is not
-   ! recoverable from per-atom data: `rd*` carries no dependence on another
-   ! atom's radius, so all of it arrives through the pair term and through the
-   ! log, exactly as for `f2_rArB`.
 
    !> Allocate the per-atom radius-row buffers
    !>
-   !> Only ever called on a path that supplies a radius direction, because the
-   !> rows exist only for a joint `(v, vrad)` contraction: live output for
-   !> [[cfc_radius_hvp]], write-only scratch for the three `hvp_*_rA` entry
-   !> points, which need `hvp_tensors` to have somewhere to put the row it fills
-   !> alongside the `tg*` they do read. A pure-nuclear contraction never runs the
-   !> radius sweep at all, so it must not pay for these -- hence the `present`
-   !> guard at those three call sites rather than an unconditional allocation.
+   !> Only ever called on a path that supplies a radius direction, the rows
+   !> existing only for a joint `(v, vrad)` contraction:
+   !>
+   !> - live output for [[cfc_radius_hvp]]
+   !> - write-only scratch for the three `hvp_*_rA` entry points, which need
+   !>   `hvp_tensors` to have somewhere to put the row it fills alongside the
+   !>   `tg*` they do read
+   !> - a pure-nuclear contraction never runs the radius sweep at all and must
+   !>   not pay for these, hence the `present` guard at those three call sites
+   !>   rather than an unconditional allocation
    !>
    !> @param[in]  n      Active-atom count
    !> @param[out] rh0    Order-0 radius-row buffer [n]
@@ -2240,20 +2095,24 @@ contains
 
    !> Shared driver of the three radius-row Hessian-vector products
    !>
-   !> The three public entry points differ only in `max_deriv` and in which
-   !> output they keep, and unlike the `_rA` ladder there is no reason to spell
-   !> the loop out three times: the radius channel has one code path. Exactly one
-   !> of `res1`/`res2`/`res3` must be present, matching `max_deriv`.
+   !> The three public entry points differ only in `max_deriv` and in which output
+   !> they keep, and unlike the `_rA` ladder there is no reason to spell the loop
+   !> out three times, the radius channel having one code path
    !>
-   !> Two layer-1 sweeps feed it. `hvp_tensors` with a radius direction gives the
-   !> joint `tg*` and the `rh*` family; `radius_tensors` gives `rd*` up to order
-   !> two. Both also produce a row this driver has no use for -- `hvp*`, which
-   !> belongs to the *position* row, and `rd3_rrr` -- and both are asked to sink
-   !> it into stack scratch by omitting the buffer. The work itself is not
-   !> avoidable and not worth avoiding: the generated kernel produces the two
-   !> rows' radius terms from one shared CSE block, cheaper than computing them
-   !> apart even counting the waste (6111 temporaries against 4427 + 2230). Only
-   !> the `66 * n_active` doubles of throwaway storage were.
+   !> - exactly one of `res1`/`res2`/`res3` must be present, matching `max_deriv`
+   !>
+   !> Two layer-1 sweeps feed it:
+   !>
+   !> - `hvp_tensors` with a radius direction gives the joint `tg*` and the `rh*`
+   !>   family, `radius_tensors` gives `rd*` up to order two
+   !> - both also produce a row this driver has no use for -- `hvp*`, belonging to
+   !>   the *position* row, and `rd3_rrr` -- and both are asked to sink it into
+   !>   stack scratch by omitting the buffer
+   !> - the work itself is not avoidable and not worth avoiding, the generated
+   !>   kernel producing the two rows' radius terms from one shared CSE block,
+   !>   cheaper than computing them apart even counting the waste (6111
+   !>   temporaries against 4427 + 2230)
+   !> - only the `66 * n_active` doubles of throwaway storage were worth avoiding
    !>
    !> @param[in]  self      LSF instance
    !> @param[in]  v         Nuclear displacement directions [3, ncenters]
@@ -2292,19 +2151,11 @@ contains
       integer :: ia
 
       if (self%n_active == 0) then
-         ! Nothing is active, so no slot is owned and "writes the first
-         ! `active_count()` slots" degenerates to writing none. Zero rather than
-         ! return bare: the results are `intent(out)`, so a bare return hands the
-         ! caller an undefined buffer.
          if (present(res1)) res1 = 0.0_wp
          if (present(res2)) res2 = 0.0_wp
          if (present(res3)) res3 = 0.0_wp
          return
       end if
-      ! One order less than the `hvp_*_rA` entry point of the same spatial
-      ! order, for two independent reasons: `d/dRad_a` consumes no derivative
-      ! order, and the radius row reads no cached `qn*` (whose spatial ladder
-      ! `prepare` fills one short of `max_deriv`).
       call self%require_deriv(max_deriv, caller)
 
       allocate (rd0(self%n_active))
@@ -2331,20 +2182,6 @@ contains
    !* ================================================================================= *!
    !*                  Jet-contracted nuclear vector-Jacobian product                   *!
    !* ================================================================================= *!
-   !
-   ! The reverse-mode mirror of the `hvp_*_rA` block above. Those contract the
-   ! *nuclear* index of the nuclear Hessian against a displacement field and keep
-   ! the spatial ones; this one contracts the *spatial* (jet) indices of the
-   ! `f1_rA` / `f2_r_rA` / `f3_rr_rA` ladder against per-point adjoint weights
-   ! and keeps the nuclear one.
-   !
-   ! It reads exactly what `f3_rr_rA` reads -- the `pd*` aggregate and the `qn*`
-   ! per-atom family, both cached by `prepare` -- so it needs no sweep of its own
-   ! and requires the same prepared order. What it saves is in the kernel, not
-   ! here: `cfc_vjp_eval` folds the weights in before the generated code takes
-   ! its common subexpressions, so three numbers per atom come out where the
-   ! uncontracted accessor produces 3 + 9 + 27, and the caller's
-   ! `[3, 3, 3, n_active]` buffer disappears.
 
    !> Adjoint jet contracted onto the nuclear gradient, active-indexed
    !>
@@ -2355,15 +2192,15 @@ contains
    !>                 + sum_a sum_b w2(a, b) f3_rr_rA(a, b, beta, i)
    !>
    !> i.e. the `f1_rA` rung with the jet indices summed away, just as
-   !> `hvp_f1_rA` is that same rung contracted with a nuclear direction instead.
-   !> `w2` is a general 3x3: all nine entries are contracted, with no symmetry
-   !> assumption and no folded factor of two.
+   !> `hvp_f1_rA` is that same rung contracted with a nuclear direction instead
    !>
-   !> Slot `i` belongs to `active_atom(i)`; columns past `active_count()` are
-   !> left untouched and nothing is written at all when no atom is active. The
-   !> order requirement is 3, not 2, for the same reason as `f3_rr_rA`: the
-   !> kernel reads `qn2_rr`, whose total derivative order is three, and `prepare`
-   !> fills that family only one spatial order below `max_deriv`.
+   !> - `w2` is a general 3x3, all nine entries contracted, with no symmetry
+   !>   assumption and no folded factor of two
+   !> - slot `i` belongs to `active_atom(i)`, columns past `active_count()` are
+   !>   left untouched, and nothing is written at all when no atom is active
+   !> - the order requirement is 3, not 2, for the same reason as `f3_rr_rA`: the
+   !>   kernel reads `qn2_rr`, of total derivative order three, and `prepare`
+   !>   fills that family only one spatial order below `max_deriv`
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of `f1_rA`
@@ -2414,13 +2251,15 @@ contains
    !> `vjp_f1_rA`. The result is a scalar per atom and not a Cartesian row,
    !> because `R_a` is a radius; the jet itself is unchanged. `w2` is a general
    !> 3x3: all nine entries are contracted, with no symmetry assumption and no
-   !> folded factor of two.
+   !> folded factor of two
    !>
-   !> Slot `i` belongs to `active_atom(i)`; entries past `active_count()` are
-   !> left untouched and nothing is written at all when no atom is active. The
-   !> order requirement is 2, one less than `vjp_f1_rA` needs, for the same
-   !> reason `f3_rr_rad` needs one less than `f3_rr_rA`: `d/dR_a` consumes no
-   !> derivative order, so the deepest input is `rd2_rr` at total order two.
+   !> Slot `i` belongs to `active_atom(i)`, entries past `active_count()` are left
+   !> untouched, and nothing is written at all when no atom is active
+   !>
+   !> - the order requirement is 2, one less than `vjp_f1_rA` needs, for the same
+   !>   reason `f3_rr_rad` needs one less than `f3_rr_rA`
+   !> - `d/dR_a` consumes no derivative order, so the deepest input is `rd2_rr` at
+   !>   total order two
    !>
    !> @param[in]  self LSF instance
    !> @param[in]  w0   Adjoint weight of `f1_rad`
@@ -2469,7 +2308,7 @@ contains
    !> Radial offset from the atom surface where the CFC contribution hits the threshold
    !>
    !> The pseudo-density gets two contributions from atom `a`, both decaying in the
-   !> reduced distance `s_a = 1 + delta/R_a`, so the offset scales with the radius.
+   !> reduced distance `s_a = 1 + delta/R_a`, so the offset scales with the radius
    !>
    !> @param[in] self    LSF instance
    !> @param[in] radius  Atom radius (Bohr)
@@ -2519,11 +2358,12 @@ contains
       !> LSF instance
       class(moist_cavity_drop_lsf_cfc_type), intent(inout) :: self
 
-      !> Bracket of the `log eps` bisection. The crossing sits near `log eps = 0`
-      !> for any sane parameterization; this span reaches it even for absurd ones.
+      !> Bracket of the `log eps` bisection; the crossing sits near `log eps = 0`
+      !> for any sane parameterization, and this span reaches it even for absurd
+      !> ones
       real(wp), parameter :: eps_log_span = 40.0_wp
-      !> Bisection steps. Closes the bracket to far below roundoff, and the whole
-      !> search runs once per `update`.
+      !> Bisection steps, closing the bracket to far below roundoff, with the
+      !> whole search running once per `update`
       integer, parameter :: eps_steps = 80
 
       !> Exponent magnitudes and the tail-domination margin `beta - alpha/2`
@@ -2595,7 +2435,7 @@ contains
                    lip_pair + (mreal - 1.0_wp)*exp(-conj*mid))
       end if
 
-      ! Catches NaN as well as a bound that overflowed on its way here.
+      ! Catches NaN as well as a bound that overflowed on its way here
       if (.not. (lip > 0.0_wp)) return
       if (lip > sqrt(huge(0.0_wp))) return
 

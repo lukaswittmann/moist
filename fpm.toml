@@ -1,5 +1,5 @@
 name = "moist"
-version = "0.6.0"
+version = "1.0.0"
 license = "MPL-2.0"
 maintainer = ["@lukaswittmann"]
 author = ["Lukas Wittmann"]
@@ -11,9 +11,8 @@ copyright = "Copyright 2025 L. Wittmann"
 link = ["lapack", "blas"]
 auto-tests = false
 
-# Preprocess .F90 so fpm honors the #ifdef WITH_FFTW / WITH_RISM / WITH_HDF5
-# guards when scanning dependencies; without a feature enabled, those blocks are
-# excluded.
+# Preprocess .F90 sources so fpm honors their #ifdef guards when scanning
+# dependencies.
 [preprocess]
 [preprocess.cpp]
 
@@ -21,11 +20,6 @@ auto-tests = false
 # `[features]` and `[profiles]` tables outright (`Key features is not allowed`).
 # Optional builds are therefore selected with flags at invocation:
 #   * OpenMP: fpm build --flag -fopenmp --link-flag -fopenmp
-#   * FFTW:   add --flag -DWITH_FFTW and --link-flag -lfftw3
-#   * HDF5:   add --flag -DWITH_HDF5 and --link-flag "-lhdf5_fortran -lhdf5"
-#   * RISM:   implies FFTW + HDF5, so combine all three:
-#             --flag "-DWITH_RISM -DWITH_FFTW -DWITH_HDF5"
-#             --link-flag "-lfftw3 -lhdf5_fortran -lhdf5"
 # (config/meson.build remains the canonical option set; the #ifdef guards in the
 # .F90 sources keep the optional subtrees inert unless their macro is defined.)
 

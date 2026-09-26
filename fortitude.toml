@@ -1,0 +1,23 @@
+# Fortitude linter settings (`fortitude check`)
+
+[check]
+line-length = 132
+# Template fragment with @placeholders@, not a standalone program unit
+extend-exclude = ["config/version.f90"]
+
+[check.per-file-ignores]
+# Vendored third-party solvers (see THIRD_PARTY_LICENSES.md): only fortitude's
+# automatic fixes are applied, to keep them close to upstream
+"src/moist/math/solver/slsqp/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/solver/lbfgsb/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/solver/newton/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/solver/fmin/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/linalg/lsqr/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/linalg/lsmr/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+"src/moist/math/linalg/lusol/**" = ["C003", "C011", "C051", "C061", "C071", "C072", "C121", "C122", "C181", "S001"]
+# Interfaces to external BLAS/LAPACK take assumed-size arrays
+"src/moist/math/blas/**" = ["C071"]
+"src/moist/math/lapack/**" = ["C071"]
+# C entry points receive raw buffers of caller-owned size
+"src/moist/api.f90" = ["C071", "C072"]
+"test/unit/test_api.f90" = ["C071", "C072"]
