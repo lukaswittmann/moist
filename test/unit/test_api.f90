@@ -2,12 +2,30 @@
 module test_api
    use iso_c_binding, only: c_ptr, c_loc, c_null_ptr, c_int, c_double, c_bool, &
                             c_funptr, c_funloc, c_associated, c_f_pointer, &
-                            c_char, c_null_char, c_size_t, c_sizeof
+                            c_char, c_null_char, c_size_t, c_sizeof, c_null_funptr, &
+                            c_int8_t
+   use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
+   use mctc_io_structure, only: structure_type
    use moist_api, only: vp_cavity, vp_error, vp_response, response_get_api, &
-      & next_response_item_api, response_item_name_api
+      & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
+      & vp_model, update_structure_api, set_custom_radii_atoms_api, &
+      & set_custom_radii_elements_api, update_solvation_model_api, &
+      & get_solvation_model_cavity_api, delete_solvation_model_api, &
+      & new_pv_component_api, delete_solvation_component_api, &
+      & general_model_add_component_api, new_coupling_api, delete_coupling_api, &
+      & new_response_api, delete_response_api, general_model_get_gradient_api, &
+      & set_isodensity_density_api, get_drop_cavity_tolerance_api, &
+      & compute_cavity_gradient_api, compute_anchor_gradient_api, &
+      & get_anchor_gradient_api, get_cavity_gradient_api, get_amat_gradient_api, &
+      & contract_amat1_q1q2_surface_weights_api, &
+      & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api
+   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_cavity_type, only: cavity_type
+   use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: density_response_type, &
-      & potential_adjoint_response_type, response_accumulate
+      & potential_adjoint_response_type, response_accumulate, response_type
+   use moist_model_type, only: solvation_model_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none
    private
@@ -23,6 +41,64 @@ module test_api
       !> Level-set scale
       real(c_double) :: scale
    end type iso_options
+
+   !> Frozen DROP options layout exercised through the C interface
+   type, bind(C) :: drop_options
+      !> Caller layout size
+      integer(c_size_t) :: struct_size
+      !> Lebedev points per atom
+      integer(c_int) :: nleb
+      !> Diagnostic checks
+      logical(c_bool) :: debug
+      !> Output detail level
+      integer(c_int) :: verbosity
+      !> Fine cavity refinement
+      logical(c_bool) :: do_fine
+      !> Projection convergence tolerance
+      real(c_double) :: tolerance
+      !> Maximum projection iterations
+      integer(c_int) :: proj_maxiter
+      !> Projection refinement level
+      integer(c_int) :: proj_level
+      !> Branch-selection smoothing weight
+      real(c_double) :: branch_weight_s
+      !> Grid density kernel length
+      real(c_double) :: rho_grid_h
+      !> Lebedev pruning level
+      integer(c_int) :: wleb_prune_level
+      !> Reserved ABI storage
+      integer(c_int) :: reserved0
+   end type drop_options
+
+   !> Test double: a cavity whose arrays the test fills by hand
+   !>
+   !> Reaches validation branches no built-in cavity can: a width that is not
+   !> positive, extents that disagree with each other, and a field name longer
+   !> than the C name buffer
+   type, extends(cavity_type) :: stub_cavity
+      !> Name of the one field the stub declares
+      character(len=:), allocatable :: field_name
+   contains
+      !> Accept any structure without building anything
+      procedure :: update => stub_cavity_update
+      !> Report no derivatives
+      procedure :: get_gradient => stub_cavity_gradient
+      !> Declare `field_name` over the widths
+      procedure :: list_fields => stub_cavity_fields
+   end type stub_cavity
+
+   !> Test double: a solvation model that is not the general model
+   type, extends(solvation_model_type) :: stub_model
+   contains
+      !> Accept any structure
+      procedure :: update => stub_model_update
+      !> Contribute no energy
+      procedure :: get_energy => stub_model_energy
+      !> Contribute no response
+      procedure :: get_response => stub_model_response
+      !> Contribute no gradient
+      procedure :: get_gradient => stub_model_gradient
+   end type stub_model
 
    !> C bindings of the entry points under test
    interface
@@ -99,8 +175,8 @@ module test_api
          import :: c_ptr, c_int
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
-         integer(c_int), intent(inout) :: ngrid
-         integer(c_int), intent(inout) :: nsph
+         integer(c_int), intent(inout), optional :: ngrid
+         integer(c_int), intent(inout), optional :: nsph
       end subroutine moist_get_cavity_sizes
 
       function moist_new_structure(verror, natoms, numbers, positions, &
@@ -109,8 +185,8 @@ module test_api
          import :: c_ptr, c_int, c_double, c_bool
          type(c_ptr), value :: verror
          integer(c_int), value :: natoms
-         integer(c_int), intent(in) :: numbers(natoms)
-         real(c_double), intent(in) :: positions(3, natoms)
+         integer(c_int), intent(in), optional :: numbers(natoms)
+         real(c_double), intent(in), optional :: positions(3, natoms)
          real(c_double), intent(in), optional :: lattice(3, 3)
          logical(c_bool), intent(in), optional :: periodic(3)
          type(c_ptr) :: vmol
@@ -145,16 +221,16 @@ module test_api
          type(c_ptr), value :: vcav
          integer(c_int), value :: ngrid_cap
          integer(c_int), value :: nsph_cap
-         real(c_double), intent(inout) :: area
-         real(c_double), intent(inout) :: volume
-         integer(c_int), intent(inout) :: ngrid
-         integer(c_int), intent(inout) :: nsph
-         real(c_double), intent(inout) :: xyz(3, ngrid_cap)
-         real(c_double), intent(inout) :: a(ngrid_cap)
-         integer(c_int), intent(inout) :: owner(ngrid_cap)
-         logical(c_bool), intent(inout) :: converged(ngrid_cap)
-         real(c_double), intent(inout) :: radii(nsph_cap)
-         real(c_double), intent(inout) :: asph(nsph_cap)
+         real(c_double), intent(inout), optional :: area
+         real(c_double), intent(inout), optional :: volume
+         integer(c_int), intent(inout), optional :: ngrid
+         integer(c_int), intent(inout), optional :: nsph
+         real(c_double), intent(inout), optional :: xyz(3, ngrid_cap)
+         real(c_double), intent(inout), optional :: a(ngrid_cap)
+         integer(c_int), intent(inout), optional :: owner(ngrid_cap)
+         logical(c_bool), intent(inout), optional :: converged(ngrid_cap)
+         real(c_double), intent(inout), optional :: radii(nsph_cap)
+         real(c_double), intent(inout), optional :: asph(nsph_cap)
       end subroutine moist_get_cavity_results
 
       subroutine moist_get_cavity_field_count(verror, vcav, nfield) &
@@ -162,7 +238,7 @@ module test_api
          import :: c_ptr, c_int
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
-         integer(c_int), intent(inout) :: nfield
+         integer(c_int), intent(inout), optional :: nfield
       end subroutine moist_get_cavity_field_count
 
       subroutine moist_get_cavity_field_info(verror, vcav, ifield, name, &
@@ -172,11 +248,11 @@ module test_api
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), value :: ifield
-         character(kind=c_char), intent(inout) :: name(*)
-         integer(c_int), intent(inout) :: dtype
-         integer(c_int), intent(inout) :: rank
-         integer(c_int), intent(inout) :: dims(2)
-         integer(c_int), intent(inout) :: count
+         character(kind=c_char), intent(inout), optional :: name(*)
+         integer(c_int), intent(inout), optional :: dtype
+         integer(c_int), intent(inout), optional :: rank
+         integer(c_int), intent(inout), optional :: dims(2)
+         integer(c_int), intent(inout), optional :: count
       end subroutine moist_get_cavity_field_info
 
       subroutine moist_get_cavity_field_real(verror, vcav, cname, values) &
@@ -185,7 +261,7 @@ module test_api
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
-         real(c_double), intent(inout) :: values(*)
+         real(c_double), intent(inout), optional :: values(*)
       end subroutine moist_get_cavity_field_real
 
       subroutine moist_get_cavity_field_int(verror, vcav, cname, values) &
@@ -194,7 +270,7 @@ module test_api
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
-         integer(c_int), intent(inout) :: values(*)
+         integer(c_int), intent(inout), optional :: values(*)
       end subroutine moist_get_cavity_field_int
 
       subroutine moist_get_cavity_field_bool(verror, vcav, cname, values) &
@@ -203,7 +279,7 @@ module test_api
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
-         logical(c_bool), intent(inout) :: values(*)
+         logical(c_bool), intent(inout), optional :: values(*)
       end subroutine moist_get_cavity_field_bool
 
       subroutine moist_get_cavity_field_about(verror, vcav, cname, about, capacity, length) &
@@ -224,9 +300,210 @@ module test_api
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), value :: ngrid_cap
-         real(c_double), intent(inout) :: amat0(ngrid_cap, ngrid_cap)
-         real(c_double), intent(inout) :: xi(ngrid_cap)
+         real(c_double), intent(inout), optional :: amat0(ngrid_cap, ngrid_cap)
+         real(c_double), intent(inout), optional :: xi(ngrid_cap)
       end subroutine moist_assemble_amat
+
+      !> C binding for moist_init_drop_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_drop_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_drop_options
+
+      !> C binding for moist_init_iswig_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_iswig_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_iswig_options
+
+      !> C binding for moist_init_svdw_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_svdw_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_svdw_options
+
+      !> C binding for moist_init_cfc_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_cfc_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_cfc_options
+
+      !> C binding for moist_init_isodensity_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_isodensity_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_isodensity_options
+
+      !> C binding for moist_init_model_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_model_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_model_options
+
+      !> C binding for moist_init_pcm_options
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] options Native options buffer
+      !> @param[in] bytes Native buffer size
+      subroutine moist_init_pcm_options(verror, options, bytes) bind(C)
+         import :: c_ptr, c_size_t
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native options buffer
+         type(c_ptr), value, intent(in) :: options
+         !> Native buffer size
+         integer(c_size_t), value, intent(in) :: bytes
+      end subroutine moist_init_pcm_options
+
+      !> C binding for moist_new_isodensity_lsf
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] nshell Native shell count
+      !> @param[in] shell_atom Native shell atoms
+      !> @param[in] shell_l Native shell angular momenta
+      !> @param[in] shell_nprim Native primitive counts
+      !> @param[in] exps Native exponents
+      !> @param[in] coeffs Native coefficients
+      !> @param[in] options Native options
+      function moist_new_isodensity_lsf(verror, nshell, shell_atom, shell_l, shell_nprim, &
+            & exps, coeffs, options) result(lsf) bind(C)
+         import :: c_ptr, c_int
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native shell count
+         integer(c_int), value, intent(in) :: nshell
+         !> Native shell atoms
+         type(c_ptr), value, intent(in) :: shell_atom
+         !> Native shell angular momenta
+         type(c_ptr), value, intent(in) :: shell_l
+         !> Native primitive counts
+         type(c_ptr), value, intent(in) :: shell_nprim
+         !> Native exponents
+         type(c_ptr), value, intent(in) :: exps
+         !> Native coefficients
+         type(c_ptr), value, intent(in) :: coeffs
+         !> Native options
+         type(c_ptr), value, intent(in) :: options
+         !> Owning result handle
+         type(c_ptr) :: lsf
+      end function moist_new_isodensity_lsf
+
+      !> C binding for moist_new_iswig_cavity
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] radii Native radii
+      !> @param[in] options Native options
+      function moist_new_iswig_cavity(verror, radii, options) result(cavity) bind(C)
+         import :: c_ptr
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native radii
+         type(c_ptr), value, intent(in) :: radii
+         !> Native options
+         type(c_ptr), value, intent(in) :: options
+         !> Owning result handle
+         type(c_ptr) :: cavity
+      end function moist_new_iswig_cavity
+
+      !> C binding for moist_new_model
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] cavity Native cavity
+      !> @param[in] options Native options
+      function moist_new_model(verror, cavity, options) result(model) bind(C)
+         import :: c_ptr
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native cavity
+         type(c_ptr), value, intent(in) :: cavity
+         !> Native options
+         type(c_ptr), value, intent(in) :: options
+         !> Owning result handle
+         type(c_ptr) :: model
+      end function moist_new_model
+
+      !> C binding for moist_set_model_isodensity_density
+      !>
+      !> @param[in] verror Native error
+      !> @param[in] model Native model
+      !> @param[in] ncart Native density dimension
+      !> @param[in] density Native density buffer
+      subroutine moist_set_model_isodensity_density(verror, model, ncart, density) bind(C)
+         import :: c_ptr, c_int
+         implicit none(type, external)
+         !> Native error
+         type(c_ptr), value, intent(in) :: verror
+         !> Native model
+         type(c_ptr), value, intent(in) :: model
+         !> Native density dimension
+         integer(c_int), value, intent(in) :: ncart
+         !> Native density buffer
+         type(c_ptr), value, intent(in) :: density
+      end subroutine moist_set_model_isodensity_density
 
    end interface
 
@@ -286,7 +563,22 @@ contains
                   new_unittest("array_capacity_too_small", test_capacity_too_small), &
                   new_unittest("array_capacity_oversized", test_capacity_oversized), &
                   new_unittest("isodensity_callback_fails_first_call", test_iso_callback_fails_first), &
-                  new_unittest("isodensity_callback_fails_mid_loop", test_iso_callback_fails_mid_loop) &
+                  new_unittest("isodensity_callback_fails_mid_loop", test_iso_callback_fails_mid_loop), &
+                  new_unittest("init_options_without_error_handle", test_init_options_null_error), &
+                  new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
+                  new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
+                  new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
+                  new_unittest("missing_pointers_results", test_missing_pointers_results), &
+                  new_unittest("missing_pointers_gradients", test_missing_pointers_gradients), &
+                  new_unittest("unbuilt_cavity_guards", test_unbuilt_cavity_guards), &
+                  new_unittest("drop_only_entry_points", test_drop_only_entry_points), &
+                  new_unittest("contraction_guards", test_contraction_guards), &
+                  new_unittest("stub_cavity_guards", test_stub_cavity_guards), &
+                  new_unittest("model_handle_guards", test_model_handle_guards), &
+                  new_unittest("model_phase_guards", test_model_phase_guards), &
+                  new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
+                  new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
+                  new_unittest("amat_surface_weights", test_amat_surface_weights) &
                   ]
 
    end subroutine collect_api
@@ -1391,5 +1683,1287 @@ contains
       end do
    end function current_item_name
 
+
+   !* ================================================================================= *!
+   !*                        Validation branches of the C entry points                  *!
+   !* ================================================================================= *!
+
+   !> Assert an API error naming `needle`, then clear it so the handle is reused
+   subroutine expect_error(error, err, needle)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> API error handle produced by the entry point
+      type(vp_error), pointer, intent(in) :: err
+      !> Expected message fragment
+      character(len=*), intent(in) :: needle
+
+      call check_api_error(error, err, needle)
+      if (allocated(err%ptr)) deallocate (err%ptr)
+
+   end subroutine expect_error
+
+   !> Fail when a rejected call changed an output it promises to leave alone
+   subroutine check_untouched(error, wrote, what)
+      !> Test-drive error, only set when `wrote`
+      type(error_type), allocatable, intent(inout) :: error
+      !> Whether an output changed
+      logical, intent(in) :: wrote
+      !> Case being checked, used in the failure message
+      character(len=*), intent(in) :: what
+
+      if (allocated(error) .or. .not. wrote) return
+      call test_failed(error, "Output changed although the call failed: "//what)
+
+   end subroutine check_untouched
+
+   !> Call one option initializer by position
+   subroutine init_options(verror, ikind, buffer)
+      !> Opaque error handle, NULL for the guard under test
+      type(c_ptr), intent(in) :: verror
+      !> Initializer index: drop, iswig, svdw, cfc, isodensity, model, pcm
+      integer, intent(in) :: ikind
+      !> Caller-owned options storage
+      integer(c_int8_t), target, intent(inout) :: buffer(256)
+
+      select case (ikind)
+      case (1)
+         call moist_init_drop_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (2)
+         call moist_init_iswig_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (3)
+         call moist_init_svdw_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (4)
+         call moist_init_cfc_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (5)
+         call moist_init_isodensity_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (6)
+         call moist_init_model_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case (7)
+         call moist_init_pcm_options(verror, c_loc(buffer), c_sizeof(buffer))
+      end select
+
+   end subroutine init_options
+
+   !> Option initializers without an error handle return before touching the buffer
+   !>
+   !> There is no handle to report into, so the caller's buffer is the only
+   !> observable: seeded bytes survive the NULL-handle call, and the same call
+   !> with a handle overwrites them, so it is the guard that kept them and not
+   !> an initializer that writes nothing
+   subroutine test_init_options_null_error(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> API error handle for the positive control
+      type(vp_error), pointer :: err
+      !> Caller-owned options storage, larger than every layout
+      integer(c_int8_t) :: buffer(256)
+      !> Initializer names, in the order of `init_options`
+      character(len=10), parameter :: kinds(7) = [character(len=10) :: "drop", "iswig", &
+         & "svdw", "cfc", "isodensity", "model", "pcm"]
+      integer :: ikind
+
+      allocate (err)
+      do ikind = 1, size(kinds)
+         buffer = 77_c_int8_t
+         call init_options(c_null_ptr, ikind, buffer)
+         if (any(buffer /= 77_c_int8_t)) then
+            call test_failed(error, "init_"//trim(kinds(ikind))//"_options wrote without an error handle")
+            exit
+         end if
+         call init_options(c_loc(err), ikind, buffer)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "init_"//trim(kinds(ikind))//"_options failed: "//err%ptr%message)
+            exit
+         end if
+         if (all(buffer == 77_c_int8_t)) then
+            call test_failed(error, "init_"//trim(kinds(ikind))//"_options wrote nothing with a handle")
+            exit
+         end if
+      end do
+      deallocate (err)
+
+   end subroutine test_init_options_null_error
+
+   !> LSF constructors refuse a missing callback, non-positive isodensity
+   !> controls and every malformed basis, and return no handle
+   !>
+   !> The basis cases walk the shell guard (no shells, a NULL array), both
+   !> halves of the primitive guard (a zero count, a sum past `huge`) and the
+   !> basis constructor's own rejection of an unsupported angular momentum
+   subroutine test_lsf_constructor_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Isodensity options with a negative isovalue
+      type(iso_options), target :: options
+      !> Two-shell basis, edited per case
+      integer(c_int), target :: shell_atom(2), shell_l(2), shell_nprim(2)
+      real(c_double), target :: exps(2), coeffs(2)
+      !> Returned LSF handle
+      type(c_ptr) :: lsf
+      !> Expected diagnostics, one per case
+      character(len=48), parameter :: needles(7) = [character(len=48) :: &
+         & "Callback is missing", "rho_iso and scale must be positive", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count", "Invalid primitive counts", &
+         & "Invalid primitive counts", "angular momentum out of supported range"]
+      integer :: icase
+
+      allocate (err)
+      shell_atom = 0_c_int
+      shell_l = 0_c_int
+      exps = 0.5_c_double
+      coeffs = 1.0_c_double
+      do icase = 1, size(needles)
+         shell_nprim = 1_c_int
+         select case (icase)
+         case (1)
+            lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_null_funptr, c_null_ptr, c_null_ptr)
+         case (2)
+            options = iso_options(c_sizeof(options), -1.0_c_double, 1000.0_c_double)
+            lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
+                                                  c_null_ptr, c_loc(options))
+         case (3)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 0_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (4)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_null_ptr, c_null_ptr)
+         case (5)
+            shell_nprim = [0_c_int, 1_c_int]
+            lsf = moist_new_isodensity_lsf(c_loc(err), 2_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (6)
+            ! Each count is valid on its own; only their sum overflows
+            shell_nprim = huge(1_c_int)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 2_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (7)
+            shell_l = 99_c_int
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, c_associated(lsf), trim(needles(icase)))
+         call moist_delete_lsf(lsf)
+         if (allocated(error)) exit
+      end do
+      deallocate (err)
+
+   end subroutine test_lsf_constructor_guards
+
+   !> Cavity constructors refuse each invalid DROP control and a radii handle
+   !> whose model was never set, and return no handle
+   subroutine test_cavity_constructor_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> DROP options, reset to the defaults before each case
+      type(drop_options), target :: options
+      !> Radii handle that was never given a model
+      type(vp_radii), target :: radii
+      !> Opaque handles
+      type(c_ptr) :: verror, lsf, cavity
+      !> Expected diagnostics: six option cases, then the two radii cases
+      character(len=48), parameter :: needles(8) = [character(len=48) :: &
+         & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
+         & "Invalid DROP options", "Invalid DROP options", "Invalid DROP options", &
+         & "[moist_new_drop_cavity] Radii are not initialized", &
+         & "[moist_new_iswig_cavity] Radii are not initialized"]
+      integer :: icase
+
+      allocate (err)
+      verror = c_loc(err)
+      lsf = moist_new_svdw_lsf(verror, c_null_ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "LSF setup failed: "//err%ptr%message)
+         deallocate (err)
+         return
+      end if
+
+      do icase = 1, size(needles)
+         call moist_init_drop_options(verror, c_loc(options), c_sizeof(options))
+         select case (icase)
+         case (1)
+            options%tolerance = 0.0_c_double
+         case (2)
+            options%rho_grid_h = 0.0_c_double
+         case (3)
+            options%branch_weight_s = -1.0_c_double
+         case (4)
+            options%proj_maxiter = 0_c_int
+         case (5)
+            options%proj_level = 0_c_int
+         case (6)
+            options%proj_level = 10_c_int
+         end select
+         select case (icase)
+         case (1:6)
+            cavity = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_loc(options))
+         case (7)
+            cavity = moist_new_drop_cavity(verror, lsf, c_loc(radii), c_null_ptr)
+         case (8)
+            cavity = moist_new_iswig_cavity(verror, c_loc(radii), c_null_ptr)
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, c_associated(cavity), trim(needles(icase)))
+         call moist_delete_cavity(cavity)
+         if (allocated(error)) exit
+      end do
+
+      call moist_delete_lsf(lsf)
+      deallocate (err)
+
+   end subroutine test_cavity_constructor_guards
+
+   !> Structure and custom-radii entry points name a missing array, a missing
+   !> structure and an empty one, and a failed constructor returns no handle
+   subroutine test_structure_radii_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Structure that was never constructed
+      type(vp_structure), target :: empty
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2), radii(2)
+      !> Returned structure handle
+      type(c_ptr) :: verror, vmol
+      !> Expected diagnostics, one per case
+      character(len=80), parameter :: needles(8) = [character(len=80) :: &
+         & "[moist_new_structure] Required pointer 'numbers' is missing", &
+         & "[moist_new_structure] Required pointer 'positions' is missing", &
+         & "[moist_update_structure] Required pointer 'positions' is missing", &
+         & "[moist_update_structure] Molecular structure data is missing", &
+         & "[moist_update_structure] Invalid molecular structure data provided", &
+         & "[moist_set_custom_radii_atoms] Required pointer 'atom_radii' is missing", &
+         & "[moist_set_custom_radii_elements] Required pointer 'atomic_numbers' is missing", &
+         & "[moist_set_custom_radii_elements] Required pointer 'element_radii' is missing"]
+      integer :: icase
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      radii = 2.0_c_double
+      allocate (err)
+      verror = c_loc(err)
+      do icase = 1, size(needles)
+         vmol = c_null_ptr
+         select case (icase)
+         case (1)
+            vmol = moist_new_structure(verror, 2_c_int, positions=positions)
+         case (2)
+            vmol = moist_new_structure(verror, 2_c_int, numbers)
+         case (3)
+            call update_structure_api(verror, c_null_ptr)
+         case (4)
+            call update_structure_api(verror, c_null_ptr, positions)
+         case (5)
+            call update_structure_api(verror, c_loc(empty), positions)
+         case (6)
+            call set_custom_radii_atoms_api(verror, c_null_ptr, 2_c_int)
+         case (7)
+            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
+         case (8)
+            call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, c_associated(vmol), "structure handle")
+         call moist_delete_structure(vmol)
+         if (allocated(error)) exit
+      end do
+      deallocate (err)
+
+   end subroutine test_structure_radii_guards
+
+   !> Omit one required pointer at a time and expect the entry point to name it
+   !>
+   !> The presence checks precede the handle checks, so the cavity handle is
+   !> NULL throughout: a message naming the omitted argument proves its own
+   !> branch fired and not the handle guard behind it
+   subroutine check_missing_pointers(error, family, names)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> Entry point without the common moist_ prefix
+      character(len=*), intent(in) :: family
+      !> Required pointer names, in argument order
+      character(len=*), intent(in) :: names(:)
+      type(vp_error), pointer :: err
+      integer :: omit
+
+      allocate (err)
+      do omit = 1, size(names)
+         call probe_missing_pointer(c_loc(err), family, omit)
+         call expect_error(error, err, &
+            & "[moist_"//family//"] Required pointer '"//trim(names(omit))//"' is missing")
+         if (allocated(error)) exit
+      end do
+      deallocate (err)
+
+   end subroutine check_missing_pointers
+
+   !> Call `family` with a NULL cavity and its `omit`-th pointer argument absent
+   !>
+   !> An unallocated allocatable actual argument is absent to an optional
+   !> dummy, the Fortran spelling of passing NULL from C; every other buffer is
+   !> allocated so only the omitted one can trip a presence check
+   subroutine probe_missing_pointer(verror, family, omit)
+      !> Opaque error handle
+      type(c_ptr), intent(in) :: verror
+      !> Entry point without the common moist_ prefix
+      character(len=*), intent(in) :: family
+      !> Position of the omitted pointer argument
+      integer, intent(in) :: omit
+      !> Scalar outputs
+      real(c_double), allocatable :: area, volume
+      integer(c_int), allocatable :: ngrid, nsph, dtype, rank, count
+      !> Grid and sphere outputs
+      real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:), xi(:), amat0(:, :)
+      integer(c_int), allocatable :: owner(:), dims(:)
+      logical(c_bool), allocatable :: converged(:)
+      character(kind=c_char), allocatable :: name(:)
+      !> Gradient outputs
+      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), vec1_rA(:, :, :), &
+         & xi1_rA(:, :, :), a_i1_rA(:, :, :), v_i1_rA(:, :, :), asph1_rA(:, :, :), &
+         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), xyz1_rA(:, :, :, :), Amat1_rA(:, :, :, :)
+
+      select case (family)
+      case ("get_cavity_results")
+         allocate (area, volume, ngrid, nsph, xyz(3, 1), a(1), owner(1), converged(1), &
+                   radii(1), asph(1))
+         if (omit == 1) deallocate (area)
+         if (omit == 2) deallocate (volume)
+         if (omit == 3) deallocate (ngrid)
+         if (omit == 4) deallocate (nsph)
+         if (omit == 5) deallocate (xyz)
+         if (omit == 6) deallocate (a)
+         if (omit == 7) deallocate (owner)
+         if (omit == 8) deallocate (converged)
+         if (omit == 9) deallocate (radii)
+         if (omit == 10) deallocate (asph)
+         call moist_get_cavity_results(verror, c_null_ptr, 1_c_int, 1_c_int, area, volume, &
+                                       ngrid, nsph, xyz, a, owner, converged, radii, asph)
+      case ("get_cavity_sizes")
+         allocate (ngrid, nsph)
+         if (omit == 1) deallocate (ngrid)
+         if (omit == 2) deallocate (nsph)
+         call moist_get_cavity_sizes(verror, c_null_ptr, ngrid, nsph)
+      case ("get_cavity_field_count")
+         call moist_get_cavity_field_count(verror, c_null_ptr)
+      case ("get_cavity_field_info")
+         allocate (name(65), dtype, rank, dims(2), count)
+         if (omit == 1) deallocate (name)
+         if (omit == 2) deallocate (dtype)
+         if (omit == 3) deallocate (rank)
+         if (omit == 4) deallocate (dims)
+         if (omit == 5) deallocate (count)
+         call moist_get_cavity_field_info(verror, c_null_ptr, 0_c_int, name, dtype, rank, dims, count)
+      case ("get_cavity_field_real")
+         call moist_get_cavity_field_real(verror, c_null_ptr, c_null_ptr)
+      case ("get_cavity_field_int")
+         call moist_get_cavity_field_int(verror, c_null_ptr, c_null_ptr)
+      case ("get_cavity_field_bool")
+         call moist_get_cavity_field_bool(verror, c_null_ptr, c_null_ptr)
+      case ("assemble_amat")
+         allocate (amat0(1, 1), xi(1))
+         if (omit == 1) deallocate (amat0)
+         if (omit == 2) deallocate (xi)
+         call moist_assemble_amat(verror, c_null_ptr, 1_c_int, amat0, xi)
+      case ("get_anchor_gradient")
+         allocate (xyz1_rA(3, 3, 1, 1), xi1_rA(3, 1, 1), a_i1_rA(3, 1, 1), v_i1_rA(3, 1, 1), &
+                   A_tot1_rA(3, 1), V_tot1_rA(3, 1))
+         if (omit == 1) deallocate (xyz1_rA)
+         if (omit == 2) deallocate (xi1_rA)
+         if (omit == 3) deallocate (a_i1_rA)
+         if (omit == 4) deallocate (v_i1_rA)
+         if (omit == 5) deallocate (A_tot1_rA)
+         if (omit == 6) deallocate (V_tot1_rA)
+         call get_anchor_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, xyz1_rA, xi1_rA, &
+                                      a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
+      case ("get_cavity_gradient")
+         allocate (A_tot1_rA(3, 1), V_tot1_rA(3, 1), asph1_rA(3, 1, 1), vsph1_rA(3, 1, 1), &
+                   xyz1_rA(3, 3, 1, 1), r_iI1_rA(3, 1, 1), vec1_rA(3, 1, 1))
+         if (omit == 1) deallocate (A_tot1_rA)
+         if (omit == 2) deallocate (V_tot1_rA)
+         if (omit == 3) deallocate (asph1_rA)
+         if (omit == 4) deallocate (vsph1_rA)
+         if (omit == 5) deallocate (xyz1_rA)
+         if (omit == 6) deallocate (r_iI1_rA)
+         if (omit == 7) deallocate (vec1_rA)
+         call get_cavity_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, vec1_rA)
+      case ("get_amat_gradient")
+         allocate (amat0(1, 1), Amat1_rA(3, 1, 1, 1), xi(1))
+         if (omit == 1) deallocate (amat0)
+         if (omit == 2) deallocate (Amat1_rA)
+         if (omit == 3) deallocate (xi)
+         call get_amat_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, amat0, Amat1_rA, xi)
+      end select
+
+   end subroutine probe_missing_pointer
+
+   !> Every required output of the result, size, field and A-matrix readers is
+   !> named when absent
+   subroutine test_missing_pointers_results(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Required outputs of each reader, in argument order
+      character(len=9), parameter :: results(10) = [character(len=9) :: "area", "volume", &
+         & "ngrid", "nsph", "xyz", "a", "owner", "converged", "radii", "asph"]
+      character(len=5), parameter :: sizes(2) = [character(len=5) :: "ngrid", "nsph"]
+      character(len=6), parameter :: nfield(1) = ["nfield"]
+      character(len=5), parameter :: info(5) = [character(len=5) :: "name", "dtype", "rank", &
+         & "dims", "count"]
+      character(len=6), parameter :: values(1) = ["values"]
+      character(len=5), parameter :: amat(2) = [character(len=5) :: "amat0", "xi"]
+
+      call check_missing_pointers(error, "get_cavity_results", results)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_sizes", sizes)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_field_count", nfield)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_field_info", info)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_field_real", values)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_field_int", values)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_field_bool", values)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "assemble_amat", amat)
+
+   end subroutine test_missing_pointers_results
+
+   !> Every required output of the three gradient readers is named when absent
+   subroutine test_missing_pointers_gradients(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Required outputs of each reader, in argument order
+      character(len=9), parameter :: anchor(6) = [character(len=9) :: "xyz1_rA", "xi1_rA", &
+         & "a_i1_rA", "v_i1_rA", "A_tot1_rA", "V_tot1_rA"]
+      character(len=9), parameter :: cavity(7) = [character(len=9) :: "A_tot1_rA", "V_tot1_rA", &
+         & "asph1_rA", "vsph1_rA", "xyz1_rA", "r_iI1_rA", "rho1_rA"]
+      character(len=8), parameter :: amat(3) = [character(len=8) :: "Amat0", "Amat1_rA", "xi"]
+
+      call check_missing_pointers(error, "get_anchor_gradient", anchor)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_cavity_gradient", cavity)
+      if (allocated(error)) return
+      call check_missing_pointers(error, "get_amat_gradient", amat)
+
+   end subroutine test_missing_pointers_gradients
+
+   !> Create an SvdW DROP cavity and an iSwiG cavity that were never updated
+   !>
+   !> Both are real handles whose cavities have no surface yet: the state a
+   !> host holds between construction and the first `moist_update_cavity`
+   subroutine new_unbuilt_cavities(error, err, verror, vdrop, viswig)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> API error handle (allocated here, released by `drop_unbuilt_cavities`)
+      type(vp_error), pointer, intent(out) :: err
+      !> Opaque view of `err`
+      type(c_ptr), intent(out) :: verror
+      !> DROP and iSwiG cavity handles
+      type(c_ptr), intent(out) :: vdrop, viswig
+      type(c_ptr) :: lsf
+
+      allocate (err)
+      verror = c_loc(err)
+      lsf = moist_new_svdw_lsf(verror, c_null_ptr)
+      vdrop = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+      call moist_delete_lsf(lsf)
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Cavity setup failed: "//err%ptr%message)
+         deallocate (err%ptr)
+      end if
+
+   end subroutine new_unbuilt_cavities
+
+   !> Release the handles built by new_unbuilt_cavities
+   subroutine drop_unbuilt_cavities(err, vdrop, viswig)
+      !> API error handle
+      type(vp_error), pointer, intent(inout) :: err
+      !> DROP and iSwiG cavity handles
+      type(c_ptr), intent(inout) :: vdrop, viswig
+
+      call moist_delete_cavity(vdrop)
+      call moist_delete_cavity(viswig)
+      deallocate (err)
+
+   end subroutine drop_unbuilt_cavities
+
+   !> Readers refuse a cavity that was never built, updates refuse a missing or
+   !> empty structure, and the A-matrix assembly refuses a missing or empty
+   !> handle; no caller buffer is written
+   subroutine test_unbuilt_cavity_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Handle whose cavity pointer is null
+      type(vp_cavity), pointer :: empty_cav
+      !> Structure that was never constructed
+      type(vp_structure), target :: empty_mol
+      type(c_ptr) :: verror, vdrop, viswig
+      !> Caller buffers, seeded so any write is visible
+      real(c_double) :: area, volume, xyz(3, 1), a(1), radii(1), asph(1), amat0(1, 1), xi(1)
+      integer(c_int) :: ngrid, nsph, owner(1)
+      logical(c_bool) :: converged(1)
+      logical :: wrote
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      !> Expected diagnostics, one per case
+      character(len=64), parameter :: needles(6) = [character(len=64) :: &
+         & "[moist_get_cavity_sizes] Cavity is not built yet", &
+         & "[moist_get_cavity_results] Cavity is not built yet", &
+         & "[moist_update_cavity] Molecular structure data is missing", &
+         & "[moist_update_cavity] Invalid number of atoms", &
+         & "[moist_assemble_amat] DROP cavity handle is missing", &
+         & "[moist_assemble_amat] DROP cavity is not initialized"]
+      integer :: icase
+
+      call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
+      if (allocated(error)) then
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
+      allocate (empty_cav)
+
+      do icase = 1, size(needles)
+         area = sentinel
+         volume = sentinel
+         amat0 = sentinel
+         xi = sentinel
+         ngrid = -1_c_int
+         nsph = -1_c_int
+         select case (icase)
+         case (1)
+            call moist_get_cavity_sizes(verror, vdrop, ngrid, nsph)
+         case (2)
+            call moist_get_cavity_results(verror, vdrop, 1_c_int, 1_c_int, area, volume, ngrid, &
+                                          nsph, xyz, a, owner, converged, radii, asph)
+         case (3)
+            call moist_update_cavity(verror, vdrop, c_null_ptr)
+         case (4)
+            call moist_update_cavity(verror, vdrop, c_loc(empty_mol))
+         case (5)
+            call moist_assemble_amat(verror, c_null_ptr, 1_c_int, amat0, xi)
+         case (6)
+            call moist_assemble_amat(verror, c_loc(empty_cav), 1_c_int, amat0, xi)
+         end select
+         wrote = area /= sentinel .or. volume /= sentinel .or. ngrid /= -1_c_int &
+            & .or. nsph /= -1_c_int .or. any(amat0 /= sentinel) .or. any(xi /= sentinel)
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, wrote, trim(needles(icase)))
+         if (allocated(error)) exit
+      end do
+
+      deallocate (empty_cav)
+      call drop_unbuilt_cavities(err, vdrop, viswig)
+
+   end subroutine test_unbuilt_cavity_guards
+
+   !> DROP-only entry points name a missing handle or output, an empty cavity
+   !> and the wrong cavity or LSF type, and leave the tolerance output alone
+   subroutine test_drop_only_entry_points(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Handle whose cavity pointer is null
+      type(vp_cavity), pointer :: empty_cav
+      type(c_ptr) :: verror, vdrop, viswig
+      !> Tolerance output and a one-component density
+      real(c_double), target :: tolerance, dcart(1, 1)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      !> Expected diagnostics, one per case
+      character(len=96), parameter :: needles(6) = [character(len=96) :: &
+         & "[moist_get_drop_cavity_tolerance] Cavity handle is missing", &
+         & "[moist_get_drop_cavity_tolerance] Output pointer is missing", &
+         & "[moist_get_drop_cavity_tolerance] Cavity is not initialized", &
+         & "[moist_get_drop_cavity_tolerance] Supplied cavity is not a DROP cavity", &
+         & "[moist_set_isodensity_density] Cavity LSF is not the internal isodensity type", &
+         & "[moist_set_isodensity_density] Cavity is not DROP type"]
+      integer :: icase
+
+      call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
+      if (allocated(error)) then
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
+      allocate (empty_cav)
+      dcart = 1.0_c_double
+
+      do icase = 1, size(needles)
+         tolerance = sentinel
+         select case (icase)
+         case (1)
+            call get_drop_cavity_tolerance_api(verror, c_null_ptr, c_loc(tolerance))
+         case (2)
+            call get_drop_cavity_tolerance_api(verror, vdrop, c_null_ptr)
+         case (3)
+            call get_drop_cavity_tolerance_api(verror, c_loc(empty_cav), c_loc(tolerance))
+         case (4)
+            call get_drop_cavity_tolerance_api(verror, viswig, c_loc(tolerance))
+         case (5)
+            call set_isodensity_density_api(verror, vdrop, 1_c_int, c_loc(dcart))
+         case (6)
+            call set_isodensity_density_api(verror, viswig, 1_c_int, c_loc(dcart))
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, tolerance /= sentinel, trim(needles(icase)))
+         if (allocated(error)) exit
+      end do
+
+      ! The same reader answers for a DROP cavity, so the refusals above are
+      ! the type guard and not a reader that never writes
+      if (.not. allocated(error)) then
+         call get_drop_cavity_tolerance_api(verror, vdrop, c_loc(tolerance))
+         if (allocated(err%ptr)) then
+            call test_failed(error, "get_drop_cavity_tolerance failed: "//err%ptr%message)
+         else if (.not. tolerance > 0.0_c_double) then
+            call test_failed(error, "get_drop_cavity_tolerance returned no positive tolerance")
+         end if
+      end if
+
+      deallocate (empty_cav)
+      call drop_unbuilt_cavities(err, vdrop, viswig)
+
+   end subroutine test_drop_only_entry_points
+
+   !> The three surface contractions name a missing or empty handle, NULL
+   !> buffers, and a cavity without the surface data they contract
+   !>
+   !> An unbuilt DROP cavity has zero grid points, so the one-element buffers
+   !> below are never indexed; they only have to be non-NULL
+   subroutine test_contraction_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Handle whose cavity pointer is null
+      type(vp_cavity), pointer :: empty_cav
+      type(c_ptr) :: verror, vdrop, viswig
+      !> Non-NULL stand-ins for every array argument
+      real(c_double), target :: w1(1), w2(1), w3(3), w4(1), w5(3), w6(9)
+      !> Expected diagnostics, one per case
+      character(len=104), parameter :: needles(9) = [character(len=104) :: &
+         & "[moist_contract_surface_lsf_weights_extended] Cavity is not initialized", &
+         & "[moist_contract_surface_lsf_weights_extended] Null array pointer provided", &
+         & "[moist_contract_surface_lsf_weights_extended] contract_surface_lsf_weights: "// &
+         & "cavity surface data are incomplete", &
+         & "[moist_contract_pcm_nuclear_gradient] Cavity handle is missing", &
+         & "[moist_contract_pcm_nuclear_gradient] Cavity is not initialized", &
+         & "[moist_contract_pcm_nuclear_gradient] Cavity position derivatives are unavailable", &
+         & "[moist_contract_amat1_q1q2_surface_weights] Cavity handle is missing", &
+         & "[moist_contract_amat1_q1q2_surface_weights] Cavity is not initialized", &
+         & "[moist_contract_amat1_q1q2_surface_weights] Cavity does not provide a Gaussian PCM surface"]
+      integer :: icase
+
+      call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
+      if (allocated(error)) then
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
+      allocate (empty_cav)
+
+      do icase = 1, size(needles)
+         select case (icase)
+         case (1)
+            call contract_surface_lsf_weights_extended_api(verror, c_loc(empty_cav), c_null_ptr, &
+               & c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, &
+               & c_null_ptr, c_null_ptr)
+         case (2)
+            call contract_surface_lsf_weights_extended_api(verror, vdrop, c_null_ptr, &
+               & c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr, &
+               & c_null_ptr, c_null_ptr)
+         case (3)
+            call contract_surface_lsf_weights_extended_api(verror, vdrop, c_loc(w1), c_loc(w2), &
+               & c_loc(w3), c_loc(w4), c_loc(w5), c_loc(w6), c_null_ptr, c_null_ptr, c_null_ptr)
+         case (4)
+            call contract_pcm_nuclear_gradient_api(verror, c_null_ptr, c_null_ptr, c_null_ptr, &
+               & c_null_ptr, c_null_ptr)
+         case (5)
+            call contract_pcm_nuclear_gradient_api(verror, c_loc(empty_cav), c_null_ptr, &
+               & c_null_ptr, c_null_ptr, c_null_ptr)
+         case (6)
+            call contract_pcm_nuclear_gradient_api(verror, vdrop, c_loc(w1), c_loc(w3), &
+               & c_loc(w2), c_loc(w5))
+         case (7)
+            call contract_amat1_q1q2_surface_weights_api(verror, c_null_ptr, c_null_ptr, &
+               & c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr)
+         case (8)
+            call contract_amat1_q1q2_surface_weights_api(verror, c_loc(empty_cav), c_null_ptr, &
+               & c_null_ptr, c_null_ptr, c_null_ptr, c_null_ptr)
+         case (9)
+            call contract_amat1_q1q2_surface_weights_api(verror, vdrop, c_loc(w1), c_loc(w2), &
+               & c_loc(w4), c_loc(w1), c_loc(w3))
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         if (allocated(error)) exit
+      end do
+
+      deallocate (empty_cav)
+      call drop_unbuilt_cavities(err, vdrop, viswig)
+
+   end subroutine test_contraction_guards
+
+   !> Wrap a hand-filled stub cavity in a cavity handle
+   !>
+   !> Two grid points on one sphere; the first width is zero, the position
+   !> derivatives are sized for two spheres, and the only declared field has a
+   !> name one character longer than MOIST_FIELD_NAME_MAX
+   subroutine new_stub_cavity(cav)
+      !> Handle owning the stub (release with deallocate, not moist_delete_cavity)
+      type(vp_cavity), pointer, intent(out) :: cav
+
+      allocate (cav)
+      allocate (stub_cavity :: cav%ptr)
+      select type (stub => cav%ptr)
+      type is (stub_cavity)
+         stub%field_name = repeat("x", 65)
+         stub%ngrid = 2
+         stub%nsph = 1
+         stub%xi0 = [0.0_wp, 1.0_wp]
+         stub%f = [1.0_wp, 1.0_wp]
+         stub%xyz = reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 2.0_wp], [3, 2])
+         allocate (stub%sphxyz(3, 1), source=0.0_wp)
+         allocate (stub%xyz1_rA(3, 3, 2, 2), source=0.0_wp)
+      end select
+
+   end subroutine new_stub_cavity
+
+   !> Refusals only a hand-built cavity reaches: an overlong field name, a
+   !> non-positive width in the A-matrix kernels, and position derivatives
+   !> whose extents disagree with the sphere count
+   subroutine test_stub_cavity_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
+      type(c_ptr) :: verror, vstub
+      !> Field descriptor outputs
+      integer(c_int) :: dtype, rank, dims(2), count
+      character(kind=c_char) :: name(66)
+      !> Caller buffers, seeded so any write is visible
+      real(c_double), target :: amat0(2, 2), xi(2), q(2), w_xi(2), w_f(2), w_xyz(3, 2)
+      real(c_double), target :: za(1), grad(3, 1)
+      logical :: wrote
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      !> Expected diagnostics, one per case
+      character(len=104), parameter :: needles(6) = [character(len=104) :: &
+         & "[moist_get_cavity_field_info] Field name exceeds MOIST_FIELD_NAME_MAX", &
+         & "[moist_assemble_amat] Gaussian PCM widths must be positive", &
+         & "[moist_contract_amat1_q1q2_surface_weights] Null array pointer provided", &
+         & "[moist_contract_amat1_q1q2_surface_weights] Gaussian PCM widths must be positive", &
+         & "[moist_contract_pcm_nuclear_gradient] Null array pointer provided", &
+         & "[moist_contract_pcm_nuclear_gradient] pcm_electrostatic_nuclear_gradient: "// &
+         & "array shape mismatch"]
+      integer :: icase
+
+      allocate (err)
+      verror = c_loc(err)
+      call new_stub_cavity(cav)
+      vstub = c_loc(cav)
+      q = 1.0_c_double
+      za = 1.0_c_double
+
+      do icase = 1, size(needles)
+         amat0 = sentinel
+         xi = sentinel
+         w_f = sentinel
+         grad = sentinel
+         wrote = .false.
+         select case (icase)
+         case (1)
+            call probe_field_info(verror, vstub, 0_c_int, name, dtype, rank, dims, count)
+         case (2)
+            call moist_assemble_amat(verror, vstub, 2_c_int, amat0, xi)
+            wrote = any(amat0 /= sentinel) .or. any(xi /= sentinel)
+         case (3)
+            call contract_amat1_q1q2_surface_weights_api(verror, vstub, c_loc(q), c_loc(q), &
+               & c_null_ptr, c_loc(w_f), c_loc(w_xyz))
+            wrote = any(w_f /= sentinel)
+         case (4)
+            call contract_amat1_q1q2_surface_weights_api(verror, vstub, c_loc(q), c_loc(q), &
+               & c_loc(w_xi), c_loc(w_f), c_loc(w_xyz))
+         case (5)
+            call contract_pcm_nuclear_gradient_api(verror, vstub, c_loc(q), c_null_ptr, &
+               & c_loc(za), c_loc(grad))
+            wrote = any(grad /= sentinel)
+         case (6)
+            call contract_pcm_nuclear_gradient_api(verror, vstub, c_loc(q), c_loc(w_xyz), &
+               & c_loc(za), c_loc(grad))
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, wrote, trim(needles(icase)))
+         if (icase == 1 .and. .not. allocated(error)) &
+            call check_unchanged_info(error, "an overlong name", name, dtype, rank, dims, count)
+         if (allocated(error)) exit
+      end do
+
+      deallocate (cav%ptr)
+      deallocate (cav)
+      deallocate (err)
+
+   end subroutine test_stub_cavity_guards
+
+   !> Model entry points name a missing or empty cavity, a missing or empty
+   !> model, a model that is not the general one, a model not updated yet and
+   !> an invalid density buffer, and a failed constructor returns no handle
+   subroutine test_model_handle_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Handle whose cavity pointer is null
+      type(vp_cavity), pointer :: empty_cav
+      !> Model handles that were never constructed and one holding a stub
+      type(vp_model), pointer :: empty_model, stub
+      type(c_ptr) :: verror, vdrop, viswig, vmodel, handle
+      !> One-component density
+      real(c_double), target :: density(1)
+      !> Expected diagnostics, one per case
+      character(len=80), parameter :: needles(12) = [character(len=80) :: &
+         & "[moist_new_model] Cavity handle is missing", &
+         & "[moist_new_model] Cavity is not initialized", &
+         & "[moist_update_model] Model is not initialized", &
+         & "[moist_update_model] Molecular structure data is missing", &
+         & "[moist_get_model_cavity] Model handle is missing", &
+         & "[moist_get_model_cavity] Model is not initialized", &
+         & "[moist_get_model_cavity] This solvation model type does not expose a cavity", &
+         & "[moist_new_coupling] Model is not initialized", &
+         & "[moist_new_coupling] Model is not a general solvation model", &
+         & "[moist_new_coupling] General model must be updated first", &
+         & "[moist_set_model_isodensity_density] Invalid density buffer", &
+         & "[moist_set_model_isodensity_density] Invalid density buffer"]
+      integer :: icase
+
+      call new_unbuilt_cavities(error, err, verror, vdrop, viswig)
+      if (allocated(error)) then
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
+      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Model setup failed: "//err%ptr%message)
+         call drop_unbuilt_cavities(err, vdrop, viswig)
+         return
+      end if
+      allocate (empty_cav, empty_model, stub)
+      allocate (stub_model :: stub%ptr)
+      density = 1.0_c_double
+
+      do icase = 1, size(needles)
+         handle = c_null_ptr
+         select case (icase)
+         case (1)
+            handle = moist_new_model(verror, c_null_ptr, c_null_ptr)
+         case (2)
+            handle = moist_new_model(verror, c_loc(empty_cav), c_null_ptr)
+         case (3)
+            call update_solvation_model_api(verror, c_loc(empty_model), c_null_ptr)
+         case (4)
+            call update_solvation_model_api(verror, vmodel, c_null_ptr)
+         case (5)
+            handle = get_solvation_model_cavity_api(verror, c_null_ptr)
+         case (6)
+            handle = get_solvation_model_cavity_api(verror, c_loc(empty_model))
+         case (7)
+            handle = get_solvation_model_cavity_api(verror, c_loc(stub))
+         case (8)
+            handle = new_coupling_api(verror, c_loc(empty_model))
+         case (9)
+            handle = new_coupling_api(verror, c_loc(stub))
+         case (10)
+            handle = new_coupling_api(verror, vmodel)
+         case (11)
+            call moist_set_model_isodensity_density(verror, vmodel, 0_c_int, c_loc(density))
+         case (12)
+            call moist_set_model_isodensity_density(verror, vmodel, 1_c_int, c_null_ptr)
+         end select
+         call expect_error(error, err, trim(needles(icase)))
+         call check_untouched(error, c_associated(handle), trim(needles(icase)))
+         if (allocated(error)) exit
+      end do
+
+      deallocate (stub%ptr)
+      deallocate (stub, empty_model, empty_cav)
+      call delete_solvation_model_api(vmodel)
+      call drop_unbuilt_cavities(err, vdrop, viswig)
+
+   end subroutine test_model_handle_guards
+
+   !> Refusals that need an updated general model: a component added after the
+   !> update, a gradient read on a model that was never updated, and a NULL
+   !> gradient buffer
+   !>
+   !> Also pins the NULL-error guard of `moist_set_model_isodensity_density`:
+   !> with a handle the call would invalidate the model, so a coupling that
+   !> still builds afterwards shows it returned before touching anything
+   subroutine test_model_phase_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, viswig, vmodel, vfresh, vpv, vcpl, vresp
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      !> Gradient buffer, seeded so any write is visible, and a density
+      real(c_double), target :: gradient(3, 2), density(1)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      density = 1.0_c_double
+      allocate (err)
+      verror = c_loc(err)
+      vcpl = c_null_ptr
+      vresp = c_null_ptr
+      vfresh = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpv)
+      call update_solvation_model_api(verror, vmodel, vmol)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         call general_model_add_component_api(verror, vmodel, vpv)
+         call expect_error(error, err, &
+            & "[moist_add_model_component] Components cannot be added after model update")
+         if (allocated(error)) exit checks
+
+         call moist_set_model_isodensity_density(c_null_ptr, vmodel, 1_c_int, c_loc(density))
+         vcpl = new_coupling_api(verror, vmodel)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Coupling on the updated model failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         vfresh = moist_new_model(verror, viswig, c_null_ptr)
+         vresp = new_response_api(verror)
+         gradient = sentinel
+         call general_model_get_gradient_api(verror, vfresh, vcpl, vresp, 2_c_int, c_loc(gradient))
+         call expect_error(error, err, "[moist_get_model_gradient] General model must be updated first")
+         call check_untouched(error, any(gradient /= sentinel), "gradient of a model never updated")
+         if (allocated(error)) exit checks
+
+         call general_model_get_gradient_api(verror, vmodel, vcpl, vresp, 2_c_int, c_null_ptr)
+         call expect_error(error, err, "[moist_get_model_gradient] Null gradient pointer provided")
+      end block checks
+
+      call delete_coupling_api(vcpl)
+      call delete_response_api(vresp)
+      call delete_solvation_model_api(vfresh)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call moist_delete_cavity(viswig)
+      call moist_delete_structure(vmol)
+      deallocate (err)
+
+   end subroutine test_model_phase_guards
+
+   !> Response reads name an empty or unterminated array name and an array the
+   !> current item was accumulated without, at every rank, and leave the
+   !> caller's buffer alone
+   subroutine test_response_unavailable_arrays(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_response), target :: response
+      !> Items with only part of their arrays
+      type(potential_adjoint_response_type) :: adjoint
+      type(density_response_type) :: density
+      !> Output buffer, seeded so any write is visible
+      real(c_double), target :: values(3, 3, 2)
+      !> NUL-terminated array names
+      character(kind=c_char), allocatable, target :: empty(:), overlong(:), w_phi(:), &
+         & w_grad_rho(:), w_hess_rho(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      allocate (density%w_rho(2), source=1.0_c_double)
+      call response_accumulate(response%ptr, adjoint, err%ptr)
+      call response_accumulate(response%ptr, density, err%ptr)
+      call check(error, .not. allocated(err%ptr))
+      if (allocated(error)) return
+      empty = c_string("")
+      overlong = c_string(repeat("w", 40))
+      w_phi = c_string("w_phi")
+      w_grad_rho = c_string("w_grad_rho")
+      w_hess_rho = c_string("w_hess_rho")
+      values = sentinel
+
+      checks: block
+         ! The name is decoded before the walk is consulted, so no item is needed
+         call response_get_api(c_loc(err), c_loc(response), c_loc(empty), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(overlong), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         if (allocated(error)) exit checks
+
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(w_phi), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] 'w_phi' is not available")
+         if (allocated(error)) exit checks
+
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] 'w_grad_rho' is not available")
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] 'w_hess_rho' is not available")
+         if (allocated(error)) exit checks
+
+         call check_untouched(error, any(values /= sentinel), "response array buffer")
+      end block checks
+
+   end subroutine test_response_unavailable_arrays
+
+   !> Gradient readers refuse capacities one short of the built cavity before
+   !> writing a single element
+   !>
+   !> The sphere capacity is short for the anchor reader and the grid capacity
+   !> for the other two, so both halves of the capacity checks are exercised;
+   !> the PCM nuclear contraction then runs to completion on the same cavity
+   subroutine test_gradient_capacity_too_small(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      !> Undersized caller buffers
+      real(c_double), allocatable :: xyz1_rA(:, :, :, :), xi1_rA(:, :, :), a_i1_rA(:, :, :), &
+         & v_i1_rA(:, :, :), A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
+         & vsph1_rA(:, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :), amat0(:, :), &
+         & Amat1_rA(:, :, :, :), xi(:)
+      !> Zero surface weights, unit charges and the contracted gradient
+      real(c_double), allocatable, target :: w_phi(:), w_xyz(:, :), za(:), grad(:, :)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) then
+         call drop_water_cavity(err, vmol, vcav)
+         return
+      end if
+
+      checks: block
+         call compute_anchor_gradient_api(verror, vcav)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "compute_anchor_gradient failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (xyz1_rA(3, 3, nsph - 1, ngrid), xi1_rA(3, nsph - 1, ngrid), &
+                   a_i1_rA(3, nsph - 1, ngrid), v_i1_rA(3, nsph - 1, ngrid), &
+                   A_tot1_rA(3, nsph - 1), V_tot1_rA(3, nsph - 1), source=sentinel)
+         call get_anchor_gradient_api(verror, vcav, nsph - 1_c_int, ngrid, xyz1_rA, xi1_rA, &
+                                      a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
+         call expect_error(error, err, "[moist_get_anchor_gradient] Array capacity is too small")
+         call check_untouched(error, any(xyz1_rA /= sentinel) .or. any(xi1_rA /= sentinel) &
+            & .or. any(A_tot1_rA /= sentinel), "anchor gradient buffers")
+         if (allocated(error)) exit checks
+         deallocate (xyz1_rA, A_tot1_rA, V_tot1_rA)
+
+         call compute_cavity_gradient_api(verror, vcav)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "compute_cavity_gradient failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
+                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid - 1), &
+                   r_iI1_rA(3, nsph, ngrid - 1), rho1_rA(3, nsph, ngrid - 1), source=sentinel)
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, rho1_rA)
+         call expect_error(error, err, "[moist_get_cavity_gradient] Array capacity is too small")
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
+            & .or. any(rho1_rA /= sentinel), "cavity gradient buffers")
+         if (allocated(error)) exit checks
+
+         allocate (amat0(ngrid - 1, ngrid - 1), Amat1_rA(3, nsph, ngrid - 1, ngrid - 1), &
+                   xi(ngrid - 1), source=sentinel)
+         call get_amat_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, amat0, Amat1_rA, xi)
+         call expect_error(error, err, "[moist_get_amat_gradient] Array capacity is too small")
+         call check_untouched(error, any(amat0 /= sentinel) .or. any(Amat1_rA /= sentinel) &
+            & .or. any(xi /= sentinel), "A-matrix gradient buffers")
+         if (allocated(error)) exit checks
+
+         ! The PCM contraction runs to completion on the same cavity: zero
+         ! potential adjoint and position weights leave exactly nothing
+         allocate (w_phi(ngrid), w_xyz(3, ngrid), source=0.0_c_double)
+         allocate (za(nsph), source=1.0_c_double)
+         allocate (grad(3, nsph), source=sentinel)
+         call contract_pcm_nuclear_gradient_api(verror, vcav, c_loc(w_phi), c_loc(w_xyz), &
+            & c_loc(za), c_loc(grad))
+         if (allocated(err%ptr)) then
+            call test_failed(error, "contract_pcm_nuclear_gradient failed: "//err%ptr%message)
+         else if (any(grad /= 0.0_c_double)) then
+            call test_failed(error, "Zero weights gave a nonzero PCM nuclear gradient")
+         end if
+      end block checks
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_gradient_capacity_too_small
+
+   !> The A-matrix surface weights of a built cavity carry the closed-form
+   !> switching-factor channel and no net position force, a NULL output is
+   !> refused before the others are written, and a later success clears the
+   !> stale error
+   !>
+   !> - only the diagonal A_ii = sqrt(2/pi)*xi_i/f_i depends on f, so
+   !>   w_f_i = -q1_i*q2_i*sqrt(2/pi)*xi_i/f_i**2 exactly
+   !> - A depends on point separations only, so a rigid shift of every point
+   !>   leaves q1^T A q2 unchanged and the position weights sum to zero
+   subroutine test_amat_surface_weights(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      !> Surface data read back by name
+      real(c_double), allocatable :: xi0(:), f(:)
+      !> Contraction vectors and weight outputs
+      real(c_double), allocatable, target :: q1(:), q2(:), w_xi(:), w_f(:), w_xyz(:, :)
+      !> Closed-form switching-factor weights
+      real(c_double), allocatable :: reference(:)
+      character(kind=c_char), allocatable, target :: name_xi0(:), name_f(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      real(c_double), parameter :: sqrt_2_over_pi = 0.7978845608028654_c_double
+      integer :: i
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) then
+         call drop_water_cavity(err, vmol, vcav)
+         return
+      end if
+      name_xi0 = c_string("xi0")
+      name_f = c_string("f")
+      allocate (xi0(ngrid), f(ngrid), q1(ngrid), q2(ngrid), w_xi(ngrid), w_f(ngrid), &
+                w_xyz(3, ngrid))
+
+      checks: block
+         call moist_get_cavity_field_real(verror, vcav, c_loc(name_xi0), xi0)
+         call moist_get_cavity_field_real(verror, vcav, c_loc(name_f), f)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Reading the Gaussian surface failed: "//err%ptr%message)
+            exit checks
+         end if
+         ! Distinct vectors, so the q1_i*q2_j + q1_j*q2_i symmetrisation is exercised
+         do i = 1, ngrid
+            q1(i) = (0.1_c_double + 0.1_c_double*real(i - 1, c_double)/real(ngrid - 1, c_double))*f(i)
+            q2(i) = cos(real(i - 1, c_double))*f(i)
+         end do
+
+         w_xi = sentinel
+         w_f = sentinel
+         call contract_amat1_q1q2_surface_weights_api(verror, vcav, c_loc(q1), c_loc(q2), &
+            & c_loc(w_xi), c_loc(w_f), c_null_ptr)
+         call check_api_error(error, err, &
+            & "[moist_contract_amat1_q1q2_surface_weights] Null array pointer provided")
+         call check_untouched(error, any(w_xi /= sentinel) .or. any(w_f /= sentinel), &
+            & "surface weights with a NULL position output")
+         if (allocated(error)) exit checks
+
+         ! The stale error from the refusal above is left in place on purpose
+         call contract_amat1_q1q2_surface_weights_api(verror, vcav, c_loc(q1), c_loc(q2), &
+            & c_loc(w_xi), c_loc(w_f), c_loc(w_xyz))
+         if (allocated(err%ptr)) then
+            call test_failed(error, "contract_amat1_q1q2_surface_weights failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         reference = -q1*q2*sqrt_2_over_pi*xi0/f**2
+         if (any(abs(w_f - reference) > 1.0e-12_c_double*abs(reference))) then
+            call test_failed(error, "Switching-factor weights disagree with the closed form")
+            exit checks
+         end if
+         if (any(w_xi == sentinel)) then
+            call test_failed(error, "Width weights were not written")
+            exit checks
+         end if
+         if (maxval(abs(sum(w_xyz, dim=2))) > 1.0e-10_c_double*maxval(abs(w_xyz))) then
+            call test_failed(error, "Position weights carry a net force on a rigid shift")
+            exit checks
+         end if
+      end block checks
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_amat_surface_weights
+
+   !* ================================================================================= *!
+   !*                              Test double procedures                               *!
+   !* ================================================================================= *!
+
+   !> Stub update: the test sets every array by hand
+   subroutine stub_cavity_update(self, mol, error)
+      !> Stub cavity
+      class(stub_cavity), intent(inout) :: self
+      !> Ignored structure
+      type(structure_type), intent(in) :: mol
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_cavity_update
+
+   !> Stub gradient: the test sets the derivative arrays by hand
+   subroutine stub_cavity_gradient(self, error)
+      !> Stub cavity
+      class(stub_cavity), intent(inout) :: self
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_cavity_gradient
+
+   !> Declare the widths under the stub's own field name
+   subroutine stub_cavity_fields(self, query)
+      !> Stub cavity
+      class(stub_cavity), intent(in) :: self
+      !> Walker collecting or fetching the declarations
+      type(cavity_field_query_type), intent(inout) :: query
+
+      call query%add_real(self%field_name, "Stub widths", self%xi0)
+
+   end subroutine stub_cavity_fields
+
+   !> Stub update: accept any structure
+   subroutine stub_model_update(self, mol, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Ignored structure
+      class(structure_type), intent(in) :: mol
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_model_update
+
+   !> Stub energy: contribute nothing
+   subroutine stub_model_energy(self, coupling, energy, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Ignored coupling
+      class(coupling_type), intent(inout), target :: coupling
+      !> Unchanged energy
+      real(wp), intent(inout) :: energy
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_model_energy
+
+   !> Stub response: contribute nothing
+   subroutine stub_model_response(self, coupling, response, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Ignored coupling
+      class(coupling_type), intent(inout), target :: coupling
+      !> Unchanged response
+      type(response_type), intent(inout) :: response
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_model_response
+
+   !> Stub gradient: contribute nothing
+   subroutine stub_model_gradient(self, coupling, response, gradient, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Ignored coupling
+      class(coupling_type), intent(inout), target :: coupling
+      !> Unchanged response
+      type(response_type), intent(inout) :: response
+      !> Unchanged gradient
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+   end subroutine stub_model_gradient
 
 end module test_api

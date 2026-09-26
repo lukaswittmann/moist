@@ -1,6 +1,7 @@
 """Cross-language contracts exercised through public Python and C entry points."""
 
 import gc
+import math
 import numpy as np
 import pytest
 import moist
@@ -219,3 +220,56 @@ def test_diagnostic_contractions_match_explicit_anchor_tensors():
                                                   np.ones(2))
     expected = np.einsum("iAkj,ij->Ak", anchor.xyz1_rA, weights)
     np.testing.assert_allclose(actual, expected, atol=1e-12)
+
+
+def _gaussian_amat(xi, f, xyz):
+    """Gaussian PCM interaction matrix written out from its closed form."""
+    d = np.linalg.norm(xyz[:, None, :] - xyz[None, :, :], axis=-1)
+    p = np.outer(xi, xi) / np.sqrt(xi[:, None]**2 + xi[None, :]**2)
+    np.fill_diagonal(d, 1.)
+    matrix = np.vectorize(math.erf)(p * d) / d
+    np.fill_diagonal(matrix, np.sqrt(2/np.pi) * xi / f)
+    return matrix
+
+
+def test_amat_surface_weights_are_the_surface_derivatives_of_q1_a_q2():
+    """The three weight channels are d(q1^T A q2) by xi, f and each point position."""
+    cavity = moist.CavityDROP(parameters=moist.DROPParameters(nleb=26))
+    cavity.update(moist.Structure([1, 1], [[0., 0., 0.], [2., 1., .2]]))
+    xi, f, xyz = cavity.get("xi0"), cavity.get("f"), cavity.get("xyz")
+    # The written-out matrix has to be the one moist assembles, or the
+    # differences below would test the transcription instead of moist.
+    matrix, _ = cavity.assemble_amat()
+    np.testing.assert_allclose(_gaussian_amat(xi, f, xyz), matrix, rtol=1e-12, atol=1e-14)
+    ngrid = cavity.ngrid
+    # Distinct vectors, so the q1_i q2_j + q1_j q2_i symmetrisation is exercised
+    q1 = np.linspace(.1, .2, ngrid) * f
+    q2 = np.cos(np.arange(ngrid)) * f
+    w_xi, w_f, w_xyz = cavity.contract_amat_surface_weights(q1, q2)
+    assert w_xi.shape == w_f.shape == (ngrid,)
+    assert w_xyz.shape == (ngrid, 3)
+
+    def slope(channel, i, k=None):
+        """Central difference of q1^T A q2 in one surface variable."""
+        surface = {"xi": xi, "f": f, "xyz": xyz}
+        h = 1e-5 if k is not None else 1e-5 * surface[channel][i]
+        moved = []
+        for step in (-h, h):
+            values = surface[channel].copy()
+            values[i if k is None else (i, k)] += step
+            moved.append(_gaussian_amat(**{**surface, channel: values}))
+        # Differencing the matrices first cancels the untouched entries
+        # exactly; a switching factor near zero makes A_ii large enough that
+        # differencing two full energies would lose the step to round-off
+        return np.einsum("i,ij,j->", q1, moved[1] - moved[0], q2) / (2*h)
+
+    ref_xi = np.array([slope("xi", i) for i in range(ngrid)])
+    ref_f = np.array([slope("f", i) for i in range(ngrid)])
+    ref_xyz = np.array([[slope("xyz", i, k) for k in range(3)] for i in range(ngrid)])
+    for actual, reference in ((w_xi, ref_xi), (w_f, ref_f), (w_xyz, ref_xyz)):
+        np.testing.assert_allclose(actual, reference, rtol=1e-7,
+                                   atol=1e-9 * np.abs(reference).max())
+    # A depends on point differences only, so a rigid shift of the surface is free
+    np.testing.assert_allclose(w_xyz.sum(axis=0), 0., atol=1e-10 * np.abs(w_xyz).max())
+    with pytest.raises(ValueError, match="ngrid"):
+        cavity.contract_amat_surface_weights(q1[:-1], q2)
