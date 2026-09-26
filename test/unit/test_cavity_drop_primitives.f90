@@ -9,7 +9,7 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
                                           new_swif_smooth_step
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_primitives
@@ -715,6 +715,8 @@ contains
             param%proj_level = 0
          case (5)
             param%proj_level = 10
+         case default
+            error stop "test_cavity_drop_primitives: unhandled icase"
          end select
          call param%compute_derived(err)
          if (.not. allocated(err)) then

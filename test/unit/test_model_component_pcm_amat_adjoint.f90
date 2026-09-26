@@ -274,7 +274,7 @@ contains
       !> Matrix, atom, axis indices and extents
       integer :: i, j, iatom, iaxis, ngrid, nsph
       !> Largest deviations of the matrix and of the gradient
-      real(wp) :: dev_amat, dev_grad, scale
+      real(wp) :: dev_grad, scale
 
       !> The dense tensor is (3, nsph, ngrid, ngrid), so this test only runs on
       !> the coarsest iSwiG grid; nleb 14 keeps it in the tens of megabytes

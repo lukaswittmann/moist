@@ -24,7 +24,7 @@ module test_model_general
    use test_helpers, only: build_test_cavity, stage_model_point_charge_energy, &
       & fill_missing_with_zeros, fill_point_charge_field, copy_potential_adjoint
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_model_general

@@ -17,7 +17,7 @@
 module moist_math_solver_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_deflation_operator_type

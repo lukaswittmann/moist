@@ -25,11 +25,11 @@
 module moist_math_solver_slsqp_curvature
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_math_solver_type, only: solver_base_type
 
    use moist_math_solver_slsqp, only: new_slsqp_solver
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_curvature_type
@@ -42,6 +42,7 @@ module moist_math_solver_slsqp_curvature
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -49,6 +50,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -56,6 +58,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -63,6 +66,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
@@ -70,6 +74,7 @@ module moist_math_solver_slsqp_curvature
 
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(in) :: f
@@ -293,12 +298,12 @@ contains
          call build_tangent_basis(normal, t1, t2)
 
          if (debug) then
-            write (output_unit, '(x,a,es10.3,a,es10.3)') &
-               '[curvature] Gradient norm ', grad_norm, ' < threshold ', grad_thr
-            write (output_unit, '(x,a)') &
-               '[curvature] Using atom-anchor fallback normal'
-            write (output_unit, '(x,a,3f10.5)') &
-               '[curvature] Fallback normal: ', normal
+            write (output_unit, "(x,a,es10.3,a,es10.3)") &
+               "[curvature] Gradient norm ", grad_norm, " < threshold ", grad_thr
+            write (output_unit, "(x,a)") &
+               "[curvature] Using atom-anchor fallback normal"
+            write (output_unit, "(x,a,3f10.5)") &
+               "[curvature] Fallback normal: ", normal
          end if
 
          !> Both tangent directions are ambiguous - seed along both at all radii
@@ -346,20 +351,20 @@ contains
       flat2 = (kappa2 < kappa_thr)
 
       if (debug) then
-         write (output_unit, '(x,a)') &
-            '========== Curvature-guided seeding ========='
-         write (output_unit, '(x,a,es12.4)') &
-            'Gradient norm:  ', grad_norm
-         write (output_unit, '(x,a,3f10.5)') &
-            'Normal:         ', normal
-         write (output_unit, '(x,a,es12.4,a,l3)') &
-            'kappa_1:        ', kappa1, '  flat:', flat1
-         write (output_unit, '(x,a,3f10.5)') &
-            'Direction 1:    ', dir1
-         write (output_unit, '(x,a,es12.4,a,l3)') &
-            'kappa_2:        ', kappa2, '  flat:', flat2
-         write (output_unit, '(x,a,3f10.5)') &
-            'Direction 2:    ', dir2
+         write (output_unit, "(x,a)") &
+            "========== Curvature-guided seeding ========="
+         write (output_unit, "(x,a,es12.4)") &
+            "Gradient norm:  ", grad_norm
+         write (output_unit, "(x,a,3f10.5)") &
+            "Normal:         ", normal
+         write (output_unit, "(x,a,es12.4,a,l3)") &
+            "kappa_1:        ", kappa1, "  flat:", flat1
+         write (output_unit, "(x,a,3f10.5)") &
+            "Direction 1:    ", dir1
+         write (output_unit, "(x,a,es12.4,a,l3)") &
+            "kappa_2:        ", kappa2, "  flat:", flat2
+         write (output_unit, "(x,a,3f10.5)") &
+            "Direction 2:    ", dir2
       end if
 
       !> Compute seed count:
@@ -413,10 +418,10 @@ contains
       n_seeds = offset
 
       if (debug) then
-         write (output_unit, '(x,a,i0,a)') &
-            '[curvature] Generated ', n_seeds, ' seeds'
-         write (output_unit, '(x,a)') &
-            '============================================='
+         write (output_unit, "(x,a,i0,a)") &
+            "[curvature] Generated ", n_seeds, " seeds"
+         write (output_unit, "(x,a)") &
+            "============================================="
       end if
    end subroutine generate_curvature_seeds
 
@@ -525,8 +530,8 @@ contains
       end if
 
       if (debug_use) then
-         write (output_unit, '(x,a)') &
-            '========== Curvature SLSQP startup =========='
+         write (output_unit, "(x,a)") &
+            "========== Curvature SLSQP startup =========="
       end if
 
       !> Generate curvature-guided seeds
@@ -620,8 +625,8 @@ contains
          call self%slsqp_solver%solve(x_trial, solver_error)
          if (allocated(solver_error)) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,a)') &
-                  'Seed ', i, ' failed: ', trim(solver_error%message)
+               write (output_unit, "(x,a,i0,a,a)") &
+                  "Seed ", i, " failed: ", trim(solver_error%message)
             end if
             deallocate (solver_error)
             cycle
@@ -650,10 +655,10 @@ contains
       x = best_x
 
       if (self%debug) then
-         write (output_unit, '(x,a,i0,a,i0,a)') &
-            '[curvature] ', n_converged, '/', self%n_seeds, ' seeds converged'
-         write (output_unit, '(x,a,es12.4)') &
-            '[curvature] Best distance: ', sqrt(best_dist2)
+         write (output_unit, "(x,a,i0,a,i0,a)") &
+            "[curvature] ", n_converged, "/", self%n_seeds, " seeds converged"
+         write (output_unit, "(x,a,es12.4)") &
+            "[curvature] Best distance: ", sqrt(best_dist2)
       end if
 
       deallocate (converged)

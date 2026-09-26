@@ -11,7 +11,7 @@ module moist_math_grid
    use moist_math_grid_molecular, only: &
       & molecular_grid_type, new_molecular_grid, &
       & new_molecular_grid_uniform, default_grid_sizes, integrand_3d
-   implicit none
+   implicit none(type, external)
    private
 
    public :: grid_size

@@ -15,10 +15,10 @@ module test_math_solvers
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_solver_type, only: solver_base_type
 
-   use moist_math_solver_newton
-   use moist_math_solver_slsqp
-   use moist_math_solver_lbfgsb
-   use moist_math_solver_slsqp_multi_tangent
+   use moist_math_solver_newton, only: new_newton_solver
+   use moist_math_solver_slsqp, only: new_slsqp_solver
+   use moist_math_solver_lbfgsb, only: new_lbfgsb_solver
+   use moist_math_solver_slsqp_multi_tangent, only: new_slsqp_multi_tangent_solver
    use moist_math_solver_slsqp_deflation, only: new_slsqp_deflation_solver, &
                                                 moist_math_solver_slsqp_deflation_type
    use moist_math_solver_newton_deflation, only: new_newton_deflation_solver, &
@@ -35,7 +35,7 @@ module test_math_solvers
                                NLESOLVER_SCALAR_BOUNDS, &
                                NLESOLVER_SPARSITY_LSQR, NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR
    use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_math_solvers
@@ -153,7 +153,6 @@ contains
       class(solver_base_type), allocatable :: solver
       type(moist_error_type), allocatable :: solver_error
       real(wp), dimension(2) :: x
-      integer :: istat
 
       ! Initial guess (same for all solvers)
       x = [0.5_wp, 0.5_wp]
@@ -192,7 +191,6 @@ contains
       type(moist_error_type), allocatable :: solver_error
       real(wp), dimension(2) :: x
       real(wp), dimension(2) :: xl, xu
-      integer :: istat
 
       ! Initial guess (same as Newton)
       x = [0.5_wp, 0.5_wp]
@@ -358,17 +356,16 @@ contains
       type(error_type), allocatable, intent(out) :: error
       class(solver_base_type), allocatable :: solver
       type(moist_error_type), allocatable :: solver_error
-      real(wp), dimension(3) :: x  ! [x, y, λ]
+      real(wp), dimension(3) :: x  ! [x, y, lambda]
       real(wp) :: x_expected, y_expected
-      integer :: istat
 
       ! Expected solution
-      x_expected = 2.0_wp/sqrt(13.0_wp)  ! ≈ 0.5547
-      y_expected = 3.0_wp/sqrt(13.0_wp)  ! ≈ 0.8321
+      x_expected = 2.0_wp/sqrt(13.0_wp)  ! ~ 0.5547
+      y_expected = 3.0_wp/sqrt(13.0_wp)  ! ~ 0.8321
 
       ! Initial guess: point on circle + Lagrange multiplier estimate
       ! Start from normalized direction toward target
-      x = [0.5547_wp, 0.8321_wp, -2.5_wp]  ! [x, y, λ_guess]
+      x = [0.5547_wp, 0.8321_wp, -2.5_wp]  ! [x, y, lambda_guess]
 
       ! Initialize Newton solver with Lagrangian formulation
       call new_newton_solver(solver, &
@@ -409,7 +406,6 @@ contains
       real(wp), dimension(2) :: x  ! [x, y]
       real(wp), dimension(2) :: xl, xu
       real(wp) :: x_expected, y_expected
-      integer :: istat
 
       ! Expected solution
       x_expected = 2.0_wp/sqrt(13.0_wp)
@@ -673,7 +669,7 @@ contains
    !> Circle Lagrangian residual for Newton: [ dL, constraint] = 0
    !> Variables: [x, y, lambda ]
    subroutine circle_lagrangian_residual(x, f)
-      real(wp), dimension(:), intent(in) :: x  ! [x, y, λ]
+      real(wp), dimension(:), intent(in) :: x  ! [x, y, lambda]
       real(wp), dimension(:), intent(out) :: f
 
       ! f_1 = dL/ dx = 2(x-2) + 2 lambda x = 0
@@ -688,23 +684,23 @@ contains
 
    !> Circle Lagrangian Jacobian for Newton
    subroutine circle_lagrangian_jacobian(x, jac)
-      real(wp), dimension(:), intent(in) :: x  ! [x, y, λ]
+      real(wp), dimension(:), intent(in) :: x  ! [x, y, lambda]
       real(wp), dimension(:, :), intent(out) :: jac
 
       ! Row 1: derivatives of f_1
-      jac(1, 1) = 2.0_wp + 2.0_wp*x(3)  ! ∂f₁/∂x
-      jac(1, 2) = 0.0_wp                   ! ∂f₁/∂y
-      jac(1, 3) = 2.0_wp*x(1)            ! ∂f₁/∂λ
+      jac(1, 1) = 2.0_wp + 2.0_wp*x(3)  ! df1/dx
+      jac(1, 2) = 0.0_wp                   ! df1/dy
+      jac(1, 3) = 2.0_wp*x(1)            ! df1/dlambda
 
       ! Row 2: derivatives of f_2
-      jac(2, 1) = 0.0_wp                   ! ∂f₂/∂x
-      jac(2, 2) = 2.0_wp + 2.0_wp*x(3)  ! ∂f₂/∂y
-      jac(2, 3) = 2.0_wp*x(2)            ! ∂f₂/∂λ
+      jac(2, 1) = 0.0_wp                   ! df2/dx
+      jac(2, 2) = 2.0_wp + 2.0_wp*x(3)  ! df2/dy
+      jac(2, 3) = 2.0_wp*x(2)            ! df2/dlambda
 
       ! Row 3: derivatives of constraint
-      jac(3, 1) = 2.0_wp*x(1)            ! ∂f₃/∂x
-      jac(3, 2) = 2.0_wp*x(2)            ! ∂f₃/∂y
-      jac(3, 3) = 0.0_wp                   ! ∂f₃/∂λ
+      jac(3, 1) = 2.0_wp*x(1)            ! df3/dx
+      jac(3, 2) = 2.0_wp*x(2)            ! df3/dy
+      jac(3, 3) = 0.0_wp                   ! df3/dlambda
    end subroutine circle_lagrangian_jacobian
 
    !> Circle objective for SLSQP: distance squared

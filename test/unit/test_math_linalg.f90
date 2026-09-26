@@ -409,7 +409,7 @@ contains
 
       ! LAPACK solution
       R_lapack = R
-      call dsyev('V', 'U', int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
+      call dsyev("V", "U", int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
                  work_lapack, int(8, lapack_ik), info)
       if (info /= 0) then
          call check(error, .false., "LAPACK dsyev failed for test case 1")
@@ -448,7 +448,7 @@ contains
 
       ! LAPACK solution
       R_lapack = R
-      call dsyev('V', 'U', int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
+      call dsyev("V", "U", int(2, lapack_ik), R_lapack, int(2, lapack_ik), evals_lapack, &
                  work_lapack, int(8, lapack_ik), info)
       if (info /= 0) then
          call check(error, .false., "LAPACK dsyev failed for test case 2")
@@ -487,9 +487,15 @@ contains
       v = [1.5_wp, -2.0_wp, 0.75_wp]
 
       t = outer4(v)
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            ref(i, j, k, l) = v(i)*v(j)*v(k)*v(l)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  ref(i, j, k, l) = v(i)*v(j)*v(k)*v(l)
+               end do
+            end do
+         end do
+      end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
                  "outer4: element-wise mismatch vs brute-force reference")
@@ -505,14 +511,20 @@ contains
       t = outer4(v)
 
       ! Adjacent swaps generate S_4
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, "outer4: i<->j")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, "outer4: j<->k")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, "outer4: k<->l")
-            if (allocated(error)) return
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, "outer4: i<->j")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, "outer4: j<->k")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, "outer4: k<->l")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+      end do
    end subroutine test_outer4_full_symmetry
 
    !> Cross-check outer4 with outer_matrix
@@ -525,9 +537,15 @@ contains
       vvT = outer_matrix(v, v)
       t = outer4(v)
 
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            ref(i, j, k, l) = vvT(i, j)*vvT(k, l)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  ref(i, j, k, l) = vvT(i, j)*vvT(k, l)
+               end do
+            end do
+         end do
+      end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
                  "outer4(v) should factor as outer_matrix(v,v) on (i,j) and (k,l)")
@@ -553,15 +571,25 @@ contains
 
       g = [0.4_wp, -0.6_wp, 1.2_wp]
       ! Asymmetric h3 separates the four terms
-      do c = 1, 3; do b = 1, 3; do a = 1, 3
-            h3(a, b, c) = real(a, wp) + 0.5_wp*real(b, wp) - 0.25_wp*real(c, wp)
-         end do; end do; end do
+      do c = 1, 3
+         do b = 1, 3
+            do a = 1, 3
+               h3(a, b, c) = real(a, wp) + 0.5_wp*real(b, wp) - 0.25_wp*real(c, wp)
+            end do
+         end do
+      end do
 
       t = sym4_31(g, h3)
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            ref(i, j, k, l) = g(i)*h3(j, k, l) + g(j)*h3(i, k, l) &
-                              + g(k)*h3(i, j, l) + g(l)*h3(i, j, k)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  ref(i, j, k, l) = g(i)*h3(j, k, l) + g(j)*h3(i, k, l) &
+                                    + g(k)*h3(i, j, l) + g(l)*h3(i, j, k)
+               end do
+            end do
+         end do
+      end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
                  "sym4_31: element-wise mismatch vs brute-force reference")
@@ -578,17 +606,23 @@ contains
       h3 = outer3(v)
       t = sym4_31(g, h3)
 
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
-                       "sym4_31 with symmetric h3: must be symmetric in i<->j")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
-                       "sym4_31 with symmetric h3: must be symmetric in j<->k")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
-                       "sym4_31 with symmetric h3: must be symmetric in k<->l")
-            if (allocated(error)) return
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
+                             "sym4_31 with symmetric h3: must be symmetric in i<->j")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                             "sym4_31 with symmetric h3: must be symmetric in j<->k")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                             "sym4_31 with symmetric h3: must be symmetric in k<->l")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+      end do
    end subroutine test_sym4_31_symmetric_input
 
    !> Check sym4_31 scaling in each argument
@@ -598,9 +632,13 @@ contains
       integer :: a, b, c
 
       g = [0.2_wp, -1.0_wp, 0.5_wp]
-      do c = 1, 3; do b = 1, 3; do a = 1, 3
-            h3(a, b, c) = 0.3_wp*a - 0.1_wp*b + 0.7_wp*c
-         end do; end do; end do
+      do c = 1, 3
+         do b = 1, 3
+            do a = 1, 3
+               h3(a, b, c) = 0.3_wp*a - 0.1_wp*b + 0.7_wp*c
+            end do
+         end do
+      end do
 
       t = sym4_31(g, h3)
       t_scaled_g = sym4_31(2.5_wp*g, h3)
@@ -624,9 +662,15 @@ contains
       call build_symmetric_pair(A, B)
 
       t = sym4_22(A, B)
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            ref(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  ref(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k)
+               end do
+            end do
+         end do
+      end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
                  "sym4_22: element-wise mismatch vs documented 3-term reference")
@@ -659,17 +703,23 @@ contains
       call build_symmetric_pair(A, B)
       t = sym4_22(A, B)
 
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
-                       "sym4_22: must be symmetric in j<->k")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
-                       "sym4_22: must be symmetric in k<->l")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, l, k, j)) < tensor_tol, &
-                       "sym4_22: must be symmetric in j<->l")
-            if (allocated(error)) return
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                             "sym4_22: must be symmetric in j<->k")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                             "sym4_22: must be symmetric in k<->l")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, l, k, j)) < tensor_tol, &
+                             "sym4_22: must be symmetric in j<->l")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+      end do
    end subroutine test_sym4_22_jkl_symmetry
 
    !> Swapped calls should produce the full 6-term tensor
@@ -688,11 +738,17 @@ contains
       if (allocated(error)) return
 
       ! The sum must be fully symmetric
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            call check(error, abs(t_sum(i, j, k, l) - t_sum(j, i, k, l)) < tensor_tol, &
-                       "sym4_22 + swapped: must be symmetric in i<->j")
-            if (allocated(error)) return
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  call check(error, abs(t_sum(i, j, k, l) - t_sum(j, i, k, l)) < tensor_tol, &
+                             "sym4_22 + swapped: must be symmetric in i<->j")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+      end do
    end subroutine test_sym4_22_full_symmetric
 
    !> Check the equivalent four-vector contraction
@@ -711,9 +767,15 @@ contains
 
       t = sym4_22(A, B)
       contracted = 0.0_wp
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            contracted = contracted + t(i, j, k, l)*u(i)*v(j)*w(k)*x(l)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  contracted = contracted + t(i, j, k, l)*u(i)*v(j)*w(k)*x(l)
+               end do
+            end do
+         end do
+      end do
 
       expected = dot_product(u, matmul(A, v))*dot_product(w, matmul(B, x)) &
                  + dot_product(u, matmul(A, w))*dot_product(v, matmul(B, x)) &
@@ -737,10 +799,16 @@ contains
                    -0.5_wp, 0.8_wp, 3.0_wp], [3, 3])
 
       t = sym4_211(g, H)
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            ref(i, j, k, l) = g(i)*g(j)*H(k, l) + g(i)*g(k)*H(j, l) + g(i)*g(l)*H(j, k) &
-                              + g(j)*g(k)*H(i, l) + g(j)*g(l)*H(i, k) + g(k)*g(l)*H(i, j)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  ref(i, j, k, l) = g(i)*g(j)*H(k, l) + g(i)*g(k)*H(j, l) + g(i)*g(l)*H(j, k) &
+                                    + g(j)*g(k)*H(i, l) + g(j)*g(l)*H(i, k) + g(k)*g(l)*H(i, j)
+               end do
+            end do
+         end do
+      end do
 
       call check(error, maxval(abs(t - ref)) < tensor_tol, &
                  "sym4_211: element-wise mismatch vs brute-force reference")
@@ -758,17 +826,23 @@ contains
                    -0.5_wp, 0.8_wp, 3.0_wp], [3, 3])
       t = sym4_211(g, H)
 
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
-                       "sym4_211: must be symmetric in i<->j")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
-                       "sym4_211: must be symmetric in j<->k")
-            if (allocated(error)) return
-            call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
-                       "sym4_211: must be symmetric in k<->l")
-            if (allocated(error)) return
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  call check(error, abs(t(i, j, k, l) - t(j, i, k, l)) < tensor_tol, &
+                             "sym4_211: must be symmetric in i<->j")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, k, j, l)) < tensor_tol, &
+                             "sym4_211: must be symmetric in j<->k")
+                  if (allocated(error)) return
+                  call check(error, abs(t(i, j, k, l) - t(i, j, l, k)) < tensor_tol, &
+                             "sym4_211: must be symmetric in k<->l")
+                  if (allocated(error)) return
+               end do
+            end do
+         end do
+      end do
    end subroutine test_sym4_211_full_symmetry
 
    !> Check sym4_211 scaling in each argument
@@ -813,10 +887,16 @@ contains
       real(wp) :: t(3, 3, 3, 3)
       integer :: i, j, k, l
 
-      do l = 1, 3; do k = 1, 3; do j = 1, 3; do i = 1, 3
-            t(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k) &
-                            + B(i, j)*A(k, l) + B(i, k)*A(j, l) + B(i, l)*A(j, k)
-         end do; end do; end do; end do
+      do l = 1, 3
+         do k = 1, 3
+            do j = 1, 3
+               do i = 1, 3
+                  t(i, j, k, l) = A(i, j)*B(k, l) + A(i, k)*B(j, l) + A(i, l)*B(j, k) &
+                                  + B(i, j)*A(k, l) + B(i, k)*A(j, l) + B(i, l)*A(j, k)
+               end do
+            end do
+         end do
+      end do
    end function sym4_22_full_ref
 
    !===========================================================================

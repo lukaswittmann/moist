@@ -1,7 +1,7 @@
 !> Memory utilities for array reallocation
 module moist_utils_mem
    use mctc_env, only: wp, error_type, fatal_error
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: grow_array

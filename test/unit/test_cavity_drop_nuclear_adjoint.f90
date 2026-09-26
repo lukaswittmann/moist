@@ -832,7 +832,7 @@ contains
 
       real(wp), allocatable :: radii(:)
       type(mctc_error), allocatable :: cav_error
-      integer :: iat, proj_level_loc, nleb_loc, prune_loc
+      integer :: proj_level_loc, nleb_loc, prune_loc
       real(wp) :: blend_k_loc, gamma_loc
 
       nleb_loc = NUM_LEB

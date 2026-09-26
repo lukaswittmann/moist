@@ -3945,9 +3945,9 @@ contains
       !> Entry point name used in error messages
       character(len=*), intent(in) :: origin
       !> Fortran error pointer
-      type(vp_error), pointer :: error
+      type(vp_error), pointer, intent(out) :: error
       !> Fortran cavity pointer
-      type(vp_cavity), pointer :: cav
+      type(vp_cavity), pointer, intent(out) :: cav
 
       ok = .false.
       nullify (error)
@@ -3980,9 +3980,9 @@ contains
    !> @return              Whether the field was found
    logical function fetch_cavity_field(error, cav, cname, origin, query) result(ok)
       !> Fortran error pointer
-      type(vp_error), pointer :: error
+      type(vp_error), pointer, intent(in) :: error
       !> Fortran cavity pointer
-      type(vp_cavity), pointer :: cav
+      type(vp_cavity), pointer, intent(in) :: cav
       !> Field name as a C string
       type(c_ptr), value :: cname
       !> Entry point name used in error messages
@@ -4024,7 +4024,7 @@ contains
    !> @return               Whether the payload may be copied out
    logical function check_field_payload(error, query, dtype, origin) result(ok)
       !> Fortran error pointer
-      type(vp_error), pointer :: error
+      type(vp_error), pointer, intent(in) :: error
       !> Query walker holding the fetched payload
       type(cavity_field_query_type), intent(in) :: query
       !> Element type the caller asked for

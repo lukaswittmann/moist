@@ -21,12 +21,12 @@
 module moist_math_solver_newton_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_math_solver_type, only: solver_base_type
 
    use moist_math_solver_newton, only: new_newton_solver
    use moist_math_solver_deflation, only: moist_deflation_operator_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_newton_deflation_type
@@ -36,6 +36,7 @@ module moist_math_solver_newton_deflation
    abstract interface
       subroutine func_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: f
          class(*), intent(in) :: context
@@ -43,6 +44,7 @@ module moist_math_solver_newton_deflation
 
       subroutine grad_context_interface(x, jac, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: jac
          class(*), intent(in) :: context
@@ -430,9 +432,9 @@ contains
             call self%newton_solver%solve(x_trial, inner_error)
             if (allocated(inner_error)) then
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                     '[newton-deflation] iter ', iter, ' contA attempt ', attempt, &
-                     ' inner Newton failed: ', trim(inner_error%message)
+                  write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                     "[newton-deflation] iter ", iter, " contA attempt ", attempt, &
+                     " inner Newton failed: ", trim(inner_error%message)
                end if
                deallocate (inner_error)
                cycle attempts_cont
@@ -444,9 +446,9 @@ contains
                exit attempts_cont
             end if
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,i0,a)') &
-                  '[newton-deflation] iter ', iter, ' contA attempt ', attempt, &
-                  ' converged to a known root (try next perturbation)'
+               write (output_unit, "(x,a,i0,a,i0,a)") &
+                  "[newton-deflation] iter ", iter, " contA attempt ", attempt, &
+                  " converged to a known root (try next perturbation)"
             end if
          end do attempts_cont
 
@@ -467,9 +469,9 @@ contains
                call self%newton_solver%solve(x_trial, inner_error)
                if (allocated(inner_error)) then
                   if (self%debug) then
-                     write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                        '[newton-deflation] iter ', iter, ' anchorB attempt ', &
-                        attempt, ' inner Newton failed: ', trim(inner_error%message)
+                     write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                        "[newton-deflation] iter ", iter, " anchorB attempt ", &
+                        attempt, " inner Newton failed: ", trim(inner_error%message)
                   end if
                   deallocate (inner_error)
                   cycle attempts_anchor
@@ -481,17 +483,17 @@ contains
                   exit attempts_anchor
                end if
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a)') &
-                     '[newton-deflation] iter ', iter, ' anchorB attempt ', &
-                     attempt, ' converged to a known root (try next perturbation)'
+                  write (output_unit, "(x,a,i0,a,i0,a)") &
+                     "[newton-deflation] iter ", iter, " anchorB attempt ", &
+                     attempt, " converged to a known root (try next perturbation)"
                end if
             end do attempts_anchor
          end if
 
          if (.not. found_new_root) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a)') &
-                  '[newton-deflation] iter ', iter, ' exhausted all attempts (stop)'
+               write (output_unit, "(x,a,i0,a)") &
+                  "[newton-deflation] iter ", iter, " exhausted all attempts (stop)"
             end if
             exit outer
          end if
@@ -531,8 +533,8 @@ contains
                deallocate (xl_tight, xu_tight)
                if (allocated(build_error)) then
                   if (self%debug) then
-                     write (output_unit, '(x,a,a)') &
-                        '[newton-deflation] bounds rebuild failed: ', &
+                     write (output_unit, "(x,a,a)") &
+                        "[newton-deflation] bounds rebuild failed: ", &
                         trim(build_error%message)
                   end if
                   ! Non-fatal: stop the deflation search rather than aborting
@@ -542,15 +544,15 @@ contains
                end if
                ball_armed = .true.
                if (self%debug) then
-                  write (output_unit, '(x,a,es12.4)') &
-                     '[newton-deflation] ball cap (phi_max) = ', phi_max
+                  write (output_unit, "(x,a,es12.4)") &
+                     "[newton-deflation] ball cap (phi_max) = ", phi_max
                end if
             end if
          end if
 
          if (self%debug) then
-            write (output_unit, '(x,a,i0,a)') &
-               '[newton-deflation] iter ', iter, ' accepted root'
+            write (output_unit, "(x,a,i0,a)") &
+               "[newton-deflation] iter ", iter, " accepted root"
          end if
       end do outer
 

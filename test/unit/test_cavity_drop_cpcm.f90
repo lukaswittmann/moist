@@ -19,7 +19,7 @@ module test_cavity_drop_cpcm
       & pcm_electrostatic_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: iso_fortran_env, only: error_unit
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_cpcm

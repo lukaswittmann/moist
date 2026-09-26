@@ -1,9 +1,9 @@
 !> Defensive-preamble tests for the C API entry points
 module test_api
-   use iso_c_binding, only: c_ptr, c_loc, c_null_ptr, c_int, c_double, c_bool, &
-                            c_funptr, c_funloc, c_associated, c_f_pointer, &
-                            c_char, c_null_char, c_size_t, c_sizeof, c_null_funptr, &
-                            c_int8_t
+   use, intrinsic :: iso_c_binding, only: c_ptr, c_loc, c_null_ptr, c_int, c_double, c_bool, &
+                                          c_funptr, c_funloc, c_associated, c_f_pointer, &
+                                          c_char, c_null_char, c_size_t, c_sizeof, c_null_funptr, &
+                                          c_int8_t
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io_structure, only: structure_type
@@ -27,7 +27,7 @@ module test_api
       & potential_adjoint_response_type, response_accumulate, response_type
    use moist_model_type, only: solvation_model_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_api
@@ -173,6 +173,7 @@ module test_api
       subroutine moist_get_cavity_sizes(verror, vcav, ngrid, nsph) &
             & bind(C, name="moist_get_cavity_sizes")
          import :: c_ptr, c_int
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), intent(inout), optional :: ngrid
@@ -183,6 +184,7 @@ module test_api
             & lattice, periodic) result(vmol) &
             & bind(C, name="moist_new_structure")
          import :: c_ptr, c_int, c_double, c_bool
+         implicit none(type, external)
          type(c_ptr), value :: verror
          integer(c_int), value :: natoms
          integer(c_int), intent(in), optional :: numbers(natoms)
@@ -195,6 +197,7 @@ module test_api
       subroutine moist_delete_structure(vmol) &
             & bind(C, name="moist_delete_structure")
          import :: c_ptr
+         implicit none(type, external)
          type(c_ptr), intent(inout) :: vmol
       end subroutine moist_delete_structure
 
@@ -202,6 +205,7 @@ module test_api
       subroutine moist_update_cavity(verror, vcav, vmol) &
             & bind(C, name="moist_update_cavity")
          import :: c_ptr
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: vmol
@@ -210,6 +214,7 @@ module test_api
       subroutine moist_delete_cavity(vcav) &
             & bind(C, name="moist_delete_cavity")
          import :: c_ptr
+         implicit none(type, external)
          type(c_ptr), intent(inout) :: vcav
       end subroutine moist_delete_cavity
 
@@ -217,6 +222,7 @@ module test_api
             & area, volume, ngrid, nsph, xyz, a, owner, converged, radii, asph) &
             & bind(C, name="moist_get_cavity_results")
          import :: c_ptr, c_int, c_double, c_bool
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), value :: ngrid_cap
@@ -236,6 +242,7 @@ module test_api
       subroutine moist_get_cavity_field_count(verror, vcav, nfield) &
             & bind(C, name="moist_get_cavity_field_count")
          import :: c_ptr, c_int
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), intent(inout), optional :: nfield
@@ -245,6 +252,7 @@ module test_api
             & dtype, rank, dims, count) &
             & bind(C, name="moist_get_cavity_field_info")
          import :: c_ptr, c_int, c_char
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), value :: ifield
@@ -258,6 +266,7 @@ module test_api
       subroutine moist_get_cavity_field_real(verror, vcav, cname, values) &
             & bind(C, name="moist_get_cavity_field_real")
          import :: c_ptr, c_double
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
@@ -267,6 +276,7 @@ module test_api
       subroutine moist_get_cavity_field_int(verror, vcav, cname, values) &
             & bind(C, name="moist_get_cavity_field_int")
          import :: c_ptr, c_int
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
@@ -276,6 +286,7 @@ module test_api
       subroutine moist_get_cavity_field_bool(verror, vcav, cname, values) &
             & bind(C, name="moist_get_cavity_field_bool")
          import :: c_ptr, c_bool
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          type(c_ptr), value :: cname
@@ -297,6 +308,7 @@ module test_api
       subroutine moist_assemble_amat(verror, vcav, ngrid_cap, amat0, xi) &
             & bind(C, name="moist_assemble_amat")
          import :: c_ptr, c_int, c_double
+         implicit none(type, external)
          type(c_ptr), value :: verror
          type(c_ptr), value :: vcav
          integer(c_int), value :: ngrid_cap
@@ -696,10 +708,10 @@ contains
       type(c_ptr), intent(in) :: vcav
       !> Scalar result buffers
       real(c_double) :: area, volume
-      integer(c_int) :: ngrid, nmax, nsph
+      integer(c_int) :: ngrid, nsph
       !> Per-point result buffers
-      real(c_double) :: xyz(3, 1), normal0(3, 1)
-      real(c_double) :: wleb(1), a(1), r_iI0(1), f(1), rho(1)
+      real(c_double) :: xyz(3, 1)
+      real(c_double) :: a(1)
       integer(c_int) :: owner(1)
       logical(c_bool) :: converged(1)
       !> Per-sphere result buffers
@@ -807,8 +819,9 @@ contains
       call check_api_error(error, err, "Field name is missing")
 
       if (.not. allocated(error)) then
-         if (any(values /= -12345.0_c_double)) &
+         if (any(values /= -12345.0_c_double)) then
             call test_failed(error, "get_cavity_field_real wrote for a null name")
+         end if
       end if
 
       call drop_water_cavity(err, vmol, vcav)
@@ -855,8 +868,9 @@ contains
       call moist_get_cavity_field_count(c_loc(err), c_null_ptr, nfield)
       call check_api_error(error, err, "Cavity handle is missing")
       if (.not. allocated(error)) then
-         if (nfield /= -1_c_int) &
+         if (nfield /= -1_c_int) then
             call test_failed(error, "get_cavity_field_count changed nfield on failure")
+         end if
       end if
       if (allocated(err%ptr)) deallocate (err%ptr)
 
@@ -866,8 +880,9 @@ contains
          call check_api_error(error, err, "Cavity handle is missing")
       end if
       if (.not. allocated(error)) then
-         if (any(values /= -12345.0_c_double)) &
+         if (any(values /= -12345.0_c_double)) then
             call test_failed(error, "get_cavity_field_real wrote for a missing handle")
+         end if
       end if
 
       deallocate (err)
@@ -894,8 +909,9 @@ contains
       call moist_get_cavity_field_count(c_loc(err), c_loc(cav), nfield)
       call check_api_error(error, err, "Cavity is not initialized")
       if (.not. allocated(error)) then
-         if (nfield /= -1_c_int) &
+         if (nfield /= -1_c_int) then
             call test_failed(error, "get_cavity_field_count changed nfield on failure")
+         end if
       end if
       if (allocated(err%ptr)) deallocate (err%ptr)
 
@@ -905,8 +921,9 @@ contains
          call check_api_error(error, err, "Cavity is not initialized")
       end if
       if (.not. allocated(error)) then
-         if (any(values /= -12345.0_c_double)) &
+         if (any(values /= -12345.0_c_double)) then
             call test_failed(error, "get_cavity_field_real wrote for an empty cavity")
+         end if
       end if
 
       deallocate (cav)
@@ -936,8 +953,9 @@ contains
       call check_api_error(error, err, "Field name is empty")
 
       if (.not. allocated(error)) then
-         if (any(values /= -12345.0_c_double)) &
+         if (any(values /= -12345.0_c_double)) then
             call test_failed(error, "get_cavity_field_real wrote for an empty name")
+         end if
       end if
 
       call drop_water_cavity(err, vmol, vcav)
@@ -974,16 +992,18 @@ contains
          call probe_field_info(verror, vcav, -1_c_int, name, dtype, rank, dims, count)
          call check_api_error(error, err, "Field index out of range")
       end if
-      if (.not. allocated(error)) &
+      if (.not. allocated(error)) then
          call check_unchanged_info(error, "negative index", name, dtype, rank, dims, count)
+      end if
       if (allocated(err%ptr)) deallocate (err%ptr)
 
       if (.not. allocated(error)) then
          call probe_field_info(verror, vcav, nfield, name, dtype, rank, dims, count)
          call check_api_error(error, err, "Field index out of range")
       end if
-      if (.not. allocated(error)) &
+      if (.not. allocated(error)) then
          call check_unchanged_info(error, "one past the end", name, dtype, rank, dims, count)
+      end if
 
       call drop_water_cavity(err, vmol, vcav)
 
@@ -1027,8 +1047,9 @@ contains
          call test_failed(error, "get_cavity_field_info changed extents for "//what)
          return
       end if
-      if (any(name /= "Z")) &
+      if (any(name /= "Z")) then
          call test_failed(error, "get_cavity_field_info wrote a name for "//what)
+      end if
 
    end subroutine check_unchanged_info
 
@@ -1099,8 +1120,9 @@ contains
       call moist_get_cavity_results(verror, vcav, ngrid, nsph, area, volume, &
                                     out_ngrid, out_nsph, xyz, a, owner, reference, &
                                     radii, asph)
-      if (allocated(err%ptr)) &
+      if (allocated(err%ptr)) then
          call test_failed(error, "get_cavity_results failed: "//err%ptr%message)
+      end if
 
       !> The declared field has to agree with the fixed getter, point for point
       if (.not. allocated(error)) then
@@ -1120,8 +1142,9 @@ contains
          call check_api_error(error, err, "has a different element type")
       end if
       if (.not. allocated(error)) then
-         if (any(values)) &
+         if (any(values)) then
             call test_failed(error, "get_cavity_field_bool wrote for a real-valued field")
+         end if
       end if
 
       call drop_water_cavity(err, vmol, vcav)
@@ -1185,8 +1208,9 @@ contains
                                     radii, asph)
       call expect_capacity_error(error, err, "get_cavity_results")
       if (.not. allocated(error)) then
-         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int)) &
+         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int)) then
             call test_failed(error, "get_cavity_results wrote into a rejected buffer")
+         end if
       end if
 
       if (.not. allocated(error)) then
@@ -1194,8 +1218,9 @@ contains
          call expect_capacity_error(error, err, "assemble_amat")
       end if
       if (.not. allocated(error)) then
-         if (any(amat0 /= sentinel) .or. any(xi /= sentinel)) &
+         if (any(amat0 /= sentinel) .or. any(xi /= sentinel)) then
             call test_failed(error, "assemble_amat wrote into a rejected buffer")
+         end if
       end if
 
       ! A short per-sphere capacity has to be caught the same way
@@ -1740,6 +1765,8 @@ contains
          call moist_init_model_options(verror, c_loc(buffer), c_sizeof(buffer))
       case (7)
          call moist_init_pcm_options(verror, c_loc(buffer), c_sizeof(buffer))
+      case default
+         error stop "test_api: unhandled ikind"
       end select
 
    end subroutine init_options
@@ -1840,6 +1867,8 @@ contains
             shell_l = 99_c_int
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(lsf), trim(needles(icase)))
@@ -1893,6 +1922,9 @@ contains
             options%proj_level = 0_c_int
          case (6)
             options%proj_level = 10_c_int
+         case default
+            ! Cases 7 and 8 keep the default options
+            continue
          end select
          select case (icase)
          case (1:6)
@@ -1901,6 +1933,8 @@ contains
             cavity = moist_new_drop_cavity(verror, lsf, c_loc(radii), c_null_ptr)
          case (8)
             cavity = moist_new_iswig_cavity(verror, c_loc(radii), c_null_ptr)
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(cavity), trim(needles(icase)))
@@ -1962,6 +1996,8 @@ contains
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, element_radii=radii)
          case (8)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(vmol), "structure handle")
@@ -2094,6 +2130,8 @@ contains
          if (omit == 2) deallocate (Amat1_rA)
          if (omit == 3) deallocate (xi)
          call get_amat_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, amat0, Amat1_rA, xi)
+      case default
+         error stop "test_api: unhandled family"
       end select
 
    end subroutine probe_missing_pointer
@@ -2244,6 +2282,8 @@ contains
             call moist_assemble_amat(verror, c_null_ptr, 1_c_int, amat0, xi)
          case (6)
             call moist_assemble_amat(verror, c_loc(empty_cav), 1_c_int, amat0, xi)
+         case default
+            error stop "test_api: unhandled icase"
          end select
          wrote = area /= sentinel .or. volume /= sentinel .or. ngrid /= -1_c_int &
             & .or. nsph /= -1_c_int .or. any(amat0 /= sentinel) .or. any(xi /= sentinel)
@@ -2301,6 +2341,8 @@ contains
             call set_isodensity_density_api(verror, vdrop, 1_c_int, c_loc(dcart))
          case (6)
             call set_isodensity_density_api(verror, viswig, 1_c_int, c_loc(dcart))
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, tolerance /= sentinel, trim(needles(icase)))
@@ -2388,6 +2430,8 @@ contains
          case (9)
             call contract_amat1_q1q2_surface_weights_api(verror, vdrop, c_loc(w1), c_loc(w2), &
                & c_loc(w4), c_loc(w1), c_loc(w3))
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          if (allocated(error)) exit
@@ -2483,11 +2527,14 @@ contains
          case (6)
             call contract_pcm_nuclear_gradient_api(verror, vstub, c_loc(q), c_loc(w_xyz), &
                & c_loc(za), c_loc(grad))
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, wrote, trim(needles(icase)))
-         if (icase == 1 .and. .not. allocated(error)) &
+         if (icase == 1 .and. .not. allocated(error)) then
             call check_unchanged_info(error, "an overlong name", name, dtype, rank, dims, count)
+         end if
          if (allocated(error)) exit
       end do
 
@@ -2568,6 +2615,8 @@ contains
             call moist_set_model_isodensity_density(verror, vmodel, 0_c_int, c_loc(density))
          case (12)
             call moist_set_model_isodensity_density(verror, vmodel, 1_c_int, c_null_ptr)
+         case default
+            error stop "test_api: unhandled icase"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(handle), trim(needles(icase)))

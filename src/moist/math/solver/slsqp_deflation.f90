@@ -31,12 +31,12 @@
 module moist_math_solver_slsqp_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_math_solver_type, only: solver_base_type
 
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_solver_deflation, only: moist_deflation_operator_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_deflation_type
@@ -46,6 +46,7 @@ module moist_math_solver_slsqp_deflation
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -53,6 +54,7 @@ module moist_math_solver_slsqp_deflation
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -60,6 +62,7 @@ module moist_math_solver_slsqp_deflation
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -67,6 +70,7 @@ module moist_math_solver_slsqp_deflation
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
@@ -448,9 +452,9 @@ contains
             call self%slsqp_solver%solve(x_trial, inner_error)
             if (allocated(inner_error)) then
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                     '[deflation] iter ', iter, ' attempt ', attempt, &
-                     ' inner SLSQP failed: ', trim(inner_error%message)
+                  write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                     "[deflation] iter ", iter, " attempt ", attempt, &
+                     " inner SLSQP failed: ", trim(inner_error%message)
                end if
                deallocate (inner_error)
                cycle attempts
@@ -462,16 +466,16 @@ contains
                exit attempts
             end if
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,i0,a)') &
-                  '[deflation] iter ', iter, ' attempt ', attempt, &
-                  ' converged to a known root (try next perturbation)'
+               write (output_unit, "(x,a,i0,a,i0,a)") &
+                  "[deflation] iter ", iter, " attempt ", attempt, &
+                  " converged to a known root (try next perturbation)"
             end if
          end do attempts
 
          if (.not. found_new_root) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a)') &
-                  '[deflation] iter ', iter, ' exhausted all attempts (stop)'
+               write (output_unit, "(x,a,i0,a)") &
+                  "[deflation] iter ", iter, " exhausted all attempts (stop)"
             end if
             exit outer
          end if
@@ -489,15 +493,15 @@ contains
             if (self%has_ball) then
                self%phi_max_sq = sum((x_trial - self%anchor)**2) + self%branch_rho2_slack
                if (self%debug) then
-                  write (output_unit, '(x,a,es12.4)') &
-                     '[deflation] ball cap (phi_max) = ', sqrt(self%phi_max_sq)
+                  write (output_unit, "(x,a,es12.4)") &
+                     "[deflation] ball cap (phi_max) = ", sqrt(self%phi_max_sq)
                end if
             end if
          end if
 
          if (self%debug) then
-            write (output_unit, '(x,a,i0,a,3(es12.4,x))') &
-               '[deflation] iter ', iter, ' accepted root: ', x_trial
+            write (output_unit, "(x,a,i0,a,3(es12.4,x))") &
+               "[deflation] iter ", iter, " accepted root: ", x_trial
          end if
       end do outer
 

@@ -4,8 +4,7 @@ module test_utils
    use moist_data_solvents, only : solvation_system_type, &
       & new_solvation_system, get_solvent_id, max_solvents
    use mctc_env_error, only : moist_error_type => error_type
-   use, intrinsic :: ieee_arithmetic
-   implicit none
+   implicit none(type, external)
    private
    public :: collect_utils
    real(wp), parameter :: thr = sqrt(epsilon(1.0_wp))
@@ -75,13 +74,13 @@ subroutine test_solvent_id_finder(error)
    type(error_type), allocatable, intent(out) :: error
    integer :: id
    type(moist_error_type), allocatable :: solvent_error
-   call get_solvent_id('wAtEr', id, solvent_error)
+   call get_solvent_id("wAtEr", id, solvent_error)
    if (allocated(solvent_error)) then
       call test_failed(error, solvent_error%message)
       return
    end if
    call check(error, id, 175, more="Solvent ID lookup mismatch")
-   call get_solvent_id('methyl chloroform', id, solvent_error)
+   call get_solvent_id("methyl chloroform", id, solvent_error)
    if (allocated(solvent_error)) then
       call test_failed(error, solvent_error%message)
       return

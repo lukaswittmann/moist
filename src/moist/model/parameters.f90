@@ -87,6 +87,9 @@ contains
          case (".toml")
             use_toml = .true.
             return
+         case default
+            ! Other extensions are rejected below
+            continue
          end select
       end if
       call fatal_error(error, "Parameter file extension must be .json or .toml: "//trim(filepath))
@@ -431,6 +434,7 @@ contains
    subroutine register_string(self, key, value)
       class(moist_model_parameters_type), intent(inout), target :: self
       character(len=*), intent(in) :: key
+      ! allow(assumed-size-character-intent): fixed-length fields, oversized input is rejected
       character(len=*), intent(inout) :: value
       character(len=:), allocatable :: text
 

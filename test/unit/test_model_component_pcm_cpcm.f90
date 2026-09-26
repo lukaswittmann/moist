@@ -33,7 +33,8 @@ module test_model_component_pcm_cpcm
       & fd4_scalar, fd4_offsets, get_test_cavity_iswig, build_test_cavity, &
       & fill_point_charge_potential, fill_point_charge_field, set_host_potential, &
       & fill_missing_with_zeros, stage_point_charge_energy
-   implicit none (type, external)
+   use, intrinsic :: iso_fortran_env, only: int64
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pcm_cpcm
@@ -225,8 +226,8 @@ contains
       real(wp) :: energies(4)
       real(wp), allocatable :: charges(:, :)
       real(wp) :: energy_array
-      real(wp) :: energy_diff, charge_rms
-      integer :: i, j
+      real(wp) :: charge_rms
+      integer :: i
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -1275,12 +1276,10 @@ contains
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
-      real(wp) :: energy_lu, energy_cholesky, energy_iterative, energy_inversion
       type(radius_type_static) :: radius_model
       integer :: solvers(4)
       character(len=20) :: solver_names(4)
       real(wp) :: energies(4)
-      real(wp) :: energy_diff
       integer :: i
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
@@ -1373,8 +1372,8 @@ contains
       real(wp), allocatable :: qat(:)
       type(radius_type_static) :: radius_model
       real(wp), parameter :: epsilon = 78.4_wp
-      integer :: n_ala, ii, i
-      integer(8) :: t1, t2, rate
+      integer :: n_ala, ii
+      integer(int64) :: t1, t2, rate
       real(wp) :: time_lu, time_cholesky, time_iterative, time_inversion
       real(wp) :: energy_lu, energy_cholesky, energy_iterative, energy_inversion
       real(wp) :: dE_lu, dE_cholesky, dE_iterv
@@ -1388,14 +1387,14 @@ contains
       call new_context(ctx)
 
       ! Print header
-      print '(a)', ""
-      print '(a)', "CPCM Solver Timing Benchmark (Polyalanine)"
-      print '(a)', "==========================================="
-      print '(a7, a10, 4(a11), 3(a11), 3(a11))', "N_Ala", "N_Grid", &
+      print "(a)", ""
+      print "(a)", "CPCM Solver Timing Benchmark (Polyalanine)"
+      print "(a)", "==========================================="
+      print "(a7, a10, 4(a11), 3(a11), 3(a11))", "N_Ala", "N_Grid", &
          "t_inv (s)", "t_lu (s)", "t_chol (s)", "t_iter (s)", &
          "dE_lu", "dE_chol", "dE_iter", &
          "rms_lu", "rms_chol", "rms_iter"
-      print '(a7, a10, 10(a11))', "------", "---------", &
+      print "(a7, a10, 10(a11))", "------", "---------", &
          "----------", "----------", "----------", "----------", &
          "----------", "----------", "----------", &
          "----------", "----------", "----------"
@@ -1407,7 +1406,7 @@ contains
       do n_ala = 4, 100, 4
 
          ! Get structure from mstore
-         write (n_str, '(a, i2.2)') 'polyala_', n_ala
+         write (n_str, "(a, i2.2)") "polyala_", n_ala
          call get_structure(mol, "POLYALANINE", trim(n_str))
 
          ! Prepare charges (simple uniform distribution)
@@ -1552,7 +1551,7 @@ contains
 
          ! Print results: N_Ala, N_Grid, times (invers, lu, cholesky, iterv),
          !                dE (lu, cholesky, iterv), rms (lu, cholesky, iterv)
-         print '(i7, i10, 4(f11.3), 3(e11.2), 3(e11.2))', n_ala, cavity%ngrid, &
+         print "(i7, i10, 4(f11.3), 3(e11.2), 3(e11.2))", n_ala, cavity%ngrid, &
             time_inversion, time_lu, time_cholesky, time_iterative, &
             dE_lu, dE_cholesky, dE_iterv, &
             rms_lu, rms_cholesky, rms_iterv
@@ -1563,8 +1562,8 @@ contains
 
       end do
 
-      print '(a)', "==========================================="
-      print '(a)', ""
+      print "(a)", "==========================================="
+      print "(a)", ""
 
    end subroutine test_cpcm_timing
 
@@ -2358,8 +2357,9 @@ contains
       select type (position => coupling%request())
       type is (gaussian_potential_request_type)
          call coupling%answer("dphi_dr", w_xyz, err)
-         if (.not. allocated(err)) &
-            & call coupling%answer("dphi_dxi", spread(0.0_wp, 1, size(w_xyz, 2)), err)
+         if (.not. allocated(err)) then
+            call coupling%answer("dphi_dxi", spread(0.0_wp, 1, size(w_xyz, 2)), err)
+         end if
       class default
          call test_failed(error, "CPCM asked for "//trim(position%name())//", not a Gaussian potential")
          return

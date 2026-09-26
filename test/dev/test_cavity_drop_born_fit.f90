@@ -26,7 +26,7 @@ module test_cavity_drop_born_fit
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_born_fit
@@ -414,7 +414,7 @@ contains
       character(len=:), allocatable :: string
       character(len=32) :: buffer
 
-      write(buffer, '(i0)') value
+      write(buffer, "(i0)") value
       string = trim(buffer)
    end function int_string
 
@@ -426,7 +426,7 @@ contains
       character(len=:), allocatable :: string
       character(len=48) :: buffer
 
-      write(buffer, '(es22.14)') value
+      write(buffer, "(es22.14)") value
       string = trim(adjustl(buffer))
    end function real_string
 

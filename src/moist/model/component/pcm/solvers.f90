@@ -9,7 +9,7 @@ module moist_model_component_pcm_solvers
    use mctc_env_error, only: error_type, fatal_error
    use moist_math_lapack, only: getrf, getrs, getri, potrf, potrs
    use moist_math_blas, only: dot, gemv
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solve_pcm_lu

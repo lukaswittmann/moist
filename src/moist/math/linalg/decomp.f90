@@ -4,7 +4,7 @@
 !> handled by BLAS/LAPACK due to call overhead
 module moist_math_linalg_decomp
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: mat3x3_inv

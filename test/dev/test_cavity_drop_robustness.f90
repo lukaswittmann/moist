@@ -16,7 +16,7 @@ module test_cavity_drop_robustness
    use moist_utils_env, only: resolve_dir, ensure_dir
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_robustness
@@ -51,9 +51,9 @@ contains
 
       ! Array of all UPU23 IDs to iterate over
       character(len=2), parameter :: upu23_ids(24) = [ &
-                                     '0a', '0b', '1a', '1b', '1c', '1e', '1f', '1g', &
-                                     '1m', '1p', '2a', '2h', '2p', '3a', '3b', '3d', &
-                                     '4b', '5z', '6p', '7a', '7p', '8d', '9a', 'aa']
+                                     "0a", "0b", "1a", "1b", "1c", "1e", "1f", "1g", &
+                                     "1m", "1p", "2a", "2h", "2p", "3a", "3b", "3d", &
+                                     "4b", "5z", "6p", "7a", "7p", "8d", "9a", "aa"]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -62,7 +62,7 @@ contains
       ! Iterate over all IDs in UPU23
       do iid = 1, size(upu23_ids)
 
-         write (*, '(2x, A, A)') "Testing UPU23 ID: ", upu23_ids(iid)
+         write (*, "(2x, A, A)") "Testing UPU23 ID: ", upu23_ids(iid)
 
          call get_structure(mol, "UPU23", upu23_ids(iid))
 
@@ -97,16 +97,16 @@ contains
 
       ! Array of all heavy28 IDs to iterate over
       character(len=11), parameter :: heavy28_ids(38) = [ &
-                                      'bih3       ', 'bih3_2     ', 'bih3_h2o   ', 'bih3_h2s   ', &
-                                      'bih3_hbr   ', 'bih3_hcl   ', 'bih3_hi    ', 'bih3_nh3   ', &
-                                      'h2o        ', 'h2s        ', 'hbr        ', 'hcl        ', &
-                                      'hi         ', 'nh3        ', 'pbh4       ', 'pbh4_2     ', &
-                                      'pbh4_bih3  ', 'pbh4_h2o   ', 'pbh4_hbr   ', 'pbh4_hcl   ', &
-                                      'pbh4_hi    ', 'pbh4_teh2  ', 'sbh3       ', 'sbh3_2     ', &
-                                      'sbh3_h2o   ', 'sbh3_h2s   ', 'sbh3_hbr   ', 'sbh3_hcl   ', &
-                                      'sbh3_hi    ', 'sbh3_nh3   ', 'teh2       ', 'teh2_2     ', &
-                                      'teh2_h2o   ', 'teh2_h2s   ', 'teh2_hbr   ', 'teh2_hcl   ', &
-                                      'teh2_hi    ', 'teh2_nh3   ']
+                                      "bih3       ", "bih3_2     ", "bih3_h2o   ", "bih3_h2s   ", &
+                                      "bih3_hbr   ", "bih3_hcl   ", "bih3_hi    ", "bih3_nh3   ", &
+                                      "h2o        ", "h2s        ", "hbr        ", "hcl        ", &
+                                      "hi         ", "nh3        ", "pbh4       ", "pbh4_2     ", &
+                                      "pbh4_bih3  ", "pbh4_h2o   ", "pbh4_hbr   ", "pbh4_hcl   ", &
+                                      "pbh4_hi    ", "pbh4_teh2  ", "sbh3       ", "sbh3_2     ", &
+                                      "sbh3_h2o   ", "sbh3_h2s   ", "sbh3_hbr   ", "sbh3_hcl   ", &
+                                      "sbh3_hi    ", "sbh3_nh3   ", "teh2       ", "teh2_2     ", &
+                                      "teh2_h2o   ", "teh2_h2s   ", "teh2_hbr   ", "teh2_hcl   ", &
+                                      "teh2_hi    ", "teh2_nh3   "]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -115,7 +115,7 @@ contains
       ! Iterate over all IDs in heavy28
       do iid = 1, size(heavy28_ids)
 
-         write (*, '(2x, A, A)') "Testing heavy28 ID: ", trim(heavy28_ids(iid))
+         write (*, "(2x, A, A)") "Testing heavy28 ID: ", trim(heavy28_ids(iid))
 
          call get_structure(mol, "Heavy28", trim(heavy28_ids(iid)))
 
@@ -150,26 +150,26 @@ contains
 
       ! Array of all amino20x4 IDs to iterate over
       character(len=7), parameter :: amino20x4_ids(100) = [ &
-                                     'ALA_xab', 'ALA_xac', 'ALA_xag', 'ALA_xai', 'ALA_xak', &
-                                     'ARG_xak', 'ARG_xbv', 'ARG_xbx', 'ARG_xby', 'ARG_xci', &
-                                     'ASN_xab', 'ASN_xae', 'ASN_xaf', 'ASN_xah', 'ASN_xaj', &
-                                     'ASP_xad', 'ASP_xau', 'ASP_xay', 'ASP_xaz', 'ASP_xbc', &
-                                     'CYS_xag', 'CYS_xah', 'CYS_xai', 'CYS_xal', 'CYS_xao', &
-                                     'GLN_xai', 'GLN_xal', 'GLN_xan', 'GLN_xap', 'GLN_xat', &
-                                     'GLU_xad', 'GLU_xal', 'GLU_xar', 'GLU_xav', 'GLU_xbi', &
-                                     'GLY_xab', 'GLY_xac', 'GLY_xad', 'GLY_xae', 'GLY_xag', &
-                                     'HIS_xah', 'HIS_xam', 'HIS_xaq', 'HIS_xau', 'HIS_xav', &
-                                     'ILE_xae', 'ILE_xag', 'ILE_xaj', 'ILE_xak', 'ILE_xaq', &
-                                     'LEU_xad', 'LEU_xae', 'LEU_xap', 'LEU_xaq', 'LEU_xbb', &
-                                     'LYS_xan', 'LYS_xao', 'LYS_xap', 'LYS_xas', 'LYS_xat', &
-                                     'MET_xag', 'MET_xav', 'MET_xbf', 'MET_xbm', 'MET_xbo', &
-                                     'PHE_xab', 'PHE_xal', 'PHE_xan', 'PHE_xar', 'PHE_xaw', &
-                                     'PRO_xab', 'PRO_xac', 'PRO_xad', 'PRO_xae', 'PRO_xaf', &
-                                     'SER_xad', 'SER_xaf', 'SER_xah', 'SER_xak', 'SER_xar', &
-                                     'THR_xab', 'THR_xag', 'THR_xah', 'THR_xal', 'THR_xaq', &
-                                     'TRP_xac', 'TRP_xaf', 'TRP_xag', 'TRP_xah', 'TRP_xao', &
-                                     'TYR_xab', 'TYR_xag', 'TYR_xah', 'TYR_xan', 'TYR_xar', &
-                                     'VAL_xad', 'VAL_xaf', 'VAL_xah', 'VAL_xaj', 'VAL_xak']
+                                     "ALA_xab", "ALA_xac", "ALA_xag", "ALA_xai", "ALA_xak", &
+                                     "ARG_xak", "ARG_xbv", "ARG_xbx", "ARG_xby", "ARG_xci", &
+                                     "ASN_xab", "ASN_xae", "ASN_xaf", "ASN_xah", "ASN_xaj", &
+                                     "ASP_xad", "ASP_xau", "ASP_xay", "ASP_xaz", "ASP_xbc", &
+                                     "CYS_xag", "CYS_xah", "CYS_xai", "CYS_xal", "CYS_xao", &
+                                     "GLN_xai", "GLN_xal", "GLN_xan", "GLN_xap", "GLN_xat", &
+                                     "GLU_xad", "GLU_xal", "GLU_xar", "GLU_xav", "GLU_xbi", &
+                                     "GLY_xab", "GLY_xac", "GLY_xad", "GLY_xae", "GLY_xag", &
+                                     "HIS_xah", "HIS_xam", "HIS_xaq", "HIS_xau", "HIS_xav", &
+                                     "ILE_xae", "ILE_xag", "ILE_xaj", "ILE_xak", "ILE_xaq", &
+                                     "LEU_xad", "LEU_xae", "LEU_xap", "LEU_xaq", "LEU_xbb", &
+                                     "LYS_xan", "LYS_xao", "LYS_xap", "LYS_xas", "LYS_xat", &
+                                     "MET_xag", "MET_xav", "MET_xbf", "MET_xbm", "MET_xbo", &
+                                     "PHE_xab", "PHE_xal", "PHE_xan", "PHE_xar", "PHE_xaw", &
+                                     "PRO_xab", "PRO_xac", "PRO_xad", "PRO_xae", "PRO_xaf", &
+                                     "SER_xad", "SER_xaf", "SER_xah", "SER_xak", "SER_xar", &
+                                     "THR_xab", "THR_xag", "THR_xah", "THR_xal", "THR_xaq", &
+                                     "TRP_xac", "TRP_xaf", "TRP_xag", "TRP_xah", "TRP_xao", &
+                                     "TYR_xab", "TYR_xag", "TYR_xah", "TYR_xan", "TYR_xar", &
+                                     "VAL_xad", "VAL_xaf", "VAL_xah", "VAL_xaj", "VAL_xak"]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -178,7 +178,7 @@ contains
       ! Iterate over all IDs in amino20x4
       do iid = 1, size(amino20x4_ids)
 
-         write (*, '(2x, A, A)') "Testing amino20x4 ID: ", amino20x4_ids(iid)
+         write (*, "(2x, A, A)") "Testing amino20x4 ID: ", amino20x4_ids(iid)
 
          call get_structure(mol, "Amino20x4", amino20x4_ids(iid))
 
@@ -213,14 +213,14 @@ contains
 
       ! Array of all mb16-43 IDs to iterate over
       character(len=4), parameter :: mb16_43_ids(59) = [ &
-                                     '01  ', '02  ', '03  ', '04  ', '05  ', '06  ', '07  ', '08  ', &
-                                     '09  ', '10  ', '11  ', '12  ', '13  ', '14  ', '15  ', '16  ', &
-                                     '17  ', '18  ', '19  ', '20  ', '21  ', '22  ', '23  ', '24  ', &
-                                     '25  ', '26  ', '27  ', '28  ', '29  ', '30  ', '31  ', '32  ', &
-                                     '33  ', '34  ', '35  ', '36  ', '37  ', '38  ', '39  ', '40  ', &
-                                     '41  ', '42  ', '43  ', 'AlH3', 'BH3 ', 'BeH2', 'CH4 ', 'Cl2 ', &
-                                     'F2  ', 'H2  ', 'LiH ', 'MgH2', 'N2  ', 'NaH ', 'O2  ', 'P2  ', &
-                                     'S2  ', 'PCl ', 'SiH4']
+                                     "01  ", "02  ", "03  ", "04  ", "05  ", "06  ", "07  ", "08  ", &
+                                     "09  ", "10  ", "11  ", "12  ", "13  ", "14  ", "15  ", "16  ", &
+                                     "17  ", "18  ", "19  ", "20  ", "21  ", "22  ", "23  ", "24  ", &
+                                     "25  ", "26  ", "27  ", "28  ", "29  ", "30  ", "31  ", "32  ", &
+                                     "33  ", "34  ", "35  ", "36  ", "37  ", "38  ", "39  ", "40  ", &
+                                     "41  ", "42  ", "43  ", "AlH3", "BH3 ", "BeH2", "CH4 ", "Cl2 ", &
+                                     "F2  ", "H2  ", "LiH ", "MgH2", "N2  ", "NaH ", "O2  ", "P2  ", &
+                                     "S2  ", "PCl ", "SiH4"]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -229,7 +229,7 @@ contains
       ! Iterate over all IDs in mb16-43
       do iid = 1, size(mb16_43_ids)
 
-         write (*, '(2x, A, A)') "Testing MB16-43 ID: ", trim(mb16_43_ids(iid))
+         write (*, "(2x, A, A)") "Testing MB16-43 ID: ", trim(mb16_43_ids(iid))
 
          call get_structure(mol, "MB16-43", trim(mb16_43_ids(iid)))
 
@@ -264,13 +264,13 @@ contains
 
       ! Array of all But14diol IDs to iterate over
       character(len=2), parameter :: but14diol_ids(65) = [ &
-                                     '1 ', '2 ', '3 ', '4 ', '5 ', '6 ', '7 ', '8 ', '9 ', '10', &
-                                     '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', &
-                                     '21', '22', '23', '24', '25', '26', '27', '28', '29', '30', &
-                                     '31', '32', '33', '34', '35', '36', '37', '38', '39', '40', &
-                                     '41', '42', '43', '44', '45', '46', '47', '48', '49', '50', &
-                                     '51', '52', '53', '54', '55', '56', '57', '58', '59', '60', &
-                                     '61', '62', '63', '64', '65']
+                                     "1 ", "2 ", "3 ", "4 ", "5 ", "6 ", "7 ", "8 ", "9 ", "10", &
+                                     "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", &
+                                     "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", &
+                                     "31", "32", "33", "34", "35", "36", "37", "38", "39", "40", &
+                                     "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", &
+                                     "51", "52", "53", "54", "55", "56", "57", "58", "59", "60", &
+                                     "61", "62", "63", "64", "65"]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -279,7 +279,7 @@ contains
       ! Iterate over all IDs in But14diol
       do iid = 1, size(but14diol_ids)
 
-         write (*, '(2x, A, A)') "Testing But14diol ID: ", trim(but14diol_ids(iid))
+         write (*, "(2x, A, A)") "Testing But14diol ID: ", trim(but14diol_ids(iid))
 
          call get_structure(mol, "But14diol", trim(but14diol_ids(iid)))
 
@@ -314,12 +314,12 @@ contains
 
       ! Array of all IL16 IDs to iterate over
       character(len=4), parameter :: il16_ids(48) = [ &
-                                     '008 ', '008A', '008B', '144 ', '144A', '144B', '147 ', '147A', &
-                                     '147B', '148 ', '148A', '148B', '150 ', '150A', '150B', '152 ', &
-                                     '152A', '152B', '187 ', '187A', '187B', '202 ', '202A', '202B', &
-                                     '212 ', '212A', '212B', '213 ', '213A', '213B', '214 ', '214A', &
-                                     '214B', '227 ', '227A', '227B', '228 ', '228A', '228B', '229 ', &
-                                     '229A', '229B', '230 ', '230A', '230B', '231 ', '231A', '231B']
+                                     "008 ", "008A", "008B", "144 ", "144A", "144B", "147 ", "147A", &
+                                     "147B", "148 ", "148A", "148B", "150 ", "150A", "150B", "152 ", &
+                                     "152A", "152B", "187 ", "187A", "187B", "202 ", "202A", "202B", &
+                                     "212 ", "212A", "212B", "213 ", "213A", "213B", "214 ", "214A", &
+                                     "214B", "227 ", "227A", "227B", "228 ", "228A", "228B", "229 ", &
+                                     "229A", "229B", "230 ", "230A", "230B", "231 ", "231A", "231B"]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -328,7 +328,7 @@ contains
       ! Iterate over all IDs in IL16
       do iid = 1, size(il16_ids)
 
-         write (*, '(2x, A, A)') "Testing IL16 ID: ", trim(il16_ids(iid))
+         write (*, "(2x, A, A)") "Testing IL16 ID: ", trim(il16_ids(iid))
 
          call get_structure(mol, "IL16", trim(il16_ids(iid)))
 
@@ -363,7 +363,7 @@ contains
       real(wp) :: rand_val, distance, min_dist, vdw_radius
       logical :: too_close
       integer :: seed_array(8)
-      character(len=300) :: test_xyz_path
+      character(len=:), allocatable :: test_xyz_path
       character(len=:), allocatable :: issues_dir
       type(mctc_error), allocatable :: cavity_error
 
@@ -399,7 +399,7 @@ contains
       seed_array = SEED_VALUE
       call random_seed(put=seed_array)
 
-      write (*, '(2x, A)') "Starting fuzz testing with random structures..."
+      write (*, "(2x, A)") "Starting fuzz testing with random structures..."
 
       ! Resolve directory for problematic-structure dumps
       ! (MOIST_DROP_ISSUES_DIR override, repo-relative default)
@@ -519,8 +519,8 @@ contains
          call write_test_xyz(mol, itest, test_xyz_path)
 
          ! Printout - extract just the filename from the full path
-         i = index(test_xyz_path, '/', back=.true.)
-         write (*, '(2x, A, I0, A, I0, A, A, A)') "Testing fuzz structure #", itest, " with ", nat, &
+         i = index(test_xyz_path, "/", back=.true.)
+         write (*, "(2x, A, I0, A, I0, A, A, A)") "Testing fuzz structure #", itest, " with ", nat, &
             " atoms (", trim(test_xyz_path(i + 1:)), ")"
 
          ! Try to construct cavity
@@ -540,7 +540,7 @@ contains
             if (any(.not. cavity%converged)) then
                ! At least one projection failed - write convergence failure file
                call write_convergence_failure_xyz(mol, itest)
-               write (*, '(4x, A, I0, A, I0, A)') "⚠ Warning: ", count(.not. cavity%converged), &
+               write (*, "(4x, A, I0, A, I0, A)") "⚠ Warning: ", count(.not. cavity%converged), &
                   " of ", size(cavity%converged), " projections failed to converge"
             end if
          end if
@@ -556,7 +556,7 @@ contains
 
       end do
 
-      write (*, '(2x, A, I0, A)') "Fuzz testing completed: ", NUM_TESTS, " structures tested successfully"
+      write (*, "(2x, A, I0, A)") "Fuzz testing completed: ", NUM_TESTS, " structures tested successfully"
 
    contains
 
@@ -564,19 +564,21 @@ contains
       subroutine write_test_xyz(mol, test_num, filepath_out)
          type(structure_type), intent(in) :: mol
          integer, intent(in) :: test_num
-         character(len=*), intent(out) :: filepath_out
+         character(len=:), allocatable, intent(out) :: filepath_out
+         character(len=300) :: buffer
          character(len=20) :: timestamp
          integer :: dt(8)
          type(mctc_error), allocatable :: write_error
 
          ! Get timestamp
          call date_and_time(values=dt)
-         write (timestamp, '(I4.4,I2.2,I2.2,A,I2.2,I2.2,I2.2)') &
-            dt(1), dt(2), dt(3), '_', dt(5), dt(6), dt(7)
+         write (timestamp, "(I4.4,I2.2,I2.2,A,I2.2,I2.2,I2.2)") &
+            dt(1), dt(2), dt(3), "_", dt(5), dt(6), dt(7)
 
-         write (filepath_out, '(A,A,I4.4,A,A,A)') &
-            trim(issues_dir)//'/', &
-            'failed_', test_num, '_', trim(timestamp), '.xyz'
+         write (buffer, "(A,A,I4.4,A,A,A)") &
+            trim(issues_dir)//"/", &
+            "failed_", test_num, "_", trim(timestamp), ".xyz"
+         filepath_out = trim(buffer)
 
          call write_structure(mol, trim(filepath_out), write_error, filetype%xyz)
 
@@ -593,12 +595,12 @@ contains
 
          ! Get timestamp
          call date_and_time(values=dt)
-         write (timestamp, '(I4.4,I2.2,I2.2,A,I2.2,I2.2,I2.2)') &
-            dt(1), dt(2), dt(3), '_', dt(5), dt(6), dt(7)
+         write (timestamp, "(I4.4,I2.2,I2.2,A,I2.2,I2.2,I2.2)") &
+            dt(1), dt(2), dt(3), "_", dt(5), dt(6), dt(7)
 
-         write (filepath, '(A,A,I4.4,A,A,A)') &
-            trim(issues_dir)//'/', &
-            'convergence_', test_num, '_', trim(timestamp), '.xyz'
+         write (filepath, "(A,A,I4.4,A,A,A)") &
+            trim(issues_dir)//"/", &
+            "convergence_", test_num, "_", trim(timestamp), ".xyz"
 
          call write_structure(mol, trim(filepath), write_error, filetype%xyz)
 

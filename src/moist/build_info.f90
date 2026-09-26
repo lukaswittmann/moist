@@ -10,7 +10,7 @@
 
 !> Build-time provenance for the moist library
 module moist_build_info
-   implicit none
+   implicit none(type, external)
    private
 
    public :: git_commit, build_host

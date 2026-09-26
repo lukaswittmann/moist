@@ -38,7 +38,7 @@ module test_model_coupling
       & sw_fs => fixture_fs_param, sw_xyz => fixture_xyz_param, &
       & sw_normals => fixture_normals_param
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_model_coupling
@@ -463,6 +463,8 @@ contains
          case (4)
             call model%update(mol, err)
             call model%get_gradient(coupling, response, gradient, err)
+         case default
+            error stop "test_model_coupling: unhandled scenario"
          end select
          call check(error, allocated(err))
          if (allocated(error)) return

@@ -13,7 +13,7 @@ module moist_model_component_pcm
       & pcm_amat_nuclear_gradient
    use moist_model_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient
-   implicit none (type, external)
+   implicit none(type, external)
    public
 
 end module moist_model_component_pcm

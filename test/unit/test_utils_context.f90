@@ -266,16 +266,17 @@ contains
       if (allocated(error)) return
 
       ! and the file holds what we wrote
-      open (newunit=iu, file=path, status='old', action='read', iostat=stat)
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
       call check(error, stat == 0, "log file exists after delete")
       if (allocated(error)) then
          return
       end if
-      read (iu, '(a)', iostat=stat) firstline
+      read (iu, "(a)", iostat=stat) firstline
       call check(error, stat == 0, "log file is non-empty")
-      if (.not. allocated(error)) &
+      if (.not. allocated(error)) then
          call check(error, trim(firstline) == "hello from the context", "message written to file")
-      close (iu, status='delete')
+      end if
+      close (iu, status="delete")
    end subroutine test_owned_logfile
 
    !> print_settings renders without error and produces output
@@ -291,17 +292,17 @@ contains
       call ctx%print_settings()
       call ctx%delete()
 
-      open (newunit=iu, file=path, status='old', action='read', iostat=stat)
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
       call check(error, stat == 0, "settings file exists")
       if (allocated(error)) return
 
       saw_verbosity = .false.
       do
-         read (iu, '(a)', iostat=stat) line
+         read (iu, "(a)", iostat=stat) line
          if (stat /= 0) exit
          if (index(line, "Verbosity") > 0) saw_verbosity = .true.
       end do
-      close (iu, status='delete')
+      close (iu, status="delete")
       call check(error, saw_verbosity, "settings block mentions Verbosity")
    end subroutine test_print_settings_runs
 
@@ -328,16 +329,16 @@ contains
       call new_context(ctx, debug=.true., debugfile=path)
       call ctx%debug_message("diagnostic line")
       call ctx%delete()
-      open (newunit=iu, file=path, status='old', action='read', iostat=stat)
+      open (newunit=iu, file=path, status="old", action="read", iostat=stat)
       call check(error, stat == 0, "debug file exists (debug on)")
       if (.not. allocated(error)) then
-         read (iu, '(a)', iostat=stat) line
+         read (iu, "(a)", iostat=stat) line
          call check(error, stat == 0, "debug file non-empty when debug on")
          if (.not. allocated(error)) then
             call check(error, trim(line) == "diagnostic line", "debug message written")
          end if
       end if
-      close (iu, status='delete')
+      close (iu, status="delete")
    end subroutine test_debug_message_gated
 
    !> delete() is safe to call, including twice, and reports no nodes after

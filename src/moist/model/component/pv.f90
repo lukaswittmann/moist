@@ -8,7 +8,7 @@ module moist_model_component_pv
    use moist_channels_response, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solvation_model_component_pv, new_component_pv

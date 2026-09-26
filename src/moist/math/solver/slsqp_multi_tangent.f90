@@ -8,11 +8,11 @@
 module moist_math_solver_slsqp_multi_tangent
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_math_solver_type, only: solver_base_type
 
    use moist_math_solver_slsqp, only: new_slsqp_solver
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_multi_tangent_type
@@ -27,6 +27,7 @@ module moist_math_solver_slsqp_multi_tangent
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -34,6 +35,7 @@ module moist_math_solver_slsqp_multi_tangent
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -41,6 +43,7 @@ module moist_math_solver_slsqp_multi_tangent
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -48,6 +51,7 @@ module moist_math_solver_slsqp_multi_tangent
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
@@ -55,6 +59,7 @@ module moist_math_solver_slsqp_multi_tangent
 
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(in) :: f
@@ -383,8 +388,8 @@ contains
       best_x = self%anchor
 
       if (self%debug) then
-         write (output_unit, '(x,a)') &
-            '========== Multi-tangent SLSQP ========='
+         write (output_unit, "(x,a)") &
+            "========== Multi-tangent SLSQP ========="
       end if
 
       allocate (converged(3, self%n_seeds))
@@ -396,7 +401,7 @@ contains
          call self%slsqp_solver%solve(x_trial, solver_error)
          if (allocated(solver_error)) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,a)') 'Seed ', i, ' failed: ', trim(solver_error%message)
+               write (output_unit, "(x,a,i0,a,a)") "Seed ", i, " failed: ", trim(solver_error%message)
             end if
             deallocate (solver_error)
             cycle

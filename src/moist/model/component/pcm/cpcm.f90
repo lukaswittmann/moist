@@ -10,7 +10,7 @@ module moist_model_component_pcm_cpcm
    use moist_cavity_type, only: cavity_type
    use moist_model_component_pcm_type, only: solvation_model_component_pcm, moist_pcm_parameters_type
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solvation_model_component_cpcm

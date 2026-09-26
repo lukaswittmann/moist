@@ -117,13 +117,15 @@ contains
          open(newunit=unit, file=path, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, '(a)', iostat=stat) text
+         write(unit, "(a)", iostat=stat) text
          close(unit)
          call check(error, stat, 0)
          if (allocated(error)) return
          call param%read_file(path, err)
          open(newunit=unit, file=path, status="old", iostat=stat)
          if (stat == 0) close(unit, status="delete", iostat=stat)
+         call check(error, stat, 0)
+         if (allocated(error)) return
          call check(error, allocated(err), more="accepted "//text)
          if (allocated(error)) return
          call check(error, index(err%message, expected) > 0, more=err%message)
@@ -342,8 +344,8 @@ contains
       open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, '(a)', iostat=stat) '# Independently authored TOML', &
-         'tolerance = 2e-8', '[grid]', 'num_leb = 110'
+      write(unit, "(a)", iostat=stat) "# Independently authored TOML", &
+         "tolerance = 2e-8", "[grid]", "num_leb = 110"
       close(unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
@@ -366,7 +368,7 @@ contains
       open(newunit=unit, file=toml_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, '(a)', iostat=stat) 'num_leb = ['
+      write(unit, "(a)", iostat=stat) "num_leb = ["
       close(unit, iostat=close_stat)
       call check(error, stat == 0 .and. close_stat == 0)
       if (allocated(error)) return
@@ -406,7 +408,7 @@ contains
       integer :: unit, stat
       integer :: i
       character(len=32), parameter :: invalid(3) = [character(len=32) :: &
-         '[]', '{broken', '{"num_leb": "bad"}']
+         "[]", "{broken", '{"num_leb": "bad"}']
 
       source%tolerance = 1.0e-8_wp
       call source%write_file(parameter_file, err)
@@ -428,7 +430,7 @@ contains
          open(newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
          call check(error, stat, 0)
          if (allocated(error)) return
-         write(unit, '(a)', iostat=stat) trim(invalid(i))
+         write(unit, "(a)", iostat=stat) trim(invalid(i))
          close(unit)
          call check(error, stat, 0)
          if (allocated(error)) return
@@ -439,7 +441,7 @@ contains
       open(newunit=unit, file=parameter_file, status="replace", action="write", iostat=stat)
       call check(error, stat, 0)
       if (allocated(error)) return
-      write(unit, '(a)', iostat=stat) '{"num_leb": 194}'
+      write(unit, "(a)", iostat=stat) '{"num_leb": 194}'
       close(unit)
       call check(error, stat, 0)
       if (allocated(error)) return

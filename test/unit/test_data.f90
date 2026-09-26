@@ -18,7 +18,7 @@ module test_data
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_data

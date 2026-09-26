@@ -6,7 +6,7 @@
 !> printed in full or filtered by category/label
 module moist_output_citations
    use moist_output_format, only: print_wrapped
-   implicit none
+   implicit none(type, external)
    private
 
    public :: citation_entry_type, moist_citations, num_citations
@@ -232,7 +232,7 @@ contains
       character(len=*), intent(in) :: category
 
       write (unit, '(a,a,":")') "", category
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
 
    end subroutine print_category_header
 
@@ -252,7 +252,7 @@ contains
       else
          call print_wrapped(unit, entry%journal, "    ", wrap_width)
       end if
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
    end subroutine print_entry
 
    !> Print all citations, grouped by category
@@ -262,8 +262,8 @@ contains
 
       call init_citations()
 
-      write (unit, '(a)') "Please include the appropriate citations when using our work:"
-      write (unit, '(a)') ""
+      write (unit, "(a)") "Please include the appropriate citations when using our work:"
+      write (unit, "(a)") ""
 
       call print_citations_by_category(unit, "General")
       call print_citations_by_category(unit, "Cavities")
@@ -294,7 +294,7 @@ contains
          ! Print label sub-header when it changes
          if (moist_citations(i)%label /= last_label) then
             write (unit, '(2x,a,a,":")') "", moist_citations(i)%label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             last_label = moist_citations(i)%label
          end if
          call print_entry(unit, moist_citations(i))
@@ -319,7 +319,7 @@ contains
          if (moist_citations(i)%label /= label) cycle
          if (.not. found) then
             write (unit, '(a,a,":")') "", label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             found = .true.
          end if
          call print_entry(unit, moist_citations(i))

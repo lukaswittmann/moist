@@ -6,7 +6,7 @@
 module moist_math_trigonometry
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: cross_product
-   implicit none
+   implicit none(type, external)
    private
 
    public :: rotation_z_to_n

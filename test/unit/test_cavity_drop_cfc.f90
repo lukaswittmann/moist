@@ -7,7 +7,7 @@ module test_cavity_drop_cfc
                                                cfc_tangent_eval, cfc_hvp_eval
    use test_helpers, only: fd4_scalar
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_cfc

@@ -15,7 +15,7 @@ module test_cavity_iswig
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_iswig
@@ -671,7 +671,7 @@ contains
    subroutine test_area_variants(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      integer :: nsph, ngrid
+      integer :: nsph
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: asph_full(:), asph_eff(:)
       integer :: num_leb
@@ -812,7 +812,7 @@ contains
       class(radius_type), allocatable :: radius_model
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: num2d(:, :), ana2d(:, :)
-      real(wp) :: h, fwd, bwd, ffwd, bbwd, cut_a, cut_f, s
+      real(wp) :: h, fwd, bwd, ffwd, bbwd, cut_a, cut_f
       integer :: i, j, nleb, nlebs(5)
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx

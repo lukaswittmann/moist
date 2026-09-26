@@ -17,7 +17,7 @@ module test_cavity_drop_integration_dev
    use moist_utils_env, only: resolve_dir, ensure_dir
    use moist_context, only: moist_context_type, new_context
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_integration
@@ -61,7 +61,7 @@ contains
 
       ! Sample UPU23 IDs to test
       character(len=2), parameter :: test_ids(4) = [ &
-                                     '1c', '2h', '4b', '7p' &
+                                     "1c", "2h", "4b", "7p" &
                                      ]
 
       ! Print header
@@ -107,7 +107,7 @@ contains
 
       ! Sample a few amino20x4 IDs to test
       character(len=7), parameter :: test_ids(4) = [ &
-                                     'GLN_xai', 'PHE_xab', 'THR_xab', 'VAL_xad' &
+                                     "GLN_xai", "PHE_xab", "THR_xab", "VAL_xad" &
                                      ]
 
       call print_comparison_header("amino20x4")
@@ -152,7 +152,7 @@ contains
 
       ! Sample MB16-43 IDs to test
       character(len=4), parameter :: test_ids(4) = [ &
-                                     'O2  ', 'CH4 ', '26  ', '40  ' &
+                                     "O2  ", "CH4 ", "26  ", "40  " &
                                      ]
 
       ! Print header
@@ -199,7 +199,7 @@ contains
 
       ! Sample But14diol IDs to test
       character(len=2), parameter :: test_ids(4) = [ &
-                                     '20', '30', '40', '50']
+                                     "20", "30", "40", "50"]
 
       ! Print header
       call print_comparison_header("But14diol")
@@ -245,7 +245,7 @@ contains
 
       ! Sample IL16 IDs to test
       character(len=4), parameter :: test_ids(4) = [ &
-                                     '008 ', '144 ', '187 ', '212 ']
+                                     "008 ", "144 ", "187 ", "212 "]
 
       ! Print header
       call print_comparison_header("IL16")
@@ -301,16 +301,16 @@ contains
       integer, parameter :: num_mols = 8
       integer, parameter :: do_num_mols = 8
       character(len=12), parameter :: dataset_names(num_mols) = [ &
-                                     'MB16-43     ', 'MB16-43     ', 'MB16-43     ', &
-                                     'Amino20x4   ', 'MB16-43     ', &
-                                     'But14diol   ', 'IL16        ', &
-                                     'UPU23       ' &
+                                     "MB16-43     ", "MB16-43     ", "MB16-43     ", &
+                                     "Amino20x4   ", "MB16-43     ", &
+                                     "But14diol   ", "IL16        ", &
+                                     "UPU23       " &
                                      ]
       character(len=7), parameter :: mol_ids(num_mols) = [ &
-                                     'Ar     ', 'O2     ', 'CH4    ', &
-                                     'THR_xab', '16     ', &
-                                     '30     ', '144    ', &
-                                     '4b     ' &
+                                     "Ar     ", "O2     ", "CH4    ", &
+                                     "THR_xab", "16     ", &
+                                     "30     ", "144    ", &
+                                     "4b     " &
                                      ]
 
                                      ! Print header
@@ -329,7 +329,7 @@ contains
                gamma_val = gamma_array(gamma_idx)
 
 
-               if (trim(mol_ids(iid)) == 'Ar') then
+               if (trim(mol_ids(iid)) == "Ar") then
                   call new(mol, [18], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
                else
                   call get_structure(mol, trim(dataset_names(iid)), trim(mol_ids(iid)))
@@ -417,25 +417,25 @@ contains
          mpe_V = sum_pct_err_V / n_samples
          mape_V = sum_abs_pct_err_V / n_samples
 
-         write(*,*) ' '
-         write(*,*) '--- Summary Statistics across whole set ---'
-         write(*,*) 'Area:'
-         write(*,'(A,F10.4)')   '  Mean Error:           ', mean_err_A
-         write(*,'(A,F10.4)')   '  Mean Absolute Error:  ', mean_abs_err_A
-         write(*,'(A,F10.4)')   '  Standard Deviation:   ', std_err_A
-         write(*,'(A,F10.4)')   '  Max Abs Error:        ', max_abs_err_A
-         write(*,'(A,F10.4,A)') '  Mean % Error (MPE):   ', mpe_A, ' %'
-         write(*,'(A,F10.4,A)') '  Mean Abs % Error:     ', mape_A, ' %'
-         write(*,'(A,F10.4,A)') '  Max Abs % Error:      ', max_abs_pct_err_A, ' %'
-         write(*,*) 'Volume:'
-         write(*,'(A,F10.4)')   '  Mean Error:           ', mean_err_V
-         write(*,'(A,F10.4)')   '  Mean Absolute Error:  ', mean_abs_err_V
-         write(*,'(A,F10.4)')   '  Standard Deviation:   ', std_err_V
-         write(*,'(A,F10.4)')   '  Max Abs Error:        ', max_abs_err_V
-         write(*,'(A,F10.4,A)') '  Mean % Error (MPE):   ', mpe_V, ' %'
-         write(*,'(A,F10.4,A)') '  Mean Abs % Error:     ', mape_V, ' %'
-         write(*,'(A,F10.4,A)') '  Max Abs % Error:      ', max_abs_pct_err_V, ' %'
-         write(*,*) ' '
+         write(*,*) " "
+         write(*,*) "--- Summary Statistics across whole set ---"
+         write(*,*) "Area:"
+         write(*,"(A,F10.4)")   "  Mean Error:           ", mean_err_A
+         write(*,"(A,F10.4)")   "  Mean Absolute Error:  ", mean_abs_err_A
+         write(*,"(A,F10.4)")   "  Standard Deviation:   ", std_err_A
+         write(*,"(A,F10.4)")   "  Max Abs Error:        ", max_abs_err_A
+         write(*,"(A,F10.4,A)") "  Mean % Error (MPE):   ", mpe_A, " %"
+         write(*,"(A,F10.4,A)") "  Mean Abs % Error:     ", mape_A, " %"
+         write(*,"(A,F10.4,A)") "  Max Abs % Error:      ", max_abs_pct_err_A, " %"
+         write(*,*) "Volume:"
+         write(*,"(A,F10.4)")   "  Mean Error:           ", mean_err_V
+         write(*,"(A,F10.4)")   "  Mean Absolute Error:  ", mean_abs_err_V
+         write(*,"(A,F10.4)")   "  Standard Deviation:   ", std_err_V
+         write(*,"(A,F10.4)")   "  Max Abs Error:        ", max_abs_err_V
+         write(*,"(A,F10.4,A)") "  Mean % Error (MPE):   ", mpe_V, " %"
+         write(*,"(A,F10.4,A)") "  Mean Abs % Error:     ", mape_V, " %"
+         write(*,"(A,F10.4,A)") "  Max Abs % Error:      ", max_abs_pct_err_V, " %"
+         write(*,*) " "
       end if
 
    end subroutine test_mc_mixed
@@ -489,7 +489,7 @@ contains
                if (allocated(error)) return
 
                ! Format distance as string for display
-               write(dist_str, '(F5.1)') distance ** 3
+               write(dist_str, "(F5.1)") distance ** 3
                call print_comparison_row(trim(adjustl(dist_str)), k_val, beta, gamma_val, &
                                         mc_area, cavity_area, mc_volume, cavity_volume)
 
@@ -513,10 +513,10 @@ contains
       character(len=*), intent(in) :: title
 
       write (*, *)
-      write (*, '(A)') "  Comparing MC vs DROP for "//trim(title)//" molecules"
-      write (*, '(1x, A12, 3A6, 2x, 3A12, 2A8, 2x, 3A12, 2A8)') "struct", "k", "b", "g", &
+      write (*, "(A)") "  Comparing MC vs DROP for "//trim(title)//" molecules"
+      write (*, "(1x, A12, 3A6, 2x, 3A12, 2A8, 2x, 3A12, 2A8)") "struct", "k", "b", "g", &
          "A_cav", "A_exact", "dA", "%", "x", "V_cav", "V_exact", "dV", "%", "x"
-      write (*, '(1x, A12, 3A6, 2x, 3A12, 2A8, 2x, 3A12, 2A8)') "-----------", "-----", &
+      write (*, "(1x, A12, 3A6, 2x, 3A12, 2A8, 2x, 3A12, 2A8)") "-----------", "-----", &
          "-----", "-----", "-----------", "-----------", "-----------", "-------", "-------", &
          "-----------", "-----------", "-----------", "-------", "-------"
    end subroutine print_comparison_header
@@ -547,7 +547,7 @@ contains
          ratio_volume = -(mc_volume / cavity_volume)
       end if
 
-      write (*, '(1x, A12, 3F6.1, 2x, 3F12.1, F8.1, F8.2, 2x, 3F12.1, F8.1, F8.2)') &
+      write (*, "(1x, A12, 3F6.1, 2x, 3F12.1, F8.1, F8.2, 2x, 3F12.1, F8.1, F8.2)") &
          trim(struct_name), k_val, beta_val, gamma_val, &
          cavity_area, mc_area, cavity_area - mc_area, &
          100.0_wp*(cavity_area - mc_area)/cavity_area, ratio_area, &
@@ -577,7 +577,6 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(moist_cavity_drop_parameters_type) :: param
       real(wp), allocatable :: radii_local(:)
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavities built here
@@ -672,20 +671,20 @@ contains
       sanitized_benchmark = trim(benchmark_name)
       sanitized_structure = trim(structure_id)
       do i = 1, len_trim(sanitized_benchmark)
-         if (sanitized_benchmark(i:i) == ' ' .or. sanitized_benchmark(i:i) == '-') then
-            sanitized_benchmark(i:i) = '_'
+         if (sanitized_benchmark(i:i) == " " .or. sanitized_benchmark(i:i) == "-") then
+            sanitized_benchmark(i:i) = "_"
          end if
       end do
       do i = 1, len_trim(sanitized_structure)
-         if (sanitized_structure(i:i) == ' ' .or. sanitized_structure(i:i) == '-') then
-            sanitized_structure(i:i) = '_'
+         if (sanitized_structure(i:i) == " " .or. sanitized_structure(i:i) == "-") then
+            sanitized_structure(i:i) = "_"
          end if
       end do
 
       ! Format k, beta and gamma as strings
-      write (k_str, '(F0.1)') k
-      write (beta_str, '(F0.1)') beta
-      write (gamma_str, '(F0.1)') gamma
+      write (k_str, "(F0.1)") k
+      write (beta_str, "(F0.1)") beta
+      write (gamma_str, "(F0.1)") gamma
 
       ! Resolve cache directory (MOIST_DROP_CACHE_DIR override, repo-relative default)
       cache_dir = resolve_dir("MOIST_DROP_CACHE_DIR", "test/outputs/drop_cache")
@@ -703,7 +702,7 @@ contains
 
       if (file_exists) then
          ! Read from cache
-         open (newunit=io_unit, file=trim(cache_file), status='old', action='read', iostat=io_stat)
+         open (newunit=io_unit, file=trim(cache_file), status="old", action="read", iostat=io_stat)
          if (io_stat == 0) then
             read (io_unit, *, iostat=io_stat) mc_area
             if (io_stat == 0) then
@@ -715,10 +714,10 @@ contains
             close (io_unit)
 
             if (io_stat /= 0) then
-               write (error_unit, '(A)') "Warning: Error reading cache file, recomputing..."
+               write (error_unit, "(A)") "Warning: Error reading cache file, recomputing..."
             end if
          else
-            write (error_unit, '(A)') "Warning: Could not open cache file, recomputing..."
+            write (error_unit, "(A)") "Warning: Could not open cache file, recomputing..."
          end if
       end if
 
@@ -729,14 +728,14 @@ contains
          if (allocated(error)) return
 
          ! Write mc results to cache (cavity results are not cached as they're fast)
-         open (newunit=io_unit, file=trim(cache_file), status='replace', &
-               action='write', iostat=io_stat)
+         open (newunit=io_unit, file=trim(cache_file), status="replace", &
+               action="write", iostat=io_stat)
          if (io_stat == 0) then
-            write (io_unit, '(F20.10)') mc_area
-            write (io_unit, '(F20.10)') mc_volume
+            write (io_unit, "(F20.10)") mc_area
+            write (io_unit, "(F20.10)") mc_volume
             close (io_unit)
          else
-            write (error_unit, '(A)') "Warning: Could not write cache file"
+            write (error_unit, "(A)") "Warning: Could not write cache file"
          end if
       else
          ! Cache hit! Only need to compute cavity results (mc results were read from cache)

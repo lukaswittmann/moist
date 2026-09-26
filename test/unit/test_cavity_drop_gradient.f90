@@ -491,8 +491,9 @@ contains
          ! The admissible branch set is derived from the softmax scale, so it
          ! has to be recomputed alongside it
          call cavity%param%compute_derived(cavity_error)
-         if (allocated(cavity_error)) &
+         if (allocated(cavity_error)) then
             call test_failed(error, "Failed to recompute derived parameters: "//cavity_error%message)
+         end if
          call cavity%branch_weight%init(branch_weight_s_override)
       end if
       call cavity%update(mol, error=cavity_error)

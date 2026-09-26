@@ -2,7 +2,7 @@ module moist_radius_type
    use mctc_env, only: wp
    use mctc_env, only: error_type
    use mctc_io, only: structure_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: radius_type
@@ -35,6 +35,7 @@ module moist_radius_type
       !> @param[out]   error  error handle on failure
       subroutine radii_update_interface(self, mol, error)
          import :: radius_type, structure_type, error_type
+         implicit none(type, external)
          class(radius_type), intent(inout) :: self
          type(structure_type), intent(in) :: mol
          type(error_type), allocatable, intent(out) :: error
@@ -46,6 +47,7 @@ module moist_radius_type
       !> @param[in] unit  optional Fortran output unit
       subroutine radii_print_interface(self, unit)
          import :: radius_type
+         implicit none(type, external)
          class(radius_type), intent(in) :: self
          integer, intent(in), optional :: unit
       end subroutine radii_print_interface

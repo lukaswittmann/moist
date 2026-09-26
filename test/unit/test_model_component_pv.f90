@@ -31,7 +31,7 @@ module test_model_component_pv
       & ngrid_sw => fixture_ngrid_param, sw_areas => fixture_areas_param, &
       & sw_xis => fixture_xis_param, sw_fs => fixture_fs_param, &
       & sw_xyz => fixture_xyz_param
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pv
@@ -144,7 +144,7 @@ contains
                   return
                end if
 
-               write (context, '(a,f0.2,a,i0,a,es9.2)') &
+               write (context, "(a,f0.2,a,i0,a,es9.2)") &
                   & "PV sphere R = ", test_radii(irad), ", nleb = ", &
                   & test_nlebs(ileb), ", p = ", test_pressures(ipres)
                call check(error, energy - sentinel, &
@@ -301,7 +301,7 @@ contains
                if (allocated(error)) return
             end do
             fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
-            write (context, '(a,i0,a,i0)') "PV gradient atom ", iatom, ", axis ", iaxis
+            write (context, "(a,i0,a,i0)") "PV gradient atom ", iatom, ", axis ", iaxis
             call check(error, gradient(iaxis, iatom) - sentinel, fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
             if (allocated(error)) return

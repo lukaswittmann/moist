@@ -11,7 +11,7 @@ module test_cavity_numsa
    use moist_radii, only: radius_type_static
    use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
    use moist_context, only: moist_context_type, new_context
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_numsa

@@ -9,7 +9,7 @@ module moist_model_component_pcm_cosmo
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_component_pcm_type, only: solvation_model_component_pcm, moist_pcm_parameters_type
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: solvation_model_component_cosmo

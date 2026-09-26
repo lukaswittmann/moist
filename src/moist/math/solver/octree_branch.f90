@@ -65,7 +65,7 @@ module moist_math_solver_octree_branch
    use mctc_env, only: error_type, fatal_error
    use, intrinsic :: iso_fortran_env, only: int64, output_unit
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_octree_branch_type
@@ -98,6 +98,7 @@ module moist_math_solver_octree_branch
       !> @param[in]  context Caller context forwarded unchanged
       subroutine octree_probe_context_interface(x, lsf0, radius, context)
          import :: wp
+         implicit none(type, external)
          real(wp), intent(in) :: x(3)
          real(wp), intent(out) :: lsf0
          real(wp), intent(out) :: radius

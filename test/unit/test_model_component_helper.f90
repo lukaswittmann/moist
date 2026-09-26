@@ -6,7 +6,7 @@ module test_model_component_helper
    use test_helpers, only: fd4_scalar, fd4_offsets
    use testdrive, only: error_type, check, test_failed
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: surface_fixture
@@ -83,6 +83,7 @@ module test_model_component_helper
       !> Evaluate the cavity-dependent component energy on a surface fixture
       function surface_energy_callback(surface) result(energy)
          import :: surface_fixture, wp
+         implicit none(type, external)
          !> Surface variables at which to evaluate the energy
          type(surface_fixture), intent(in) :: surface
          !> Component energy

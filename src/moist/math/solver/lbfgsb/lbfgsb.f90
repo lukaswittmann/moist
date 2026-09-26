@@ -246,7 +246,7 @@ contains
       integer :: lws, lr, lz, lt, ld, lxp, lwa, lwy, lsy, lss, &
                  lwt, lwn, lsnd
 
-      if (Task == 'START') then
+      if (Task == "START") then
          Isave(1) = m*n
          Isave(2) = m**2
          Isave(3) = 4*m**2
@@ -427,7 +427,7 @@ contains
       logical :: prelims
       logical :: linesearch
 
-      if (Task == 'START') then
+      if (Task == "START") then
 
          epsmch = epsilon(one)
 
@@ -474,7 +474,7 @@ contains
          lnscht = 0
 
          ! 'word' records the status of subspace solutions.
-         word = '---'
+         word = "---"
 
          ! 'info' records the termination information.
          info = 0
@@ -482,14 +482,14 @@ contains
          ! open a summary file 'iterate.dat'
          if (Iprint >= 1) then
             if (present(iteration_file)) then
-               open (newunit=itfile, file=trim(iteration_file), status='unknown')
+               open (newunit=itfile, file=trim(iteration_file), status="unknown")
             else ! use default name if not specified
-               open (newunit=itfile, file='iterate.dat', status='unknown')
+               open (newunit=itfile, file="iterate.dat", status="unknown")
             end if
          end if
          ! Check the input arguments for errors.
          call errclb(n, m, Factr, l, u, Nbd, Task, info, k)
-         if (Task(1:5) == 'ERROR') then
+         if (Task(1:5) == "ERROR") then
             call prn3lb(n, x, f, Task, Iprint, info, itfile, iter, nfgv, nintol, &
                         nskip, nact, sbgnrm, zero, nseg, word, iback, stp, &
                         xstep, k, cachyt, sbtime, lnscht)
@@ -554,16 +554,16 @@ contains
       compute_infinity_norm_of_projected_gradient = .true.
       prelims = .true.
       linesearch = .true.
-      if (Task(1:5) == 'FG_LN') then
+      if (Task(1:5) == "FG_LN") then
          compute_infinity_norm_of_projected_gradient = .false.
          prelims = .false.
-      else if (Task(1:5) == 'NEW_X') then
+      else if (Task(1:5) == "NEW_X") then
          compute_infinity_norm_of_projected_gradient = .false.
          prelims = .false.
          linesearch = .false.
-      else if (Task(1:5) /= 'FG_ST') then
-         if (Task(1:4) == 'STOP') then
-            if (Task(7:9) == 'CPU') then
+      else if (Task(1:5) /= "FG_ST") then
+         if (Task(1:4) == "STOP") then
+            if (Task(7:9) == "CPU") then
                ! restore the previous iterate.
                call dcopy(n, t, 1, x, 1)
                call dcopy(n, r, 1, g, 1)
@@ -582,14 +582,14 @@ contains
          call projgr(n, l, u, Nbd, x, g, sbgnrm)
 
          if (Iprint >= 1) then
-            write (output_unit, '(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)') &
-               'At iterate', iter, 'f= ', f, '|proj g|= ', sbgnrm
-            write (itfile, '(2(1x,i4),5x,a,5x,a,3x,a,5x,a,5x,a,8x,a,3x,1p,2(1x,d10.3))') &
-               iter, nfgv, '-', '-', '-', '-', '-', '-', sbgnrm, f
+            write (output_unit, "(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)") &
+               "At iterate", iter, "f= ", f, "|proj g|= ", sbgnrm
+            write (itfile, "(2(1x,i4),5x,a,5x,a,3x,a,5x,a,5x,a,8x,a,3x,1p,2(1x,d10.3))") &
+               iter, nfgv, "-", "-", "-", "-", "-", "-", sbgnrm, f
          end if
          if (sbgnrm <= Pgtol) then
             ! terminate the algorithm.
-            Task = 'CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL'
+            Task = "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL"
             call finish()
             return
          end if
@@ -600,7 +600,7 @@ contains
 
          if (prelims) then
 
-            if (Iprint >= 99) write (output_unit, '(//,A,i5)') 'ITERATION ', iter + 1
+            if (Iprint >= 99) write (output_unit, "(//,A,i5)") "ITERATION ", iter + 1
 
             iword = -1
 
@@ -619,9 +619,9 @@ contains
                            Iprint, sbgnrm, info, epsmch)
                if (info /= 0) then
                   ! singular triangular system detected; refresh the lbfgs memory.
-                  if (Iprint >= 1) write (output_unit, '(/,A,/,A)') &
-                     ' Singular triangular system detected;', &
-                     '   refresh the lbfgs memory and restart the iteration.'
+                  if (Iprint >= 1) write (output_unit, "(/,A,/,A)") &
+                     " Singular triangular system detected;", &
+                     "   refresh the lbfgs memory and restart the iteration."
                   info = 0
                   col = 0
                   head = 1
@@ -666,9 +666,9 @@ contains
                if (info /= 0) then
                   ! nonpositive definiteness in Cholesky factorization;
                   ! refresh the lbfgs memory and restart the iteration.
-                  if (Iprint >= 1) write (output_unit, '(/,a,/,a)') &
-                     ' Nonpositive definiteness in Cholesky factorization in formk;', &
-                     '   refresh the lbfgs memory and restart the iteration.'
+                  if (Iprint >= 1) write (output_unit, "(/,a,/,a)") &
+                     " Nonpositive definiteness in Cholesky factorization in formk;", &
+                     "   refresh the lbfgs memory and restart the iteration."
                   info = 0
                   col = 0
                   head = 1
@@ -694,9 +694,9 @@ contains
                if (info /= 0) then
                   ! singular triangular system detected;
                   ! refresh the lbfgs memory and restart the iteration.
-                  if (Iprint >= 1) write (output_unit, '(/,A,/,A)') &
-                     ' Singular triangular system detected;', &
-                     '   refresh the lbfgs memory and restart the iteration.'
+                  if (Iprint >= 1) write (output_unit, "(/,A,/,A)") &
+                     " Singular triangular system detected;", &
+                     "   refresh the lbfgs memory and restart the iteration."
                   info = 0
                   col = 0
                   head = 1
@@ -745,15 +745,15 @@ contains
                      ifun = ifun - 1
                      iback = iback - 1
                   end if
-                  Task = 'ABNORMAL_TERMINATION_IN_LNSRCH'
+                  Task = "ABNORMAL_TERMINATION_IN_LNSRCH"
                   iter = iter + 1
                   call finish()
                   return
                else
                   ! refresh the lbfgs memory and restart the iteration.
-                  if (Iprint >= 1) write (output_unit, '(/,a,/,a)') &
-                     ' Bad direction in the line search;', &
-                     '   refresh the lbfgs memory and restart the iteration.'
+                  if (Iprint >= 1) write (output_unit, "(/,a,/,a)") &
+                     " Bad direction in the line search;", &
+                     "   refresh the lbfgs memory and restart the iteration."
                   if (info == 0) nfgv = nfgv - 1
                   info = 0
                   col = 0
@@ -761,13 +761,13 @@ contains
                   theta = one
                   iupdat = 0
                   updatd = .false.
-                  Task = 'RESTART_FROM_LNSRCH'
+                  Task = "RESTART_FROM_LNSRCH"
                   call cpu_time(cpu2)
                   lnscht = lnscht + cpu2 - cpu1
                   call continue_loop()
                   cycle main_loop
                end if
-            else if (Task(1:5) == 'FG_LN') then
+            else if (Task(1:5) == "FG_LN") then
                ! return to the driver for calculating f and g; reenter at 666.
                call save_locals()
                return
@@ -794,7 +794,7 @@ contains
          ! Test for termination.
          if (sbgnrm <= Pgtol) then
             ! terminate the algorithm.
-            Task = 'CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL'
+            Task = "CONVERGENCE: NORM_OF_PROJECTED_GRADIENT_<=_PGTOL"
             call finish()
             return
          end if
@@ -802,7 +802,7 @@ contains
          ddum = max(abs(fold), abs(f), one)
          if ((fold - f) <= tol*ddum) then
             ! terminate the algorithm.
-            Task = 'CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH'
+            Task = "CONVERGENCE: REL_REDUCTION_OF_F_<=_FACTR*EPSMCH"
             if (iback >= 10) info = -5
             ! i.e., to issue a warning if iback>10 in the line search.
             call finish()
@@ -827,8 +827,8 @@ contains
             ! skip the L-BFGS update.
             nskip = nskip + 1
             updatd = .false.
-            if (Iprint >= 1) write (output_unit, '(a,1p,e10.3,a,1p,e10.3,a)') &
-               '  ys=', dr, '  -gs=', ddum, ' BFGS update SKIPPED'
+            if (Iprint >= 1) write (output_unit, "(a,1p,e10.3,a,1p,e10.3,a)") &
+               "  ys=", dr, "  -gs=", ddum, " BFGS update SKIPPED"
             call continue_loop()
             cycle main_loop
          end if
@@ -851,9 +851,9 @@ contains
          if (info /= 0) then
             ! nonpositive definiteness in Cholesky factorization;
             ! refresh the lbfgs memory and restart the iteration.
-            if (Iprint >= 1) write (output_unit, '(/,a,/,a)') &
-               ' Nonpositive definiteness in Cholesky factorization in formt;', &
-               '   refresh the lbfgs memory and restart the iteration.'
+            if (Iprint >= 1) write (output_unit, "(/,a,/,a)") &
+               " Nonpositive definiteness in Cholesky factorization in formt;", &
+               "   refresh the lbfgs memory and restart the iteration."
             info = 0
             col = 0
             head = 1
@@ -884,7 +884,7 @@ contains
       subroutine start()
             !! return to the driver to calculate f and g
 
-         Task = 'FG_START'
+         Task = "FG_START"
          call save_locals()
 
       end subroutine start
@@ -1030,12 +1030,12 @@ contains
 
       if (Iprint >= 0) then
          if (Prjctd) write (output_unit, *) &
-            'The initial X is infeasible.  Restart with its projection.'
-         if (.not. Cnstnd) write (output_unit, *) 'This problem is unconstrained.'
+            "The initial X is infeasible.  Restart with its projection."
+         if (.not. Cnstnd) write (output_unit, *) "This problem is unconstrained."
       end if
 
-      if (Iprint > 0) write (output_unit, '(/,a,i9,a)') &
-         'At X0 ', nbdd, ' variables are exactly at the bounds'
+      if (Iprint > 0) write (output_unit, "(/,a,i9,a)") &
+         "At X0 ", nbdd, " variables are exactly at the bounds"
 
    end subroutine active
 !*******************************************************************************
@@ -1242,7 +1242,7 @@ contains
       ! the derivative f1 and the vector p = W'd (for theta = 1).
 
       if (Sbgnrm <= zero) then
-         if (Iprint >= 0) write (output_unit, *) 'Subgnorm = 0.  GCP = X.'
+         if (Iprint >= 0) write (output_unit, *) "Subgnorm = 0.  GCP = X."
          call dcopy(n, x, 1, Xcp, 1)
          return
       end if
@@ -1253,8 +1253,8 @@ contains
       bkmin = zero
       col2 = 2*Col
       f1 = zero
-      if (Iprint >= 99) write (output_unit, '(/,a)') &
-         '---------------- CAUCHY entered-------------------'
+      if (Iprint >= 99) write (output_unit, "(/,a)") &
+         "---------------- CAUCHY entered-------------------"
 
       ! We set p to zero and build it up as we determine d.
 
@@ -1341,7 +1341,7 @@ contains
 
       if (nbreak == 0 .and. nfree == n + 1) then
          ! is a zero vector, return with the initial xcp as GCP.
-         if (Iprint > 100) write (output_unit, '(A,/,(4x,1p,6(1x,d11.4)))') 'Cauchy X =  ', (Xcp(i), i=1, n)
+         if (Iprint > 100) write (output_unit, "(A,/,(4x,1p,6(1x,d11.4)))") "Cauchy X =  ", (Xcp(i), i=1, n)
          return
       end if
 
@@ -1363,7 +1363,7 @@ contains
       dtm = -f1/f2
       tsum = zero
       Nseg = 1
-      if (Iprint >= 99) write (output_unit, *) 'There are ', nbreak, '  breakpoints '
+      if (Iprint >= 99) write (output_unit, *) "There are ", nbreak, "  breakpoints "
 
       ! If there are no breakpoints, locate the GCP and return.
       if (nbreak /= 0) then
@@ -1405,9 +1405,9 @@ contains
             dt = tj - tj0
 
             if (dt /= zero .and. Iprint >= 100) then
-               write (output_unit, '(/,a,i3,a,1p,2(1x,d11.4))') 'Piece    ', Nseg, ' --f1, f2 at start point ', f1, f2
-               write (output_unit, '(a,1p,d11.4)') 'Distance to the next break point =  ', dt
-               write (output_unit, '(A,1p,d11.4)') 'Distance to the stationary point =  ', dtm
+               write (output_unit, "(/,a,i3,a,1p,2(1x,d11.4))") "Piece    ", Nseg, " --f1, f2 at start point ", f1, f2
+               write (output_unit, "(a,1p,d11.4)") "Distance to the next break point =  ", dt
+               write (output_unit, "(A,1p,d11.4)") "Distance to the stationary point =  ", dtm
             end if
 
             ! If a minimizer is within this interval, locate the GCP and return.
@@ -1431,7 +1431,7 @@ contains
                Xcp(ibp) = l(ibp)
                Iwhere(ibp) = 1
             end if
-            if (Iprint >= 100) write (output_unit, *) 'Variable  ', ibp, '  is fixed.'
+            if (Iprint >= 100) write (output_unit, *) "Variable  ", ibp, "  is fixed."
             if (nleft == 0 .and. nbreak == n) then
                ! all n variables are fixed,
                ! return with xcp as GCP.
@@ -1500,10 +1500,10 @@ contains
 
       if (Iprint >= 99) then
          write (output_unit, *)
-         write (output_unit, *) 'GCP found in this segment'
-         write (output_unit, '(a,i3,a,1p,2(1x,d11.4))') &
-            'Piece    ', Nseg, ' --f1, f2 at start point ', f1, f2
-         write (output_unit, '(A,1p,d11.4)') 'Distance to the stationary point =  ', dtm
+         write (output_unit, *) "GCP found in this segment"
+         write (output_unit, "(a,i3,a,1p,2(1x,d11.4))") &
+            "Piece    ", Nseg, " --f1, f2 at start point ", f1, f2
+         write (output_unit, "(A,1p,d11.4)") "Distance to the stationary point =  ", dtm
       end if
       if (dtm <= zero) dtm = zero
       tsum = tsum + dtm
@@ -1523,8 +1523,8 @@ contains
          ! which will be used in computing r = Z'(B(x^c - x) + g).
 
          if (Col > 0) call daxpy(col2, dtm, p, 1, c, 1)
-         if (Iprint > 100) write (output_unit, '(A,/,(4x,1p,6(1x,d11.4)))') 'Cauchy X =  ', (Xcp(i), i=1, n)
-         if (Iprint >= 99) write (output_unit, '(/,A,/)') '---------------- exit CAUCHY----------------------'
+         if (Iprint > 100) write (output_unit, "(A,/,(4x,1p,6(1x,d11.4)))") "Cauchy X =  ", (Xcp(i), i=1, n)
+         if (Iprint >= 99) write (output_unit, "(/,A,/)") "---------------- exit CAUCHY----------------------"
 
       end subroutine update
 
@@ -1614,9 +1614,9 @@ contains
 
       ! Check the input arguments for errors.
 
-      if (n <= 0) Task = 'ERROR: N <= 0'
-      if (m <= 0) Task = 'ERROR: M <= 0'
-      if (Factr < zero) Task = 'ERROR: FACTR < 0'
+      if (n <= 0) Task = "ERROR: N <= 0"
+      if (m <= 0) Task = "ERROR: M <= 0"
+      if (Factr < zero) Task = "ERROR: FACTR < 0"
 
       ! Check the validity of the arrays nbd(i), u(i), and l(i).
 
@@ -1625,14 +1625,14 @@ contains
       do i = 1, n
          if (Nbd(i) < 0 .or. Nbd(i) > 3) then
             ! return
-            Task = 'ERROR: INVALID NBD'
+            Task = "ERROR: INVALID NBD"
             Info = -6
             k = i
          end if
          if (Nbd(i) == 2) then
             if (l(i) > u(i)) then
                ! return
-               Task = 'ERROR: NO FEASIBLE SOLUTION'
+               Task = "ERROR: NO FEASIBLE SOLUTION"
                Info = -7
                k = i
             end if
@@ -2019,8 +2019,8 @@ contains
             if (Iwhere(k) > 0) then
                Ileave = Ileave - 1
                Indx2(Ileave) = k
-               if (Iprint >= 100) write (output_unit, *) 'Variable ', k, &
-                   &' leaves the set of free variables'
+               if (Iprint >= 100) write (output_unit, *) "Variable ", k, &
+                   &" leaves the set of free variables"
             end if
          end do
          do i = 1 + Nfree, n
@@ -2028,13 +2028,13 @@ contains
             if (Iwhere(k) <= 0) then
                Nenter = Nenter + 1
                Indx2(Nenter) = k
-               if (Iprint >= 100) write (output_unit, *) 'Variable ', k, &
-                   &' enters the set of free variables'
+               if (Iprint >= 100) write (output_unit, *) "Variable ", k, &
+                   &" enters the set of free variables"
             end if
          end do
          if (Iprint >= 99) write (output_unit, *) n + 1 - Ileave, &
-                                   &' variables leave; ', Nenter, &
-                                   &' variables enter'
+                                   &" variables leave; ", Nenter, &
+                                   &" variables enter"
       end if
       Wrk = (Ileave < n + 1) .or. (Nenter > 0) .or. Updatd
 
@@ -2052,7 +2052,7 @@ contains
          end if
       end do
       if (Iprint >= 99) write (output_unit, *) Nfree, &
-         ' variables are free at GCP ', &
+         " variables are free at GCP ", &
          Iter + 1
 
    end subroutine freev
@@ -2190,7 +2190,7 @@ contains
       real(wp), parameter :: gtol = 0.9_wp
       real(wp), parameter :: xtol = 0.1_wp
 
-      if (Task(1:5) /= 'FG_LN') then
+      if (Task(1:5) /= "FG_LN") then
 
          Dtd = ddot(n, d, 1, d, 1)
          Dnorm = sqrt(Dtd)
@@ -2236,7 +2236,7 @@ contains
          Fold = f
          Ifun = 0
          Iback = 0
-         Csave = 'START'
+         Csave = "START"
 
       end if
 
@@ -2246,7 +2246,7 @@ contains
          if (Gd >= zero) then
             ! the directional derivative >=0.
             ! Line search is impossible.
-            write (output_unit, *) ' ascent direction in projection gd = ', Gd
+            write (output_unit, *) " ascent direction in projection gd = ", Gd
             Info = -4
             return
          end if
@@ -2255,8 +2255,8 @@ contains
       call dcsrch(f, Gd, Stp, ftol, gtol, xtol, zero, Stpmx, Csave, Isave, Dsave)
 
       Xstep = Stp*Dnorm
-      if (Csave(1:4) /= 'CONV' .and. Csave(1:4) /= 'WARN') then
-         Task = 'FG_LNSRCH'
+      if (Csave(1:4) /= "CONV" .and. Csave(1:4) /= "WARN") then
+         Task = "FG_LNSRCH"
          Ifun = Ifun + 1
          Nfgv = Nfgv + 1
          Iback = Ifun - 1
@@ -2268,7 +2268,7 @@ contains
             end do
          end if
       else
-         Task = 'NEW_X'
+         Task = "NEW_X"
       end if
 
    end subroutine lnsrlb
@@ -2376,34 +2376,34 @@ contains
       integer :: i
 
       if (Iprint >= 0) then
-         write (output_unit, '(a,/,/,a,/,/,a,1p,d10.3)') &
-            'RUNNING THE L-BFGS-B CODE', &
-            '           * * *', &
-            'Machine precision =', Epsmch
-         write (output_unit, *) 'N = ', n, '    M = ', m
+         write (output_unit, "(a,/,/,a,/,/,a,1p,d10.3)") &
+            "RUNNING THE L-BFGS-B CODE", &
+            "           * * *", &
+            "Machine precision =", Epsmch
+         write (output_unit, *) "N = ", n, "    M = ", m
          if (Iprint >= 1) then
-            write (Itfile, '(a,/,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,/,a,/,/,a,1p,d10.3)') &
-               'RUNNING THE L-BFGS-B CODE', &
-               'it    = iteration number', &
-               'nf    = number of function evaluations', &
-               'nseg  = number of segments explored during the Cauchy search', &
-               'nact  = number of active bounds at the generalized Cauchy point', &
-               'sub   = manner in which the subspace minimization terminated:', &
-               '        con = converged, bnd = a bound was reached', &
-               'itls  = number of iterations performed in the line search', &
-               'stepl = step length used', &
-               'tstep = norm of the displacement (total step)', &
-               'projg = norm of the projected gradient', &
-               'f     = function value', &
-               '           * * *', &
-               'Machine precision =', Epsmch
-            write (Itfile, *) 'N = ', n, '    M = ', m
-            write (Itfile, '(/,3x,a,3x,a,2x,a,2x,a,2x,a,2x,a,2x,a,4x,a,5x,a,8x,a)') &
-               'it', 'nf', 'nseg', 'nact', 'sub', 'itls', 'stepl', 'tstep', 'projg', 'f'
+            write (Itfile, "(a,/,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,a,/,/,a,/,/,a,1p,d10.3)") &
+               "RUNNING THE L-BFGS-B CODE", &
+               "it    = iteration number", &
+               "nf    = number of function evaluations", &
+               "nseg  = number of segments explored during the Cauchy search", &
+               "nact  = number of active bounds at the generalized Cauchy point", &
+               "sub   = manner in which the subspace minimization terminated:", &
+               "        con = converged, bnd = a bound was reached", &
+               "itls  = number of iterations performed in the line search", &
+               "stepl = step length used", &
+               "tstep = norm of the displacement (total step)", &
+               "projg = norm of the projected gradient", &
+               "f     = function value", &
+               "           * * *", &
+               "Machine precision =", Epsmch
+            write (Itfile, *) "N = ", n, "    M = ", m
+            write (Itfile, "(/,3x,a,3x,a,2x,a,2x,a,2x,a,2x,a,2x,a,4x,a,5x,a,8x,a)") &
+               "it", "nf", "nseg", "nact", "sub", "itls", "stepl", "tstep", "projg", "f"
             if (Iprint > 100) then
-               write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') 'L =', (l(i), i=1, n)
-               write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') 'X0 =', (x(i), i=1, n)
-               write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') 'U =', (u(i), i=1, n)
+               write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") "L =", (l(i), i=1, n)
+               write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") "X0 =", (x(i), i=1, n)
+               write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") "U =", (u(i), i=1, n)
             end if
          end if
       end if
@@ -2435,26 +2435,26 @@ contains
       integer :: i, imod
 
       select case (Iword)
-      case (0); Word = 'con' ! the subspace minimization converged.
-      case (1); Word = 'bnd' ! the subspace minimization stopped at a bound.
-      case (5); Word = 'TNT' ! the truncated Newton step has been used.
-      case default; Word = '---'
+      case (0); Word = "con" ! the subspace minimization converged.
+      case (1); Word = "bnd" ! the subspace minimization stopped at a bound.
+      case (5); Word = "TNT" ! the truncated Newton step has been used.
+      case default; Word = "---"
       end select
 
       if (Iprint >= 99) then
-         write (output_unit, *) 'LINE SEARCH', Iback, ' times; norm of step = ', Xstep
-         write (output_unit, '(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)') &
-            'At iterate', Iter, 'f= ', f, '|proj g|= ', Sbgnrm
+         write (output_unit, *) "LINE SEARCH", Iback, " times; norm of step = ", Xstep
+         write (output_unit, "(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)") &
+            "At iterate", Iter, "f= ", f, "|proj g|= ", Sbgnrm
          if (Iprint > 100) then
-            write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') 'X =', (x(i), i=1, n)
-            write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') 'G =', (g(i), i=1, n)
+            write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") "X =", (x(i), i=1, n)
+            write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") "G =", (g(i), i=1, n)
          end if
       else if (Iprint > 0) then
          imod = mod(Iter, Iprint)
-         if (imod == 0) write (output_unit, '(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)') &
-            'At iterate', Iter, 'f= ', f, '|proj g|= ', Sbgnrm
+         if (imod == 0) write (output_unit, "(/,a,i5,4x,a,1p,d12.5,4x,a,1p,d12.5)") &
+            "At iterate", Iter, "f= ", f, "|proj g|= ", Sbgnrm
       end if
-      if (Iprint >= 1) write (Itfile, '(2(1x,i4),2(1x,i5),2x,a3,1x,i4,1p,2(2x,d7.1),1p,2(1x,d10.3))') &
+      if (Iprint >= 1) write (Itfile, "(2(1x,i4),2(1x,i5),2x,a3,1x,i4,1p,2(2x,d7.1),1p,2(1x,d10.3))") &
          Iter, Nfgv, Nseg, Nact, Word, Iback, Stp, Xstep, Sbgnrm, f
 
    end subroutine prn2lb
@@ -2488,90 +2488,90 @@ contains
 
       integer :: i
 
-      if (Task(1:5) /= 'ERROR') then
+      if (Task(1:5) /= "ERROR") then
 
          if (Iprint >= 0) then
-            write (output_unit, '(/,a,/,/,a,/,a,/,a,a,/,a,/,a,a,/,a,/,a,/,/,a)') &
-               '           * * *', &
-               'Tit   = total number of iterations', &
-               'Tnf   = total number of function evaluations', &
-               'Tnint = total number of segments explored during', &
-               ' Cauchy searches', &
-               'Skip  = number of BFGS updates skipped', &
-               'Nact  = number of active bounds at final generalized', &
-               ' Cauchy point', &
-               'Projg = norm of the final projected gradient', &
-               'F     = final function value', &
-               '           * * *'
-            write (output_unit, '(/,3x,a,4x,a,5x,a,2x,a,2x,a,2x,a,5x,a,8x,a)') &
-               'N', 'Tit', 'Tnf', 'Tnint', 'Skip', 'Nact', 'Projg', 'F'
-            write (output_unit, '(i5,2(1x,i6),(1x,i6),(2x,i4),(1x,i5),1p,2(2x,d10.3))') &
+            write (output_unit, "(/,a,/,/,a,/,a,/,a,a,/,a,/,a,a,/,a,/,a,/,/,a)") &
+               "           * * *", &
+               "Tit   = total number of iterations", &
+               "Tnf   = total number of function evaluations", &
+               "Tnint = total number of segments explored during", &
+               " Cauchy searches", &
+               "Skip  = number of BFGS updates skipped", &
+               "Nact  = number of active bounds at final generalized", &
+               " Cauchy point", &
+               "Projg = norm of the final projected gradient", &
+               "F     = final function value", &
+               "           * * *"
+            write (output_unit, "(/,3x,a,4x,a,5x,a,2x,a,2x,a,2x,a,5x,a,8x,a)") &
+               "N", "Tit", "Tnf", "Tnint", "Skip", "Nact", "Projg", "F"
+            write (output_unit, "(i5,2(1x,i6),(1x,i6),(2x,i4),(1x,i5),1p,2(2x,d10.3))") &
                n, Iter, Nfgv, Nintol, Nskip, Nact, Sbgnrm, f
             if (Iprint >= 100) then
-               write (output_unit, '(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))') &
-                  'X =', (x(i), i=1, n)
+               write (output_unit, "(/,a4,1p,6(1x,d11.4),/,(4x,1p,6(1x,d11.4)))") &
+                  "X =", (x(i), i=1, n)
             end if
-            if (Iprint >= 1) write (output_unit, *) ' F =', f
+            if (Iprint >= 1) write (output_unit, *) " F =", f
          end if
 
       end if
 
       if (Iprint >= 0) then
-         write (output_unit, '(/,a60)') Task
+         write (output_unit, "(/,a60)") Task
          select case (Info)
-         case (-1); write (output_unit, '(/,a)') ' Matrix in 1st Cholesky factorization in formk is not Pos. Def.'
-         case (-2); write (output_unit, '(/,a)') ' Matrix in 2st Cholesky factorization in formk is not Pos. Def.'
-         case (-3); write (output_unit, '(/,a)') ' Matrix in the Cholesky factorization in formt is not Pos. Def.'
-         case (-4); write (output_unit, '(/,a,/,a,/,a,/,a)') &
- ' Derivative >= 0, backtracking line search impossible.', &
- '   Previous x, f and g restored.', &
- ' Possible causes: 1 error in function or gradient evaluation;', &
- '                  2 rounding errors dominate computation.'
-         case (-5); write (output_unit, '(/,a,/,a,/,a)') &
- ' Warning:  more than 10 function and gradient', &
- '   evaluations in the last line search.  Termination', &
- '   may possibly be caused by a bad search direction.'
-         case (-6); write (output_unit, *) ' Input nbd(', k, ') is invalid.'
-         case (-7); write (output_unit, *) ' l(', k, ') > u(', k, ').  No feasible solution.'
-         case (-8); write (output_unit, '(/,a)') ' The triangular system is singular.'
-         case (-9); write (output_unit, '(/,a,/,a,/,a,/,a)') &
- ' Line search cannot locate an adequate point after 20 function', &
- '  and gradient evaluations.  Previous x, f and g restored.', &
- ' Possible causes: 1 error in function or gradient evaluation;', &
- '                  2 rounding error dominate computation.'
+         case (-1); write (output_unit, "(/,a)") " Matrix in 1st Cholesky factorization in formk is not Pos. Def."
+         case (-2); write (output_unit, "(/,a)") " Matrix in 2st Cholesky factorization in formk is not Pos. Def."
+         case (-3); write (output_unit, "(/,a)") " Matrix in the Cholesky factorization in formt is not Pos. Def."
+         case (-4); write (output_unit, "(/,a,/,a,/,a,/,a)") &
+ " Derivative >= 0, backtracking line search impossible.", &
+ "   Previous x, f and g restored.", &
+ " Possible causes: 1 error in function or gradient evaluation;", &
+ "                  2 rounding errors dominate computation."
+         case (-5); write (output_unit, "(/,a,/,a,/,a)") &
+ " Warning:  more than 10 function and gradient", &
+ "   evaluations in the last line search.  Termination", &
+ "   may possibly be caused by a bad search direction."
+         case (-6); write (output_unit, *) " Input nbd(", k, ") is invalid."
+         case (-7); write (output_unit, *) " l(", k, ") > u(", k, ").  No feasible solution."
+         case (-8); write (output_unit, "(/,a)") " The triangular system is singular."
+         case (-9); write (output_unit, "(/,a,/,a,/,a,/,a)") &
+ " Line search cannot locate an adequate point after 20 function", &
+ "  and gradient evaluations.  Previous x, f and g restored.", &
+ " Possible causes: 1 error in function or gradient evaluation;", &
+ "                  2 rounding error dominate computation."
          end select
-         if (Iprint >= 1) write (output_unit, '(/,a,1p,e10.3,a,/a,1p,e10.3,a,/a,1p,e10.3,a)') &
-            ' Cauchy                time', Cachyt, ' seconds.', &
-            ' Subspace minimization time', Sbtime, ' seconds.', &
-            ' Line search           time', Lnscht, ' seconds.'
-         write (output_unit, '(/,a,1p,e10.3,a,/)') ' Total User time', Time, ' seconds.'
+         if (Iprint >= 1) write (output_unit, "(/,a,1p,e10.3,a,/a,1p,e10.3,a,/a,1p,e10.3,a)") &
+            " Cauchy                time", Cachyt, " seconds.", &
+            " Subspace minimization time", Sbtime, " seconds.", &
+            " Line search           time", Lnscht, " seconds."
+         write (output_unit, "(/,a,1p,e10.3,a,/)") " Total User time", Time, " seconds."
          if (Iprint >= 1) then
             if (Info == -4 .or. Info == -9) then
-               write (Itfile, '(2(1x,i4),2(1x,i5),2x,a3,1x,i4,1p,2(2x,d7.1),6x,a,10x,a)') &
-                  Iter, Nfgv, Nseg, Nact, Word, Iback, Stp, Xstep, '-', '-'
+               write (Itfile, "(2(1x,i4),2(1x,i5),2x,a3,1x,i4,1p,2(2x,d7.1),6x,a,10x,a)") &
+                  Iter, Nfgv, Nseg, Nact, Word, Iback, Stp, Xstep, "-", "-"
             end if
-            write (Itfile, '(/,a60)') Task
+            write (Itfile, "(/,a60)") Task
             select case (Info)
-            case (-1); write (Itfile, '(/,a)') ' Matrix in 1st Cholesky factorization in formk is not Pos. Def.'
-            case (-2); write (Itfile, '(/,a)') ' Matrix in 2st Cholesky factorization in formk is not Pos. Def.'
-            case (-3); write (Itfile, '(/,a)') ' Matrix in the Cholesky factorization in formt is not Pos. Def.'
-            case (-4); write (output_unit, '(/,a,/,a,/,a,/,a)') &
- ' Derivative >= 0, backtracking line search impossible.', &
- '   Previous x, f and g restored.', &
- ' Possible causes: 1 error in function or gradient evaluation;', &
- '                  2 rounding errors dominate computation.'
-            case (-5); write (Itfile, '(/,a,/,a,/,a)') &
- ' Warning:  more than 10 function and gradient', &
- '   evaluations in the last line search.  Termination', &
- '   may possibly be caused by a bad search direction.'
-            case (-8); write (Itfile, '(/,a)') ' The triangular system is singular.'
-            case (-9); write (Itfile, '(/,a,/,a,/,a,/,a)') &
- ' Line search cannot locate an adequate point after 20 function', &
- '  and gradient evaluations.  Previous x, f and g restored.', &
- ' Possible causes: 1 error in function or gradient evaluation;', &
- '                  2 rounding error dominate computation.'
+            case (-1); write (Itfile, "(/,a)") " Matrix in 1st Cholesky factorization in formk is not Pos. Def."
+            case (-2); write (Itfile, "(/,a)") " Matrix in 2st Cholesky factorization in formk is not Pos. Def."
+            case (-3); write (Itfile, "(/,a)") " Matrix in the Cholesky factorization in formt is not Pos. Def."
+            case (-4); write (output_unit, "(/,a,/,a,/,a,/,a)") &
+ " Derivative >= 0, backtracking line search impossible.", &
+ "   Previous x, f and g restored.", &
+ " Possible causes: 1 error in function or gradient evaluation;", &
+ "                  2 rounding errors dominate computation."
+            case (-5); write (Itfile, "(/,a,/,a,/,a)") &
+ " Warning:  more than 10 function and gradient", &
+ "   evaluations in the last line search.  Termination", &
+ "   may possibly be caused by a bad search direction."
+            case (-8); write (Itfile, "(/,a)") " The triangular system is singular."
+            case (-9); write (Itfile, "(/,a,/,a,/,a,/,a)") &
+ " Line search cannot locate an adequate point after 20 function", &
+ "  and gradient evaluations.  Previous x, f and g restored.", &
+ " Possible causes: 1 error in function or gradient evaluation;", &
+ "                  2 rounding error dominate computation."
             end select
-            write (Itfile, '(/,a,1p,e10.3,a,/)') ' Total User time', Time, ' seconds.'
+            write (Itfile, "(/,a,1p,e10.3,a,/)") " Total User time", Time, " seconds."
          end if
       end if
 
@@ -2734,7 +2734,7 @@ contains
       real(wp) :: dd_p
 
       if (Nsub <= 0) return
-      if (Iprint >= 99) write (output_unit, '(/,A,/)') '----------------SUBSM entered-----------------'
+      if (Iprint >= 99) write (output_unit, "(/,A,/)") "----------------SUBSM entered-----------------"
 
       ! Compute wv = W'Zd.
 
@@ -2827,8 +2827,8 @@ contains
          if (dd_p <= zero) exit main
 
          call dcopy(n, Xp, 1, x, 1)
-         if (Iprint >= 0) write (output_unit, '(A)') ' Positive dir derivative in projection '
-         if (Iprint >= 0) write (output_unit, '(A)') ' Using the backtracking step '
+         if (Iprint >= 0) write (output_unit, "(A)") " Positive dir derivative in projection "
+         if (Iprint >= 0) write (output_unit, "(A)") " Using the backtracking step "
 
          !-----------------------------------------------------------------
 
@@ -2879,7 +2879,7 @@ contains
 
       end block main
 
-      if (Iprint >= 99) write (output_unit, '(/,A,/)') '----------------exit SUBSM --------------------'
+      if (Iprint >= 99) write (output_unit, "(/,A,/)") "----------------exit SUBSM --------------------"
 
    end subroutine subsm
 !*******************************************************************************
@@ -2995,22 +2995,22 @@ contains
 
       ! Initialization block.
 
-      if (Task(1:5) == 'START') then
+      if (Task(1:5) == "START") then
 
          ! Check the input arguments for errors.
 
-         if (Stp < Stpmin) Task = 'ERROR: STP < STPMIN'
-         if (Stp > Stpmax) Task = 'ERROR: STP > STPMAX'
-         if (g >= zero) Task = 'ERROR: INITIAL G >= ZERO'
-         if (Ftol < zero) Task = 'ERROR: FTOL < ZERO'
-         if (Gtol < zero) Task = 'ERROR: GTOL < ZERO'
-         if (Xtol < zero) Task = 'ERROR: XTOL < ZERO'
-         if (Stpmin < zero) Task = 'ERROR: STPMIN < ZERO'
-         if (Stpmax < Stpmin) Task = 'ERROR: STPMAX < STPMIN'
+         if (Stp < Stpmin) Task = "ERROR: STP < STPMIN"
+         if (Stp > Stpmax) Task = "ERROR: STP > STPMAX"
+         if (g >= zero) Task = "ERROR: INITIAL G >= ZERO"
+         if (Ftol < zero) Task = "ERROR: FTOL < ZERO"
+         if (Gtol < zero) Task = "ERROR: GTOL < ZERO"
+         if (Xtol < zero) Task = "ERROR: XTOL < ZERO"
+         if (Stpmin < zero) Task = "ERROR: STPMIN < ZERO"
+         if (Stpmax < Stpmin) Task = "ERROR: STPMAX < STPMIN"
 
          ! Exit if there are errors on input.
 
-         if (Task(1:5) == 'ERROR') return
+         if (Task(1:5) == "ERROR") return
 
          ! Initialize local variables.
 
@@ -3037,7 +3037,7 @@ contains
          gy = ginit
          stmin = zero
          stmax = Stp + xtrapu*Stp
-         Task = 'FG'
+         Task = "FG"
 
          call save_locals()
          return
@@ -3076,22 +3076,26 @@ contains
 
       ! Test for warnings.
 
-      if (brackt .and. (Stp <= stmin .or. Stp >= stmax)) &
-         Task = 'WARNING: ROUNDING ERRORS PREVENT PROGRESS'
-      if (brackt .and. stmax - stmin <= Xtol*stmax) &
-         Task = 'WARNING: XTOL TEST SATISFIED'
-      if (Stp == Stpmax .and. f <= ftest .and. g <= gtest) &
-         Task = 'WARNING: STP = STPMAX'
-      if (Stp == Stpmin .and. (f > ftest .or. g >= gtest)) &
-         Task = 'WARNING: STP = STPMIN'
+      if (brackt .and. (Stp <= stmin .or. Stp >= stmax)) then
+         Task = "WARNING: ROUNDING ERRORS PREVENT PROGRESS"
+      end if
+      if (brackt .and. stmax - stmin <= Xtol*stmax) then
+         Task = "WARNING: XTOL TEST SATISFIED"
+      end if
+      if (Stp == Stpmax .and. f <= ftest .and. g <= gtest) then
+         Task = "WARNING: STP = STPMAX"
+      end if
+      if (Stp == Stpmin .and. (f > ftest .or. g >= gtest)) then
+         Task = "WARNING: STP = STPMIN"
+      end if
 
       ! Test for convergence.
 
-      if (f <= ftest .and. abs(g) <= Gtol*(-ginit)) Task = 'CONVERGENCE'
+      if (f <= ftest .and. abs(g) <= Gtol*(-ginit)) Task = "CONVERGENCE"
 
       ! Test for termination.
 
-      if (Task(1:4) == 'WARN' .or. Task(1:4) == 'CONV') then
+      if (Task(1:4) == "WARN" .or. Task(1:4) == "CONV") then
          call save_locals()
          return
       end if
@@ -3162,7 +3166,7 @@ contains
 
       ! Obtain another function and derivative.
 
-      Task = 'FG'
+      Task = "FG"
 
       call save_locals()
 

@@ -7,13 +7,13 @@
 module moist_math_solver_slsqp_multistart
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_math_solver_type, only: solver_base_type
 
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_grid_lebedev, only: lebedev_order_from_num, get_angular_grid
    use moist_math_trigonometry, only: rotation_z_to_n
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_multistart_type
@@ -27,6 +27,7 @@ module moist_math_solver_slsqp_multistart
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -34,6 +35,7 @@ module moist_math_solver_slsqp_multistart
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -41,6 +43,7 @@ module moist_math_solver_slsqp_multistart
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -48,6 +51,7 @@ module moist_math_solver_slsqp_multistart
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
@@ -55,6 +59,7 @@ module moist_math_solver_slsqp_multistart
 
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(in) :: f
@@ -365,8 +370,8 @@ contains
       best_x = self%anchor
 
       if (self%debug) then
-         write (output_unit, '(x,a)') &
-            '========== Multi-start SLSQP ========='
+         write (output_unit, "(x,a)") &
+            "========== Multi-start SLSQP ========="
       end if
 
       allocate (converged(3, self%n_seeds))
@@ -378,7 +383,7 @@ contains
          call self%slsqp_solver%solve(x_trial, solver_error)
          if (allocated(solver_error)) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,a)') 'Seed ', i, ' failed: ', trim(solver_error%message)
+               write (output_unit, "(x,a,i0,a,a)") "Seed ", i, " failed: ", trim(solver_error%message)
             end if
             deallocate (solver_error)
             cycle
@@ -402,8 +407,8 @@ contains
             retry_radius = maxval(self%radii) + iretry*self%radius_increment
 
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,f8.3)') &
-                  'Retry ', iretry, ': expanding radius to ', retry_radius
+               write (output_unit, "(x,a,i0,a,f8.3)") &
+                  "Retry ", iretry, ": expanding radius to ", retry_radius
             end if
 
             allocate (retry_seeds(3, retry_npts))
@@ -425,8 +430,8 @@ contains
                call self%slsqp_solver%solve(x_trial, solver_error)
                if (allocated(solver_error)) then
                   if (self%debug) then
-                     write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                        'Retry ', iretry, ' seed ', i, ' failed: ', &
+                     write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                        "Retry ", iretry, " seed ", i, " failed: ", &
                         trim(solver_error%message)
                   end if
                   deallocate (solver_error)

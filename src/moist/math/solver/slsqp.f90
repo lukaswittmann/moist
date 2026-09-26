@@ -13,9 +13,9 @@ module moist_math_solver_slsqp
    use moist_math_solver_type, only: solver_base_type
 
    use slsqp_module, only: slsqp_solver
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_type
@@ -26,6 +26,7 @@ module moist_math_solver_slsqp
       !> Compute objective function
       subroutine objective_interface(x, f)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), intent(out) :: f                !> objective value
       end subroutine objective_interface
@@ -33,6 +34,7 @@ module moist_math_solver_slsqp
       !> Compute gradient of objective
       subroutine objective_grad_interface(x, df)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: df !> gradient
       end subroutine objective_grad_interface
@@ -40,6 +42,7 @@ module moist_math_solver_slsqp
       !> Compute constraints
       subroutine constraints_interface(x, c)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: c  !> constraint values
       end subroutine constraints_interface
@@ -47,6 +50,7 @@ module moist_math_solver_slsqp
       !> Compute constraint Jacobian
       subroutine constraints_grad_interface(x, dc)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: dc  !> constraint Jacobian (m x n)
       end subroutine constraints_grad_interface
@@ -54,6 +58,7 @@ module moist_math_solver_slsqp
       !> Iteration callback for debugging
       subroutine iteration_callback_interface(iter, x, f, c)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                  !> iteration number
          real(wp), dimension(:), intent(in) :: x      !> current variables
          real(wp), intent(in) :: f                    !> objective value
@@ -66,6 +71,7 @@ module moist_math_solver_slsqp
       !> Compute objective function (with context)
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), intent(out) :: f                !> objective value
          class(*), intent(in) :: context           !> user context data
@@ -74,6 +80,7 @@ module moist_math_solver_slsqp
       !> Compute gradient of objective (with context)
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: df !> gradient
          class(*), intent(in) :: context           !> user context data
@@ -82,6 +89,7 @@ module moist_math_solver_slsqp
       !> Compute constraints (with context)
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: c  !> constraint values
          class(*), intent(in) :: context           !> user context data
@@ -90,6 +98,7 @@ module moist_math_solver_slsqp
       !> Compute constraint Jacobian (with context)
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: dc  !> constraint Jacobian (m x n)
          class(*), intent(in) :: context              !> user context data
@@ -98,6 +107,7 @@ module moist_math_solver_slsqp
       !> Iteration callback for debugging (with context)
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                  !> iteration number
          real(wp), dimension(:), intent(in) :: x      !> current variables
          real(wp), intent(in) :: f                    !> objective value
@@ -445,7 +455,7 @@ contains
    function int_to_str(i) result(s)
       integer, intent(in) :: i
       character(len=20) :: s
-      write (s, '(I0)') i
+      write (s, "(I0)") i
    end function int_to_str
 
 end module moist_math_solver_slsqp

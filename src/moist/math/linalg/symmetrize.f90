@@ -4,7 +4,7 @@
 !> rank-3 and rank-4 tensors
 module moist_math_linalg_symmetrize
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: sym3_21

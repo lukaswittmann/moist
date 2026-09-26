@@ -4,7 +4,7 @@
 !> function used by the smooth cavity construction
 module moist_math_linalg_geometry
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: cross_product

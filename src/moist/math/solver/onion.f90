@@ -23,8 +23,8 @@ module moist_math_solver_onion
 
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
-   use iso_fortran_env, only: output_unit
-   implicit none
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_onion_type
@@ -155,13 +155,12 @@ contains
       real(wp), dimension(:), intent(inout) :: x
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: oleb, num_leb, i_ang, i_shell, ierr
+      integer :: oleb, num_leb, i_ang
       real(wp), allocatable :: ang_grid(:, :), ang_weight(:)
       real(wp) :: r_curr, r_lower, r_upper, step_size
       real(wp) :: best_radius, best_lsf, shell_max_lsf, shell_max_point(3)
-      integer :: best_ang, total_evals, level, iter, step
-      integer, parameter :: max_refinements = 10
-      logical :: found_bracket, found_positive
+      integer :: best_ang, total_evals, iter, step
+      logical :: found_positive
 
       if (.not. associated(self%lsf)) then
          call fatal_error(error, "Onion solver: LSF primitive not associated")
@@ -173,8 +172,8 @@ contains
       end if
 
       if (self%debug) then
-         write (output_unit, '(x,a)') &
-            '==================================  Starting Onion Solver  =================================='
+         write (output_unit, "(x,a)") &
+            "==================================  Starting Onion Solver  =================================="
       end if
 
       ! Initialize
@@ -239,7 +238,7 @@ contains
       end do
 
       if (self%debug) then
-         write (output_unit, '(x,a)') 'Onion solver finished!'
+         write (output_unit, "(x,a)") "Onion solver finished!"
       end if
 
    end subroutine onion_solve
@@ -368,23 +367,23 @@ contains
 
       ! Flag for positive found
       if (shell_max_lsf > 0.0_wp) then
-         status_flag = 'U'
+         status_flag = "U"
       else if (shell_max_lsf < 0.0_wp) then
-         status_flag = 'L'
+         status_flag = "L"
       end if
 
       ! Print header on first iteration
       if (iter == 1) then
-         write (output_unit, '(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)') &
-            'Step', 'N_leb', 'R', 'maxLSF', 'R_lower', 'R_upper', 'Bracket', 'St'
-         write (output_unit, '(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)') &
-            '------', '-------', '--------------', '--------------', '--------------', &
-            '--------------', '--------------', '---'
+         write (output_unit, "(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)") &
+            "Step", "N_leb", "R", "maxLSF", "R_lower", "R_upper", "Bracket", "St"
+         write (output_unit, "(x,a6,1x,a7,1x,a14,1x,a14,1x,a14,1x,a14,1x,a14,1x,a3)") &
+            "------", "-------", "--------------", "--------------", "--------------", &
+            "--------------", "--------------", "---"
       end if
 
       ! Print iteration data
-      write (output_unit, '(x,i6,1x,i7,1x,e14.4,1x,e14.4,1x,f14.8,1x,f14.8,1x,'// &
-             'es14.4,1x,a3)') &
+      write (output_unit, "(x,i6,1x,i7,1x,e14.4,1x,e14.4,1x,f14.8,1x,f14.8,1x,"// &
+             "es14.4,1x,a3)") &
          iter, num_leb, radius, shell_max_lsf, r_lower, r_upper, r_upper - r_lower, &
          status_flag
 

@@ -10,7 +10,7 @@ module test_model_component_pcm_electrostatics
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
                            fd4_scalar, fd4_offsets
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pcm_electrostatics

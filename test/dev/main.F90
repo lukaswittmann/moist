@@ -12,7 +12,7 @@ program dev_tester
    use test_cavity_drop_convergence, only : collect_cavity_drop_convergence
    use test_cavity_drop_deflation_comparison, only : collect_cavity_drop_deflation_comparison
 
-implicit none
+implicit none(type, external)
 
    integer :: stat, is
    character(len=:), allocatable :: suite_name, test_name
@@ -61,7 +61,7 @@ implicit none
    end if
 
    if (stat > 0) then
-      write(error_unit, '(i0, 1x, a)') stat, "test(s) failed!"
+      write(error_unit, "(i0, 1x, a)") stat, "test(s) failed!"
       error stop 1
    end if
 

@@ -1,7 +1,7 @@
 
 !> Versioning information on this library
 module moist_version
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_version_string, moist_version_compact

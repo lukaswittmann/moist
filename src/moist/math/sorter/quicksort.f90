@@ -1,7 +1,7 @@
 !> Quicksort-based sorting utilities for real arrays
 module moist_math_sorter_quicksort
    use mctc_env, only: wp, error_type, fatal_error
-   implicit none
+   implicit none(type, external)
    private
 
    !> Partition size threshold where insertion sort is used

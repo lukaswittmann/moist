@@ -83,7 +83,7 @@ module test_cavity_drop_lsf
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_model_gems_utils, only: BuildSuperStructure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_lsf
@@ -448,8 +448,8 @@ contains
       type(structure_type) :: center_mol, moving_mol, super_mol
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_ref, lsf_scr
       real(wp), allocatable :: radii(:), points(:, :)
-      real(wp) :: thr, gap, shift, val_ref, val_scr, diff, bound, perc
-      integer :: icase, ithr, istep, ip, nc, ntot, min_nact, n_mov_pts
+      real(wp) :: thr, gap, shift, val_ref, val_scr
+      integer :: icase, ithr, istep, ip, nc, ntot
 
       real(wp), parameter :: separation_thresholds(6) = [ &
                              1.0e-8_wp, 1.0E-9_wp, 1.0e-10_wp, 1.0e-11_wp, 1.0e-12_wp, 1.0e-13_wp]

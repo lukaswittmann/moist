@@ -6,7 +6,7 @@ module test_model_component_pcm_amat
                                              pcm_amat_surface_weights
    use moist_model_component_pcm_amat_kernel, only: pcm_amat_x_far
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pcm_amat

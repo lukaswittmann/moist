@@ -13,7 +13,7 @@ module test_cavity_marchingcubes
    use moist_radii, only: new_radii_custom_atoms, radius_type, default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_marchingcubes
@@ -251,7 +251,7 @@ contains
       xyz(:, 1) = 0.0_wp
 
       do ir = 1, size(radii)
-         write (label, '(f6.2)') radii(ir)
+         write (label, "(f6.2)") radii(ir)
 
          call build_custom_cavity(error, ctx, mol, cav, radii(ir:ir), xyz)
          if (allocated(error)) return
@@ -533,9 +533,9 @@ contains
 
       character(len=8) :: k_str, b_str, g_str
 
-      write (k_str, '(f4.1)') c%blend_k
-      write (b_str, '(f4.1)') c%blend_2b
-      write (g_str, '(f4.1)') c%blend_3b
+      write (k_str, "(f4.1)") c%blend_k
+      write (b_str, "(f4.1)") c%blend_2b
+      write (g_str, "(f4.1)") c%blend_3b
       str = trim(c%dataset)//" "//trim(c%structure)//" k="// &
          & k_str(1:4)//" b="//b_str(1:4)//" g="//g_str(1:4)
 

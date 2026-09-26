@@ -14,7 +14,7 @@ module test_radii
    use moist_radii, only: new_radii, new_radii_custom_atoms, new_radii_custom_elements
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_radii

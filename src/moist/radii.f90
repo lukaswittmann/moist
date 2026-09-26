@@ -9,7 +9,7 @@ module moist_radii
    use moist_radii_custom, only: radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
    use mctc_io_utils, only: to_lower
-   implicit none
+   implicit none(type, external)
    private
 
    public :: radius_type
@@ -144,7 +144,7 @@ contains
             call new_bondi_radii(model, verbosity)
          end select
       case default
-         write (msg, '(a,i0)') "Unknown radius type tag: ", model_tag
+         write (msg, "(a,i0)") "Unknown radius type tag: ", model_tag
          call fatal_error(error, trim(msg))
          return
       end select
@@ -186,7 +186,7 @@ contains
          call fatal_error(error, "Use new_radii_custom_atoms or new_radii_custom_elements for custom radii")
          return
       case default
-         write (msg, '(a,a,a)') "Unknown radius type: '", trim(model_name), "'"
+         write (msg, "(a,a,a)") "Unknown radius type: '", trim(model_name), "'"
          call fatal_error(error, trim(msg))
          return
       end select

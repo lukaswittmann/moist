@@ -5,7 +5,9 @@ module moist_math_boys
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none(type, external)
+   private
+
    public :: dboysfun1, dboysfun12, zboysfun00
 
    real(wp), parameter :: tol = 1.0E-03_wp
@@ -140,7 +142,7 @@ contains
    !> Uses a short Taylor expansion near x=0 to avoid cancellation in F1, and
    !> an erf-based closed form otherwise
    subroutine dboysfun1(x, vals)
-      implicit none
+      implicit none(type, external)
 
       real(wp), intent(in) :: x
       real(wp), intent(out) :: vals(0:1)
@@ -189,13 +191,13 @@ contains
    !> Computes real Boys functions F_n(x) for n=0..12 via quadrature and
    !> upward recursion, switching to asymptotic forms for large |x|
    subroutine dboysfun12(x, vals)
-      implicit none
+      implicit none(type, external)
 
       real(wp), intent(in) :: x
       real(wp), intent(out) :: vals(0:12)
       real(wp) :: y, yy, rtmp
       real(wp) ::   p, q, tmp
-      integer*4 :: n, k
+      integer :: n, k
 !
       ! Precompute the exponential factor used throughout the recurrence
       y = exp(-x)
@@ -243,12 +245,12 @@ contains
    !> Evaluates the complex Boys F_0(z) using asymptotic, Taylor, or
    !> quadrature expansions depending on |z| for numerical stability
    subroutine zboysfun00(z, val)
-      implicit none
+      implicit none(type, external)
 
       complex(wp), intent(in) :: z
       complex(wp), intent(out) :: val
       complex(wp) :: z1, ez, y
-      integer*4 ::  k
+      integer :: k
 
       ! z may be complex, so keep the exponential explicit for clarity
       ez = exp(-z)

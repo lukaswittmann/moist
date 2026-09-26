@@ -1275,7 +1275,7 @@ contains
             case (2) ! new version
                call bvls_wrapper(w, n1, n1, m, w(jf), w(iy), rnorm, w(iwdual), w(iz), mode, max_iter_ls)
             case default
-               error stop 'invalid nnls_mode'
+               error stop "invalid nnls_mode"
             end select
 
             if (mode == 1) then
@@ -2269,7 +2269,7 @@ contains
 
       where (x < xl .and. xl > -infbnd .and. .not. ieee_is_nan(xl))
          x = xl
-      elsewhere(x > xu .and. xu < infbnd .and. .not. ieee_is_nan(xu))
+      else where(x > xu .and. xu < infbnd .and. .not. ieee_is_nan(xu))
          x = xu
       end where
 

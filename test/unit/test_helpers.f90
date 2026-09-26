@@ -65,7 +65,7 @@ module test_helpers
       density_response_type, gostshyp_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
    use testdrive, only: error_type, test_failed
-   implicit none
+   implicit none(type, external)
    private
 
    public :: component_view, submit, read_fixture_moments

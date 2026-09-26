@@ -8,7 +8,7 @@
 !> small (typically <= 256); the sort is stable, atoms with the same bucket
 !> appear in perm in their original order
 module moist_math_sorter_counting_sort
-   implicit none
+   implicit none(type, external)
    private
 
    public :: counting_argsort

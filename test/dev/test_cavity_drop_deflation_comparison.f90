@@ -18,7 +18,7 @@ module test_cavity_drop_deflation_comparison
    use moist_radii, only: default_cpcm_radii
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_deflation_comparison

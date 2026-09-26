@@ -4,7 +4,7 @@ module moist_radii_custom
    use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_io, only: structure_type
    use moist_radius_type, only: radius_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: radius_type_custom

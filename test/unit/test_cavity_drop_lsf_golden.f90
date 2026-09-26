@@ -40,7 +40,7 @@ module test_cavity_drop_lsf_golden
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use testdrive, only: new_unittest, unittest_type, error_type, test_failed
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_lsf_golden
@@ -375,7 +375,7 @@ contains
             dmin = min(dmin, norm2(points(:, ip) - mol%xyz(:, iat)))
          end do
          if (dmin < min_nucleus_clearance) then
-            write (tail, '(i0,a,es12.4)') ip, " sits ", dmin
+            write (tail, "(i0,a,es12.4)") ip, " sits ", dmin
             call test_failed(error, "evaluation point "//trim(tail)// &
                              " bohr from a nucleus - reference geometry changed?")
             return
@@ -1177,7 +1177,7 @@ contains
          if (rel_deviation(got%rec(i)%val, ref(i)%val) <= golden_tol) cycle
          nfail = nfail + 1
          if (nfail == 1) then
-            write (values, '(a,es24.16,a,es24.16)') " golden ", ref(i)%val, " now ", &
+            write (values, "(a,es24.16,a,es24.16)") " golden ", ref(i)%val, " now ", &
                got%rec(i)%val
             first = "record "//itoa(i)//" "//record_label(ref(i))//values
          end if
@@ -1213,7 +1213,7 @@ contains
       character(len=:), allocatable :: text
       character(len=32) :: buf
 
-      write (buf, '(i0)') n
+      write (buf, "(i0)") n
       text = trim(buf)
    end function itoa
 
@@ -1261,7 +1261,7 @@ contains
 
       n = 0
       do
-         read (unit, '(a)', iostat=stat) line
+         read (unit, "(a)", iostat=stat) line
          if (stat /= 0) exit
          if (is_record_line(line)) n = n + 1
       end do
@@ -1271,7 +1271,7 @@ contains
 
       n = 0
       do
-         read (unit, '(a)', iostat=stat) line
+         read (unit, "(a)", iostat=stat) line
          if (stat /= 0) exit
          if (.not. is_record_line(line)) cycle
          n = n + 1
@@ -1360,7 +1360,7 @@ contains
 
       do i = 1, first%n
          if (first%rec(i)%val == second%rec(i)%val) cycle
-         write (tail, '(a,es24.16,a,es24.16)') &
+         write (tail, "(a,es24.16,a,es24.16)") &
             " differs between two passes in one process: ", first%rec(i)%val, " then ", &
             second%rec(i)%val
          call test_failed(error, kind//" record "//itoa(i)//trim(tail))

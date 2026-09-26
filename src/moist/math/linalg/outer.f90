@@ -3,7 +3,7 @@
 !> Direct small-size implementations that avoid BLAS/temporary overhead
 module moist_math_linalg_outer
    use mctc_env_accuracy, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: outer_matrix

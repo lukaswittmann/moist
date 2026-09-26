@@ -2,7 +2,7 @@
 submodule(moist_model_component_pcm_amat) moist_model_component_pcm_amat_adjoint
    use mctc_env, only: fatal_error
    use moist_model_component_pcm_amat_kernel, only: pcm_amat_near_grad, pcm_amat_diag_grad
-   implicit none (type, external)
+   implicit none(type, external)
 
    !> Threshold below which a charge product contributes no useful precision
    real(wp), parameter :: qtol = 1.0e-30_wp

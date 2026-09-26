@@ -1,7 +1,7 @@
 !> Environment-variable lookup and output-directory resolution helpers
 module moist_utils_env
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: get_env

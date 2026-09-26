@@ -7,8 +7,12 @@ module moist_math_solver_newton
    use mctc_env, only: error_type, fatal_error
    use moist_math_solver_type, only: solver_base_type
 
-   use nlesolver_module
-   implicit none
+   use nlesolver_module, only: nlesolver_type, NLESOLVER_SPARSITY_DENSE, NLESOLVER_SPARSITY_LSQR, &
+      & NLESOLVER_SPARSITY_LUSOL, NLESOLVER_SPARSITY_LSMR, NLESOLVER_LINESEARCH_SIMPLE, &
+      & NLESOLVER_LINESEARCH_BACKTRACKING, NLESOLVER_LINESEARCH_EXACT, &
+      & NLESOLVER_LINESEARCH_FIXEDPOINT, NLESOLVER_IGNORE_BOUNDS, NLESOLVER_SCALAR_BOUNDS, &
+      & NLESOLVER_VECTOR_BOUNDS, NLESOLVER_WALL_BOUNDS
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_newton_type
@@ -43,6 +47,7 @@ module moist_math_solver_newton
       !> Compute the function vector
       subroutine func_interface(x, f)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x  !> variables
          real(wp), dimension(:), intent(out) :: f !> function values
       end subroutine func_interface
@@ -50,6 +55,7 @@ module moist_math_solver_newton
       !> Compute the Jacobian matrix (dense)
       subroutine grad_interface(x, jac)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: jac !> Jacobian matrix
       end subroutine grad_interface
@@ -57,6 +63,7 @@ module moist_math_solver_newton
       !> Compute the Jacobian matrix (sparse)
       subroutine grad_sparse_interface(x, jac_sparse)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x           !> variables
          real(wp), dimension(:), intent(out) :: jac_sparse !> sparse Jacobian
       end subroutine grad_sparse_interface
@@ -64,6 +71,7 @@ module moist_math_solver_newton
       !> Debug callback for iteration monitoring
       subroutine debug_callback_interface(iter, x, f, jac, jac_sparse)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                              !> iteration number
          real(wp), dimension(:), intent(in) :: x                  !> current variables
          real(wp), dimension(:), intent(in) :: f                  !> current residuals
@@ -74,6 +82,7 @@ module moist_math_solver_newton
       !> User input check callback for early termination
       function user_input_check_interface(x) result(stop_solver)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x  !> current variables
          logical :: stop_solver                    !> true to stop solver
       end function user_input_check_interface
@@ -84,6 +93,7 @@ module moist_math_solver_newton
       !> Compute the function vector (with context)
       subroutine func_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x     !> variables
          real(wp), dimension(:), intent(out) :: f    !> function values
          class(*), intent(in) :: context             !> user context data
@@ -92,6 +102,7 @@ module moist_math_solver_newton
       !> Compute the Jacobian matrix (dense, with context)
       subroutine grad_context_interface(x, jac, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: jac !> Jacobian matrix
          class(*), intent(in) :: context              !> user context data
@@ -100,6 +111,7 @@ module moist_math_solver_newton
       !> Compute the Jacobian matrix (sparse, with context)
       subroutine grad_sparse_context_interface(x, jac_sparse, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x           !> variables
          real(wp), dimension(:), intent(out) :: jac_sparse !> sparse Jacobian
          class(*), intent(in) :: context                   !> user context data
@@ -108,6 +120,7 @@ module moist_math_solver_newton
       !> Debug callback for iteration monitoring (with context)
       subroutine debug_callback_context_interface(iter, x, f, context, jac, jac_sparse)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                              !> iteration number
          real(wp), dimension(:), intent(in) :: x                  !> current variables
          real(wp), dimension(:), intent(in) :: f                  !> current residuals
@@ -119,6 +132,7 @@ module moist_math_solver_newton
       !> User input check callback for early termination (with context)
       function user_input_check_context_interface(x, context) result(stop_solver)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x  !> current variables
          class(*), intent(in) :: context          !> user context data
          logical :: stop_solver                    !> true to stop solver
@@ -615,7 +629,7 @@ contains
    function int_to_str(i) result(s)
       integer, intent(in) :: i
       character(len=20) :: s
-      write (s, '(I0)') i
+      write (s, "(I0)") i
    end function int_to_str
 
    !> Internal wrapper for user Jacobian callback (sparse)

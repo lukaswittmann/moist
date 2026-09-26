@@ -26,7 +26,7 @@ module test_model_component_gostshyp
       & ngrid_sw => fixture_ngrid_param, sw_areas => fixture_areas_param, &
       & sw_xis => fixture_xis_param, sw_fs => fixture_fs_param, &
       & sw_xyz => fixture_xyz_param
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_gostshyp

@@ -8,7 +8,7 @@ module moist_radii_static
    use moist_data_radii_legacy, only: get_radius, get_radius_func, rad_type
    use moist_radius_type, only: radius_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: radius_type_static

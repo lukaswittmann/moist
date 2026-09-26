@@ -53,7 +53,7 @@
 !> ```
 module moist_math_cell_grid
    use mctc_env, only: wp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_cell_grid_type

@@ -1,7 +1,7 @@
 module moist_utils_prettyprint
    use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
      & real32, real64
-   implicit none
+   implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
 
@@ -86,7 +86,7 @@ contains
       if (.not. allocated(self%fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
       if (.not. allocated(self%fmt_real)) self%fmt_real = fixed_fmt(self%fmt_len, 6)
       if (.not. allocated(self%fmt_exp)) self%fmt_exp = exp_fmt(self%fmt_len, 2)
-      if (.not. allocated(self%fmt_logical)) self%fmt_logical = 'L1'
+      if (.not. allocated(self%fmt_logical)) self%fmt_logical = "L1"
 
       if (present(fmt_len)) then
          if (.not. present(fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
@@ -138,7 +138,7 @@ contains
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
-      write (self%iu, '(A)') ''
+      write (self%iu, "(A)") ""
    end subroutine blank
 
    !> Print a section title at current indentation
@@ -150,7 +150,7 @@ contains
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
-      write (self%iu, '(A)') repeat(' ', self%indent)//trim(title)
+      write (self%iu, "(A)") repeat(" ", self%indent)//trim(title)
    end subroutine section
 
    !> Print a section title and increase indentation level
@@ -202,7 +202,7 @@ contains
 
       call self%set_layout()  ! ensure defaults are allocated
 
-      prefix = repeat(' ', self%indent)
+      prefix = repeat(" ", self%indent)
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else if (present(use_exp)) then
@@ -216,7 +216,7 @@ contains
       end if
       vstr = value_to_string(val, eff_fmt)
 
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
 
       nlead = max(0, (self%col_value - 1) - len(left))
 
@@ -227,7 +227,7 @@ contains
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -235,16 +235,16 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
       if (present(unit)) then
-         line = left//leader//' '//vstr//' '//trim(unit)
+         line = left//leader//" "//vstr//" "//trim(unit)
       else
-         line = left//leader//' '//trim(vstr)
+         line = left//leader//" "//trim(vstr)
       end if
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kv
 
    !> Print one key with two values on the same line
@@ -309,19 +309,19 @@ contains
 
       vstr1 = value_to_string(val1, eff_fmt1)
       vstr2 = value_to_string(val2, eff_fmt2)
-      u1 = ''
-      u2 = ''
+      u1 = ""
+      u2 = ""
       if (present(unit1)) u1 = trim(unit1)
       if (present(unit2)) u2 = trim(unit2)
 
-      prefix = repeat(' ', self%indent)
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      prefix = repeat(" ", self%indent)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
       nlead = max(0, (self%col_value - 1) - len(left))
 
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -329,21 +329,21 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
-      line = left//leader//' '//vstr1
-      if (len(u1) > 0) line = line//' '//u1
+      line = left//leader//" "//vstr1
+      if (len(u1) > 0) line = line//" "//u1
       nspaces = (self%col_value2 - 1) - len(line)
       if (nspaces > 0) then
-         line = line//repeat(' ', nspaces)
+         line = line//repeat(" ", nspaces)
       else
-         line = line//'  '
+         line = line//"  "
       end if
       line = line//vstr2
-      if (len(u2) > 0) line = line//' '//u2
+      if (len(u2) > 0) line = line//" "//u2
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kv2
 
    !> Print one key with three values on the same line and one shared
@@ -426,17 +426,17 @@ contains
       vstr1 = value_to_string(val1, eff_fmt1)
       vstr2 = value_to_string(val2, eff_fmt2)
       vstr3 = value_to_string(val3, eff_fmt3)
-      u = ''
+      u = ""
       if (present(unit)) u = trim(unit)
 
-      prefix = repeat(' ', self%indent)
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      prefix = repeat(" ", self%indent)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
       nlead = max(0, (self%col_value - 1) - len(left))
 
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -444,15 +444,15 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
-      line = left//leader//' '//vstr1
-      line = line//repeat(' ', value_gap)//vstr2
-      line = line//repeat(' ', value_gap)//vstr3
-      if (len(u) > 0) line = line//' '//u
+      line = left//leader//" "//vstr1
+      line = line//repeat(" ", value_gap)//vstr2
+      line = line//repeat(" ", value_gap)//vstr3
+      if (len(u) > 0) line = line//" "//u
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kvvv
 
    function default_fmt(self, val) result(fmt)
@@ -476,9 +476,9 @@ contains
       type is (logical)
          fmt = self%fmt_logical
       type is (character(*))
-         fmt = 'A'
+         fmt = "A"
       class default
-         fmt = 'A'
+         fmt = "A"
       end select
    end function default_fmt
 
@@ -489,8 +489,8 @@ contains
       character(256) :: buf
       character(:), allocatable :: f
 
-      f = '('//trim(fmt)//')'
-      buf = ''
+      f = "("//trim(fmt)//")"
+      buf = ""
 
       select type (val)
       type is (integer(int8))
@@ -518,7 +518,7 @@ contains
       type is (character(*))
          buf = val
       class default
-         buf = '<unsupported type>'
+         buf = "<unsupported type>"
       end select
 
       s = trim(buf)
@@ -531,15 +531,15 @@ contains
       character(:), allocatable :: f
       integer :: idot, w
 
-      f = '('//trim(fmt)//')'
+      f = "("//trim(fmt)//")"
       write (buf, f) 0.0_real64
-      idot = index(buf, '.')
+      idot = index(buf, ".")
       w = len_trim(buf)
 
       if (idot > 1 .and. w > 0) then
-         s = repeat(' ', idot - 2)//'0.0'//repeat(' ', max(0, w - (idot + 1)))
+         s = repeat(" ", idot - 2)//"0.0"//repeat(" ", max(0, w - (idot + 1)))
       else
-         s = '0.0'
+         s = "0.0"
       end if
    end function zero_value_string
 
@@ -548,9 +548,9 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf, dbuf
 
-      write (wbuf, '(I0)') max(1, width)
-      write (dbuf, '(I0)') max(0, decimals)
-      fmt = 'F'//trim(wbuf)//'.'//trim(dbuf)
+      write (wbuf, "(I0)") max(1, width)
+      write (dbuf, "(I0)") max(0, decimals)
+      fmt = "F"//trim(wbuf)//"."//trim(dbuf)
    end function fixed_fmt
 
    function exp_fmt(width, decimals) result(fmt)
@@ -558,9 +558,9 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf, dbuf
 
-      write (wbuf, '(I0)') max(1, width)
-      write (dbuf, '(I0)') max(0, decimals)
-      fmt = 'ES'//trim(wbuf)//'.'//trim(dbuf)
+      write (wbuf, "(I0)") max(1, width)
+      write (dbuf, "(I0)") max(0, decimals)
+      fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
    end function exp_fmt
 
    function int_fmt(width) result(fmt)
@@ -568,8 +568,8 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf
 
-      write (wbuf, '(I0)') max(1, width - 7)
-      fmt = 'I'//trim(wbuf)
+      write (wbuf, "(I0)") max(1, width - 7)
+      fmt = "I"//trim(wbuf)
    end function int_fmt
 
    function default_real_fmt(self, val) result(fmt)
