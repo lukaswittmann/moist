@@ -5,7 +5,7 @@
 module moist_math_blas_level1
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_dot
@@ -56,6 +56,7 @@ module moist_math_blas_level1
    interface blas_dot
       pure function sdot(n, x, incx, y, incy)
          import :: sp, blas_ik
+         implicit none(type, external)
          real(sp) :: sdot
          real(sp), intent(in) :: x(*)
          real(sp), intent(in) :: y(*)
@@ -65,6 +66,7 @@ module moist_math_blas_level1
       end function sdot
       pure function ddot(n, x, incx, y, incy)
          import :: dp, blas_ik
+         implicit none(type, external)
          real(dp) :: ddot
          real(dp), intent(in) :: x(*)
          real(dp), intent(in) :: y(*)
@@ -78,6 +80,7 @@ module moist_math_blas_level1
    interface blas_nrm2
       pure function snrm2(n, x, incx)
          import :: sp, blas_ik
+         implicit none(type, external)
          real(sp) :: snrm2
          real(sp), intent(in) :: x(*)
          integer(blas_ik), intent(in) :: incx
@@ -85,6 +88,7 @@ module moist_math_blas_level1
       end function snrm2
       pure function dnrm2(n, x, incx)
          import :: dp, blas_ik
+         implicit none(type, external)
          real(dp) :: dnrm2
          real(dp), intent(in) :: x(*)
          integer(blas_ik), intent(in) :: incx
@@ -96,6 +100,7 @@ module moist_math_blas_level1
    interface blas_scal
       pure subroutine sscal(n, a, x, incx)
          import :: sp, blas_ik
+         implicit none(type, external)
          real(sp), intent(in) :: a
          real(sp), intent(inout) :: x(*)
          integer(blas_ik), intent(in) :: incx
@@ -103,6 +108,7 @@ module moist_math_blas_level1
       end subroutine sscal
       pure subroutine dscal(n, a, x, incx)
          import :: dp, blas_ik
+         implicit none(type, external)
          real(dp), intent(in) :: a
          real(dp), intent(inout) :: x(*)
          integer(blas_ik), intent(in) :: incx
@@ -114,6 +120,7 @@ module moist_math_blas_level1
    interface blas_copy
       pure subroutine scopy(n, x, incx, y, incy)
          import :: sp, blas_ik
+         implicit none(type, external)
          real(sp), intent(in) :: x(*)
          real(sp), intent(inout) :: y(*)
          integer(blas_ik), intent(in) :: incx
@@ -122,6 +129,7 @@ module moist_math_blas_level1
       end subroutine scopy
       pure subroutine dcopy(n, x, incx, y, incy)
          import :: dp, blas_ik
+         implicit none(type, external)
          real(dp), intent(in) :: x(*)
          real(dp), intent(inout) :: y(*)
          integer(blas_ik), intent(in) :: incx
@@ -134,6 +142,7 @@ module moist_math_blas_level1
    interface blas_axpy
       pure subroutine saxpy(n, a, x, incx, y, incy)
          import :: sp, blas_ik
+         implicit none(type, external)
          real(sp), intent(in) :: a
          real(sp), intent(in) :: x(*)
          real(sp), intent(inout) :: y(*)
@@ -143,6 +152,7 @@ module moist_math_blas_level1
       end subroutine saxpy
       pure subroutine daxpy(n, a, x, incx, y, incy)
          import :: dp, blas_ik
+         implicit none(type, external)
          real(dp), intent(in) :: a
          real(dp), intent(in) :: x(*)
          real(dp), intent(inout) :: y(*)

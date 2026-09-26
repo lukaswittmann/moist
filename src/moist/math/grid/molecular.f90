@@ -20,7 +20,7 @@
 !> Units: all lengths are in bohr; covalent radii come from
 !> `moist_data_atomicrad` which stores them already in bohr
 module moist_math_grid_molecular
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_constants, only: pi
@@ -28,7 +28,7 @@ module moist_math_grid_molecular
    use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
    use moist_math_grid_radial, only: chebyshev2_radii
    use moist_math_grid_becke, only: becke_weights
-   implicit none
+   implicit none(type, external)
    private
 
    public :: molecular_grid_type
@@ -46,6 +46,7 @@ module moist_math_grid_molecular
    abstract interface
       pure function integrand_3d(r) result(val)
          import :: wp
+         implicit none(type, external)
          !> Point in bohr
          real(wp), intent(in) :: r(3)
          !> Function value at r
@@ -366,21 +367,21 @@ contains
       iunit = output_unit
       if (present(unit)) iunit = unit
 
-      write (iunit, '(a)') "moist molecular_grid_type"
-      write (iunit, '(a,i0)') "  total points   : ", self%npts
+      write (iunit, "(a)") "moist molecular_grid_type"
+      write (iunit, "(a,i0)") "  total points   : ", self%npts
       if (.not. allocated(self%xyz)) then
-         write (iunit, '(a)') "  (grid is uninitialised)"
+         write (iunit, "(a)") "  (grid is uninitialised)"
          return
       end if
-      write (iunit, '(a,es12.4,a,es12.4)') &
+      write (iunit, "(a,es12.4,a,es12.4)") &
          & "  weight range   : min = ", minval(self%weights), &
          & ", max = ", maxval(self%weights)
-      write (iunit, '(a,es14.6)') "  sum(weights)   : ", sum(self%weights)
+      write (iunit, "(a,es14.6)") "  sum(weights)   : ", sum(self%weights)
       nat = size(self%nrad_per_atom)
-      write (iunit, '(a,i0)') "  atoms          : ", nat
-      write (iunit, '(a)') "  per-atom counts (atom, npts, nrad, nang):"
+      write (iunit, "(a,i0)") "  atoms          : ", nat
+      write (iunit, "(a)") "  per-atom counts (atom, npts, nrad, nang):"
       do iat = 1, nat
-         write (iunit, '(4x,i6,3x,i8,3x,i5,3x,i5)') iat, &
+         write (iunit, "(4x,i6,3x,i8,3x,i5,3x,i5)") iat, &
             & self%atom_offset(iat + 1) - self%atom_offset(iat), &
             & self%nrad_per_atom(iat), self%nang_per_atom(iat)
       end do

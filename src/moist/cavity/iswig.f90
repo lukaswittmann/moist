@@ -5,7 +5,7 @@ module moist_cavity_iswig
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use iso_fortran_env, only: error_unit, output_unit
+   use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
@@ -163,7 +163,7 @@ contains
       write (unit, "(a)") "ngrid,numbering,x,y,z,owner,radius,area,w_leb,f"
 
       do ipt = 1, self%ngrid
-         write (unit, '(i0,10('','',g0))') ipt, self%numbering(ipt), &
+         write (unit, "(i0,10(',',g0))") ipt, self%numbering(ipt), &
             self%xyz(1, ipt), self%xyz(2, ipt), self%xyz(3, ipt), &
             self%owner(ipt), self%radii(self%owner(ipt)), &
             self%a(ipt), self%wleb(ipt), self%f(ipt)

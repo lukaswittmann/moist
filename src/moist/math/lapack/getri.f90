@@ -4,7 +4,7 @@
 module moist_math_lapack_getri
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_getri
@@ -27,6 +27,7 @@ module moist_math_lapack_getri
    interface lapack_getri
       pure subroutine sgetri(n, a, lda, ipiv, work, lwork, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
          real(sp), intent(inout) :: a(lda, *)
@@ -37,6 +38,7 @@ module moist_math_lapack_getri
       end subroutine sgetri
       pure subroutine dgetri(n, a, lda, ipiv, work, lwork, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
          real(dp), intent(inout) :: a(lda, *)

@@ -5,7 +5,7 @@
 module moist_math_blas_level3
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_gemm, wrap_trsm, wrap_syrk
@@ -76,6 +76,7 @@ module moist_math_blas_level3
       pure subroutine sgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, &
             & beta, c, ldc)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: m
          integer(blas_ik), intent(in) :: n
          integer(blas_ik), intent(in) :: k
@@ -93,6 +94,7 @@ module moist_math_blas_level3
       pure subroutine dgemm(transa, transb, m, n, k, alpha, a, lda, b, ldb, &
             & beta, c, ldc)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: m
          integer(blas_ik), intent(in) :: n
          integer(blas_ik), intent(in) :: k
@@ -122,6 +124,7 @@ module moist_math_blas_level3
    interface blas_trsm
       pure subroutine strsm(side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: ldb
          integer(blas_ik), intent(in) :: lda
          integer(blas_ik), intent(in) :: m
@@ -136,6 +139,7 @@ module moist_math_blas_level3
       end subroutine strsm
       pure subroutine dtrsm(side, uplo, transa, diag, m, n, alpha, a, lda, b, ldb)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: ldb
          integer(blas_ik), intent(in) :: lda
          integer(blas_ik), intent(in) :: m
@@ -164,6 +168,7 @@ module moist_math_blas_level3
    interface blas_syrk
       pure subroutine ssyrk(uplo, trans, n, k, alpha, a, lda, beta, c, ldc)
          import :: sp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: n
          integer(blas_ik), intent(in) :: k
          integer(blas_ik), intent(in) :: lda
@@ -177,6 +182,7 @@ module moist_math_blas_level3
       end subroutine ssyrk
       pure subroutine dsyrk(uplo, trans, n, k, alpha, a, lda, beta, c, ldc)
          import :: dp, blas_ik
+         implicit none(type, external)
          integer(blas_ik), intent(in) :: n
          integer(blas_ik), intent(in) :: k
          integer(blas_ik), intent(in) :: lda

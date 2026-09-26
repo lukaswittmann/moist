@@ -2,7 +2,7 @@
 module moist_data_solvents
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new_structure
-   use iso_fortran_env, only: output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_io_convert, only: autokcal, aatoau
    use mctc_io_codata2018, only: Avogadro_constant, Bohr_radius
    use mctc_io_codata2018, only: Hartree_energy, atomic_unit_of_mass
@@ -10,10 +10,7 @@ module moist_data_solvents
    use moist_data_mass, only: get_mass
    use mctc_io_utils, only: to_lower
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
-   use moist_context, only: moist_context_type, new_context
-   use moist_radii_static, only: radius_type_static, new_bondi_radii
-   implicit none
+   implicit none(type, external)
 
    integer, parameter, public :: max_solvents = 180
 
@@ -87,7 +84,7 @@ contains
       character(:), allocatable :: query
 
       integer, dimension(max_solvents) :: id_list
-      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho, eta
+      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
 
       !> Get basic solvent information
       include "solvents.inc"
@@ -138,7 +135,6 @@ contains
 
       character(len=64) :: name_list(max_solvents)
       character(len=64) :: alias_list(10, max_solvents)
-      character(:), allocatable :: name
 
       integer, dimension(max_solvents) :: id_list
       real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
@@ -192,13 +188,6 @@ contains
 
       character(len=64) :: name_list(max_solvents)
       character(len=64) :: alias_list(10, max_solvents)
-      character(:), allocatable :: name
-
-      ! NumSA and radius model for packing fraction calculation
-      type(cavity_type_iswig), allocatable :: cavity
-      type(radius_type_static) :: radii
-      !> Local run context borrowed by the throw-away packing-fraction cavity
-      type(moist_context_type), target :: cav_ctx
 
       integer, dimension(max_solvents) :: id_list
       real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho

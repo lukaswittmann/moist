@@ -18,7 +18,7 @@
 module moist_math_grid_radial
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
-   implicit none
+   implicit none(type, external)
    private
 
    public :: chebyshev2_radii

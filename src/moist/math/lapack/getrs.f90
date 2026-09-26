@@ -4,7 +4,7 @@
 module moist_math_lapack_getrs
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_getrs
@@ -25,6 +25,7 @@ module moist_math_lapack_getrs
    interface lapack_getrs
       pure subroutine sgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: trans
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: nrhs
@@ -37,6 +38,7 @@ module moist_math_lapack_getrs
       end subroutine sgetrs
       pure subroutine dgetrs(trans, n, nrhs, a, lda, ipiv, b, ldb, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: trans
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: nrhs
@@ -63,7 +65,7 @@ contains
       if (present(trans)) then
          tra = trans
       else
-         tra = 'n'
+         tra = "n"
       end if
       lda = int(max(1, size(amat, 1)), lapack_ik)
       ldb = int(max(1, size(bmat, 1)), lapack_ik)
@@ -87,7 +89,7 @@ contains
       if (present(trans)) then
          tra = trans
       else
-         tra = 'n'
+         tra = "n"
       end if
       lda = int(max(1, size(amat, 1)), lapack_ik)
       ldb = int(max(1, size(bmat, 1)), lapack_ik)

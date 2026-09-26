@@ -2,7 +2,7 @@
 module moist_math_lapack_sptrs
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_dsptrf, wrap_dsptrs
@@ -10,6 +10,7 @@ module moist_math_lapack_sptrs
    interface lapack_sptrf
       pure subroutine dsptrf(uplo, n, ap, ipiv, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n
          real(dp), intent(inout) :: ap(*)
@@ -21,6 +22,7 @@ module moist_math_lapack_sptrs
    interface lapack_sptrs
       pure subroutine dsptrs(uplo, n, nrhs, ap, ipiv, b, ldb, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: nrhs
@@ -46,7 +48,7 @@ contains
       if (present(uplo)) then
          ula = uplo
       else
-         ula = 'u'
+         ula = "u"
       end if
 
       n = int((sqrt(real(8*size(ap) + 1, dp)) - 1.0_dp)/2.0_dp, lapack_ik)
@@ -69,7 +71,7 @@ contains
       if (present(uplo)) then
          ula = uplo
       else
-         ula = 'u'
+         ula = "u"
       end if
 
       n = int((sqrt(real(8*size(ap) + 1, dp)) - 1.0_dp)/2.0_dp, lapack_ik)

@@ -2,7 +2,7 @@
 module moist_cavity_fields
    use mctc_env, only: wp, error_type, fatal_error
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: cavity_field_info_type, cavity_field_query_type

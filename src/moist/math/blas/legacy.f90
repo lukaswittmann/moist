@@ -17,7 +17,7 @@
 module moist_math_blas_legacy_raw
    use mctc_env_accuracy, only: wp
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: daxpy, dcopy, ddot, dnrm2, dscal
@@ -26,7 +26,7 @@ module moist_math_blas_legacy_raw
       !> Constant times a vector plus a vector: dy := dy + da*dx
       pure subroutine daxpy(n, da, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Scalar multiplier
@@ -44,7 +44,7 @@ module moist_math_blas_legacy_raw
       !> Copy a vector: dy := dx
       pure subroutine dcopy(n, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Source vector
@@ -60,7 +60,7 @@ module moist_math_blas_legacy_raw
       !> Dot product of two vectors
       pure real(wp) function ddot(n, dx, incx, dy, incy)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> First vector
@@ -76,7 +76,7 @@ module moist_math_blas_legacy_raw
       !> Euclidean (2-)norm of a vector
       pure function dnrm2(n, x, incx) result(norm)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Input vector
@@ -90,7 +90,7 @@ module moist_math_blas_legacy_raw
       !> Scale a vector by a constant: dx := da*dx
       pure subroutine dscal(n, da, dx, incx)
          import :: wp, blas_ik
-         implicit none
+         implicit none(type, external)
          !> Number of elements to process
          integer(blas_ik), intent(in) :: n
          !> Scalar multiplier
@@ -110,7 +110,7 @@ module moist_math_blas_legacy
    use moist_math_lapack_kinds, only: blas_ik => lapack_ik
    use moist_math_blas_legacy_raw, only: blas_daxpy => daxpy, blas_dcopy => dcopy, &
       & blas_ddot => ddot, blas_dnrm2 => dnrm2, blas_dscal => dscal
-   implicit none
+   implicit none(type, external)
    private
 
    public :: daxpy, dcopy, ddot, dnrm2, dscal

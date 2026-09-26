@@ -331,7 +331,7 @@ contains
       write (unit, "(a)") "ngrid,x,y,z,owner,area"
 
       do i = 1, self%ngrid
-         write (unit, '(i0,7('','',g0))') i, &
+         write (unit, "(i0,7(',',g0))") i, &
             self%xyz(1, i), self%xyz(2, i), self%xyz(3, i), &
             self%owner(i), self%a(i)
       end do

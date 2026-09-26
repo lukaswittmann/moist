@@ -19,7 +19,7 @@
 module moist_math_grid_becke
    use mctc_env, only: wp
    use moist_data_atomicrad, only: covalent_rad
-   implicit none
+   implicit none(type, external)
    private
 
    public :: becke_weights

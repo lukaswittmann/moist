@@ -5,7 +5,7 @@ module moist_data_radii_legacy
    use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: symbol_to_number
    use mctc_io_utils, only: to_lower
-   implicit none
+   implicit none(type, external)
    private
 
    integer :: i
@@ -239,7 +239,7 @@ contains
       case (rad_type%rahm); upper = max_elem_rahm
       case (rad_type%gauss); upper = max_elem_gauss
       case default
-         write (msg, '(a,i0)') "Unknown radius type: ", model
+         write (msg, "(a,i0)") "Unknown radius type: ", model
          call fatal_error(error, trim(msg))
       end select
    end subroutine get_upper_bound
@@ -303,7 +303,7 @@ contains
       case (rad_type%rahm); rad = rahm_vdw_rad(num)
       case (rad_type%gauss); rad = gauss_vdw_rad(num)
       case default
-         write (msg, '(a,i0)') "Unknown radius type: ", model
+         write (msg, "(a,i0)") "Unknown radius type: ", model
          call fatal_error(error, trim(msg))
       end select
    end subroutine fetch_radius
@@ -323,7 +323,7 @@ contains
 
       if (num < 1 .or. num > max_elem_cpcm) then
          rad = 0.0_wp
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", max_elem_cpcm, "]"
          call fatal_error(error, trim(msg))
          return
@@ -332,7 +332,7 @@ contains
       rad = cpcm_vdw_rad(num)
 
       if (rad < 0.0_wp) then
-         write (msg, '(a,i0,a)') &
+         write (msg, "(a,i0,a)") &
             "No valid CPCM radius for atomic number ", num, ""
          call fatal_error(error, trim(msg))
       end if
@@ -358,7 +358,7 @@ contains
       if (allocated(error)) return
 
       if (num < 1 .or. num > upper) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", upper, "]"
          call fatal_error(error, trim(msg))
          return
@@ -368,7 +368,7 @@ contains
       if (allocated(error)) return
 
       if (rad < 0.0_wp) then
-         write (msg, '(a,i0)') &
+         write (msg, "(a,i0)") &
             "No valid radius for atomic number ", num
          call fatal_error(error, trim(msg))
       end if
@@ -412,7 +412,7 @@ contains
       call symbol_to_number(num, trim(sym))
       if (num < 1) then
          rad = 0.0_wp
-         write (msg, '(a,a,a)') &
+         write (msg, "(a,a,a)") &
             "Unknown element symbol: '", trim(sym), "'"
          call fatal_error(error, trim(msg))
          return
@@ -442,7 +442,7 @@ contains
 
       call symbol_to_number(num, trim(sym))
       if (num < 1) then
-         write (msg, '(a,a,a)') &
+         write (msg, "(a,a,a)") &
             "Unknown element symbol: '", trim(sym), "'"
          call fatal_error(error, trim(msg))
          return

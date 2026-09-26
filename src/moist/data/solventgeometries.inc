@@ -3,7 +3,6 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
    use mctc_io, only: structure_type, new_structure
    use mctc_env, only: wp
    use mctc_env_error, only: error_type, fatal_error
-   use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: to_number
 
    integer, intent(in) :: solvent_id
@@ -11,15 +10,15 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
    type(error_type), allocatable, intent(out) :: error
 
    allocate(mol)
-   
+
    select case (solvent_id)
    case (1)
       call new_structure(mol, &
                            [17, 6, 17, 17, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'Cl', 'C ', 'Cl', 'Cl', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "Cl", "C ", "Cl", "Cl", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  0.3092059_wp, 0.7920945_wp, 1.5098612_wp, &
                                  -0.3325658_wp, -0.0000843_wp, 0.0000411_wp, &
@@ -35,8 +34,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [17, 6, 17, 6, 17, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'Cl', 'C ', 'Cl', 'C ', 'Cl', 'H ', 'H ', &
-                           'H '], &
+                           "Cl", "C ", "Cl", "C ", "Cl", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -2.0200758_wp, -0.8611523_wp, -0.0054998_wp, &
                                  -0.3996587_wp, -0.1132539_wp, -0.3721360_wp, &
@@ -53,9 +52,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 6, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.6518723_wp, 1.0559367_wp, 0.0114270_wp, &
                                  0.7229922_wp, 0.7751355_wp, 0.0018735_wp, &
@@ -84,8 +83,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 35, 1, 6, 1, 35, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'Br', 'H ', 'C ', 'H ', 'Br', &
-                           'H '], &
+                           "C ", "H ", "Br", "H ", "C ", "H ", "Br", &
+                           "H "], &
                            reshape([ &
                                  -0.0003761_wp, 0.4449586_wp, 0.6071769_wp, &
                                  0.9014476_wp, 0.3441931_wp, 1.2157457_wp, &
@@ -101,8 +100,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 17, 17, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'Cl', 'Cl', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "Cl", "Cl", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.6461961_wp, -0.9898472_wp, 0.3849979_wp, &
                                  0.6461953_wp, -0.9898444_wp, -0.3849954_wp, &
@@ -119,9 +118,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'O ', 'C ', 'C ', 'O ', 'O ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "O ", "C ", "C ", "O ", "O ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -2.3038937_wp, 0.0577772_wp, 0.5919492_wp, &
                                  -1.1398215_wp, -0.8857872_wp, 0.3637218_wp, &
@@ -146,8 +145,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 6, 1, 1, 1, 1, &
                            8, 6, 6, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'O ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "O ", "C ", "C ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.4108264_wp, 0.2449734_wp, -0.0002380_wp, &
                                  0.7264287_wp, -0.2252495_wp, -1.1797664_wp, &
@@ -168,7 +167,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -177,7 +176,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -186,7 +185,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -196,8 +195,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 35, 1, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'Br', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "Br", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.2173834_wp, 0.6156689_wp, -0.0817679_wp, &
                                  -0.1632299_wp, -0.3844117_wp, 0.4212193_wp, &
@@ -217,9 +216,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'O ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "O ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -2.5969838_wp, 0.3188301_wp, 0.0066136_wp, &
                                  -1.3126719_wp, -0.5171002_wp, -0.0153936_wp, &
@@ -243,9 +242,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 17, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'Cl', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "Cl", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.7862378_wp, 0.6860820_wp, 0.0033206_wp, &
                                  0.5856110_wp, -0.2408171_wp, -0.0018180_wp, &
@@ -274,9 +273,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 1, 6, &
                            1, 1, 17], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'Cl'], &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "H ", "C ", &
+                           "H ", "H ", "Cl"], &
                            reshape([ &
                                  -1.3643332_wp, -0.4057329_wp, -0.0014014_wp, &
                                  -2.5505820_wp, 0.5681863_wp, -0.0009187_wp, &
@@ -301,8 +300,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 1, 1, 1, 1, &
                            1, 1, 1, 17], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'Cl'], &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "Cl"], &
                            reshape([ &
                                  -1.1457673_wp, 0.5129110_wp, -0.0000435_wp, &
                                  -2.5657796_wp, -0.0753694_wp, 0.0000371_wp, &
@@ -324,11 +323,11 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "C ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -6.2672561_wp, 0.3128650_wp, 0.0409852_wp, &
                                  -5.0505671_wp, -0.4657540_wp, -0.0091175_wp, &
@@ -368,7 +367,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -380,10 +379,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'O ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "O ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -4.5502886_wp, 0.2810592_wp, 0.0063871_wp, &
                                  -3.2491651_wp, -0.5290485_wp, -0.0085538_wp, &
@@ -416,9 +415,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -3.7125782_wp, 0.3032507_wp, 0.0483826_wp, &
                                  -2.5003668_wp, -0.4810866_wp, -0.0122488_wp, &
@@ -448,9 +447,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 6, 1, 1, &
                            6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'C ', 'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "C ", "H ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.1552691_wp, 0.5981567_wp, 0.7303799_wp, &
                                  0.7791057_wp, 1.1771151_wp, 0.8178486_wp, &
@@ -477,9 +476,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 6, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "H ", "H ", "C ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "C ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  0.7537731_wp, -0.7269062_wp, 0.0005997_wp, &
                                  2.0571531_wp, -0.0692139_wp, -0.0006160_wp, &
@@ -503,8 +502,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 6, 1, 1, &
                            6, 1, 1, 6, 53, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'C ', 'H ', 'H ', 'C ', 'I ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "C ", "H ", "H ", &
+                           "C ", "H ", "H ", "C ", "I ", "H ", "H "], &
                            reshape([ &
                                  -2.0073063_wp, -0.1969824_wp, -0.0509381_wp, &
                                  -2.0974399_wp, -1.1410711_wp, 0.5077751_wp, &
@@ -525,7 +524,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -534,7 +533,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -544,8 +543,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 6, 1, 1, &
                            6, 53, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'C ', 'I ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "C ", "H ", "H ", &
+                           "C ", "I ", "H ", "H "], &
                            reshape([ &
                                  -3.7015204_wp, -0.0005556_wp, 0.0233762_wp, &
                                  -3.9049144_wp, 0.8894382_wp, 0.6370133_wp, &
@@ -564,8 +563,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 6, 1, 7, 8, 8, &
                            6, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'C ', 'H ', 'N ', 'O ', 'O ', &
-                           'C ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "H ", "C ", "H ", "N ", "O ", "O ", &
+                           "C ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.1480294_wp, 0.3215098_wp, 0.5772519_wp, &
                                  1.1774780_wp, 0.3559441_wp, 0.9632636_wp, &
@@ -589,11 +588,11 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 8, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'O ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "C ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "C ", "H ", "H ", "O ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  5.8378249_wp, 0.0075975_wp, 0.3124873_wp, &
                                  6.7297393_wp, 0.0017126_wp, -0.3317374_wp, &
@@ -633,10 +632,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 8, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'O ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "O ", "H "], &
                            reshape([ &
                                  -5.1886416_wp, 0.3586674_wp, 0.0017808_wp, &
                                  -3.9065094_wp, -0.4810799_wp, -0.0104781_wp, &
@@ -672,9 +671,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 6, 1, 1, 6, &
                            1, 1, 8, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'O ', 'H '], &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "O ", "H "], &
                            reshape([ &
                                  0.0089184_wp, 0.3698715_wp, -0.7073208_wp, &
                                  0.9097034_wp, 1.0079363_wp, -0.7462579_wp, &
@@ -701,9 +700,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  2.4519017_wp, 0.1713974_wp, -0.3372682_wp, &
                                  1.3744771_wp, -0.3017169_wp, 0.3030370_wp, &
@@ -726,8 +725,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 6, 6, 1, 1, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.8499885_wp, 0.1003480_wp, 0.0520995_wp, &
                                  -0.5372189_wp, -0.4991344_wp, -0.0215199_wp, &
@@ -746,7 +745,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -755,7 +754,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -764,7 +763,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -773,7 +772,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -782,7 +781,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -792,8 +791,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 6, 35, 1, &
                            6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'Br', 'H ', &
-                           'C ', 'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "C ", "Br", "H ", &
+                           "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.2716832_wp, 0.1330838_wp, 1.7494653_wp, &
                                  -1.3076278_wp, 1.2296188_wp, 1.7300609_wp, &
@@ -813,9 +812,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'O ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "O ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -2.0916677_wp, -0.0292031_wp, 0.1093760_wp, &
                                  -0.7695209_wp, -0.6991715_wp, -0.2748073_wp, &
@@ -837,7 +836,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -849,10 +848,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'O ', 'C ', 'H ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "O ", "C ", "H ", "H ", "H ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.1159011_wp, -0.5316327_wp, -0.1796937_wp, &
                                  -0.1027662_wp, -1.4827896_wp, 0.3757821_wp, &
@@ -883,9 +882,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.7230566_wp, -1.3278416_wp, -0.0590036_wp, &
                                  -1.6610528_wp, -0.0984004_wp, -0.0260987_wp, &
@@ -912,8 +911,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 8, 1, 1, 8, 6, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'O ', 'H ', 'H ', 'O ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "O ", "H ", "H ", "O ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.3296909_wp, -0.5618327_wp, -0.2376933_wp, &
                                  0.0902925_wp, -0.7450399_wp, 0.2583949_wp, &
@@ -933,7 +932,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -944,9 +943,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 8, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'O ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "O ", &
+                           "H "], &
                            reshape([ &
                                  -0.0493363_wp, 0.0469319_wp, 0.0183462_wp, &
                                  -0.7580992_wp, 0.6344712_wp, 1.2392459_wp, &
@@ -970,9 +969,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.2098435_wp, -2.8482120_wp, -0.1679411_wp, &
                                  -0.3474814_wp, -1.5024345_wp, 0.3117586_wp, &
@@ -1000,8 +999,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 7, 1, &
                            1, 1, 1, 6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'N ', 'H ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "N ", "H ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.9130581_wp, 0.0336345_wp, -0.0006709_wp, &
                                  0.1782044_wp, 1.2305118_wp, -0.0007888_wp, &
@@ -1023,8 +1022,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 1, 6, 7, 8, 8, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'H ', 'C ', 'N ', 'O ', 'O ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "H ", "C ", "N ", "O ", "O ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.4092898_wp, 0.7208314_wp, 0.2218625_wp, &
                                  -0.4618670_wp, 1.5001174_wp, -1.0839358_wp, &
@@ -1044,7 +1043,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1055,9 +1054,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'O ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "O ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -2.8180769_wp, 0.2869470_wp, 0.0095694_wp, &
                                  -1.4575900_wp, -0.4158813_wp, -0.0573911_wp, &
@@ -1081,8 +1080,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 8, 1, 1, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'O ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "O ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.1877350_wp, 0.4985287_wp, -0.0114366_wp, &
                                  0.0348656_wp, -0.3845239_wp, 0.2328229_wp, &
@@ -1101,7 +1100,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1110,7 +1109,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1120,8 +1119,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 7, 6, 6, 6, 1, &
                            1, 1, 1, 6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'N ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "N ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.9537869_wp, -0.0149345_wp, 0.0009491_wp, &
                                  0.1912307_wp, 1.1637546_wp, 0.0006984_wp, &
@@ -1144,9 +1143,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 1, 6, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'C ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "O ", "C ", "C ", "H ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "H ", "C ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0008091_wp, -0.0000040_wp, -0.0382443_wp, &
                                  0.0018866_wp, -0.0000597_wp, -1.2687807_wp, &
@@ -1169,7 +1168,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1178,7 +1177,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1187,7 +1186,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1199,10 +1198,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.0000362_wp, 0.0029448_wp, 1.4207300_wp, &
                                  -0.0000166_wp, 0.0025085_wp, 0.1912556_wp, &
@@ -1238,8 +1237,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "O ", "O ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.4945702_wp, 0.2793296_wp, 0.1324703_wp, &
                                  -0.9692824_wp, 1.2442045_wp, 0.7171396_wp, &
@@ -1255,8 +1254,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 6, 6, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  0.0005759_wp, -0.0257992_wp, 1.3245602_wp, &
                                  0.0000649_wp, -0.0084933_wp, 0.0924678_wp, &
@@ -1273,7 +1272,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [7, 6, 6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'H ', 'H ', 'H '], &
+                           "N ", "C ", "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  -2.1017914_wp, 0.2238048_wp, -0.2178263_wp, &
                                  -0.9498259_wp, 0.1011633_wp, -0.0984465_wp, &
@@ -1288,9 +1287,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 8, 6, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'O ', 'C ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "O ", "C ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -2.6008247_wp, 0.0557788_wp, 0.0000413_wp, &
                                  -1.8695404_wp, 1.2492877_wp, -0.0002697_wp, &
@@ -1315,8 +1314,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 7, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'N ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "N ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.8799185_wp, 0.0000053_wp, -0.0033356_wp, &
                                  -1.1665811_wp, 1.2065179_wp, 0.0008124_wp, &
@@ -1339,9 +1338,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 8, 1, 1, 6, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'O ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "O ", "H ", "H ", "C ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -2.3412094_wp, 0.3409720_wp, -0.1806307_wp, &
                                  -2.0079581_wp, -1.0132693_wp, -0.0243223_wp, &
@@ -1365,8 +1364,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 6, 1, 1, 8, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'O ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "O ", "H "], &
                            reshape([ &
                                  -2.2615986_wp, -0.2560608_wp, 0.0000624_wp, &
                                  -1.7834321_wp, 1.0601259_wp, 0.0001364_wp, &
@@ -1388,8 +1387,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.0923579_wp, -0.8755287_wp, 0.0000001_wp, &
                                  0.2120744_wp, -1.3837319_wp, 0.0000029_wp, &
@@ -1409,8 +1408,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 1, 1, 6, 7], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'C ', 'N '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "C ", "N "], &
                            reshape([ &
                                  0.0000603_wp, 0.0009058_wp, 2.2414471_wp, &
                                  1.2149137_wp, -0.0002745_wp, 1.5444658_wp, &
@@ -1432,9 +1431,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 8, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'O ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "O ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  0.2912542_wp, -2.2709544_wp, 0.1674719_wp, &
                                  1.3675123_wp, -1.4195268_wp, -0.1202952_wp, &
@@ -1458,8 +1457,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 35, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'Br', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "Br", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -2.3659081_wp, 1.2111507_wp, 0.0001360_wp, &
                                  -0.9653456_wp, 1.2214146_wp, -0.0000255_wp, &
@@ -1479,8 +1478,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 6, 1, 35, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'H ', 'Br', &
-                           'H '], &
+                           "C ", "H ", "H ", "H ", "C ", "H ", "Br", &
+                           "H "], &
                            reshape([ &
                                  -2.2519607_wp, 0.4208249_wp, -0.0002067_wp, &
                                  -2.1701785_wp, 1.0532882_wp, 0.8936587_wp, &
@@ -1495,7 +1494,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 35, 35, 35, 1], &
                            [character(len=2) :: &
-                           'C ', 'Br', 'Br', 'Br', 'H '], &
+                           "C ", "Br", "Br", "Br", "H "], &
                            reshape([ &
                                  -0.5433810_wp, -0.0003166_wp, 0.0000311_wp, &
                                  0.0350249_wp, 0.9590807_wp, 1.6079491_wp, &
@@ -1507,7 +1506,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1517,8 +1516,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 1, 6, 6, 1, &
                            1, 6, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'H ', 'C ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "H ", "C ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.7889734_wp, 0.0833603_wp, -0.2625388_wp, &
                                  -1.9980078_wp, 0.0201634_wp, -1.4660635_wp, &
@@ -1539,7 +1538,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1549,8 +1548,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [7, 6, 6, 1, 1, 6, 6, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'H ', 'H ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "N ", "C ", "C ", "H ", "H ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.2648219_wp, -2.4927078_wp, -0.0013054_wp, &
                                  0.1387210_wp, -1.3994705_wp, -0.0004689_wp, &
@@ -1571,9 +1570,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'O ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "O ", "C ", "C ", "C ", "C ", &
+                           "C ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -1.2596527_wp, -2.3214941_wp, -0.0188398_wp, &
                                  -0.0499958_wp, -2.1247648_wp, 0.0018654_wp, &
@@ -1602,9 +1601,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 6, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'N ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "N ", "H ", "H ", "C ", "H ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  1.2658364_wp, 0.5035946_wp, -0.0002336_wp, &
                                  -0.0209721_wp, -0.3343849_wp, -0.0017605_wp, &
@@ -1630,10 +1629,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  2.5934089_wp, 1.1991034_wp, -0.2892713_wp, &
                                  1.2816722_wp, 1.2117767_wp, 0.1997981_wp, &
@@ -1664,7 +1663,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1673,7 +1672,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1682,7 +1681,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 16, 16], &
                            [character(len=2) :: &
-                           'C ', 'S ', 'S '], &
+                           "C ", "S ", "S "], &
                            reshape([ &
                                  0.0000499_wp, 0.0000000_wp, 0.0000033_wp, &
                                  1.5720750_wp, 0.0000000_wp, -0.0002023_wp, &
@@ -1692,7 +1691,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 17, 17, 17, 17], &
                            [character(len=2) :: &
-                           'C ', 'Cl', 'Cl', 'Cl', 'Cl'], &
+                           "C ", "Cl", "Cl", "Cl", "Cl"], &
                            reshape([ &
                                  -0.0000283_wp, 0.0002295_wp, 0.0000231_wp, &
                                  0.3163509_wp, 0.9673189_wp, 1.4868985_wp, &
@@ -1705,8 +1704,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 1, 1, 17], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'Cl'], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "Cl"], &
                            reshape([ &
                                  -0.0000024_wp, -0.0001359_wp, 2.3696522_wp, &
                                  1.2111386_wp, 0.0001636_wp, 1.6683009_wp, &
@@ -1725,7 +1724,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 1, 17, 17, 17], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'Cl', 'Cl', 'Cl'], &
+                           "C ", "H ", "Cl", "Cl", "Cl"], &
                            reshape([ &
                                  0.0001196_wp, -0.0000073_wp, 0.4837735_wp, &
                                  0.0000461_wp, 0.0001364_wp, 1.5725598_wp, &
@@ -1737,7 +1736,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1746,7 +1745,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1757,9 +1756,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 8, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'O ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "O ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  1.9207290_wp, 0.5904725_wp, -0.0025164_wp, &
                                  0.9959533_wp, 1.6353645_wp, -0.0419207_wp, &
@@ -1784,9 +1783,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 8, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'C ', 'O ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "C ", "O ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -1.3026502_wp, 1.5357410_wp, 0.0469205_wp, &
                                  0.0906715_wp, 1.4072879_wp, 0.1208641_wp, &
@@ -1811,9 +1810,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.8766708_wp, -1.1761157_wp, 0.2299938_wp, &
                                  1.4571274_wp, 0.1709352_wp, -0.2297360_wp, &
@@ -1840,9 +1839,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'O ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "O ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  1.0802998_wp, -0.0869349_wp, 0.0000624_wp, &
                                  0.3187951_wp, -0.3461415_wp, -1.2837595_wp, &
@@ -1868,9 +1867,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.2727010_wp, 1.2759524_wp, 0.0418199_wp, &
                                  -1.2693127_wp, 0.1146648_wp, -0.2318475_wp, &
@@ -1892,7 +1891,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1902,8 +1901,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 6, 6, 6, 6, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -2.0703223_wp, -0.0005200_wp, 0.0042458_wp, &
                                  -0.8427560_wp, -0.0002130_wp, 0.0011354_wp, &
@@ -1924,7 +1923,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1933,7 +1932,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -1946,11 +1945,11 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -5.7808637_wp, -0.2959106_wp, -0.0038742_wp, &
                                  -4.4848094_wp, 0.5223972_wp, -0.0014311_wp, &
@@ -1989,7 +1988,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 35, 35, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'Br', 'Br', 'H ', 'H '], &
+                           "C ", "Br", "Br", "H ", "H "], &
                            reshape([ &
                                  -0.9804627_wp, 0.0000020_wp, 0.0000011_wp, &
                                  0.0949909_wp, 1.6414131_wp, 0.0000117_wp, &
@@ -2004,10 +2003,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.0000052_wp, 0.2404086_wp, -0.0008066_wp, &
                                  1.1921120_wp, -0.5596497_wp, -0.0001794_wp, &
@@ -2042,8 +2041,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 17, &
                            17, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'Cl', &
-                           'Cl', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "Cl", &
+                           "Cl", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.7012746_wp, -0.0000478_wp, -0.0703807_wp, &
                                  -0.7011883_wp, 0.0000109_wp, -0.0704357_wp, &
@@ -2062,7 +2061,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2071,7 +2070,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2080,7 +2079,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 1, 1, 17, 17], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'Cl', 'Cl'], &
+                           "C ", "H ", "H ", "Cl", "Cl"], &
                            reshape([ &
                                  -0.0000017_wp, 0.0000130_wp, 0.8250771_wp, &
                                  0.0000505_wp, 0.9101466_wp, 1.4247922_wp, &
@@ -2094,9 +2093,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'O ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "O ", "C ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -2.4020475_wp, 0.3890262_wp, -0.0001202_wp, &
                                  -1.1923723_wp, -0.5279286_wp, 0.0001743_wp, &
@@ -2120,9 +2119,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'S ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "S ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  0.0560815_wp, 0.3973894_wp, -0.0904431_wp, &
                                  1.4169000_wp, -0.8582027_wp, -0.1002038_wp, &
@@ -2146,9 +2145,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 1, 6, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H '], &
+                           "N ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "H ", "C ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -0.0000151_wp, -0.2911612_wp, 0.0683061_wp, &
                                  1.2258508_wp, 0.5179644_wp, -0.0164458_wp, &
@@ -2171,7 +2170,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2182,9 +2181,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 8, 6, 6, 6, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H ', 'O ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "C ", &
+                           "H ", "H ", "H ", "O ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.8988986_wp, -2.2124228_wp, -0.6284640_wp, &
                                  -0.1398482_wp, -1.2146027_wp, 0.2400181_wp, &
@@ -2212,7 +2211,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2222,8 +2221,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 16, 16, 6, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'S ', 'S ', 'C ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "S ", "S ", "C ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -1.8808062_wp, -0.8682581_wp, 0.4572906_wp, &
                                  -1.9453368_wp, -0.6166916_wp, 1.5197217_wp, &
@@ -2242,9 +2241,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'N ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "O ", "C ", "C ", "N ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  1.1518130_wp, 1.7433349_wp, -0.7114546_wp, &
                                  0.8750479_wp, 0.5890315_wp, -0.3158435_wp, &
@@ -2267,8 +2266,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 1, 7, 6, 6, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'H ', 'N ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "H ", "N ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.0515891_wp, 1.8852395_wp, -0.0032659_wp, &
                                  0.6239070_wp, 0.7808512_wp, -0.0019746_wp, &
@@ -2288,8 +2287,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 1, 1, 16, 8, 6, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'S ', 'O ', 'C ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "H ", "S ", "O ", "C ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  0.8846683_wp, -1.3769096_wp, -0.2427511_wp, &
                                  0.9568232_wp, -1.2632547_wp, -1.3314840_wp, &
@@ -2309,10 +2308,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'O ', &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "O ", &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -3.1443466_wp, -0.6512830_wp, 1.5123151_wp, &
                                  -2.5733235_wp, 0.0056212_wp, 0.4148470_wp, &
@@ -2345,10 +2344,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 6, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "N ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.0674284_wp, 0.4399022_wp, 0.0000345_wp, &
                                  -0.0091124_wp, -0.3709166_wp, -1.2254764_wp, &
@@ -2382,12 +2381,12 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "C ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -7.0600746_wp, 0.1230245_wp, 0.3066606_wp, &
                                  -5.8012956_wp, -0.1857998_wp, -0.5122873_wp, &
@@ -2433,8 +2432,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 16, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'S ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "S ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -1.7454540_wp, 0.3697195_wp, -0.0352689_wp, &
                                  -0.6128667_wp, -0.6448153_wp, 0.0553388_wp, &
@@ -2451,8 +2450,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 6, 1, 1, 1, 1, &
                            8, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'O ', 'H '], &
+                           "C ", "H ", "C ", "H ", "H ", "H ", "H ", &
+                           "O ", "H "], &
                            reshape([ &
                                  -0.0165316_wp, -1.2834568_wp, -0.2604713_wp, &
                                  0.8427443_wp, -1.3428214_wp, -0.9464603_wp, &
@@ -2469,8 +2468,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 6, 1, 1, 1, &
                            6, 6, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'C ', 'H ', 'H ', 'H ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "C ", "H ", "H ", "H ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.0634332_wp, -1.0039969_wp, -0.0111525_wp, &
                                  1.2695533_wp, -1.2113676_wp, -0.0812977_wp, &
@@ -2492,8 +2491,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 1, 6, 6, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'H ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "H ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.4835096_wp, -1.3153118_wp, 0.0000378_wp, &
                                  0.6016864_wp, -1.8728644_wp, -0.0007653_wp, &
@@ -2513,9 +2512,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 6, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.3118111_wp, 0.3273937_wp, 0.0353091_wp, &
                                  -1.0262799_wp, 0.6294141_wp, 0.0731150_wp, &
@@ -2543,9 +2542,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 1, 6, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "H ", "C ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -2.2757600_wp, 0.2410890_wp, 0.0000092_wp, &
                                  -1.5838011_wp, 0.1017035_wp, 1.2094376_wp, &
@@ -2571,8 +2570,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 6, 1, 6, 9, 6, &
                            1, 6, 1, 6, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'C ', 'H ', 'C ', 'F ', 'C ', &
-                           'H ', 'C ', 'H ', 'C ', 'H '], &
+                           "C ", "H ", "C ", "H ", "C ", "F ", "C ", &
+                           "H ", "C ", "H ", "C ", "H "], &
                            reshape([ &
                                  -1.2103770_wp, 1.2124835_wp, 0.0002671_wp, &
                                  -1.7520593_wp, 2.1597954_wp, 0.0003770_wp, &
@@ -2591,7 +2590,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [8, 6, 1, 7, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'H ', 'N ', 'H ', 'H '], &
+                           "O ", "C ", "H ", "N ", "H ", "H "], &
                            reshape([ &
                                  -0.2048829_wp, 1.1505162_wp, 0.0002415_wp, &
                                  0.4072401_wp, 0.0720801_wp, -0.0001274_wp, &
@@ -2604,7 +2603,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [8, 6, 8, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'O ', 'H ', 'H '], &
+                           "O ", "C ", "O ", "H ", "H "], &
                            reshape([ &
                                  -0.1222145_wp, -1.1399258_wp, 0.0001454_wp, &
                                  0.4153106_wp, 0.0937307_wp, 0.0000386_wp, &
@@ -2619,10 +2618,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -3.8462242_wp, 0.3582823_wp, 0.0003157_wp, &
                                  -2.5691216_wp, -0.4891521_wp, 0.0012908_wp, &
@@ -2659,14 +2658,14 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "C ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  9.6311618_wp, 0.0209805_wp, -0.3424512_wp, &
                                  8.3459455_wp, 0.0096838_wp, 0.4948683_wp, &
@@ -2725,9 +2724,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 6, 1, 1, 6, &
                            1, 1, 6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.6680897_wp, 0.3765380_wp, -0.0018009_wp, &
                                  0.7129031_wp, 1.0403620_wp, 0.8806748_wp, &
@@ -2754,7 +2753,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2764,8 +2763,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 6, 1, 6, 53, 6, &
                            1, 6, 1, 6, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'C ', 'H ', 'C ', 'I ', 'C ', &
-                           'H ', 'C ', 'H ', 'C ', 'H '], &
+                           "C ", "H ", "C ", "H ", "C ", "I ", "C ", &
+                           "H ", "C ", "H ", "C ", "H "], &
                            reshape([ &
                                  -2.8794708_wp, 1.2106651_wp, 0.0000259_wp, &
                                  -3.4182009_wp, 2.1599760_wp, -0.0003896_wp, &
@@ -2785,8 +2784,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 53, 1, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'I ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "I ", "H ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.6934166_wp, -1.6119166_wp, -0.0000031_wp, &
                                  0.0268541_wp, 0.4938503_wp, 0.0000000_wp, &
@@ -2801,7 +2800,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 1, 53, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'I ', 'H ', 'H '], &
+                           "C ", "H ", "I ", "H ", "H "], &
                            reshape([ &
                                  -1.9494912_wp, -0.0000124_wp, 0.0000568_wp, &
                                  -2.2621580_wp, 0.9529460_wp, 0.4298332_wp, &
@@ -2815,9 +2814,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 6, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  2.5945754_wp, -0.2142016_wp, 0.0021906_wp, &
                                  2.0697317_wp, 1.0826367_wp, -0.0084679_wp, &
@@ -2845,7 +2844,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -2856,9 +2855,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 6, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.9705381_wp, -0.9998096_wp, 0.0012040_wp, &
                                  1.3727338_wp, 0.3424664_wp, -0.0062745_wp, &
@@ -2886,7 +2885,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 8, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.3672472_wp, -0.0107637_wp, 0.0218200_wp, &
                                  0.9185664_wp, 0.3717979_wp, -0.5023152_wp, &
@@ -2901,9 +2900,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            8, 8, 6, 1, 1, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'O ', 'O ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "O ", "O ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  2.1451908_wp, -1.3737034_wp, -0.0018927_wp, &
                                  3.0019238_wp, -0.2656956_wp, -0.0003398_wp, &
@@ -2930,9 +2929,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'O ', 'O ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "O ", "O ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  1.9681729_wp, 0.4086118_wp, 0.0065196_wp, &
                                  0.7785471_wp, -0.5529907_wp, -0.0004593_wp, &
@@ -2957,8 +2956,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 6, 1, 1, 1, &
                            6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'C ', 'H ', 'H ', 'H ', &
-                           'C ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "C ", "H ", "H ", "H ", &
+                           "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.4711995_wp, -0.1120190_wp, 0.0151222_wp, &
                                  0.3566799_wp, -1.3278418_wp, 0.1104419_wp, &
@@ -2977,8 +2976,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "O ", "O ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  0.4951886_wp, -0.7402492_wp, -0.0000003_wp, &
                                  -0.5793066_wp, -1.3146161_wp, 0.0000013_wp, &
@@ -2994,8 +2993,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 6, 6, 6, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.0067346_wp, -0.0246512_wp, 0.0698151_wp, &
                                  0.0681771_wp, -1.2455458_wp, 0.0196564_wp, &
@@ -3018,9 +3017,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "N ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -1.8370054_wp, -0.5824941_wp, -0.1161355_wp, &
                                  -0.4910815_wp, -0.2648021_wp, -0.0376690_wp, &
@@ -3046,9 +3045,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.2628959_wp, -0.3046959_wp, 0.1743568_wp, &
                                  0.0003286_wp, -1.0324974_wp, -0.3237225_wp, &
@@ -3077,8 +3076,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 1, 7, 6, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'H ', 'N ', 'C ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "O ", "C ", "H ", "N ", "C ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -1.5177463_wp, 1.3570895_wp, -0.0004256_wp, &
                                  -1.3593150_wp, 0.1264268_wp, -0.0723747_wp, &
@@ -3095,8 +3094,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 1, &
                            1, 1, 7, 1, 1, 8, 8], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'N ', 'H ', 'H ', 'O ', 'O '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "N ", "H ", "H ", "O ", "O "], &
                            reshape([ &
                                  0.0001428_wp, -0.0001396_wp, -2.5885718_wp, &
                                  1.2159295_wp, 0.0001823_wp, -1.8921012_wp, &
@@ -3118,8 +3117,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 1, 6, 1, 7, 8, 8, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'C ', 'H ', 'N ', 'O ', 'O ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "H ", "C ", "H ", "N ", "O ", "O ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  0.0287525_wp, 0.7458640_wp, 0.7799412_wp, &
                                  0.9476475_wp, 0.6693460_wp, 1.3761784_wp, &
@@ -3136,7 +3135,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 1, 1, 1, 7, 8, 8], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'H ', 'N ', 'O ', 'O '], &
+                           "C ", "H ", "H ", "H ", "N ", "O ", "O "], &
                            reshape([ &
                                  0.0006025_wp, 1.4176256_wp, 0.0002586_wp, &
                                  0.4972377_wp, 1.7602393_wp, -0.9088393_wp, &
@@ -3150,7 +3149,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3163,11 +3162,11 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  0.3737265_wp, -5.1304106_wp, 0.0069767_wp, &
                                  -0.4738578_wp, -3.8533928_wp, 0.0061567_wp, &
@@ -3206,10 +3205,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 6, 1, &
                            1, 6, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H '], &
+                           "C ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "C ", "H ", "H ", "H ", "C ", &
+                           "H ", "H ", "C ", "H ", "H ", "C ", "H ", &
+                           "H ", "C ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.6265502_wp, 0.4424988_wp, -0.0005226_wp, &
                                  0.6031122_wp, 1.1051140_wp, 0.8835637_wp, &
@@ -3242,7 +3241,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3253,9 +3252,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'H ', 'O ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "H ", "O ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -2.7115336_wp, 0.1293647_wp, -0.2898354_wp, &
                                  -1.4331120_wp, -0.2840861_wp, 0.3746596_wp, &
@@ -3280,9 +3279,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 6, 1, 1, 1, 6, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'C ', 'H ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "C ", "H ", "H ", "H ", "C ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -0.0002174_wp, 0.0000018_wp, -0.3217534_wp, &
                                  -0.0005580_wp, -1.2849106_wp, 0.5162815_wp, &
@@ -3306,7 +3305,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3318,10 +3317,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 6, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'O ', 'C ', 'C ', &
-                           'O ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "O ", "C ", "C ", &
+                           "O ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "C ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -3.4749184_wp, 0.5353242_wp, -0.0002049_wp, &
                                  -2.2056917_wp, -0.3267088_wp, -0.0043584_wp, &
@@ -3353,9 +3352,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 6, 1, 1, 6, &
                            1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'N ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "N ", "H ", "H ", "C ", "H ", &
+                           "H ", "H ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.8706809_wp, 0.5308489_wp, 0.0009675_wp, &
                                  0.6437595_wp, -0.3927501_wp, 0.0012864_wp, &
@@ -3382,8 +3381,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 6, 6, 6, 6, 9, &
                            9, 9, 9, 9, 9], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'F ', &
-                           'F ', 'F ', 'F ', 'F ', 'F '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "F ", &
+                           "F ", "F ", "F ", "F ", "F "], &
                            reshape([ &
                                  -1.3958123_wp, 0.0128366_wp, -0.0000300_wp, &
                                  -0.6871330_wp, 1.2159133_wp, 0.0000584_wp, &
@@ -3403,8 +3402,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 1, 6, 1, 1, 6, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'H ', 'C ', 'H ', 'H ', 'C ', &
-                           'H ', 'H ', 'H '], &
+                           "O ", "C ", "H ", "C ", "H ", "H ", "C ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  -0.5863990_wp, 1.3773245_wp, -0.0004642_wp, &
                                  0.5032575_wp, 0.8162737_wp, 0.0000348_wp, &
@@ -3422,8 +3421,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 8, 8, 1, 6, 6, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'H ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "H ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.0780444_wp, 0.4876782_wp, 0.0017943_wp, &
                                  1.3000529_wp, 0.5400581_wp, 0.0032653_wp, &
@@ -3442,8 +3441,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [7, 6, 6, 1, 1, 6, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H '], &
+                           "N ", "C ", "C ", "H ", "H ", "C ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -0.2932843_wp, -1.8378853_wp, -0.0001236_wp, &
                                  0.1322687_wp, -0.7531589_wp, -0.0000609_wp, &
@@ -3461,9 +3460,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 6, 1, 1, 6, 1, 1, &
                            1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'O ', 'O ', 'C ', 'H ', 'H ', 'H ', &
-                           'C ', 'C ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H '], &
+                           "C ", "O ", "O ", "C ", "H ", "H ", "H ", &
+                           "C ", "C ", "H ", "H ", "C ", "H ", "H ", &
+                           "H ", "H ", "H "], &
                            reshape([ &
                                  0.1009308_wp, -1.5479111_wp, -0.0005406_wp, &
                                  1.3212698_wp, -1.6610495_wp, -0.0087106_wp, &
@@ -3488,8 +3487,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [6, 6, 7, 1, 1, 6, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'N ', 'H ', 'H ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "N ", "H ", "H ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  0.5614911_wp, 0.5023358_wp, 0.0001371_wp, &
                                  -0.5857999_wp, -0.5208953_wp, 0.0000304_wp, &
@@ -3510,8 +3509,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [7, 6, 6, 6, 6, 6, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "N ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.3985843_wp, -0.0000747_wp, -0.0000607_wp, &
                                  0.6950528_wp, 1.1501669_wp, -0.0000119_wp, &
@@ -3529,7 +3528,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 6, 17, 17, 17, 17], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'Cl', 'Cl', 'Cl', 'Cl'], &
+                           "C ", "C ", "Cl", "Cl", "Cl", "Cl"], &
                            reshape([ &
                                  -0.0000072_wp, -0.0000107_wp, 0.6750270_wp, &
                                  -0.0000070_wp, 0.0000011_wp, -0.6750051_wp, &
@@ -3543,8 +3542,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [8, 6, 6, 6, 6, 1, 1, &
                            1, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'C ', 'C ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "O ", "C ", "C ", "C ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.0011430_wp, 0.0009720_wp, 1.2220185_wp, &
                                  1.1779880_wp, -0.1369265_wp, 0.3781922_wp, &
@@ -3564,7 +3563,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3576,10 +3575,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.0871949_wp, -0.7053381_wp, 0.0249578_wp, &
                                  -0.0871109_wp, 0.7053693_wp, -0.0241427_wp, &
@@ -3609,8 +3608,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            [16, 6, 6, 6, 6, 1, 1, &
                            1, 1], &
                            [character(len=2) :: &
-                           'S ', 'C ', 'C ', 'C ', 'C ', 'H ', 'H ', &
-                           'H ', 'H '], &
+                           "S ", "C ", "C ", "C ", "C ", "H ", "H ", &
+                           "H ", "H "], &
                            reshape([ &
                                  -0.0000537_wp, 1.1605706_wp, 0.0000276_wp, &
                                  1.2504563_wp, -0.0573406_wp, 0.0000922_wp, &
@@ -3626,7 +3625,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3637,9 +3636,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 6, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "H ", "H ", "H ", "H ", "C ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  0.9563968_wp, 0.0040266_wp, 0.0005546_wp, &
                                  0.2310231_wp, 1.2070739_wp, 0.0005221_wp, &
@@ -3661,7 +3660,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3670,7 +3669,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3679,7 +3678,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [6, 6, 1, 17, 17, 17], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'H ', 'Cl', 'Cl', 'Cl'], &
+                           "C ", "C ", "H ", "Cl", "Cl", "Cl"], &
                            reshape([ &
                                  -0.6933689_wp, 0.0000873_wp, -0.2190983_wp, &
                                  0.6172549_wp, 0.0000189_wp, 0.0529809_wp, &
@@ -3695,10 +3694,10 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1], &
                            [character(len=2) :: &
-                           'N ', 'C ', 'C ', 'C ', 'H ', 'C ', 'C ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H '], &
+                           "N ", "C ", "C ", "C ", "H ", "C ", "C ", &
+                           "H ", "C ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H "], &
                            reshape([ &
                                  -0.0001544_wp, -0.0002821_wp, 0.0237767_wp, &
                                  -1.1719061_wp, 0.7768409_wp, -0.4234375_wp, &
@@ -3731,11 +3730,11 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            1, 1, 1, 1, 1, 1, 1, &
                            1, 6, 1, 1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'C ', 'C ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'C ', 'H ', 'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "C ", "C ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "C ", "H ", "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -6.4160586_wp, 0.3499987_wp, -0.0977598_wp, &
                                  -5.1380744_wp, -0.4438184_wp, 0.1970078_wp, &
@@ -3777,7 +3776,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [8, 1, 1], &
                            [character(len=2) :: &
-                           'O ', 'H ', 'H '], &
+                           "O ", "H ", "H "], &
                            reshape([ &
                                  -0.0000012_wp, 0.0000000_wp, 0.4015039_wp, &
                                  0.7648129_wp, 0.0000000_wp, -0.2007524_wp, &
@@ -3787,7 +3786,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3798,9 +3797,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 1, 1, 1, 6, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'H ', &
-                           'C ', 'H ', 'H ', 'H ', 'C ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "H ", &
+                           "C ", "H ", "H ", "H ", "C ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  -0.0002341_wp, 1.2300424_wp, 0.3037010_wp, &
                                  -0.0001831_wp, 0.0000102_wp, 0.9827138_wp, &
@@ -3825,7 +3824,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
       call new_structure(mol, &
                            [1, 1], &
                            [character(len=2) :: &
-                           'H ', 'H '], &
+                           "H ", "H "], &
                            reshape([ &
                                  0.0_wp, 0.0_wp, 0.0_wp, &
                                  0.0_wp, 0.0_wp, 0.74_wp &
@@ -3836,9 +3835,9 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                            6, 1, 1, 1, 1, 1, 1, &
                            1, 1, 1, 1], &
                            [character(len=2) :: &
-                           'C ', 'C ', 'C ', 'C ', 'C ', 'C ', 'C ', &
-                           'C ', 'H ', 'H ', 'H ', 'H ', 'H ', 'H ', &
-                           'H ', 'H ', 'H ', 'H '], &
+                           "C ", "C ", "C ", "C ", "C ", "C ", "C ", &
+                           "C ", "H ", "H ", "H ", "H ", "H ", "H ", &
+                           "H ", "H ", "H ", "H "], &
                            reshape([ &
                                  1.4277544_wp, 0.0017702_wp, -0.0146428_wp, &
                                  0.6986426_wp, 1.2012022_wp, 0.0511245_wp, &
@@ -3866,7 +3865,7 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
    end select
 
    ! Check if mol has 2 atoms and if they are both hydrogens
-   if (mol%nat == 2 .and. all(mol%sym == 'H ')) then
+   if (mol%nat == 2 .and. all(mol%sym == "H ")) then
       call fatal_error(error, message="Solvent does not have a geometry (yet).")
       return
    end if

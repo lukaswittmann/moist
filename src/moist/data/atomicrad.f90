@@ -9,7 +9,7 @@ module moist_data_atomicrad
    use mctc_env, only: error_type, fatal_error
    use mctc_io_convert, only: aatoau
    use mctc_io_symbols, only: to_number
-   implicit none
+   implicit none(type, external)
    private
 
    public :: get_atomic_rad, get_covalent_rad, atomic_rad, covalent_rad

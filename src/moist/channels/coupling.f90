@@ -1171,7 +1171,7 @@ contains
       class(coupling_type), intent(inout) :: coupling
       !> Output name
       character(len=*), intent(in) :: name
-      !> Flattened answer
+      !> Flattened answer;  allow(assumed-size): the C entry passes a buffer of unknown size
       real(wp), intent(in) :: values(*)
       !> Rejected answer
       type(error_type), allocatable, intent(out) :: error

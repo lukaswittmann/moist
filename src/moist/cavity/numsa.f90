@@ -171,7 +171,7 @@ contains
       integer :: nat
       real(wp), allocatable :: surface(:)
       real(wp), allocatable :: dsdr(:, :, :)
-      integer :: iat, jatom, i
+      integer :: iat, jatom
 
       nat = mol%nat
       self%nsph = nat
@@ -588,9 +588,9 @@ contains
    !> $$
    !> u_j = |{\bf x}_p - {\bf R}_j| - R_j, \quad
    !> H_j(u_j) = \begin{cases}
-   !> 0 & u_j < -w \\
-   !> a_0 + (a_1 + a_3 u_j^2) u_j & -w \le u_j \le w \\
-   !> 1 & u_j > w
+   !> 0 & u_j < -w
+   !> \\ a_0 + (a_1 + a_3 u_j^2) u_j & -w \le u_j \le w
+   !> \\ 1 & u_j > w
    !> \end{cases}
    !> $$
    !>

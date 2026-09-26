@@ -2,7 +2,7 @@
 module moist_math_lapack_potrf
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_potrf
@@ -33,6 +33,7 @@ module moist_math_lapack_potrf
    interface lapack_potrf
       pure subroutine spotrf(uplo, n, a, lda, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
@@ -41,6 +42,7 @@ module moist_math_lapack_potrf
       end subroutine spotrf
       pure subroutine dpotrf(uplo, n, a, lda, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
@@ -58,7 +60,7 @@ contains
       integer(lapack_ik) :: n, lda, info_lapack
       character(len=1) :: ula
 
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = int(max(1, size(amat, 1)), lapack_ik)
       n = int(size(amat, 2), lapack_ik)
@@ -73,7 +75,7 @@ contains
       integer(lapack_ik) :: n, lda, info_lapack
       character(len=1) :: ula
 
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = int(max(1, size(amat, 1)), lapack_ik)
       n = int(size(amat, 2), lapack_ik)
