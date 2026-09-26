@@ -9,6 +9,8 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
    type(structure_type), allocatable, intent(out) :: mol
    type(error_type), allocatable, intent(out) :: error
 
+   character(len=64) :: msg
+
    allocate(mol)
 
    select case (solvent_id)
@@ -3859,14 +3861,16 @@ subroutine get_solvent_geometry(solvent_id, mol, error)
                                  -3.3450039_wp, -0.9158907_wp, 0.4493728_wp &
                                  ], shape=[3, 18]))
    case default
-      ! If we reach here, the ID was not found
-      call fatal_error(error, message="Solvent ID not recognized: "//trim(adjustl(char(solvent_id))))
+      ! If we reach here, the ID has no geometry entry
+      write (msg, "(a,i0)") "No geometry available for solvent ID ", solvent_id
+      call fatal_error(error, message=trim(msg))
       return
    end select
 
-   ! Check if mol has 2 atoms and if they are both hydrogens
+   ! Placeholder entry: an H2 molecule stands in for a missing geometry
    if (mol%nat == 2 .and. all(mol%sym == "H ")) then
-      call fatal_error(error, message="Solvent does not have a geometry (yet).")
+      write (msg, "(a,i0)") "No geometry available for solvent ID ", solvent_id
+      call fatal_error(error, message=trim(msg))
       return
    end if
 end subroutine get_solvent_geometry

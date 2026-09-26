@@ -15,7 +15,7 @@ module moist_data_solvents
    integer, parameter, public :: max_solvents = 180
 
    public :: solvation_system_type, new_solvation_system
-   public :: get_solvent_id, get_solvent_for_alpb
+   public :: get_solvent_id
 
    private
 
@@ -37,15 +37,14 @@ module moist_data_solvents
       real(wp) :: solvent_beta                ! Abrahams HB basicity
       real(wp) :: solvent_surface_tension_si  ! Surface tension in SI units (N/m)
       real(wp) :: solvent_surface_tension_au  ! Surface tension in atomic units
-      real(wp) :: solvent_mass_density_si     ! Density in g/cm^3
+      real(wp) :: solvent_mass_density_si     ! Mass density in kg/m^3
       real(wp) :: solvent_mass_density_au     ! Density in atomic units
-      real(wp) :: solvent_number_density_si   ! Solvent number density in mol/m^3
+      real(wp) :: solvent_number_density_si   ! Solvent number density in 1/m^3
       real(wp) :: solvent_number_density_au   ! Solvent number density in atomic units (1/bohr^3)
       real(wp) :: solvent_molecular_volume_si ! Volume per solvent molecule in m^3
       real(wp) :: solvent_molecular_volume_au ! Volume per solvent molecule in atomic units
       real(wp) :: solvent_molar_mass_si       ! Molar mass of solvent in kg/mol
       real(wp) :: solvent_mass_au             ! Mass of solvent in atomic units (AU)
-      real(wp) :: solvent_packing_fraction    ! Packing fraction of the solvent
 
       !> Solute properties (that do *not* depend on the geometry)
       real(wp) :: solute_molar_mass_si ! Molar mass of solute in kg/mol
@@ -91,7 +90,7 @@ contains
 
       solvent_id = 0
 
-      ! Blank-pad remaining alias_list slots
+      ! Reject blank queries, which would otherwise match the blank alias padding
       if (len_trim(alias) == 0) then
          call fatal_error(error, message="Empty solvent alias", stat=1)
          return
@@ -100,11 +99,11 @@ contains
       ! Normalise
       query = trim(adjustl(to_lower(alias)))
 
-      ! Search for the alias in the alias list
+      ! Search for the alias in the alias list, normalised like the query
       do i = 1, max_solvents
          do j = 1, 10
             if (len_trim(alias_list(j, i)) == 0) cycle
-            if (query == trim(alias_list(j, i))) then
+            if (query == trim(adjustl(to_lower(alias_list(j, i))))) then
                solvent_id = id_list(i)
                return
             end if
@@ -127,34 +126,6 @@ contains
    !>
    include "solventgeometries.inc"
 
-   subroutine get_solvent_for_alpb(solvent_id, epsilon, solvent_name, error)
-      integer, intent(in) :: solvent_id
-      real(wp), intent(out) :: epsilon
-      character(:), allocatable, intent(out) :: solvent_name
-      type(error_type), allocatable, intent(out) :: error
-
-      character(len=64) :: name_list(max_solvents)
-      character(len=64) :: alias_list(10, max_solvents)
-
-      integer, dimension(max_solvents) :: id_list
-      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
-
-      include "solvents.inc"
-
-      integer :: i
-
-      do i = 1, max_solvents
-         if (solvent_id == id_list(i)) then
-            epsilon = eps(i)
-            solvent_name = trim(to_lower(name_list(i)))
-            return
-         end if
-      end do
-
-      ! If we reach here, the solvent ID was not found
-      call fatal_error(error, message="Unknown solvent ID", stat=1)
-
-   end subroutine get_solvent_for_alpb
 
    !> Initialize a solvation system from solvent data
    subroutine new_solvation_system( &
@@ -242,7 +213,11 @@ contains
 
       allocate (self%solv_mol)
       call get_solvent_geometry(self%solvent_id, self%solv_mol, error)
-      if (allocated(error)) return
+      if (allocated(error)) then
+         write (id_msg, "(a,i0,a)") " (ID ", self%solvent_id, ")"
+         call fatal_error(error, "No geometry available for solvent '"//self%solvent_name//"'"//trim(id_msg))
+         return
+      end if
 
       ! Convert coordinates to atomic units
       self%solv_mol%xyz = self%solv_mol%xyz*aatoau
@@ -275,10 +250,9 @@ contains
                                          self%solvent_mass_density_si/Avogadro_constant
 
       ! Solvent mass density: kg/m^3 -> me/bohr^3
-      self%solvent_mass_density_au = self%solvent_mass_density_si*(Bohr_radius**3) &
-                                     /Avogadro_constant/atomic_unit_of_mass
+      self%solvent_mass_density_au = self%solvent_mass_density_si*(Bohr_radius**3)/atomic_unit_of_mass
 
-      ! Convert solvent molecular volume to atomic units (m^3/mol)
+      ! Solvent molecular volume: m^3 -> bohr^3
       self%solvent_molecular_volume_au = self%solvent_molecular_volume_si/(Bohr_radius**3)
 
    end subroutine new_solvation_system
@@ -346,7 +320,6 @@ contains
                   self%solvent_number_density_au, "1/bohr**3")
       call pp%kv2("Molecular volume", self%solvent_molecular_volume_si, "m**3", &
                   self%solvent_molecular_volume_au, "bohr**3")
-      call pp%kv("Packing fraction", self%solvent_packing_fraction)
       call pp%kv2("Surface tension", self%solvent_surface_tension_si, "N/m", &
                   self%solvent_surface_tension_au, "Eh/bohr**2")
       call pp%kv("Rel. permitivity", self%solvent_epsilon, "eps/eps0")

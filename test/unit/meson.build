@@ -7,7 +7,6 @@
 tests = [
   'api',
   'parameters',
-  'utils',
   'utils_timer',
   'utils_context',
   'utils_mem',

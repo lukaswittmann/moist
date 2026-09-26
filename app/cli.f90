@@ -158,8 +158,6 @@ subroutine get_arguments(config, error)
 
    call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
       "Run the GEMS solvation model")
-   call model_specs(2)%init("alpb", "ALPB model", "moist model alpb", &
-      "Run the ALPB solvation model")
    call model_specs(3)%init("rism1d", "RISM1D model", "moist model rism1d", &
       "Run the RISM1D solvation model")
    call model_specs(4)%init("rism3d", "RISM3D model", "moist model rism3d", &
@@ -183,7 +181,7 @@ subroutine get_arguments(config, error)
    call setup_solvent_parser(solvent_parser, general_parent)
 
    call parser%add_parser("model", model_parser, &
-      help_text="Run a full solvation model (gems, alpb, rism1d, rism3d)")
+      help_text="Run a full solvation model")
    call parser%add_parser("cavity", cavity_parser, &
       help_text="Construct a cavity (numsa, iswig, drop, mc)")
    call parser%add_parser("solvent", solvent_parser, &
@@ -224,7 +222,7 @@ subroutine get_arguments(config, error)
    select case(trim(command))
    case("model")
       if (.not. args%has_key("model_mode")) then
-         call fatal_error(error, "Select one of: gems, alpb, rism1d, rism3d models")
+         call fatal_error(error, "Currently no model is available.")
          return
       end if
 

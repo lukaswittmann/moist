@@ -13,7 +13,7 @@ module test_data
       & arad_max_elem => max_elem
    use moist_data_radii_legacy, only: get_radius, get_radius_func, &
       & get_upper_bound, rad_type
-   use moist_data_solvents, only: get_solvent_id, get_solvent_for_alpb, max_solvents, &
+   use moist_data_solvents, only: get_solvent_id, max_solvents, &
       & solvation_system_type, new_solvation_system
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
@@ -75,13 +75,14 @@ contains
                   new_unittest("radius_model_error_wins_over_symbol", test_radius_error_precedence), &
                   new_unittest("radius_func_sentinel", test_radius_func_sentinel), &
                   new_unittest("radius_func_reports_error", test_radius_func_reports_error), &
-                  new_unittest("solvent_ids_are_contiguous", test_solvent_ids_contiguous), &
-                  new_unittest("solvent_name_round_trip", test_solvent_name_round_trip), &
+                  new_unittest("solvent_table_checksums", test_solvent_table_checksums), &
+                  new_unittest("solvent_alias_round_trip", test_solvent_alias_round_trip), &
                   new_unittest("solvent_alias_case_and_blanks", test_solvent_alias_normalisation), &
                   new_unittest("solvent_rejects_blank_alias", test_solvent_blank_alias), &
-                  new_unittest("solvent_rejects_bad_id", test_solvent_bad_id), &
                   new_unittest("solvent_system_constructs", test_solvent_system_constructs), &
-                  new_unittest("solvent_system_validates_input", test_solvent_system_validation) &
+                  new_unittest("solvent_system_validates_input", test_solvent_system_validation), &
+                  new_unittest("solvent_system_all_ids", test_solvent_system_all_ids), &
+                  new_unittest("solvent_surface_tension_units", test_solvent_surface_tension_units) &
                   ]
    end subroutine collect_data
 
@@ -813,66 +814,82 @@ contains
 
    !* ---------------------------- Group E: solvent tables ---------------------------- *!
 
-   !> Solvent ids run 1..max_solvents without gaps, every entry has a name, and
-   !> every permittivity is physical. The lookups assume this identity mapping
-   subroutine test_solvent_ids_contiguous(error)
+   !> Column sums of the solvent table. Any edit to the tabulated values must
+   !> update these references deliberately
+   subroutine test_solvent_table_checksums(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      real(wp), parameter :: sum_eps_ref = 2089.1406_wp
+      real(wp), parameter :: sum_refr_ref = 260.1461_wp
+      real(wp), parameter :: sum_A_ref = 17.52_wp
+      real(wp), parameter :: sum_B_ref = 55.45_wp
+      real(wp), parameter :: sum_g_ref = 5.1805690392_wp
+      real(wp), parameter :: sum_rho_ref = 181524.8_wp
+
+      integer :: i
+      real(wp) :: sum_eps, sum_refr, sum_A, sum_B, sum_g, sum_rho
+      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
+      integer :: id_list(max_solvents)
+      character(len=64) :: name_list(max_solvents)
+      character(len=64) :: alias_list(10, max_solvents)
+
+      include "../src/moist/data/solvents.inc"
+
+      sum_eps = 0.0_wp
+      sum_refr = 0.0_wp
+      sum_A = 0.0_wp
+      sum_B = 0.0_wp
+      sum_g = 0.0_wp
+      sum_rho = 0.0_wp
+      do i = 1, max_solvents
+         sum_eps = sum_eps + eps(i)
+         sum_refr = sum_refr + refr(i)
+         sum_A = sum_A + A(i)
+         sum_B = sum_B + B(i)
+         sum_g = sum_g + g(i)*0.001_wp
+         sum_rho = sum_rho + rho(i)
+      end do
+
+      call check(error, sum_eps, sum_eps_ref, thr=thr, rel=.true., more="sum of permittivities")
+      if (allocated(error)) return
+      call check(error, sum_refr, sum_refr_ref, thr=thr, rel=.true., more="sum of refractive indices")
+      if (allocated(error)) return
+      call check(error, sum_A, sum_A_ref, thr=thr, rel=.true., more="sum of HB acidities")
+      if (allocated(error)) return
+      call check(error, sum_B, sum_B_ref, thr=thr, rel=.true., more="sum of HB basicities")
+      if (allocated(error)) return
+      call check(error, sum_g, sum_g_ref, thr=thr, rel=.true., more="sum of surface tensions")
+      if (allocated(error)) return
+      call check(error, sum_rho, sum_rho_ref, thr=thr, rel=.true., more="sum of mass densities")
+   end subroutine test_solvent_table_checksums
+
+   !> Every stored alias resolves to its own solvent, so no alias is shadowed by
+   !> an earlier entry or unreachable through normalisation
+   subroutine test_solvent_alias_round_trip(error)
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_error_type), allocatable :: err
-      character(:), allocatable :: name
-      integer :: id
-      real(wp) :: eps_val
+      integer :: i, j, id
+      real(wp), dimension(max_solvents) :: eps, refr, A, B, g, rho
+      integer :: id_list(max_solvents)
+      character(len=64) :: name_list(max_solvents)
+      character(len=64) :: alias_list(10, max_solvents)
 
-      do id = 1, max_solvents
-         call get_solvent_for_alpb(id, eps_val, name, err)
-         if (allocated(err)) then
-            call test_failed(error, "solvent id gap in the table: "//trim(err%message))
-            return
-         end if
-         if (.not. allocated(name)) then
-            call test_failed(error, "solvent name was not returned")
-            return
-         end if
-         if (len_trim(name) == 0) then
-            call test_failed(error, "solvent has a blank name")
-            return
-         end if
-         if (eps_val < 1.0_wp) then
-            call test_failed(error, "solvent permittivity below the vacuum limit")
-            return
-         end if
+      include "../src/moist/data/solvents.inc"
+
+      do i = 1, max_solvents
+         do j = 1, 10
+            if (len_trim(alias_list(j, i)) == 0) cycle
+            call get_solvent_id(alias_list(j, i), id, err)
+            if (allocated(err)) then
+               call test_failed(error, "alias '"//trim(alias_list(j, i))//"' does not resolve: "//trim(err%message))
+               return
+            end if
+            call check(error, id, id_list(i), more="alias '"//trim(alias_list(j, i))//"' resolved elsewhere")
+            if (allocated(error)) return
+         end do
       end do
-   end subroutine test_solvent_ids_contiguous
-
-   !> Every solvent's own name must resolve back to its own id. This walks all
-   !> 180 entries and would fail if a name were misspelt relative to its alias
-   !> list, or if two solvents shared an alias and the wrong one won
-   subroutine test_solvent_name_round_trip(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_error_type), allocatable :: err
-      character(:), allocatable :: name
-      integer :: id, resolved
-      real(wp) :: eps_val
-
-      do id = 1, max_solvents
-         call get_solvent_for_alpb(id, eps_val, name, err)
-         if (allocated(err)) then
-            call test_failed(error, "solvent lookup failed: "//trim(err%message))
-            return
-         end if
-
-         call get_solvent_id(name, resolved, err)
-         if (allocated(err)) then
-            call test_failed(error, "solvent name '"//name//"' does not resolve: "//trim(err%message))
-            return
-         end if
-         if (resolved /= id) then
-            call test_failed(error, "solvent name '"//name//"' resolved to the wrong id")
-            return
-         end if
-      end do
-   end subroutine test_solvent_name_round_trip
+   end subroutine test_solvent_alias_round_trip
 
    !> Alias matching ignores case and surrounding blanks
    subroutine test_solvent_alias_normalisation(error)
@@ -910,6 +927,20 @@ contains
          return
       end if
       call check(error, id, 1, more="'methyl chloroform' must map to 1,1,1-trichloroethane")
+      if (allocated(error)) return
+
+      ! Stored aliases are normalised like the query
+      call get_solvent_id("furan", reference, err)
+      if (allocated(err)) then
+         call test_failed(error, "'furan' did not resolve: "//trim(err%message))
+         return
+      end if
+      call get_solvent_id(" Tetrole ", id, err)
+      if (allocated(err)) then
+         call test_failed(error, "'Tetrole' did not resolve: "//trim(err%message))
+         return
+      end if
+      call check(error, id, reference, more="'Tetrole' must map to furan")
    end subroutine test_solvent_alias_normalisation
 
    !> Solvents with fewer than ten aliases have their remaining alias slots
@@ -937,26 +968,6 @@ contains
       call get_solvent_id("definitely-not-a-solvent", id, err)
       call check(error, allocated(err), more="an unknown solvent alias was accepted")
    end subroutine test_solvent_blank_alias
-
-   !> Ids outside the table are rejected by the permittivity lookup
-   subroutine test_solvent_bad_id(error)
-      type(error_type), allocatable, intent(out) :: error
-
-      type(moist_error_type), allocatable :: err
-      character(:), allocatable :: name
-      integer :: i
-      integer :: bad_id(4)
-      real(wp) :: eps_val
-
-      bad_id = [0, -1, max_solvents + 1, huge(1)]
-
-      do i = 1, size(bad_id)
-         call get_solvent_for_alpb(bad_id(i), eps_val, name, err)
-         call check(error, allocated(err), more="an out-of-range solvent id was accepted")
-         if (allocated(error)) return
-         deallocate (err)
-      end do
-   end subroutine test_solvent_bad_id
 
    !> A full solvation system builds for a real solvent and carries the table
    !> values through into the derived type
@@ -990,6 +1001,12 @@ contains
       call check(error, system%pressure_si, 101325.0_wp, thr=thr, more="default pressure")
       if (allocated(error)) return
       call check(error, system%solvent_molar_mass_si > 0.0_wp, "solvent molar mass must be positive")
+      if (allocated(error)) return
+
+      ! Mass density in atomic units is number density times molecular mass
+      call check(error, system%solvent_mass_density_au, &
+                 system%solvent_number_density_au*system%solvent_mass_au, thr=thr, rel=.true., &
+                 more="mass density and number density disagree in atomic units")
    end subroutine test_solvent_system_constructs
 
    !> The constructor validates its inputs before doing any work, and an
@@ -1033,5 +1050,63 @@ contains
       call check(error, allocated(err), more="an unknown solvent id was accepted without an error argument")
       if (allocated(error)) return
    end subroutine test_solvent_system_validation
+
+   !> Every table entry either builds a solvation system or reports an error
+   !> that names its id. Entries without a geometry must not fail with a
+   !> garbled message
+   subroutine test_solvent_system_all_ids(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvation_system_type) :: system
+      type(moist_error_type), allocatable :: err
+      character(len=16) :: id_str
+      integer :: id
+
+      do id = 1, max_solvents
+         call new_solvation_system(system, id, error=err)
+         if (.not. allocated(err)) then
+            call check(error, system%solvent_id, id, more="constructor stored the wrong id")
+            if (allocated(error)) return
+            cycle
+         end if
+
+         write (id_str, "(i0)") id
+         if (index(err%message, "(ID "//trim(id_str)//")") == 0) then
+            call test_failed(error, "solvent error does not name its id: "//err%message)
+            return
+         end if
+         deallocate (err)
+      end do
+   end subroutine test_solvent_system_all_ids
+
+   !> Surface tensions are tabulated in mN/m. n-Hexane and methanol are checked
+   !> against their 298.15 K literature values (17.89 and 22.07 mN/m), which the
+   !> old cal/(mol A^2) entries overshot by a factor of 1.44
+   subroutine test_solvent_surface_tension_units(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      type(solvation_system_type) :: system
+      type(moist_error_type), allocatable :: err
+      integer :: id
+
+      call get_solvent_id("n-hexane", id, err)
+      if (.not. allocated(err)) call new_solvation_system(system, id, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "n-hexane system failed to build: "//trim(err%message))
+         return
+      end if
+      call check(error, system%solvent_surface_tension_si, 17.89e-3_wp, thr=1.0e-4_wp, &
+                 more="n-hexane surface tension is not in mN/m")
+      if (allocated(error)) return
+
+      call get_solvent_id("methanol", id, err)
+      if (.not. allocated(err)) call new_solvation_system(system, id, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "methanol system failed to build: "//trim(err%message))
+         return
+      end if
+      call check(error, system%solvent_surface_tension_si, 22.07e-3_wp, thr=1.0e-4_wp, &
+                 more="methanol surface tension is not in mN/m")
+   end subroutine test_solvent_surface_tension_units
 
 end module test_data

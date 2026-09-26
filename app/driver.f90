@@ -334,11 +334,8 @@ contains
       !* ================================================================================= *!
 
       ! Exit, no models implemented in the current preview version
-      if ((to_lower(config%mode) == "gems") .or. to_lower(config%mode) == "rism1d" .or. &
-          to_lower(config%mode) == "rism3d" .or. to_lower(config%mode) == "alpb") then
-         call fatal_error(error, "No solvation models implemented in the current preview version")
-         return
-      end if
+      call fatal_error(error, "No solvation models implemented in the current preview version")
+      return
 
       call report_run_timings()
       call ctx%delete()

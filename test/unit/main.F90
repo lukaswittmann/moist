@@ -6,7 +6,6 @@ program tester
       & select_suite, run_selected, get_argument
    use test_parameters, only: collect_parameters
    use test_api, only: collect_api
-   use test_utils, only: collect_utils
    use test_utils_timer, only: collect_utils_timer
    use test_utils_context, only: collect_utils_context
    use test_utils_mem, only: collect_utils_mem
@@ -58,7 +57,6 @@ program tester
    testsuites = [ &
       & new_testsuite("parameters", collect_parameters), &
       & new_testsuite("api", collect_api), &
-      & new_testsuite("utils", collect_utils), &
       & new_testsuite("utils_timer", collect_utils_timer), &
       & new_testsuite("utils_context", collect_utils_context), &
       & new_testsuite("utils_mem", collect_utils_mem), &

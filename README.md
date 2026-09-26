@@ -191,7 +191,6 @@ The other cavity constructors are available as `moist cavity {numsa,iswig} <coor
 
 ### Other subcommands
 
-<!-- - `moist model <gems|alpb|rism1d|rism3d> <input>` runs a full solvation model. -->
 - `moist solvent <name>` reports the tabulated properties of a solvent by name
   or alias.
 
