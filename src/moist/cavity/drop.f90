@@ -8,7 +8,8 @@ module moist_cavity_drop
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
-   use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
+   use moist_math_quadrature_lebedev, only: grid_size, lebedev_order_from_num
+   use moist_math_grid_s2_lebedev, only: moist_math_grid_s2_lebedev_type, new_s2_grid_lebedev
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -894,6 +895,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer :: oleb
 
+      !> Angular quadrature used to fill the cached grid; swapping the S2
+      !> scheme is a one-line change here
+      type(moist_math_grid_s2_lebedev_type) :: leb
+
       ! Map requested num_leb to Lebedev order index
       call lebedev_order_from_num(self%param%num_leb, oleb, error)
       if (allocated(error)) return
@@ -917,10 +922,16 @@ contains
       allocate (self%oleb)
       self%oleb = oleb
 
+      ! Build the angular quadrature through the S2 grid type and cache its
+      ! nodes and weights in the plain arrays the integrators consume
+      call new_s2_grid_lebedev(leb, error, npts=self%param%num_leb)
+      if (allocated(error)) return
+
       allocate (self%ang_grid(3, self%param%num_leb))
       allocate (self%ang_weight(self%param%num_leb))
-      call get_angular_grid(self%oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
+      self%ang_grid(:, :) = leb%points
+      self%ang_weight(:) = leb%weights
+      call leb%destroy()
 
       !> Check for negative weights (?!)
       if (any(self%ang_weight < 0.0_wp)) then

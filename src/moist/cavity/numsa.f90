@@ -16,7 +16,7 @@ module moist_cavity_numsa
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
-   use moist_math_grid_lebedev, only: get_angular_grid, lebedev_order_from_num
+   use moist_math_grid_s2_lebedev, only: moist_math_grid_s2_lebedev_type, new_s2_grid_lebedev
    use mctc_io_constants, only: pi
 
    implicit none(type, external)
@@ -298,7 +298,10 @@ contains
       !> Error handling
       type(error_type), intent(out), allocatable :: error
 
-      integer :: iat, jat, ij, oleb, izp
+      integer :: iat, jat, ij, izp
+      !> Angular quadrature used to fill the cached grid; swapping the S2
+      !> scheme is a one-line change here
+      type(moist_math_grid_s2_lebedev_type) :: leb
       real(wp) :: ws, rr
 
       ! Set number of atoms
@@ -379,17 +382,18 @@ contains
          self%srcut = self%srcut + 2.0_wp*aatoau
       end if
 
-      ! Set up Lebedev angular quadrature grid, mapping the requested num_leb
-      ! to a Lebedev order index
-      call lebedev_order_from_num(nang, oleb, error)
+      ! Set up the angular quadrature grid through the S2 grid type and cache
+      ! its nodes and weights in the plain arrays the integrators consume
+      call new_s2_grid_lebedev(leb, error, npts=nang)
       if (allocated(error)) return
 
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
       if (allocated(self%ang_weight)) deallocate (self%ang_weight)
       allocate (self%ang_grid(3, nang))
       allocate (self%ang_weight(nang))
-      call get_angular_grid(oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
+      self%ang_grid(:, :) = leb%points
+      self%ang_weight(:) = leb%weights
+      call leb%destroy()
 
       ! Scale weights for full sphere (Lebedev weights integrate to 1)
       self%ang_weight(:) = self%ang_weight*4.0_wp*pi

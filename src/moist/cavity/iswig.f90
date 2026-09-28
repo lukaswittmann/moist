@@ -7,7 +7,8 @@ module moist_cavity_iswig
    use mctc_env, only: error_type, fatal_error, wp
    use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
 
-   use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
+   use moist_math_quadrature_lebedev, only: grid_size, lebedev_order_from_num
+   use moist_math_grid_s2_lebedev, only: moist_math_grid_s2_lebedev_type, new_s2_grid_lebedev
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
@@ -463,6 +464,10 @@ contains
       !> iSwiG-supported Lebedev orders (indexing into swig_xi_tab)
       integer :: iswig_order
 
+      !> Angular quadrature used to fill the cached grid; swapping the S2
+      !> scheme is a one-line change here
+      type(moist_math_grid_s2_lebedev_type) :: leb
+
       ! Precompute constant swig_xi value for this Lebedev order
       real(wp), parameter :: swig_xi_tab(11) = [ &
                              4.865_wp, 4.855_wp, 4.893_wp, 4.901_wp, 4.903_wp, &
@@ -499,10 +504,16 @@ contains
       if (allocated(self%ang_grid)) deallocate (self%ang_grid)
       if (allocated(self%ang_weight)) deallocate (self%ang_weight)
 
+      ! Build the angular quadrature through the S2 grid type and cache its
+      ! nodes and weights in the plain arrays the integrators consume
+      call new_s2_grid_lebedev(leb, error, npts=self%num_leb)
+      if (allocated(error)) return
+
       allocate (self%ang_grid(3, self%num_leb))
       allocate (self%ang_weight(self%num_leb))
-      call get_angular_grid(self%cached_oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
+      self%ang_grid(:, :) = leb%points
+      self%ang_weight(:) = leb%weights
+      call leb%destroy()
 
    end subroutine ensure_lebedev_cache
 
