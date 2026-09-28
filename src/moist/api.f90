@@ -2174,7 +2174,7 @@ contains
    ! - a cursor over the response items (`moist_next_response_item`), copying
    !   each array of the current item by name
    ! - request kinds, outputs, response items and arrays are addressed by their
-   !   scientific names, the same strings the Fortran bindings use
+   !   canonical names, the same strings the Fortran bindings use
    !
    ! - array reads accept capacities at least as large as the logical grid and
    !   write only its leading entries
@@ -2765,7 +2765,7 @@ contains
       more = logical(cpl%ptr%next(), c_bool)
    end function next_coupling_request_api
 
-   !> Scientific name of the current request
+   !> Canonical name of the current request
    !>
    !> The caller's buffer holds MOIST_NAME_MAX + 1 characters, enough for every
    !> name with its terminator
@@ -2959,7 +2959,7 @@ contains
       more = logical(resp%ptr%next(), c_bool)
    end function next_response_item_api
 
-   !> Scientific name of the current response item
+   !> Canonical name of the current response item
    !>
    !> The caller's buffer holds MOIST_NAME_MAX + 1 characters, enough for every
    !> name with its terminator

@@ -891,7 +891,7 @@ class CouplingRequest:
     :attr:`missing` names the outputs to compute.
     """
 
-    #: Scientific name of the request kind
+    #: Canonical name of the request kind
     name: str = ""
     #: Output names this kind can answer, in native order, each with its
     #: extents after the grid axis

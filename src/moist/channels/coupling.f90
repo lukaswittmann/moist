@@ -57,7 +57,7 @@ module moist_channels_coupling
    !> Answers are stored as (rows, ngrid) with rows = product(lead); the
    !> declared leading extents restore the caller's rank on read
    type :: output_slot_type
-      !> Scientific name, e.g. "phi" or "dphi_dr"
+      !> Canonical name, e.g. "phi" or "dphi_dr"
       character(len=output_name_len) :: name = ""
       !> Leading extents before ngrid; unused entries stay 1
       integer :: lead(max_lead) = 1
@@ -69,7 +69,7 @@ module moist_channels_coupling
       logical :: available = .false.
    end type output_slot_type
 
-   !> Scientific request: what a host computes, never the data it returns
+   !> Coupling request: what a host computes, never the data it returns
    !>
    !> Kinds declare their outputs once in `declare`; every accessor works by
    !> output name, so a new kind adds no per-output code. A host sees a copy
@@ -81,7 +81,7 @@ module moist_channels_coupling
       !> Phase staged by the latest arm
       integer :: phase = moist_phase_none
    contains
-      !> Scientific name, e.g. "gaussian_potential"
+      !> Canonical name, e.g. "gaussian_potential"
       procedure(request_name), deferred :: name
       !> Whether an output is required by the staged phase and still unanswered
       procedure :: is_missing => request_is_missing
@@ -100,10 +100,10 @@ module moist_channels_coupling
       procedure, private :: same_inputs => request_same_inputs
    end type coupling_request_type
 
-   !> Polymorphic scientific request operations
+   !> Polymorphic coupling request operations
    abstract interface
 
-      !> Return a scientific calculation name
+      !> Return the canonical request name
       !>
       !> @param[in] self Request to describe
       function request_name(self) result(name)
@@ -178,7 +178,7 @@ module moist_channels_coupling
    type :: registration_type
       !> Component number; zero denotes the cavity
       integer :: scope = 0
-      !> Local scientific name chosen during registration
+      !> Local canonical name chosen during registration
       character(len=request_name_len) :: key = ""
       !> Registered request slot
       integer :: slot = 0
@@ -543,12 +543,12 @@ contains
 
    !> Resolve an available output of the caller's rank
    !>
-   !> @param[in] self Scientific request
+   !> @param[in] self Coupling request
    !> @param[in] name Output name
    !> @param[in] nlead Leading extents of the caller's array
    !> @param[out] error Unknown, mismatched or missing output
    function request_available_index(self, name, nlead, error) result(i)
-      !> Scientific request
+      !> Coupling request
       class(coupling_request_type), intent(in) :: self
       !> Output name
       character(len=*), intent(in) :: name
@@ -750,13 +750,13 @@ contains
    !> Register by local name, sharing calculations only when their inputs match
    !>
    !> @param[in,out] coupling Collection receiving the declaration
-   !> @param[in] key Component-local scientific name
+   !> @param[in] key Component-local canonical name
    !> @param[in] item Calculation and output requirements
    !> @param[out] error Registration error
    subroutine coupling_register(coupling, key, item, error)
       !> Collection receiving the declaration
       class(coupling_type), intent(inout) :: coupling
-      !> Component-local scientific name
+      !> Component-local canonical name
       character(len=*), intent(in) :: key
       !> Calculation and requirements
       class(coupling_request_type), intent(in) :: item
@@ -774,7 +774,7 @@ contains
       end if
       allocate (declared, source=item, stat=stat)
       if (stat /= 0) then
-         call fatal_error(error, "Cannot allocate scientific request")
+         call fatal_error(error, "Cannot allocate coupling request")
          return
       end if
       call declared%ensure_outputs(error)

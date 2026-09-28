@@ -492,7 +492,7 @@ def new_general_model(
 # next_coupling_request() and next_response_item() move the cursors, and the
 # other request and response functions act on the request or item they stopped
 # at, failing by name when none is current. Requests and response items are
-# identified by their scientific names, never by an index or a token. Grid
+# identified by their canonical names, never by an index or a token. Grid
 # inputs are read from the model's cavity. Like the C entries they bind, these
 # functions take no sizes: moist reads and writes exactly the documented
 # shape, so an array passed in has to have it. Only the element type and the
@@ -614,7 +614,7 @@ def next_coupling_request(coupling: CouplingHandle) -> bool:
 
 
 def get_coupling_request_name(coupling: CouplingHandle) -> str:
-    """Return the scientific name of the current request, e.g. ``"gaussian_potential"``."""
+    """Return the canonical name of the current request, e.g. ``"gaussian_potential"``."""
 
     buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
     error_check(lib.moist_get_coupling_request_name)(coupling.handle, buffer)
@@ -674,7 +674,7 @@ def next_response_item(response: ResponseHandle) -> bool:
 
 
 def get_response_item_name(response: ResponseHandle) -> str:
-    """Return the scientific name of the current item, e.g. ``"potential_adjoint"``."""
+    """Return the canonical name of the current item, e.g. ``"potential_adjoint"``."""
 
     buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
     error_check(lib.moist_get_response_item_name)(response.handle, buffer)

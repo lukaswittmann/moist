@@ -126,7 +126,7 @@ contains
       call coupling_snapshot(coupling, 2)
    end subroutine three_requests
 
-   !> Scientific name of the current request, "no_current_request" outside a `next()` window
+   !> Canonical name of the current request, "no_current_request" outside a `next()` window
    function current_name(coupling) result(name)
       type(coupling_type), intent(in) :: coupling
       character(len=request_name_len) :: name

@@ -105,7 +105,7 @@ typedef struct moist_coupling_s* moist_coupling;
 /// moist_get_model_* entry points and read back by walking its items
 typedef struct moist_response_s* moist_response;
 
-/// Requests, response items, outputs and arrays are identified by scientific
+/// Requests, response items, outputs and arrays are identified by canonical
 /// NAME, never by a numeric tag or handle. Request names: "point_potential",
 /// "gaussian_potential", "gaussian_moments"; their outputs: "phi", "dphi_dr",
 /// "dphi_dxi", "gt", "pt", "mt", "rt". Response items: "potential_adjoint"
@@ -639,7 +639,7 @@ moist_get_model_gradient(moist_error error,
 /// afterwards. Leaving the loop early resumes the pass at the next call
 moist_API_ENTRY bool moist_API_CALL
 moist_next_coupling_request(moist_error error, moist_coupling coupling) moist_API_SUFFIX__V_1_0;
-/// NUL-terminated scientific name of the current request, written into
+/// NUL-terminated canonical name of the current request, written into
 /// name[MOIST_NAME_MAX + 1]. An error when no request is current
 moist_API_ENTRY void moist_API_CALL
 moist_get_coupling_request_name(moist_error error, moist_coupling coupling, char* name) moist_API_SUFFIX__V_1_0;
@@ -673,7 +673,7 @@ moist_get_coupling_request_width(moist_error error, moist_coupling coupling, dou
 /// so it can drive a while loop: check error afterwards
 moist_API_ENTRY bool moist_API_CALL
 moist_next_response_item(moist_error error, moist_response response) moist_API_SUFFIX__V_1_0;
-/// NUL-terminated scientific name of the current item, written into
+/// NUL-terminated canonical name of the current item, written into
 /// name[MOIST_NAME_MAX + 1]. An error when no item is current
 moist_API_ENTRY void moist_API_CALL
 moist_get_response_item_name(moist_error error, moist_response response,

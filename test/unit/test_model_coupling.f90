@@ -508,7 +508,7 @@ contains
       end do
    end function count_visits
 
-   !> Scientific name of the current request, "no_current_request" outside a `next()` window
+   !> Canonical name of the current request, "no_current_request" outside a `next()` window
    function current_name(coupling) result(name)
       !> Coupling to inspect
       type(coupling_type), intent(in) :: coupling
