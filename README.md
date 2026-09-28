@@ -18,10 +18,13 @@
 
 To build this project from the source code in this repository you need to have
 - a Fortran compiler supporting Fortran 2008
+- a C++17 compiler for the vendored FFT backend and FINUFFT (g++ of the same
+  release as gfortran, or icpx with ifx)
+- [cmake](https://cmake.org) version 3.25 or newer (FINUFFT is built through
+  its own CMake project, also under meson)
 - one of the supported build systems:
   - [meson](https://mesonbuild.com) version 0.57 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.7 or newer
-  - [cmake](https://cmake.org) version 3.18 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
-  - [fpm](https://github.com/fortran-lang/fpm) version 0.11.0 or newer
+  - [cmake](https://cmake.org) version 3.25 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
 - a LAPACK / BLAS provider, like MKL or OpenBLAS
 
 Currently this project supports GCC and Intel compilers.
@@ -72,37 +75,6 @@ meson install -C build
 ```
 
 This might require administrator access depending on the chosen install prefix.
-
-
-#### Building with fpm
-
-This project support the Fortran package manager (fpm).
-Invoke fpm in the project root with
-
-```
-fpm build
-```
-
-To run the testsuite use
-
-```
-fpm test
-```
-
-You can access the ``moist`` program using the run subcommand
-
-```
-fpm run -- --help
-```
-
-To use ``moist`` for testing include it as dependency in your package manifest
-
-```toml
-[dependencies]
-moist.git = "https://github.com/lukaswittmann/moist"
-```
-
-Note that the fpm build does not support exporting the C-API, it only provides access to the standalone binary.
 
 
 #### Building with cmake
@@ -209,7 +181,6 @@ To provide first class API support for a new language the interface specificatio
 ### Fortran API
 
 The recommended way to access the Fortran module API is by using `moist` as a meson subproject.
-Alternatively, the project is accessible by the Fortran package manager ([fpm](https://github.com/fortran-lang/fpm)).
 
 The complete API is available from `moist` module, the individual modules are available to the user as well but are not part of the public API and therefore not guaranteed to remain stable.
 ABI compatibility is only guaranteed for the same minor version.

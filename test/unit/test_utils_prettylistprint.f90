@@ -203,8 +203,7 @@ contains
    !>
    !> `count_lines` discards the file itself; a test that only ever calls
    !> `read_line` has to clean up explicitly. Skipping it leaks the file into the
-   !> working directory, which is the build tree under meson but the project root
-   !> under fpm
+   !> working directory, which is the build tree under meson
    !>
    !> @param[in] path Scratch file name
    subroutine discard_scratch(path)

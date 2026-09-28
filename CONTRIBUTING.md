@@ -44,7 +44,7 @@ MOIST aims at reusable solvation models and infrastructure;  contributions shoul
 
 - The code has to be well tested.
 - One suite per file (module): `test/unit/test_<id>.f90` defines module `test_<id>` with `collect_<id>`. Register new suites in both `test/unit/meson.build` (`tests` list) and `test/unit/main.F90`.
-- Run with `meson test -C build --print-errorlogs` or `fpm test`. Suites run their tests in parallel, so avoid `save`d state in test helpers.
+- Run with `meson test -C build --print-errorlogs`. Suites run their tests in parallel, so avoid `save`d state in test helpers.
 - Every new feature or bug fix comes with a test.
 
 ### Documentation
