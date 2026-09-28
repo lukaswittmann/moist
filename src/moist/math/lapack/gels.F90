@@ -3,7 +3,7 @@
 module moist_math_lapack_gels
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: lapack_gels
@@ -12,6 +12,7 @@ module moist_math_lapack_gels
    interface lapack_gels
       pure subroutine sgels(trans, m, n, nrhs, a, lda, b, ldb, work, lwork, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: trans
          integer(lapack_ik), intent(in) :: m
          integer(lapack_ik), intent(in) :: n
@@ -26,6 +27,7 @@ module moist_math_lapack_gels
       end subroutine sgels
       pure subroutine dgels(trans, m, n, nrhs, a, lda, b, ldb, work, lwork, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: trans
          integer(lapack_ik), intent(in) :: m
          integer(lapack_ik), intent(in) :: n

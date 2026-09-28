@@ -1,21 +1,22 @@
 
-!> Citation registry for moist and its sub-models.
+!> Citation registry for moist and its sub-models
+!>
 !> Each citation is stored as a typed entry with category, label,
 !> authors, title, journal line, and DOI. The registry can be
-!> printed in full or filtered by category/label.
+!> printed in full or filtered by category/label
 module moist_output_citations
    use moist_output_format, only: print_wrapped
-   implicit none
+   implicit none(type, external)
    private
 
    public :: citation_entry_type, moist_citations, num_citations
    public :: print_citations, print_citations_by_category, print_citations_by_label
 
-   !> A single literature reference.
+   !> A single literature reference
    type :: citation_entry_type
       !> Broad grouping: "General", "Cavities", "Models", or "Solvers"
       character(len=:), allocatable :: category
-      !> Short identifier, e.g. "iSwiG", "GEMS", "ALPB"
+      !> Short identifier, e.g. "iSwiG", "GEMS", "SMD"
       character(len=:), allocatable :: label
       !> Author list (single line)
       character(len=:), allocatable :: authors
@@ -28,24 +29,24 @@ module moist_output_citations
    end type citation_entry_type
 
    !> Number of entries in the registry
-   integer, parameter :: num_citations = 20
+   integer, parameter :: num_citations = 19
 
-   !> The global citation registry, populated in init_citations().
+   !> The global citation registry, populated in init_citations()
    type(citation_entry_type), target :: moist_citations(num_citations)
 
    !> Guard against repeated initialisation
    logical :: initialised = .false.
 
-   !> Maximum line width for word-wrapped output (excluding indent).
+   !> Maximum line width for word-wrapped output (excluding indent)
    integer, parameter :: wrap_width = 57
 
 contains
 
-   !> Populate the registry (called lazily on first access).
+   !> Populate the registry (called lazily on first access)
    subroutine init_citations()
       if (initialised) return
 
-      ! No dedicated toolkit paper yet; cite the DROP cavity work for now.
+      ! No dedicated toolkit paper yet; cite the DROP cavity work for now
       moist_citations(1) = citation_entry_type( &
                            category="General", &
                            label="moist", &
@@ -109,15 +110,6 @@ contains
 
       moist_citations(8) = citation_entry_type( &
                            category="Models", &
-                           label="ALPB", &
-                           authors="Ehlert, S., Stahn, M., Spicher, S., Grimme, S.", &
-                           title="Robust and Efficient Implicit Solvation Model for "// &
-                           "Fast Semiempirical Methods.", &
-                           journal="J. Chem. Theory Comput. 2021, 17", &
-                           doi="https://doi.org/10.1021/acs.jctc.1c00471")
-
-      moist_citations(9) = citation_entry_type( &
-                           category="Models", &
                            label="SMD", &
                            authors="Marenich, A.V., Cramer, C.J., Truhlar, D.G.", &
                            title="Universal Solvation Model Based on Solute Electron Density "// &
@@ -126,15 +118,15 @@ contains
                            journal="J. Phys. Chem. B 2009, 113, 18", &
                            doi="https://doi.org/10.1021/jp810292n")
 
-      moist_citations(10) = citation_entry_type( &
-                            category="Solvers", &
-                            label="SLSQP", &
-                            authors="Kraft, D.", &
-                            title="A software package for sequential quadratic programming.", &
-                            journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
-                            doi="")
+      moist_citations(9) = citation_entry_type( &
+                           category="Solvers", &
+                           label="SLSQP", &
+                           authors="Kraft, D.", &
+                           title="A software package for sequential quadratic programming.", &
+                           journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
+                           doi="")
 
-      moist_citations(11) = citation_entry_type( &
+      moist_citations(10) = citation_entry_type( &
                             category="Solvers", &
                             label="SLSQP", &
                             authors="Kraft, D.", &
@@ -143,7 +135,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1994, 20, 262-281", &
                             doi="https://doi.org/10.1145/192115.192124")
 
-      moist_citations(12) = citation_entry_type( &
+      moist_citations(11) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Byrd, R.H., Lu, P., Nocedal, J., Zhu, C.", &
@@ -151,7 +143,7 @@ contains
                             journal="SIAM J. Sci. Comput. 1995, 16, 1190-1208", &
                             doi="https://doi.org/10.1137/0916069")
 
-      moist_citations(13) = citation_entry_type( &
+      moist_citations(12) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Zhu, C., Byrd, R.H., Lu, P., Nocedal, J.", &
@@ -160,7 +152,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1997, 23, 550-560", &
                             doi="https://doi.org/10.1145/279232.279236")
 
-      moist_citations(14) = citation_entry_type( &
+      moist_citations(13) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Morales, J.L., Nocedal, J.", &
@@ -169,7 +161,7 @@ contains
                             journal="ACM Trans. Math. Softw. 2011, 38, 7", &
                             doi="https://doi.org/10.1145/2049662.2049669")
 
-      moist_citations(15) = citation_entry_type( &
+      moist_citations(14) = citation_entry_type( &
                             category="Solvers", &
                             label="fmin", &
                             authors="Brent, R.P.", &
@@ -177,7 +169,7 @@ contains
                             journal="Prentice-Hall, Englewood Cliffs, NJ, 1973", &
                             doi="https://maths-people.anu.edu.au/~brent/pub/pub011.html")
 
-      moist_citations(16) = citation_entry_type( &
+      moist_citations(15) = citation_entry_type( &
                             category="Solvers", &
                             label="LSQR", &
                             authors="Paige, C.C., Saunders, M.A.", &
@@ -186,7 +178,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1982, 8, 43-71", &
                             doi="https://doi.org/10.1145/355984.355989")
 
-      moist_citations(17) = citation_entry_type( &
+      moist_citations(16) = citation_entry_type( &
                             category="Solvers", &
                             label="LSMR", &
                             authors="Fong, D.C.-L., Saunders, M.A.", &
@@ -195,7 +187,7 @@ contains
                             journal="SIAM J. Sci. Comput. 2011, 33, 2950-2971", &
                             doi="https://doi.org/10.1137/10079687X")
 
-      moist_citations(18) = citation_entry_type( &
+      moist_citations(17) = citation_entry_type( &
                             category="Solvers", &
                             label="LUSOL", &
                             authors="Gill, P.E., Murray, W., Saunders, M.A., Wright, M.H.", &
@@ -203,7 +195,7 @@ contains
                             journal="Linear Algebra Appl. 1987, 88-89, 239-270", &
                             doi="https://doi.org/10.1016/0024-3795(87)90112-1")
 
-      moist_citations(19) = citation_entry_type( &
+      moist_citations(18) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Spooner, J., Yanciw, B., Wiebe, B., Weinberg, N.", &
@@ -211,7 +203,7 @@ contains
                             journal="J. Phys. Chem. A 2014, 118, 765-777", &
                             doi="https://doi.org/10.1021/jp410496t")
 
-      moist_citations(20) = citation_entry_type( &
+      moist_citations(19) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Zeller, F., Pracht, P., Neudecker, T.", &
@@ -231,12 +223,13 @@ contains
       character(len=*), intent(in) :: category
 
       write (unit, '(a,a,":")') "", category
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
 
    end subroutine print_category_header
 
-   !> Print a single citation entry with consistent formatting.
-   !> Long lines are word-wrapped at wrap_width characters.
+   !> Print a single citation entry with consistent formatting
+   !>
+   !> - long lines are word-wrapped at wrap_width characters
    subroutine print_entry(unit, entry)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -250,18 +243,18 @@ contains
       else
          call print_wrapped(unit, entry%journal, "    ", wrap_width)
       end if
-      write (unit, '(a)') ""
+      write (unit, "(a)") ""
    end subroutine print_entry
 
-   !> Print all citations, grouped by category.
+   !> Print all citations, grouped by category
    subroutine print_citations(unit)
       !> Fortran I/O unit
       integer, intent(in) :: unit
 
       call init_citations()
 
-      write (unit, '(a)') "Please include the appropriate citations when using our work:"
-      write (unit, '(a)') ""
+      write (unit, "(a)") "Please include the appropriate citations when using our work:"
+      write (unit, "(a)") ""
 
       call print_citations_by_category(unit, "General")
       call print_citations_by_category(unit, "Cavities")
@@ -270,8 +263,9 @@ contains
 
    end subroutine print_citations
 
-   !> Print all citations matching a given category.
-   !> Entries are grouped under their label as sub-header.
+   !> Print all citations matching a given category
+   !>
+   !> - entries are grouped under their label as sub-header
    subroutine print_citations_by_category(unit, category)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -291,7 +285,7 @@ contains
          ! Print label sub-header when it changes
          if (moist_citations(i)%label /= last_label) then
             write (unit, '(2x,a,a,":")') "", moist_citations(i)%label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             last_label = moist_citations(i)%label
          end if
          call print_entry(unit, moist_citations(i))
@@ -299,7 +293,7 @@ contains
 
    end subroutine print_citations_by_category
 
-   !> Print all citations matching a given label (e.g. "iSwiG", "GEMS").
+   !> Print all citations matching a given label (e.g. "iSwiG", "GEMS")
    subroutine print_citations_by_label(unit, label)
       !> Fortran I/O unit
       integer, intent(in) :: unit
@@ -316,7 +310,7 @@ contains
          if (moist_citations(i)%label /= label) cycle
          if (.not. found) then
             write (unit, '(a,a,":")') "", label
-            write (unit, '(a)') ""
+            write (unit, "(a)") ""
             found = .true.
          end if
          call print_entry(unit, moist_citations(i))

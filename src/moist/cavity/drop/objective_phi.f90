@@ -1,13 +1,15 @@
-!> Closest-point projection objective phi for DROP cavity grid projection.
+!> Closest-point projection objective phi for DROP cavity grid projection
 !>
-!> This module implements the quadratic objective \(\phi\) used by the
-!> projector to find the closest point on the DROP level set surface.
-!> The level set constraint is owned and evaluated by the projector.
+!> The quadratic objective \(\phi\) the projector uses to find the closest
+!> point on the DROP level set surface
+!>
+!> - the level set constraint is owned and evaluated by the projector
 module moist_cavity_drop_objective_phi
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   implicit none
+   implicit none(type, external)
+   private
 
    integer, parameter :: ndim = 3
 
@@ -17,7 +19,7 @@ module moist_cavity_drop_objective_phi
    !> $$
    !> \phi(\mathbf{r}) = \frac{w_a}{2}\|\mathbf{r} - \mathbf{r}^\circ\|^2
    !> $$
-   !> where $\mathbf{r}^\circ$ is the anchor point and $w_a$ is `param%phi_alpha`.
+   !> where $\mathbf{r}^\circ$ is the anchor point and $w_a$ is `param%phi_alpha`
    type :: moist_cavity_drop_objective_phi_type
       !> Parameters for the DROP cavity
       type(moist_cavity_drop_parameters_type) :: param
@@ -29,7 +31,7 @@ module moist_cavity_drop_objective_phi
       !> Setup
       procedure :: set_parameters => phi_type_set_parameters
       procedure :: set_input => phi_type_set_input
-      !> Value.
+      !> Value
       procedure :: f0 => phi0
       !> Point derivatives
       procedure :: f1_r => phi1_r
@@ -50,6 +52,7 @@ module moist_cavity_drop_objective_phi
 contains
 
    !> Set objective parameters
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    param DROP cavity parameters
    subroutine phi_type_set_parameters(self, param)
@@ -60,6 +63,7 @@ contains
    end subroutine phi_type_set_parameters
 
    !> Record molecular input dimensions
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    mol Molecular structure
    !> @param[in]    radii Atomic radii
@@ -72,6 +76,7 @@ contains
    end subroutine phi_type_set_input
 
    !> Compute phi
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
    !> @param[in]    anch Anchor coordinates
@@ -90,6 +95,7 @@ contains
    end function phi0
 
    !> Compute the spatial gradient of phi
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
    !> @param[in]    anch Anchor coordinates
@@ -106,6 +112,7 @@ contains
    end function phi1_r
 
    !> Compute the spatial Hessian of phi
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
    !> @param[in]    anch Anchor coordinates
@@ -126,6 +133,7 @@ contains
    end function phi2_rr
 
    !> Compute phi, spatial gradient, and spatial Hessian
+   !>
    !> @param[inout] self Objective instance
    !> @param[in]    pt Evaluation point
    !> @param[in]    anch Anchor coordinates
@@ -158,6 +166,7 @@ contains
    end subroutine phi012_r
 
    !> Compute the gradient of phi with respect to nuclear positions
+   !>
    !> @param[in] self Objective instance
    !> @param[in] pt Evaluation point
    !> @param[in] anch Anchor coordinates
@@ -177,6 +186,7 @@ contains
    end function phi1_rA
 
    !> Compute the Hessian of phi with respect to nuclear positions
+   !>
    !> @param[in] self Objective instance
    !> @param[in] pt Evaluation point
    !> @param[in] anch Anchor coordinates
@@ -199,6 +209,7 @@ contains
    end function phi2_rArB
 
    !> Compute the mixed spatial-nuclear Hessian of phi
+   !>
    !> @param[in] self Objective instance
    !> @param[in] pt Evaluation point
    !> @param[in] anch Anchor coordinates
@@ -221,6 +232,7 @@ contains
    end function phi2_r_rA
 
    !> Compute the third spatial derivative of phi
+   !>
    !> @param[in] self Objective instance
    !> @param[in] pt Evaluation point
    !> @param[in] anch Anchor coordinates
@@ -237,6 +249,7 @@ contains
    end function phi3_rrr
 
    !> Compute the fourth spatial derivative of phi
+   !>
    !> @param[in] self Objective instance
    !> @param[in] pt Evaluation point
    !> @param[in] anch Anchor coordinates

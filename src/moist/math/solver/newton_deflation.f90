@@ -1,5 +1,5 @@
 !> Newton-Raphson solver wrapped with Farrell deflation for enumerating
-!> multiple roots of a nonlinear system F(x) = 0 from a single seed.
+!> multiple roots of a nonlinear system F(x) = 0 from a single seed
 !>
 !> Given the caller's residual F(x) and its Jacobian J(x) = dF/dx, this solver
 !> runs Newton's method repeatedly on wrapped callbacks:
@@ -9,32 +9,34 @@
 !>
 !> where M(x) = prod_i ( ||x - x*_i||^{-p} + alpha ) accumulates the roots
 !> already found, and the Jacobian correction is a rank-1 outer-product
-!> update - each row of the correction is F_i * grad M.
+!> update - each row of the correction is F_i * grad M
 !>
 !> Seeding policy is "single seed + iterated deflation". Termination when the
 !> inner Newton solver fails or returns a point within `dedup_tol` of a known
-!> root, or when `max_roots` has been reached.
+!> root, or when `max_roots` has been reached
 !>
 !> Thread safety: context carries pointers to owning solver state; each solver
 !> instance owns its own deflation operator, so multiple instances running in
-!> parallel do not collide.
+!> parallel do not collide
 module moist_math_solver_newton_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
-   use moist_type, only: solver_base_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_newton, only: new_newton_solver
    use moist_math_solver_deflation, only: moist_deflation_operator_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_newton_deflation_type
    public :: new_newton_deflation_solver
 
-   !> Context-aware user function interfaces (mirror moist_math_solver_newton).
+   !> Context-aware user function interfaces (mirror moist_math_solver_newton)
    abstract interface
       subroutine func_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: f
          class(*), intent(in) :: context
@@ -42,16 +44,19 @@ module moist_math_solver_newton_deflation
 
       subroutine grad_context_interface(x, jac, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: jac
          class(*), intent(in) :: context
       end subroutine grad_context_interface
    end interface
 
-   !> Internal context passed into the inner Newton solver. The inner solver
-   !> stores a copy via allocate/source=; pointer components in the copy still
-   !> target the owning solver's fields, so mutations to the deflation
-   !> operator between outer iterations are visible to the wrapped callbacks.
+   !> Internal context passed into the inner Newton solver
+   !>
+   !> - the inner solver stores a copy via allocate/source=; pointer
+   !>   components in the copy still target the owning solver's fields, so
+   !>   mutations to the deflation operator between outer iterations are
+   !>   visible to the wrapped callbacks
    type :: deflation_newton_context_type
       procedure(func_context_interface), pointer, nopass :: user_func_ctx => null()
       procedure(grad_context_interface), pointer, nopass :: user_grad_ctx => null()
@@ -59,10 +64,10 @@ module moist_math_solver_newton_deflation
       class(*), pointer :: user_context => null()
    end type deflation_newton_context_type
 
-   !> Newton-deflation solver.
+   !> Newton-deflation solver
    type, extends(solver_base_type) :: moist_math_solver_newton_deflation_type
       private
-      !> Problem size (n variables, m residuals). For square systems n == m.
+      !> Problem size (n variables, m residuals), n == m for square systems
       integer :: n = 0
       integer :: m = 0
 
@@ -83,22 +88,22 @@ module moist_math_solver_newton_deflation
       real(wp) :: tolx = 1.0e-10_wp
       integer  :: max_iter = 100
 
-      !> Multiplier on (tol, tolx) for the inner Newton; deflation only
-      !> needs to land in the correct basin. Default 1.0 (no relaxation).
+      !> Multiplier on (tol, tolx) for the inner Newton, default 1.0 (no
+      !> relaxation); deflation only needs to land in the correct basin
       real(wp) :: tol_relax_factor = 1.0_wp
 
       !> Outer deflation iteration cap
       integer :: max_roots = 8
 
-      !> Inner Newton damping. Mirrors `alpha` of new_newton_solver: smaller
+      !> Inner Newton damping, mirroring `alpha` of new_newton_solver: smaller
       !> values trade speed for staying inside the basin on stiff problems
-      !> (the projection KKT system needs alpha ~ 0.01).
+      !> (the projection KKT system needs alpha ~ 0.01)
       real(wp) :: alpha = 1.0_wp
       logical  :: use_broyden = .false.
 
       !> Number of perturbed-seed retries on the first (un-deflated) Newton
-      !> call. Mirrors the SLSQP-deflation retry pattern; needed because a
-      !> single-seed solver loses to Lebedev multistart on pathological anchors.
+      !> call, mirroring the SLSQP-deflation retry pattern; a single-seed
+      !> solver loses to Lebedev multistart on pathological anchors
       integer :: max_retries = 6
       real(wp) :: retry_radius = 0.25_wp
 
@@ -107,7 +112,7 @@ module moist_math_solver_newton_deflation
       !> Number of successfully enumerated roots
       integer :: n_raw_candidates = 0
 
-      !> Bounds plumbing for Newton (ignored when bounds_mode == 0).
+      !> Bounds plumbing for Newton (ignored when bounds_mode == 0)
       integer :: bounds_mode = 0
       real(wp), allocatable :: xl_init(:)
       real(wp), allocatable :: xu_init(:)
@@ -116,9 +121,10 @@ module moist_math_solver_newton_deflation
       !> accepted, the inner Newton is rebuilt with axis-aligned bounds
       !> that intersect [xl_init, xu_init] with [anchor - rho_max, anchor + rho_max]
       !> on the first n_anchor components, where
-      !>     rho_max = sqrt(rho_min^2 + branch_rho2_slack).
-      !> Useful when the residual is the projection KKT system on
-      !> z = (x, lambda): n_anchor == 3 and lambda keeps its wide bounds.
+      !>     rho_max = sqrt(rho_min^2 + branch_rho2_slack)
+      !>
+      !> - useful when the residual is the projection KKT system on
+      !>   z = (x, lambda): n_anchor == 3 and lambda keeps its wide bounds
       logical :: has_ball = .false.
       real(wp), allocatable :: anchor(:)
       integer  :: n_anchor = 0
@@ -134,7 +140,7 @@ module moist_math_solver_newton_deflation
 
 contains
 
-   !> Factory: construct a new Newton-deflation solver.
+   !> Factory: construct a new Newton-deflation solver
    !>
    !> @param[out] solver         Allocated polymorphic solver handle
    !> @param[in]  n              Number of variables
@@ -149,20 +155,21 @@ contains
    !> @param[in]  p_power           Deflation exponent (optional, default 2)
    !> @param[in]  alpha_shift       Deflation additive shift (optional, default 1.0)
    !> @param[in]  dedup_tol         Root-identity tolerance (optional, default 1e-6)
-   !> @param[in]  tol_relax_factor  Multiplier on (tol, tolx). Default 1.0.
+   !> @param[in]  tol_relax_factor  Multiplier on (tol, tolx), default 1.0
    !> @param[in]  bounds_mode       Newton bounds mode (forwarded to inner Newton)
    !> @param[in]  xlow              Initial lower bounds for inner Newton (length n)
    !> @param[in]  xupp              Initial upper bounds for inner Newton (length n)
-   !> @param[in]  anchor            Anchor used for the post-first-root box cap.
-   !>                               Must have length n_anchor (= size(anchor)).
-   !>                               Only the first n_anchor entries of x are
-   !>                               capped; remaining entries (e.g. lambda in
-   !>                               a 4-D KKT system) keep [xlow, xupp].
+   !> @param[in]  anchor            Anchor used for the post-first-root box
+   !>                               cap, of length n_anchor (= size(anchor));
+   !>                               only the first n_anchor entries of x are
+   !>                               capped, the rest (e.g. lambda in a 4-D KKT
+   !>                               system) keep [xlow, xupp]
    !> @param[in]  branch_rho2_slack Squared-distance slack allowed beyond the
-   !>                               first root: rho_max^2 = rho_min^2 + branch_rho2_slack.
-   !>                               Squared because the admissible set of the
-   !>                               quadratic objective is a difference of squares.
-   !>                               Inactive when <= 0 or anchor is absent.
+   !>                               first root: rho_max^2 = rho_min^2 + branch_rho2_slack,
+   !>                               squared because the admissible set of the
+   !>                               quadratic objective is a difference of
+   !>                               squares; inactive when <= 0 or anchor is
+   !>                               absent
    !> @param[in]  debug             If true, print per-iteration diagnostics
    !> @param[out] error             Error descriptor
    subroutine new_newton_deflation_solver(solver, n, m, &
@@ -227,7 +234,7 @@ contains
          return
       end if
 
-      ! Bounds: default to "ignore" mode if none provided.
+      ! Bounds: default to "ignore" mode if none provided
       if (present(bounds_mode)) tmp%bounds_mode = bounds_mode
       if (present(xlow)) then
          if (size(xlow) /= n) then
@@ -244,7 +251,7 @@ contains
          allocate (tmp%xu_init(n)); tmp%xu_init = xupp
       end if
 
-      ! Ball cap setup: anchor + positive branch_rho2_slack, plus bounds present.
+      ! Ball cap setup: anchor + positive branch_rho2_slack, plus bounds present
       tmp%has_ball = .false.
       if (present(branch_rho2_slack)) tmp%branch_rho2_slack = branch_rho2_slack
       if (present(anchor) .and. tmp%branch_rho2_slack > 0.0_wp) then
@@ -265,7 +272,7 @@ contains
          return
       end if
 
-      ! Build the initial inner Newton with the caller's bounds.
+      ! Build the initial inner Newton with the caller's bounds
       call tmp%build_inner_newton(tmp%xl_init, tmp%xu_init, error)
       if (allocated(error)) return
 
@@ -273,8 +280,10 @@ contains
    end subroutine new_newton_deflation_solver
 
    !> Construct (or reconstruct) the inner Newton solver with the given
-   !> bounds. Tears down a previous instance if present. Used at factory
-   !> time and again whenever the ball cap tightens after a root is found.
+   !> bounds, tearing down a previous instance if present
+   !>
+   !> - used at factory time and again whenever the ball cap tightens after a
+   !>   root is found
    subroutine newton_deflation_build_inner(self, xl, xu, error)
       class(moist_math_solver_newton_deflation_type), intent(inout), target :: self
       real(wp), dimension(:), intent(in), optional :: xl, xu
@@ -329,30 +338,32 @@ contains
    end subroutine newton_deflation_build_inner
 
    !> Solve the nonlinear system, enumerating up to `max_roots` distinct
-   !> roots via iterated deflation. On exit `x` holds the first root
-   !> discovered. The full list is available via get_raw_candidates.
+   !> roots via iterated deflation
+   !>
+   !> - on exit `x` holds the first root discovered
+   !> - the full list is available via get_raw_candidates
    !>
    !> Seeding strategy (combined continuation + anchor fallback):
    !>   iter=1     -- try the un-perturbed caller seed (warm-started by the
-   !>                 caller for the projection problem). If it fails, try
-   !>                 up to `max_retries` perturbations of that seed.
+   !>                 caller for the projection problem), then up to
+   !>                 `max_retries` perturbations of that seed
    !>   iter >= 2  -- two-phase probe:
    !>                 phase A (continuation): perturbations of the most
-   !>                   recently accepted root `x_base`. Cheap and works
+   !>                   recently accepted root `x_base`, cheap and good
    !>                   for asymmetric branch arrangements where the next
-   !>                   sibling root is geometrically near the previous one.
-   !>                 phase B (anchor fallback): only entered if phase A
-   !>                   exhausts without finding a new root. Perturbations
-   !>                   of the original (warm-started) caller seed `x_seed`.
-   !>                   Required for radially symmetric arrangements where
+   !>                   sibling root is geometrically near the previous one
+   !>                 phase B (anchor fallback): entered only when phase A
+   !>                   exhausts without finding a new root, perturbing the
+   !>                   original (warm-started) caller seed `x_seed`, as
+   !>                   required by radially symmetric arrangements where
    !>                   sibling roots sit equidistant *around* the anchor
    !>                   but far *from each other* (e.g. octahedral 4-fold
    !>                   anchors), so a small perturbation from any one root
-   !>                   cannot reach the next sibling.
+   !>                   cannot reach the next sibling
    !>
    !> Perturbations only touch the leading n_anchor components when a ball
    !> cap is active so lambda flows through (the previous root's lambda is
-   !> a much better guess than 0 for the neighboring root's lambda).
+   !> a much better guess than 0 for the neighboring root's lambda)
    subroutine newton_deflation_solve(self, x, error)
       class(moist_math_solver_newton_deflation_type), intent(inout), target :: self
       real(wp), dimension(:), intent(inout) :: x
@@ -384,25 +395,25 @@ contains
       ! otherwise the whole vector. lambda is left at the seed value
       ! (typically 0 or a warm-started tangent-plane estimate from the
       ! caller) because the right multiplier is a function of xyz, not a
-      ! free knob.
+      ! free knob
       n_perturb = self%n
       if (self%has_ball) n_perturb = self%n_anchor
 
       x_seed = x
       x_first = x
-      ! x_base is the seed for the *current* outer iteration. It starts at
+      ! x_base is the seed for the *current* outer iteration: it starts at
       ! the caller's (warm-started) seed and is updated to the most recent
       ! accepted root after each successful iter, so subsequent iterations
       ! probe the neighborhood of the previous basin rather than restarting
-      ! from the anchor every time.
+      ! from the anchor every time
       x_base = x_seed
 
       outer: do iter = 1, self%max_roots
          found_new_root = .false.
-         ! Phase A (continuation): perturbations of x_base = previous root.
-         ! iter 1: try un-perturbed seed first (attempt=0), then perturbations.
+         ! Phase A (continuation): perturbations of x_base = previous root
+         ! iter 1: try un-perturbed seed first (attempt=0), then perturbations
          ! iter >= 2: skip attempt=0 - x_base IS the previous accepted root,
-         ! so the un-perturbed solve would just rediscover it.
+         ! so the un-perturbed solve would just rediscover it
          start_attempt = 0
          if (iter > 1) start_attempt = 1
 
@@ -411,7 +422,7 @@ contains
                x_trial = x_base
             else
                ! Globally unique offset index across (iter, attempt) so each
-               ! iteration probes a fresh octant rather than recycling.
+               ! iteration probes a fresh octant rather than recycling
                k = (iter - 1)*self%max_retries + attempt
                perturb = 0.0_wp
                perturb(1:n_perturb) = retry_offset(n_perturb, k, self%retry_radius)
@@ -421,9 +432,9 @@ contains
             call self%newton_solver%solve(x_trial, inner_error)
             if (allocated(inner_error)) then
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                     '[newton-deflation] iter ', iter, ' contA attempt ', attempt, &
-                     ' inner Newton failed: ', trim(inner_error%message)
+                  write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                     "[newton-deflation] iter ", iter, " contA attempt ", attempt, &
+                     " inner Newton failed: ", trim(inner_error%message)
                end if
                deallocate (inner_error)
                cycle attempts_cont
@@ -435,20 +446,20 @@ contains
                exit attempts_cont
             end if
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,i0,a)') &
-                  '[newton-deflation] iter ', iter, ' contA attempt ', attempt, &
-                  ' converged to a known root (try next perturbation)'
+               write (output_unit, "(x,a,i0,a,i0,a)") &
+                  "[newton-deflation] iter ", iter, " contA attempt ", attempt, &
+                  " converged to a known root (try next perturbation)"
             end if
          end do attempts_cont
 
          ! Phase B (anchor fallback): only entered when phase A exhausted
          ! and the original anchor seed is genuinely different from x_base
-         ! (i.e. iter >= 2). For iter=1 phase A already perturbed x_seed.
+         ! (i.e. iter >= 2); for iter=1 phase A already perturbed x_seed
          if (.not. found_new_root .and. iter > 1) then
             attempts_anchor: do attempt = 1, self%max_retries
                ! Offset range disjoint from phase A so phase B probes
                ! different perturbations even after the cyclic axis pattern
-               ! would have repeated.
+               ! would have repeated
                k = (iter - 1)*self%max_retries + attempt &
                    + self%max_roots*self%max_retries
                perturb = 0.0_wp
@@ -458,9 +469,9 @@ contains
                call self%newton_solver%solve(x_trial, inner_error)
                if (allocated(inner_error)) then
                   if (self%debug) then
-                     write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                        '[newton-deflation] iter ', iter, ' anchorB attempt ', &
-                        attempt, ' inner Newton failed: ', trim(inner_error%message)
+                     write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                        "[newton-deflation] iter ", iter, " anchorB attempt ", &
+                        attempt, " inner Newton failed: ", trim(inner_error%message)
                   end if
                   deallocate (inner_error)
                   cycle attempts_anchor
@@ -472,17 +483,17 @@ contains
                   exit attempts_anchor
                end if
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a)') &
-                     '[newton-deflation] iter ', iter, ' anchorB attempt ', &
-                     attempt, ' converged to a known root (try next perturbation)'
+                  write (output_unit, "(x,a,i0,a,i0,a)") &
+                     "[newton-deflation] iter ", iter, " anchorB attempt ", &
+                     attempt, " converged to a known root (try next perturbation)"
                end if
             end do attempts_anchor
          end if
 
          if (.not. found_new_root) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a)') &
-                  '[newton-deflation] iter ', iter, ' exhausted all attempts (stop)'
+               write (output_unit, "(x,a,i0,a)") &
+                  "[newton-deflation] iter ", iter, " exhausted all attempts (stop)"
             end if
             exit outer
          end if
@@ -490,15 +501,15 @@ contains
          self%n_raw_candidates = self%n_raw_candidates + 1
          converged(:, self%n_raw_candidates) = x_trial
          ! Continuation: next iter's perturbations are around the just-found
-         ! root, not the original anchor seed.
+         ! root, not the original anchor seed
          x_base = x_trial
          if (self%n_raw_candidates == 1) then
             x_first = x_trial
             first_root_found = .true.
 
             ! After the first accepted root, tighten Newton's bounds to
-            ! anchor +/- rho_max on the n_anchor leading components.
-            ! lambda (and any other tail entries) keep their initial bounds.
+            ! anchor +/- rho_max on the n_anchor leading components
+            ! lambda (and any other tail entries) keep their initial bounds
             if (self%has_ball .and. .not. ball_armed) then
                phi_min = norm2(x_trial(1:self%n_anchor) - self%anchor)
                phi_max = sqrt(phi_min*phi_min + self%branch_rho2_slack)
@@ -522,26 +533,26 @@ contains
                deallocate (xl_tight, xu_tight)
                if (allocated(build_error)) then
                   if (self%debug) then
-                     write (output_unit, '(x,a,a)') &
-                        '[newton-deflation] bounds rebuild failed: ', &
+                     write (output_unit, "(x,a,a)") &
+                        "[newton-deflation] bounds rebuild failed: ", &
                         trim(build_error%message)
                   end if
                   ! Non-fatal: stop the deflation search rather than aborting
-                  ! the whole solve.
+                  ! the whole solve
                   deallocate (build_error)
                   exit outer
                end if
                ball_armed = .true.
                if (self%debug) then
-                  write (output_unit, '(x,a,es12.4)') &
-                     '[newton-deflation] ball cap (phi_max) = ', phi_max
+                  write (output_unit, "(x,a,es12.4)") &
+                     "[newton-deflation] ball cap (phi_max) = ", phi_max
                end if
             end if
          end if
 
          if (self%debug) then
-            write (output_unit, '(x,a,i0,a)') &
-               '[newton-deflation] iter ', iter, ' accepted root'
+            write (output_unit, "(x,a,i0,a)") &
+               "[newton-deflation] iter ", iter, " accepted root"
          end if
       end do outer
 
@@ -564,9 +575,10 @@ contains
    end subroutine newton_deflation_solve
 
    !> Retry-offset pattern: cycle through axis-aligned +/- directions for
-   !> n=3 (the common xyz case), deterministic spiral otherwise. Mirrors
-   !> the SLSQP-deflation helper so both deflation paths sample the same
-   !> octants on the projection problem.
+   !> n=3 (the common xyz case), deterministic spiral otherwise
+   !>
+   !> - mirrors the SLSQP-deflation helper, so both deflation paths sample the
+   !>   same octants on the projection problem
    pure function retry_offset(n, k, r) result(off)
       integer, intent(in) :: n
       integer, intent(in) :: k
@@ -591,7 +603,7 @@ contains
       end if
    end function retry_offset
 
-   !> Return the full list of converged roots.
+   !> Return the full list of converged roots
    subroutine newton_deflation_get_raw_candidates(self, candidates, n_candidates)
       class(moist_math_solver_newton_deflation_type), intent(in) :: self
       real(wp), allocatable, intent(out) :: candidates(:, :)
@@ -606,7 +618,7 @@ contains
       candidates(:, :) = self%raw_candidates(:, :)
    end subroutine newton_deflation_get_raw_candidates
 
-   !> Release resources.
+   !> Release resources
    subroutine newton_deflation_destroy(self)
       class(moist_math_solver_newton_deflation_type), intent(inout), target :: self
 
@@ -629,10 +641,10 @@ contains
    end subroutine newton_deflation_destroy
 
    !>==================================================================
-   !> Callback wrappers installed on the inner Newton solver.
+   !> Callback wrappers installed on the inner Newton solver
    !>==================================================================
 
-   !> Deflated residual: F_def(x) = M(x) * F(x).
+   !> Deflated residual: F_def(x) = M(x) * F(x)
    subroutine deflated_residual(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: f
@@ -653,7 +665,7 @@ contains
       end select
    end subroutine deflated_residual
 
-   !> Deflated Jacobian: J_def(x) = M*J + F * grad_M^T (rank-1 outer product).
+   !> Deflated Jacobian: J_def(x) = M*J + F * grad_M^T (rank-1 outer product)
    subroutine deflated_jacobian(x, jac, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:, :), intent(out) :: jac

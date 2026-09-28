@@ -103,7 +103,7 @@ contains
       if (allocated(error)) return
 
       !> The rank-2 case takes its first extent from the request when there is
-      !> no existing array to match, so this must not trip the dim1 guard.
+      !> no existing array to match, so this must not trip the dim1 guard
       call grow_array(m, 3, 2, fill_value=1.0_wp, error=refused)
       call check(error,.not. allocated(refused), "2d growth from unallocated succeeds")
       if (allocated(error)) return
@@ -149,7 +149,7 @@ contains
       if (allocated(error)) return
 
       !> The caller unwinds on this error, so the array it was handed must still
-      !> be the one it had: same size, same contents.
+      !> be the one it had: same size, same contents
       call check(error, size(a), 3, "array kept its size")
       if (allocated(error)) return
       call check(error, a(3), 3.0_wp, "array kept its contents")
@@ -226,7 +226,7 @@ contains
 
       allocate (m(3, 2), source=1.0_wp)
 
-      !> Second extent grows here, so only the first-extent guard can fire.
+      !> Second extent grows here, so only the first-extent guard can fire
       call grow_array(m, 4, 6, error=refused)
 
       call check(error, allocated(refused), "first-extent change reported")

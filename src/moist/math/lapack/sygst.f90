@@ -1,37 +1,38 @@
-!> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+!> Reduces a real symmetric-definite generalized eigenproblem to standard form
 module moist_math_lapack_sygst
    use mctc_env, only: sp, dp
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_sygst
 
-   !> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+   !> Reduces a real symmetric-definite generalized eigenproblem to standard form
    !>
    !> If ITYPE = 1, the problem is A*x = lambda*B*x,
    !> and A is overwritten by inv(U**T)*A*inv(U) or inv(L)*A*inv(L**T)
    !>
    !> If ITYPE = 2 or 3, the problem is A*B*x = lambda*x or
-   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L.
+   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L
    !>
-   !> B must have been previously factorized as U**T*U or L*L**T by POTRF.
+   !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface wrap_sygst
       module procedure :: wrap_ssygst
       module procedure :: wrap_dsygst
    end interface wrap_sygst
 
-   !> Reduces a real symmetric-definite generalized eigenproblem to standard form.
+   !> Reduces a real symmetric-definite generalized eigenproblem to standard form
    !>
    !> If ITYPE = 1, the problem is A*x = lambda*B*x,
    !> and A is overwritten by inv(U**T)*A*inv(U) or inv(L)*A*inv(L**T)
    !>
    !> If ITYPE = 2 or 3, the problem is A*B*x = lambda*x or
-   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L.
+   !> B*A*x = lambda*x, and A is overwritten by U*A*U**T or L**T*A*L
    !>
-   !> B must have been previously factorized as U**T*U or L*L**T by POTRF.
+   !> B must have been previously factorized as U**T*U or L*L**T by POTRF
    interface lapack_sygst
       pure subroutine ssygst(itype, uplo, n, a, lda, b, ldb, info)
          import :: sp
+         implicit none(type, external)
          real(sp), intent(inout) :: a(lda, *)
          real(sp), intent(in) :: b(ldb, *)
          integer, intent(in) :: itype
@@ -43,6 +44,7 @@ module moist_math_lapack_sygst
       end subroutine ssygst
       pure subroutine dsygst(itype, uplo, n, a, lda, b, ldb, info)
          import :: dp
+         implicit none(type, external)
          real(dp), intent(inout) :: a(lda, *)
          real(dp), intent(in) :: b(ldb, *)
          integer, intent(in) :: itype
@@ -67,7 +69,7 @@ contains
 
       ita = 1
       if (present(itype)) ita = itype
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = max(1, size(amat, 1))
       ldb = max(1, size(bmat, 1))
@@ -86,7 +88,7 @@ contains
 
       ita = 1
       if (present(itype)) ita = itype
-      ula = 'u'
+      ula = "u"
       if (present(uplo)) ula = uplo
       lda = max(1, size(amat, 1))
       ldb = max(1, size(bmat, 1))

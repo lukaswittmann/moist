@@ -5,13 +5,17 @@
 !>   * the nuclear gradient is `p * dV/dR`
 !>   * the surface adjoints are `p *` the cavity volume adjoints
 module test_model_component_pv
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
+   use moist_cavity_numsa, only: moist_cavity_numsa_parameters_type
+   use test_helpers, only: component_view
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use moist_channels, only: coupling_type, response_type
+   use moist_channels_coupling, only: coupling_type
+   use moist_channels_response, only: response_type
    use moist_model_components, only: solvation_model_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
@@ -27,7 +31,7 @@ module test_model_component_pv
       & ngrid_sw => fixture_ngrid_param, sw_areas => fixture_areas_param, &
       & sw_xis => fixture_xis_param, sw_fs => fixture_fs_param, &
       & sw_xyz => fixture_xyz_param
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pv
@@ -37,7 +41,7 @@ module test_model_component_pv
 
 contains
 
-!> Collect the PV component test suite.
+!> Collect the PV component test suite
 !>
 !> @param[out] testsuite Collected unit tests
    subroutine collect_model_component_pv(testsuite)
@@ -63,7 +67,7 @@ contains
 !> deliberately placed off the origin so a dropped center offset in that
 !> contraction would show up. The pressures span ambient to extreme; one atomic
 !> unit of pressure is about 29.4 TPa, so the top of the sweep is far above any
-!> physical solvation pressure and makes the PV term dominate outright.
+!> physical solvation pressure and makes the PV term dominate outright
 !>
 !> @param[out] error Error handling
    subroutine test_pv_sphere_volume(error)
@@ -134,13 +138,13 @@ contains
                end if
 
                energy = sentinel
-               call pv_component%get_energy(coupling, cavity, energy, err)
+               call pv_component%get_energy(component_view(coupling), cavity, energy, err)
                if (allocated(err)) then
                   call test_failed(error, "PV energy failed: "//err%message)
                   return
                end if
 
-               write (context, '(a,f0.2,a,i0,a,es9.2)') &
+               write (context, "(a,f0.2,a,i0,a,es9.2)") &
                   & "PV sphere R = ", test_radii(irad), ", nleb = ", &
                   & test_nlebs(ileb), ", p = ", test_pressures(ipres)
                call check(error, energy - sentinel, &
@@ -151,13 +155,13 @@ contains
          end do
       end do
 
-      ! The sweep is only meaningful if the top pressure moved the accumulator.
+      ! The sweep is only meaningful if the top pressure moved the accumulator
       call check(error, abs(energy - sentinel) > 1.0_wp, &
          & more="PV sphere energy is negligible, the sweep is vacuous")
       if (allocated(error)) return
 
       ! Two spheres far enough apart not to switch each other off must give
-      ! twice the single-sphere volume, so PV really reads the cavity total.
+      ! twice the single-sphere volume, so PV really reads the cavity total
       call new (mol_pair, [6, 6], reshape([ &
                                           center, center + [separation, 0.0_wp, 0.0_wp]], [3, 2]))
       call new_radii_custom_atoms([test_radii(2), test_radii(2)], radius_model, err)
@@ -179,7 +183,7 @@ contains
          return
       end if
       energy = 0.0_wp
-      call pv_component%get_energy(coupling, cavity, energy, err)
+      call pv_component%get_energy(component_view(coupling), cavity, energy, err)
       if (allocated(err)) then
          call test_failed(error, "PV energy on the two-sphere cavity failed: "//err%message)
          return
@@ -191,14 +195,14 @@ contains
 
    end subroutine test_pv_sphere_volume
 
-!> The PV nuclear gradient against fourth-order central differences.
+!> The PV nuclear gradient against fourth-order central differences
 !>
 !> The cavity is rebuilt from scratch at every stencil point, so this differences
 !> the same quantity the component reports rather than a frozen surface. The
 !> gradient accumulator carries a sentinel throughout, which turns an assignment
 !> where an accumulation was meant into a failure; the exact pressure scaling is
 !> then checked separately, where it can be asserted to roundoff instead of to
-!> finite-difference accuracy.
+!> finite-difference accuracy
 !>
 !> @param[out] error Error handling
    subroutine test_pv_nuclear_gradient(error)
@@ -218,6 +222,8 @@ contains
       type(coupling_type) :: coupling
       !> Gradient accumulators at unit and at scaled pressure
       real(wp), allocatable :: gradient(:, :), gradient_scaled(:, :)
+      !> Host part of the gradient phase, unused by PV
+      type(response_type) :: response
       !> Stencil samples, in `fd4_offsets` order, and the resulting derivative
       real(wp) :: values(4), fd
       !> Saved reference coordinate
@@ -258,7 +264,7 @@ contains
       end if
 
       allocate (gradient(3, mols(1)%nat), source=sentinel)
-      call pv_component%get_gradient(coupling, cavity, gradient, err)
+      call pv_component%get_gradient(component_view(coupling), cavity, response, gradient, err)
       if (allocated(err)) then
          call test_failed(error, "PV gradient failed: "//err%message)
          return
@@ -267,7 +273,7 @@ contains
          & more="PV nuclear gradient is zero, the test is vacuous")
       if (allocated(error)) return
 
-      ! The pressure enters as a pure prefactor, so this holds to roundoff.
+      ! The pressure enters as a pure prefactor, so this holds to roundoff
       call new_component_pv(pv_scaled, scaled_pressure)
       call pv_scaled%update(mols(1), cavity, err)
       if (allocated(err)) then
@@ -275,7 +281,7 @@ contains
          return
       end if
       allocate (gradient_scaled(3, mols(1)%nat), source=sentinel)
-      call pv_scaled%get_gradient(coupling, cavity, gradient_scaled, err)
+      call pv_scaled%get_gradient(component_view(coupling), cavity, response, gradient_scaled, err)
       if (allocated(err)) then
          call test_failed(error, "Scaled PV gradient failed: "//err%message)
          return
@@ -295,7 +301,7 @@ contains
                if (allocated(error)) return
             end do
             fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
-            write (context, '(a,i0,a,i0)') "PV gradient atom ", iatom, ", axis ", iaxis
+            write (context, "(a,i0,a,i0)") "PV gradient atom ", iatom, ", axis ", iaxis
             call check(error, gradient(iaxis, iatom) - sentinel, fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))
             if (allocated(error)) return
@@ -304,7 +310,7 @@ contains
 
    contains
 
-      !> Evaluate the PV energy for one displaced molecular structure.
+      !> Evaluate the PV energy for one displaced molecular structure
       !>
       !> @param[in]  displaced_mol Displaced structure
       !> @param[out] energy        PV energy on the rebuilt cavity
@@ -329,7 +335,7 @@ contains
             call test_failed(error, "Displaced PV update failed: "//local_err%message)
             return
          end if
-         call pv_component%get_energy(coupling, cavity, energy, local_err)
+         call pv_component%get_energy(component_view(coupling), cavity, energy, local_err)
          if (allocated(local_err)) then
             call test_failed(error, "Displaced PV energy failed: "//local_err%message)
             return
@@ -339,7 +345,7 @@ contains
 
    end subroutine test_pv_nuclear_gradient
 
-!> The PV surface adjoints against fourth-order central differences.
+!> The PV surface adjoints against fourth-order central differences
 !>
 !> Driven on the shared synthetic seven-point DROP surface, carrying the radial
 !> normal field: the volume is the divergence-theorem integral
@@ -347,7 +353,7 @@ contains
 !> closed radial surface, so the harness's tilted field would change what is
 !> being tested. Unlike CPCM, the volume depends on the normals, so all four
 !> channels stay enabled. The pressure is deliberately not one, so a dropped
-!> prefactor cannot hide.
+!> prefactor cannot hide
 !>
 !> @param[out] error Error handling
    subroutine test_pv_surface_weights(error)
@@ -391,7 +397,7 @@ contains
       call new (mol, [1], xyz_mol)
 
       ! Synthetic surface carrying only the fields the volume adjoint reads,
-      ! plus the total volume PV's own lifecycle guards require.
+      ! plus the total volume PV's own lifecycle guards require
       cavity%ngrid = ngrid_sw
       cavity%nsph = 1
       allocate (cavity%a, source=sw_areas)
@@ -414,7 +420,7 @@ contains
       end if
 
       call weights%init(ngrid_sw)
-      call pv_component%get_surface_weights(coupling, cavity, weights, err)
+      call pv_component%get_surface_weights(component_view(coupling), cavity, weights, err)
       if (allocated(err)) then
          call test_failed(error, "PV surface-weight assembly failed: "//err%message)
          return
@@ -428,7 +434,7 @@ contains
          & "pv", step=step, thr_abs=fd_atol, thr_rel=fd_rtol)
       if (allocated(error)) return
 
-      ! A zero pressure must return before the accumulator is written at all.
+      ! A zero pressure must return before the accumulator is written at all
       call prefilled%init(ngrid_sw)
       prefilled%w_xi = prefill
       prefilled%w_f = prefill
@@ -445,7 +451,7 @@ contains
          call test_failed(error, "PV(0) update failed: "//err%message)
          return
       end if
-      call pv_zero%get_surface_weights(coupling, cavity, prefilled, err)
+      call pv_zero%get_surface_weights(component_view(coupling), cavity, prefilled, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) surface-weight assembly failed: "//err%message)
          return
@@ -460,7 +466,7 @@ contains
 
    contains
 
-      !> Rebuild the PV energy independently on a perturbed surface.
+      !> Rebuild the PV energy independently on a perturbed surface
       !>
       !> @param[in] trial Perturbed surface fixture
       !> @return PV energy of the perturbed surface
@@ -489,9 +495,9 @@ contains
 
    end subroutine test_pv_surface_weights
 
-!> A zero pressure must short-circuit before the cavity is asked for anything.
+!> A zero pressure must short-circuit before the cavity is asked for anything
 !> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,
-!> so a missing short circuit is observable as the error PV raises without them.
+!> so a missing short circuit is observable as the error PV raises without them
 !>
 !> @param[out] error Error handling
    subroutine test_pv_short_circuit(error)
@@ -512,6 +518,8 @@ contains
       type(solvation_model_component_pv) :: pv_component
       !> Gradient accumulator carrying a sentinel
       real(wp), allocatable :: gradient(:, :)
+      !> Host part of the gradient phase, unused by PV
+      type(response_type) :: response
 
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
@@ -520,7 +528,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_cosmo_radii(radius_model)
-      call new_cavity_numsa(cavity, ctx, nleb=110, radii=radius_model, error=err)
+      call new_cavity_numsa(cavity, ctx, radii=radius_model, error=err, &
+         param=moist_cavity_numsa_parameters_type(num_leb=110))
       if (allocated(err)) then
          call test_failed(error, "NUMSA cavity setup failed: "//err%message)
          return
@@ -533,14 +542,14 @@ contains
 
       allocate (gradient(3, mol%nat), source=1.5_wp)
 
-      ! Zero pressure: no cavity call at all, accumulator untouched.
+      ! Zero pressure: no cavity call at all, accumulator untouched
       call new_component_pv(pv_component, 0.0_wp)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
          return
       end if
-      call pv_component%get_gradient(coupling, cavity, gradient, err)
+      call pv_component%get_gradient(component_view(coupling), cavity, response, gradient, err)
       call check(error, .not. allocated(err), &
          & more="PV at zero pressure queried the cavity volume gradient")
       if (allocated(error)) return
@@ -549,14 +558,14 @@ contains
          & message="PV at zero pressure modified the gradient accumulator")
       if (allocated(error)) return
 
-      ! Finite pressure: the missing cavity hook must surface as an error.
+      ! Finite pressure: the missing cavity hook must surface as an error
       call new_component_pv(pv_component, 0.75_wp)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
          return
       end if
-      call pv_component%get_gradient(coupling, cavity, gradient, err)
+      call pv_component%get_gradient(component_view(coupling), cavity, response, gradient, err)
       call check(error, allocated(err), &
          & more="PV did not report the missing cavity volume-gradient hook")
       if (allocated(error)) return
@@ -566,7 +575,7 @@ contains
 
 !> The lifecycle guards: a cavity that was never updated carries no volume, a
 !> volume contribution produces no host-trace potential, and a mis-shaped
-!> gradient accumulator is rejected without being written to.
+!> gradient accumulator is rejected without being written to
 !>
 !> @param[out] error Error handling
    subroutine test_pv_guards(error)
@@ -604,13 +613,14 @@ contains
       call get_structure(mol, "MB16-43", "01")
       call new_cosmo_radii(radius_model)
 
-      call new_cavity_iswig(cavity, ctx, nleb=26, radius_model=radius_model, error=err)
+      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=26))
       if (allocated(err)) then
          call test_failed(error, "Cavity construction failed: "//err%message)
          return
       end if
 
-      ! Never updated: no total volume, so neither update nor get_energy may run.
+      ! Never updated: no total volume, so neither update nor get_energy may run
       call new_component_pv(pv_component, pressure)
       call pv_component%update(mol, cavity, err)
       call check(error, allocated(err), &
@@ -619,7 +629,7 @@ contains
       if (allocated(err)) deallocate (err)
 
       energy = sentinel
-      call pv_component%get_energy(coupling, cavity, energy, err)
+      call pv_component%get_energy(component_view(coupling), cavity, energy, err)
       call check(error, allocated(err), &
          & more="PV returned an energy for a cavity without a volume")
       if (allocated(error)) return
@@ -639,20 +649,19 @@ contains
          return
       end if
 
-      ! A volume contribution carries no host-trace potential.
-      call pv_component%get_response(coupling, cavity, response, err)
+      ! A volume contribution carries no host-trace potential
+      call pv_component%get_response(component_view(coupling), cavity, response, err)
       if (allocated(err)) then
          call test_failed(error, "PV potential failed: "//err%message)
          return
       end if
-      call check(error, .not. allocated(response%lsf%w_value) &
-         & .and. .not. allocated(response%electrostatics%surface_charge), &
+      call check(error, .not. response%next(), &
          & more="PV wrote to the host potential")
       if (allocated(error)) return
 
-      ! A gradient sized for the wrong number of nuclei.
+      ! A gradient sized for the wrong number of nuclei
       allocate (bad_gradient(3, mol%nat + 1), source=sentinel)
-      call pv_component%get_gradient(coupling, cavity, bad_gradient, err)
+      call pv_component%get_gradient(component_view(coupling), cavity, response, bad_gradient, err)
       call check(error, allocated(err), more="a mis-shaped gradient was accepted")
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)

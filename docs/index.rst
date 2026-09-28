@@ -22,13 +22,13 @@ MOIST Documentation
    :alt: Coverage
 
 
-Welcome to the documentation for MOIST, the Modular and Open-source Implicit Solvation Toolkit.
-MOIST is a library designed to provide tools and methods from the field of implicit and statistical solvation, especially in the context of quantum computational chemistry.
-This documentation describes the usage and functionality of the `moist`_ library.
+
+Welcome to the documentation of `MOIST <moist_>`_, the Modular and Open-source Implicit Solvation Toolkit.
+MOIST is a modular library designed to provide tools and methods from the field of implicit and statistical solvation for molecular quantum chemistry.
 
 .. note::
 
-   MOIST is currently in a pre-release state. This version only includes the cavity construction capabilities of the Modular and Open-source Implicit Solvation Toolkit.
+   MOIST is currently in a pre-release state.
 
 .. _moist: https://github.com/lukaswittmann/moist 
 
@@ -44,4 +44,5 @@ References
    Models <models/index>
    Cavities <cavities/index>
    Recipes <recipe/index>
-   References <reference/index>
+   API Reference <reference/index>
+   Release Notes <changelog>

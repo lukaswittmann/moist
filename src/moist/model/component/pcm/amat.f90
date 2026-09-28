@@ -2,8 +2,8 @@
 !>
 !> Matrix assembly and derivative contractions are implemented in
 !> [[moist_model_component_pcm_amat_assembly]] and
-!> [[moist_model_component_pcm_amat_adjoint]] submodules
-!> Generated pair mathematics in [[moist_model_component_pcm_amat_kernel]]
+!> [[moist_model_component_pcm_amat_adjoint]] submodules; generated pair
+!> mathematics in [[moist_model_component_pcm_amat_kernel]]
 module moist_model_component_pcm_amat
    use mctc_env, only: wp, error_type
    implicit none(type, external)

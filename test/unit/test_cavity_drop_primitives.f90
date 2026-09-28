@@ -9,7 +9,7 @@ module test_cavity_drop_primitives
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, &
                                           new_swif_smooth_step
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_primitives
@@ -37,11 +37,12 @@ contains
                   new_unittest("phi_f2_rarb", test_phi_f2_rArB), &
                   new_unittest("phi_f2_r_ra", test_phi_f2_r_rA), &
                   new_unittest("phi_f012_r", test_phi_f012_r), &
-                  new_unittest("switching_f1_ra", test_switching_f1_rA) &
+                  new_unittest("switching_f1_ra", test_switching_f1_rA), &
+                  new_unittest("parameters_invalid", test_parameters_invalid) &
                   ]
    end subroutine collect_cavity_drop_primitives
 
-   !> Test phi value against the direct quadratic expression.
+   !> Test phi value against the direct quadratic expression
    subroutine test_phi_f0(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -75,7 +76,7 @@ contains
       end do
    end subroutine test_phi_f0
 
-   !> Test phi point gradient against a finite difference of the value.
+   !> Test phi point gradient against a finite difference of the value
    subroutine test_phi_f1_r(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -131,7 +132,7 @@ contains
       end do
    end subroutine test_phi_f1_r
 
-   !> Test phi point Hessian against a finite difference of the point gradient.
+   !> Test phi point Hessian against a finite difference of the point gradient
    subroutine test_phi_f2_rr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -191,10 +192,10 @@ contains
       end do
    end subroutine test_phi_f2_rr
 
-   !> Test phi third point derivative against a finite difference of the Hessian.
+   !> Test phi third point derivative against a finite difference of the Hessian
    !> Mol-less pure-math test: phi = 0.5*alpha*(r-anchor)^2 has analytic
    !> derivatives that hold for any two distinct points, so the (point,
-   !> anchor) pair is hard-coded rather than sourced from a molecule.
+   !> anchor) pair is hard-coded rather than sourced from a molecule
    subroutine test_phi_f3_rrr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -247,8 +248,8 @@ contains
       end do
    end subroutine test_phi_f3_rrr
 
-   !> Test phi fourth point derivative against a finite difference of the third derivative.
-   !> Mol-less pure-math test (see test_phi_f3_rrr).
+   !> Test phi fourth point derivative against a finite difference of the third derivative
+   !> Mol-less pure-math test (see test_phi_f3_rrr)
    subroutine test_phi_f4_rrrr(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -306,7 +307,7 @@ contains
       end do
    end subroutine test_phi_f4_rrrr
 
-   !> Test phi nuclear gradient against a finite difference of the anchor point.
+   !> Test phi nuclear gradient against a finite difference of the anchor point
    subroutine test_phi_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -364,7 +365,7 @@ contains
       end do
    end subroutine test_phi_f1_rA
 
-   !> Test phi nuclear Hessian against finite differences of the nuclear gradient.
+   !> Test phi nuclear Hessian against finite differences of the nuclear gradient
    subroutine test_phi_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -429,7 +430,7 @@ contains
       end do
    end subroutine test_phi_f2_rArB
 
-   !> Test phi mixed point-nuclear Hessian against finite differences of point gradient.
+   !> Test phi mixed point-nuclear Hessian against finite differences of point gradient
    subroutine test_phi_f2_r_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -489,7 +490,7 @@ contains
       end do
    end subroutine test_phi_f2_r_rA
 
-   !> Test combined phi value, gradient, and Hessian against finite differences.
+   !> Test combined phi value, gradient, and Hessian against finite differences
    subroutine test_phi_f012_r(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_objective_phi_type) :: phi
@@ -567,10 +568,10 @@ contains
       end do
    end subroutine test_phi_f012_r
 
-   !> Test switching function nuclear gradient via finite difference.
+   !> Test switching function nuclear gradient via finite difference
    !> Builds an LSF-svdw scaffold to obtain f0 and nuclear gradients,
    !> wraps them through the smooth-step switching function, and
-   !> FD-checks against the analytic switching gradient.
+   !> FD-checks against the analytic switching gradient
    subroutine test_switching_f1_rA(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type), allocatable :: mols(:)
@@ -679,5 +680,53 @@ contains
          deallocate (centers_base, centers_local)
       end do
    end subroutine test_switching_f1_rA
+
+   !> Derived DROP parameters refuse each out-of-range numerical control
+   subroutine test_parameters_invalid(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(mctc_error), allocatable :: err
+      !> Parameter set under test, reset to defaults per case
+      type(moist_cavity_drop_parameters_type) :: param
+      !> Case index
+      integer :: icase
+      !> Number of invalid cases
+      integer, parameter :: ncase = 5
+
+      ! The defaults themselves derive cleanly, so each refusal below is the
+      ! single field changed for that case
+      call param%compute_derived(err)
+      if (allocated(err)) then
+         call test_failed(error, "default DROP parameters were refused: "//err%message)
+         return
+      end if
+
+      do icase = 1, ncase
+         call param%init_defaults()
+         select case (icase)
+         case (1)
+            param%tolerance = 0.0_wp
+         case (2)
+            param%rho_grid_h = -1.0_wp
+         case (3)
+            param%proj_maxiter = 0
+         case (4)
+            param%proj_level = 0
+         case (5)
+            param%proj_level = 10
+         case default
+            error stop "test_cavity_drop_primitives: unhandled icase"
+         end select
+         call param%compute_derived(err)
+         if (.not. allocated(err)) then
+            call test_failed(error, "invalid DROP parameters were accepted")
+            return
+         end if
+         call check(error, index(err%message, "Invalid DROP numerical parameters") > 0, &
+                    more="unexpected error message: "//err%message)
+         if (allocated(error)) return
+      end do
+   end subroutine test_parameters_invalid
 
 end module test_cavity_drop_primitives

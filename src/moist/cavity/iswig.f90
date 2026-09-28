@@ -1,23 +1,41 @@
 module moist_cavity_iswig
+   use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use iso_fortran_env, only: error_unit, output_unit
+   use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
 
    use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
-   use moist_type, only: cavity_type, list_cavity_fields_base
+   use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_fields, only: cavity_field_query_type
 
-   implicit none
+   implicit none(type, external)
    private
    public :: cavity_type_iswig, new_cavity_iswig
 
-   ! iSwiG implementation of cavity
+   public :: moist_cavity_iswig_parameters_type
+
+   !> iSwiG construction parameters
+   type, extends(moist_model_parameters_type) :: moist_cavity_iswig_parameters_type
+      !> Lebedev points per sphere
+      integer :: num_leb = 110
+      !> Area cutoff
+      real(wp) :: cut_a = 0.0_wp
+      !> Switching-factor cutoff
+      real(wp) :: cut_f = 1.0e-10_wp
+   contains
+      !> Restore compiled defaults
+      procedure :: init_defaults => init_parameter_defaults
+      !> Declare fields for JSON input, output, and printing
+      procedure :: register_entries => register_parameter_entries
+   end type moist_cavity_iswig_parameters_type
+
+   !> iSwiG cavity state
    type, extends(cavity_type) :: cavity_type_iswig
 
       !> Number of Lebedev points per sphere
@@ -55,6 +73,29 @@ module moist_cavity_iswig
 
 contains
 
+   !> Restore compiled parameter defaults
+   !>
+   !> @param[inout] self Parameter values
+   subroutine init_parameter_defaults(self)
+      class(moist_cavity_iswig_parameters_type), intent(inout) :: self
+      type(moist_cavity_iswig_parameters_type) :: defaults
+
+      self%num_leb = defaults%num_leb
+      self%cut_a = defaults%cut_a
+      self%cut_f = defaults%cut_f
+   end subroutine init_parameter_defaults
+
+   !> Declare parameter fields for JSON input, output, and printing
+   !>
+   !> @param[inout] self Parameter values
+   subroutine register_parameter_entries(self)
+      class(moist_cavity_iswig_parameters_type), intent(inout), target :: self
+
+      call self%register_int_scalar("num_leb", self%num_leb)
+      call self%register_real_scalar("cut_a", self%cut_a)
+      call self%register_real_scalar("cut_f", self%cut_f)
+   end subroutine register_parameter_entries
+
    !> Declare the results an iSwiG cavity holds, on top of the generic ones
    !>
    !> @param[in]    self   iSwiG cavity instance
@@ -75,33 +116,34 @@ contains
 
    end subroutine list_cavity_fields_iswig
 
-   !> Constructor for iSwiG cavity
-   !> Initialize an already-declared object; no allocation of the object itself.
-   subroutine new_cavity_iswig(self, ctx, nleb, cut_a, cut_f, radius_model, error)
-      !> Cavity type instance to initialize
+   !> Construct from parameter values; omission uses compiled defaults
+   !>
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radius_model Atomic radius model to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_iswig(self, ctx, radius_model, error, param)
+      !> Cavity to initialize
       type(cavity_type_iswig), intent(inout) :: self
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
+      !> Borrowed context; must outlive the cavity
       type(moist_context_type), intent(in), target :: ctx
-      !> Number of lebedev grid points per unit sphere
-      integer, intent(in), optional :: nleb
-      !> Settings for iSwiG cavity
-      real(wp), intent(in), optional :: cut_a, cut_f
-      !> Enable simplified mode
-      !> Optional radii model
+      !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
-      !> Constructor error
+      !> Construction error
       type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_iswig_parameters_type), intent(in), optional :: param
+      !> Resolved configuration
+      type(moist_cavity_iswig_parameters_type) :: settings
 
-      !> Borrow the shared run context (owns verbosity/debug/timer)
+      if (present(param)) settings = param
       self%ctx => ctx
-
-      !> Set configuration values (leave previously allocated buffers untouched)
-      if (present(nleb)) self%num_leb = nleb
-      if (present(cut_a)) self%cut_a = cut_a
-      if (present(cut_f)) self%cut_f = cut_f
-      if (allocated(self%radius_model)) deallocate (self%radius_model)
-      allocate (self%radius_model, source=radius_model)
-
+      self%num_leb = settings%num_leb
+      self%cut_a = settings%cut_a
+      self%cut_f = settings%cut_f
+      if (allocated(self%radius_model)) deallocate(self%radius_model)
+      allocate(self%radius_model, source=radius_model)
    end subroutine new_cavity_iswig
 
    !> Write grid to CSV, including numbering, Lebedev weight, and switching value
@@ -121,7 +163,7 @@ contains
       write (unit, "(a)") "ngrid,numbering,x,y,z,owner,radius,area,w_leb,f"
 
       do ipt = 1, self%ngrid
-         write (unit, '(i0,10('','',g0))') ipt, self%numbering(ipt), &
+         write (unit, "(i0,10(',',g0))") ipt, self%numbering(ipt), &
             self%xyz(1, ipt), self%xyz(2, ipt), self%xyz(3, ipt), &
             self%owner(ipt), self%radii(self%owner(ipt)), &
             self%a(ipt), self%wleb(ipt), self%f(ipt)
@@ -142,7 +184,7 @@ contains
       self%nsph = mol%nat
 
       ! Nuclear derivative arrays belong to the previous geometry until the
-      ! caller explicitly requests a fresh gradient build.
+      ! caller explicitly requests a fresh gradient build
       if (allocated(self%area_grad)) deallocate (self%area_grad)
       if (allocated(self%volume_grad)) deallocate (self%volume_grad)
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
@@ -202,13 +244,13 @@ contains
 
    end subroutine update_cavity_iswig
 
-   !> Unified gradient computation for the iSwiG cavity.
-   !> Populates self%area_grad(3, nsph) and self%volume_grad(3, nsph)
-   !> in a single pass over grid points and switching function derivatives.
+   !> Unified gradient computation for the iSwiG cavity
    !>
-   !> Both gradients share the same expensive inner loop over pairs
-   !> (grid point ip, atom jat) for the switching function derivative df/ds.
-   !> The area and volume gradients differ only in the weight applied:
+   !> - populates self%area_grad(3, nsph) and self%volume_grad(3, nsph) in a
+   !>   single pass over grid points and switching function derivatives
+   !> - both gradients share the same expensive inner loop over pairs
+   !>   (grid point ip, atom jat) for the switching function derivative df/ds
+   !> - they differ only in the weight applied:
    !>   area:   dA/ds  = sum_p  R^2 * w * (df/ds)
    !>   volume: dV/ds  = sum_p  R * w * r_dot_p/3 * (df/ds)  + geom. term
    subroutine compute_gradient_iswig(self, error)
@@ -290,7 +332,7 @@ contains
 
             ! Volume gradient (switching function part), accumulated both per
             ! grid point and into the total; contracting v1_rA over the grid
-            ! reproduces volume_grad up to summation order.
+            ! reproduces volume_grad up to summation order
             self%volume_grad(1, iat) = self%volume_grad(1, iat) + dswitch*vol_weight*dx
             self%volume_grad(2, iat) = self%volume_grad(2, iat) + dswitch*vol_weight*dy
             self%volume_grad(3, iat) = self%volume_grad(3, iat) + dswitch*vol_weight*dz
@@ -371,7 +413,7 @@ contains
 
       ! Geometry-dependent radii would move the width, weight, normal and
       ! curvature channels this routine drops, and the forward path in
-      ! [[compute_gradient_iswig]] ignores them just as completely.
+      ! [[compute_gradient_iswig]] ignores them just as completely
       if (allocated(self%radius_model)) then
          if (allocated(self%radius_model%f1_rA)) then
             if (any(self%radius_model%f1_rA /= 0.0_wp)) then
@@ -392,7 +434,7 @@ contains
 
          !* -------------------------- Switching channel -------------------------- *!
          ! a_i = R_I^2 wleb_i f_i, and neither radius nor Lebedev weight moves,
-         ! so the area adjoint enters purely through df_i/dR_A.
+         ! so the area adjoint enters purely through df_i/dR_A
          w_f_eff = acc%w_f(igrid) &
                    + acc%w_a(igrid)*self%radii(iat)**2*self%wleb(igrid)
          if (w_f_eff == 0.0_wp) cycle
@@ -583,7 +625,7 @@ contains
 
          ! Points sit on their owner sphere, so the outward unit normal is the
          ! radial direction and the volume element is the divergence-theorem
-         ! contribution a_i (r_i . n_i)/3 that the total below accumulates.
+         ! contribution a_i (r_i . n_i)/3 that the total below accumulates
          normal0(1, ipt) = rx/radii(owner(ipt))
          normal0(2, ipt) = ry/radii(owner(ipt))
          normal0(3, ipt) = rz/radii(owner(ipt))
@@ -600,7 +642,7 @@ contains
    subroutine fill_intermediate_arrays( &
       nsph, centers, radii, num_leb, ang_grid, ang_weight, zeta_born, &
       nraw, xyz_raw, area_raw, owner_raw, zeta_raw, weight_raw, switch_raw)
-      implicit none
+      implicit none(type, external)
 
       !> Number of spheres
       integer, intent(in) :: nsph
@@ -667,7 +709,7 @@ contains
    !> Compute switching function values for all surface points
    subroutine compute_switching_function( &
       nraw, nsph, owner_raw, xyz_raw, centers, zeta_raw, radii, switch_raw)
-      implicit none
+      implicit none(type, external)
 
       !> Total number of raw points
       integer, intent(in) :: nraw
@@ -759,14 +801,14 @@ contains
    !> `f_i` is the product of the elementary switching factors over all spheres
    !> other than the owner, so its derivative with respect to the separation
    !> from sphere `j` factorizes into `f_i` times the logarithmic derivative of
-   !> that one factor. The result is returned as the radial coefficient `dfdr`
-   !> and the separation vector `dvec`, with
+   !> that one factor, returned as the radial coefficient `dfdr` and the
+   !> separation vector `dvec`, with
    !>
    !>   d f_i / d r  =  dfdr * dvec  =  -d f_i / d c_j
    !>
    !> Shared by the forward Jacobian in [[compute_gradient_iswig]] and the
    !> reverse contraction in [[get_surface_gradient_iswig]] so that both paths
-   !> evaluate the identical expression.
+   !> evaluate the identical expression
    !>
    !> @param[in]  point  Grid point position
    !> @param[in]  center Sphere center position

@@ -15,7 +15,7 @@ contains
    !> Misuse of the printer (mismatched widths and headers, no columns, a row
    !> that over- or underruns its column count) is a programming error and now
    !> ends in `error stop`, so it cannot be exercised from inside the test
-   !> binary. What remains testable is the output the printer produces.
+   !> binary. What remains testable is the output the printer produces
    subroutine collect_utils_prettylistprint(testsuite)
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
@@ -44,7 +44,7 @@ contains
       call plp%print_header()
       call plp%begin_row()
       call plp%add(1)
-      call plp%add(2.5_real64, fmt='f6.2')
+      call plp%add(2.5_real64, fmt="f6.2")
       call plp%end_row()
 
       call close_scratch(iu)
@@ -69,7 +69,7 @@ contains
       call plp%begin_row()
       call plp%add("ab")
       call plp%skip()
-      call plp%add(42, fmt='I3')
+      call plp%add(42, fmt="I3")
       call plp%end_row()
 
       call close_scratch(iu)
@@ -133,8 +133,8 @@ contains
 
       plp = new_prettylistprinter([5, 5], ["a", "b"], unit=iu, offset=0, column_gap=0)
       call plp%begin_row()
-      call plp%add(1.0e12_real64, fmt='f6.2')
-      call plp%add(-1.0e12_real64, fmt='f6.2')
+      call plp%add(1.0e12_real64, fmt="f6.2")
+      call plp%add(-1.0e12_real64, fmt="f6.2")
       call plp%end_row()
 
       call close_scratch(iu)
@@ -157,7 +157,7 @@ contains
       integer, intent(out) :: iu
 
       !$omp critical(moist_test_scratch_unit)
-      open (newunit=iu, file=path, action='write', status='replace')
+      open (newunit=iu, file=path, action="write", status="replace")
       !$omp end critical(moist_test_scratch_unit)
    end subroutine open_scratch
 
@@ -187,7 +187,7 @@ contains
 
       nlines = 0
       !$omp critical(moist_test_scratch_unit)
-      open (newunit=read_unit, file=path, action='read', status='old')
+      open (newunit=read_unit, file=path, action="read", status="old")
       !$omp end critical(moist_test_scratch_unit)
       do
          read (read_unit, *, iostat=stat)
@@ -195,7 +195,7 @@ contains
          nlines = nlines + 1
       end do
       !$omp critical(moist_test_scratch_unit)
-      close (read_unit, status='delete')
+      close (read_unit, status="delete")
       !$omp end critical(moist_test_scratch_unit)
    end subroutine count_lines
 
@@ -204,7 +204,7 @@ contains
    !> `count_lines` discards the file itself; a test that only ever calls
    !> `read_line` has to clean up explicitly. Skipping it leaks the file into the
    !> working directory, which is the build tree under meson but the project root
-   !> under fpm.
+   !> under fpm
    !>
    !> @param[in] path Scratch file name
    subroutine discard_scratch(path)
@@ -214,15 +214,15 @@ contains
       integer :: unit, stat
 
       !$omp critical(moist_test_scratch_unit)
-      open (newunit=unit, file=path, action='read', status='old', iostat=stat)
-      if (stat == 0) close (unit, status='delete')
+      open (newunit=unit, file=path, action="read", status="old", iostat=stat)
+      if (stat == 0) close (unit, status="delete")
       !$omp end critical(moist_test_scratch_unit)
    end subroutine discard_scratch
 
    !> Read one line of printer output, keeping the scratch file for later reads
    !>
    !> Blanks are rendered as '_' so that trailing spaces survive the comparison
-   !> that `check` performs on trimmed strings.
+   !> that `check` performs on trimmed strings
    !>
    !> @param[in]  path   Scratch file name
    !> @param[in]  iline  One-based line to return
@@ -238,13 +238,13 @@ contains
       character(len=256) :: buf
       integer :: read_unit, stat, i, j
 
-      line = ''
-      buf = ''
+      line = ""
+      buf = ""
       !$omp critical(moist_test_scratch_unit)
-      open (newunit=read_unit, file=path, action='read', status='old')
+      open (newunit=read_unit, file=path, action="read", status="old")
       !$omp end critical(moist_test_scratch_unit)
       do i = 1, iline
-         read (read_unit, '(A)', iostat=stat) buf
+         read (read_unit, "(A)", iostat=stat) buf
          if (stat /= 0) exit
       end do
       !$omp critical(moist_test_scratch_unit)
@@ -254,7 +254,7 @@ contains
 
       line = trim(buf)
       do j = 1, len(line)
-         if (line(j:j) == ' ') line(j:j) = '_'
+         if (line(j:j) == " ") line(j:j) = "_"
       end do
    end subroutine read_line
 

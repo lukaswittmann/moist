@@ -1,13 +1,6 @@
-!> Reverse-mode surface -> level set adjoint contractions for the DROP cavity.
+!> Contract DROP surface adjoints into the density response
 !>
-!> Provides the variational cavity response (Fock) infrastucture
-!>
-!> These routines map per-point surface adjoint weights (Gaussian width,
-!> integration weight, area, switch factor, projected position, and normal) onto
-!> adjoint weights of the level set function value/gradient/Hessian
-!>
-!> The per-grid point sensitivity kernel is shared with the nuclear path
-!> in [[moist_cavity_drop_derivatives_kernel]]
+!> Shares the sensitivity kernel with [[moist_cavity_drop_derivatives_kernel]]
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, lsf_thread_slot
    use moist_math_lapack_kinds, only: lapack_ik
@@ -15,104 +8,88 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_potential
       & drop_surface_weights_type, build_seed_state, seed_state_ok
    use moist_cavity_drop_derivatives_seeds, only: drop_kkt_solve, seed_normal_channel, &
       & seed_jet_basis
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
-   !> Map accumulated surface adjoints into the generic response container
+   !> Accumulate surface adjoints into the density response using dS/drho
    !>
-   !> @param[inout] self     DROP cavity instance
-   !> @param[in]    acc      Accumulated surface-observable adjoints
-   !> @param[inout] response Response accumulator receiving the LSF channels
-   !> @param[out]   error    Error object
+   !> Converts level-set adjoints to density adjoints and adds them to the response;
+   !> density-independent cavities contribute nothing
+   !>
+   !> @param[in,out] self     Requires an initialized level-set model
+   !> @param[in]     acc      Surface weights on the current cavity grid
+   !> @param[in,out] response Existing contributions are preserved
+   !> @param[out]    error    Allocated on failure
    module subroutine get_surface_response_drop(self, acc, response, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(inout) :: self
       !> Accumulated surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Response accumulator receiving the LSF channels
+      !> Response list receiving the density item
       type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       real(wp), allocatable :: w0(:), w1(:, :), w2(:, :, :)
+      !> Cavity density response
+      type(density_response_type) :: item
+      !> Density chain-rule factor dS/drho
+      real(wp) :: factor
+
+      if (.not. allocated(self%lsf_model)) then
+         call fatal_error(error, "get_surface_response_drop: level-set model is not initialized")
+         return
+      end if
+      if (.not. self%lsf_model%density_adjoint_factor(factor)) return
 
       allocate (w0(self%ngrid), w1(3, self%ngrid), w2(3, 3, self%ngrid))
       call self%contract_surface_lsf_weights(acc, w0, w1, w2, error)
       if (allocated(error)) return
 
-      if (.not. allocated(response%lsf%w_value)) then
-         allocate (response%lsf%w_value(self%ngrid), source=0.0_wp)
-         allocate (response%lsf%w_gradient(3, self%ngrid), source=0.0_wp)
-         allocate (response%lsf%w_hessian(3, 3, self%ngrid), source=0.0_wp)
-      else if (size(response%lsf%w_value) /= self%ngrid) then
-         call fatal_error(error, "DROP surface response grid-size mismatch")
-         return
-      end if
-      response%lsf%w_value = response%lsf%w_value + w0
-      response%lsf%w_gradient = response%lsf%w_gradient + w1
-      response%lsf%w_hessian = response%lsf%w_hessian + w2
+      allocate (item%w_rho(self%ngrid), source=0.0_wp)
+      allocate (item%w_grad_rho(3, self%ngrid), source=0.0_wp)
+      allocate (item%w_hess_rho(3, 3, self%ngrid), source=0.0_wp)
+      item%w_rho = item%w_rho + factor*w0
+      item%w_grad_rho = item%w_grad_rho + factor*w1
+      item%w_hess_rho = item%w_hess_rho + factor*w2
+      call response_accumulate(response, item, error)
 
    end subroutine get_surface_response_drop
 
-   !> Contract per-grid surface adjoint weights to LSF value/gradient/Hessian adjoints
+   !> Contract surface adjoints into LSF value, gradient, and Hessian weights
    !>
-   !> Implements the DROP reverse-mode chain rule: a perturbation $p$
-   !> of the level set function (value $S$, gradient $\nabla S$, Hessian $\nabla^2 S$) moves
-   !> the projected surface point and every weight derived from it.
+   !> Includes position, normal, and curvature channel; area and integration
+   !> weights enter through the Gaussian width; anchor-only switching is fixed
    !>
-   !> This routine rewrites the upstream surface adjoint as the LSF-local adjoint,
-   !> enforcing for every perturbation $p$ the identity
-   !>
-   !> $$
-   !> \sum_i \Big[ w^{\xi}_i \, \frac{\partial \xi_i}{\partial p}
-   !>            + \mathbf{w}^{\mathrm{xyz}}_i \cdot \frac{\partial \mathbf{r}_i}{\partial p} \Big]
-   !> = \sum_i \Big[ w^{S}_i \, \frac{\partial S_i}{\partial p}
-   !>            + \mathbf{w}^{S_r}_i \cdot \frac{\partial (\nabla S_i)}{\partial p}
-   !>            + \sum_{a,b} w^{S_{rr}}_{ab,i} \, \frac{\partial (\nabla^2 S_i)_{ab}}{\partial p} \Big],
-   !> $$
-   !>
-   !> where $w^{\xi}$ = `acc%w_xi`, $\mathbf{w}^{\mathrm{xyz}}$ = `acc%w_xyz`, and
-   !> $w^{S}, \mathbf{w}^{S_r}, w^{S_{rr}}$ = `w_lsf0`, `w_lsf1`, `w_lsf2`. The
-   !> outward-normal (`acc%w_n`) and principal-curvature (`acc%w_k1`, `acc%w_k2`)
-   !> channels enter the same left-hand sum through their own $\partial/\partial p$
-   !> sensitivities and are folded into the same `w_lsf` weights. The derived
-   !> area (`acc%w_a`) and integration-weight (`acc%w_w`) channels are folded into
-   !> the Gaussian-width channel via $a_i = c f_i/\xi_i^2$ and $w_i = c/\xi_i^2$.
-   !>
-   !> The switching factor $f_i$ is an anchor-only iSwig overlap, so $\partial
-   !> f_i/\partial p = 0$ for a level-set perturbation and `acc%w_f` does not
-   !> contribute here. It does contribute to the nuclear gradient, which is why
-   !> the area channel is folded into the width channel only.
-   !>
-   !> @param[in]  self    DROP cavity instance (must hold a projected grid)
-   !> @param[in]  acc     Accumulated surface-observable adjoints
-   !> @param[out] w_lsf0  Adjoint weights for LSF values S_i (ngrid)
-   !> @param[out] w_lsf1  Adjoint weights for LSF gradients S_r_i (3, ngrid)
-   !> @param[out] w_lsf2  Adjoint weights for LSF Hessians S_rr_i (3, 3, ngrid)
-   !> @param[out] error   Error object, allocated on failure (KKT sensitivity solve)
+   !> @param[in]  self   Requires a projected grid
+   !> @param[in]  acc    Surface weights on the current cavity grid
+   !> @param[out] w_lsf0 Shape (ngrid)
+   !> @param[out] w_lsf1 Shape (3, ngrid)
+   !> @param[out] w_lsf2 Shape (3, 3, ngrid)
+   !> @param[out] error  Allocated on failure
    module subroutine contract_surface_lsf_weights(self, acc, w_lsf0, w_lsf1, w_lsf2, error)
-      !> DROP cavity instance (must hold a projected grid)
+      !> DROP cavity with a projected grid
       class(cavity_type_drop), intent(in) :: self
       !> Accumulated surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Adjoint weights for LSF values S_i (ngrid)
+      !> LSF value adjoints (ngrid)
       real(wp), intent(out) :: w_lsf0(:)
-      !> Adjoint weights for LSF gradients S_r_i (3, ngrid)
+      !> LSF gradient adjoints (3, ngrid)
       real(wp), intent(out) :: w_lsf1(:, :)
-      !> Adjoint weights for LSF Hessians S_rr_i (3, 3, ngrid)
+      !> LSF Hessian adjoints (3, 3, ngrid)
       real(wp), intent(out) :: w_lsf2(:, :, :)
-      !> Error object, allocated on failure (KKT sensitivity solve)
+      !> Error allocated on failure
       type(error_type), allocatable, intent(out) :: error
 
-      !> Level-set clone and objective used to rebuild the per-point jet
+      !> Local level-set evaluator
       type(lsf_thread_slot) :: lsf_slot
       type(moist_cavity_drop_objective_phi_type) :: phi
-      !> Shared per-grid point sensitivity kernel state and its response
+      !> Point sensitivity state
       type(drop_seed_state_type) :: state
-      !> Grid, seed and Cartesian indices
+      !> Grid index
       integer :: igrid
-      !> Degeneracy status returned by the kernel
+      !> Kernel degeneracy status
       integer :: status
       !> Projected point, anchor and owner sphere
       real(wp) :: point(3), anchor(3)
@@ -127,18 +104,16 @@ contains
       !> Bordered KKT sensitivity system
       real(wp) :: kkt_rhs(4, 4)
       integer(lapack_ik) :: kkt_info
-      !> Point-local level-set adjoints built from the 13 jet seeds
+      !> Local LSF adjoints from 13 jet seeds
       real(wp) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
-      !> Folded surface adjoints and the branch objective adjoint
+      !> Effective surface adjoints
       type(drop_surface_weights_type) :: eff
       real(wp) :: w_xyz_local(3)
 
       call check_surface_adjoint(self, acc, "contract_surface_lsf_weights", error)
       if (allocated(error)) return
 
-      ! fold_switching = .false.: the electronic degrees of freedom leave the
-      ! switching factor f untouched, so the area channel's da/df term is
-      ! identically zero here. The nuclear path passes .true.
+      ! Density variations leave anchor-only switching fixed
       call prepare_surface_weights(self, acc, .false., eff)
 
       allocate (lsf_slot%lsf, source=self%lsf_model)
@@ -157,8 +132,6 @@ contains
          owner_idx = self%owner(igrid)
          lambda_val = self%lambda0(igrid)
 
-         ! Serial loop, so an evaluation failure can be returned immediately
-         ! (see the parallel loops for the general contract).
          call lsf_slot%lsf%prepare(point, error)
          if (allocated(error)) return
          call lsf_slot%lsf%f3_rrr(lsf0, lsf1_r, lsf2_rr, lsf3_rrr)
@@ -175,24 +148,13 @@ contains
 
          if (status /= seed_state_ok) cycle
 
-         ! Fold an optional outward-normal adjoint weight into the field channels:
-         ! the direct grad-S contribution normal_grad = P_tan(w_n)/|grad S| enters
-         ! w_lsf1 at the fixed projected point, and its point-motion coupling
-         ! H @ normal_grad augments the effective position weight below.
-         !
-         ! This write happens only once the point is known to be usable, so a
-         ! rejected point never leaves a half-contracted weight behind.
+         ! For usable points, fold normal adjoints into gradient and position weights
          w_lsf0_pt = 0.0_wp
          w_lsf1_pt = 0.0_wp
          w_lsf2_pt = 0.0_wp
          call seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_local)
 
-         ! KKT sensitivities for all 13 basis perturbations from one
-         ! factorization: only the value (ibasis 1) and gradient (ibasis 2-4)
-         ! perturbations enter the right-hand side; the nine Hessian
-         ! perturbations have rhs = 0 and hence dr/dp = 0, dlambda/dp = 0.
-         ! Only the value (column 1) and gradient (columns 2-4) seeds move the
-         ! point; the nine Hessian seeds have a zero right-hand side.
+         ! Solve value and gradient sensitivities together; Hessian seeds do not move the point
          kkt_rhs = 0.0_wp
          kkt_rhs(4, 1) = -1.0_wp
          kkt_rhs(1, 2) = lambda_val

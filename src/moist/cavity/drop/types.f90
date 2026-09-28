@@ -3,7 +3,8 @@ module moist_cavity_drop_types
    use mctc_env, only: error_type, fatal_error
    use moist_utils_mem, only: grow_array
 
-   implicit none
+   implicit none(type, external)
+   private
 
    public :: projection_workspace_type
    public :: projection_buffer_type
@@ -13,24 +14,24 @@ module moist_cavity_drop_types
    !> A workspace is intended to be thread-local and reused across many
    !> projector calls to avoid repeated allocation/deallocation in hot loops
    type :: projection_workspace_type
-      !> Number of valid branch entries currently stored.
+      !> Number of valid branch entries currently stored
       integer :: n_points = 0
-      !> Allocated branch capacity.
+      !> Allocated branch capacity
       integer :: capacity = 0
 
-      !> Projected branch coordinates (3, capacity).
+      !> Projected branch coordinates (3, capacity)
       real(wp), allocatable :: points(:, :)
-      !> Projected branch normal vectors (3, capacity).
+      !> Projected branch normal vectors (3, capacity)
       real(wp), allocatable :: normals(:, :)
-      !> Anchor-to-projected displacement norms.
+      !> Anchor-to-projected displacement norms
       real(wp), allocatable :: rho(:)
-      !> Projection multipliers.
+      !> Projection multipliers
       real(wp), allocatable :: lambda(:)
-      !> Objective values (used for branch weighting).
+      !> Objective values (used for branch weighting)
       real(wp), allocatable :: phi(:)
-      !> Per-branch weights.
+      !> Per-branch weights
       real(wp), allocatable :: branch_weights(:)
-      !> Per-branch convergence flags.
+      !> Per-branch convergence flags
       logical, allocatable :: converged(:)
    contains
       procedure :: init => projection_workspace_init
@@ -44,50 +45,52 @@ module moist_cavity_drop_types
 
    !> Thread-local append-only storage for projected DROP grid points
    !>
-   !> Stores one entry per projected branch. The buffer keeps capacity separate from logical size (`n_used`)
-   !> so parallel projection loops can append efficiently and merge later
+   !> Stores one entry per projected branch
+   !>
+   !> - keeps capacity separate from logical size (`n_used`), so parallel
+   !>   projection loops can append efficiently and merge later
    type :: projection_buffer_type
-      !> Number of valid entries currently stored in the buffer.
+      !> Number of valid entries currently stored in the buffer
       integer :: n_used = 0
-      !> Allocated storage capacity.
+      !> Allocated storage capacity
       integer :: capacity = 0
 
-      !> Projected grid point positions (3, capacity).
+      !> Projected grid point positions (3, capacity)
       real(wp), allocatable :: xyz(:, :)
-      !> Anchor positions used as projection sources (3, capacity).
+      !> Anchor positions used as projection sources (3, capacity)
       real(wp), allocatable :: anchorxyz(:, :)
-      !> Surface normal vectors at projected points (3, capacity).
+      !> Surface normal vectors at projected points (3, capacity)
       real(wp), allocatable :: normal0(:, :)
 
-      !> Projected Lebedev weights.
+      !> Projected Lebedev weights
       real(wp), allocatable :: wleb(:)
-      !> Anchor Lebedev weights.
+      !> Anchor Lebedev weights
       real(wp), allocatable :: anchor_wleb0(:)
-      !> Lagrange multipliers from projection solve.
+      !> Lagrange multipliers from projection solve
       real(wp), allocatable :: lambda0(:)
-      !> iSwiG anchor switching values.
+      !> iSwiG anchor switching values
       real(wp), allocatable :: iswig_f0(:)
-      !> Combined switching values.
+      !> Combined switching values
       real(wp), allocatable :: f(:)
-      !> Anchor Gaussian widths.
+      !> Anchor Gaussian widths
       real(wp), allocatable :: anchor_xi0(:)
-      !> Anchor-to-projected displacement norm.
+      !> Anchor-to-projected displacement norm
       real(wp), allocatable :: rho(:)
-      !> Branch weights for multi-solution projections.
+      !> Branch weights for multi-solution projections
       real(wp), allocatable :: wbranch(:)
-      !> Per-branch objective values at the projected points.
+      !> Per-branch objective values at the projected points
       real(wp), allocatable :: phi0(:)
 
-      !> Owning atom index per point.
+      !> Owning atom index per point
       integer, allocatable :: owner(:)
-      !> Branch index in anchor group.
+      !> Branch index in anchor group
       integer, allocatable :: branch(:)
-      !> Anchor group id.
+      !> Anchor group id
       integer, allocatable :: anchor_id(:)
-      !> Number of branches for the originating anchor.
+      !> Number of branches for the originating anchor
       integer, allocatable :: branch_count(:)
 
-      !> Per-point projection convergence flag.
+      !> Per-point projection convergence flag
       logical, allocatable :: converged(:)
    contains
       procedure :: init => projection_buffer_init
@@ -204,7 +207,7 @@ contains
       self%converged(1) = converged_flag
    end subroutine projection_workspace_set_single
 
-   !> Return number of valid branch entries currently stored.
+   !> Return number of valid branch entries currently stored
    !>
    !> @param[in] self Projection workspace instance
    !> @param[out] n Number of valid branch entries
@@ -231,7 +234,7 @@ contains
       if (allocated(self%converged)) deallocate (self%converged)
    end subroutine projection_workspace_destroy
 
-   !> Finalizer for projection_workspace_type.
+   !> Finalizer for projection_workspace_type
    !>
    !> @param[inout] self Projection workspace instance
    subroutine finalize_projection_workspace(self)
@@ -501,7 +504,7 @@ contains
       if (allocated(self%converged)) deallocate (self%converged)
    end subroutine projection_buffer_destroy
 
-   !> Finalizer for projection_buffer_type.
+   !> Finalizer for projection_buffer_type
    !>
    !> @param[inout] self Projection buffer instance
    subroutine finalize_projection_buffer(self)

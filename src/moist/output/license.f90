@@ -1,7 +1,7 @@
 
-!> License text for moist.
+!> License text for moist
 module moist_output_license
-   implicit none
+   implicit none(type, external)
    private
 
    public :: print_license
@@ -13,7 +13,7 @@ contains
       !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit
 
-      write (unit, '(a)') &
+      write (unit, "(a)") &
          "This Source Code Form is subject to the terms of the Mozilla Public", &
          "License, v. 2.0. If a copy of the MPL was not distributed with this", &
          "file, You can obtain one at https://mozilla.org/MPL/2.0/.", &

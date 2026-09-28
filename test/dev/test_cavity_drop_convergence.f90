@@ -1,4 +1,6 @@
 module test_cavity_drop_convergence
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -13,7 +15,7 @@ module test_cavity_drop_convergence
    use moist_data_radii_legacy, only: get_radius_func
    use mstore, only: get_structure
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_convergence
@@ -41,7 +43,7 @@ contains
          ]
    end subroutine collect_cavity_drop_convergence
 
-   !> Test convergence of DROP cavity area and volume w.r.t. Lebedev grid size.
+   !> Test convergence of DROP cavity area and volume w.r.t. Lebedev grid size
    subroutine test_convergence_drop_lebedev(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -61,18 +63,18 @@ contains
 
       integer, parameter :: n_mols = 3
       character(len=12), parameter :: dataset_names(n_mols) = [ &
-         'MB16-43     ', 'Amino20x4   ', 'UPU23       ']
+         "MB16-43     ", "Amino20x4   ", "UPU23       "]
       character(len=7), parameter :: mol_ids(n_mols) = [ &
-         'CH4    ', 'THR_xab', '4b     ']
+         "CH4    ", "THR_xab", "4b     "]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, verbosity=0)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '========================================================================'
-      write (*, '(a)') 'Convergence: DROP cavity area & volume vs. Lebedev grid size'
-      write (*, '(a)') '========================================================================'
+      write (*, "(a)") ""
+      write (*, "(a)") "========================================================================"
+      write (*, "(a)") "Convergence: DROP cavity area & volume vs. Lebedev grid size"
+      write (*, "(a)") "========================================================================"
 
       do imol = 1, n_mols
          call get_structure(mol, trim(dataset_names(imol)), trim(mol_ids(imol)))
@@ -82,11 +84,11 @@ contains
             allocate(cavity)
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
-                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-                  radius_model=default_cpcm_radii(), &
-                  lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                  blend_2b=blend_2b, blend_3b=blend_3b))
+               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
+                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level))
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -106,21 +108,21 @@ contains
          ref_area = areas(n_grids)
          ref_volume = volumes(n_grids)
 
-         write (*, '(a)') ''
-         write (*, '(a,a,a,a,a,i0,a)') '  Molecule: ', trim(dataset_names(imol)), &
-            '/', trim(mol_ids(imol)), ' (', mol%nat, ' atoms)'
-         write (*, '(a8, 4a20)') &
-            'nleb', 'Area (bohr^2)', 'Volume (bohr^3)', 'dA_ref (%)', 'dV_ref (%)'
-         write (*, '(a8, 4a20)') &
-            '-------', '-------------------', '-------------------', &
-            '-------------------', '-------------------'
+         write (*, "(a)") ""
+         write (*, "(a,a,a,a,a,i0,a)") "  Molecule: ", trim(dataset_names(imol)), &
+            "/", trim(mol_ids(imol)), " (", mol%nat, " atoms)"
+         write (*, "(a8, 4a20)") &
+            "nleb", "Area (bohr^2)", "Volume (bohr^3)", "dA_ref (%)", "dV_ref (%)"
+         write (*, "(a8, 4a20)") &
+            "-------", "-------------------", "-------------------", &
+            "-------------------", "-------------------"
 
          do igrid = n_grids, 1, -1
             if (igrid == n_grids) then
-               write (*, '(i8, 2f20.12, 2a20)') nleb_values(igrid), &
-                  areas(igrid), volumes(igrid), '         ref        ', '         ref        '
+               write (*, "(i8, 2f20.12, 2a20)") nleb_values(igrid), &
+                  areas(igrid), volumes(igrid), "         ref        ", "         ref        "
             else
-               write (*, '(i8, 4f20.12)') nleb_values(igrid), &
+               write (*, "(i8, 4f20.12)") nleb_values(igrid), &
                   areas(igrid), volumes(igrid), &
                   100.0_wp * (areas(igrid) - ref_area) / ref_area, &
                   100.0_wp * (volumes(igrid) - ref_volume) / ref_volume
@@ -129,20 +131,19 @@ contains
 
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
       if (allocated(cavity)) deallocate(cavity)
 
    end subroutine test_convergence_drop_lebedev
 
-   !> Test convergence of marching cubes area and volume w.r.t. grid spacing.
+   !> Test convergence of marching cubes area and volume w.r.t. grid spacing
    subroutine test_convergence_marching_cubes(error)
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: mc_error
 
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
-      type(moist_cavity_drop_parameters_type) :: param
       real(wp), allocatable :: radii(:)
       real(wp) :: areas(8), volumes(8)
       real(wp) :: ref_area, ref_volume
@@ -154,14 +155,14 @@ contains
 
       integer, parameter :: n_mols = 3
       character(len=12), parameter :: dataset_names(n_mols) = [ &
-         'MB16-43     ', 'Amino20x4   ', 'UPU23       ']
+         "MB16-43     ", "Amino20x4   ", "UPU23       "]
       character(len=7), parameter :: mol_ids(n_mols) = [ &
-         'CH4    ', 'THR_xab', '4b     ']
+         "CH4    ", "THR_xab", "4b     "]
 
-      write (*, '(a)') ''
-      write (*, '(a)') '========================================================================'
-      write (*, '(a)') 'Convergence: Marching cubes area & volume vs. grid spacing'
-      write (*, '(a)') '========================================================================'
+      write (*, "(a)") ""
+      write (*, "(a)") "========================================================================"
+      write (*, "(a)") "Convergence: Marching cubes area & volume vs. grid spacing"
+      write (*, "(a)") "========================================================================"
 
       do imol = 1, n_mols
          call get_structure(mol, trim(dataset_names(imol)), trim(mol_ids(imol)))
@@ -170,9 +171,10 @@ contains
          call fill_cpcm_radii(mol, radii, error)
          if (allocated(error)) return
 
-         call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+            blend_3b=blend_3b))
          !> Without a cavity to set this, the direct user owns the
-         !> screening threshold; lsf_update reads it when sizing SSD.
+         !> screening threshold; lsf_update reads it when sizing SSD
          lsf%screening_threshold = proj_tol * 0.1_wp
          call lsf%update(mol, radii)
 
@@ -188,21 +190,21 @@ contains
          ref_area = areas(n_spacings)
          ref_volume = volumes(n_spacings)
 
-         write (*, '(a)') ''
-         write (*, '(a,a,a,a,a,i0,a)') '  Molecule: ', trim(dataset_names(imol)), &
-            '/', trim(mol_ids(imol)), ' (', mol%nat, ' atoms)'
-         write (*, '(a12, 4a20)') &
-            'spacing', 'Area (bohr^2)', 'Volume (bohr^3)', 'dA_ref (%)', 'dV_ref (%)'
-         write (*, '(a12, 4a20)') &
-            '-----------', '-------------------', '-------------------', &
-            '-------------------', '-------------------'
+         write (*, "(a)") ""
+         write (*, "(a,a,a,a,a,i0,a)") "  Molecule: ", trim(dataset_names(imol)), &
+            "/", trim(mol_ids(imol)), " (", mol%nat, " atoms)"
+         write (*, "(a12, 4a20)") &
+            "spacing", "Area (bohr^2)", "Volume (bohr^3)", "dA_ref (%)", "dV_ref (%)"
+         write (*, "(a12, 4a20)") &
+            "-----------", "-------------------", "-------------------", &
+            "-------------------", "-------------------"
 
          do igrid = n_spacings, 1, -1
             if (igrid == n_spacings) then
-               write (*, '(f12.4, 2f20.12, 2a20)') spacings(igrid), &
-                  areas(igrid), volumes(igrid), '         ref        ', '         ref        '
+               write (*, "(f12.4, 2f20.12, 2a20)") spacings(igrid), &
+                  areas(igrid), volumes(igrid), "         ref        ", "         ref        "
             else
-               write (*, '(f12.4, 4f20.12)') spacings(igrid), &
+               write (*, "(f12.4, 4f20.12)") spacings(igrid), &
                   areas(igrid), volumes(igrid), &
                   100.0_wp * (areas(igrid) - ref_area) / ref_area, &
                   100.0_wp * (volumes(igrid) - ref_volume) / ref_volume
@@ -211,13 +213,13 @@ contains
 
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
       if (allocated(radii)) deallocate(radii)
 
    end subroutine test_convergence_marching_cubes
 
-   !> Test convergence of iSWiG cavity area and volume w.r.t. Lebedev grid size.
+   !> Test convergence of iSWiG cavity area and volume w.r.t. Lebedev grid size
    subroutine test_convergence_iswig_lebedev(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -236,18 +238,18 @@ contains
 
       integer, parameter :: n_mols = 3
       character(len=12), parameter :: dataset_names(n_mols) = [ &
-         'MB16-43     ', 'Amino20x4   ', 'UPU23       ']
+         "MB16-43     ", "Amino20x4   ", "UPU23       "]
       character(len=7), parameter :: mol_ids(n_mols) = [ &
-         'CH4    ', 'THR_xab', '4b     ']
+         "CH4    ", "THR_xab", "4b     "]
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
       call new_context(ctx, verbosity=0)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '========================================================================'
-      write (*, '(a)') 'Convergence: iSWiG cavity area & volume vs. Lebedev grid size'
-      write (*, '(a)') '========================================================================'
+      write (*, "(a)") ""
+      write (*, "(a)") "========================================================================"
+      write (*, "(a)") "Convergence: iSWiG cavity area & volume vs. Lebedev grid size"
+      write (*, "(a)") "========================================================================"
 
       do imol = 1, n_mols
          call get_structure(mol, trim(dataset_names(imol)), trim(mol_ids(imol)))
@@ -265,8 +267,8 @@ contains
          do igrid = 1, n_grids
             if (allocated(cav)) deallocate(cav)
             allocate(cav)
-            call new_cavity_iswig(cav, ctx, nleb=nleb_values(igrid), &
-               radius_model=radius_model, error=cavity_error)
+            call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+               param=moist_cavity_iswig_parameters_type(num_leb=nleb_values(igrid)))
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -285,21 +287,21 @@ contains
          ref_area = areas(n_grids)
          ref_volume = volumes(n_grids)
 
-         write (*, '(a)') ''
-         write (*, '(a,a,a,a,a,i0,a)') '  Molecule: ', trim(dataset_names(imol)), &
-            '/', trim(mol_ids(imol)), ' (', mol%nat, ' atoms)'
-         write (*, '(a8, 4a20)') &
-            'nleb', 'Area (bohr^2)', 'Volume (bohr^3)', 'dA_ref (%)', 'dV_ref (%)'
-         write (*, '(a8, 4a20)') &
-            '-------', '-------------------', '-------------------', &
-            '-------------------', '-------------------'
+         write (*, "(a)") ""
+         write (*, "(a,a,a,a,a,i0,a)") "  Molecule: ", trim(dataset_names(imol)), &
+            "/", trim(mol_ids(imol)), " (", mol%nat, " atoms)"
+         write (*, "(a8, 4a20)") &
+            "nleb", "Area (bohr^2)", "Volume (bohr^3)", "dA_ref (%)", "dV_ref (%)"
+         write (*, "(a8, 4a20)") &
+            "-------", "-------------------", "-------------------", &
+            "-------------------", "-------------------"
 
          do igrid = n_grids, 1, -1
             if (igrid == n_grids) then
-               write (*, '(i8, 2f20.12, 2a20)') nleb_values(igrid), &
-                  areas(igrid), volumes(igrid), '         ref        ', '         ref        '
+               write (*, "(i8, 2f20.12, 2a20)") nleb_values(igrid), &
+                  areas(igrid), volumes(igrid), "         ref        ", "         ref        "
             else
-               write (*, '(i8, 4f20.12)') nleb_values(igrid), &
+               write (*, "(i8, 4f20.12)") nleb_values(igrid), &
                   areas(igrid), volumes(igrid), &
                   100.0_wp * (areas(igrid) - ref_area) / ref_area, &
                   100.0_wp * (volumes(igrid) - ref_volume) / ref_volume
@@ -308,16 +310,16 @@ contains
 
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
       if (allocated(cav)) deallocate(cav)
       if (allocated(radii)) deallocate(radii)
 
    end subroutine test_convergence_iswig_lebedev
 
-   !> Test convergence of DROP total-area and total-volume gradients w.r.t. Lebedev grid size.
+   !> Test convergence of DROP total-area and total-volume gradients w.r.t. Lebedev grid size
    !> Computes the gradient at the finest level as reference, then reports the deviation
-   !> of each coarser level from that reference (max abs, RMS, mean abs).
+   !> of each coarser level from that reference (max abs, RMS, mean abs)
    subroutine test_convergence_drop_gradient(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -352,12 +354,11 @@ contains
       allocate(cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-         call new_cavity_drop(cavity, ctx, nleb=nleb_values(n_grids), &
-            tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-            do_fine=.true., &
-            radius_model=default_cpcm_radii(), &
-            lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+            blend_2b=blend_2b, blend_3b=blend_3b))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(n_grids), &
+            tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -382,22 +383,22 @@ contains
          end do
       end do
 
-      write (*, '(a)') ''
-      write (*, '(a)') '================================================================================================'
-      write (*, '(a)') 'Convergence: DROP gradient vs. Lebedev grid size (reference: finest level)'
-      write (*, '(a,i0,a)') '  Molecule: MB16-43/CH4 (', mol%nat, ' atoms)'
-      write (*, '(a)') '================================================================================================'
-      write (*, '(a8, 3a20, 3a20)') &
-         'nleb', 'max|dA_err|', 'rms(dA_err)', 'mad(dA_err)', &
-         'max|dV_err|', 'rms(dV_err)', 'mad(dV_err)'
-      write (*, '(a8, 6a20)') &
-         '-------', '-------------------', '-------------------', '-------------------', &
-         '-------------------', '-------------------', '-------------------'
+      write (*, "(a)") ""
+      write (*, "(a)") "================================================================================================"
+      write (*, "(a)") "Convergence: DROP gradient vs. Lebedev grid size (reference: finest level)"
+      write (*, "(a,i0,a)") "  Molecule: MB16-43/CH4 (", mol%nat, " atoms)"
+      write (*, "(a)") "================================================================================================"
+      write (*, "(a8, 3a20, 3a20)") &
+         "nleb", "max|dA_err|", "rms(dA_err)", "mad(dA_err)", &
+         "max|dV_err|", "rms(dV_err)", "mad(dV_err)"
+      write (*, "(a8, 6a20)") &
+         "-------", "-------------------", "-------------------", "-------------------", &
+         "-------------------", "-------------------", "-------------------"
 
       ! Print finest level as reference
-      write (*, '(i8, 6a20)') nleb_values(n_grids), &
-         '         ref        ', '         ref        ', '         ref        ', &
-         '         ref        ', '         ref        ', '         ref        '
+      write (*, "(i8, 6a20)") nleb_values(n_grids), &
+         "         ref        ", "         ref        ", "         ref        ", &
+         "         ref        ", "         ref        ", "         ref        "
 
       ! Loop from second-finest to coarsest
       do igrid = n_grids - 1, 1, -1
@@ -405,12 +406,11 @@ contains
          allocate(cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-            call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
-               tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-               do_fine=.true., &
-               radius_model=default_cpcm_radii(), &
-               lsf_model=svdw_template, error=cavity_error)
+            call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+               blend_2b=blend_2b, blend_3b=blend_3b))
+            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
+               tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.))
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
@@ -457,11 +457,11 @@ contains
          mad_a = mad_a / real(n_comp, wp)
          mad_v = mad_v / real(n_comp, wp)
 
-         write (*, '(i8, 6es20.8)') nleb_values(igrid), &
+         write (*, "(i8, 6es20.8)") nleb_values(igrid), &
             max_a, rms_a, mad_a, max_v, rms_v, mad_v
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
       deallocate(cavity)
       deallocate(ref_dA, ref_dV, cur_dA, cur_dV)
@@ -469,7 +469,7 @@ contains
    end subroutine test_convergence_drop_gradient
 
    !> Test convergence of DROP cavity area and volume w.r.t. Lebedev grid size
-   !> for various values of the blending parameter k.
+   !> for various values of the blending parameter k
    subroutine test_convergence_drop_nleb_blendk(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -496,8 +496,8 @@ contains
 
       call get_structure(mol, "UPU23", "4b")
 
-      write (*, '(a)') ''
-      write (*, '(a)') 'blend_k, nleb, area, volume'
+      write (*, "(a)") ""
+      write (*, "(a)") "blend_k, nleb, area, volume"
 
       do ik = 1, n_blendk
          do igrid = 1, n_grids
@@ -505,12 +505,11 @@ contains
             allocate(cavity)
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blendk_values(ik), blend_2b=blend_2b, &
-                  blend_3b=blend_3b)
-               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
-                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, &
-                  radius_model=default_cpcm_radii(), &
-                  lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blendk_values(ik), &
+                  blend_2b=blend_2b, blend_3b=blend_3b))
+               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
+                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level))
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -523,9 +522,9 @@ contains
                return
             end if
 
-            write (*, '(f8.2, a, i8, a, es24.15, a, es24.15)') &
-               blendk_values(ik), ',', nleb_values(igrid), ',', &
-               cavity%total_area, ',', cavity%total_volume
+            write (*, "(f8.2, a, i8, a, es24.15, a, es24.15)") &
+               blendk_values(ik), ",", nleb_values(igrid), ",", &
+               cavity%total_area, ",", cavity%total_volume
          end do
       end do
 
@@ -534,7 +533,7 @@ contains
    end subroutine test_convergence_drop_nleb_blendk
 
    !> Test convergence of DROP cavity area and volume w.r.t. Lebedev grid size
-   !> for various values of the projection tolerance.
+   !> for various values of the projection tolerance
    subroutine test_convergence_drop_nleb_projtol(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -569,8 +568,8 @@ contains
 
       call get_structure(mol, "UPU23", "4b")
 
-      write (*, '(a)') ''
-      write (*, '(a)') 'proj_tol, nleb, area, volume'
+      write (*, "(a)") ""
+      write (*, "(a)") "proj_tol, nleb, area, volume"
 
       do itol = 1, n_tol
          do igrid = 1, n_grids
@@ -578,12 +577,11 @@ contains
             allocate(cavity)
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, ctx, nleb=nleb_values(igrid), &
-                  tolerance=tol_values(itol), proj_maxiter=proj_maxiter, &
-                  proj_level=proj_level, &
-                  radius_model=default_cpcm_radii(), &
-                  lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                  blend_2b=blend_2b, blend_3b=blend_3b))
+               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
+                  tolerance=tol_values(itol), proj_maxiter=proj_maxiter, proj_level=proj_level))
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -596,9 +594,9 @@ contains
                return
             end if
 
-            write (*, '(es12.1, a, i8, a, es24.15, a, es24.15)') &
-               tol_values(itol), ',', nleb_values(igrid), ',', &
-               cavity%total_area, ',', cavity%total_volume
+            write (*, "(es12.1, a, i8, a, es24.15, a, es24.15)") &
+               tol_values(itol), ",", nleb_values(igrid), ",", &
+               cavity%total_area, ",", cavity%total_volume
          end do
       end do
 
@@ -606,7 +604,7 @@ contains
 
    end subroutine test_convergence_drop_nleb_projtol
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
    subroutine fill_cpcm_radii(mol, radii, error)
       !> Structure whose per-atom radii are filled
       type(structure_type), intent(in) :: mol

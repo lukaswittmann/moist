@@ -5,7 +5,7 @@ module moist_math_lapack_sygvd
    use mctc_env, only: sp, dp, error_type, fatal_error
    use moist_output_format, only: format_string
    use moist_math_lapack_type, only: eigen_solver_type, context_solver
-   implicit none
+   implicit none(type, external)
    private
 
    public :: new_sygvd
@@ -14,6 +14,7 @@ module moist_math_lapack_sygvd
       pure subroutine ssygvd(itype, jobz, uplo, n, a, lda, b, ldb, w, work, lwork, &
             & iwork, liwork, info)
          import :: sp
+         implicit none(type, external)
          real(sp), intent(inout) :: a(lda, *)
          real(sp), intent(inout) :: b(ldb, *)
          real(sp), intent(out) :: w(*)
@@ -32,6 +33,7 @@ module moist_math_lapack_sygvd
       pure subroutine dsygvd(itype, jobz, uplo, n, a, lda, b, ldb, w, work, lwork, &
             & iwork, liwork, info)
          import :: dp
+         implicit none(type, external)
          real(dp), intent(inout) :: a(lda, *)
          real(dp), intent(inout) :: b(ldb, *)
          real(dp), intent(out) :: w(*)
@@ -92,7 +94,7 @@ contains
       lswork = size(self%swork)
       liwork = size(self%iwork)
 
-      call lapack_sygvd(1, 'v', 'u', self%n, hmat, self%n, self%sbmat, self%n, eval, &
+      call lapack_sygvd(1, "v", "u", self%n, hmat, self%n, self%sbmat, self%n, eval, &
          & self%swork, lswork, self%iwork, liwork, info)
 
       call handle_info(error, info)
@@ -120,7 +122,7 @@ contains
       ldwork = size(self%dwork)
       liwork = size(self%iwork)
 
-      call lapack_sygvd(1, 'v', 'u', self%n, hmat, self%n, self%dbmat, self%n, eval, &
+      call lapack_sygvd(1, "v", "u", self%n, hmat, self%n, self%dbmat, self%n, eval, &
          & self%dwork, ldwork, self%iwork, liwork, info)
 
       call handle_info(error, info)
@@ -133,7 +135,7 @@ contains
 
       if (info /= 0) then
          call fatal_error(error, "(sygvd) failed to solve eigenvalue problem.&
-            & info="//format_string(info, '(i0)'))
+            & info="//format_string(info, "(i0)"))
       end if
    end subroutine handle_info
 

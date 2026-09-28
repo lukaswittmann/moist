@@ -2,7 +2,7 @@ module moist_data_hardness
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
-   implicit none
+   implicit none(type, external)
    private
 
    public :: get_hardness
@@ -17,7 +17,7 @@ module moist_data_hardness
    integer, parameter :: max_elem = 118
 
    !> Element-specific chemical hardnesses for the charge scaling function used
-   !> to extrapolate the C6 coefficients in DFT-D4.
+   !> to extrapolate the C6 coefficients in DFT-D4
    real(wp), parameter :: chemical_hardness(max_elem) = [ &
      & 0.47259288_wp, 0.92203391_wp, 0.17452888_wp, 0.25700733_wp, 0.33949086_wp, &
      & 0.42195412_wp, 0.50438193_wp, 0.58691863_wp, 0.66931351_wp, 0.75191607_wp, &
@@ -76,8 +76,8 @@ contains
    !>
    !> Note that a hardness of exactly zero is a legitimate result for the
    !> superheavy elements Rf-Og (Z = 104-118), which DFT-D4 does not
-   !> parametrise. Callers must therefore branch on `error`, never on the
-   !> returned value.
+   !> parametrise, so callers must branch on `error`, never on the returned
+   !> value
    subroutine get_hardness_num(num, eta, error)
 
       !> Atomic number
@@ -94,7 +94,7 @@ contains
       eta = 0.0_wp
 
       if (num < 1 .or. num > max_elem) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", max_elem, "]"
          call fatal_error(error, trim(msg))
          return

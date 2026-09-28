@@ -1,5 +1,5 @@
 !> SLSQP solver wrapped with Farrell deflation for enumerating multiple
-!> local minima of a constrained optimisation problem from a single seed.
+!> local minima of a constrained optimisation problem from a single seed
 !>
 !> Given the caller's objective f(x) and its gradient g(x), plus a constraint
 !> h(x) = 0, this solver runs SLSQP repeatedly on wrapped callbacks:
@@ -8,37 +8,45 @@
 !>    grad f_def(x) = M(x) * grad f(x) + f(x) * grad M(x)
 !>
 !> where M(x) = prod_i ( ||x - x*_i||^{-p} + alpha ) accumulates the roots
-!> already found. The constraint (and its gradient) pass through unchanged, so
-!> SLSQP's active-set machinery and Lagrange multipliers are unaffected and no
-!> additional second-derivative information is required.
+!> already found
 !>
-!> Seeding policy is "single seed + iterated deflation": each outer iteration
-!> starts SLSQP from the same caller-supplied seed; the deflation multiplier
-!> guarantees the solver cannot return to an already-discovered root.
-!> Termination happens when the inner SLSQP either fails or returns a point
-!> within `dedup_tol` of an existing root, or when `max_roots` has been reached.
+!> - the constraint and its gradient pass through unchanged, so SLSQP's
+!>   active-set machinery and Lagrange multipliers are unaffected and no
+!>   second-derivative information is required
 !>
-!> Thread safety: the wrapped context carries pointers to the owning solver's
-!> deflation operator and caller-context. Each solver instance owns its own
-!> operator, so parallel callers (e.g. OMP projection) see no cross-thread
-!> contention as long as each thread constructs its own solver.
+!> Seeding policy is "single seed + iterated deflation"
+!>
+!> - each outer iteration starts SLSQP from the same caller-supplied seed; the
+!>   deflation multiplier keeps the solver off an already-discovered root
+!> - terminates when the inner SLSQP fails, returns a point within
+!>   `dedup_tol` of an existing root, or `max_roots` is reached
+!>
+!> Thread safety
+!>
+!> - the wrapped context carries pointers to the owning solver's deflation
+!>   operator and caller-context
+!> - each solver instance owns its own operator, so parallel callers such as
+!>   the OMP projection see no cross-thread contention as long as each thread
+!>   constructs its own solver
 module moist_math_solver_slsqp_deflation
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use iso_fortran_env, only: output_unit
-   use moist_type, only: solver_base_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
+   use moist_math_solver_type, only: solver_base_type
+
    use moist_math_solver_slsqp, only: new_slsqp_solver
    use moist_math_solver_deflation, only: moist_deflation_operator_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_deflation_type
    public :: new_slsqp_deflation_solver
 
-   !> Context-aware user function interfaces (mirror moist_math_solver_slsqp).
+   !> Context-aware user function interfaces (mirror moist_math_solver_slsqp)
    abstract interface
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), intent(out) :: f
          class(*), intent(in) :: context
@@ -46,6 +54,7 @@ module moist_math_solver_slsqp_deflation
 
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: df
          class(*), intent(in) :: context
@@ -53,6 +62,7 @@ module moist_math_solver_slsqp_deflation
 
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:), intent(out) :: c
          class(*), intent(in) :: context
@@ -60,17 +70,19 @@ module moist_math_solver_slsqp_deflation
 
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x
          real(wp), dimension(:, :), intent(out) :: dc
          class(*), intent(in) :: context
       end subroutine constraints_grad_context_interface
    end interface
 
-   !> Internal context passed into the inner SLSQP solver. The inner solver
-   !> stores a copy (via allocate/source=), which preserves the pointer
-   !> components - they continue to target the owning solver's fields, so
-   !> mutations to the deflation operator between outer iterations are seen
-   !> by the wrapped callbacks on the next inner solve.
+   !> Internal context passed into the inner SLSQP solver
+   !>
+   !> - the inner solver stores a copy (via allocate/source=), preserving the
+   !>   pointer components: they keep targeting the owning solver's fields, so
+   !>   mutations to the deflation operator between outer iterations are seen
+   !> by the wrapped callbacks on the next inner solve
    type :: deflation_slsqp_context_type
       !> Caller's original objective
       procedure(objective_context_interface), pointer, nopass :: user_obj_ctx => null()
@@ -90,13 +102,13 @@ module moist_math_solver_slsqp_deflation
       logical :: has_ball = .false.
       !> Anchor point for the ball constraint (only used when has_ball)
       real(wp), pointer :: anchor(:) => null()
-      !> Squared cap radius rho_min^2 + branch_rho2_slack; mutated between
-      !> outer iterations. Set to huge() until the first root is accepted,
-      !> so the inequality is trivially satisfied during the un-deflated solve.
+      !> Squared cap radius rho_min^2 + branch_rho2_slack, mutated between
+      !> outer iterations; huge() until the first root is accepted, so the
+      !> inequality is trivially satisfied during the un-deflated solve
       real(wp), pointer :: phi_max_sq => null()
    end type deflation_slsqp_context_type
 
-   !> SLSQP-deflation solver.
+   !> SLSQP-deflation solver
    type, extends(solver_base_type) :: moist_math_solver_slsqp_deflation_type
       private
       !> Problem size
@@ -115,7 +127,7 @@ module moist_math_solver_slsqp_deflation
       procedure(objective_grad_context_interface), pointer, nopass :: user_obj_grad_ctx => null()
       procedure(constraints_context_interface), pointer, nopass :: user_con_ctx => null()
       procedure(constraints_grad_context_interface), pointer, nopass :: user_con_grad_ctx => null()
-      !> Caller's original context (copied in by allocate/source=).
+      !> Caller's original context (copied in by allocate/source=)
       class(*), allocatable :: user_context
 
       !> Inner SLSQP solver (polymorphic so the standard factory can be reused)
@@ -127,33 +139,35 @@ module moist_math_solver_slsqp_deflation
       real(wp) :: toldf = 1.0e-8_wp
       integer  :: max_iter = 100
 
-      !> Upper limit on outer deflation iterations.
+      !> Upper limit on outer deflation iterations
       integer :: max_roots = 8
 
       !> Number of perturbed-seed retries if plain SLSQP fails on the first
-      !> (un-deflated) attempt. Each retry offsets the seed along a fixed
-      !> small set of directions scaled by retry_radius.
+      !> (un-deflated) attempt; each retry offsets the seed along a fixed
+      !> small set of directions scaled by retry_radius
       integer :: max_retries = 6
-      !> Offset magnitude for perturbed retries (in the units of x).
+      !> Offset magnitude for perturbed retries (in the units of x)
       real(wp) :: retry_radius = 0.25_wp
 
       !> Multiplier applied to (tol, toldx, toldf) when constructing the
       !> inner SLSQP. Deflation only needs to identify the *basin* of each
-      !> root; tight convergence is left to a downstream refinement step.
+      !> root; tight convergence is left to a downstream refinement step
       real(wp) :: tol_relax_factor = 1.0_wp
 
       !> Optional ball cap on subsequent roots: ||x - anchor||^2 <=
-      !> rho_min^2 + branch_rho2_slack, where rho_min is the displacement
-      !> norm of the first accepted root. The slack is a squared length
-      !> because the admissible set of the quadratic objective is a
-      !> difference of squares. Active only when both anchor and a positive
-      !> branch_rho2_slack are provided.
+      !> rho_min^2 + branch_rho2_slack, rho_min being the displacement norm of
+      !> the first accepted root
+      !>
+      !> - the slack is a squared length because the admissible set of the
+      !>   quadratic objective is a difference of squares
+      !> - active only when both anchor and a positive branch_rho2_slack are
+      !>   provided
       logical :: has_ball = .false.
       real(wp), allocatable :: anchor(:)
       real(wp) :: branch_rho2_slack = 0.0_wp
-      !> Mutated between outer iterations. Reached through the wrapped
-      !> context's pointer (subobject of a TARGET parent is itself a valid
-      !> pointer target per F2008 16.4.1.4).
+      !> Mutated between outer iterations, reached through the wrapped
+      !> context's pointer (a subobject of a TARGET parent is itself a valid
+      !> pointer target per F2008 16.4.1.4)
       real(wp) :: phi_max_sq = huge(1.0_wp)
 
       !> Converged candidate points (n_dim, n_raw_candidates)
@@ -171,7 +185,7 @@ module moist_math_solver_slsqp_deflation
 
 contains
 
-   !> Factory: construct a new SLSQP-deflation solver.
+   !> Factory: construct a new SLSQP-deflation solver
    !>
    !> @param[out] solver         Allocated polymorphic solver handle
    !> @param[in]  n              Number of variables
@@ -192,23 +206,23 @@ contains
    !> @param[in]  dedup_tol      Root-identity tolerance (optional, default 1e-6)
    !> @param[in]  max_retries    If the first (un-deflated) SLSQP from the
    !>                            caller seed fails, try this many perturbed
-   !>                            seeds before giving up (optional, default 6).
+   !>                            seeds before giving up (optional, default 6)
    !> @param[in]  retry_radius   Magnitude of the perturbation for each retry
-   !>                            (in units of x) (optional, default 0.25).
+   !>                            (in units of x) (optional, default 0.25)
    !> @param[in]  tol_relax_factor   Multiplier on (tol, toldx, toldf) for the
-   !>                            inner SLSQP. Default 1.0 (no relaxation).
-   !>                            Larger values trade root accuracy for fewer
+   !>                            inner SLSQP, default 1.0 (no relaxation);
+   !>                            larger values trade root accuracy for fewer
    !>                            inner iterations; deflation only needs to
-   !>                            land in the correct basin, so 100x is typical.
+   !>                            land in the correct basin, so 100x is typical
    !> @param[in]  anchor         Optional anchor point used to enforce a ball
-   !>                            cap once the first root is found. Must have
-   !>                            length n if supplied.
+   !>                            cap once the first root is found, of length
+   !>                            n if supplied
    !> @param[in]  branch_rho2_slack Squared-distance slack allowed *beyond* the
    !>                            first-root distance: subsequent SLSQP solves
    !>                            see an extra inequality
-   !>                            rho_min^2 + branch_rho2_slack - ||x - anchor||^2 >= 0.
-   !>                            Inactive while branch_rho2_slack <= 0 or anchor
-   !>                            is absent.
+   !>                            rho_min^2 + branch_rho2_slack - ||x - anchor||^2 >= 0,
+   !>                            inactive while branch_rho2_slack <= 0 or
+   !>                            anchor is absent
    !> @param[in]  debug          If true, print per-iteration diagnostics
    !> @param[out] error          Error descriptor
    subroutine new_slsqp_deflation_solver(solver, n, m, meq, &
@@ -276,7 +290,7 @@ contains
       end if
 
       ! Activate the ball cap only when the caller provides BOTH a finite
-      ! positive radius and an anchor of the right size.
+      ! positive radius and an anchor of the right size
       tmp%has_ball = .false.
       if (present(branch_rho2_slack)) tmp%branch_rho2_slack = branch_rho2_slack
       if (present(anchor) .and. tmp%branch_rho2_slack > 0.0_wp) then
@@ -302,9 +316,9 @@ contains
          return
       end if
 
-      ! Wire the wrapped context's pointers to the solver's own state. The
-      ! inner SLSQP will source-copy this context, but pointer components in
-      ! the copy still target our fields.
+      ! Wire the wrapped context's pointers to the solver's own state; the
+      ! inner SLSQP source-copies this context, but pointer components in the
+      ! copy still target our fields
       wrapped_ctx%user_obj_ctx => tmp%user_obj_ctx
       wrapped_ctx%user_obj_grad_ctx => tmp%user_obj_grad_ctx
       wrapped_ctx%user_con_ctx => tmp%user_con_ctx
@@ -345,18 +359,23 @@ contains
    end subroutine new_slsqp_deflation_solver
 
    !> Solve the constrained problem, enumerating up to `max_roots` distinct
-   !> minima via iterated deflation. On exit `x` holds the first root
-   !> discovered (the one reached from the caller's seed before any deflation
-   !> is applied). All enumerated roots are stored in raw_candidates.
+   !> minima via iterated deflation
    !>
-   !> Seeding strategy: iter=1 first tries the un-perturbed caller seed; if
-   !> that fails, perturbed seeds are tried up to `max_retries` times. From
-   !> iter=2 onward the un-perturbed seed is *skipped* (re-running it almost
-   !> always rediscovers the previous root); each iter immediately tries up
-   !> to `max_retries` perturbed seeds, accepting the first one that converges
-   !> to a *new* (non-duplicate) root. This breaks the "all restarts converge
-   !> to the same root" failure mode for high-symmetry geometries where
-   !> deflation alone cannot redirect the inner solver.
+   !> - on exit `x` holds the first root discovered, the one reached from the
+   !>   caller's seed before any deflation is applied
+   !> - all enumerated roots are stored in raw_candidates
+   !>
+   !> Seeding strategy
+   !>
+   !> - iter=1 first tries the un-perturbed caller seed, then up to
+   !>   `max_retries` perturbed seeds
+   !> - from iter=2 onward the un-perturbed seed is *skipped* (re-running it
+   !>   almost always rediscovers the previous root); each iter goes straight
+   !>   to up to `max_retries` perturbed seeds, accepting the first that
+   !>   converges to a *new* root
+   !> - breaks the "all restarts converge to the same root" failure mode for
+   !>   high-symmetry geometries where deflation alone cannot redirect the
+   !>   inner solver
    subroutine slsqp_deflation_solve(self, x, error)
       !> Solver instance
       class(moist_math_solver_slsqp_deflation_type), intent(inout), target :: self
@@ -381,18 +400,19 @@ contains
       end if
 
       call self%deflation%reset()
-      ! Disarm the ball cap before the first un-deflated solve. It is
-      ! re-armed below as soon as the first root is accepted.
+      ! Disarm the ball cap before the first un-deflated solve, re-armed
+      ! below as soon as the first root is accepted
       !
-      ! Use the squared box diagonal as the "inert" cap (not huge(1.0_wp)):
-      ! the inner SLSQP keeps x inside [xl, xu] via its own bound
-      ! constraints, so the inequality phi_max_sq - ||x - anchor||^2 >= 0
-      ! is trivially satisfied for any feasible point. But SLSQP's QP
-      ! subproblem normalizes constraint values with their gradients
-      ! (~ 1/sqrt(c^2 + g^Tg)); a literal huge(1.0_wp) overflows c^2 and
-      ! taints the line search with NaN, which on real molecules causes
-      ! "no roots enumerated" failures even when the un-deflated problem
-      ! is well-posed.
+      ! Squared box diagonal as the "inert" cap, not huge(1.0_wp)
+      !
+      ! - the inner SLSQP keeps x inside [xl, xu] via its own bound
+      !   constraints, so the inequality phi_max_sq - ||x - anchor||^2 >= 0 is
+      !   trivially satisfied for any feasible point
+      ! - SLSQP's QP subproblem normalizes constraint values with their
+      !   gradients (~ 1/sqrt(c^2 + g^Tg)); a literal huge(1.0_wp) overflows
+      !   c^2 and taints the line search with NaN, which on real molecules
+      !   causes "no roots enumerated" failures even when the un-deflated
+      !   problem is well-posed
       if (self%has_ball) then
          self%phi_max_sq = sum((self%xu - self%xl)**2)
          if (self%phi_max_sq <= 0.0_wp) then
@@ -409,9 +429,9 @@ contains
 
       outer: do iter = 1, self%max_roots
          found_new_root = .false.
-         ! iter 1: try un-perturbed seed first (attempt=0), then perturbations.
+         ! iter 1: try un-perturbed seed first (attempt=0), then perturbations
          ! iter >= 2: skip attempt=0 entirely - the un-perturbed seed already
-         ! produced the first root, so re-running it just yields a duplicate.
+         ! produced the first root, so re-running it just yields a duplicate
          start_attempt = 0
          if (iter > 1) start_attempt = 1
 
@@ -420,10 +440,9 @@ contains
                x_trial = x_seed
             else
                ! Globally unique offset index: iter=1 uses k=1..max_retries,
-               ! iter=2 uses k=max_retries+1..2*max_retries, etc.  This keeps
-               ! later iterations probing fresh octants instead of recycling
-               ! the same axis-aligned offsets the first iteration already
-               ! tried.
+               ! iter=2 uses k=max_retries+1..2*max_retries, etc., keeping
+               ! later iterations on fresh octants instead of recycling the
+               ! axis-aligned offsets the first iteration already tried
                k = (iter - 1)*self%max_retries + attempt
                perturb = retry_offset(size(x), k, self%retry_radius)
                x_trial = x_seed + perturb
@@ -433,9 +452,9 @@ contains
             call self%slsqp_solver%solve(x_trial, inner_error)
             if (allocated(inner_error)) then
                if (self%debug) then
-                  write (output_unit, '(x,a,i0,a,i0,a,a)') &
-                     '[deflation] iter ', iter, ' attempt ', attempt, &
-                     ' inner SLSQP failed: ', trim(inner_error%message)
+                  write (output_unit, "(x,a,i0,a,i0,a,a)") &
+                     "[deflation] iter ", iter, " attempt ", attempt, &
+                     " inner SLSQP failed: ", trim(inner_error%message)
                end if
                deallocate (inner_error)
                cycle attempts
@@ -447,16 +466,16 @@ contains
                exit attempts
             end if
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a,i0,a)') &
-                  '[deflation] iter ', iter, ' attempt ', attempt, &
-                  ' converged to a known root (try next perturbation)'
+               write (output_unit, "(x,a,i0,a,i0,a)") &
+                  "[deflation] iter ", iter, " attempt ", attempt, &
+                  " converged to a known root (try next perturbation)"
             end if
          end do attempts
 
          if (.not. found_new_root) then
             if (self%debug) then
-               write (output_unit, '(x,a,i0,a)') &
-                  '[deflation] iter ', iter, ' exhausted all attempts (stop)'
+               write (output_unit, "(x,a,i0,a)") &
+                  "[deflation] iter ", iter, " exhausted all attempts (stop)"
             end if
             exit outer
          end if
@@ -467,22 +486,22 @@ contains
             x_first = x_trial
             first_root_found = .true.
             ! Activate the ball cap from iteration 2 onwards: subsequent
-            ! SLSQP solves must stay inside ||x - anchor|| <= phi_min + rho_cut.
-            ! The wrapped constraint sees this through context%phi_max_sq,
+            ! SLSQP solves must stay inside ||x - anchor|| <= phi_min + rho_cut,
+            ! which the wrapped constraint sees through context%phi_max_sq,
             ! which the inner solver's source-copied context still points
-            ! to via this solver's `phi_max_sq` field.
+            ! to via this solver's `phi_max_sq` field
             if (self%has_ball) then
                self%phi_max_sq = sum((x_trial - self%anchor)**2) + self%branch_rho2_slack
                if (self%debug) then
-                  write (output_unit, '(x,a,es12.4)') &
-                     '[deflation] ball cap (phi_max) = ', sqrt(self%phi_max_sq)
+                  write (output_unit, "(x,a,es12.4)") &
+                     "[deflation] ball cap (phi_max) = ", sqrt(self%phi_max_sq)
                end if
             end if
          end if
 
          if (self%debug) then
-            write (output_unit, '(x,a,i0,a,3(es12.4,x))') &
-               '[deflation] iter ', iter, ' accepted root: ', x_trial
+            write (output_unit, "(x,a,i0,a,3(es12.4,x))") &
+               "[deflation] iter ", iter, " accepted root: ", x_trial
          end if
       end do outer
 
@@ -505,8 +524,8 @@ contains
    end subroutine slsqp_deflation_solve
 
    !> Retry-offset pattern for `n_dim == 3`: cycle through +/- x, +/- y, +/- z
-   !> scaled by `r`, so successive retries sample distinct octants. For other
-   !> dimensions a deterministic pseudo-random offset is used.
+   !> scaled by `r`, so successive retries sample distinct octants; other
+   !> dimensions get a deterministic pseudo-random offset
    pure function retry_offset(n, k, r) result(off)
       !> Space dimension
       integer, intent(in) :: n
@@ -521,7 +540,7 @@ contains
 
       off = 0.0_wp
       if (n == 3) then
-         ! 6-point pattern (axis aligned) for the common 3D projection case.
+         ! 6-point pattern (axis aligned) for the common 3D projection case
          axis = mod(k - 1, 3) + 1
          sign_k = 1
          if (mod((k - 1)/3, 2) == 1) sign_k = -1
@@ -536,7 +555,7 @@ contains
       end if
    end function retry_offset
 
-   !> Clip `x` into [xl, xu] element-wise (no error on out-of-bounds input).
+   !> Clip `x` into [xl, xu] element-wise (no error on out-of-bounds input)
    pure subroutine clip_to_box(x, xl, xu)
       !> Point to clip (modified in place)
       real(wp), dimension(:), intent(inout) :: x
@@ -552,7 +571,7 @@ contains
       end do
    end subroutine clip_to_box
 
-   !> Return the full list of converged roots.
+   !> Return the full list of converged roots
    subroutine slsqp_deflation_get_raw_candidates(self, candidates, n_candidates)
       class(moist_math_solver_slsqp_deflation_type), intent(in) :: self
       real(wp), allocatable, intent(out) :: candidates(:, :)
@@ -567,7 +586,7 @@ contains
       candidates(:, :) = self%raw_candidates(:, :)
    end subroutine slsqp_deflation_get_raw_candidates
 
-   !> Release resources.
+   !> Release resources
    subroutine slsqp_deflation_destroy(self)
       class(moist_math_solver_slsqp_deflation_type), intent(inout), target :: self
 
@@ -591,10 +610,10 @@ contains
    end subroutine slsqp_deflation_destroy
 
    !>==================================================================
-   !> Callback wrappers installed on the inner SLSQP solver.
+   !> Callback wrappers installed on the inner SLSQP solver
    !>==================================================================
 
-   !> Deflated objective: f_def(x) = M(x) * f(x).
+   !> Deflated objective: f_def(x) = M(x) * f(x)
    subroutine deflated_objective(x, f, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), intent(out) :: f
@@ -614,7 +633,7 @@ contains
       end select
    end subroutine deflated_objective
 
-   !> Deflated objective gradient: grad f_def(x) = M*grad f + f*grad M.
+   !> Deflated objective gradient: grad f_def(x) = M*grad f + f*grad M
    subroutine deflated_objective_grad(x, df, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: df
@@ -641,8 +660,8 @@ contains
    !> Constraint callback: passes the user constraints through unchanged in
    !> rows 1..m_user, and appends a single inequality
    !>     phi_max^2 - ||x - anchor||^2 >= 0
-   !> in row m_user+1 when the ball cap is active. Until the first root
-   !> lands, phi_max_sq == huge so the inequality is trivially satisfied.
+   !> in row m_user+1 when the ball cap is active; until the first root lands
+   !> phi_max_sq == huge, so the inequality is trivially satisfied
    subroutine passthrough_constraint(x, c, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:), intent(out) :: c
@@ -672,7 +691,7 @@ contains
 
    !> Constraint Jacobian callback: rows 1..m_user are the user Jacobian;
    !> row m_user+1 (when active) is d/dx ( phi_max^2 - ||x - anchor||^2 )
-   !> = -2 (x - anchor).
+   !> = -2 (x - anchor)
    subroutine passthrough_constraint_grad(x, dc, context)
       real(wp), dimension(:), intent(in) :: x
       real(wp), dimension(:, :), intent(out) :: dc

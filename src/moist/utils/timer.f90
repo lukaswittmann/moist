@@ -1,26 +1,27 @@
 !> Dynamic, nesting-based profiling timer
 !>
-!> Timers are addressed by name, never by a pre-allocated integer slot:
-!> The registry grows on demand, so callers do not need to know the number of
-!> steps up front
-!> A timer is identified by the pair (parent, name), where the parent is
-!> whichever timer is open when `start` is called
-!> Re-entering a name (e.g. inside a loop) accumulates into the same node;
-!> arbitrary nesting depth (sub- and subsub-timers) falls out of the runtime
-!> nesting with no extra bookkeeping
+!> Timers are addressed by name, never by a pre-allocated integer slot
+!>
+!> - the registry grows on demand, so callers need not know the number of
+!>   steps up front
+!> - a timer is identified by the pair (parent, name), the parent being
+!>   whichever timer is open when `start` is called
+!> - re-entering a name (e.g. inside a loop) accumulates into the same node
+!> - arbitrary nesting depth (sub- and subsub-timers) falls out of the runtime
+!>   nesting with no extra bookkeeping
 !>
 !> Two call styles share the same node storage:
 !>   * name-based `start("X")` / `stop()` (optionally `stop("X")` to assert the
 !>     name) uses an internal stack to derive the parent and is convenient for
-!>     straight-line code.
+!>     straight-line code
 !>   * handle-based `start(id)` / `stop(id)`, with `id` obtained once from
-!>     `resolve`, skips the hash lookup and the stack; use it inside hot loops.
+!>     `resolve`, skips the hash lookup and the stack; use it inside hot loops
 !>
 !> Any timer left running at report time, or closed by a mismatched
 !> `stop("name")`, is poisoned and rendered as NaN
 !>
-!> FIXME: TODO: the timer is NOT thread-safe. Inside OpenMP regions gate start/stop to
-!> a single thread (see cavity/drop/gradient.f90).
+!> FIXME: TODO: the timer is NOT thread-safe; inside OpenMP regions gate
+!> start/stop to a single thread (see cavity/drop/gradient.f90)
 module moist_utils_timer
    use mctc_env, only: wp, int64 => i8
    use, intrinsic :: iso_fortran_env, only: output_unit
@@ -33,7 +34,7 @@ module moist_utils_timer
              cat_hessian, cat_solve, cat_properties, cat_io
 
    !> Timer categories: an orthogonal tag summed across the module tree at
-   !> report time. A node inherits its parent's category unless one is given.
+   !> report time; a node inherits its parent's category unless one is given
    integer, parameter :: cat_none = 0
    integer, parameter :: cat_setup = 1
    integer, parameter :: cat_energy = 2
@@ -62,32 +63,34 @@ module moist_utils_timer
 
    !> Report table layout. `sect_w` is the display width (columns, not bytes) of
    !> the leftmost "section" column; the numeric tail (time/percent/calls) is a
-   !> fixed 32 columns, so the whole rule is `sect_w + 32`.
+   !> fixed 32 columns, so the whole rule is `sect_w + 32`
    integer, parameter :: sect_w = 26
    integer, parameter :: tbl_w = sect_w + 32
 
-   !> Unicode (UTF-8) box-drawing guides for the tree column. NOTE: intentionally
-   !> non-ASCII, at explicit request, so this is the one place the module departs
-   !> from the ASCII-only house rule. Each glyph is 3 bytes but a single display
-   !> column; `disp_len` measures columns (not bytes) so the numeric columns to
-   !> their right stay aligned regardless of nesting depth.
+   !> Unicode (UTF-8) box-drawing guides for the tree column
+   !>
+   !> - NOTE: intentionally non-ASCII, at explicit request, so this is the one
+   !>   place the module departs from the ASCII-only house rule
+   !> - each glyph is 3 bytes but a single display column; `disp_len` measures
+   !>   columns, not bytes, so the numeric columns to their right stay aligned
+   !>   regardless of nesting depth
    !>   tg_branch = "|--" (a non-last child), tg_last = "`--" (the last child),
-   !>   tg_pipe   = "|  " (an ancestor guide), tg_blank = "   " (a spent guide).
+   !>   tg_pipe   = "|  " (an ancestor guide), tg_blank = "   " (a spent guide)
    character(len=*), parameter :: tg_branch = "├─ "
    character(len=*), parameter :: tg_last = "└─ "
    character(len=*), parameter :: tg_pipe = "│  "
    character(len=*), parameter :: tg_blank = "  "
    !> Bare vertical guide drawn on a group-separator blank line so the tree stays
-   !> visually connected across the gap (aligns with the child connectors).
+   !> visually connected across the gap (aligns with the child connectors)
    character(len=*), parameter :: tg_vert = "│"
 
    !> FNV-1a (32-bit) constants; arithmetic is masked to 32 bits each step so
-   !> the intermediate product stays well inside a signed 64-bit integer.
+   !> the intermediate product stays well inside a signed 64-bit integer
    integer(int64), parameter :: fnv_offset = 2166136261_int64
    integer(int64), parameter :: fnv_prime = 16777619_int64
    integer(int64), parameter :: mask32 = int(z'FFFFFFFF', int64)
 
-   !> Hierarchical profiling timer.
+   !> Hierarchical profiling timer
    type :: timer_type
 
       !> Number of registered nodes
@@ -158,14 +161,15 @@ module moist_utils_timer
       procedure :: node_name
       procedure :: node_depth
       procedure :: node_time
-      !> Currently-open node (top of the nesting stack), 0 if none. Lets a
-      !> handle-based hot loop attach its fine timers under whatever node the
-      !> caller opened by name, instead of guessing a fixed parent.
+      !> Currently-open node (top of the nesting stack), 0 if none
+      !>
+      !> - lets a handle-based hot loop attach its fine timers under whatever
+      !>   node the caller opened by name, instead of guessing a fixed parent
       procedure :: current
-      !> Current nesting depth (number of open frames). Pair with `unwind` to
-      !> keep the shared stack balanced across early error returns.
+      !> Current nesting depth (number of open frames); pair with `unwind` to
+      !> keep the shared stack balanced across early error returns
       procedure :: current_depth
-      !> Stop and pop open frames until the stack is back at a saved depth.
+      !> Stop and pop open frames until the stack is back at a saved depth
       procedure :: unwind
 
    end type timer_type
@@ -173,7 +177,8 @@ module moist_utils_timer
 contains
 
 !> Initialize the timer, allocating the growable registry and stamping the
-!> root wall/CPU clocks.
+!> root wall/CPU clocks
+!>
 !> @param[inout] self     Timer instance
 !> @param[in]    verbose  Optional: print the verbose report footer
    subroutine new_timer(self, verbose)
@@ -208,7 +213,8 @@ contains
 
    end subroutine new_timer
 
-!> Release all timer storage.
+!> Release all timer storage
+!>
 !> @param[inout] self  Timer instance
    subroutine delete_timer(self)
       !> Timer instance
@@ -233,8 +239,11 @@ contains
    end subroutine delete_timer
 
 !> Zero all accumulated times while keeping the registered node tree, and
-!> restart the root clocks. Used for per-window reporting: `write` then `reset`
-!> begins a fresh window without reallocating.
+!> restart the root clocks
+!>
+!> - for per-window reporting: `write` then `reset` begins a fresh window
+!>   without reallocating
+!>
 !> @param[inout] self  Timer instance
    subroutine reset_timer(self)
       !> Timer instance
@@ -256,7 +265,8 @@ contains
 
    end subroutine reset_timer
 
-!> Set the verbose report flag without touching accumulated timings.
+!> Set the verbose report flag without touching accumulated timings
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    flag  New verbose flag
    subroutine set_verbose(self, flag)
@@ -269,8 +279,9 @@ contains
 
    end subroutine set_verbose
 
-!> Set the blank-line grouping flag: when on, the report separates the top-level
-!> groups with a blank line. Does not touch accumulated timings.
+!> Set the blank-line grouping flag: when on, the report separates the
+!> top-level groups with a blank line, leaving accumulated timings alone
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    flag  New grouping flag
    subroutine set_group_blanks(self, flag)
@@ -283,8 +294,10 @@ contains
 
    end subroutine set_group_blanks
 
-!> Return a stable node handle for (name, parent), creating the node if needed.
-!> Use the handle with the `start(id)`/`stop(id)` fast path inside hot loops.
+!> Return a stable node handle for (name, parent), creating the node if needed
+!>
+!> - use the handle with the `start(id)`/`stop(id)` fast path inside hot loops
+!>
 !> @param[inout] self      Timer instance
 !> @param[in]    name      Timer name
 !> @param[in]    parent    Parent node handle (0 = top level)
@@ -335,7 +348,7 @@ contains
       self%parent(id) = parent
       ! Category precedence: an explicit tag wins; otherwise inherit the parent's
       ! (so the handle path `resolve`+`start_id` categorizes the same way as the
-      ! name/stack path, and fine-grained timers are not dropped from the pivot).
+      ! name/stack path, and fine-grained timers are not dropped from the pivot)
       if (present(category)) then
          self%category(id) = category
       else if (parent > 0) then
@@ -358,8 +371,9 @@ contains
 
    end function resolve
 
-!> Start a named timer under the currently open timer (its parent). Pushes the
-!> node onto the nesting stack.
+!> Start a named timer under the currently open timer (its parent), pushing
+!> the node onto the nesting stack
+!>
 !> @param[inout] self      Timer instance
 !> @param[in]    name      Timer name
 !> @param[in]    category  Optional category tag
@@ -394,7 +408,8 @@ contains
 
    end subroutine start_name
 
-!> Start a timer by handle (hot-path fast form, no lookup, no stack).
+!> Start a timer by handle (hot-path fast form, no lookup, no stack)
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    id    Node handle from `resolve`
    subroutine start_id(self, id)
@@ -409,7 +424,7 @@ contains
 
       ! A start on an already-running node is an imbalance (a missing stop):
       ! poison it so the interval surfaces as NaN instead of being silently
-      ! dropped (the closing stop would only measure from this last start).
+      ! dropped (the closing stop would only measure from this last start)
       if (self%running(id)) self%poisoned(id) = .true.
 
       call system_clock(c)
@@ -419,7 +434,8 @@ contains
 
    end subroutine start_id
 
-!> Stop the innermost open timer (top of the nesting stack).
+!> Stop the innermost open timer (top of the nesting stack)
+!>
 !> @param[inout] self  Timer instance
    subroutine stop_top(self)
       !> Timer instance
@@ -436,9 +452,11 @@ contains
 
    end subroutine stop_top
 
-!> Stop a named timer, asserting it matches an open frame. If inner frames were
-!> left open (e.g. an early return), they are unwound and poisoned as NaN so the
-!> imbalance is visible and the stack recovers.
+!> Stop a named timer, asserting it matches an open frame
+!>
+!> - inner frames left open (e.g. an early return) are unwound and poisoned as
+!>   NaN, so the imbalance is visible and the stack recovers
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    name  Expected timer name
    subroutine stop_name(self, name)
@@ -473,8 +491,9 @@ contains
 
    end subroutine stop_name
 
-!> Stop a timer by handle (hot-path fast form). A stop without a matching start
-!> poisons the node.
+!> Stop a timer by handle (hot-path fast form); a stop without a matching
+!> start poisons the node
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    id    Node handle
    subroutine stop_id(self, id)
@@ -497,7 +516,8 @@ contains
 
    end subroutine stop_id
 
-!> Overall elapsed wall time since `new`/`reset`, in seconds.
+!> Overall elapsed wall time since `new`/`reset`, in seconds
+!>
 !> @param[inout] self  Timer instance
 !> @return       Elapsed seconds
    function get_total(self) result(sec)
@@ -517,9 +537,12 @@ contains
 
    end function get_total
 
-!> Accumulated wall time of a named timer, in seconds. The name may be a path
-!> "Parent/Child/..." to disambiguate a leaf name that occurs under several
-!> parents. Returns 0 for an unknown path and NaN for a poisoned/open timer.
+!> Accumulated wall time of a named timer, in seconds
+!>
+!> - the name may be a path "Parent/Child/..." to disambiguate a leaf name
+!>   occurring under several parents
+!> - 0 for an unknown path, NaN for a poisoned or open timer
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    path  Timer name or slash-separated path
 !> @return       Elapsed seconds (NaN if unbalanced)
@@ -542,9 +565,12 @@ contains
 
    end function get_name
 
-!> Number of registered timer nodes. Nodes are indexed 1..num_nodes in
-!> registration (pre-order) order: a parent is always registered before its
-!> children, so iterating 1..num_nodes yields a valid tree traversal.
+!> Number of registered timer nodes
+!>
+!> - indexed 1..num_nodes in registration (pre-order) order: a parent is
+!>   always registered before its children, so iterating 1..num_nodes yields a
+!>   valid tree traversal
+!>
 !> @param[in] self  Timer instance
 !> @return    Node count
    pure function num_nodes(self) result(n)
@@ -558,7 +584,8 @@ contains
    end function num_nodes
 
 !> Return the currently-open node (top of the nesting stack), or 0 if the stack
-!> is empty or the timer is inactive.
+!> is empty or the timer is inactive
+!>
 !> @param[in] self  Timer instance
 !> @return    Node handle of the innermost open timer, else 0
    pure function current(self) result(id)
@@ -572,11 +599,12 @@ contains
 
    end function current
 
-!> Current nesting depth (number of open frames on the stack), 0 if inactive.
+!> Current nesting depth (number of open frames on the stack), 0 if inactive
 !>
-!> Capture this at the top of a timed routine and pass it to `unwind` on an early
-!> (error) return so any frames the routine opened are closed and the run-wide
-!> stack is left balanced for whatever runs next.
+!> - capture at the top of a timed routine and pass to `unwind` on an early
+!>   (error) return, so any frames the routine opened are closed and the
+!>   run-wide stack is left balanced for whatever runs next
+!>
 !> @param[in] self  Timer instance
 !> @return    Number of currently-open frames
    pure function current_depth(self) result(d)
@@ -590,12 +618,13 @@ contains
 
    end function current_depth
 
-!> Close open frames until the nesting stack is back at `depth`.
+!> Close open frames until the nesting stack is back at `depth`
 !>
-!> Each unwound frame is stopped through the normal `stop_top` path, so it
-!> records the partial time measured up to the unwind point. Intended for error
-!> paths that `return` between a `start` and its matching `stop`; a no-op when the
-!> stack is already at (or below) `depth`.
+!> - each unwound frame is stopped through the normal `stop_top` path, so it
+!>   records the partial time measured up to the unwind point
+!> - intended for error paths that `return` between a `start` and its matching
+!>   `stop`; a no-op when the stack is already at or below `depth`
+!>
 !> @param[inout] self   Timer instance
 !> @param[in]    depth  Target open-frame count to unwind back to
    subroutine unwind(self, depth)
@@ -611,7 +640,8 @@ contains
 
    end subroutine unwind
 
-!> Name of a node by index.
+!> Name of a node by index
+!>
 !> @param[in] self  Timer instance
 !> @param[in] id    Node index (1..num_nodes)
 !> @return    Trimmed node name
@@ -631,7 +661,8 @@ contains
 
    end function node_name
 
-!> Nesting depth of a node (0 = top level), from its parent chain.
+!> Nesting depth of a node (0 = top level), from its parent chain
+!>
 !> @param[in] self  Timer instance
 !> @param[in] id    Node index (1..num_nodes)
 !> @return    Depth
@@ -655,7 +686,8 @@ contains
 
    end function node_depth
 
-!> Accumulated seconds of a node by index (NaN if unbalanced).
+!> Accumulated seconds of a node by index (NaN if unbalanced)
+!>
 !> @param[in] self  Timer instance
 !> @param[in] id    Node index (1..num_nodes)
 !> @return    Seconds
@@ -671,7 +703,8 @@ contains
 
    end function node_time
 
-!> Write a single named timer line to `iunit`.
+!> Write a single named timer line to `iunit`
+!>
 !> @param[inout] self     Timer instance
 !> @param[in]    iunit    Output unit
 !> @param[in]    path     Timer name or path
@@ -693,19 +726,22 @@ contains
 
    end subroutine write_timing
 
-!> Write the hierarchical timing report: a module tree with per-node share and
-!> call counts, an "(other)" remainder per parent, a category-pivot summary, and
-!> a wall/CPU footer. Any timer still open is poisoned and shown as NaN.
+!> Write the hierarchical timing report
 !>
-!> The tree is drawn with Unicode box-drawing guides and a fixed, header-labelled
-!> column layout; percentages are expressed against the run total ("%tot") so
-!> every row shares one stable reference and two runs diff cleanly.
+!> - a module tree with per-node share and call counts, an "(other)" remainder
+!>   per parent, a category-pivot summary and a wall/CPU footer
+!> - any timer still open is poisoned and shown as NaN
+!> - the tree is drawn with Unicode box-drawing guides and a fixed,
+!>   header-labelled column layout
+!> - percentages are against the run total ("%tot"), so every row shares one
+!>   stable reference and two runs diff cleanly
+!>
 !> @param[inout] self       Timer instance
 !> @param[in]    iunit      Output unit
 !> @param[in]    inmsg      Optional label for the total row
-!> @param[in]    max_depth  Optional deepest node level to print (0 = top-level
-!>                          only). Deeper nodes are folded into their ancestor's
-!>                          total. Absent = print the whole tree.
+!> @param[in]    max_depth  Optional deepest node level to print (0 =
+!>                          top-level only); deeper nodes fold into their
+!>                          ancestor's total, absent = print the whole tree
    subroutine write_report(self, iunit, inmsg, max_depth)
       !> Timer instance
       class(timer_type), intent(inout) :: self
@@ -777,11 +813,11 @@ contains
             cat_sec(self%category(i)) = cat_sec(self%category(i)) + node_seconds(self, i)
          else if (self%category(self%parent(i)) /= self%category(i)) then
             ! Head of a category region nested inside a differently-categorized
-            ! one. Count it under its own category ...
+            ! one, counted under its own category ...
             cat_sec(self%category(i)) = cat_sec(self%category(i)) + node_seconds(self, i)
             ! ... but the enclosing region's head already counted this child's
             ! time inclusively under the parent's category, so remove the overlap
-            ! to keep the totals a partition of wall time (no double counting).
+            ! to keep the totals a partition of wall time (no double counting)
             if (self%category(self%parent(i)) /= cat_none) then
                cat_sec(self%category(self%parent(i))) = &
                   cat_sec(self%category(self%parent(i))) - node_seconds(self, i)
@@ -818,12 +854,15 @@ contains
 
    end subroutine write_report
 
-!> Print one node and, recursively, its children, plus an "(other)" remainder.
+!> Print one node and, recursively, its children, plus an "(other)" remainder
 !>
-!> The section column carries the Unicode tree guides: `prefix` is the accumulated
-!> ancestor guide string ("|  "/"   " per level), and `is_last` selects this node's
-!> own connector ("`--" vs "|--"). A depth-0 node is the tree root and is drawn
-!> bare (no connector). Percentages are against the run total (`total_sec`).
+!> The section column carries the Unicode tree guides
+!>
+!> - `prefix` is the accumulated ancestor guide string ("|  "/"   " per level)
+!> - `is_last` selects this node's own connector ("`--" vs "|--")
+!> - a depth-0 node is the tree root, drawn bare with no connector
+!> - percentages are against the run total (`total_sec`)
+!>
 !> @param[in] self       Timer instance
 !> @param[in] iunit      Output unit
 !> @param[in] id         Node index
@@ -834,7 +873,7 @@ contains
 !> @param[in] max_depth  Deepest level to print; children below it are folded in
 !>
 !> Whether the top-level groups are separated by a blank line is read from the
-!> timer's own `group_blanks` flag (set via `set_group_blanks`).
+!> timer's own `group_blanks` flag (set via `set_group_blanks`)
    recursive subroutine print_node(self, iunit, id, prefix, depth, is_last, &
       & total_sec, max_depth)
       !> Timer instance
@@ -948,7 +987,8 @@ contains
 
    end subroutine print_node
 
-!> Accumulated seconds of a node, or NaN if it was left unbalanced.
+!> Accumulated seconds of a node, or NaN if it was left unbalanced
+!>
 !> @param[in] self  Timer instance
 !> @param[in] id    Node index
 !> @return    Seconds (NaN if poisoned/open)
@@ -970,10 +1010,13 @@ contains
 
    end function node_seconds
 
-!> Whether `print_node` would emit any child rows beneath node `id`: it has at
-!> least one printable child (called, or poisoned) that is not folded away by the
-!> depth cap. Used to decide group spacing so the separator blank is drawn only
-!> after a category that actually expanded into printed subcategories.
+!> Whether `print_node` would emit any child rows beneath node `id`
+!>
+!> - true when at least one printable child (called, or poisoned) is not
+!>   folded away by the depth cap
+!> - decides group spacing, so the separator blank is drawn only after a
+!>   category that actually expanded into printed subcategories
+!>
 !> @param[in] self       Timer instance
 !> @param[in] id         Node index
 !> @param[in] depth      Nesting depth at which `id` is printed
@@ -1006,7 +1049,8 @@ contains
 
    end function node_has_printed_children
 
-!> Resolve a slash-separated path to a node index, walking from the root.
+!> Resolve a slash-separated path to a node index, walking from the root
+!>
 !> @param[in] self  Timer instance
 !> @param[in] path  Name or "Parent/Child/..." path
 !> @return    Node index, or 0 if not found
@@ -1048,7 +1092,8 @@ contains
 
    end function find_path
 
-!> Left-justified, blank-padded copy of a name for fixed-length comparison.
+!> Left-justified, blank-padded copy of a name for fixed-length comparison
+!>
 !> @param[in] name  Timer name
 !> @return    Name padded/truncated to name_len
    pure function pad_name(name) result(padded)
@@ -1061,7 +1106,8 @@ contains
 
    end function pad_name
 
-!> FNV-1a hash of (name, parent), masked to 32 bits.
+!> FNV-1a hash of (name, parent), masked to 32 bits
+!>
 !> @param[in] name    Timer name
 !> @param[in] parent  Parent node index
 !> @return    Hash value in [0, 2^32)
@@ -1085,7 +1131,8 @@ contains
 
    end function hash_key
 
-!> Insert an existing node into the hash table by linear probing.
+!> Insert an existing node into the hash table by linear probing
+!>
 !> @param[inout] self  Timer instance
 !> @param[in]    id    Node index to insert
    subroutine table_insert(self, id)
@@ -1110,7 +1157,8 @@ contains
 
    end subroutine table_insert
 
-!> Double the hash table and reinsert every registered node.
+!> Double the hash table and reinsert every registered node
+!>
 !> @param[inout] self  Timer instance
    subroutine grow_table(self)
       !> Timer instance
@@ -1127,7 +1175,8 @@ contains
 
    end subroutine grow_table
 
-!> Ensure room for one more node, doubling the node arrays if full.
+!> Ensure room for one more node, doubling the node arrays if full
+!>
 !> @param[inout] self  Timer instance
    subroutine ensure_node_capacity(self)
       !> Timer instance
@@ -1180,7 +1229,8 @@ contains
 
    end subroutine ensure_node_capacity
 
-!> Ensure room for one more open frame on the nesting stack.
+!> Ensure room for one more open frame on the nesting stack
+!>
 !> @param[inout] self  Timer instance
    subroutine ensure_stack_capacity(self)
       !> Timer instance
@@ -1198,10 +1248,13 @@ contains
 
    end subroutine ensure_stack_capacity
 
-!> Display width (terminal columns) of a possibly-UTF-8 string. Counts every byte
-!> except UTF-8 continuation bytes (10xxxxxx); since the only multibyte glyphs the
-!> report emits are the single-column box-drawing guides, this equals the number
-!> of printed columns and lets fixed-width alignment survive the tree guides.
+!> Display width (terminal columns) of a possibly-UTF-8 string
+!>
+!> - counts every byte except UTF-8 continuation bytes (10xxxxxx)
+!> - the only multibyte glyphs the report emits are the single-column
+!>   box-drawing guides, so the count equals the number of printed columns and
+!>   fixed-width alignment survives the tree guides
+!>
 !> @param[in] s  Byte string (ASCII and/or box-drawing UTF-8)
 !> @return    Number of display columns
    pure function disp_len(s) result(n)
@@ -1220,8 +1273,9 @@ contains
 
    end function disp_len
 
-!> Right-pad `s` with blanks to a display width of `w` columns (no truncation if
-!> it is already wider). Uses `disp_len` so a UTF-8 tree prefix pads correctly.
+!> Right-pad `s` with blanks to a display width of `w` columns, never
+!> truncating; uses `disp_len` so a UTF-8 tree prefix pads correctly
+!>
 !> @param[in] s  String to pad
 !> @param[in] w  Target display width in columns
 !> @return    Padded string
@@ -1244,7 +1298,7 @@ contains
 
    end function pad_disp
 
-!> The centersd "T I M I N G S" banner, `tbl_w` columns wide.
+!> The centersd "T I M I N G S" banner, `tbl_w` columns wide
 !> @return  Banner line
    pure function banner_line() result(s)
       !> Banner line
@@ -1259,7 +1313,7 @@ contains
    end function banner_line
 
 !> The column-header row ("section  time [s]  %tot  calls"), aligned to the same
-!> fixed columns the data rows use.
+!> fixed columns the data rows use
 !> @return  Header line
    function header_line() result(s)
       !> Header line

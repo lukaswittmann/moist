@@ -6,7 +6,7 @@ module moist_cavity_drop_request
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
-   implicit none
+   implicit none(type, external)
 
    public :: drop_property_request
    public :: drop_request_default
@@ -16,9 +16,10 @@ module moist_cavity_drop_request
 
    !> Property request flags for DROP cavity computation
    !>
-   !> Flags control optional quantities beyond the core pipeline
-   !> (area, volume, Gaussian widths, gradient). All flags default
-   !> to `.false.` for minimal overhead.
+   !> Flags controlling optional quantities beyond the core pipeline (area,
+   !> volume, Gaussian widths, gradient)
+   !>
+   !> - all flags default to `.false.` for minimal overhead
    type :: drop_property_request
 
       !> Compute local grid point density (diagnostic)

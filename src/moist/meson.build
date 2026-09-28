@@ -3,6 +3,7 @@ subdir('radii')
 subdir('model')
 subdir('math')
 subdir('cavity')
+subdir('channels')
 subdir('utils')
 subdir('output')
 
@@ -10,13 +11,11 @@ srcs += files(
   'context.f90',
   'math.f90',
   'cavity.f90',
-  'channels.f90',
   'data.f90',
   'radii.f90',
   'model.f90',
   'output.f90',
   'version.f90',
-  'type.f90',
   'utils.f90',
 )
 

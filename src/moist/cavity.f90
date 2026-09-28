@@ -4,5 +4,12 @@ module moist_cavity
    use moist_cavity_marchingcubes, only: cavity_type_marchingcubes, new_cavity_marchingcubes
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
-   implicit none
+   implicit none(type, external)
+   private
+
+   public :: cavity_type_iswig, new_cavity_iswig
+   public :: cavity_type_drop, new_cavity_drop
+   public :: cavity_type_marchingcubes, new_cavity_marchingcubes
+   public :: moist_cavity_drop_lsf_svdw_type
+   public :: moist_cavity_drop_lsf_cfc_type
 end module moist_cavity

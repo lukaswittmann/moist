@@ -10,11 +10,12 @@
 module moist_math_solver_slsqp
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
-   use moist_type, only: solver_base_type
-   use slsqp_module, only: slsqp_solver
-   use iso_fortran_env, only: output_unit
+   use moist_math_solver_type, only: solver_base_type
 
-   implicit none
+   use slsqp_module, only: slsqp_solver
+   use, intrinsic :: iso_fortran_env, only: output_unit
+
+   implicit none(type, external)
    private
 
    public :: moist_math_solver_slsqp_type
@@ -25,6 +26,7 @@ module moist_math_solver_slsqp
       !> Compute objective function
       subroutine objective_interface(x, f)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), intent(out) :: f                !> objective value
       end subroutine objective_interface
@@ -32,6 +34,7 @@ module moist_math_solver_slsqp
       !> Compute gradient of objective
       subroutine objective_grad_interface(x, df)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: df !> gradient
       end subroutine objective_grad_interface
@@ -39,6 +42,7 @@ module moist_math_solver_slsqp
       !> Compute constraints
       subroutine constraints_interface(x, c)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: c  !> constraint values
       end subroutine constraints_interface
@@ -46,6 +50,7 @@ module moist_math_solver_slsqp
       !> Compute constraint Jacobian
       subroutine constraints_grad_interface(x, dc)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: dc  !> constraint Jacobian (m x n)
       end subroutine constraints_grad_interface
@@ -53,6 +58,7 @@ module moist_math_solver_slsqp
       !> Iteration callback for debugging
       subroutine iteration_callback_interface(iter, x, f, c)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                  !> iteration number
          real(wp), dimension(:), intent(in) :: x      !> current variables
          real(wp), intent(in) :: f                    !> objective value
@@ -65,6 +71,7 @@ module moist_math_solver_slsqp
       !> Compute objective function (with context)
       subroutine objective_context_interface(x, f, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), intent(out) :: f                !> objective value
          class(*), intent(in) :: context           !> user context data
@@ -73,6 +80,7 @@ module moist_math_solver_slsqp
       !> Compute gradient of objective (with context)
       subroutine objective_grad_context_interface(x, df, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: df !> gradient
          class(*), intent(in) :: context           !> user context data
@@ -81,6 +89,7 @@ module moist_math_solver_slsqp
       !> Compute constraints (with context)
       subroutine constraints_context_interface(x, c, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x   !> variables
          real(wp), dimension(:), intent(out) :: c  !> constraint values
          class(*), intent(in) :: context           !> user context data
@@ -89,6 +98,7 @@ module moist_math_solver_slsqp
       !> Compute constraint Jacobian (with context)
       subroutine constraints_grad_context_interface(x, dc, context)
          import :: wp
+         implicit none(type, external)
          real(wp), dimension(:), intent(in) :: x      !> variables
          real(wp), dimension(:, :), intent(out) :: dc  !> constraint Jacobian (m x n)
          class(*), intent(in) :: context              !> user context data
@@ -97,6 +107,7 @@ module moist_math_solver_slsqp
       !> Iteration callback for debugging (with context)
       subroutine iteration_callback_context_interface(iter, x, f, c, context)
          import :: wp
+         implicit none(type, external)
          integer, intent(in) :: iter                  !> iteration number
          real(wp), dimension(:), intent(in) :: x      !> current variables
          real(wp), intent(in) :: f                    !> objective value
@@ -119,7 +130,7 @@ module moist_math_solver_slsqp
       procedure :: destroy => slsqp_destroy
    end type moist_math_solver_slsqp_type
 
-   !> Internal per-instance callback payload for the SLSQP wrappers.
+   !> Internal per-instance callback payload for the SLSQP wrappers
    type, extends(slsqp_solver) :: moist_slsqp_bridge_type
       private
       !> User-provided function pointers (legacy, no context)
@@ -136,7 +147,7 @@ module moist_math_solver_slsqp
       procedure(constraints_grad_context_interface), pointer, nopass :: user_con_grad_ctx => null()
       procedure(iteration_callback_context_interface), pointer, nopass :: user_iter_callback_ctx => null()
 
-      !> User context copied into the solver instance.
+      !> User context copied into the solver instance
       class(*), allocatable :: user_context
    end type moist_slsqp_bridge_type
 
@@ -144,9 +155,12 @@ contains
 
    !> Factory function to create and initialize an SLSQP solver (unified interface)
    !>
-   !> This is a standalone constructor that allocates and initializes an SLSQP solver.
-   !> Supports both legacy (no context) and context-aware (thread-safe) interfaces.
-   !> Use this with polymorphic allocation:
+   !> Standalone constructor that allocates and initializes an SLSQP solver
+   !>
+   !> - supports both legacy (no context) and context-aware (thread-safe)
+   !>   interfaces
+   !>
+   !> Use with polymorphic allocation:
    !>
    !>   ! Context-aware (thread-safe):
    !>   call new_slsqp_solver(solver, n, m, meq, error, &
@@ -222,8 +236,8 @@ contains
 
       select type (bridge => tmp%solver)
       type is (moist_slsqp_bridge_type)
-         ! Validate interface inputs first. Callback pointers are assigned only
-         ! after initialize(), because initialize() calls destroy() internally.
+         ! Validate interface inputs first; callback pointers are assigned only
+         ! after initialize(), because initialize() calls destroy() internally
          if (use_context_interface) then
             ! Context-aware interface
             if (.not. present(context)) then
@@ -354,7 +368,8 @@ contains
    end subroutine slsqp_destroy
 
    !> Wrapper for objective function (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_objective(me, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -384,7 +399,8 @@ contains
    end subroutine wrapper_objective
 
    !> Wrapper for gradient computation (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_gradient(me, x, df, dc)
       class(slsqp_solver), intent(inout) :: me
       real(wp), dimension(:), intent(in) :: x
@@ -414,7 +430,8 @@ contains
    end subroutine wrapper_gradient
 
    !> Wrapper for iteration callback (SLSQP interface)
-   !> Supports both legacy and context-aware interfaces
+   !>
+   !> - supports both legacy and context-aware interfaces
    subroutine wrapper_iteration(me, iter, x, f, c)
       class(slsqp_solver), intent(inout) :: me
       integer, intent(in) :: iter
@@ -438,7 +455,7 @@ contains
    function int_to_str(i) result(s)
       integer, intent(in) :: i
       character(len=20) :: s
-      write (s, '(I0)') i
+      write (s, "(I0)") i
    end function int_to_str
 
 end module moist_math_solver_slsqp

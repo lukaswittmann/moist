@@ -1,4 +1,4 @@
-!> DROP geometric property routines.
+!> DROP geometric property routines
 submodule(moist_cavity_drop) moist_cavity_drop_properties
    !$ use omp_lib, only: omp_get_thread_num
    use mctc_io_constants, only: pi
@@ -6,7 +6,7 @@ submodule(moist_cavity_drop) moist_cavity_drop_properties
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
    use moist_math_sorter_quicksort, only: qsort
-   implicit none
+   implicit none(type, external)
 
 contains
 
@@ -51,7 +51,7 @@ contains
       ! Set kernel parameters from cavity parameters
       h = self%param%rho_grid_h
       ! `rho_grid_h` is a user-tunable cavity parameter, so a non-positive value
-      ! reaches the kernel as an ordinary bad input rather than a bug.
+      ! reaches the kernel as an ordinary bad input rather than a bug
       call kernel%init(order=2, dimension=2, h=h, error=error)
       if (allocated(error)) return
       four_h2 = self%param%adj_list_grid_cutoff*self%param%rho_grid_h
@@ -59,8 +59,8 @@ contains
       !> Soft cavity density (adjacency-list-accelerated)
 
       ! Each pair (i,j) is stored in both directions in the CSR list, so we
-      ! simply accumulate all neighbour contributions into each point.
-      ! Self-contribution (diagonal) is added separately.
+      ! simply accumulate all neighbour contributions into each point
+      ! Self-contribution (diagonal) is added separately
 
       !$omp parallel do default(shared) &
       !$omp& private(igrid, jj, jgrid, xi, yi, zi, dx, dy, dz, d2, d, kval) &
@@ -100,7 +100,7 @@ contains
       !> Hard cavity reference density (full Lebedev grid per owner sphere)
 
       ! Evaluate the anchor density at each active point against the complete
-      ! (unfiltered) Lebedev grid of its owner sphere.
+      ! (unfiltered) Lebedev grid of its owner sphere
       !$omp parallel do default(shared) &
       !$omp& private(igrid, isph, jj, xi, yi, zi, xj, yj, zj, &
       !$omp&   dx, dy, dz, d2, d, kval) &
@@ -170,7 +170,7 @@ contains
    !> Compute surface area from projected grid
    !>
    !> Calculates area elements a = w_leb * f * r^2 and accumulates per-sphere
-   !> areas (asph) and total area. Also computes Gaussian widths xi.
+   !> areas (asph) and the total area, also computing the Gaussian widths xi
    !>
    !> @param[inout] self Cavity instance
    module subroutine compute_area_volume(self, error)
@@ -275,15 +275,15 @@ contains
       if (allocated(self%KG)) deallocate (self%KG)
       allocate (self%KG(self%ngrid), source=0.0_wp)
 
-      ! Set up thread-local LSF evaluators and SSD systems.
+      ! Set up thread-local LSF evaluators and SSD systems
       ! The curvature loop below reads the LSF Hessian (lsf2_rr), so the cached
-      ! callback LSF must be told to compute up to second order.
+      ! callback LSF must be told to compute up to second order
       call slots%init(self%ctx, self%lsf_model, 2)
 
       call abort%reset()
 
-      ! num_threads pins the team to the size the slots were built for; without
-      ! it a larger live team indexes slots%lsf out of bounds.
+      ! num_threads pins the team to the size the slots were built for; without it
+      ! a larger live team indexes slots%lsf out of bounds
       !$omp parallel do num_threads(slots%nthreads) default(shared) &
       !$omp& private(igrid, thread_slot, lsf0_loc, lsf1_r_loc, lsf2_rr_loc, &
       !$omp&   g_vec, H_mat, g_norm, g_norm_sq, inv_g_norm, &
@@ -437,7 +437,7 @@ contains
 
       do i = 1, ngrid
          ! Serial loop, so an evaluation failure can be returned immediately
-         ! (see the parallel loops for the general contract).
+         ! (see the parallel loops for the general contract)
          call lsf%prepare(self%xyz(:, i), error)
          if (allocated(error)) return
          call lsf%f012_r(lsf0=S_val, lsf1_r=grad_S)
@@ -636,9 +636,10 @@ contains
                end if
             end do
 
-            ! Per-patch probe radius set by the deepest point in the basin, and area-weighted mean k2 across each
-            ! basin (Lebedev weights vary across the surface, so a plain arithmetic average would over-emphasise
-            ! low-weight points near sphere intersections)
+            ! Per-patch probe radius set by the deepest point in the basin, and an
+            ! area-weighted mean k2 across each basin; Lebedev weights vary over
+            ! the surface, so a plain arithmetic average would over-emphasise
+            ! low-weight points near sphere intersections
             do ip = 1, npatch
                patch_r(ip) = -1.0_wp/patch_k2_min(ip)
                if (patch_area(ip) > 0.0_wp) then

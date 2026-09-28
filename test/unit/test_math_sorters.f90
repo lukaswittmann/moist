@@ -9,14 +9,14 @@ module test_math_sorters
 
    public :: collect_math_sorters
 
-   !> Numerical tolerance for floating-point comparisons in tests.
+   !> Numerical tolerance for floating-point comparisons in tests
    real(wp), parameter :: thr = 10.0_wp*epsilon(1.0_wp)
 
 contains
 
-   !> Collect all sorter tests.
+   !> Collect all sorter tests
    subroutine collect_math_sorters(testsuite)
-      !> Collection of tests.
+      !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
@@ -29,7 +29,7 @@ contains
                   ]
    end subroutine collect_math_sorters
 
-   !> Sort mixed values including negatives and duplicates.
+   !> Sort mixed values including negatives and duplicates
    subroutine test_qsort_values_mixed(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
@@ -47,7 +47,7 @@ contains
       call check(error, maxval(abs(a - expected)) < thr, more="Sorted values do not match expectation")
    end subroutine test_qsort_values_mixed
 
-   !> Sort a longer descending array to exercise quicksort partitioning.
+   !> Sort a longer descending array to exercise quicksort partitioning
    subroutine test_qsort_values_descending_long(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
@@ -68,7 +68,7 @@ contains
       call check(error, maxval(abs(a - expected)) < thr, more="Descending input was not sorted correctly")
    end subroutine test_qsort_values_descending_long
 
-   !> Sort 10k random values and verify neighboring order.
+   !> Sort 10k random values and verify neighboring order
    subroutine test_qsort_large_random_sorted_order(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
@@ -98,7 +98,7 @@ contains
       end do
    end subroutine test_qsort_large_random_sorted_order
 
-   !> Sort values with index tracking and verify value-index consistency.
+   !> Sort values with index tracking and verify value-index consistency
    subroutine test_qsort_with_indices_tracks_permutation(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
@@ -135,7 +135,7 @@ contains
       call check(error, all(seen), more="Index array must contain each original position exactly once")
    end subroutine test_qsort_with_indices_tracks_permutation
 
-   !> Verify empty, singleton, and two-element edge sizes.
+   !> Verify empty, singleton, and two-element edge sizes
    subroutine test_qsort_edge_sizes(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error
@@ -163,7 +163,7 @@ contains
                  more="Two-element array sorted values are incorrect")
    end subroutine test_qsort_edge_sizes
 
-   !> Ensure mismatched index size reports an error.
+   !> Ensure mismatched index size reports an error
    subroutine test_qsort_index_size_mismatch_error(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: sort_error

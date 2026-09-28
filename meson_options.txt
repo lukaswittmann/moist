@@ -27,20 +27,6 @@ option(
 )
 
 option(
-  'rism',
-  type: 'boolean',
-  value: false,
-  description: 'Build RISM module (auto-enables FFTW and HDF5)',
-)
-
-option(
-  'fftw',
-  type: 'boolean',
-  value: false,
-  description: 'Enable FFTW support',
-)
-
-option(
   'api',
   type: 'boolean',
   value: true,
@@ -67,13 +53,6 @@ option(
   value: false,
   yield: true,
   description: 'Enable BLAS/LAPACK ilp64 support',
-)
-
-option(
-  'hdf5',
-  type: 'boolean',
-  value: false,
-  description: 'Enable HDF5 support for I/O',
 )
 
 option(

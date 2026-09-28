@@ -7,4 +7,5 @@ Components are reusable energy terms that can be combined in a ``solvation_model
    :maxdepth: 2
 
    pv
+   gostshyp
    pcm/index

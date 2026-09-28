@@ -4,17 +4,18 @@
 module moist_math_lapack_syev
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: lapack_syev
    public :: dsyev, ssyev
 
    !> Computes all eigenvalues and, optionally, eigenvectors of a
-   !> real symmetric matrix A.
+   !> real symmetric matrix A
    interface lapack_syev
       pure subroutine ssyev(jobz, uplo, n, a, lda, w, work, lwork, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: jobz
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n
@@ -27,6 +28,7 @@ module moist_math_lapack_syev
       end subroutine ssyev
       pure subroutine dsyev(jobz, uplo, n, a, lda, w, work, lwork, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: jobz
          character(len=1), intent(in) :: uplo
          integer(lapack_ik), intent(in) :: n

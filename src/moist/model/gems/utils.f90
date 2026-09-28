@@ -3,13 +3,17 @@ module moist_model_gems_utils
    use mctc_io, only: structure_type, &
       & new_structure
    use mctc_env_error, only: error_type
+   implicit none(type, external)
+   private
+
+   public :: BuildSuperStructure
 
 contains
 
    subroutine BuildSuperStructure(soluteMol, solventMol, SuperStructure, no_displacement)
       use mctc_env, only: wp
       use mctc_io, only: structure_type
-      implicit none
+      implicit none(type, external)
 
       ! Inputs
       type(structure_type), intent(in)  :: soluteMol

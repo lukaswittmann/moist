@@ -1,34 +1,64 @@
 !> Parameter container for the COSMO Fine Cavity (CFC) LSF
 module moist_cavity_drop_lsf_cfc_param
+   use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
    use, intrinsic :: iso_fortran_env, only: output_unit
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_cavity_drop_lsf_cfc_param_type
 
    !> CFC level set function parameters (Diedenhofen-Klamt 2018 defaults)
-   type :: moist_cavity_drop_lsf_cfc_param_type
-      !> Atomic-term exponent a1.
+   type, extends(moist_model_parameters_type) :: moist_cavity_drop_lsf_cfc_param_type
+      !> Atomic-term exponent a1
       real(wp) :: a1 = -15.0_wp
-      !> Pair-term exponent a2.
+      !> Pair-term exponent a2
       real(wp) :: a2 = -9.0_wp
-      !> Pair-term coupling constant c.
+      !> Pair-term coupling constant c
       real(wp) :: c = 5.0_wp
-      !> Pair-term polynomial power m.
+      !> Pair-term polynomial power m
       !>
       !> The kernel uses `m = 4` for the implemented symbolic differentiation
       !> A value other than 4 is inconsistent with the derivatives
       integer :: m = 4
    contains
-      !> Override any subset of parameter fields.
+      !> Restore compiled defaults
+      procedure :: init_defaults => init_parameter_defaults
+      !> Declare fields for JSON input, output, and printing
+      procedure :: register_entries => register_parameter_entries
+      !> Override any subset of parameter fields
       procedure, public :: new => new_lsf_cfc_param
-      !> Print the CFC shape parameters under an "Implicit surface (CFC)" header.
+      !> Print the CFC shape parameters under an "Implicit surface (CFC)" header
       procedure, public :: print => print_lsf_cfc_param
    end type moist_cavity_drop_lsf_cfc_param_type
 
 contains
+
+   !> Restore compiled parameter defaults
+   !>
+   !> @param[inout] self Parameter values
+   subroutine init_parameter_defaults(self)
+      class(moist_cavity_drop_lsf_cfc_param_type), intent(inout) :: self
+      type(moist_cavity_drop_lsf_cfc_param_type) :: defaults
+
+      self%a1 = defaults%a1
+      self%a2 = defaults%a2
+      self%c = defaults%c
+      self%m = defaults%m
+   end subroutine init_parameter_defaults
+
+   !> Declare parameter fields for JSON input, output, and printing
+   !>
+   !> @param[inout] self Parameter values
+   subroutine register_parameter_entries(self)
+      class(moist_cavity_drop_lsf_cfc_param_type), intent(inout), target :: self
+
+      call self%register_real_scalar("a1", self%a1)
+      call self%register_real_scalar("a2", self%a2)
+      call self%register_real_scalar("c", self%c)
+      call self%register_int_scalar("m", self%m)
+   end subroutine register_parameter_entries
 
    !> Override any subset of CFC parameter fields
    !>

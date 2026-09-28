@@ -109,9 +109,9 @@ contains
       integer, intent(in), optional       :: nout    !! output unit for printing
 
       ! check for consistent inputs:
-      if (any(size(a) /= [size(irow), size(icol)])) error stop 'invalid a,icol,irow sizes in initialize_ez'
-      if (any(irow > m)) error stop 'invalid irow or m in initialize_ez'
-      if (any(icol > n)) error stop 'invalid icol or n in initialize_ez'
+      if (any(size(a) /= [size(irow), size(icol)])) error stop "invalid a,icol,irow sizes in initialize_ez"
+      if (any(irow > m)) error stop "invalid irow or m in initialize_ez"
+      if (any(icol > n)) error stop "invalid icol or n in initialize_ez"
 
       me%num_nonzero_elements = size(irow)
       me%m = m
@@ -152,7 +152,7 @@ contains
       integer :: r    !! row index
       integer :: c    !! column index
 
-      if (m /= me%m .or. n /= me%n) error stop 'lsqr_solver_ez class not properly initialized'
+      if (m /= me%m .or. n /= me%n) error stop "lsqr_solver_ez class not properly initialized"
 
       select case (mode)
 
@@ -197,7 +197,7 @@ contains
          x = x + me%Aty
 
       case default
-         error stop 'invalid mode in aprod_ez'
+         error stop "invalid mode in aprod_ez"
       end select
 
    end subroutine aprod_ez
@@ -579,22 +579,22 @@ contains
 
       logical, parameter :: extra = .true.  !! for extra printing below.
 
-      character(len=*), parameter :: enter = ' Enter LSQR.  '
-      character(len=*), parameter :: exit = ' Exit  LSQR.  '
-      character(len=*), dimension(0:5), parameter :: msg = ['The exact solution is x = 0                          ', &
-                                                            'A solution to Ax = b was found, given atol, btol     ', &
-                                                            'A least-squares solution was found, given atol       ', &
-                                                            'A damped least-squares solution was found, given atol', &
-                                                            'Cond(Abar) seems to be too large, given conlim       ', &
-                                                            'The iteration limit was reached                      ']
+      character(len=*), parameter :: enter = " Enter LSQR.  "
+      character(len=*), parameter :: exit = " Exit  LSQR.  "
+      character(len=*), dimension(0:5), parameter :: msg = ["The exact solution is x = 0                          ", &
+                                                            "A solution to Ax = b was found, given atol, btol     ", &
+                                                            "A least-squares solution was found, given atol       ", &
+                                                            "A damped least-squares solution was found, given atol", &
+                                                            "Cond(Abar) seems to be too large, given conlim       ", &
+                                                            "The iteration limit was reached                      "]
 
       ! Initialize.
       if (nout /= 0) then
-         write (nout, '(//A)') enter//'     Least-squares solution of  Ax = b'
-         write (nout, '(A,I7,A,I7,A)') ' The matrix  A  has', m, ' rows   and', n, ' columns'
-         write (nout, '(1P,A,E22.14,3X,A,L10)') ' damp   =', damp, 'wantse =', wantse
-         write (nout, '(1P,A,E10.2,15x,A,E10.2)') ' atol   =', atol, 'conlim =', conlim
-         write (nout, '(1P,A,E10.2,15x,A,I10)') ' btol   =', btol, 'itnlim =', itnlim
+         write (nout, "(//A)") enter//"     Least-squares solution of  Ax = b"
+         write (nout, "(A,I7,A,I7,A)") " The matrix  A  has", m, " rows   and", n, " columns"
+         write (nout, "(1P,A,E22.14,3X,A,L10)") " damp   =", damp, "wantse =", wantse
+         write (nout, "(1P,A,E10.2,15x,A,E10.2)") " atol   =", atol, "conlim =", conlim
+         write (nout, "(1P,A,E10.2,15x,A,I10)") " btol   =", btol, "itnlim =", itnlim
       end if
 
       damped = damp > zero
@@ -657,20 +657,20 @@ contains
 
          if (nout /= 0) then
             if (damped) then
-               write (nout, '(//A)') &
-                  '   Itn       x(1)           Function     Compatible   LS     Norm Abar Cond Abar'
+               write (nout, "(//A)") &
+                  "   Itn       x(1)           Function     Compatible   LS     Norm Abar Cond Abar"
             else
-               write (nout, '(//A)') &
-                  '   Itn       x(1)           Function     Compatible   LS        Norm A    Cond A'
+               write (nout, "(//A)") &
+                  "   Itn       x(1)           Function     Compatible   LS        Norm A    Cond A"
             end if
             test1 = one
             test2 = alpha/beta
 
             if (extra) then
-               write (nout, '(80X,A)') '    phi    dknorm   dxk  alfa_opt'
+               write (nout, "(80X,A)") "    phi    dknorm   dxk  alfa_opt"
             end if
-            write (nout, '(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)') itn, x(1), rnorm, test1, test2
-            write (nout, '(A)') ''
+            write (nout, "(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)") itn, x(1), rnorm, test1, test2
+            write (nout, "(A)") ""
          end if
 
          do
@@ -828,10 +828,10 @@ contains
                   ! Print a line for this iteration.
                   ! "extra" is for experimental purposes.
                   if (extra) then
-                     write (nout, '(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)') &
+                     write (nout, "(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)") &
                         itn, x(1), rnorm, test1, test2, anorm, acond, phi, dknorm, dxk, alfopt
                   else
-                     write (nout, '(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)') &
+                     write (nout, "(1P, I6, 2E17.9, 4E10.2, E9.1, 3E8.1)") &
                         itn, x(1), rnorm, test1, test2, anorm, acond
                   end if
                   !if (mod(itn,10) == 0) write(nout, '(A)') ''
@@ -873,13 +873,13 @@ contains
       ! Print the stopping condition.
       if (damped .and. istop == 2) istop = 3
       if (nout /= 0) then
-         write (nout, '(//A,5X,A,I2,15X,A,I8)') exit, 'istop  =', istop, 'itn    =', itn
-         write (nout, '(1P,A,5X,A,E12.5,5X,A,E12.5)') exit, 'anorm  =', anorm, 'acond  =', acond
-         write (nout, '(1P,A,5X,A,E12.5,5X,A,E12.5)') exit, 'bnorm  =', bnorm, 'xnorm  =', xnorm
-         write (nout, '(1P,A,5X,A,E12.5,5X,A,E12.5)') exit, 'rnorm  =', rnorm, 'arnorm =', arnorm
-         write (nout, '(1P,A,5X,A,E8.1,A,I8)') exit, 'max dx =', dxmax, ' occurred at itn ', maxdx
-         write (nout, '(1P,A,5X,A,E8.1,A)') exit, '       =', dxmax/(xnorm + 1.0e-20_wp), '*xnorm'
-         write (nout, '(A,5X,A)') exit, msg(istop)
+         write (nout, "(//A,5X,A,I2,15X,A,I8)") exit, "istop  =", istop, "itn    =", itn
+         write (nout, "(1P,A,5X,A,E12.5,5X,A,E12.5)") exit, "anorm  =", anorm, "acond  =", acond
+         write (nout, "(1P,A,5X,A,E12.5,5X,A,E12.5)") exit, "bnorm  =", bnorm, "xnorm  =", xnorm
+         write (nout, "(1P,A,5X,A,E12.5,5X,A,E12.5)") exit, "rnorm  =", rnorm, "arnorm =", arnorm
+         write (nout, "(1P,A,5X,A,E8.1,A,I8)") exit, "max dx =", dxmax, " occurred at itn ", maxdx
+         write (nout, "(1P,A,5X,A,E8.1,A)") exit, "       =", dxmax/(xnorm + 1.0e-20_wp), "*xnorm"
+         write (nout, "(A,5X,A)") exit, msg(istop)
       end if
 
    end subroutine LSQR
@@ -940,8 +940,8 @@ contains
       real(wp) :: alfa, beta, t, test1, test2, test3, tol
 
       tol = eps**power
-      if (nout /= 0) write (nout, '(//A)') &
-         'Enter acheck. Test of aprod for LSQR and CRAIG'
+      if (nout /= 0) write (nout, "(//A)") &
+         "Enter acheck. Test of aprod for LSQR and CRAIG"
 
       ! ==================================================================
       ! Cook up some "unlikely" vectors x and y of unit length.
@@ -986,12 +986,12 @@ contains
 
       if (test3 <= tol) then
          inform = 0
-         if (nout /= 0) write (nout, '(1P,A,1X,E10.1)') &
-            'aprod seems OK. Relative error =', test3
+         if (nout /= 0) write (nout, "(1P,A,1X,E10.1)") &
+            "aprod seems OK. Relative error =", test3
       else
          inform = 1
-         if (nout /= 0) write (nout, '(1P,A,1X,E10.1)') &
-            'aprod seems incorrect. Relative error =', test3
+         if (nout /= 0) write (nout, "(1P,A,1X,E10.1)") &
+            "aprod seems incorrect. Relative error =", test3
       end if
 
    end subroutine acheck
@@ -1103,11 +1103,11 @@ contains
       rho1 = nrm2(u)
       sigma1 = nrm2(v)
       if (nout /= 0) then
-         write (nout, '(//A)') 'Enter xcheck. Does x solve Ax = b, etc?'
-         write (nout, '(1P,A,E10.3)') ' damp            =', damp
-         write (nout, '(1P,A,E10.3)') ' norm(x)         =', xnorm
-         write (nout, '(1P,A,E15.8,A)') ' norm(r)         =', rho1, ' = rho1'
-         write (nout, '(1P,A,E10.3,5X,A)') ' norm(A''r)       =', sigma1, ' = sigma1'
+         write (nout, "(//A)") "Enter xcheck. Does x solve Ax = b, etc?"
+         write (nout, "(1P,A,E10.3)") " damp            =", damp
+         write (nout, "(1P,A,E10.3)") " norm(x)         =", xnorm
+         write (nout, "(1P,A,E15.8,A)") " norm(r)         =", rho1, " = rho1"
+         write (nout, "(1P,A,E10.3,5X,A)") " norm(A'r)       =", sigma1, " = sigma1"
       end if
 
       if (damp == zero) then
@@ -1119,10 +1119,10 @@ contains
          snorm = rho1/damp
          xsnorm = rho2/damp
          if (nout /= 0) then
-            write (nout, '(1P/A,E10.3)') ' norm(s)         =', snorm
-            write (nout, '(1P,A,E10.3)') ' norm(x,s)       =', xsnorm
-            write (nout, '(1P,A,E15.8,A)') ' norm(rbar)      =', rho2, ' = rho2'
-            write (nout, '(1P,A,E10.3,5X,A)') ' norm(Abar''rbar) =', sigma2, ' = sigma2'
+            write (nout, "(1P/A,E10.3)") " norm(s)         =", snorm
+            write (nout, "(1P,A,E10.3)") " norm(x,s)       =", xsnorm
+            write (nout, "(1P,A,E15.8,A)") " norm(rbar)      =", rho2, " = rho2"
+            write (nout, "(1P,A,E10.3,5X,A)") " norm(Abar'rbar) =", sigma2, " = sigma2"
          end if
       end if
 
@@ -1147,11 +1147,11 @@ contains
       end if
 
       if (nout /= 0) then
-         write (nout, '(/A,I2)') ' inform          =', inform
-         write (nout, '(1P,A,E10.3)') ' tol             =', tol
-         write (nout, '(1P,A,E10.3,A)') ' test1           =', test1, ' (Ax = b)'
-         write (nout, '(1P,A,E10.3,A)') ' test2           =', test2, ' (least-squares)'
-         write (nout, '(1P,A,E10.3,A)') ' test3           =', test3, ' (damped least-squares)'
+         write (nout, "(/A,I2)") " inform          =", inform
+         write (nout, "(1P,A,E10.3)") " tol             =", tol
+         write (nout, "(1P,A,E10.3,A)") " test1           =", test1, " (Ax = b)"
+         write (nout, "(1P,A,E10.3,A)") " test2           =", test2, " (least-squares)"
+         write (nout, "(1P,A,E10.3,A)") " test3           =", test3, " (damped least-squares)"
       end if
 
    end subroutine xcheck

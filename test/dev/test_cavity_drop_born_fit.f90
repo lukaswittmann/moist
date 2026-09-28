@@ -1,4 +1,4 @@
-!> Dev test for fitting DROP Gaussian widths to analytical Born energies.
+!> Dev test for fitting DROP Gaussian widths to analytical Born energies
 !>
 !> The geometry used here is a *vestigial structural carrier*: the
 !> physically meaningful object is a single sphere at the origin with
@@ -6,8 +6,10 @@
 !> come from mstore, we load MB16-43/H2 and park its second atom 100 bohr
 !> away with a 1e-3 bohr radius. That atom's surface area (~1e-5 bohr^2)
 !> and Born contribution are O(1e-7) - well below the test's
-!> max_rel_energy_error = 1e-4 tolerance.
+!> max_rel_energy_error = 1e-4 tolerance
 module test_cavity_drop_born_fit
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use, intrinsic :: ieee_arithmetic, only : ieee_is_finite
    use, intrinsic :: iso_fortran_env, only : error_unit
    use mctc_env_accuracy, only : wp
@@ -24,37 +26,37 @@ module test_cavity_drop_born_fit
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_born_fit
 
-   !> Dielectric constant used for the CPCM/Born comparison.
+   !> Dielectric constant used for the CPCM/Born comparison
    real(wp), parameter :: epsilon = 100.0_wp
-   !> CPCM dielectric prefactor.
+   !> CPCM dielectric prefactor
    real(wp), parameter :: feps = (epsilon - 1.0_wp) / epsilon
-   !> Central point charge used for the spherical Born reference.
+   !> Central point charge used for the spherical Born reference
    real(wp), parameter :: source_charge = 1.0_wp
-   !> Radii used to verify the fitted zeta reproduces 1/R Born scaling.
+   !> Radii used to verify the fitted zeta reproduces 1/R Born scaling
    real(wp), parameter :: sphere_radii(*) = [1.0_wp, 2.0_wp, 3.0_wp, 5.0_wp, 7.0_wp]
-   !> Fitting lower bound for zeta.
+   !> Fitting lower bound for zeta
    real(wp), parameter :: zeta_lower = 1.0_wp
-   !> Fitting upper bound for zeta.
+   !> Fitting upper bound for zeta
    real(wp), parameter :: zeta_upper = 10.0_wp
-   !> Maximum tolerated relative energy error after fitting.
+   !> Maximum tolerated relative energy error after fitting
    real(wp), parameter :: max_rel_energy_error = 1.0e-4_wp
-   !> Maximum tolerated difference to the constructor-selected zeta.
+   !> Maximum tolerated difference to the constructor-selected zeta
    real(wp), parameter :: max_zeta_param_error = 2.0e-4_wp
-   !> Stop threshold for the golden-section fit interval.
+   !> Stop threshold for the golden-section fit interval
    real(wp), parameter :: fit_interval_tol = 1.0e-4_wp
-   !> Maximum golden-section iterations.
+   !> Maximum golden-section iterations
    integer, parameter :: fit_maxiter = 40
 
 contains
 
-   !> Collect all DROP Born fit tests.
+   !> Collect all DROP Born fit tests
    subroutine collect_cavity_drop_born_fit(testsuite)
-      !> Collection of tests.
+      !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
@@ -62,9 +64,9 @@ contains
          ]
    end subroutine collect_cavity_drop_born_fit
 
-   !> Fit zeta_Born for all supported Lebedev grids.
+   !> Fit zeta_Born for all supported Lebedev grids
    subroutine test_all_lebedev_grids(error)
-      !> Test-drive error object.
+      !> Test-drive error object
       type(error_type), allocatable, intent(out) :: error
 
       integer :: igrid
@@ -107,13 +109,13 @@ contains
       end if
    end subroutine test_all_lebedev_grids
 
-   !> Fit and validate one Lebedev grid size.
+   !> Fit and validate one Lebedev grid size
    subroutine check_lebedev_grid(nleb, plp, error)
-      !> Number of Lebedev points per sphere.
+      !> Number of Lebedev points per sphere
       integer, intent(in) :: nleb
-      !> Results table printer.
+      !> Results table printer
       type(prettylistprinter), intent(inout) :: plp
-      !> Test-drive error object.
+      !> Test-drive error object
       type(error_type), allocatable, intent(out) :: error
 
       type(cavity_type_drop) :: cavities(size(sphere_radii))
@@ -166,13 +168,13 @@ contains
       call plp%end_row()
    end subroutine check_lebedev_grid
 
-   !> Build single-atom DROP cavities for all reference radii.
+   !> Build single-atom DROP cavities for all reference radii
    subroutine build_spherical_cavities(nleb, cavities, error)
-      !> Number of Lebedev points per sphere.
+      !> Number of Lebedev points per sphere
       integer, intent(in) :: nleb
-      !> Output DROP cavities.
+      !> Output DROP cavities
       type(cavity_type_drop), intent(out) :: cavities(:)
-      !> Test-drive error object.
+      !> Test-drive error object
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol
@@ -202,12 +204,11 @@ contains
 
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=3.0_wp, blend_1b=1.0_wp, &
-               blend_2b=1.0_wp, blend_3b=1.0_wp)
-            call new_cavity_drop(cavities(ir), ctx, nleb=nleb, &
-               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2, &
-               radius_model=radius_model, &
-               lsf_model=svdw_template, error=cavity_error)
+            call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=3.0_wp, &
+               blend_1b=1.0_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
+            call new_cavity_drop(cavities(ir), ctx, radius_model=radius_model, lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, &
+               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2))
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "new_cavity_drop failed for nleb=" &
@@ -227,11 +228,11 @@ contains
       end do
    end subroutine build_spherical_cavities
 
-   !> Check whether DROP can use a Lebedev grid without negative weights.
+   !> Check whether DROP can use a Lebedev grid without negative weights
    function drop_supports_lebedev_grid(nleb) result(supported)
-      !> Number of Lebedev points.
+      !> Number of Lebedev points
       integer, intent(in) :: nleb
-      !> Support flag.
+      !> Support flag
       logical :: supported
 
       type(mctc_error), allocatable :: grid_error
@@ -251,13 +252,13 @@ contains
       supported = .not. any(weights < 0.0_wp)
    end function drop_supports_lebedev_grid
 
-   !> Fit zeta by minimizing summed squared relative Born-energy errors.
+   !> Fit zeta by minimizing summed squared relative Born-energy errors
    subroutine fit_zeta(cavities, zeta_fit, message)
-      !> Spherical DROP cavities.
+      !> Spherical DROP cavities
       type(cavity_type_drop), intent(inout) :: cavities(:)
-      !> Fitted zeta value.
+      !> Fitted zeta value
       real(wp), intent(out) :: zeta_fit
-      !> Error message, allocated on failure.
+      !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
       real(wp) :: a, b, c, d, fc, fd, gr
@@ -298,15 +299,15 @@ contains
       zeta_fit = 0.5_wp * (a + b)
    end subroutine fit_zeta
 
-   !> Compute summed squared relative Born-energy errors for one zeta.
+   !> Compute summed squared relative Born-energy errors for one zeta
    subroutine born_fit_objective(cavities, zeta, objective, message)
-      !> Spherical DROP cavities.
+      !> Spherical DROP cavities
       type(cavity_type_drop), intent(inout) :: cavities(:)
-      !> Candidate zeta value.
+      !> Candidate zeta value
       real(wp), intent(in) :: zeta
-      !> Summed squared relative error.
+      !> Summed squared relative error
       real(wp), intent(out) :: objective
-      !> Error message, allocated on failure.
+      !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
       real(wp) :: energy, reference, rel_error
@@ -314,7 +315,7 @@ contains
       objective = 0.0_wp
       ! For a single centered charge in a one-atom spherical cavity, the CPCM
       ! energy scales exactly as 1/R. One radius is sufficient for fitting;
-      ! all radii are checked after the fitted zeta is found.
+      ! all radii are checked after the fitted zeta is found
       call compute_drop_born_energy(cavities(1), zeta, energy, message)
       if (allocated(message)) return
 
@@ -323,15 +324,15 @@ contains
       objective = rel_error**2
    end subroutine born_fit_objective
 
-   !> Validate the final fit and return the maximum relative error.
+   !> Validate the final fit and return the maximum relative error
    subroutine validate_fit(cavities, zeta, max_error, message)
-      !> Spherical DROP cavities.
+      !> Spherical DROP cavities
       type(cavity_type_drop), intent(inout) :: cavities(:)
-      !> Fitted zeta value.
+      !> Fitted zeta value
       real(wp), intent(in) :: zeta
-      !> Maximum relative error over radii.
+      !> Maximum relative error over radii
       real(wp), intent(out) :: max_error
-      !> Error message, allocated on failure.
+      !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
       real(wp) :: energy, reference, rel_error
@@ -348,15 +349,15 @@ contains
       end do
    end subroutine validate_fit
 
-   !> Compute DROP CPCM solvation energy for a central point charge.
+   !> Compute DROP CPCM solvation energy for a central point charge
    subroutine compute_drop_born_energy(cavity, zeta, energy, message)
-      !> Spherical DROP cavity.
+      !> Spherical DROP cavity
       type(cavity_type_drop), intent(inout) :: cavity
-      !> Candidate Gaussian width scale.
+      !> Candidate Gaussian width scale
       real(wp), intent(in) :: zeta
-      !> CPCM solvation energy.
+      !> CPCM solvation energy
       real(wp), intent(out) :: energy
-      !> Error message, allocated on failure.
+      !> Error message, allocated on failure
       character(len=:), allocatable, intent(out) :: message
 
       type(mctc_error), allocatable :: cavity_error
@@ -395,37 +396,37 @@ contains
       energy = 0.5_wp * dot_product(sigma, phi)
    end subroutine compute_drop_born_energy
 
-   !> Analytical Born solvation energy for a central unit charge in a sphere.
+   !> Analytical Born solvation energy for a central unit charge in a sphere
    pure function analytical_born_energy(radius) result(energy)
-      !> Sphere radius in bohr.
+      !> Sphere radius in bohr
       real(wp), intent(in) :: radius
-      !> Analytical Born energy in hartree.
+      !> Analytical Born energy in hartree
       real(wp) :: energy
 
       energy = -0.5_wp * feps * source_charge**2 / radius
    end function analytical_born_energy
 
-   !> Convert integer to allocatable string.
+   !> Convert integer to allocatable string
    function int_string(value) result(string)
-      !> Integer value.
+      !> Integer value
       integer, intent(in) :: value
-      !> Formatted string.
+      !> Formatted string
       character(len=:), allocatable :: string
       character(len=32) :: buffer
 
-      write(buffer, '(i0)') value
+      write(buffer, "(i0)") value
       string = trim(buffer)
    end function int_string
 
-   !> Convert real to allocatable string.
+   !> Convert real to allocatable string
    function real_string(value) result(string)
-      !> Real value.
+      !> Real value
       real(wp), intent(in) :: value
-      !> Formatted string.
+      !> Formatted string
       character(len=:), allocatable :: string
       character(len=48) :: buffer
 
-      write(buffer, '(es22.14)') value
+      write(buffer, "(es22.14)") value
       string = trim(adjustl(buffer))
    end function real_string
 

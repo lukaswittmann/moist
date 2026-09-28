@@ -4,12 +4,13 @@ program tester
    use, intrinsic :: iso_fortran_env, only: error_unit
    use testdrive, only: run_testsuite, new_testsuite, testsuite_type, &
       & select_suite, run_selected, get_argument
+   use test_parameters, only: collect_parameters
    use test_api, only: collect_api
-   use test_utils, only: collect_utils
    use test_utils_timer, only: collect_utils_timer
    use test_utils_context, only: collect_utils_context
    use test_utils_mem, only: collect_utils_mem
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
+   use test_channels, only: collect_channels
    use test_radii, only: collect_radii
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
@@ -31,9 +32,6 @@ program tester
    use test_cavity_numsa, only: collect_cavity_numsa
    use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
    use test_math_solvers, only: collect_math_solvers
-#ifdef WITH_HDF5
-   use test_utils_hdf5, only: collect_utils_hdf5
-#endif
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
@@ -45,6 +43,7 @@ program tester
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
    use test_model_general, only: collect_model_general
+   use test_model_coupling, only: collect_model_coupling
 
    implicit none(type, external)
 
@@ -56,12 +55,13 @@ program tester
    stat = 0
 
    testsuites = [ &
+      & new_testsuite("parameters", collect_parameters), &
       & new_testsuite("api", collect_api), &
-      & new_testsuite("utils", collect_utils), &
       & new_testsuite("utils_timer", collect_utils_timer), &
       & new_testsuite("utils_context", collect_utils_context), &
       & new_testsuite("utils_mem", collect_utils_mem), &
       & new_testsuite("utils_prettylistprint", collect_utils_prettylistprint), &
+      & new_testsuite("channels", collect_channels), &
       & new_testsuite("data", collect_data), &
       & new_testsuite("radii", collect_radii), &
       & new_testsuite("math_linalg", collect_math_linalg), &
@@ -96,12 +96,9 @@ program tester
       & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
-      & new_testsuite("model_general", collect_model_general) &
+      & new_testsuite("model_general", collect_model_general), &
+      & new_testsuite("model_coupling", collect_model_coupling) &
       & ]
-
-#ifdef WITH_HDF5
-   testsuites = [testsuites, new_testsuite("utils_hdf5", collect_utils_hdf5)]
-#endif
 
    call get_argument(1, suite_name)
    call get_argument(2, test_name)

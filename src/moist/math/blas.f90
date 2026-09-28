@@ -4,6 +4,6 @@ module moist_math_blas
       & scal => wrap_scal, copy => wrap_copy, axpy => wrap_axpy
    use moist_math_blas_level2, only: gemv => wrap_gemv, symv => wrap_symv
    use moist_math_blas_level3, only: gemm => wrap_gemm, syrk => wrap_syrk
-   implicit none
+   implicit none(type, external)
    public
 end module moist_math_blas

@@ -223,21 +223,21 @@ contains
       if (present(report_msg)) me%report_msg => report_msg
 
       if (size(xl) /= size(xu) .or. size(xl) /= n) then
-         call me%report_message('error: invalid upper or lower bound vector size')
-         call me%report_message('  size(xl) =', ival=size(xl))
-         call me%report_message('  size(xu) =', ival=size(xu))
-         call me%report_message('  n        =', ival=n)
+         call me%report_message("error: invalid upper or lower bound vector size")
+         call me%report_message("  size(xl) =", ival=size(xl))
+         call me%report_message("  size(xu) =", ival=size(xu))
+         call me%report_message("  n        =", ival=n)
       else if (meq < 0 .or. meq > m) then
-         call me%report_message('error: invalid meq value:', ival=meq)
+         call me%report_message("error: invalid meq value:", ival=meq)
       else if (m < 0) then
-         call me%report_message('error: invalid m value:', ival=m)
+         call me%report_message("error: invalid m value:", ival=m)
       else if (n < 1) then
-         call me%report_message('error: invalid n value:', ival=n)
+         call me%report_message("error: invalid n value:", ival=n)
       else if (any(xl > xu .and. .not. ieee_is_nan(xl) .and. .not. ieee_is_nan(xu))) then
-         call me%report_message('error: lower bounds must be <= upper bounds.')
+         call me%report_message("error: lower bounds must be <= upper bounds.")
          do i = 1, n
             if (xl(i) > xu(i) .and. .not. ieee_is_nan(xl(i)) .and. .not. ieee_is_nan(xu(i))) then
-               call me%report_message('  xl(i)>xu(i) for variable', ival=i)
+               call me%report_message("  xl(i)>xu(i) for variable", ival=i)
             end if
          end do
       else
@@ -250,7 +250,7 @@ contains
             case (2)     !exact
                me%linesearch_mode = linesearch_mode
             case default
-               call me%report_message('error: invalid linesearch_mode (must be 1 or 2): ', &
+               call me%report_message("error: invalid linesearch_mode (must be 1 or 2): ", &
                                       ival=linesearch_mode)
                call me%destroy()
                return
@@ -266,9 +266,9 @@ contains
              me%alphamax <= me%alphamin .or. &
              me%alphamin >= one .or. me%alphamax > one) then
 
-            call me%report_message('error: invalid values for alphamin or alphamax.')
-            call me%report_message('  alphamin =', rval=me%alphamin)
-            call me%report_message('  alphamax =', rval=me%alphamax)
+            call me%report_message("error: invalid values for alphamin or alphamax.")
+            call me%report_message("  alphamin =", rval=me%alphamin)
+            call me%report_message("  alphamax =", rval=me%alphamax)
             call me%destroy()
             return
 
@@ -284,7 +284,7 @@ contains
             case (1:2)
                me%nnls_mode = nnls_mode
             case default
-               call me%report_message('error: invalid value for nnls_mode. defaulting to 1.')
+               call me%report_message("error: invalid value for nnls_mode. defaulting to 1.")
                me%nnls_mode = 1
             end select
          end if
@@ -406,9 +406,9 @@ contains
 
       if (associated(me%report)) then
          call me%report_message( &
-             & ' ==================================='// &
-             & '  Starting SLSQP Solver  '// &
-             & '===================================')
+             & " ==================================="// &
+             & "  Starting SLSQP Solver  "// &
+             & "===================================")
       end if
 
       !check setup:
@@ -497,7 +497,7 @@ contains
                      call me%f(x - delta, fl, cvecl)
                   case default
                      !this should never happen due to prior checks
-                     error stop 'Internal Error: invalid gradient_mode in slsqp_wrapper'
+                     error stop "Internal Error: invalid gradient_mode in slsqp_wrapper"
                   end select
                   !compute the gradients by first-order finite differences
                   g(ig) = (fr - fl)/(fact*delta(ig))
@@ -524,8 +524,9 @@ contains
          if (mode == 1 .or. mode == -1) then
             !continue to next call
          else
-            if (mode == 0 .and. associated(me%report)) &
+            if (mode == 0 .and. associated(me%report)) then
                call me%report(i, x, f, c) !report solution
+            end if
             call me%report_message(mode_to_status_message(mode))
             exit
          end if
@@ -583,26 +584,26 @@ contains
       if (write_message) then
 
          if (present(ival)) then
-            write (istr, fmt='(I10)', iostat=istat) ival
-            if (istat /= 0) istr = '*****'
-            str_to_write = str//' '//trim(adjustl(istr))
-         elseif (present(rval)) then
-            write (istr, fmt='(F30.16)', iostat=istat) rval
-            if (istat /= 0) rstr = '*****'
-            str_to_write = str//' '//trim(adjustl(rstr))
+            write (istr, fmt="(I10)", iostat=istat) ival
+            if (istat /= 0) istr = "*****"
+            str_to_write = str//" "//trim(adjustl(istr))
+         else if (present(rval)) then
+            write (istr, fmt="(F30.16)", iostat=istat) rval
+            if (istat /= 0) rstr = "*****"
+            str_to_write = str//" "//trim(adjustl(rstr))
          else
             str_to_write = str
          end if
 
          if (me%iprint == 0 .and. stop_program) then
-            write (error_unit, '(A)') str_to_write  !in this case, use the error unit
-         elseif (me%iprint /= 0) then
-            write (me%iprint, '(A)', iostat=istat) str_to_write   !user specified unit number
+            write (error_unit, "(A)") str_to_write  !in this case, use the error unit
+         else if (me%iprint /= 0) then
+            write (me%iprint, "(A)", iostat=istat) str_to_write   !user specified unit number
             if (istat /= 0) then
                ! attempt to write to error unit if above failed:
-               write (istr, fmt='(I10)', iostat=istat) me%iprint
-               write (error_unit, '(A)') 'Error writing to unit '//trim(adjustl(istr))
-               write (error_unit, '(A)') str_to_write
+               write (istr, fmt="(I10)", iostat=istat) me%iprint
+               write (error_unit, "(A)") "Error writing to unit "//trim(adjustl(istr))
+               write (error_unit, "(A)") str_to_write
             end if
          end if
 
@@ -610,7 +611,7 @@ contains
 
          deallocate (str_to_write)
 
-         if (stop_program) error stop 'Fatal Error'
+         if (stop_program) error stop "Fatal Error"
 
       end if
 
@@ -630,41 +631,41 @@ contains
 
       select case (imode)
       case (0) !required accuracy for solution obtained
-         message = '[SLSQP]: Required accuracy for solution obtained'
+         message = "[SLSQP]: Required accuracy for solution obtained"
       case (-100)
-         message = '[SLSQP]: Invalid size(x) in slsqp_wrapper'
+         message = "[SLSQP]: Invalid size(x) in slsqp_wrapper"
       case (-101)
-         message = '[SLSQP]: Invalid linesearch_mode in slsqp_wrapper'
+         message = "[SLSQP]: Invalid linesearch_mode in slsqp_wrapper"
       case (-102)
-         message = '[SLSQP]: Function is not associated'
+         message = "[SLSQP]: Function is not associated"
       case (-103)
-         message = '[SLSQP]: Gradient function is not associated'
+         message = "[SLSQP]: Gradient function is not associated"
       case (-104)
-         message = '[SLSQP]: Invalid gradient mode'
+         message = "[SLSQP]: Invalid gradient mode"
       case (-105)
-         message = '[SLSQP]: Invalid perturbation step size for finite difference gradients'
+         message = "[SLSQP]: Invalid perturbation step size for finite difference gradients"
       case (-2)
-         message = '[SLSQP]: User-triggered stop of slsqp'
+         message = "[SLSQP]: User-triggered stop of slsqp"
       case (1, -1)
-         message = '[SLSQP]: In progress'
+         message = "[SLSQP]: In progress"
       case (2)
-         message = '[SLSQP]: Number of equality constraints larger than n'
+         message = "[SLSQP]: Number of equality constraints larger than n"
       case (3)
-         message = '[SLSQP]: More than 3*n iterations in lsq subproblem'
+         message = "[SLSQP]: More than 3*n iterations in lsq subproblem"
       case (4)
-         message = '[SLSQP]: Inequality constraints incompatible'
+         message = "[SLSQP]: Inequality constraints incompatible"
       case (5)
-         message = '[SLSQP]: Singular matrix e in lsq subproblem'
+         message = "[SLSQP]: Singular matrix e in lsq subproblem"
       case (6)
-         message = '[SLSQP]: Singular matrix c in lsq subproblem'
+         message = "[SLSQP]: Singular matrix c in lsq subproblem"
       case (7)
-         message = '[SLSQP]: Rank-deficient equality constraint subproblem hfti'
+         message = "[SLSQP]: Rank-deficient equality constraint subproblem hfti"
       case (8)
-         message = '[SLSQP]: Positive directional derivative for linesearch'
+         message = "[SLSQP]: Positive directional derivative for linesearch"
       case (9)
-         message = '[SLSQP]: More than max_iter iterations'
+         message = "[SLSQP]: More than max_iter iterations"
       case default
-         message = '[SLSQP]: Unknown error'
+         message = "[SLSQP]: Unknown error"
       end select
 
    end function mode_to_status_message

@@ -63,7 +63,6 @@ TARGETS=(
    meson.build
    fpm.toml
    python/meson.build
-   python/pyproject.toml
    src/moist/version.f90
    docs/src/version.f90
 )
@@ -80,8 +79,9 @@ sub "s/^version = \"[^\"]*\"/version = \"$BASE\"/" "$REPO_ROOT/fpm.toml"
 # 3. python/meson.build -- version: 'X.Y.Z[aN]' (PEP 440; project line only, not dependency)
 sub "s/^\(  version: '\)[0-9][^']*'/\1$PEP440'/" "$REPO_ROOT/python/meson.build"
 
-# 4. python/pyproject.toml -- version = "X.Y.Z[aN]" (PEP 440 wheel version)
-sub "s/^version = \"[^\"]*\"/version = \"$PEP440\"/" "$REPO_ROOT/python/pyproject.toml"
+# 4. python/pyproject.toml declares the version dynamic; meson-python reads it
+#    from python/meson.build, and moist/__init__.py derives __version__ from
+#    the linked library at import time. Nothing to sync.
 
 # 5 & 6. version.f90 (src + doc) -- display string (full) + compact array (base ints)
 for f90 in "$REPO_ROOT/src/moist/version.f90" "$REPO_ROOT/docs/src/version.f90"; do

@@ -1,51 +1,44 @@
 """End-to-end tests of the GOSTSHYP pressure model on a moist isodensity cavity.
 
-GOSTSHYP is almost entirely QM-side integral work; what moist contributes is
-the response of the cavity itself.  These tests close that loop: every analytic
-quantity is checked against a finite difference of the energy the model
-actually reports, at 50 GPa.
+Every analytic quantity is checked against a finite difference of the energy
+the model reports, at 50 GPa.
 
-The physics lives in moist's ``gostshyp`` component, so this file tests the
-*host* half and the assembled result.  The component's own surface weights are
-finite-differenced channel by channel in
-``test/unit/test_model/component/gostshyp.f90``, against a model density whose
-Gaussian moments are available in closed form.  Where a control moved there,
-the comment at its old site says so.
+This file tests the *host* half and the assembled result. The component's
+own surface weights are finite-differenced channel by channel in
+``test/unit/test_model_component_gostshyp.f90``, against a model density
+whose Gaussian moments are available in closed form.
 
-The suite is layered so a failure localises:
+The suite is organised into layers:
 
 ``integrals``
-    The libcint fakemol constants, the cartesian d/f component orders, and the
-    identity ``f == n . grad_r g``.  moist is used only to place the grid points;
-    a failure here is integral bookkeeping, not the cavity.  These constants
-    are the one convention that stayed host-side, so this layer is load-bearing.
+    The libcint fakemol constants, the cartesian d/f component orders, and
+    the identity ``f == n . grad_r g``. moist is used only to place the grid
+    points, so a failure here is integral bookkeeping, not the cavity. These
+    constants are the one convention that stayed host-side.
 ``params``
     The Gaussian moments this module hands the component, and the hand-off
     itself: a transposed moment is the failure mode the language boundary
     introduces.
 ``fock``
-    Energy and ``dE/dP`` with the surface following the density -- the level-set
-    chain rule.
+    Energy and ``dE/dP`` with the surface following the density -- the
+    level-set chain rule.
 ``gradient``
     ``dE/dR`` at fixed density, split into its integral, field and surface
-    channels and then assembled.  The first two are the host's; the third is
+    channels and then assembled. The first two are the host's; the third is
     moist contracting the component's weights in reverse mode.
 ``conventions``
     Channel semantics, the negative controls, and the frozen reference values.
 
-Each layer carries a negative control, because a finite-difference test whose
-extra term is numerically negligible passes while testing nothing.  GOSTSHYP is
-unusually sharp here: it has no electrostatic component at all, so there is no
-dominant term for a broken level-set route to hide behind.  The cavity response
-is ~84% of ``dE/dP`` rather than a correction, and all three gradient channels
-are comparable in size (1.3e-2, 1.4e-2, 1.5e-2 for water/STO-3G at 50 GPa).
+Each layer carries a negative control. GOSTSHYP has no electrostatic
+component: the cavity response is ~84% of ``dE/dP`` rather than a
+correction, and all three gradient channels are comparable in size (1.3e-2,
+1.4e-2, 1.5e-2 for water/STO-3G at 50 GPa).
 
-One caveat the layering cannot fix: the finite differences are self-consistent,
-comparing the model's derivative against the model's own energy.  A convention
-error applied consistently to both would leave every one of them passing.  That
-is what ``GOLDEN`` and ``test_conventions_matches_the_frozen_reference`` are
-for, and why they cover the energy, amplitudes, adjoints and gradient rather
-than the energy alone.
+The finite differences here are self-consistent: they compare the model's
+derivative against the model's own energy, so a convention error applied
+consistently to both would leave every one of them passing. ``GOLDEN`` and
+``test_conventions_matches_the_frozen_reference`` check the energy,
+amplitudes, adjoints and gradient against frozen reference values instead.
 """
 
 import functools
@@ -63,26 +56,29 @@ except ImportError as exc:
         raise
     pytest.skip(f"pyscf is unavailable: {exc}", allow_module_level=True)
 
-from .gostshyp import (
+from moist.interface import (
+    DensityResponse,
+    GostshypAmplitudeResponse,
+    ModelComponentCPCM,
+    ModelComponentGOSTSHYP,
+    Structure,
+)
+from moist.parameters import DROPParameters, IsodensityParameters
+from moist.pyscf import (
     _D_CART_ORDER,
     _F_RHO2_FIRST_MOMENT,
     _S_NORM,
     _S_OVER_D_NORM,
     _S_OVER_F_NORM,
     _S_OVER_P_NORM,
+    DROP,
     GPA_TO_AU,
-    GostshypModel,
-    GostshypWall,
+    GaussianMoments,
+    Isodensity,
+    PySCFHost,
+    PySCFSolvation,
     _int3c1e,
 )
-from .interface import (
-    CavityDROPIsodensity,
-    ModelComponentCPCM,
-    ModelComponentGOSTSHYP,
-    SolvationModel,
-    Structure,
-)
-from .pyscf import PySCFHost
 
 #: Every test in this module is a GOSTSHYP test; the second marker selects the
 #: layer, and meson turns each into its own target.
@@ -179,8 +175,7 @@ CASES = [
 #: The case used by tests that pin a convention once rather than sweeping.
 PRIMARY_CASE = CASES[0]
 
-#: Reference valuesfrom the pure-Python implementation before creating the
-#: standalone ``gostshyp`` component
+#: Reference values from the pure-Python implementation.
 GOLDEN = {
     ("water", "sto-3g"): {
         "energy": 0.1340185971628404,
@@ -240,9 +235,9 @@ GOLDEN = {
     },
 }
 
-#: The golden values are a different platform's arithmetic away from exact, but
-#: the cavity projection is the only real variability and it converges to
-#: PROJ_TOL.  Anything looser than this would stop catching a convention error.
+#: The golden values are a different platform's arithmetic away from exact,
+#: but the cavity projection is the only real variability, and it converges
+#: to PROJ_TOL.
 GOLDEN_RTOL = 1e-9
 
 
@@ -255,10 +250,10 @@ def deviation(actual, reference, *, thr_abs=None, thr_rel=None) -> float:
     """Deviation measured in units of the tolerance: ``<= 1`` passes.
 
     Combines the two thresholds the way test-drive's
-    ``check(..., thr_abs=, thr_rel=)`` does -- ``max(thr_abs, thr_rel*|ref|)`` --
-    so the absolute floor covers references near zero while the relative bound
-    scales with the magnitude.  Reporting the ratio rather than the raw
-    difference makes a failure message say how many tolerances were missed.
+    ``check(..., thr_abs=, thr_rel=)`` does: ``max(thr_abs, thr_rel*|ref|)``.
+    The absolute floor covers references near zero; the relative bound
+    scales with the magnitude. The return value is the number of tolerances
+    ``actual`` missed ``reference`` by.
     """
     thr_abs = ABS_THR if thr_abs is None else thr_abs
     thr_rel = REL_THR if thr_rel is None else thr_rel
@@ -269,8 +264,8 @@ def array_deviation(actual, reference, *, thr_rel, thr_abs=None) -> float:
     """Worst elementwise deviation, scaled by the *array's* magnitude.
 
     Per-element relative errors are meaningless for arrays whose entries span
-    orders of magnitude -- the small entries are differences of large ones -- so
-    the tolerance is set from the largest entry of the reference.
+    orders of magnitude -- the small entries are differences of large ones.
+    The tolerance is set from the largest entry of the reference.
     """
     actual = np.asarray(actual)
     reference = np.asarray(reference)
@@ -316,16 +311,27 @@ def reference_density(system: str, basis: str):
     return mean_field.make_rdm1()
 
 
-def make_wall(mol, positions=None, *, dm, pressure=PRESSURE):
-    """Host plus an updated GOSTSHYP wall at ``dm``, optionally displaced."""
+def cavity_config(rho_iso=None):
+    """The isodensity DROP configuration the wall is built on."""
+    lsf = Isodensity() if rho_iso is None else Isodensity(
+        parameters=IsodensityParameters(rho_iso=rho_iso))
+    return DROP(lsf=lsf, parameters=DROPParameters(nleb=NLEB, tolerance=PROJ_TOL))
+
+
+def make_wall(mol, positions=None, *, dm, pressure=PRESSURE, rho_iso=None):
+    """Host plus an evaluated GOSTSHYP driver ("wall") at ``dm``, optionally displaced."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    host = PySCFHost(mol)
-    host.dm = dm
-    with pytest.deprecated_call(match="Gostshyp"):
-        wall = GostshypModel(host, pressure, nleb=NLEB, tolerance=PROJ_TOL)
-    wall.update(dm)
-    return host, wall
+    wall = PySCFSolvation(mol, cavity_config(rho_iso), [ModelComponentGOSTSHYP(pressure)])
+    wall.evaluate(dm)
+    return wall.host, wall
+
+
+def item_of(response, kind):
+    """The item of class ``kind`` the walk over ``response`` meets, or None."""
+    found = [item for item in response if isinstance(item, kind)]
+    assert len(found) <= 1, found
+    return found[0] if found else None
 
 
 def fd_density(mol, dm, direction, *, pressure=PRESSURE):
@@ -334,7 +340,7 @@ def fd_density(mol, dm, direction, *, pressure=PRESSURE):
     for offset in FD4_OFFSETS:
         _host, wall = make_wall(mol, dm=dm + offset * STEP_DM * direction, pressure=pressure)
         samples.append(wall.energy)
-        grids.append(wall.ngrid)
+        grids.append(wall.model.cavity.ngrid)
     assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_DM)
 
@@ -347,7 +353,7 @@ def fd_position(mol, positions, dm, index, *, pressure=PRESSURE):
         displaced.flat[index] += offset * STEP_R
         _host, wall = make_wall(mol, displaced, dm=dm, pressure=pressure)
         samples.append(wall.energy)
-        grids.append(wall.ngrid)
+        grids.append(wall.model.cavity.ngrid)
     assert len(set(grids)) == 1, f"grid point count drifted across the stencil: {grids}"
     return fd4(samples, STEP_R)
 
@@ -372,9 +378,8 @@ def sampled_coordinates(natm):
 def frozen_surface_energy(mol, dm, centers, areas, omega, normals, pressure=PRESSURE):
     """GOSTSHYP energy for an explicit surface, independent of any wall state.
 
-    Deliberately re-derived from :func:`~moist.gostshyp._int3c1e` rather than
-    calling into the model, so the finite differences that use it cannot inherit
-    a bug from the code under test.
+    Re-derived from :func:`~moist.gostshyp._int3c1e` rather than calling
+    into the model.
     """
     ngrid = int(np.asarray(centers).shape[0])
     g_cart = _int3c1e(mol, centers, omega, 0)
@@ -401,7 +406,7 @@ def frozen_surface_energy(mol, dm, centers, areas, omega, normals, pressure=PRES
 
 
 # ----------------------------------------------------------------------
-# integrals -- libcint conventions, moist only places the  grid points
+# integrals -- libcint conventions, moist only places the grid points
 # ----------------------------------------------------------------------
 
 
@@ -409,22 +414,22 @@ def frozen_surface_energy(mol, dm, centers, areas, omega, normals, pressure=PRES
 def test_integrals_fakemol_normalization_constants():
     """The four angular constants and the cartesian d/f orders, vs quadrature.
 
-    libcint attaches a different normalization to a coefficient-1 shell of each
-    angular momentum.  Restoring the ratios ``N_s/N_l`` is what puts every
-    moment in the same units as ``g`` and makes ``f = n . grad g`` exact rather
-    than exact-up-to-a-factor.  An independent Becke-grid quadrature of the same
-    monomial moments pins the constants *and* the component orders together: a
-    transposed ``_D_CART_ORDER`` entry or a mis-assigned
-    ``_F_RHO2_FIRST_MOMENT`` triple is invisible to any self-consistency check.
+    libcint attaches a different normalization to a coefficient-1 shell of
+    each angular momentum. Restoring the ratios ``N_s/N_l`` puts every
+    moment in the same units as ``g`` and makes ``f = n . grad g`` exact
+    rather than exact-up-to-a-factor. An independent Becke-grid quadrature
+    of the same monomial moments checks the constants and the component
+    orders together, catching a transposed ``_D_CART_ORDER`` entry or a
+    mis-assigned ``_F_RHO2_FIRST_MOMENT`` triple.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    # A handful of well-conditioned  grid points is enough and keeps the grid cheap.
-    picks = np.argsort(-np.abs(wall.traces(dm)[1]))[:4]
-    centers = wall.centers[picks]
-    omega = wall.omega[picks]
+    # A handful of well-conditioned grid points is enough.
+    picks = np.argsort(-np.abs(wall.moments.traces(dm)[1]))[:4]
+    centers = wall.moments.centers[picks]
+    omega = wall.moments.omega[picks]
 
     grids = dft.gen_grid.Grids(mol)
     grids.level = 9
@@ -481,17 +486,17 @@ def test_integrals_f_is_the_field_point_normal_gradient_of_g(system, basis):
     """``ftilde == n . grad_r gtilde``, i.e. minus the grid point-center gradient.
 
     Displacing the field point is the opposite of displacing the Gaussian
-    center, which is the whole content of the sign in ``_build_integrals``.  Get
-    it wrong and the wall pushes outward instead of inward.
+    center, the sign convention used in ``_build_integrals``. Get it wrong
+    and the wall pushes outward instead of inward.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    ftilde = wall.traces(dm)[1]
+    ftilde = wall.moments.traces(dm)[1]
 
     samples = []
     for offset in FD4_OFFSETS:
-        centers = wall.centers + offset * STEP_C * wall.normals
-        samples.append(wall.traces(dm, centers=centers)[0])
+        centers = wall.moments.centers + offset * STEP_C * wall.moments.normals
+        samples.append(wall.moments.traces(dm, centers=centers)[0])
     center_gradient = fd4(samples, STEP_C)
 
     assert array_deviation(ftilde, -center_gradient, thr_rel=FROZEN_REL_THR) <= 1.0
@@ -502,16 +507,16 @@ def test_integrals_f_is_the_field_point_normal_gradient_of_g(system, basis):
 def test_integrals_ftilde_is_the_normal_projection_of_the_f_vector(system, basis):
     """``ftilde_j == n_j . gvfield_j`` exactly.
 
-    ``gvfield`` is the unprojected f-vector and doubles as ``dftilde/dn``, so
-    the two must agree to round-off or the normal weight is built from a
+    ``gvfield`` is the unprojected f-vector and doubles as ``dftilde/dn``.
+    The two must agree to round-off, or the normal weight is built from a
     different quantity than the one it differentiates.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    gvfield = np.einsum("uvja,uv->ja", wall.f_vector(), dm, optimize=True)
-    projected = np.einsum("ja,ja->j", wall.normals, gvfield, optimize=True)
-    np.testing.assert_allclose(projected, wall.traces(dm)[1], rtol=0.0, atol=1e-14)
+    gvfield = np.einsum("uvja,uv->ja", wall.moments.f_vector(), dm, optimize=True)
+    projected = np.einsum("ja,ja->j", wall.moments.normals, gvfield, optimize=True)
+    np.testing.assert_allclose(projected, wall.moments.traces(dm)[1], rtol=0.0, atol=1e-14)
 
 
 # ----------------------------------------------------------------------
@@ -524,26 +529,25 @@ def test_integrals_ftilde_is_the_normal_projection_of_the_f_vector(system, basis
 def test_params_first_moment_is_the_center_gradient(system, basis):
     """``dgtilde/dC_a == 2 omega Pt_a``, pinning the p moment component by component.
 
-    ``Pt`` is the only moment the energy itself depends on -- through
-    ``ftilde = -2 omega (n . Pt)`` -- so an error here moves every downstream
-    quantity at once.  The Becke quadrature in the integrals layer pins the
-    fakemol block; this pins the contraction that turns it into the moment the
-    component is handed.
+    ``Pt`` is the only moment the energy depends on, through
+    ``ftilde = -2 omega (n . Pt)``. The Becke quadrature in the integrals
+    layer checks the fakemol block; this checks the contraction that turns
+    it into the moment the component is handed.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    _gt, pt, _mt, _rt = wall._surface_moments(wall._density_matrix_cart(dm))
+    _gt, pt, _mt, _rt = wall.moments._surface_moments(wall.moments._density_matrix_cart(dm))
 
     for axis in range(3):
         shift = np.zeros(3)
         shift[axis] = STEP_C
         samples = [
-            wall.traces(dm, centers=wall.centers + offset * shift)[0]
+            wall.moments.traces(dm, centers=wall.moments.centers + offset * shift)[0]
             for offset in FD4_OFFSETS
         ]
         derivative = fd4(samples, STEP_C)
-        expected = 2.0 * wall.omega * pt[:, axis]
+        expected = 2.0 * wall.moments.omega * pt[:, axis]
         assert array_deviation(expected, derivative, thr_rel=PARAM_REL_THR, thr_abs=PARAM_ABS_THR) <= 1.0, axis
 
 
@@ -552,21 +556,20 @@ def test_params_first_moment_is_the_center_gradient(system, basis):
 def test_params_moments_reach_the_component_intact(system, basis):
     """The energy moist reports is the one the host's own moments imply.
 
-    The moments cross a language boundary and change layout on the way -- numpy
-    ``(ngrid, 3)`` becomes Fortran ``(3, ngrid)``, ``(ngrid, 3, 3)`` becomes
-    ``(3, 3, ngrid)``.  A transposed hand-off is the failure mode this refactor
-    introduces and nothing else in this layer would see, so the whole exchange
-    is closed here against the documented formula
-    ``E = sum_j p a_j gtilde_j / ftilde_j``.
+    The moments cross a language boundary and change layout on the way --
+    numpy ``(ngrid, 3)`` becomes Fortran ``(3, ngrid)``, ``(ngrid, 3, 3)``
+    becomes ``(3, 3, ngrid)``. A transposed hand-off is a failure mode
+    nothing else in this layer would see. This checks the whole exchange
+    against the documented formula ``E = sum_j p a_j gtilde_j / ftilde_j``.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    gt, ftilde = wall.traces(dm)
+    gt, ftilde = wall.moments.traces(dm)
     with np.errstate(divide="ignore", invalid="ignore"):
-        terms = PRESSURE * wall.areas * gt / ftilde
+        terms = PRESSURE * wall.moments.areas * gt / ftilde
     # Grid points the component switched off carry a zero amplitude.
-    active = wall.amplitudes != 0.0
+    active = item_of(wall.response, GostshypAmplitudeResponse).w_overlap != 0.0
     expected = float(np.sum(np.where(active, terms, 0.0)))
 
     assert wall.energy == pytest.approx(expected, rel=1e-12)
@@ -577,31 +580,27 @@ def test_params_moments_reach_the_component_intact(system, basis):
 def test_params_energy_is_insensitive_to_the_activity_floor(system, basis):
     """Moving the cut six decades must not move the energy.
 
-    The floor exists for the *derivatives* -- ``beta ~ gtilde^2/ftilde^2``
-    diverges as the overlap vanishes -- and it is only defensible if it costs
-    the energy nothing, because it does not fall in a gap.  Water gives it about
-    a decade of clearance, but that is the easy case: measured once on
-    fluoroacetate/STO-3G, the smallest kept point sat at ``|ftilde|/max = 2.0e-9``
-    and the largest dropped at ``6.7e-10`` -- a factor of three apart, 24 of 159
-    points discarded.  A cut through a continuum is arbitrary, and what makes an
-    arbitrary cut acceptable is exactly the insensitivity checked here.  Enable a
-    larger row in ``CASES`` to run this against that harder case.
+    The floor is for the *derivatives* -- ``beta ~ gtilde^2/ftilde^2``
+    diverges as the overlap vanishes -- and must cost the energy nothing.
+    Water gives it about a decade of clearance; measured once on
+    fluoroacetate/STO-3G, the smallest kept point sat at
+    ``|ftilde|/max = 2.0e-9`` and the largest dropped at ``6.7e-10`` -- a
+    factor of three apart, 24 of 159 points discarded. Enable a larger row
+    in ``CASES`` to run this against that harder case.
 
-    So this is the test that fails if the floor ever becomes load-bearing.  If
-    the energy starts depending on where the cut falls, the cut is discarding
-    physics -- most likely a point approaching the genuine pole at
-    ``ftilde = 0``, where the wall turns locally attractive -- and the model
-    needs a treatment of that neighbourhood rather than a threshold.
+    If the energy starts depending on where the cut falls, the cut is
+    discarding physics -- most likely a point approaching the pole at
+    ``ftilde = 0``, where the wall turns locally attractive.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    gt, ftilde = wall.live_traces
+    gt, ftilde = wall.moments.live_traces
     relative = np.abs(ftilde) / np.abs(ftilde).max()
-    # Masked explicitly rather than via nansum: a NaN among the *kept* points is
-    # a real failure and must not be swallowed with the discarded ones.
+    # A NaN among the *kept* points is a real failure and must not be
+    # swallowed with the discarded ones.
     with np.errstate(divide="ignore", invalid="ignore"):
-        contribution = PRESSURE * wall.areas * gt / ftilde
+        contribution = PRESSURE * wall.moments.areas * gt / ftilde
 
     def energy_at(floor):
         keep = relative > floor
@@ -617,79 +616,49 @@ def test_params_energy_is_insensitive_to_the_activity_floor(system, basis):
         assert energy == pytest.approx(wall.energy, rel=1e-4), f"floor={floor:.0e}"
 
     # Vacuous unless the floor is actually cutting something.
-    assert wall.inactive_count > 0
-    assert wall.inactive_count < wall.ngrid // 2
+    assert wall.moments.inactive_count > 0
+    assert wall.moments.inactive_count < wall.model.cavity.ngrid // 2
 
 
 @pytest.mark.gostshyp_params
 def test_params_inactive_count_does_not_follow_the_pressure():
     """The dropped-point count describes the surface, not the pressure.
 
-    The component short-circuits at zero pressure and hands back amplitudes that
-    are identically zero, so a count read off them calls the whole grid dropped
-    -- the trap :meth:`effective_volume` already documents one screen above.
-    This number exists to be watched across a trajectory for a moment supply
-    going wrong, which it cannot do if it also tracks the applied pressure.
+    The component short-circuits at zero pressure and hands back amplitudes
+    that are identically zero; a count read off them alone would call the
+    whole grid dropped (see :meth:`effective_volume`).
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, live = make_wall(mol, dm=dm)
     _host, quiet = make_wall(mol, dm=dm, pressure=0.0)
 
-    # The cavity is isodensity, so dropping the pressure must not move a point.
-    assert quiet.ngrid == live.ngrid
+    # Isodensity cavity: dropping the pressure must not move a point.
+    assert quiet.model.cavity.ngrid == live.model.cavity.ngrid
 
     # Vacuous unless the floor is actually cutting something.
-    assert 0 < live.inactive_count < live.ngrid // 2
-    assert quiet.inactive_count == live.inactive_count
-
-
-@pytest.mark.gostshyp_params
-def test_params_supply_rejects_mis_shaped_moments():
-    """Wrong-shaped moments are refused rather than reinterpreted.
-
-    The binding hands moist four raw pointers, so a shape it accepted silently
-    would be read as whatever the grid size implies.  Cheap to pin, and it is
-    the only guard between a host bug and a plausible wrong number.
-    """
-    system, basis = PRIMARY_CASE
-    mol, dm = molecule(system, basis), reference_density(system, basis)
-    _host, wall = make_wall(mol, dm=dm)
-
-    gt, pt, mt, rt = wall._surface_moments(wall._density_matrix_cart(dm))
-    good = (gt, np.asfortranarray(pt.T), np.asfortranarray(mt.transpose(1, 2, 0)),
-            np.asfortranarray(rt.T))
-
-    # The untransposed vector moments are the natural mistake.
-    with pytest.raises(ValueError, match="pt"):
-        wall.model.supply_gostshyp(gt, pt, good[2], good[3])
-    with pytest.raises(ValueError, match="mt"):
-        wall.model.supply_gostshyp(gt, good[1], mt, good[3])
-    with pytest.raises(ValueError, match="rt"):
-        wall.model.supply_gostshyp(gt, good[1], good[2], rt)
-    # ...and a grid size that no longer matches the live cavity.
-    with pytest.raises(RuntimeError):
-        wall.model.supply_gostshyp(gt[:-1], good[1][:, :-1], good[2][:, :, :-1], good[3][:, :-1])
+    assert 0 < live.moments.inactive_count < live.model.cavity.ngrid // 2
+    assert quiet.moments.inactive_count == live.moments.inactive_count
 
 
 @pytest.mark.gostshyp_params
 def test_params_update_drops_the_previous_surfaces_moments():
     """A cavity update invalidates the moments, and reading without new ones fails.
 
-    moist cannot rebuild them itself -- they are AO-basis integrals only the host
-    can form -- and their shapes cannot betray a stale set, because a geometry
-    step normally preserves the point count.  So the update drops them, turning
-    "forgot to re-supply" into the same error as "never supplied" instead of a
-    plausible energy for a surface that has moved.
+    moist cannot rebuild the moments itself: they are AO-basis integrals
+    only the host can form, and their shapes cannot distinguish a stale set
+    from a current one. The update drops them; reading afterward raises
+    rather than returning an energy for a surface that has moved.
 
-    :meth:`GostshypModel.update` always re-supplies in the same breath, so this
-    only bites a host driving the model by hand.
+    :meth:`PySCFSolvation.evaluate` always re-supplies immediately; only a
+    host driving the model by hand hits this.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
     before = wall.energy
     original_xyz = wall.model.cavity.xyz.copy()
+    original_ngrid = wall.model.cavity.ngrid
 
     displaced = mol.atom_coords()
     displaced[0, 2] += 0.05
@@ -698,11 +667,14 @@ def test_params_update_drops_the_previous_surfaces_moments():
 
     # Vacuous unless the surface really moved while keeping its point count --
     # exactly the case a shape check cannot distinguish.
-    assert wall.model.ngrid == wall.ngrid
+    assert wall.model.cavity.ngrid == original_ngrid
     assert not np.allclose(wall.model.cavity.xyz, original_xyz)
 
-    with pytest.raises(RuntimeError, match="not supplied by the host"):
-        wall.model.get_energy()
+    coupling = wall.model.new_coupling()
+    wall.model.prepare_energy(coupling)
+    energy = np.array(0.0)
+    with pytest.raises(RuntimeError, match="missing required outputs"):
+        wall.model.get_energy(coupling, energy)
 
     # Going through the wrapper re-supplies, and the energy tracks the geometry.
     _host2, moved = make_wall(mol, displaced, dm=dm)
@@ -721,15 +693,15 @@ def test_params_second_moment_matches_a_second_difference():
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    dm_cart = wall._density_matrix_cart(dm)
+    dm_cart = wall.moments._density_matrix_cart(dm)
 
-    _gt, _pt, moment, _rt = wall._surface_moments(dm_cart)
-    gtilde = wall.traces(dm)[0]
-    omega = wall.omega
+    _gt, _pt, moment, _rt = wall.moments._surface_moments(dm_cart)
+    gtilde = wall.moments.traces(dm)[0]
+    omega = wall.moments.omega
     step = 2.0e-3
 
     def gt_at(shift):
-        return wall.traces(dm, centers=wall.centers + shift)[0]
+        return wall.moments.traces(dm, centers=wall.moments.centers + shift)[0]
 
     for a in range(3):
         for b in range(3):
@@ -756,10 +728,9 @@ def test_gostshyp_is_a_composable_model_component():
     mol, dm = molecule(system, basis), reference_density(system, basis)
 
     def evaluate(components):
-        host = PySCFHost(mol)
-        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
-        model = SolvationModel(cavity=cavity, components=components)
-        return model.evaluate(coupling=host.coupling(dm))
+        solvation = PySCFSolvation(mol, cavity_config(), components)
+        solvation.evaluate(dm)
+        return solvation
 
     gostshyp = evaluate([ModelComponentGOSTSHYP(PRESSURE)])
     cpcm = evaluate([ModelComponentCPCM(EPSILON)])
@@ -768,42 +739,28 @@ def test_gostshyp_is_a_composable_model_component():
     assert combined.energy == pytest.approx(cpcm.energy + gostshyp.energy, rel=1e-12)
     np.testing.assert_allclose(combined.fock, cpcm.fock + gostshyp.fock, rtol=1e-11)
     np.testing.assert_allclose(
-        combined.gradient,
-        cpcm.gradient + gostshyp.gradient,
+        combined.gradient(dm),
+        cpcm.gradient(dm) + gostshyp.gradient(dm),
         rtol=1e-10,
         atol=1e-11,
     )
 
 
 @pytest.mark.gostshyp_fock
-def test_evaluation_owns_complete_gostshyp_results():
-    """The generic result includes the wall's reverse-mode host response."""
+def test_results_are_frozen_and_pinned_to_the_evaluated_density():
+    """Results are immutable values, and a mutated host density cannot leak in."""
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    host = PySCFHost(mol)
-    with pytest.deprecated_call(match="Gostshyp"):
-        wall = GostshypModel(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
+    host, wall = make_wall(mol, dm=dm)
 
-    result = wall.evaluate(dm)
-    expected_gradient = wall.nuclear_gradient(dm)
+    result = wall.result
+    expected_gradient = wall.gradient(dm)
     host.dm = np.zeros_like(dm)
 
     assert result.energy == wall.energy
-    np.testing.assert_allclose(result.fock, wall.fock(dm))
-    np.testing.assert_allclose(result.gradient, expected_gradient)
+    assert wall.evaluate(dm) is result
+    np.testing.assert_allclose(wall.gradient(dm), expected_gradient)
     assert not result.fock.flags.writeable
-    assert not result.gradient.flags.writeable
-
-
-@pytest.mark.gostshyp_conventions
-def test_gostshyp_wall_name_remains_compatible():
-    mol = molecule(*PRIMARY_CASE)
-    host = PySCFHost(mol)
-
-    with pytest.deprecated_call(match="GostshypModel"):
-        wall = GostshypWall(host, PRESSURE, nleb=NLEB, tolerance=PROJ_TOL)
-
-    assert isinstance(wall, GostshypModel)
 
 
 @pytest.mark.gostshyp_fock
@@ -824,24 +781,22 @@ def test_fock_energy_is_linear_in_pressure_and_sets_the_effective_volume():
     assert wall.energy > 0.0
     assert doubled.energy == pytest.approx(2.0 * wall.energy, rel=1e-12)
     assert vacuum.energy == 0.0
-    assert wall.effective_volume() == pytest.approx(wall.energy / PRESSURE, rel=1e-12)
+    assert wall.moments.effective_volume() == pytest.approx(wall.energy / PRESSURE, rel=1e-12)
     # Not the cavity volume: the wall is weighted by the local density overlap.
-    assert wall.effective_volume() != pytest.approx(wall.model.cavity.volume, rel=1e-3)
+    assert wall.moments.effective_volume() != pytest.approx(wall.model.cavity.volume, rel=1e-3)
 
-    # The three walls share a density and therefore a surface, so the volume is
-    # common to them.  At p = 0 the energy vanishes with the pressure while the
-    # volume does not, which is why it cannot be recovered as E/p there.
-    assert vacuum.effective_volume() == pytest.approx(wall.effective_volume(), rel=1e-12)
-    assert doubled.effective_volume() == pytest.approx(wall.effective_volume(), rel=1e-12)
+    # The three walls share a density and surface, so the volume is common to
+    # them. At p = 0 the energy vanishes while the volume does not.
+    assert vacuum.moments.effective_volume() == pytest.approx(wall.moments.effective_volume(), rel=1e-12)
+    assert doubled.moments.effective_volume() == pytest.approx(wall.moments.effective_volume(), rel=1e-12)
 
 
 @pytest.mark.gostshyp_fock
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_fock_frozen_surface_matches_fd(system, basis):
-    """The eq-16 Fock is ``dE/dP`` with the  grid points held fixed.
+    """The eq-16 Fock is ``dE/dP`` with the grid points held fixed.
 
-    Isolates the explicit density dependence from the cavity response, so a
-    failure in the headline test below can be attributed to one or the other.
+    Isolates the explicit density dependence from the cavity response.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
@@ -851,15 +806,15 @@ def test_fock_frozen_surface_matches_fd(system, basis):
             frozen_surface_energy(
                 mol,
                 dm + offset * STEP_DM * direction,
-                wall.centers,
-                wall.areas,
-                wall.omega,
-                wall.normals,
+                wall.moments.centers,
+                wall.moments.areas,
+                wall.moments.omega,
+                wall.moments.normals,
             )
             for offset in FD4_OFFSETS
         ]
         numerical = fd4(samples, STEP_DM)
-        frozen = wall.fock(dm, include_cavity_response=False)
+        frozen = wall.frozen_fock()
         analytic = float(np.einsum("uv,uv->", frozen, direction))
         assert deviation(
             analytic, numerical, thr_abs=FROZEN_ABS_THR, thr_rel=FROZEN_REL_THR
@@ -876,7 +831,7 @@ def test_fock_matches_fd(system, basis):
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    fock = wall.fock(dm)
+    fock = wall.fock
 
     for direction in symmetric_directions(dm.shape[0], 2):
         numerical = fd_density(mol, dm, direction)
@@ -892,7 +847,7 @@ def test_fock_matches_fd(system, basis):
 @pytest.mark.gostshyp_gradient
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_gradient_integral_channel_matches_frozen_surface_fd(system, basis):
-    """AO centers move,  grid points frozen: the ``int3c1e_ip1`` term alone.
+    """AO centers move, grid points frozen: the ``int3c1e_ip1`` term alone.
 
     Pins the sign of the integral derivative, the both-legs factor of two, and
     the mapping from cartesian AO rows onto atoms.
@@ -900,7 +855,7 @@ def test_gradient_integral_channel_matches_frozen_surface_fd(system, basis):
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     _host, wall = make_wall(mol, dm=dm)
-    analytic = wall._integral_nuclear_gradient(dm).flatten(order="F")
+    analytic = wall.gradient_channels(dm)["moments"].flatten(order="C")
 
     for index in sampled_coordinates(mol.natm):
         samples = []
@@ -910,7 +865,7 @@ def test_gradient_integral_channel_matches_frozen_surface_fd(system, basis):
             moved = mol.set_geom_(displaced, unit="Bohr", inplace=False)
             samples.append(
                 frozen_surface_energy(
-                    moved, dm, wall.centers, wall.areas, wall.omega, wall.normals
+                    moved, dm, wall.moments.centers, wall.moments.areas, wall.moments.omega, wall.moments.normals
                 )
             )
         numerical = fd4(samples, STEP_R)
@@ -924,28 +879,28 @@ def test_gradient_integral_channel_matches_frozen_surface_fd(system, basis):
 def test_gradient_surface_channel_matches_fd(system, basis):
     """The cavity's own response at a frozen level-set field.
 
-    Displacing only the structure handed to the cavity -- never the molecule the
-    level set is built from -- drags the atom-anchored reference grid while the
-    density stays put.  That is exactly the channel moist contracts in reverse
-    mode, so this closes the component's ``w_a``/``w_xyz``/``w_n`` against a
-    finite difference of the energy through moist's own cavity derivatives:
-    the area route including its switching factor, and the position route
-    including the normal's point-motion fold.
+    Displacing only the structure handed to the cavity -- never the molecule
+    the level set is built from -- drags the atom-anchored reference grid
+    while the density stays put: the channel moist contracts in reverse
+    mode. This checks the component's ``w_a``/``w_xyz``/``w_normal`` against
+    a finite difference of the energy through moist's own cavity
+    derivatives: the area route including its switching factor, and the
+    position route including the normal's point-motion fold.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     host, wall = make_wall(mol, dm=dm)
-    analytic = wall._surface_nuclear_gradient().flatten(order="F")
+    analytic = wall.gradient_channels(dm)["model"].flatten(order="C")
     numbers = np.asarray(mol.atom_charges(), dtype=np.int64)
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
-        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = cavity_config().build(source=host)
         cavity.update(Structure(numbers, displaced))
         result = cavity.cavity
-        centers = np.ascontiguousarray(result.xyz.T)
+        centers = np.ascontiguousarray(result.xyz)
         areas = np.ascontiguousarray(result.a)
-        normals = np.array(result.normal0.T, order="C", copy=True)
+        normals = np.array(result.normal0, order="C", copy=True)
         normals /= np.linalg.norm(normals, axis=1)[:, None]
         with np.errstate(divide="ignore", invalid="ignore"):
             omega = np.pi * math.log(2.0) / areas
@@ -972,7 +927,7 @@ def test_gradient_matches_fd(system, basis):
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     _host, wall = make_wall(mol, dm=dm)
-    analytic = wall.nuclear_gradient(dm).flatten(order="F")
+    analytic = wall.gradient(dm).flatten(order="C")
 
     for index in sampled_coordinates(mol.natm):
         numerical = fd_position(mol, positions, dm, index)
@@ -983,18 +938,18 @@ def test_gradient_matches_fd(system, basis):
 def test_gradient_is_translationally_invariant():
     """The net force vanishes.
 
-    A rigid translation moves the AOs, the density and the cavity together, so
-    the energy cannot change.  This is a global identity that knows nothing
-    about the channel split, which is what makes it able to catch a sign error
-    or a mis-binned AO-to-atom map that each per-channel test tolerates.
+    A rigid translation moves the AOs, the density and the cavity together,
+    so the energy cannot change. This is a global identity that knows
+    nothing about the channel split, so it catches a sign error or a
+    mis-binned AO-to-atom map that each per-channel test tolerates.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    gradient = wall.nuclear_gradient(dm)
+    gradient = wall.gradient(dm)
 
     assert np.abs(gradient).max() > MIN_SIGNAL
-    np.testing.assert_allclose(gradient.sum(axis=1), 0.0, atol=1e-10)
+    np.testing.assert_allclose(gradient.sum(axis=0), 0.0, atol=1e-10)
 
 
 @pytest.mark.gostshyp_gradient
@@ -1005,11 +960,11 @@ def test_gradient_is_exactly_the_sum_of_its_channels():
     _host, wall = make_wall(mol, dm=dm)
 
     channels = (
-        wall._integral_nuclear_gradient(dm)
-        + wall._field_nuclear_gradient(dm)
-        + wall._surface_nuclear_gradient()
+        wall.gradient_channels(dm)["moments"]
+        + wall.gradient_channels(dm)["density"]
+        + wall.gradient_channels(dm)["model"]
     )
-    np.testing.assert_allclose(wall.nuclear_gradient(dm), channels, rtol=0.0, atol=1e-14)
+    np.testing.assert_allclose(wall.gradient(dm), channels, rtol=0.0, atol=1e-14)
 
 
 # ----------------------------------------------------------------------
@@ -1017,12 +972,11 @@ def test_gradient_is_exactly_the_sum_of_its_channels():
 # ----------------------------------------------------------------------
 
 
-# The surface weights themselves are no longer visible from Python: they are
-# built and consumed inside the moist ``gostshyp`` component.  What used to be
-# checked here -- ``w_f == 0`` exactly, and a per-channel starve control for
-# ``w_n``/``w_a`` -- now lives in test/unit/test_model/component/gostshyp.f90,
-# where ``check_surface_weights`` finite-differences each channel separately
-# rather than only detecting that some channel is missing.
+# The surface weights are built and consumed inside the moist ``gostshyp``
+# component and are not visible from Python. ``w_f == 0`` exactly, and a
+# per-channel starve control for ``w_normal``/``w_a``, are checked in
+# test/unit/test_model_component_gostshyp.f90's ``check_surface_weights``,
+# which finite-differences each channel separately.
 
 
 @pytest.mark.gostshyp_conventions
@@ -1036,12 +990,12 @@ def test_conventions_fock_requires_cavity_response():
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
-    response = wall.fock(dm) - wall.fock(dm, include_cavity_response=False)
+    response = wall.fock - wall.frozen_fock()
     assert np.abs(response).max() > MIN_SIGNAL
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd_density(mol, dm, direction)
-    starved = float(np.einsum("uv,uv->", wall.fock(dm, include_cavity_response=False), direction))
+    starved = float(np.einsum("uv,uv->", wall.frozen_fock(), direction))
     assert deviation(starved, numerical) > VACUITY_FACTOR
 
 
@@ -1049,20 +1003,21 @@ def test_conventions_fock_requires_cavity_response():
 def test_conventions_amplitudes_are_both_needed():
     """Both host amplitudes carry a non-negligible share of the frozen Fock.
 
-    ``w_overlap`` and ``w_normal_deriv`` arrive as a pair with their signs already
-    folded in, so the natural failure is using one and dropping the other, or
-    flipping the fold.  Either would leave a Fock that still looks plausible.
+    ``w_overlap`` and ``w_normal_deriv`` arrive as a pair with their signs
+    already folded in. A natural failure is using one and dropping the
+    other, or flipping the fold; either would leave a Fock that still looks
+    plausible.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    response = wall.response
+    amplitude = item_of(wall.response, GostshypAmplitudeResponse)
 
-    assert np.abs(response.gostshyp.w_overlap).max() > MIN_SIGNAL
-    assert np.abs(response.gostshyp.w_normal_deriv).max() > MIN_SIGNAL
+    assert np.abs(amplitude.w_overlap).max() > MIN_SIGNAL
+    assert np.abs(amplitude.w_normal_deriv).max() > MIN_SIGNAL
     # The fold is a sign, not an absolute value: the two channels oppose.
-    assert response.gostshyp.w_overlap.max() > 0.0
-    assert response.gostshyp.w_normal_deriv.min() < 0.0
+    assert amplitude.w_overlap.max() > 0.0
+    assert amplitude.w_normal_deriv.min() < 0.0
 
     direction = next(iter(symmetric_directions(dm.shape[0], 1)))
     numerical = fd4(
@@ -1070,10 +1025,10 @@ def test_conventions_amplitudes_are_both_needed():
             frozen_surface_energy(
                 mol,
                 dm + offset * STEP_DM * direction,
-                wall.centers,
-                wall.areas,
-                wall.omega,
-                wall.normals,
+                wall.moments.centers,
+                wall.moments.areas,
+                wall.moments.omega,
+                wall.moments.normals,
             )
             for offset in FD4_OFFSETS
         ],
@@ -1081,12 +1036,12 @@ def test_conventions_amplitudes_are_both_needed():
     )
 
     g_only = np.einsum(
-        "j,uvj->uv", response.gostshyp.w_overlap, wall._G, optimize=True
+        "j,uvj->uv", amplitude.w_overlap, wall.moments._G, optimize=True
     )
     starved = float(np.einsum("uv,uv->", 0.5 * (g_only + g_only.T), direction))
     assert deviation(starved, numerical, thr_rel=FROZEN_REL_THR) > VACUITY_FACTOR
     # ...and the pair together is the quantity that does close.
-    full = float(np.einsum("uv,uv->", wall.fock(dm, include_cavity_response=False), direction))
+    full = float(np.einsum("uv,uv->", wall.frozen_fock(), direction))
     assert deviation(full, numerical, thr_abs=FROZEN_ABS_THR, thr_rel=FROZEN_REL_THR) <= 1.0
 
 
@@ -1095,8 +1050,8 @@ def test_conventions_amplitudes_are_both_needed():
 def test_conventions_gradient_requires_every_channel(dropped):
     """Each of the three nuclear routes carries a non-negligible share.
 
-    Two are the host's and one is moist's, so this also pins the split itself:
-    dropping the moist term must break the gradient, or the component is not
+    Two are the host's and one is moist's; this also pins the split itself.
+    Dropping the moist term must break the gradient, or the component is not
     actually contributing what its surface weights claim.
     """
     system, basis = PRIMARY_CASE
@@ -1105,102 +1060,101 @@ def test_conventions_gradient_requires_every_channel(dropped):
     _host, wall = make_wall(mol, dm=dm)
 
     channels = {
-        "integral": wall._integral_nuclear_gradient(dm),
-        "field": wall._field_nuclear_gradient(dm),
-        "surface": wall._surface_nuclear_gradient(),
+        "integral": wall.gradient_channels(dm)["moments"],
+        "field": wall.gradient_channels(dm)["density"],
+        "surface": wall.gradient_channels(dm)["model"],
     }
     assert np.abs(channels[dropped]).max() > MIN_SIGNAL
     starved = sum(value for name, value in channels.items() if name != dropped)
 
-    index = int(np.argmax(np.abs(channels[dropped].flatten(order="F"))))
+    index = int(np.argmax(np.abs(channels[dropped].flatten(order="C"))))
     numerical = fd_position(mol, positions, dm, index)
-    assert deviation(starved.flatten(order="F")[index], numerical) > VACUITY_FACTOR
+    assert deviation(starved.flatten(order="C")[index], numerical) > VACUITY_FACTOR
 
 
-# Two controls retired with the port, both because the quantity they starved is
-# no longer reachable from Python:
+# Two constraints on the amplitudes, checked elsewhere:
 #
-#   * the area route must use the true ``da_i/dR_A`` rather than the Gaussian-
-#     width proxy -- now moist's internal choice, and covered end to end by
+#   * the area route must use the true ``da_i/dR_A`` rather than a
+#     Gaussian-width proxy, covered end to end by
 #     ``test_gradient_surface_channel_matches_fd``;
-#   * the activity floor must gate the amplitudes rather than only ``dE/da``.
-#     That is now structural: the component computes the mask once, beside the
-#     amplitudes, and ``test_gostshyp_energy_matches_amplitudes`` in
-#     test/unit/test_model/component/gostshyp.f90 checks the energy and the host
-#     amplitudes agree, which is exactly the property a split mask breaks.
+#   * the activity floor must gate the amplitudes, not only ``dE/da``. The
+#     component computes the mask once, beside the amplitudes, and
+#     ``gostshyp_energy_matches_amplitudes`` in
+#     test/unit/test_model_component_gostshyp.f90 checks that the energy and
+#     the host amplitudes agree.
 
 
 @pytest.mark.gostshyp_conventions
 def test_conventions_anchor_area_derivatives_sum_to_the_total():
     """``sum_i a_i1_rA == A_tot1_rA``, pinning the anchor buffer layout.
 
-    The binding hands moist a rank-4 Fortran buffer and a capacity pair whose
-    order is the reverse of the array indexing.  This identity is independent of
-    any GOSTSHYP physics, so it bisects a layout error away from a weight error.
+    The binding exposes C arrays with the native axes reversed. This
+    identity is independent of any GOSTSHYP physics, isolating a layout
+    error from a weight error.
 
-    Driven on a standalone cavity: the wall's cavity now belongs to the model,
-    and this checks the binding rather than the wall.
+    Driven on a standalone cavity: the wall's cavity belongs to the model,
+    so this checks the binding rather than the wall.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
     host.dm = dm
-    cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = cavity_config().build(source=host)
     cavity.update(host.structure())
 
     cavity.compute_anchor_gradient()
     anchor = cavity.get_anchor_gradient()
     np.testing.assert_allclose(
-        anchor.a_i1_rA.sum(axis=2), anchor.A_tot1_rA, rtol=0.0, atol=1e-12
+        anchor.a_i1_rA.sum(axis=0), anchor.A_tot1_rA, rtol=0.0, atol=1e-12
     )
     np.testing.assert_allclose(
-        anchor.v_i1_rA.sum(axis=2), anchor.V_tot1_rA, rtol=0.0, atol=1e-12
+        anchor.v_i1_rA.sum(axis=0), anchor.V_tot1_rA, rtol=0.0, atol=1e-12
     )
 
 
 @pytest.mark.gostshyp_conventions
-def test_conventions_failed_update_leaves_no_stale_results(monkeypatch):
-    """A rebuild that raises must not leave the previous geometry readable.
+def test_conventions_failed_evaluation_leaves_no_stale_results(monkeypatch):
+    """An evaluation that raises must not leave the previous density readable.
 
-    :meth:`update` moves the host density and the cavity before it can fail --
-    a density with no isodensity surface, a projection that will not converge --
-    so results cached from the previous call describe a surface that no longer
-    exists.  The failure is forced here rather than hunted for: what is being
-    pinned is the invalidation, not any particular way of tripping it.
+    :meth:`evaluate` moves the host density and the cavity before it can
+    fail -- a density with no isodensity surface, a projection that will
+    not converge. Results cached from the previous call would describe a
+    surface that no longer exists. The failure is forced here rather than
+    hunted for: this pins the invalidation, not any particular way of
+    tripping it.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
 
     # Vacuous unless there is a real result to go stale.
-    assert wall.effective_volume() > 0.0
-    assert wall.amplitudes is not None
+    assert wall.moments.effective_volume() > 0.0
+    assert item_of(wall.response, GostshypAmplitudeResponse) is not None
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("integral build failed")
 
-    monkeypatch.setattr(wall, "_build_integrals", boom)
+    monkeypatch.setattr(wall.moments, "_build_integrals", boom)
     with pytest.raises(RuntimeError, match="integral build failed"):
-        wall.update(dm)
+        wall.evaluate(1.001 * dm)
 
-    assert wall.amplitudes is None
-    assert wall.energy == 0.0
-    for read in (wall.effective_volume, lambda: wall.fock(dm), lambda: wall.nuclear_gradient(dm)):
-        with pytest.raises(RuntimeError, match="update"):
+    assert wall.result is None
+    for read in (lambda: wall.energy, lambda: wall.fock, lambda: wall.response):
+        with pytest.raises(RuntimeError, match="evaluate"):
             read()
+    # ...and the gradient re-evaluates rather than reading anything stale.
+    with pytest.raises(RuntimeError, match="integral build failed"):
+        wall.gradient(dm)
 
 
 @pytest.mark.gostshyp_conventions
-def test_conventions_failed_update_publishes_nothing_partial(monkeypatch):
-    """A failure in the *last* step of :meth:`update` publishes nothing either.
+def test_conventions_failed_evaluation_publishes_nothing_partial(monkeypatch):
+    """A failure in the *last* step of :meth:`evaluate` publishes nothing either.
 
-    The cavity and the moments are built by then, so the traces and the energy
-    waiting behind that call are perfectly good numbers -- which is why this is
-    worth pinning rather than obvious: they are the tempting ones to keep.
-    :meth:`update` raised, so no caller was ever handed the state they belong
-    to, and a half-published result is one no accessor can tell from a whole
-    one.  The sibling test injects its failure in ``_build_integrals`` and so
-    never reaches this path.
+    The cavity and the moments are built by then, and the energy waiting
+    behind that call is a perfectly good number. :meth:`evaluate` raised, so
+    no caller was ever handed the state it belongs to, and a half-published
+    result is one no accessor can tell from a whole one.
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -1209,59 +1163,45 @@ def test_conventions_failed_update_publishes_nothing_partial(monkeypatch):
     def boom(*_args, **_kwargs):
         raise RuntimeError("response assembly failed")
 
-    monkeypatch.setattr(wall.model, "response", boom)
+    monkeypatch.setattr(wall.model, "get_response", boom)
     with pytest.raises(RuntimeError, match="response assembly failed"):
-        wall.update(dm)
+        wall.evaluate(1.001 * dm)
 
-    assert wall.amplitudes is None
-    assert wall.energy == 0.0
-    for read in (
-        wall.effective_volume,
-        lambda: wall.live_traces,
-        lambda: wall.inactive_count,
-        lambda: wall.fock(dm),
-    ):
-        with pytest.raises(RuntimeError, match="update"):
+    assert wall.result is None
+    for read in (lambda: wall.energy, lambda: wall.fock, lambda: wall.response):
+        with pytest.raises(RuntimeError, match="evaluate"):
             read()
 
 
 @pytest.mark.gostshyp_conventions
-def test_conventions_moments_are_built_once_per_update(monkeypatch):
-    """One moment build per :meth:`update`, and none per result read.
-
-    :meth:`_surface_moments` is four dense three-center integral blocks -- the d
-    and f shells among them -- and is by far the most expensive thing this
-    module does.  It is needed exactly once, to hand the component its moments;
-    every later read is a contraction against cached amplitudes.  Nothing about
-    the returned numbers would reveal a rebuild, so the count is pinned.
-    """
+def test_conventions_moments_are_built_once_per_evaluation(monkeypatch):
+    """Build each required moment block once, with no rebuild on result reads."""
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    _host, wall = make_wall(mol, dm=dm)
 
-    original = wall._surface_moments
+    original = GaussianMoments._surface_moments
     calls = []
 
-    def counted(*args, **kwargs):
-        calls.append(args)
-        return original(*args, **kwargs)
+    def counted(self, *args, **kwargs):
+        calls.append(frozenset(kwargs["required"]))
+        return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(wall, "_surface_moments", counted)
+    monkeypatch.setattr(GaussianMoments, "_surface_moments", counted)
 
-    wall.update(dm)
-    assert len(calls) == 1
+    _host, wall = make_wall(mol, dm=dm)
+    assert calls == [frozenset({"gt", "pt"}), frozenset({"mt", "rt"})]
 
-    fock = wall.fock(dm)
-    gradient = wall.nuclear_gradient(dm)
-    volume = wall.effective_volume()
-    assert len(calls) == 1, "a result read rebuilt the moments"
+    fock = wall.fock
+    gradient = wall.gradient(dm)
+    volume = wall.moments.effective_volume()
+    assert len(calls) == 2, "a result read rebuilt the moments"
     assert np.abs(fock).max() > MIN_SIGNAL
     assert np.abs(gradient).max() > MIN_SIGNAL
     assert volume > 0.0
 
     # The cached traces are the ones a fresh build would produce.
-    gt, ftilde = wall.live_traces
-    rebuilt_gt, rebuilt_ftilde = wall.traces(dm)
+    gt, ftilde = wall.moments.live_traces
+    rebuilt_gt, rebuilt_ftilde = wall.moments.traces(dm)
     np.testing.assert_allclose(gt, rebuilt_gt, rtol=0.0, atol=0.0)
     np.testing.assert_allclose(ftilde, rebuilt_ftilde, rtol=0.0, atol=0.0)
 
@@ -1287,36 +1227,42 @@ def test_conventions_matches_the_frozen_reference(system, basis):
 
     The finite differences elsewhere in this file are self-consistent: they
     check the model's derivative against the model's own energy, so a
-    convention error applied consistently to both -- a wrong angular constant,
-    a mis-ordered cartesian component -- leaves all of them passing.  This is
-    the only test that would notice, which is why it covers the energy, the
-    amplitudes, the level-set adjoints and the gradient rather than just the
-    energy.
+    convention error applied consistently to both -- a wrong angular
+    constant, a mis-ordered cartesian component -- leaves all of them
+    passing. This test checks the energy, the amplitudes, the level-set
+    adjoints and the gradient, not just the energy.
 
-    Parametrised over ``GOLDEN``, *not* ``CASES``: these values were captured
-    from the pure-Python implementation that existed before the physics moved
-    into the Fortran component, so they exist only for the cases that were
-    enabled at that time.  Enabling a new row in ``CASES`` must not fail here.
+    Parametrised over ``GOLDEN``, *not* ``CASES``: these values exist only
+    for the cases enabled when they were captured. Enabling a new row in
+    ``CASES`` must not fail here.
 
-    Nor should a new row simply be added to ``GOLDEN``.  That pre-port
-    implementation is gone, so values captured for a new case would come from
-    the code under test -- a regression pin against future drift, which is
-    useful, but not the independent cross-check the water rows carry.  If you
-    add one, say in a comment which of the two it is.
+    Nor should a new row simply be added to ``GOLDEN``. A value captured for
+    a new case would come from the code under test, not the pre-port
+    implementation -- a regression pin against future drift, not the
+    independent cross-check the water rows carry. Say in a comment which of
+    the two a new row is.
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
-    _host, wall = make_wall(mol, dm=dm)
+    # Reference values were captured at rho_iso=4e-4; do not regenerate them.
+    _host, wall = make_wall(mol, dm=dm, rho_iso=4e-4)
 
-    weights = wall.response
-    actual = {"energy": float(wall.energy), "ngrid": int(wall.ngrid)}
-    actual.update(_golden_summary("alpha", wall.amplitudes))
+    amplitude = item_of(wall.response, GostshypAmplitudeResponse)
+    weights = item_of(wall.response, DensityResponse)
+    actual = {"energy": float(wall.energy), "ngrid": int(wall.model.cavity.ngrid)}
+    actual.update(_golden_summary("alpha", amplitude.w_overlap))
     actual.update(
-        _golden_summary("fock_frozen", wall.fock(dm, include_cavity_response=False))
+        _golden_summary("fock_frozen", wall.frozen_fock())
     )
-    actual.update(_golden_summary("w_lsf0", weights.lsf.w_value))
-    actual.update(_golden_summary("w_lsf1", weights.lsf.w_gradient))
-    actual.update(_golden_summary("w_lsf2", weights.lsf.w_hessian))
-    actual.update(_golden_summary("gradient", wall.nuclear_gradient(dm)))
+    # The frozen reference holds adjoints of the level set. moist returns
+    # adjoints of the density, larger by exactly `-scale`; this divides that
+    # back out to compare the same quantity.
+    def level_set(array):
+        return np.asarray(array) / -IsodensityParameters().scale
+
+    actual.update(_golden_summary("w_lsf0", level_set(weights.w_rho)))
+    actual.update(_golden_summary("w_lsf1", level_set(weights.w_grad_rho)))
+    actual.update(_golden_summary("w_lsf2", level_set(weights.w_hess_rho)))
+    actual.update(_golden_summary("gradient", wall.gradient(dm)))
 
     expected = GOLDEN[(system, basis)]
     assert actual.keys() == expected.keys()

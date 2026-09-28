@@ -176,7 +176,7 @@
 !> split-to-spatial recombination.
 module moist_cavity_drop_lsf_cfc_kernel
    use mctc_env_accuracy, only: wp
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Layer 1: pseudo-density accumulators (per atom / per pair)

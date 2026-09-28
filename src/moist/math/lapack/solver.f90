@@ -6,7 +6,7 @@ module moist_math_lapack_solver
    use moist_math_lapack_sygvd, only: sygvd_solver, new_sygvd
    use moist_math_lapack_sygvr, only: sygvr_solver, new_sygvr
    use mctc_env, only: sp, dp, error_type
-   implicit none
+   implicit none(type, external)
    private
 
    public :: eigen_solver_type, lapack_algorithm
@@ -59,6 +59,9 @@ contains
             call new_sygvr(tmp, ndim)
             call move_alloc(tmp, solver)
          end block
+      case default
+         ! Unknown algorithm leaves the solver unallocated
+         continue
       end select
    end subroutine new
 

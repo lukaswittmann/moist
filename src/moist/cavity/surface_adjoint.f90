@@ -2,7 +2,7 @@
 module moist_cavity_surface_adjoint
    use mctc_env, only: wp, error_type, fatal_error
 
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: cavity_surface_adjoint_type

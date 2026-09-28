@@ -321,10 +321,10 @@ contains
       integer :: iostat !! write `iostat` code
 
       message = trim(string)
-      if (present(i)) message = message//' '//int2str(i)
-      if (present(r)) message = message//' '//real2str(r)
+      if (present(i)) message = message//" "//int2str(i)
+      if (present(r)) message = message//" "//real2str(r)
 
-      if (me%verbose) write (me%iunit, '(A)', iostat=iostat) message
+      if (me%verbose) write (me%iunit, "(A)", iostat=iostat) message
 
       ! store in the class:
       me%istat = istat
@@ -344,7 +344,7 @@ contains
       integer :: iostat !! write `iostat` code
       write (tmp, fmt=*, iostat=iostat) i
       if (iostat /= 0) then
-         s = '****'
+         s = "****"
       else
          s = trim(adjustl(tmp))
       end if
@@ -362,7 +362,7 @@ contains
       integer :: iostat !! write `iostat` code
       write (tmp, fmt=*, iostat=iostat) r
       if (iostat /= 0) then
-         s = '****'
+         s = "****"
       else
          s = trim(adjustl(tmp))
       end if
@@ -414,7 +414,7 @@ contains
          if (allocated(me%message)) then
             message = trim(me%message)
          else
-            message = 'Error: class has not been initialized'
+            message = "Error: class has not been initialized"
          end if
       end if
 
@@ -549,7 +549,7 @@ contains
       if (present(bounds_mode) .and. present(xlow) .and. present(xupp)) then
          if (any(xlow > xupp)) then  ! check for consistency
             status_ok = .false.
-            call me%set_status(istat=-16, string='Error: xlow > xupp')
+            call me%set_status(istat=-16, string="Error: xlow > xupp")
             return
          end if
          me%bounds_mode = bounds_mode
@@ -566,7 +566,7 @@ contains
          case (NLESOLVER_1_NORM); me%norm => norm_1
          case default
             status_ok = .false.
-            call me%set_status(istat=-18, string='Error: invalid norm_mode:', i=norm_mode)
+            call me%set_status(istat=-18, string="Error: invalid norm_mode:", i=norm_mode)
             return
          end select
       else
@@ -581,7 +581,7 @@ contains
          case (NLESOLVER_LINESEARCH_FIXEDPOINT); me%linesearch => fixed_point_linesearch
          case default
             status_ok = .false.
-            call me%set_status(istat=-5, string='Error: invalid step_mode:', i=step_mode)
+            call me%set_status(istat=-5, string="Error: invalid step_mode:", i=step_mode)
             return
          end select
       else
@@ -608,32 +608,32 @@ contains
       ! error checks:
       if (me%alpha < zero .or. me%alpha > one) then
          status_ok = .false.
-         call me%set_status(istat=-1, string='Error: invalid alpha:', r=me%alpha)
+         call me%set_status(istat=-1, string="Error: invalid alpha:", r=me%alpha)
          return
       end if
       if (me%alpha_min < zero .or. me%alpha_min > one) then
          status_ok = .false.
-         call me%set_status(istat=-2, string='Error: invalid alpha_min:', r=me%alpha_min)
+         call me%set_status(istat=-2, string="Error: invalid alpha_min:", r=me%alpha_min)
          return
       end if
       if (me%alpha_max < zero .or. me%alpha_max > one) then
          status_ok = .false.
-         call me%set_status(istat=-3, string='Error: invalid alpha_max:', r=me%alpha_max)
+         call me%set_status(istat=-3, string="Error: invalid alpha_max:", r=me%alpha_max)
          return
       end if
       if (me%alpha_max <= me%alpha_min) then
          status_ok = .false.
-         call me%set_status(istat=-4, string='Error: alpha_min must be < alpha_max')
+         call me%set_status(istat=-4, string="Error: alpha_min must be < alpha_max")
          return
       end if
       if (me%c < zero .or. me%c > one) then
          status_ok = .false.
-         call me%set_status(istat=-12, string='Error: backtracking linesearch c must be in range (0, 1):', r=me%c)
+         call me%set_status(istat=-12, string="Error: backtracking linesearch c must be in range (0, 1):", r=me%c)
          return
       end if
       if (me%tau < zero .or. me%tau > one) then
          status_ok = .false.
-         call me%set_status(istat=-13, string='Error: backtracking linesearch tau must be in range (0, 1):', r=me%tau)
+         call me%set_status(istat=-13, string="Error: backtracking linesearch tau must be in range (0, 1):", r=me%tau)
          return
       end if
 
@@ -653,11 +653,11 @@ contains
                   me%irow = irow
                   me%icol = icol
                else
-                  call me%set_status(istat=-15, string='Error: irow and icol must be the same length')
+                  call me%set_status(istat=-15, string="Error: irow and icol must be the same length")
                   return
                end if
             else
-               call me%set_status(istat=-14, string='Error: must specify grad_sparse, irow, and icol for sparsity_mode > 1')
+               call me%set_status(istat=-14, string="Error: must specify grad_sparse, irow, and icol for sparsity_mode > 1")
                return
             end if
             ! LSQR optional inputs:
@@ -677,13 +677,13 @@ contains
          end if
          if (sparsity_mode == NLESOLVER_SPARSITY_CUSTOM_SPARSE) then
             if (.not. associated(me%custom_solver_sparse)) then
-               call me%set_status(istat=-16, string='Error: must specify custom_solver_sparse for sparsity_mode = 5')
+               call me%set_status(istat=-16, string="Error: must specify custom_solver_sparse for sparsity_mode = 5")
                return
             end if
          end if
       end if
 
-      if (status_ok) call me%set_status(istat=0, string='')
+      if (status_ok) call me%set_status(istat=0, string="")
 
    end subroutine initialize_nlesolver_variables
 !*****************************************************************************************
@@ -732,22 +732,22 @@ contains
 
       ! call me%set_status(istat = 0, string = 'Class successfully initialized')
       call me%set_status(istat=0, string= &
-          & ' ==========================================='// &
-          & '  Starting NLE Solver  '// &
-          & '============================================')
+          & " ==========================================="// &
+          & "  Starting NLE Solver  "// &
+          & "============================================")
 
       if (me%istat < 0) return ! class was not initialized properly
 
       if (.not. associated(me%func)) then
-         call me%set_status(istat=-10, string='Error: function routine is not associated')
+         call me%set_status(istat=-10, string="Error: function routine is not associated")
          return
       end if
       if (me%sparsity_mode == NLESOLVER_SPARSITY_DENSE .and. .not. associated(me%grad)) then
-         call me%set_status(istat=-11, string='Error: gradient routine is not associated')
+         call me%set_status(istat=-11, string="Error: gradient routine is not associated")
          return
       end if
       if (me%sparsity_mode > NLESOLVER_SPARSITY_DENSE .and. .not. associated(me%grad_sparse)) then
-         call me%set_status(istat=-11, string='Error: gradient routine is not associated')
+         call me%set_status(istat=-11, string="Error: gradient routine is not associated")
          return
       end if
 
@@ -784,11 +784,11 @@ contains
          if (alloc_stat == 0) allocate (delx(me%n, 1), stat=alloc_stat)
       end if
       if (alloc_stat /= 0) then
-         call me%set_status(istat=-9, string='Error: Out of memory')
+         call me%set_status(istat=-9, string="Error: Out of memory")
          return
       else
          me%istat = -998
-         me%message = 'Unknown error'
+         me%message = "Unknown error"
       end if
 
       ! evaluate the function:
@@ -799,7 +799,7 @@ contains
       ! check to see if initial guess is a root:
       if (f <= me%tol) then
 
-         call me%set_status(istat=1, string='Required accuracy achieved')
+         call me%set_status(istat=1, string="Required accuracy achieved")
 
       else
 
@@ -813,7 +813,7 @@ contains
             if (associated(me%user_input_check)) then
                call me%user_input_check(user_stop)
                if (user_stop) then
-                  call me%set_status(istat=4, string='Stopped by the user')
+                  call me%set_status(istat=4, string="Stopped by the user")
                   exit
                end if
             end if
@@ -842,7 +842,7 @@ contains
                      delxmag2 = dot_product(delx(:, 1), delx(:, 1))
                      if (delxmag2 < eps) then
                         call me%set_status(istat=-8, &
-                                           string='Error: Divide by zero when computing Broyden update')
+                                           string="Error: Divide by zero when computing Broyden update")
                         exit
                      end if
 
@@ -864,9 +864,9 @@ contains
                         associate (dx => delx(me%icol(idx), :)) ! nonzero x vec for this row
                            delxmag2 = dot_product(dx(:, 1), dx(:, 1)) ! only those x's for this row
                            if (delxmag2 < eps) then
-                              write (i_str, '(I10)') i
+                              write (i_str, "(I10)") i
                               call me%set_status(istat=-8, &
-                                                 string='Error: Divide by zero when computing sparse Broyden update for row '// &
+                                                 string="Error: Divide by zero when computing sparse Broyden update for row "// &
                                                  trim(adjustl(i_str)))
                               exit
                            end if
@@ -921,11 +921,11 @@ contains
                select case (info)
                case (4)
                   call me%set_status(istat=-1004, &
-                                     string='LSQR Error: The system appears to be ill-conditioned. istop =', i=info)
+                                     string="LSQR Error: The system appears to be ill-conditioned. istop =", i=info)
                   exit
                case (5)
                   call me%set_status(istat=-1005, &
-                                     string='LSQR Error: The iteration limit was reached. istop =', i=info)
+                                     string="LSQR Error: The iteration limit was reached. istop =", i=info)
                   exit
                case default
                   info = 0
@@ -949,11 +949,11 @@ contains
                select case (info)
                case (4)
                   call me%set_status(istat=-1004, &
-                                     string='LSMR Error: The system appears to be ill-conditioned. istop =', i=info)
+                                     string="LSMR Error: The system appears to be ill-conditioned. istop =", i=info)
                   exit
                case (5)
                   call me%set_status(istat=-1005, &
-                                     string='LSMR Error: The iteration limit was reached. istop =', i=info)
+                                     string="LSMR Error: The iteration limit was reached. istop =", i=info)
                   exit
                case default
                   info = 0
@@ -965,17 +965,17 @@ contains
                   call me%custom_solver_sparse(me%n, me%m, me%n_nonzeros, me%irow, me%icol, fjac_sparse, rhs, p, info)
                else
                   call me%set_status(istat=-1006, &
-                                     string='Error: The custom_solver_sparse procedure has not been set.')
+                                     string="Error: The custom_solver_sparse procedure has not been set.")
                   exit
                end if
             case default
-               error stop 'invalid sparsity_mode'
+               error stop "invalid sparsity_mode"
             end select
 
             ! check for errors:
             if (info /= 0) then
 
-               call me%set_status(istat=-6, string='Error solving linear system. info =', i=info)
+               call me%set_status(istat=-6, string="Error solving linear system. info =", i=info)
                exit
 
             else
@@ -993,25 +993,25 @@ contains
                ! check for stopping conditions
                if (f <= me%tol) then
 
-                  call me%set_status(istat=1, string='Required accuracy achieved')
+                  call me%set_status(istat=1, string="Required accuracy achieved")
                   exit
 
-               elseif (maxval(abs(x - xold)) <= me%tolx) then
+               else if (maxval(abs(x - xold)) <= me%tolx) then
 
-                  call me%set_status(istat=2, string='Solution cannot be improved')
+                  call me%set_status(istat=2, string="Solution cannot be improved")
                   exit
 
-               elseif (iter == me%max_iter) then
+               else if (iter == me%max_iter) then
 
-                  call me%set_status(istat=3, string='Maximum number of iterations reached')
+                  call me%set_status(istat=3, string="Maximum number of iterations reached")
                   exit
 
-               elseif (n_uphill > me%n_uphill_max) then
+               else if (n_uphill > me%n_uphill_max) then
 
-                  call me%set_status(istat=5, string='Too many steps in the uphill direction')
+                  call me%set_status(istat=5, string="Too many steps in the uphill direction")
                   exit
 
-               elseif (me%use_broyden) then
+               else if (me%use_broyden) then
 
                   ! If delxmag2 is too small when using broyden, just
                   ! call the user-supplied jacobian function to avoid
@@ -1064,10 +1064,10 @@ contains
          do i = 1, me%n
             if (x(i) < me%xlow(i)) then
                x(i) = me%xlow(i)
-               if (me%verbose) write (me%iunit, '(A)') 'Initial x('//int2str(i)//') < xlow(i) : adjusting to lower bound'
+               if (me%verbose) write (me%iunit, "(A)") "Initial x("//int2str(i)//") < xlow(i) : adjusting to lower bound"
             else if (x(i) > me%xupp(i)) then
                x(i) = me%xupp(i)
-               if (me%verbose) write (me%iunit, '(A)') 'Initial x('//int2str(i)//') > xupp(i) : adjusting to upper bound'
+               if (me%verbose) write (me%iunit, "(A)") "Initial x("//int2str(i)//") > xupp(i) : adjusting to upper bound"
             end if
          end do
       end if
@@ -1116,7 +1116,7 @@ contains
          if (xnew(i) < me%xlow(i)) then
             search_direction_modifed = .true.
             modified(i) = .true.
-            if (me%verbose) write (me%iunit, '(A)') 'x('//int2str(i)//') < xlow(i) : adjusting to lower bound'
+            if (me%verbose) write (me%iunit, "(A)") "x("//int2str(i)//") < xlow(i) : adjusting to lower bound"
             select case (me%bounds_mode)
             case (NLESOLVER_SCALAR_BOUNDS, NLESOLVER_WALL_BOUNDS); xnew(i) = me%xlow(i)
             case (NLESOLVER_VECTOR_BOUNDS); t = min(t, (me%xlow(i) - x(i))/p(i))
@@ -1124,7 +1124,7 @@ contains
          else if (xnew(i) > me%xupp(i)) then
             search_direction_modifed = .true.
             modified(i) = .true.
-            if (me%verbose) write (me%iunit, '(A)') 'x('//int2str(i)//') > xupp(i) : adjusting to upper bound'
+            if (me%verbose) write (me%iunit, "(A)") "x("//int2str(i)//") > xupp(i) : adjusting to upper bound"
             select case (me%bounds_mode)
             case (NLESOLVER_SCALAR_BOUNDS, NLESOLVER_WALL_BOUNDS); xnew(i) = me%xupp(i)
             case (NLESOLVER_VECTOR_BOUNDS); t = min(t, (me%xupp(i) - x(i))/p(i))
@@ -1137,17 +1137,17 @@ contains
          select case (me%bounds_mode)
          case (NLESOLVER_SCALAR_BOUNDS, NLESOLVER_WALL_BOUNDS)
             pnew = xnew - x  ! here we have changed the search direction vector
-            if (all(pnew == 0.0_wp)) call me%set_status(istat=-17, string='Error adjusting line search direction for bounds')
+            if (all(pnew == 0.0_wp)) call me%set_status(istat=-17, string="Error adjusting line search direction for bounds")
          case (NLESOLVER_VECTOR_BOUNDS)
             ! here was are staying on the original search direction vector, just walking back
             if (t <= 0.0_wp) then ! something wrong
-               call me%set_status(istat=-17, string='Error adjusting line search direction for bounds')
+               call me%set_status(istat=-17, string="Error adjusting line search direction for bounds")
                pnew = p
             else
                pnew = p/t
             end if
          end select
-         if (me%verbose) write (me%iunit, '(A)') 'Search direction modified to be within bounds'
+         if (me%verbose) write (me%iunit, "(A)") "Search direction modified to be within bounds"
       else
          pnew = p
       end if
@@ -1240,7 +1240,7 @@ contains
 
       class(nlesolver_type), intent(out) :: me
 
-      me%message = 'Error: class has not been initialized'
+      me%message = "Error: class has not been initialized"
       me%istat = -999
 
    end subroutine destroy_nlesolver_variables
@@ -1295,7 +1295,7 @@ contains
          bmat(1:m, 1) = b
          lwork = int(min(m, n) + max(1, m, n), lapack_ik)
          allocate (work(int(lwork)))
-         call dgels('N', m_lapack, n_lapack, int(1, lapack_ik), amat, m_lapack, bmat, &
+         call dgels("N", m_lapack, n_lapack, int(1, lapack_ik), amat, m_lapack, bmat, &
                     int(max(1, m, n), lapack_ik), work, lwork, info_lapack)
          x = bmat(1:n, 1)
 
@@ -1392,9 +1392,9 @@ contains
       ! TODO: Print header here ("slope", "t", "alpha", "f", "f - ftmp", "alpha*t") with (1X,A16) formatting
       if (me%verbose) then
          ! write(me%iunit,'(5X,A)') 'Backtracking line search:'
-         write (me%iunit, '(7X,6(A14,1X), A)') "slope", "t", "alpha", "f", "f - ftmp", "alpha*t", &
+         write (me%iunit, "(7X,6(A14,1X), A)") "slope", "t", "alpha", "f", "f - ftmp", "alpha*t", &
             "[BACKTRACKING]"
-         write (me%iunit, '(7X,6(A14,1X))') "--------------", "--------------", "--------------", &
+         write (me%iunit, "(7X,6(A14,1X))") "--------------", "--------------", "--------------", &
             "--------------", "--------------", "--------------"
 
       end if
@@ -1434,10 +1434,10 @@ contains
          if (me%verbose) then
             ! TODO: adhere to header format (1X,E16.6)
             if (f - ftmp >= alpha*t) then
-               write (me%iunit, '(7X,6(E14.6,1X),A)') slope, t, alpha, ftmp, f - ftmp, alpha*t, &
-                  '[ACCEPTED]'
+               write (me%iunit, "(7X,6(E14.6,1X),A)") slope, t, alpha, ftmp, f - ftmp, alpha*t, &
+                  "[ACCEPTED]"
             else
-               write (me%iunit, '(7X,6(E14.6,1X))') slope, t, alpha, ftmp, f - ftmp, alpha*t
+               write (me%iunit, "(7X,6(E14.6,1X))") slope, t, alpha, ftmp, f - ftmp, alpha*t
             end if
 
             ! write(me%iunit,'(1P,*(A,1X,E16.6))')          '        alpha    = ', alpha,    ' f       = ', ftmp
@@ -1451,9 +1451,9 @@ contains
          if (((f - ftmp)/2.0_wp >= alpha*t) .or. min_alpha_reached) then
             if (me%verbose .and. min_alpha_reached) then
                ! write(me%iunit,'(5X,A)') 'Minimum alpha reached'
-               write (me%iunit, '(7X,6(A14,1X),A)') "--------------", "--------------", &
+               write (me%iunit, "(7X,6(A14,1X),A)") "--------------", "--------------", &
                   "--------------", "--------------", "--------------", &
-                  "--------------", '[Minimum alpha reached]'
+                  "--------------", "[Minimum alpha reached]"
 
             end if
             ! Armijo-Goldstein condition is satisfied
@@ -1517,7 +1517,7 @@ contains
       ! find the minimum value of f in the range of alphas:
       alpha_min = fmin(func_for_fmin, me%alpha_min, me%alpha_max, me%fmin_tol)
 
-      if (me%verbose) write (me%iunit, '(1P,*(A,1X,E16.6))') '        alpha_min = ', alpha_min
+      if (me%verbose) write (me%iunit, "(1P,*(A,1X,E16.6))") "        alpha_min = ", alpha_min
 
       call me%compute_next_step(xold, search_direction, alpha_min, modified, x)
       if (all(x == xnew)) then

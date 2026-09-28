@@ -28,12 +28,12 @@
 !>     arg(x) = k * (hi - lo) * (2*x - lo - hi) / ((x - lo) * (hi - x))
 !>
 !> The actual value follows the `from`/`to` orientation:
-!>   from < to -> rising 0 -> 1; from > to -> falling 1 -> 0.
+!>   from < to -> rising 0 -> 1; from > to -> falling 1 -> 0
 module moist_cavity_drop_switching
    use mctc_env_accuracy, only: wp
    use mctc_io_constants, only: pi
 
-   implicit none
+   implicit none(type, external)
    private
 
    public :: moist_cavity_drop_swif_type
@@ -57,7 +57,8 @@ module moist_cavity_drop_switching
    end type moist_cavity_drop_swif_type
 
    abstract interface
-      !> Evaluate a scalar switching function and its scalar derivatives.
+      !> Evaluate a scalar switching function and its scalar derivatives
+      !>
       !> @param[in]  self  Switching-function instance
       !> @param[in]  x0    Input value
       !> @param[out] f0    Switching value
@@ -65,6 +66,7 @@ module moist_cavity_drop_switching
       !> @param[out] f2    Second derivative with respect to x0
       pure subroutine swif_eval_iface(self, x0, f0, f1, f2)
          import :: wp, moist_cavity_drop_swif_type
+         implicit none(type, external)
          class(moist_cavity_drop_swif_type), intent(in) :: self
          !> Input value
          real(wp), intent(in) :: x0
@@ -320,7 +322,7 @@ contains
             dbump = 0.0_wp
             d2bump = 0.0_wp
          else
-            !> Stable sigmoid evaluation for any sign of g.
+            !> Stable sigmoid evaluation for any sign of g
             if (g >= 0.0_wp) then
                exp_neg_g = exp(-g)
                s = exp_neg_g/(1.0_wp + exp_neg_g)
@@ -359,8 +361,9 @@ contains
 
    !> Evaluate the switching function value via the abstract `eval` hook
    !>
-   !> When from < to the value rises smoothly from 0 to 1.
-   !> When from > to the value falls smoothly from 1 to 0.
+   !> When from < to the value rises smoothly from 0 to 1
+   !> When from > to the value falls smoothly from 1 to 0
+   !>
    !> @param[in] self  Switching-function instance
    !> @param[in] x0    Input value
    pure function swif_f0(self, x0) result(val)
@@ -377,6 +380,7 @@ contains
    !> coordinates, via the chain rule through x0
    !>
    !> dS/dR_A = S'(x0) * dx0/dR_A
+   !>
    !> @param[in] self    Switching-function instance
    !> @param[in] x0      Input scalar value
    !> @param[in] x1      Gradient of x0 w.r.t. nuclear coordinates (3, ncenters)
@@ -412,6 +416,7 @@ contains
    !>
    !> d^2S/(dR_A dR_B) = S''(x0) * dx0/dR_A * dx0/dR_B
    !>                   + S'(x0) * d^2x0/(dR_A dR_B)
+   !>
    !> @param[in] self  Switching-function instance
    !> @param[in] x0    Input scalar value
    !> @param[in] x1    Gradient of x0 (3, ncenters)

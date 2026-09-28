@@ -12,14 +12,14 @@
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_weights
    use moist_cavity_drop_derivatives_kernel, only: drop_surface_weights_type, &
       & drop_seed_state_type, compute_branch_phi_adj, seed_weight_tol
-   implicit none (type, external)
+   implicit none(type, external)
 
 contains
 
    !> Reject a surface adjoint the cavity cannot contract
    !>
    !> Every message is prefixed with the caller's name, so a failure names the
-   !> entry point the user actually called.
+   !> entry point the user actually called
    !>
    !> @param[in]  self    DROP cavity instance
    !> @param[in]  acc     Accumulated surface-observable adjoints
@@ -48,9 +48,9 @@ contains
          call fatal_error(error, context//": cavity surface data are incomplete")
          return
       end if
-      ! The area and integration-weight channels are converted through 1/xi^2.
+      ! The area and integration-weight channels are converted through 1/xi^2
       ! A vanishing width with a live area or weight adjoint has no finite
-      ! conversion, and must not be silently dropped.
+      ! conversion, and must not be silently dropped
       if (any(abs(self%xi0) <= seed_weight_tol .and. &
               (abs(acc%w_a) > seed_weight_tol .or. abs(acc%w_w) > seed_weight_tol))) then
          call fatal_error(error, context//": singular derived-weight conversion")
@@ -61,13 +61,15 @@ contains
    !> Fold the derived weight channels and run the branch reverse pass
    !>
    !> `fold_switching` is the *only* difference between the electronic and the
-   !> nuclear preparation. The area channel folds into the switching channel
-   !> through `da/df = R_I^2 wleb_i`; a parameter that leaves `f` fixed -- an
-   !> electronic degree of freedom -- may skip that term, a nuclear
-   !> displacement may not.
+   !> nuclear preparation
+   !>
+   !> - the area channel folds into the switching channel through
+   !>   `da/df = R_I^2 wleb_i`
+   !> - a parameter leaving `f` fixed, an electronic degree of freedom, may skip
+   !>   that term; a nuclear displacement may not
    !>
    !> Call [[check_surface_adjoint]] first; this routine assumes a valid
-   !> accumulator and does not re-validate.
+   !> accumulator and does not re-validate
    !>
    !> @param[in]  self           DROP cavity instance
    !> @param[in]  acc            Accumulated surface-observable adjoints
@@ -96,7 +98,7 @@ contains
       allocate (eff%w_k2, source=acc%w_k2)
 
       ! a_i = c*f_i/xi_i^2 and w_i = c/xi_i^2, so da/dxi = -2a/xi and
-      ! dw/dxi = -2w/xi; both land on the width channel.
+      ! dw/dxi = -2w/xi; both land on the width channel
       do igrid = 1, self%ngrid
          if (abs(acc%w_a(igrid)) > seed_weight_tol) then
             eff%w_xi(igrid) = eff%w_xi(igrid) &
@@ -122,8 +124,8 @@ contains
                     .or. any(abs(eff%w_k2) > seed_weight_tol)
 
       ! Reverse pass for the branch-weight post-pass: converts the width-induced
-      ! adjoint dL/dp_m into dL/dPhi_m, which the seed loop couples to dr/dp.
-      ! Runs after the folds, since it reads the folded width channel.
+      ! adjoint dL/dp_m into dL/dPhi_m, which the seed loop couples to dr/dp
+      ! Runs after the folds, since it reads the folded width channel
       allocate (eff%branch_phi_adj(self%ngrid), source=0.0_wp)
       if (self%ngrid > 0 .and. allocated(self%branch_count)) then
          sigma_phi = self%branch_weight%s
@@ -138,9 +140,10 @@ contains
 
    !> Copy the cavity's grid-level scalars into a kernel seed state
    !>
-   !> Only the fields the cavity owns are written. The level-set jet
-   !> (`lsf1_r`, `lsf2_rr`, `lsf3_rrr`) and the multiplier come from the
-   !> caller's own LSF evaluation and are set by the caller.
+   !> Only the fields the cavity owns are written
+   !>
+   !> - the level-set jet (`lsf1_r`, `lsf2_rr`, `lsf3_rrr`) and the multiplier
+   !>   come from the caller's own LSF evaluation and are set by the caller
    !>
    !> @param[in]    self           DROP cavity instance
    !> @param[in]    igrid          Grid point to describe

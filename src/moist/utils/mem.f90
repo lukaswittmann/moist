@@ -1,7 +1,7 @@
 !> Memory utilities for array reallocation
 module moist_utils_mem
    use mctc_env, only: wp, error_type, fatal_error
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: grow_array
@@ -206,8 +206,8 @@ contains
 
    !> Filter allocated 1D real array in-place
    !>
-   !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays
+   !> - compacts arr(1:n) to keep only elements where keep is .true
+   !> - safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D real array to filter
    !> @param[in]    n      Number of elements to consider
@@ -237,8 +237,9 @@ contains
 
    !> Filter allocated 2D real array (dim1, n) in-place
    !>
-   !> Compacts arr(:, 1:n) to keep only columns where keep is .true.
-   !> Processes each row independently. Safely skips unallocated arrays
+   !> - compacts arr(:, 1:n) to keep only columns where keep is .true
+   !> - processes each row independently
+   !> - safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 2D real array to filter
    !> @param[in]    n      Number of columns to consider
@@ -269,8 +270,8 @@ contains
 
    !> Filter allocated 1D integer array in-place
    !>
-   !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays
+   !> - compacts arr(1:n) to keep only elements where keep is .true
+   !> - safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D integer array to filter
    !> @param[in]    n      Number of elements to consider
@@ -300,8 +301,8 @@ contains
 
    !> Filter allocated 1D logical array in-place
    !>
-   !> Compacts arr(1:n) to keep only elements where keep is .true.
-   !> Safely skips unallocated arrays
+   !> - compacts arr(1:n) to keep only elements where keep is .true
+   !> - safely skips unallocated arrays
    !>
    !> @param[inout] arr    Allocatable 1D logical array to filter
    !> @param[in]    n      Number of elements to consider

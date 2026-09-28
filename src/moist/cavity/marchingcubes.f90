@@ -1,10 +1,11 @@
 !> Marching-cubes cavity: total area and volume of an LSF isosurface
 !>
 !> The cavity is the `f0 = 0` isosurface of a level set function (negative
-!> inside), triangulated on an adaptively refined cube grid. Unlike the other
-!> cavity models this one produces no surface discretization -- there are no
-!> grid points, weights, or Gaussians, only the two integrated totals -- so it
-!> serves as an independent numerical reference for whatever LSF it is given.
+!> inside), triangulated on an adaptively refined cube grid
+!>
+!> - unlike the other cavity models it produces no surface discretization:
+!>   no grid points, weights or Gaussians, only the two integrated totals
+!> - serves as an independent numerical reference for whatever LSF it is given
 !>
 !> Two entry points live here:
 !>   - [[cavity_type_marchingcubes]], the [[cavity_type]] extension, constructed
@@ -15,6 +16,7 @@
 !> TODO: Add actual discretization, so this can be used for PCM and other surface-based models
 !>       Advantage: The grid point are is very homogeneous so good for (open)COSMO-RS
 module moist_cavity_marchingcubes
+   use moist_model_parameters, only: moist_model_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env, only: error_type, fatal_error
    use mctc_io_structure, only: structure_type
@@ -22,7 +24,7 @@ module moist_cavity_marchingcubes
    use mctc_io_convert, only: autoaa
    use mctc_io_constants, only: pi
    use moist_math_linalg, only: cross_product
-   use moist_type, only: cavity_type
+   use moist_cavity_type, only: cavity_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
@@ -36,11 +38,30 @@ module moist_cavity_marchingcubes
    public :: cavity_type_marchingcubes
    public :: new_cavity_marchingcubes
 
-   !> Marching-cubes cavity
+   public :: moist_cavity_marchingcubes_parameters_type
+
+   !> Marching-cubes construction parameters
+   type, extends(moist_model_parameters_type) :: moist_cavity_marchingcubes_parameters_type
+      !> Grid spacing in bohr
+      real(wp) :: spacing = 0.2_wp
+      !> Optional OBJ output path
+      character(len=:), allocatable :: obj_file
+      !> Optional PQR output path
+      character(len=:), allocatable :: pqr_file
+   contains
+      !> Restore compiled defaults
+      procedure :: init_defaults => init_parameter_defaults
+      !> Declare fields for JSON input, output, and printing
+      procedure :: register_entries => register_parameter_entries
+      !> Check grid spacing
+      procedure :: validate => validate_mc_parameters
+   end type moist_cavity_marchingcubes_parameters_type
+
+   !> Marching-cubes cavity state
    type, extends(cavity_type) :: cavity_type_marchingcubes
 
-      !> Level set function model. Constructed once at cavity setup; the
-      !> integrator source-allocates one thread-local clone per OpenMP thread.
+      !> Level set function model, constructed once at cavity setup; the
+      !> integrator source-allocates one thread-local clone per OpenMP thread
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
 
       !> Finest marching-cubes grid spacing, bohr
@@ -362,83 +383,84 @@ module moist_cavity_marchingcubes
        1,  3,  8,  9,  1,  8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, &
        0,  9,  1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, &
        0,  3,  8, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, &
-      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 &
-      ], [16, 256])
+      -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 ], [16, 256])
    !&>
 
    public :: integrate_surface_marching_cubes
 
 contains
 
-   !* ================================================================================= *!
-   !*                                    Constructor                                    *!
-   !* ================================================================================= *!
-
-   !> Initialize a marching-cubes cavity
+   !> Validate marching-cubes grid spacing
    !>
-   !> The LSF model is *required*; callers build their LSF concrete (e.g. `svdw%new(...)`)
-   !> and pass it as `lsf_model`, exactly as for [[new_cavity_drop]]. The cavity stores a
-   !> copy and refreshes its geometry caches on every `update`.
-   !>
-   !> Mesh export is opt-in: pass `obj_file` and/or `pqr_file` and the triangles produced
-   !> during `update` are written there. Omitting both skips triangle buffering entirely.
-   !>
-   !> @param[inout] self          Cavity instance to initialize
-   !> @param[in]    ctx           Shared run context (borrowed; must outlive the cavity)
-   !> @param[in]    radius_model  Atomic radius model used to feed the LSF
-   !> @param[in]    lsf_model     LSF template (required; cavity stores a copy)
-   !> @param[in]    spacing       Finest grid spacing in bohr (optional, default 0.2)
-   !> @param[in]    obj_file      Wavefront OBJ mesh output path (optional)
-   !> @param[in]    pqr_file      PQR triangle-centroid output path (optional)
-   !> @param[out]   error         Error handling structure
-   subroutine new_cavity_marchingcubes(self, ctx, radius_model, lsf_model, &
-                                       spacing, obj_file, pqr_file, error)
-      type(cavity_type_marchingcubes), intent(inout) :: self
-
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
-      type(moist_context_type), intent(in), target :: ctx
-
-      !> Radius model to use for cavity construction (provided by caller)
-      class(radius_type), intent(in) :: radius_model
-
-      !> LSF model template (provided by caller)
-      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
-
-      !> Finest marching-cubes grid spacing, bohr
-      real(wp), intent(in), optional :: spacing
-
-      !> Mesh export paths
-      character(len=*), intent(in), optional :: obj_file
-      character(len=*), intent(in), optional :: pqr_file
-
-      !> Error handling
+   !> @param[inout] self Grid configuration
+   !> @param[out] error Invalid spacing
+   subroutine validate_mc_parameters(self, error)
+      class(moist_cavity_marchingcubes_parameters_type), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      !> Borrow the shared run context (owns verbosity/debug/timer)
+      if (self%spacing <= 0.0_wp) call fatal_error(error, "Marching cubes grid spacing must be positive")
+   end subroutine validate_mc_parameters
+
+   !> Restore compiled parameter defaults
+   !>
+   !> @param[inout] self Parameter values
+   subroutine init_parameter_defaults(self)
+      class(moist_cavity_marchingcubes_parameters_type), intent(inout) :: self
+      type(moist_cavity_marchingcubes_parameters_type) :: defaults
+
+      self%spacing = defaults%spacing
+      if (allocated(self%obj_file)) deallocate(self%obj_file)
+      if (allocated(self%pqr_file)) deallocate(self%pqr_file)
+   end subroutine init_parameter_defaults
+
+   !> Declare parameter fields for JSON input, output, and printing
+   !>
+   !> @param[inout] self Parameter values
+   subroutine register_parameter_entries(self)
+      class(moist_cavity_marchingcubes_parameters_type), intent(inout), target :: self
+
+      call self%register_real_scalar("spacing", self%spacing)
+      call self%register_alloc_string("obj_file", self%obj_file)
+      call self%register_alloc_string("pqr_file", self%pqr_file)
+   end subroutine register_parameter_entries
+
+   !> Construct from parameter values; omission uses compiled defaults
+   !>
+   !> @param[inout] self Object to initialize
+   !> @param[in] ctx Borrowed context; must outlive the object
+   !> @param[in] radius_model Atomic radius model to copy
+   !> @param[in] lsf_model Level set function to copy
+   !> @param[out] error Construction error
+   !> @param[in] param Configuration copied by value
+   subroutine new_cavity_marchingcubes(self, ctx, radius_model, lsf_model, error, param)
+      !> Cavity to initialize
+      type(cavity_type_marchingcubes), intent(inout) :: self
+      !> Borrowed context; must outlive the cavity
+      type(moist_context_type), intent(in), target :: ctx
+      !> Radius model to copy
+      class(radius_type), intent(in) :: radius_model
+      !> Level set function to copy
+      class(moist_cavity_drop_lsf_type), intent(in) :: lsf_model
+      !> Construction error
+      type(error_type), allocatable, intent(out) :: error
+      !> Configuration; omitted means compiled defaults
+      type(moist_cavity_marchingcubes_parameters_type), intent(in), optional :: param
+      !> Resolved configuration
+      type(moist_cavity_marchingcubes_parameters_type) :: settings
+
+      if (present(param)) settings = param
+      call settings%validate(error)
+      if (allocated(error)) return
       self%ctx => ctx
-
-      if (present(spacing)) then
-         if (spacing <= 0.0_wp) then
-            call fatal_error(error, "Marching cubes grid spacing must be positive")
-            return
-         end if
-         self%spacing = spacing
-      end if
-
-      !> Radius model setup
-      if (allocated(self%radius_model)) deallocate (self%radius_model)
-      allocate (self%radius_model, source=radius_model)
-
-      !> LSF model setup
-      if (allocated(self%lsf_model)) deallocate (self%lsf_model)
-      allocate (self%lsf_model, source=lsf_model)
-
-      !> Mesh export paths
-      if (allocated(self%obj_file)) deallocate (self%obj_file)
-      if (allocated(self%pqr_file)) deallocate (self%pqr_file)
-      if (present(obj_file)) self%obj_file = obj_file
-      if (present(pqr_file)) self%pqr_file = pqr_file
-
+      self%spacing = settings%spacing
+      if (allocated(self%obj_file)) deallocate(self%obj_file)
+      if (allocated(settings%obj_file)) self%obj_file = settings%obj_file
+      if (allocated(self%pqr_file)) deallocate(self%pqr_file)
+      if (allocated(settings%pqr_file)) self%pqr_file = settings%pqr_file
+      if (allocated(self%radius_model)) deallocate(self%radius_model)
+      allocate(self%radius_model, source=radius_model)
+      if (allocated(self%lsf_model)) deallocate(self%lsf_model)
+      allocate(self%lsf_model, source=lsf_model)
    end subroutine new_cavity_marchingcubes
 
    !* ================================================================================= *!
@@ -447,8 +469,8 @@ contains
 
    !> Integrate the LSF isosurface for a new geometry
    !>
-   !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3). There is no surface
-   !> discretization, so `ngrid` stays zero and the grid arrays stay unallocated.
+   !> Fills `total_area` (bohr^2) and `total_volume` (bohr^3); with no surface
+   !> discretization `ngrid` stays zero and the grid arrays stay unallocated
    !>
    !> @param[inout] self  Cavity instance
    !> @param[in]    mol   Molecular structure
@@ -490,10 +512,10 @@ contains
 
    end subroutine update_cavity_marchingcubes
 
-   !> Run the integrator, forwarding only the mesh-export paths that were requested.
+   !> Run the integrator, forwarding only the mesh-export paths that were requested
    !>
    !> The kernel keys triangle buffering off `present(obj_file)`/`present(pqr_file)`,
-   !> so the four combinations have to be dispatched explicitly.
+   !> so the four combinations have to be dispatched explicitly
    !>
    !> @param[inout] self  Cavity instance holding the LSF and the output slots
    !> @param[out]   error LSF evaluation failure raised by the integrator
@@ -534,7 +556,7 @@ contains
 
    !> Marching cubes integrates a triangulated mesh whose connectivity changes
    !> discontinuously with the geometry, so there is no analytic nuclear
-   !> derivative to hand back. Fail loudly rather than return zeros.
+   !> derivative to hand back -- fail loudly rather than return zeros
    !>
    !> @param[inout] self  Cavity instance
    !> @param[out]   error Error handling
@@ -593,11 +615,12 @@ contains
    end subroutine compute_lsf_grid_bounds
 
    !> Compute LSF isosurface area and volume with marching cubes
-   !> The cavity is the f0=0 isosurface (negative inside). Triangle winding follows the
-   !> standard table convention; volume is summed via signed tetrahedra w.r.t. the origin.
    !>
-   !> Uses screened LSF evaluation for O(N) per-point cost.
-   !> Initial coarse grid vertices are cached to avoid redundant evaluations.
+   !> - the cavity is the f0=0 isosurface (negative inside)
+   !> - triangle winding follows the standard table convention
+   !> - volume is summed via signed tetrahedra w.r.t. the origin
+   !> - screened LSF evaluation, O(N) per point
+   !> - initial coarse grid vertices are cached to avoid redundant evaluations
    !>
    !> @param[in]  lsf             LSF level set function primitive
    !> @param[in]  xyz             Atomic coordinates (3, natom)
@@ -735,7 +758,7 @@ contains
                call lsf_priv%prepare(ptmp, lsf_error)
                ! The failure cannot be returned from inside this worksharing
                ! construct, so hand it to the shared `error` slot and let the
-               ! flag drain the loop.
+               ! flag drain the loop
                if (allocated(lsf_error)) then
                   !$omp critical (marchingcubes_abort)
                   if (.not. abort_requested) then
@@ -1046,7 +1069,8 @@ contains
       end if
    end subroutine integrate_surface_marching_cubes
 
-   !> March a single cube defined by its minimum point and edge length.
+   !> March a single cube defined by its minimum point and edge length
+   !>
    !> @param[inout] tri_buf  Optional triangle buffer for mesh export
    subroutine march_single_cube(origin, h, vals, area_acc, volume_acc, tri_acc, &
                                 tri_buf)
@@ -1107,7 +1131,7 @@ contains
 
       tri_list = tri_table(:, cube_index + 1)
 
-      do tri_idx = 1, 16, 3
+      do tri_idx = 1, size(tri_list) - 2, 3
          if (tri_list(tri_idx) == -1) exit
 
          v0 = vlist(:, tri_list(tri_idx) + 1)
@@ -1124,10 +1148,12 @@ contains
       end do
    end subroutine march_single_cube
 
-   !> Subdivide a cube into eight children and evaluate LSF at the child corners.
-   !> Caches the 27 unique sample points of the 3x3x3 subdivision grid. The 8 parent
-   !> corner values are reused from parent_vals; only 19 new evaluations are performed.
-   !> Uses screened LSF evaluation via the ssd system for O(N) per-point cost.
+   !> Subdivide a cube into eight children and evaluate LSF at the child corners
+   !>
+   !> - caches the 27 unique sample points of the 3x3x3 subdivision grid
+   !> - the 8 parent corner values are reused from parent_vals, so only 19 new
+   !>   evaluations are performed
+   !> - screened LSF evaluation via the ssd system, O(N) per point
    !>
    !> @param[in]  minp         Minimum corner of parent cube
    !> @param[in]  maxp         Maximum corner of parent cube
@@ -1203,7 +1229,7 @@ contains
       end do
    end subroutine subdivide_cube
 
-   !> Append a single triangle to a growable buffer, doubling capacity as needed.
+   !> Append a single triangle to a growable buffer, doubling capacity as needed
    subroutine mc_tri_buffer_append(buf, v0, v1, v2)
       type(mc_tri_buffer_type), intent(inout) :: buf
       real(wp), intent(in) :: v0(3), v1(3), v2(3)
@@ -1222,7 +1248,7 @@ contains
       buf%v(7:9, buf%n) = v2
    end subroutine mc_tri_buffer_append
 
-   !> Merge a source buffer into a destination buffer.
+   !> Merge a source buffer into a destination buffer
    subroutine mc_tri_buffer_merge(dst, src)
       type(mc_tri_buffer_type), intent(inout) :: dst
       type(mc_tri_buffer_type), intent(in) :: src
@@ -1240,7 +1266,7 @@ contains
       dst%n = dst%n + src%n
    end subroutine mc_tri_buffer_merge
 
-   !> Write triangle mesh to Wavefront OBJ format (coordinates in Angstrom).
+   !> Write triangle mesh to Wavefront OBJ format (coordinates in Angstrom)
    subroutine write_mc_obj(filename, tris)
       character(len=*), intent(in) :: filename
       type(mc_tri_buffer_type), intent(in) :: tris
@@ -1274,9 +1300,10 @@ contains
       write (output_unit, "(a,1x,a)") "[Info] Wrote MC mesh to", trim(filename)
    end subroutine write_mc_obj
 
-   !> Write triangle centroids to PQR file (coordinates in Angstrom).
-   !> Each triangle becomes one HETATM record with radius derived from
-   !> triangle area: r = sqrt(area / (2*pi)).
+   !> Write triangle centroids to PQR file (coordinates in Angstrom)
+   !>
+   !> - each triangle becomes one HETATM record with radius derived from the
+   !>   triangle area: r = sqrt(area / (2*pi))
    subroutine write_mc_pqr(filename, tris)
       character(len=*), intent(in) :: filename
       type(mc_tri_buffer_type), intent(in) :: tris

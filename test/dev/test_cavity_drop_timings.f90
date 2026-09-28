@@ -1,4 +1,7 @@
 module test_cavity_drop_timings
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
@@ -15,7 +18,8 @@ module test_cavity_drop_timings
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_context, only: moist_context_type, new_context
-   implicit none
+   use, intrinsic :: iso_fortran_env, only: int64
+   implicit none(type, external)
    private
 
    public :: collect_cavity_drop_timings
@@ -40,18 +44,18 @@ contains
                   ]
    end subroutine collect_cavity_drop_timings
 
-   !> Time a serial cavity build and report the geometry it produced.
+   !> Time a serial cavity build and report the geometry it produced
    !>
    !> Area and volume are printed alongside the timing so that a change aimed
    !> at the projection can be checked for having left the cavity alone --
-   !> which is the whole premise of relaxing anything in the *seed* stage.
+   !> which is the whole premise of relaxing anything in the *seed* stage
    subroutine test_timing_cavity_build(error)
       type(error_type), allocatable, intent(out) :: error
 
       integer, parameter :: n_struct = 3
       character(len=20), parameter :: struct_names(n_struct) = &
-                                      [character(len=20) :: 'polyala_04', 'polyala_16', &
-                                       'polyala_32']
+                                      [character(len=20) :: "polyala_04", "polyala_16", &
+                                       "polyala_32"]
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(radius_type_static) :: radius_model
@@ -64,24 +68,25 @@ contains
       call new_context(ctx, verbosity=0)
       radius_model = default_cpcm_radii()
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Cavity build time and resulting geometry (OMP_NUM_THREADS=1)'
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') ''
-      write (*, '(2x,a12,a8,a12,a15,a15)') &
-         'Structure', 'N_at', 'build(s)', 'area', 'volume'
-      write (*, '(2x,a12,a8,a12,a15,a15)') &
-         '-----------', '-------', '-----------', '--------------', '--------------'
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Cavity build time and resulting geometry (OMP_NUM_THREADS=1)"
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") ""
+      write (*, "(2x,a12,a8,a12,a15,a15)") &
+         "Structure", "N_at", "build(s)", "area", "volume"
+      write (*, "(2x,a12,a8,a12,a15,a15)") &
+         "-----------", "-------", "-----------", "--------------", "--------------"
 
       do istruct = 1, n_struct
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
 
 
          allocate (cavity)
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-            call svdw_template%new(blend_k=5.5_wp, blend_2b=0.0_wp, blend_3b=3.0_wp)
+            call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=5.5_wp, &
+               blend_2b=0.0_wp, blend_3b=3.0_wp))
             call new_cavity_drop(cavity, ctx, radius_model=radius_model, &
                                  lsf_model=svdw_template, error=cavity_error)
          end block
@@ -98,20 +103,20 @@ contains
          end if
          t_build = real(c1 - c0, wp)
 
-         write (*, '(2x,a12,i8,f12.4,2f15.6)') &
+         write (*, "(2x,a12,i8,f12.4,2f15.6)") &
             trim(struct_names(istruct)), mol%nat, t_build, &
             cavity%total_area, cavity%total_volume
 
          deallocate (cavity)
       end do
 
-      write (*, '(a)') ''
-      write (*, '(a)') 'Serial cavity build; area and volume pin the geometry down'
-      write (*, '(a)') ''
+      write (*, "(a)") ""
+      write (*, "(a)") "Serial cavity build; area and volume pin the geometry down"
+      write (*, "(a)") ""
 
    end subroutine test_timing_cavity_build
 
-   !> Split `prepare` into its screening and accumulation halves.
+   !> Split `prepare` into its screening and accumulation halves
    !>
    !> `prepare` does two things: reject candidates that cannot contribute
    !> (`screen_candidates`, one squared-distance compare per candidate) and
@@ -119,7 +124,7 @@ contains
    !> tensors per active atom). Only the second half depends on the evaluation
    !> point continuously; the first is a set membership that barely moves
    !> between two nearby points. Knowing the split therefore decides whether
-   !> freezing the active set across solver iterations is worth anything.
+   !> freezing the active set across solver iterations is worth anything
    !>
    !> Both halves are measured through the public API, by timing the same
    !> points twice with different candidate-list lengths:
@@ -130,11 +135,11 @@ contains
    !> `acc` is identical in the two because the surviving set is the same, so
    !> the pair determines both unknowns. `a` must come out independent of the
    !> derivative order (screening does no derivative work), which is printed as
-   !> a consistency check on the model rather than assumed.
+   !> a consistency check on the model rather than assumed
    !>
    !> The cell grid is built exactly as `setup_mol_cell_grid` builds it, and the
-   !> query is timed separately so the grid lookup is not charged to screening.
-   !> SvdW only: CFC does not remap the cell grid into its candidate space.
+   !> query is timed separately so the grid lookup is not charged to screening
+   !> SvdW only: CFC does not remap the cell grid into its candidate space
    subroutine test_timing_prepare_split(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -150,8 +155,8 @@ contains
       real(wp), parameter :: blend_k = 5.5_wp, blend_2b = 0.0_wp, blend_3b = 3.0_wp
 
       character(len=20), parameter :: struct_names(n_struct) = &
-                                      [character(len=20) :: 'polyala_04', 'polyala_16', &
-                                       'polyala_32', 'polyala_52', 'polyala_76', 'polyala_100']
+                                      [character(len=20) :: "polyala_04", "polyala_16", &
+                                       "polyala_32", "polyala_52", "polyala_76", "polyala_100"]
 
       type(structure_type) :: mol
       type(moist_cavity_drop_lsf_svdw_type) :: lsf
@@ -165,23 +170,23 @@ contains
       integer :: nat
       real :: c0, c1
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Benchmark: SvdW prepare split (screening vs accumulation)'
-      write (*, '(a,i0)') 'points/system: ', npts
-      write (*, '(a,i0,a,f5.2)') 'cell grid: full_scan_below=', full_scan_below, &
-         '  cell_fraction=', cell_fraction
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') ''
-      write (*, '(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)') &
-         'Structure', 'N_at', 'ncand', 'n_act', 'd', 'full(us)', 'grid(us)', &
-         'screen/cand', 'accum(us)'
-      write (*, '(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)') &
-         '-----------', '-----', '--------', '--------', '---', &
-         '----------', '----------', '----------', '----------'
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Benchmark: SvdW prepare split (screening vs accumulation)"
+      write (*, "(a,i0)") "points/system: ", npts
+      write (*, "(a,i0,a,f5.2)") "cell grid: full_scan_below=", full_scan_below, &
+         "  cell_fraction=", cell_fraction
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") ""
+      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)") &
+         "Structure", "N_at", "ncand", "n_act", "d", "full(us)", "grid(us)", &
+         "screen/cand", "accum(us)"
+      write (*, "(2x,a12,a6,a9,a9,a4,a11,a11,a11,a11)") &
+         "-----------", "-----", "--------", "--------", "---", &
+         "----------", "----------", "----------", "----------"
 
       do istruct = 1, n_struct
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
          nat = mol%nat
          call fill_cpcm_radii(mol, radii, error)
          if (allocated(error)) return
@@ -189,7 +194,8 @@ contains
          allocate (r_eff(nat), points(ndim, npts))
          call build_lsf_shell_points(mol, radii, points)
 
-         call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+            blend_3b=blend_3b))
          lsf%screening_threshold = screen_thr
          call lsf%update(mol, radii)
 
@@ -251,7 +257,7 @@ contains
 
             ! t_full = a*N + acc, t_grid = a*ncand + acc. Below
             ! `full_scan_below` the grid is a single cell, so the two
-            ! measurements coincide and the split is not determined.
+            ! measurements coincide and the split is not determined
             if (real(nat, wp) - ncand_mean > 1.0_wp) then
                a_screen(ilvl) = (t_full(ilvl) - t_grid(ilvl))/(real(nat, wp) - ncand_mean)
                t_acc(ilvl) = t_grid(ilvl) - a_screen(ilvl)*ncand_mean
@@ -263,12 +269,12 @@ contains
 
          do ilvl = 0, max_lvl
             if (ilvl == 0) then
-               write (*, '(2x,a12,i6,f9.1,f9.1,i4,4f11.4)') &
+               write (*, "(2x,a12,i6,f9.1,f9.1,i4,4f11.4)") &
                   trim(struct_names(istruct)), nat, ncand_mean, nact_mean, ilvl, &
                   t_full(ilvl), t_grid(ilvl), a_screen(ilvl), t_acc(ilvl)
             else
-               write (*, '(2x,a12,a6,a9,a9,i4,4f11.4)') &
-                  '', '', '', '', ilvl, &
+               write (*, "(2x,a12,a6,a9,a9,i4,4f11.4)") &
+                  "", "", "", "", ilvl, &
                   t_full(ilvl), t_grid(ilvl), a_screen(ilvl), t_acc(ilvl)
             end if
          end do
@@ -277,13 +283,13 @@ contains
          deallocate (radii, r_eff, points)
       end do
 
-      write (*, '(a)') ''
-      write (*, '(a)') 'full  = prepare (screens every atom), grid = prepare_subset'
-      write (*, '(a)') '        (screens the cell-grid candidates), query excluded'
-      write (*, '(a)') 'accum = grid - screen/cand * ncand: the point-dependent half'
-      write (*, '(a)') '  "-1" = grid is a single cell (N_at < full_scan_below),'
-      write (*, '(a)') '        so full and grid coincide and the split is undetermined'
-      write (*, '(a)') ''
+      write (*, "(a)") ""
+      write (*, "(a)") "full  = prepare (screens every atom), grid = prepare_subset"
+      write (*, "(a)") "        (screens the cell-grid candidates), query excluded"
+      write (*, "(a)") "accum = grid - screen/cand * ncand: the point-dependent half"
+      write (*, "(a)") '  "-1" = grid is a single cell (N_at < full_scan_below),'
+      write (*, "(a)") "        so full and grid coincide and the split is undetermined"
+      write (*, "(a)") ""
 
       call sweep_screening_threshold(error)
 
@@ -298,11 +304,11 @@ contains
    !> in `S = -(1/k) ln Z` -- and `Z` is not 1 away from the surface. This sweep
    !> measures what the absolute gate buys and costs: active count, `prepare`
    !> cost, and the resulting error in `S` against an effectively unscreened
-   !> reference, over the shell points where a cavity surface would sit.
+   !> reference, over the shell points where a cavity surface would sit
    !>
    !> `dS` is reported in absolute terms on purpose. The projection solves
    !> `S = 0`, so a shift in `S` displaces the surface by `dS/|grad S|`; a
-   !> relative measure against `S ~ 0` would be meaningless there.
+   !> relative measure against `S ~ 0` would be meaningless there
    subroutine sweep_screening_threshold(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -326,12 +332,12 @@ contains
       integer :: ithr, ipt, start, ncand, act_sum, cand_sum, nat
       real :: c0, c1
 
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Sweep: SvdW screening_threshold (polyala_100, max_deriv=2)'
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') ''
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Sweep: SvdW screening_threshold (polyala_100, max_deriv=2)"
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") ""
 
-      call get_structure(mol, 'POLYALANINE', 'polyala_100')
+      call get_structure(mol, "POLYALANINE", "polyala_100")
       nat = mol%nat
       call fill_cpcm_radii(mol, radii, error)
       if (allocated(error)) return
@@ -340,7 +346,8 @@ contains
       call build_lsf_shell_points(mol, radii, points)
 
       !> Reference S at a threshold far below any of the sweep values
-      call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+         blend_3b=blend_3b))
       lsf%screening_threshold = thr_ref
       call lsf%update(mol, radii)
       call lsf%set_max_deriv(0)
@@ -349,14 +356,15 @@ contains
          call lsf%f0(s_ref(ipt))
       end do
 
-      write (*, '(2x,a10,a10,a9,a9,a12,a13,a13)') &
-         'threshold', 'reach', 'ncand', 'n_act', 'prep_d2(us)', 'max|dS|', 'mean|dS|'
-      write (*, '(2x,a10,a10,a9,a9,a12,a13,a13)') &
-         '---------', '--------', '--------', '--------', '-----------', &
-         '------------', '------------'
+      write (*, "(2x,a10,a10,a9,a9,a12,a13,a13)") &
+         "threshold", "reach", "ncand", "n_act", "prep_d2(us)", "max|dS|", "mean|dS|"
+      write (*, "(2x,a10,a10,a9,a9,a12,a13,a13)") &
+         "---------", "--------", "--------", "--------", "-----------", &
+         "------------", "------------"
 
       do ithr = 1, n_thr
-         call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+            blend_3b=blend_3b))
          lsf%screening_threshold = thr_list(ithr)
          call lsf%update(mol, radii)
          offset = lsf%screening_offset(radii(1))
@@ -401,17 +409,17 @@ contains
          call cpu_time(c1)
          t_prep = real(c1 - c0, wp)/real(npts, wp)*1.0e6_wp
 
-         write (*, '(2x,es10.1,f10.2,f9.1,f9.1,f12.4,es13.3,es13.3)') &
+         write (*, "(2x,es10.1,f10.2,f9.1,f9.1,f12.4,es13.3,es13.3)") &
             thr_list(ithr), offset, ncand_mean, nact_mean, t_prep, ds_max, ds_mean
 
          call cell_grid%destroy()
       end do
 
-      write (*, '(a)') ''
-      write (*, '(a)') 'reach = -3*ln(thr)/k, the radial offset beyond each atom radius'
-      write (*, '(a)') 'dS    = shift in the level-set value against thr=1e-15;'
-      write (*, '(a)') '        the surface moves by dS/|grad S|'
-      write (*, '(a)') ''
+      write (*, "(a)") ""
+      write (*, "(a)") "reach = -3*ln(thr)/k, the radial offset beyond each atom radius"
+      write (*, "(a)") "dS    = shift in the level-set value against thr=1e-15;"
+      write (*, "(a)") "        the surface moves by dS/|grad S|"
+      write (*, "(a)") ""
 
    end subroutine sweep_screening_threshold
 
@@ -441,29 +449,29 @@ contains
       blend_3b = 3.0_wp
       n_iter = 1
 
-      struct_names = [character(len=20) :: 'polyala_04', 'polyala_08', 'polyala_12', &
-                      'polyala_16', 'polyala_20', 'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', &
-                      'polyala_40', 'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-                      'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', 'polyala_84', &
-                      'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
+      struct_names = [character(len=20) :: "polyala_04", "polyala_08", "polyala_12", &
+                      "polyala_16", "polyala_20", "polyala_24", "polyala_28", "polyala_32", "polyala_36", &
+                      "polyala_40", "polyala_44", "polyala_48", "polyala_52", "polyala_56", "polyala_60", &
+                      "polyala_64", "polyala_68", "polyala_72", "polyala_76", "polyala_80", "polyala_84", &
+                      "polyala_88", "polyala_92", "polyala_96", "polyala_100"]
 
-      write (*, '(a)') ''
-      write (*, '(a)') '================================================================'
-      write (*, '(a)') 'Benchmark: DROP Cavity - Projection Level Comparison'
-      write (*, '(a, i0)') 'Parameters: nleb = ', nleb
-      write (*, '(a, f6.3)') '            blend_k  = ', blend_k
-      write (*, '(a, f6.3)') '            blend_2b = ', blend_2b
-      write (*, '(a, f6.3)') '            blend_3b = ', blend_3b
-      write (*, '(a, i0)') '            iterations = ', n_iter
-      write (*, '(a)') '================================================================'
-      write (*, '(a)') ''
-      write (*, '(a14, a9, a10, a12, 3a13)') 'Structure', 'N_atoms', 'N_grid', &
-         'proj_level', 'Update(s)', 'Gradient(s)', 'Total(s)'
-      write (*, '(a14, a9, a10, a12, 3a13)') '-------------', '--------', '--------', &
-         '-----------', '------------', '------------', '------------'
+      write (*, "(a)") ""
+      write (*, "(a)") "================================================================"
+      write (*, "(a)") "Benchmark: DROP Cavity - Projection Level Comparison"
+      write (*, "(a, i0)") "Parameters: nleb = ", nleb
+      write (*, "(a, f6.3)") "            blend_k  = ", blend_k
+      write (*, "(a, f6.3)") "            blend_2b = ", blend_2b
+      write (*, "(a, f6.3)") "            blend_3b = ", blend_3b
+      write (*, "(a, i0)") "            iterations = ", n_iter
+      write (*, "(a)") "================================================================"
+      write (*, "(a)") ""
+      write (*, "(a14, a9, a10, a12, 3a13)") "Structure", "N_atoms", "N_grid", &
+         "proj_level", "Update(s)", "Gradient(s)", "Total(s)"
+      write (*, "(a14, a9, a10, a12, 3a13)") "-------------", "--------", "--------", &
+         "-----------", "------------", "------------", "------------"
 
       do istruct = 1, size(struct_names)
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
 
          if (allocated(radii)) deallocate (radii)
          call fill_cpcm_radii(mol, radii, error)
@@ -483,11 +491,12 @@ contains
                call cpu_time(t0)
                block
                   type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-                  call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-                  call new_cavity_drop(cavity_drop, ctx, nleb=nleb, &
-                                       tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                       radius_model=default_cpcm_radii(), &
-                                       lsf_model=svdw_template, error=cavity_error)
+                  call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                     blend_2b=blend_2b, blend_3b=blend_3b))
+                  call new_cavity_drop(cavity_drop, ctx, radius_model=default_cpcm_radii(), &
+                     lsf_model=svdw_template, error=cavity_error, &
+                     param=moist_cavity_drop_parameters_type(num_leb=nleb, tolerance=1.0E-10_wp, &
+                     proj_level=proj_level))
                end block
                if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
                call cavity_drop%update(mol, error=cavity_error)
@@ -506,23 +515,23 @@ contains
             time_gradient = time_gradient/real(n_iter, wp)
             time_total = time_update + time_gradient
 
-            write (*, '(a14, i9, i10, i12, 3f13.6)') &
+            write (*, "(a14, i9, i10, i12, 3f13.6)") &
                trim(struct_names(istruct)), mol%nat, cavity_drop%ngrid, proj_level, &
                time_update, time_gradient, time_total
          end do
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
       if (allocated(radii)) deallocate (radii)
 
    end subroutine test_timing_drop_proj_levels
 
-   !> Generate categorized test points: surface, interior, and exterior.
+   !> Generate categorized test points: surface, interior, and exterior
    !>
    !> Surface points are placed near atomic sphere surfaces where screening is
    !> least effective (many active atoms). Interior points sit deep inside where
-   !> screening rapidly culls. Exterior points lie well outside the molecule.
+   !> screening rapidly culls. Exterior points lie well outside the molecule
    !>
    !> @param[in]  mol           Molecular structure
    !> @param[in]  radii         Atomic radii [n_atoms]
@@ -540,8 +549,9 @@ contains
       real(wp) :: offset, r_max
       integer :: ipt, iat, idim, idx
 
-      if (n_surface + n_interior + n_exterior > size(points, 2)) &
+      if (n_surface + n_interior + n_exterior > size(points, 2)) then
          error stop "generate_categorized_points: output array too small"
+      end if
 
       points = 0.0_wp
 
@@ -599,14 +609,14 @@ contains
       end do
    end subroutine generate_categorized_points
 
-   !> Benchmark cell_fraction impact on cell-grid-screened SSD + LSF evaluation.
+   !> Benchmark cell_fraction impact on cell-grid-screened SSD + LSF evaluation
    !>
    !> For each structure, compares:
    !>   - Full SSD compute (no cell grid, brute-force baseline)
    !>   - Cell-grid-screened SSD + LSF with cell_fraction = 1.0, 0.5, 0.25
    !>
    !> Reports per-call timings, average candidates per query, and speedup
-   !> relative to the unscreened baseline.
+   !> relative to the unscreened baseline
    subroutine test_timing_cell_fraction_benchmark(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -619,11 +629,11 @@ contains
 
       integer, parameter :: n_structs = 6
       character(len=20), parameter :: struct_sets(n_structs) = &
-                                      [character(len=20) :: 'AMYLOSE', 'AMYLOSE', 'AMYLOSE', &
-                                                             'POLYALANINE', 'POLYALANINE', 'POLYALANINE']
+                                      [character(len=20) :: "AMYLOSE", "AMYLOSE", "AMYLOSE", &
+                                                             "POLYALANINE", "POLYALANINE", "POLYALANINE"]
       character(len=20), parameter :: struct_names(n_structs) = &
-                                      [character(len=20) :: 'Amylose16', 'Amylose32', 'Amylose64', &
-                                                             'polyala_28', 'polyala_52', 'polyala_100']
+                                      [character(len=20) :: "Amylose16", "Amylose32", "Amylose64", &
+                                                             "polyala_28", "polyala_52", "polyala_100"]
 
       integer, parameter :: n_fractions = 6
       real(wp), parameter :: fractions(n_fractions) = [1.0_wp, 0.5_wp, 0.25_wp, 0.125_wp, 0.0625_wp, 0.03125_wp]
@@ -647,20 +657,20 @@ contains
       ! Screening shell: exp(-k/3 * delta) = 0.1 * threshold
       delta = -3.0_wp/blend_k*log(0.1_wp*threshold)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '========================================================================================='
-      write (*, '(a)') 'Benchmark: cell_fraction impact on cell-grid-screened SSD + LSF'
-      write (*, '(a, i0, a, i0)') 'Points: surface=', n_surface, '  interior=', n_interior
-      write (*, '(a, i0, a, f5.2, a, es8.1)') 'Parameters: iterations=', n_iter, &
-         '  k=', blend_k, '  threshold=', threshold
-      write (*, '(a, f8.2, a)') 'Screening shell delta=', delta, ' bohr'
-      write (*, '(a)') '========================================================================================='
-      write (*, '(a)') ''
-      write (*, '(a14, a9, a10, a12, a14, a14, a12, a9)') &
-         'Structure', 'N_atoms', 'fraction', 'N_cells', 't_build(us)', 't_eval(us)', 'N_cand', 'speedup'
-      write (*, '(a14, a9, a10, a12, a14, a14, a12, a9)') &
-         '-------------', '--------', '---------', '-----------', &
-         '-------------', '-------------', '-----------', '--------'
+      write (*, "(a)") ""
+      write (*, "(a)") "========================================================================================="
+      write (*, "(a)") "Benchmark: cell_fraction impact on cell-grid-screened SSD + LSF"
+      write (*, "(a, i0, a, i0)") "Points: surface=", n_surface, "  interior=", n_interior
+      write (*, "(a, i0, a, f5.2, a, es8.1)") "Parameters: iterations=", n_iter, &
+         "  k=", blend_k, "  threshold=", threshold
+      write (*, "(a, f8.2, a)") "Screening shell delta=", delta, " bohr"
+      write (*, "(a)") "========================================================================================="
+      write (*, "(a)") ""
+      write (*, "(a14, a9, a10, a12, a14, a14, a12, a9)") &
+         "Structure", "N_atoms", "fraction", "N_cells", "t_build(us)", "t_eval(us)", "N_cand", "speedup"
+      write (*, "(a14, a9, a10, a12, a14, a14, a12, a9)") &
+         "-------------", "--------", "---------", "-----------", &
+         "-------------", "-------------", "-----------", "--------"
 
       do istruct = 1, n_structs
          call get_structure(mol, trim(struct_sets(istruct)), trim(struct_names(istruct)))
@@ -674,8 +684,8 @@ contains
          r_eff = radii + delta
 
          ! Setup LSF primitive (owns its internal SSD system)
-         call lsf_prim%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
-                           blend_3b=blend_3b)
+         call lsf_prim%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_1b=1.0_wp, &
+            blend_2b=1.0_wp, blend_3b=blend_3b))
          lsf_prim%screening_threshold = threshold
          call lsf_prim%set_max_deriv(2)
          call lsf_prim%update(mol, radii)
@@ -699,9 +709,9 @@ contains
          end do
          t_full = t_full/real(n_calls, wp)
 
-         write (*, '(a14, i9, a10, a12, a14, f14.4, a12, a9)') &
-            trim(struct_names(istruct)), mol%nat, 'full', &
-            '-', '-', 1.0e6_wp*t_full, '-', '1.00x'
+         write (*, "(a14, i9, a10, a12, a14, f14.4, a12, a9)") &
+            trim(struct_names(istruct)), mol%nat, "full", &
+            "-", "-", 1.0e6_wp*t_full, "-", "1.00x"
 
          ! --- Cell-grid-screened path for each fraction ---
          do ifrac = 1, n_fractions
@@ -732,30 +742,30 @@ contains
             end do
             t_screened = t_screened/real(n_calls, wp)
 
-            write (frac_str, '(f5.2)') fractions(ifrac)
-            write (*, '(a14, i9, a10, i12, f14.4, f14.4, f12.1, f7.2, a)') &
-               '', mol%nat, adjustr(frac_str), cell_grid%ncells, &
+            write (frac_str, "(f5.2)") fractions(ifrac)
+            write (*, "(a14, i9, a10, i12, f14.4, f14.4, f12.1, f7.2, a)") &
+               "", mol%nat, adjustr(frac_str), cell_grid%ncells, &
                1.0e6_wp*t_build, &
                1.0e6_wp*t_screened, &
                cand_sum/real(n_calls, wp), &
-               t_full/max(t_screened, 1.0e-30_wp), 'x'
+               t_full/max(t_screened, 1.0e-30_wp), "x"
 
             call cell_grid%destroy()
          end do
 
-         write (*, '(a)') ''
+         write (*, "(a)") ""
       end do
 
       if (allocated(radii)) deallocate (radii)
       if (allocated(r_eff)) deallocate (r_eff)
    end subroutine test_timing_cell_fraction_benchmark
 
-   !> Benchmark DROP cavity component scaling with system size.
+   !> Benchmark DROP cavity component scaling with system size
    !>
    !> Runs full DROP cavity update and gradient computation for polyalanine
    !> chains of increasing size. Reads per-component wall times from the
    !> internal timer and fits t(N) = A * N^X via grid search to
-   !> determine the formal scaling exponent of each component.
+   !> determine the formal scaling exponent of each component
    !>
    !> @param[out] error  Test error (set on failure)
    subroutine test_timing_drop_scaling(error)
@@ -767,7 +777,7 @@ contains
       !> Number of polyalanine structures to benchmark
       integer, parameter :: n_struct = 25
       !> Upper bound on the number of timer nodes; the actual count is read from
-      !> the cavity timer tree at runtime into n_timers.
+      !> the cavity timer tree at runtime into n_timers
       integer, parameter :: max_timers = 64
       !> Minimum time (s) for a data point to be included in the fit
       real(wp), parameter :: t_min = 1.0e-6_wp
@@ -781,7 +791,7 @@ contains
 
       character(len=20) :: struct_names(n_struct)
       !> Display labels (indented by tree depth) and top-level flags, enumerated
-      !> from the cavity timer itself rather than a hardcoded table.
+      !> from the cavity timer itself rather than a hardcoded table
       integer :: n_timers
       character(len=40) :: timer_labels(max_timers)
       logical :: is_parent(max_timers)
@@ -805,7 +815,7 @@ contains
 
       !> CSV output
       integer :: csv_unit
-      character(len=*), parameter :: csv_file = 'drop_timings.csv'
+      character(len=*), parameter :: csv_file = "drop_timings.csv"
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -813,35 +823,35 @@ contains
 
       !> Polyalanine structures (increasing size)
       struct_names = [character(len=20) :: &
-                      'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
-                      'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
-                      'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-                      'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
-                      'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
+                      "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &
+                      "polyala_24", "polyala_28", "polyala_32", "polyala_36", "polyala_40", &
+                      "polyala_44", "polyala_48", "polyala_52", "polyala_56", "polyala_60", &
+                      "polyala_64", "polyala_68", "polyala_72", "polyala_76", "polyala_80", &
+                      "polyala_84", "polyala_88", "polyala_92", "polyala_96", "polyala_100"]
 
       !> The timer node set (names, nesting, order) is not declared here: it is
       !> enumerated from the cavity's own timer after the first build, so this
-      !> benchmark automatically tracks whatever the DROP source measures.
+      !> benchmark automatically tracks whatever the DROP source measures
       is_parent = .false.
       n_timers = 0
 
       !> ====================== Benchmark loop ======================
       rn_iter = real(n_iter, wp)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Benchmark: DROP cavity component scaling (update + gradient)'
-      write (*, '(a,i0,a,f5.2,a,f5.2,a,f5.2,a,i0,a,i0)') &
-         'nleb=', nleb, '  k=', blend_k, '  b2=', blend_2b, '  b3=', blend_3b, &
-         '  proj=', proj_level, '  iter=', n_iter
-      write (*, '(a)') '=================================================================='
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Benchmark: DROP cavity component scaling (update + gradient)"
+      write (*, "(a,i0,a,f5.2,a,f5.2,a,f5.2,a,i0,a,i0)") &
+         "nleb=", nleb, "  k=", blend_k, "  b2=", blend_2b, "  b3=", blend_3b, &
+         "  proj=", proj_level, "  iter=", n_iter
+      write (*, "(a)") "=================================================================="
 
       !> Open the CSV file; its header is written once the timer tree is known
-      !> (after the first cavity builds, so columns match what was measured).
-      open (newunit=csv_unit, file=csv_file, status='replace', action='write')
+      !> (after the first cavity builds, so columns match what was measured)
+      open (newunit=csv_unit, file=csv_file, status="replace", action="write")
 
       do istruct = 1, n_struct
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
          n_atoms_arr(istruct) = mol%nat
 
          !> Zero accumulators
@@ -853,16 +863,15 @@ contains
             allocate (cavity)
             !> Zero the shared timer so every node reports this build alone. The
             !> node tree (and hence the itimer -> label mapping snapshotted below)
-            !> survives the reset, unlike a freshly constructed context.
+            !> survives the reset, unlike a freshly constructed context
             call ctx%timer%reset()
             block
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-               call svdw_template%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-               call new_cavity_drop(cavity, ctx, nleb=nleb, &
-                                    do_fine=.true., &
-                                    tolerance=1.0E-10_wp, proj_level=proj_level, &
-                                    radius_model=default_cpcm_radii(), &
-                                    lsf_model=svdw_template, error=cavity_error)
+               call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
+                  blend_2b=blend_2b, blend_3b=blend_3b))
+               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+                  error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, do_fine=.true., &
+                  tolerance=1.0E-10_wp, proj_level=proj_level))
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -882,22 +891,22 @@ contains
             end if
 
             !> On the first build, enumerate the timer tree (labels + structure)
-            !> and write the now-known CSV header.
+            !> and write the now-known CSV header
             if (n_timers == 0) then
                call snapshot_timer_tree()
-               write (csv_unit, '(a)', advance='no') 'structure,n_atoms,n_grid,iter,total'
+               write (csv_unit, "(a)", advance="no") "structure,n_atoms,n_grid,iter,total"
                do itimer = 1, n_timers
-                  write (csv_unit, '(a,a)', advance='no') ',', trim(adjustl(timer_labels(itimer)))
+                  write (csv_unit, "(a,a)", advance="no") ",", trim(adjustl(timer_labels(itimer)))
                end do
                write (csv_unit, *)
             end if
 
             !> Write per-iteration row to CSV
-            write (csv_unit, '(a,a,i0,a,i0,a,i0,a,es14.6)', advance='no') &
-               trim(struct_names(istruct)), ',', mol%nat, ',', cavity%ngrid, &
-               ',', iter, ',', cavity%ctx%timer%get()
+            write (csv_unit, "(a,a,i0,a,i0,a,i0,a,es14.6)", advance="no") &
+               trim(struct_names(istruct)), ",", mol%nat, ",", cavity%ngrid, &
+               ",", iter, ",", cavity%ctx%timer%get()
             do itimer = 1, n_timers
-               write (csv_unit, '(a,es14.6)', advance='no') ',', &
+               write (csv_unit, "(a,es14.6)", advance="no") ",", &
                   cavity%ctx%timer%node_time(itimer)
             end do
             write (csv_unit, *)
@@ -915,38 +924,38 @@ contains
          times(:, istruct) = times(:, istruct)/rn_iter
          total_times(istruct) = total_times(istruct)/rn_iter
 
-         write (*, '(2x,a14,a,i5,a,i7,a,f10.3,a)') &
+         write (*, "(2x,a14,a,i5,a,i7,a,f10.3,a)") &
             trim(struct_names(istruct)), &
-            '  N_at=', n_atoms_arr(istruct), &
-            '  N_grid=', n_grid_arr(istruct), &
-            '  avg=', total_times(istruct), ' s'
+            "  N_at=", n_atoms_arr(istruct), &
+            "  N_grid=", n_grid_arr(istruct), &
+            "  avg=", total_times(istruct), " s"
       end do
 
       if (allocated(cavity)) deallocate (cavity)
       close (csv_unit)
-      write (*, '(a,a,a)') 'Per-iteration timings written to: ', csv_file, ''
+      write (*, "(a,a,a)") "Per-iteration timings written to: ", csv_file, ""
 
       !> =================== Raw timing table ====================
-      write (*, '(a)') ''
-      write (*, '(a,i0,a)') '--- Average timings over ', n_iter, ' iterations (seconds) ---'
+      write (*, "(a)") ""
+      write (*, "(a,i0,a)") "--- Average timings over ", n_iter, " iterations (seconds) ---"
 
       !> Header: component name + N_atoms for each structure
-      write (*, '(a30)', advance='no') 'Component'
+      write (*, "(a30)", advance="no") "Component"
       do istruct = 1, n_struct
-         write (*, '(i10)', advance='no') n_atoms_arr(istruct)
+         write (*, "(i10)", advance="no") n_atoms_arr(istruct)
       end do
       write (*, *)
 
-      write (*, '(a30)', advance='no') repeat('-', 30)
+      write (*, "(a30)", advance="no") repeat("-", 30)
       do istruct = 1, n_struct
-         write (*, '(a10)', advance='no') '----------'
+         write (*, "(a10)", advance="no") "----------"
       end do
       write (*, *)
 
       !> Total row
-      write (*, '(a30)', advance='no') 'TOTAL'
+      write (*, "(a30)", advance="no") "TOTAL"
       do istruct = 1, n_struct
-         write (*, '(f10.4)', advance='no') total_times(istruct)
+         write (*, "(f10.4)", advance="no") total_times(istruct)
       end do
       write (*, *)
 
@@ -955,25 +964,25 @@ contains
          itimer = iprint
          if (maxval(times(itimer, :)) < t_min) cycle
          if (is_parent(itimer)) then
-            write (*, '(a30)', advance='no') repeat('-', 30)
+            write (*, "(a30)", advance="no") repeat("-", 30)
             do istruct = 1, n_struct
-               write (*, '(a10)', advance='no') '----------'
+               write (*, "(a10)", advance="no") "----------"
             end do
             write (*, *)
          end if
-         write (*, '(a30)', advance='no') timer_labels(itimer)
+         write (*, "(a30)", advance="no") timer_labels(itimer)
          do istruct = 1, n_struct
-            write (*, '(f10.4)', advance='no') times(itimer, istruct)
+            write (*, "(f10.4)", advance="no") times(itimer, istruct)
          end do
          write (*, *)
       end do
 
       !> ================== Scaling exponents ===================
-      write (*, '(a)') ''
-      write (*, '(a)') '--- Scaling fit: t(N) = A * N^X ---'
-      write (*, '(a30, a10, a10, a12)') 'Component', 'X', 'R^2', 'A'
-      write (*, '(a30, a10, a10, a12)') repeat('-', 30), &
-         repeat('-', 10), repeat('-', 10), repeat('-', 12)
+      write (*, "(a)") ""
+      write (*, "(a)") "--- Scaling fit: t(N) = A * N^X ---"
+      write (*, "(a30, a10, a10, a12)") "Component", "X", "R^2", "A"
+      write (*, "(a30, a10, a10, a12)") repeat("-", 30), &
+         repeat("-", 10), repeat("-", 10), repeat("-", 12)
 
       !> Total
       call collect_valid_points(n_struct, n_atoms_arr, total_times, t_min, &
@@ -981,8 +990,8 @@ contains
       if (n_valid >= 4) then
          call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, &
                             coeff_a)
-         write (*, '(a30, f10.3, f10.4, es12.3)') &
-            'TOTAL', exponent, r_sq, coeff_a
+         write (*, "(a30, f10.3, f10.4, es12.3)") &
+            "TOTAL", exponent, r_sq, coeff_a
       end if
 
       !> Per-timer
@@ -990,8 +999,8 @@ contains
          itimer = iprint
          if (maxval(times(itimer, :)) < t_min) cycle
          if (is_parent(itimer)) then
-            write (*, '(a30, a10, a10, a12)') repeat('-', 30), &
-               repeat('-', 10), repeat('-', 10), repeat('-', 12)
+            write (*, "(a30, a10, a10, a12)") repeat("-", 30), &
+               repeat("-", 10), repeat("-", 10), repeat("-", 12)
          end if
 
          call collect_valid_points(n_struct, n_atoms_arr, times(itimer, :), t_min, &
@@ -999,34 +1008,34 @@ contains
          if (n_valid >= 4) then
             call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, &
                                coeff_a)
-            write (*, '(a30, f10.3, f10.4, es12.3)') &
+            write (*, "(a30, f10.3, f10.4, es12.3)") &
                timer_labels(itimer), exponent, r_sq, coeff_a
          else
-            write (*, '(a30, a22)') timer_labels(itimer), '  (insufficient data)'
+            write (*, "(a30, a22)") timer_labels(itimer), "  (insufficient data)"
          end if
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
    contains
 
       !> Enumerate the cavity timer tree into the display arrays: label indented
       !> by nesting depth, top-level nodes flagged as parents. Uses the timer's
-      !> own introspection so nothing about the node set is duplicated here.
+      !> own introspection so nothing about the node set is duplicated here
       subroutine snapshot_timer_tree()
          integer :: id, depth
          n_timers = min(cavity%ctx%timer%num_nodes(), max_timers)
          do id = 1, n_timers
             depth = cavity%ctx%timer%node_depth(id)
-            timer_labels(id) = repeat('  ', depth)//cavity%ctx%timer%node_name(id)
+            timer_labels(id) = repeat("  ", depth)//cavity%ctx%timer%node_name(id)
             is_parent(id) = depth == 0
          end do
       end subroutine snapshot_timer_tree
 
    end subroutine test_timing_drop_scaling
 
-   !> Benchmark marching cubes integration scaling with system size.
-   !> Uses the same polyalanine series as test_timing_drop_scaling.
+   !> Benchmark marching cubes integration scaling with system size
+   !> Uses the same polyalanine series as test_timing_drop_scaling
    subroutine test_timing_mc_scaling(error)
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: mc_error
@@ -1068,32 +1077,32 @@ contains
 
       !> Polyalanine structures (increasing size)
       struct_names = [character(len=20) :: &
-                      'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
-                      'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
-                      'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-                      'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
-                      'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
+                      "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &
+                      "polyala_24", "polyala_28", "polyala_32", "polyala_36", "polyala_40", &
+                      "polyala_44", "polyala_48", "polyala_52", "polyala_56", "polyala_60", &
+                      "polyala_64", "polyala_68", "polyala_72", "polyala_76", "polyala_80", &
+                      "polyala_84", "polyala_88", "polyala_92", "polyala_96", "polyala_100"]
 
       rn_iter = real(n_iter, wp)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Benchmark: Marching cubes scaling'
-      write (*, '(a,f5.2,a,f5.2,a,f5.2,a,i0)') &
-         'k=', blend_k, '  b3=', blend_3b, &
-         '  spacing=', mc_spacing, '  iter=', n_iter
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') ''
-      write (*, '(a14, a8, a12, a16, a16)') &
-         'Structure', 'N_at', 'Time (s)', 'Area', 'Volume'
-      write (*, '(a14, a8, a12, a16, a16)') &
-         '-------------', '-------', '-----------', &
-         '---------------', '---------------'
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Benchmark: Marching cubes scaling"
+      write (*, "(a,f5.2,a,f5.2,a,f5.2,a,i0)") &
+         "k=", blend_k, "  b3=", blend_3b, &
+         "  spacing=", mc_spacing, "  iter=", n_iter
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") ""
+      write (*, "(a14, a8, a12, a16, a16)") &
+         "Structure", "N_at", "Time (s)", "Area", "Volume"
+      write (*, "(a14, a8, a12, a16, a16)") &
+         "-------------", "-------", "-----------", &
+         "---------------", "---------------"
 
       radius_model = default_cpcm_radii()
 
       do istruct = 1, n_struct
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
          n_atoms_arr(istruct) = mol%nat
 
          call radius_model%update(mol, radii_error)
@@ -1102,8 +1111,8 @@ contains
             return
          end if
 
-         call lsf%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
-                      blend_3b=blend_3b)
+         call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_1b=1.0_wp, &
+            blend_2b=1.0_wp, blend_3b=blend_3b))
          lsf%screening_threshold = 0.0_wp
          call lsf%update(mol, radius_model%f0)
 
@@ -1123,35 +1132,35 @@ contains
          mc_areas(istruct) = area
          mc_volumes(istruct) = volume
 
-         write (*, '(2x,a14, i6, f12.4, f16.4, f16.4)') &
+         write (*, "(2x,a14, i6, f12.4, f16.4, f16.4)") &
             trim(struct_names(istruct)), n_atoms_arr(istruct), &
             mc_times(istruct), mc_areas(istruct), mc_volumes(istruct)
       end do
 
       !> Scaling fit
-      write (*, '(a)') ''
-      write (*, '(a)') '--- Scaling fit: t(N) = A * N^X ---'
-      write (*, '(a10, a10, a10, a12)') 'Component', 'X', 'R^2', 'A'
-      write (*, '(a10, a10, a10, a12)') repeat('-', 10), &
-         repeat('-', 10), repeat('-', 10), repeat('-', 12)
+      write (*, "(a)") ""
+      write (*, "(a)") "--- Scaling fit: t(N) = A * N^X ---"
+      write (*, "(a10, a10, a10, a12)") "Component", "X", "R^2", "A"
+      write (*, "(a10, a10, a10, a12)") repeat("-", 10), &
+         repeat("-", 10), repeat("-", 10), repeat("-", 12)
 
       call collect_valid_points(n_struct, n_atoms_arr, mc_times, t_min, &
                                 real_n, raw_t, n_valid)
       if (n_valid >= 4) then
          call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, &
                             coeff_a)
-         write (*, '(a10, f10.3, f10.4, es12.3)') &
-            'MC total', exponent, r_sq, coeff_a
+         write (*, "(a10, f10.3, f10.4, es12.3)") &
+            "MC total", exponent, r_sq, coeff_a
       else
-         write (*, '(a10, a22)') 'MC total', '  (insufficient data)'
+         write (*, "(a10, a22)") "MC total", "  (insufficient data)"
       end if
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
    end subroutine test_timing_mc_scaling
 
-   !> Benchmark iSwiG cavity scaling with system size.
-   !> Uses the same polyalanine series as test_timing_drop_scaling.
+   !> Benchmark iSwiG cavity scaling with system size
+   !> Uses the same polyalanine series as test_timing_drop_scaling
    subroutine test_timing_iswig_scaling(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -1192,36 +1201,36 @@ contains
       call new_context(ctx, verbosity=0)
 
       struct_names = [character(len=20) :: &
-                      'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
-                      'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
-                      'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-                      'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
-                      'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
+                      "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &
+                      "polyala_24", "polyala_28", "polyala_32", "polyala_36", "polyala_40", &
+                      "polyala_44", "polyala_48", "polyala_52", "polyala_56", "polyala_60", &
+                      "polyala_64", "polyala_68", "polyala_72", "polyala_76", "polyala_80", &
+                      "polyala_84", "polyala_88", "polyala_92", "polyala_96", "polyala_100"]
 
       rn_iter = real(n_iter, wp)
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Benchmark: iSwiG cavity scaling (update + gradient)'
-      write (*, '(a,i0,a,i0)') 'nleb=', nleb, '  iter=', n_iter
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') ''
-      write (*, '(a14, a8, a8, a12, a16, a16)') &
-         'Structure', 'N_at', 'N_grid', 'Time (s)', 'Area', 'Volume'
-      write (*, '(a14, a8, a8, a12, a16, a16)') &
-         '-------------', '-------', '-------', '-----------', &
-         '---------------', '---------------'
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Benchmark: iSwiG cavity scaling (update + gradient)"
+      write (*, "(a,i0,a,i0)") "nleb=", nleb, "  iter=", n_iter
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") ""
+      write (*, "(a14, a8, a8, a12, a16, a16)") &
+         "Structure", "N_at", "N_grid", "Time (s)", "Area", "Volume"
+      write (*, "(a14, a8, a8, a12, a16, a16)") &
+         "-------------", "-------", "-------", "-----------", &
+         "---------------", "---------------"
 
       do istruct = 1, n_struct
-         call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+         call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
          n_atoms_arr(istruct) = mol%nat
 
          total_times(istruct) = 0.0_wp
          do iter = 1, n_iter
             if (allocated(cavity)) deallocate (cavity)
             allocate (cavity)
-            call new_cavity_iswig(cavity, ctx, nleb=nleb, &
-                                  radius_model=default_cpcm_radii(), error=cavity_error)
+            call new_cavity_iswig(cavity, ctx, radius_model=default_cpcm_radii(), error=cavity_error, &
+               param=moist_cavity_iswig_parameters_type(num_leb=nleb))
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -1246,7 +1255,7 @@ contains
          areas(istruct) = cavity%total_area
          volumes(istruct) = cavity%total_volume
 
-         write (*, '(2x,a14, i6, i8, f12.4, f16.4, f16.4)') &
+         write (*, "(2x,a14, i6, i8, f12.4, f16.4, f16.4)") &
             trim(struct_names(istruct)), n_atoms_arr(istruct), &
             n_grid_arr(istruct), total_times(istruct), &
             areas(istruct), volumes(istruct)
@@ -1255,41 +1264,41 @@ contains
       if (allocated(cavity)) deallocate (cavity)
 
       !> Scaling fit
-      write (*, '(a)') ''
-      write (*, '(a)') '--- Scaling fit: t(N) = A * N^X ---'
-      write (*, '(a14, a10, a10, a12)') 'Component', 'X', 'R^2', 'A'
-      write (*, '(a14, a10, a10, a12)') repeat('-', 14), &
-         repeat('-', 10), repeat('-', 10), repeat('-', 12)
+      write (*, "(a)") ""
+      write (*, "(a)") "--- Scaling fit: t(N) = A * N^X ---"
+      write (*, "(a14, a10, a10, a12)") "Component", "X", "R^2", "A"
+      write (*, "(a14, a10, a10, a12)") repeat("-", 14), &
+         repeat("-", 10), repeat("-", 10), repeat("-", 12)
 
       call collect_valid_points(n_struct, n_atoms_arr, total_times, t_min, &
                                 real_n, raw_t, n_valid)
       if (n_valid >= 4) then
          call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, &
                             coeff_a)
-         write (*, '(a14, f10.3, f10.4, es12.3)') &
-            'iSwiG total', exponent, r_sq, coeff_a
+         write (*, "(a14, f10.3, f10.4, es12.3)") &
+            "iSwiG total", exponent, r_sq, coeff_a
       else
-         write (*, '(a14, a22)') 'iSwiG total', '  (insufficient data)'
+         write (*, "(a14, a22)") "iSwiG total", "  (insufficient data)"
       end if
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
    end subroutine test_timing_iswig_scaling
 
-   !> Benchmark LSF evaluation cost per derivative order and per LSF type.
+   !> Benchmark LSF evaluation cost per derivative order and per LSF type
    !>
    !> Baseline for the code-generation refactor of the SvdW and CFC level set
    !> functions. Deliberately independent of the DROP projection: the evaluation
    !> points come from a fixed deterministic shell sample (see
    !> [[build_lsf_shell_points]]) rather than from a cavity, so the series stays
-   !> comparable while the projection code changes underneath it.
+   !> comparable while the projection code changes underneath it
    !>
    !> `prepare` and the accessors are timed separately, because the refactor
    !> deliberately moves work across exactly that boundary. `prepare` gets one
    !> sweep per `set_max_deriv` level; every accessor then gets its own sweep in
    !> which `prepare` (and, for the two accessors consuming its output,
    !> `f3_rr_rA`) runs outside the timer window, so an accessor row is
-   !> never a difference of two much larger numbers.
+   !> never a difference of two much larger numbers
    subroutine test_timing_lsf_accessors(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -1328,27 +1337,27 @@ contains
       !> SvdW accessor rows (orders 0-4)
       integer, parameter :: n_acc_svdw = 12
       character(len=24), parameter :: acc_labels_svdw(n_acc_svdw) = [character(len=24) :: &
-                                      'f0', 'f012_r val', 'f012_r val+grad', &
-                                      'f012_r val+grad+hess', 'f3_rrr', 'f3_rr_rA', &
-                                      'f2_rArB', 'f3_r_rArB', 'f4_rrrr', 'f4_rrr_rA', &
-                                      'f4_rr_rArB', 'normalized_f01_rA']
+                                      "f0", "f012_r val", "f012_r val+grad", &
+                                      "f012_r val+grad+hess", "f3_rrr", "f3_rr_rA", &
+                                      "f2_rArB", "f3_r_rArB", "f4_rrrr", "f4_rrr_rA", &
+                                      "f4_rr_rArB", "normalized_f01_rA"]
       !> `set_max_deriv` level each SvdW row is measured at
       integer, parameter :: acc_deriv_svdw(n_acc_svdw) = [0, 0, 1, 2, 3, 3, 3, 3, 4, 4, 4, 2]
 
       !> CFC accessor rows (orders 0-4, plus the direction-contracted families)
       integer, parameter :: n_acc_cfc = 16
       character(len=24), parameter :: acc_labels_cfc(n_acc_cfc) = [character(len=24) :: &
-                                     'f0', 'f012_r val', 'f012_r val+grad', &
-                                     'f012_r val+grad+hess', 'f3_rrr', 'f3_rr_rA', &
-                                     'f4_rrrr', 'f4_rrr_rA', 'normalized_f01_rA', &
-                                     'f2_rArB', 'f3_r_rArB', 'f4_rr_rArB', &
-                                     'tangent_f2_rr', 'hvp_f1_rA', 'hvp_f2_r_rA', &
-                                     'hvp_f3_rr_rA']
-      !> `set_max_deriv` level each CFC row is measured at.
+                                     "f0", "f012_r val", "f012_r val+grad", &
+                                     "f012_r val+grad+hess", "f3_rrr", "f3_rr_rA", &
+                                     "f4_rrrr", "f4_rrr_rA", "normalized_f01_rA", &
+                                     "f2_rArB", "f3_r_rArB", "f4_rr_rArB", &
+                                     "tangent_f2_rr", "hvp_f1_rA", "hvp_f2_r_rA", &
+                                     "hvp_f3_rr_rA"]
+      !> `set_max_deriv` level each CFC row is measured at
       !>
       !> CFC's `max_deriv` is the highest *total* order `prepare` provisions, so a
       !> row reading the one-nuclear-index family sits one level above the tensor
-      !> rank it returns: `f3_rr_rA` reads `qn2_rr`, a total order 3.
+      !> rank it returns: `f3_rr_rA` reads `qn2_rr`, a total order 3
       integer, parameter :: acc_deriv_cfc(n_acc_cfc) = &
                             [0, 0, 1, 2, 3, 3, 4, 4, 2, 1, 2, 3, 2, 1, 2, 3]
 
@@ -1365,28 +1374,28 @@ contains
       integer :: act_max(n_struct)
 
       integer :: ilsf, istruct, n_acc, n_lvl
-      integer(kind=8) :: clock0, clock1, clock_rate
+      integer(int64) :: clock0, clock1, clock_rate
       real(wp) :: elapsed
 
       struct_names = [character(len=20) :: &
-                      'polyala_04', 'polyala_08', 'polyala_12', 'polyala_16', 'polyala_20', &
-                      'polyala_24', 'polyala_28', 'polyala_32', 'polyala_36', 'polyala_40', &
-                      'polyala_44', 'polyala_48', 'polyala_52', 'polyala_56', 'polyala_60', &
-                      'polyala_64', 'polyala_68', 'polyala_72', 'polyala_76', 'polyala_80', &
-                      'polyala_84', 'polyala_88', 'polyala_92', 'polyala_96', 'polyala_100']
+                      "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &
+                      "polyala_24", "polyala_28", "polyala_32", "polyala_36", "polyala_40", &
+                      "polyala_44", "polyala_48", "polyala_52", "polyala_56", "polyala_60", &
+                      "polyala_64", "polyala_68", "polyala_72", "polyala_76", "polyala_80", &
+                      "polyala_84", "polyala_88", "polyala_92", "polyala_96", "polyala_100"]
 
-      write (*, '(a)') ''
-      write (*, '(a)') '=================================================================='
-      write (*, '(a)') 'Benchmark: LSF cost per derivative order (prepare vs accessors)'
-      write (*, '(a,i0,a,i0,a,i0)') &
-         'points/system: SvdW=', npts, '  SvdW heavy accessors=', npts_heavy, &
-         '  CFC=', npts_cfc
-      write (*, '(a,es9.2)') 'screening_threshold=', screen_thr
-      write (*, '(a,f5.2,a,f5.2,a,f5.2)') &
-         'SvdW: k=', blend_k, '  b2=', blend_2b, '  b3=', blend_3b
-      write (*, '(a)') 'CFC : Diedenhofen-Klamt defaults'
-      write (*, '(a)') 'Points: deterministic Fibonacci shells, no cavity, no random_number'
-      write (*, '(a)') '=================================================================='
+      write (*, "(a)") ""
+      write (*, "(a)") "=================================================================="
+      write (*, "(a)") "Benchmark: LSF cost per derivative order (prepare vs accessors)"
+      write (*, "(a,i0,a,i0,a,i0)") &
+         "points/system: SvdW=", npts, "  SvdW heavy accessors=", npts_heavy, &
+         "  CFC=", npts_cfc
+      write (*, "(a,es9.2)") "screening_threshold=", screen_thr
+      write (*, "(a,f5.2,a,f5.2,a,f5.2)") &
+         "SvdW: k=", blend_k, "  b2=", blend_2b, "  b3=", blend_3b
+      write (*, "(a)") "CFC : Diedenhofen-Klamt defaults"
+      write (*, "(a)") "Points: deterministic Fibonacci shells, no cavity, no random_number"
+      write (*, "(a)") "=================================================================="
 
       do ilsf = 1, 2
          if (ilsf == 1) then
@@ -1403,7 +1412,7 @@ contains
          call system_clock(clock0, clock_rate)
 
          do istruct = 1, n_struct
-            call get_structure(mol, 'POLYALANINE', trim(struct_names(istruct)))
+            call get_structure(mol, "POLYALANINE", trim(struct_names(istruct)))
             n_atoms_arr(istruct) = mol%nat
 
             if (allocated(radii)) deallocate (radii)
@@ -1433,23 +1442,23 @@ contains
             end if
             if (allocated(error)) return
 
-            write (*, '(2x,a14,a,i5,a,f7.1,a,i5)') &
-               trim(struct_names(istruct)), '  N_at=', n_atoms_arr(istruct), &
-               '  act_mean=', act_mean(istruct), '  act_max=', act_max(istruct)
+            write (*, "(2x,a14,a,i5,a,f7.1,a,i5)") &
+               trim(struct_names(istruct)), "  N_at=", n_atoms_arr(istruct), &
+               "  act_mean=", act_mean(istruct), "  act_max=", act_max(istruct)
          end do
 
          call system_clock(clock1)
          elapsed = real(clock1 - clock0, wp)/real(clock_rate, wp)
 
          if (ilsf == 1) then
-            call report_lsf_timings('SvdW', n_struct, struct_names, n_atoms_arr, &
+            call report_lsf_timings("SvdW", n_struct, struct_names, n_atoms_arr, &
                                     n_lvl, prep_times(0:n_lvl, :), n_acc, &
                                     acc_labels_svdw, acc_deriv_svdw, &
                                     acc_times(1:n_acc, :), acc_ncalls(1:n_acc), &
                                     acc_reps(1:n_acc, :), act_mean, act_max, &
                                     checksums, t_min, elapsed)
          else
-            call report_lsf_timings('CFC', n_struct, struct_names, n_atoms_arr, &
+            call report_lsf_timings("CFC", n_struct, struct_names, n_atoms_arr, &
                                     n_lvl, prep_times(0:n_lvl, :), n_acc, &
                                     acc_labels_cfc, acc_deriv_cfc, &
                                     acc_times(1:n_acc, :), acc_ncalls(1:n_acc), &
@@ -1458,21 +1467,21 @@ contains
          end if
       end do
 
-      write (*, '(a)') ''
+      write (*, "(a)") ""
 
    end subroutine test_timing_lsf_accessors
 
-   !> Deterministic shell sample of evaluation points around a molecule.
+   !> Deterministic shell sample of evaluation points around a molecule
    !>
    !> Point `p` is assigned to atom `a = 1 + mod((p-1)*stride, nat)` with a
    !> stride prime larger than any structure benchmarked here, so consecutive
    !> points hop across the molecule and any *prefix* of the sequence is still
-   !> spread over all atoms (the O(ncenters^2) accessors are timed on a prefix).
+   !> spread over all atoms (the O(ncenters^2) accessors are timed on a prefix)
    !> The point is placed at `r_a + (R_a + delta)*u_p`, with `u_p` the p-th
    !> direction of a fixed Fibonacci sphere and `delta` cycling through
-   !> {0, 0.25, 0.5} Bohr, so points sit near where a cavity surface would lie.
+   !> {0, 0.25, 0.5} Bohr, so points sit near where a cavity surface would lie
    !>
-   !> No `random_number` anywhere: the sample depends only on the geometry.
+   !> No `random_number` anywhere: the sample depends only on the geometry
    !>
    !> @param[in]  mol    Molecular structure
    !> @param[in]  radii  Atomic radii in Bohr [nat]
@@ -1504,7 +1513,7 @@ contains
       end do
    end subroutine build_lsf_shell_points
 
-   !> Time SvdW `prepare` and every SvdW accessor on a fixed point set.
+   !> Time SvdW `prepare` and every SvdW accessor on a fixed point set
    !>
    !> @param[in]  mol         Molecular structure
    !> @param[in]  radii       Atomic radii in Bohr [nat]
@@ -1570,7 +1579,8 @@ contains
       npts = size(points, 2)
       chk = 0.0_wp
 
-      call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
+      call lsf%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, blend_2b=blend_2b, &
+         blend_3b=blend_3b))
       lsf%screening_threshold = thr
       call lsf%update(mol, radii)
 
@@ -1635,13 +1645,13 @@ contains
 
    contains
 
-      !> Time accessor row `iacc` over the first `nc` points.
+      !> Time accessor row `iacc` over the first `nc` points
       !>
       !> `prepare` (and, for the two accessors consuming it, the
       !> `f3_rr_rA` that produces their input) runs outside the timer
       !> window, so the row measures the accessor alone rather than a difference
       !> of two much larger numbers - the CFC accessors are five orders of
-      !> magnitude cheaper than their `prepare`, which no subtraction survives.
+      !> magnitude cheaper than their `prepare`, which no subtraction survives
       !>
       !> @param[in]  iacc     Accessor row
       !> @param[in]  nc       Points to sweep
@@ -1658,8 +1668,9 @@ contains
          do ip = 1, nc
             call lsf%prepare(points(:, ip), lsf_err)
             if (allocated(lsf_err)) exit
-            if (needs_rr_rA(iacc)) &
+            if (needs_rr_rA(iacc)) then
                call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+            end if
             chk_on = .true.
             call cpu_time(p0)
             do ir = 1, nrep
@@ -1670,8 +1681,9 @@ contains
             total = total + real(p1 - p0, wp)
          end do
          per_call = total/real(nc, wp)/real(nrep, wp)
-         if (allocated(lsf_err)) &
+         if (allocated(lsf_err)) then
             call test_failed(error, "SvdW prepare failed: "//lsf_err%message)
+         end if
       end subroutine time_accessor
 
       !> Accessor calls per prepared point, so that one timer window sits well
@@ -1698,8 +1710,9 @@ contains
             nrep = 1
             return
          end if
-         if (needs_rr_rA(iacc)) &
+         if (needs_rr_rA(iacc)) then
             call lsf%f3_rr_rA(lsf1_rA, lsf2_r_rA, lsf3_rr_rA)
+         end if
 
          nrep = 1
          do
@@ -1757,16 +1770,18 @@ contains
          case (12)
             call lsf%normalized_f01_rA(val, deriv_rA=deriv_rA)
             if (chk_on) chk = chk + val + deriv_rA(1, 1)
+         case default
+            error stop "test_cavity_drop_timings: unhandled iacc"
          end select
       end subroutine call_accessor
 
    end subroutine bench_lsf_svdw
 
-   !> Time CFC `prepare` and every CFC accessor on a fixed point set.
+   !> Time CFC `prepare` and every CFC accessor on a fixed point set
    !>
    !> Same protocol as [[bench_lsf_svdw]]; the CFC LSF stops at order 3 and has
    !> no nuclear-pair accessors, so no row needs its own point budget - but the
-   !> pair term makes every `prepare` expensive, hence the smaller `npts_use`.
+   !> pair term makes every `prepare` expensive, hence the smaller `npts_use`
    !>
    !> @param[in]  mol         Molecular structure
    !> @param[in]  radii       Atomic radii in Bohr [nat]
@@ -1799,9 +1814,9 @@ contains
 
       integer, parameter :: acc_deriv(16) = &
                             [0, 0, 1, 2, 3, 3, 4, 4, 2, 1, 2, 3, 2, 1, 2, 3]
-      !> Per-row point cap; 0 means "use the full `npts_use` prefix".
+      !> Per-row point cap; 0 means "use the full `npts_use` prefix"
       !>
-      !> Two costs drive these, and both are quadratic in the active-atom count.
+      !> Two costs drive these, and both are quadratic in the active-atom count
       !> First, `time_accessor` re-`prepare`s at the row's own `set_max_deriv`
       !> level for every point, and a CFC `prepare` at level 4 accumulates the
       !> two largest pair branches in the module (1101 + 2484 CSE temporaries),
@@ -1809,20 +1824,20 @@ contains
       !> accessor is even called. Second, the two-nucleus and direction-
       !> contracted rows run their own O(n_active**2) sweep on top of that --
       !> the `f*_rArB` rows twice over, once for the diagonal blocks and once
-      !> for the ordered pairs.
+      !> for the ordered pairs
       !>
       !> The caps keep every row near or below a second per structure. The point
       !> sequence is quasi-uniform over the molecule, so a shorter prefix stays
-      !> a fair sample; `points` in the report names the budget each row used.
+      !> a fair sample; `points` in the report names the budget each row used
       integer, parameter :: acc_npts_cap(16) = &
                             [0, 0, 0, 0, 50, 50, 10, 10, 0, 10, 4, 2, 10, 10, 10, 4]
 
-      !> Point budget of the `prepare` pass at each derivative level.
+      !> Point budget of the `prepare` pass at each derivative level
       !>
       !> Level 4 accumulates the order-4 spatial ladder and the order-3 nuclear
       !> one, i.e. the two largest pair branches in the module (1101 + 2484 CSE
       !> temporaries), so at the top of the series a single point costs tens of
-      !> milliseconds. Same prefix argument as above.
+      !> milliseconds. Same prefix argument as above
       integer, parameter :: prep_npts_cap(0:4) = [0, 0, 0, 50, 10]
 
       type(moist_cavity_drop_lsf_cfc_type) :: lsf
@@ -1949,8 +1964,9 @@ contains
             total = total + real(p1 - p0, wp)
          end do
          per_call = total/real(nc, wp)/real(nrep, wp)
-         if (allocated(lsf_err)) &
+         if (allocated(lsf_err)) then
             call test_failed(error, "CFC prepare failed: "//lsf_err%message)
+         end if
       end subroutine time_accessor
 
       !> Accessor calls per prepared point, so that one timer window sits well
@@ -2040,12 +2056,14 @@ contains
          case (16)
             call lsf%hvp_f3_rr_rA(vdir, hvp3)
             if (chk_on) chk = chk + hvp3(1, 1, 1, 1)
+         case default
+            error stop "test_cavity_drop_timings: unhandled iacc"
          end select
       end subroutine call_accessor
 
    end subroutine bench_lsf_cfc
 
-   !> Print the per-system, per-accessor and scaling tables for one LSF.
+   !> Print the per-system, per-accessor and scaling tables for one LSF
    !>
    !> @param[in] title        LSF name used in the table headers
    !> @param[in] n_struct     Number of structures
@@ -2094,112 +2112,112 @@ contains
       character(len=12) :: hdr
 
       !> ==================== Per-system summary (prepare) ====================
-      write (*, '(a)') ''
-      write (*, '(a,a,a,f8.1,a)') '=== ', title, ': per-system summary   (benchmarked in ', &
-         elapsed, ' s wall) ==='
-      write (*, '(a14, a7, a10, a9)', advance='no') 'Structure', 'N_at', 'act_mean', 'act_max'
+      write (*, "(a)") ""
+      write (*, "(a,a,a,f8.1,a)") "=== ", title, ": per-system summary   (benchmarked in ", &
+         elapsed, " s wall) ==="
+      write (*, "(a14, a7, a10, a9)", advance="no") "Structure", "N_at", "act_mean", "act_max"
       do ilvl = 0, n_lvl
-         write (hdr, '(a,i0,a)') 'prep_d', ilvl, '(us)'
-         write (*, '(a13)', advance='no') hdr
+         write (hdr, "(a,i0,a)") "prep_d", ilvl, "(us)"
+         write (*, "(a13)", advance="no") hdr
       end do
-      write (*, '(a18)') 'checksum'
+      write (*, "(a18)") "checksum"
 
-      write (*, '(a14, a7, a10, a9)', advance='no') repeat('-', 13), repeat('-', 6), &
-         repeat('-', 9), repeat('-', 8)
+      write (*, "(a14, a7, a10, a9)", advance="no") repeat("-", 13), repeat("-", 6), &
+         repeat("-", 9), repeat("-", 8)
       do ilvl = 0, n_lvl
-         write (*, '(a13)', advance='no') repeat('-', 12)
+         write (*, "(a13)", advance="no") repeat("-", 12)
       end do
-      write (*, '(a18)') repeat('-', 17)
+      write (*, "(a18)") repeat("-", 17)
 
       do istruct = 1, n_struct
-         write (*, '(a14, i7, f10.2, i9)', advance='no') &
+         write (*, "(a14, i7, f10.2, i9)", advance="no") &
             trim(struct_names(istruct)), n_atoms(istruct), &
             act_mean(istruct), act_max(istruct)
          do ilvl = 0, n_lvl
-            write (*, '(f13.4)', advance='no') prep_times(ilvl, istruct)*1.0e6_wp
+            write (*, "(f13.4)", advance="no") prep_times(ilvl, istruct)*1.0e6_wp
          end do
-         write (*, '(es18.9)') checksums(istruct)
+         write (*, "(es18.9)") checksums(istruct)
       end do
 
       !> ================== Per-accessor cost, blocked columns ==================
-      write (*, '(a)') ''
-      write (*, '(a,a,a)') '=== ', title, ': accessor cost in us/call (prepare excluded) ==='
+      write (*, "(a)") ""
+      write (*, "(a,a,a)") "=== ", title, ": accessor cost in us/call (prepare excluded) ==="
       do iblock = 1, (n_struct + cols - 1)/cols
          ifirst = (iblock - 1)*cols + 1
          ilast = min(n_struct, ifirst + cols - 1)
 
-         write (*, '(a24, a4, a8)', advance='no') 'N_at ->', 'd', 'points'
+         write (*, "(a24, a4, a8)", advance="no") "N_at ->", "d", "points"
          do istruct = ifirst, ilast
-            write (*, '(i12)', advance='no') n_atoms(istruct)
+            write (*, "(i12)", advance="no") n_atoms(istruct)
          end do
          write (*, *)
-         write (*, '(a24, a4, a8)', advance='no') repeat('-', 23), repeat('-', 3), &
-            repeat('-', 7)
+         write (*, "(a24, a4, a8)", advance="no") repeat("-", 23), repeat("-", 3), &
+            repeat("-", 7)
          do istruct = ifirst, ilast
-            write (*, '(a12)', advance='no') repeat('-', 11)
+            write (*, "(a12)", advance="no") repeat("-", 11)
          end do
          write (*, *)
 
          do iacc = 1, n_acc
-            write (*, '(a24, i4, i8)', advance='no') &
+            write (*, "(a24, i4, i8)", advance="no") &
                acc_labels(iacc), acc_deriv(iacc), acc_ncalls(iacc)
             do istruct = ifirst, ilast
-               write (*, '(f12.4)', advance='no') acc_times(iacc, istruct)*1.0e6_wp
+               write (*, "(f12.4)", advance="no") acc_times(iacc, istruct)*1.0e6_wp
             end do
             write (*, *)
          end do
-         write (*, '(a)') ''
+         write (*, "(a)") ""
       end do
 
       !> ==================== Repeat counts, blocked columns ====================
       !> Accessor calls timed per prepared point behind each timing above; a
       !> row at 1 was measured call-for-call, a higher count means the accessor
       !> is too cheap to resolve in a single timer window
-      write (*, '(a,a,a)') '=== ', title, ': accessor calls per prepared point (repeat count) ==='
+      write (*, "(a,a,a)") "=== ", title, ": accessor calls per prepared point (repeat count) ==="
       do iblock = 1, (n_struct + cols - 1)/cols
          ifirst = (iblock - 1)*cols + 1
          ilast = min(n_struct, ifirst + cols - 1)
 
-         write (*, '(a24, a4)', advance='no') 'N_at ->', 'd'
+         write (*, "(a24, a4)", advance="no") "N_at ->", "d"
          do istruct = ifirst, ilast
-            write (*, '(i12)', advance='no') n_atoms(istruct)
+            write (*, "(i12)", advance="no") n_atoms(istruct)
          end do
          write (*, *)
-         write (*, '(a24, a4)', advance='no') repeat('-', 23), repeat('-', 3)
+         write (*, "(a24, a4)", advance="no") repeat("-", 23), repeat("-", 3)
          do istruct = ifirst, ilast
-            write (*, '(a12)', advance='no') repeat('-', 11)
+            write (*, "(a12)", advance="no") repeat("-", 11)
          end do
          write (*, *)
 
          do iacc = 1, n_acc
-            write (*, '(a24, i4)', advance='no') acc_labels(iacc), acc_deriv(iacc)
+            write (*, "(a24, i4)", advance="no") acc_labels(iacc), acc_deriv(iacc)
             do istruct = ifirst, ilast
-               write (*, '(i12)', advance='no') acc_reps(iacc, istruct)
+               write (*, "(i12)", advance="no") acc_reps(iacc, istruct)
             end do
             write (*, *)
          end do
-         write (*, '(a)') ''
+         write (*, "(a)") ""
       end do
 
       !> ========================== Scaling exponents ==========================
-      write (*, '(a)') ''
-      write (*, '(a,a,a)') '=== ', title, ': per-call scaling fit  t(N) = A * N^X ==='
-      write (*, '(a24, a4, a10, a10, a12, a12, a12)') &
-         'Row', 'd', 'X', 'R^2', 'A', 'us@N_min', 'us@N_max'
-      write (*, '(a24, a4, a10, a10, a12, a12, a12)') repeat('-', 23), repeat('-', 3), &
-         repeat('-', 9), repeat('-', 9), repeat('-', 11), repeat('-', 11), repeat('-', 11)
+      write (*, "(a)") ""
+      write (*, "(a,a,a)") "=== ", title, ": per-call scaling fit  t(N) = A * N^X ==="
+      write (*, "(a24, a4, a10, a10, a12, a12, a12)") &
+         "Row", "d", "X", "R^2", "A", "us@N_min", "us@N_max"
+      write (*, "(a24, a4, a10, a10, a12, a12, a12)") repeat("-", 23), repeat("-", 3), &
+         repeat("-", 9), repeat("-", 9), repeat("-", 11), repeat("-", 11), repeat("-", 11)
 
       do ilvl = 0, n_lvl
-         write (hdr, '(a,i0,a)') 'prepare d', ilvl
+         write (hdr, "(a,i0,a)") "prepare d", ilvl
          row = prep_times(ilvl, 1:n_struct)
          call collect_valid_points(n_struct, n_atoms, row, t_min, real_n, raw_t, n_valid)
          if (n_valid >= 4) then
             call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, coeff_a)
-            write (*, '(a24, i4, f10.3, f10.4, es12.3, f12.4, f12.4)') &
+            write (*, "(a24, i4, f10.3, f10.4, es12.3, f12.4, f12.4)") &
                hdr, ilvl, exponent, r_sq, coeff_a, &
                row(1)*1.0e6_wp, row(n_struct)*1.0e6_wp
          else
-            write (*, '(a24, i4, a22)') hdr, ilvl, '  (insufficient data)'
+            write (*, "(a24, i4, a22)") hdr, ilvl, "  (insufficient data)"
          end if
       end do
 
@@ -2208,19 +2226,19 @@ contains
          call collect_valid_points(n_struct, n_atoms, row, t_min, real_n, raw_t, n_valid)
          if (n_valid >= 4) then
             call fit_power_law(n_valid, real_n, raw_t, exponent, r_sq, coeff_a)
-            write (*, '(a24, i4, f10.3, f10.4, es12.3, f12.4, f12.4)') &
+            write (*, "(a24, i4, f10.3, f10.4, es12.3, f12.4, f12.4)") &
                acc_labels(iacc), acc_deriv(iacc), exponent, r_sq, coeff_a, &
                row(1)*1.0e6_wp, row(n_struct)*1.0e6_wp
          else
-            write (*, '(a24, i4, a22)') acc_labels(iacc), acc_deriv(iacc), &
-               '  (insufficient data)'
+            write (*, "(a24, i4, a22)") acc_labels(iacc), acc_deriv(iacc), &
+               "  (insufficient data)"
          end if
       end do
 
    end subroutine report_lsf_timings
 
-   !> Collect valid data points for power-law fitting.
-   !> Only includes points where the measured time exceeds t_min.
+   !> Collect valid data points for power-law fitting
+   !> Only includes points where the measured time exceeds t_min
    !>
    !> @param[in]  n_struct  Number of structures
    !> @param[in]  n_atoms   Atom counts per structure
@@ -2249,11 +2267,11 @@ contains
       end do
    end subroutine collect_valid_points
 
-   !> Fit power law: t(N) = A * N^X  (constrained through origin).
+   !> Fit power law: t(N) = A * N^X  (constrained through origin)
    !>
    !> Uses a two-pass grid search over X. For each candidate X the
    !> model is linear in A, so the optimal prefactor is obtained as
-   !> A = sum(N_i^X * t_i) / sum(N_i^{2X}).
+   !> A = sum(N_i^X * t_i) / sum(N_i^{2X})
    !>
    !> Pass 1: X in [0, 4], step 0.05  (coarse scan)
    !> Pass 2: X in [best-0.05, best+0.05], step 0.001  (refinement)
@@ -2350,7 +2368,7 @@ contains
       end if
    end subroutine fit_power_law
 
-   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure.
+   !> Fill per-atom CPCM radii, turning a failed lookup into a test failure
    subroutine fill_cpcm_radii(mol, radii, error)
       !> Structure whose per-atom radii are filled
       type(structure_type), intent(in) :: mol

@@ -4,29 +4,30 @@
 module moist_math_lapack_getri
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: wrap_getri
 
    !> Computes the inverse of a matrix using the LU factorization
-   !> computed by ?GETRF.
+   !> computed by ?GETRF
    !>
    !> This method inverts U and then computes inv(A) by solving the system
-   !> inv(A)*L = inv(U) for inv(A).
+   !> inv(A)*L = inv(U) for inv(A)
    interface wrap_getri
       module procedure :: wrap_sgetri
       module procedure :: wrap_dgetri
    end interface wrap_getri
 
    !> Computes the inverse of a matrix using the LU factorization
-   !> computed by ?GETRF.
+   !> computed by ?GETRF
    !>
    !> This method inverts U and then computes inv(A) by solving the system
-   !> inv(A)*L = inv(U) for inv(A).
+   !> inv(A)*L = inv(U) for inv(A)
    interface lapack_getri
       pure subroutine sgetri(n, a, lda, ipiv, work, lwork, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
          real(sp), intent(inout) :: a(lda, *)
@@ -37,6 +38,7 @@ module moist_math_lapack_getri
       end subroutine sgetri
       pure subroutine dgetri(n, a, lda, ipiv, work, lwork, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          integer(lapack_ik), intent(in) :: n
          integer(lapack_ik), intent(in) :: lda
          real(dp), intent(inout) :: a(lda, *)

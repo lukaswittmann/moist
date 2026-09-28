@@ -1,5 +1,7 @@
-!> Regression tests for DROP cavity area/volume against fixed MC references.
+!> Regression tests for DROP cavity area/volume against fixed MC references
 module test_cavity_drop_integration
+   use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
+   use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -16,19 +18,19 @@ module test_cavity_drop_integration
 
    !> One independent integration reference case
    type :: integration_case_type
-      !> Blending parameter k.
+      !> Blending parameter k
       real(wp) :: blend_k
-      !> Blending parameter beta.
+      !> Blending parameter beta
       real(wp) :: blend_2b
-      !> Blending parameter gamma.
+      !> Blending parameter gamma
       real(wp) :: blend_3b
-      !> Dataset name used with mstore.
+      !> Dataset name used with mstore
       character(len=12) :: dataset
-      !> Structure identifier inside dataset.
+      !> Structure identifier inside dataset
       character(len=7) :: structure
-      !> Reference marching-cubes area.
+      !> Reference marching-cubes area
       real(wp) :: mc_area
-      !> Reference marching-cubes volume.
+      !> Reference marching-cubes volume
       real(wp) :: mc_volume
    end type integration_case_type
 
@@ -118,9 +120,9 @@ module test_cavity_drop_integration
 
 contains
 
-   !> Collect all regular integration reference tests.
+   !> Collect all regular integration reference tests
    subroutine collect_cavity_drop_integration(testsuite)
-      !> Collection of unit tests.
+      !> Collection of unit tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       allocate (testsuite(size(cases)))
@@ -162,28 +164,29 @@ contains
       testsuite(36) = new_unittest(case_to_string(cases(36)), test_case_036)
    end subroutine collect_cavity_drop_integration
 
-   !> Validate one DROP cavity area/volume case against fixed MC references.
-   !> @param[out] error     Test failure state.
-   !> @param[in]  case_idx  Index into the `cases` table.
+   !> Validate one DROP cavity area/volume case against fixed MC references
+   !>
+   !> @param[out] error     Test failure state
+   !> @param[in]  case_idx  Index into the `cases` table
    subroutine run_single_case(error, case_idx)
-      !> Test failure state.
+      !> Test failure state
       type(error_type), allocatable, intent(out) :: error
-      !> Index into the `cases` table.
+      !> Index into the `cases` table
       integer, intent(in) :: case_idx
 
-      !> Molecular structure for current case.
+      !> Molecular structure for current case
       type(structure_type) :: mol
-      !> DROP cavity instance.
+      !> DROP cavity instance
       type(cavity_type_drop), allocatable :: cavity
-      !> Error from cavity routines.
+      !> Error from cavity routines
       type(mctc_error), allocatable :: cavity_error
-      !> Computed total cavity area.
+      !> Computed total cavity area
       real(wp) :: cavity_area
-      !> Computed total cavity volume.
+      !> Computed total cavity volume
       real(wp) :: cavity_volume
-      !> Computed area ratio (cavity/reference).
+      !> Computed area ratio (cavity/reference)
       real(wp) :: area_ratio
-      !> Computed volume ratio (cavity/reference).
+      !> Computed volume ratio (cavity/reference)
       real(wp) :: volume_ratio
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
@@ -195,13 +198,11 @@ contains
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
-         call svdw_template%new(blend_k=cases(case_idx)%blend_k, &
-                                blend_2b=cases(case_idx)%blend_2b, &
-                                blend_3b=cases(case_idx)%blend_3b)
-         call new_cavity_drop(cavity, ctx, nleb=NUM_LEB, tolerance=PROJ_TOL, &
-                              proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, &
-                              radius_model=default_cpcm_radii(), &
-                              lsf_model=svdw_template, error=cavity_error)
+         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=cases(case_idx)%blend_k, &
+            blend_2b=cases(case_idx)%blend_2b, blend_3b=cases(case_idx)%blend_3b))
+         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "new_cavity_drop failed for "//trim(case_to_string(cases(case_idx)))// &
@@ -430,16 +431,17 @@ contains
       call run_single_case(error, 38)
    end subroutine test_case_038
 
-   !> Load one structure for an integration reference case.
-   !> @param[in]  dataset   Dataset name in mstore.
-   !> @param[in]  structure Structure ID in mstore.
-   !> @param[out] mol       Loaded molecular structure.
+   !> Load one structure for an integration reference case
+   !>
+   !> @param[in]  dataset   Dataset name in mstore
+   !> @param[in]  structure Structure ID in mstore
+   !> @param[out] mol       Loaded molecular structure
    subroutine load_structure(dataset, structure, mol)
-      !> Dataset name in mstore.
+      !> Dataset name in mstore
       character(len=*), intent(in) :: dataset
-      !> Structure ID in mstore.
+      !> Structure ID in mstore
       character(len=*), intent(in) :: structure
-      !> Loaded molecular structure.
+      !> Loaded molecular structure
       type(structure_type), intent(out) :: mol
 
       if (trim(structure) == "Ar") then
@@ -449,19 +451,20 @@ contains
       end if
    end subroutine load_structure
 
-   !> Convert one integration case to a compact label.
-   !> @param[in] c    Reference case entry.
-   !> @return    str  Printable case label without trailing blanks.
+   !> Convert one integration case to a compact label
+   !>
+   !> @param[in] c    Reference case entry
+   !> @return    str  Printable case label without trailing blanks
    pure function case_to_string(c) result(str)
-      !> Reference case entry.
+      !> Reference case entry
       type(integration_case_type), intent(in) :: c
-      !> Printable case label without trailing blanks.
+      !> Printable case label without trailing blanks
       character(len=:), allocatable :: str
-      !> Formatted k value.
+      !> Formatted k value
       character(len=8) :: k_str
-      !> Formatted beta value.
+      !> Formatted beta value
       character(len=8) :: b_str
-      !> Formatted gamma value.
+      !> Formatted gamma value
       character(len=8) :: g_str
 
       write (k_str, "(F4.1)") c%blend_k

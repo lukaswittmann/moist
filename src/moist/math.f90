@@ -4,7 +4,7 @@ module moist_math
       & grid_size, get_angular_grid, lebedev_order_from_num, &
       & molecular_grid_type, new_molecular_grid, &
       & new_molecular_grid_uniform, default_grid_sizes, integrand_3d
-   implicit none
+   implicit none(type, external)
    public
 
 end module moist_math

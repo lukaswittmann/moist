@@ -8,7 +8,7 @@ module moist_radii_static
    use moist_data_radii_legacy, only: get_radius, get_radius_func, rad_type
    use moist_radius_type, only: radius_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: radius_type_static
@@ -20,16 +20,16 @@ module moist_radii_static
    public :: new_rahm_radii
    public :: new_gauss_radii
 
-   !> Static, table-based radii model.
+   !> Static, table-based radii model
    type, extends(radius_type) :: radius_type_static
-      !> Selected legacy radius-model tag.
+      !> Selected legacy radius-model tag
       integer :: model_tag = rad_type%cpcm
-      !> Atomic numbers for the current structure.
+      !> Atomic numbers for the current structure
       integer, allocatable :: atomic_numbers(:)
    contains
-      !> Refresh cached radii values and derivatives for a structure.
+      !> Refresh cached radii values and derivatives for a structure
       procedure :: update => update_static_radii
-      !> Print unique elemental radii for the current molecule.
+      !> Print unique elemental radii for the current molecule
       procedure :: print => print_static_radii
    end type radius_type_static
 

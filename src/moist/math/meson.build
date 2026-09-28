@@ -19,7 +19,3 @@ srcs += files(
   'trigonometry.f90',
   'grid.f90',
 )
-
-if use_fftw
-  srcs += files('fftw3.F90')
-endif

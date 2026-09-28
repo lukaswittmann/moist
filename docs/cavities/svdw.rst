@@ -16,7 +16,49 @@ Optional settings:
    One-body smoothing.
 
 ``blend_2b`` (real, default ``0.0``)
-   Two-body smoothing.
+   Two-body smoothing; the two-body term is off at the default.
 
 ``blend_3b`` (real, default ``3.0``)
-   three-body smoothing.
+   Three-body smoothing.
+
+Construction
+------------
+
+.. tab-set::
+
+   .. tab-item:: Fortran
+      :sync: fortran
+
+      .. code-block:: fortran
+
+         use mctc_env, only : wp
+         use moist_cavity_drop_lsf_svdw, only : &
+            & moist_cavity_drop_lsf_svdw_type
+         use moist, only : moist_cavity_drop_lsf_svdw_param_type
+
+         type(moist_cavity_drop_lsf_svdw_type) :: svdw
+
+         call svdw%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=5.5_wp))
+
+   .. tab-item:: C
+      :sync: c
+
+      .. code-block:: c
+
+         moist_svdw_options options;
+         moist_init_svdw_options(error, &options, sizeof options);
+         options.blend_k = 5.5;
+
+         moist_lsf lsf = moist_new_svdw_lsf(error, &options);
+
+   .. tab-item:: Python
+      :sync: python
+
+      .. code-block:: python
+
+         from moist import SvdW, SvdWParameters
+
+         lsf = SvdW(parameters=SvdWParameters(blend_k=5.5))
+
+Pass the level set to the DROP cavity constructor together with a radius model;
+see :ref:`drop-construction`.

@@ -86,7 +86,7 @@
 !> returns one tensor at one order and therefore takes no `max_deriv` at all.
 module moist_cavity_drop_lsf_svdw_kernel
    use mctc_env_accuracy, only: wp
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    !> Cartesian dimension.

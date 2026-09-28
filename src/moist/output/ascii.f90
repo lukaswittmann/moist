@@ -1,7 +1,8 @@
 
-!> Canonical ASCII art headers for moist and its sub-models.
-!> All banner output should go through this module so that the art
-!> is defined in exactly one place.
+!> Canonical ASCII art headers for moist and its sub-models
+!>
+!> All banner output should go through this module, so that the art is
+!> defined in exactly one place
 module moist_output_ascii
    use moist_build_info, only: git_commit, build_host
    use moist_version, only: get_moist_version
@@ -13,6 +14,7 @@ module moist_output_ascii
    integer, parameter, public :: HEADER_SHORT = 1  !< Tagline box only
    integer, parameter, public :: HEADER_ASCII = 2  !< Logo only, no tagline
 
+   public :: moist_banner_text
    public :: moist_header
    public :: moist_build_header
    public :: moist_version_header
@@ -20,92 +22,74 @@ module moist_output_ascii
 
 contains
 
-   !> Print moist banner.
+   !> Print moist banner
+   !>
    !> @param[in] unit   Fortran I/O unit (6 = stdout)
    !> @param[in] style  Optional style selector:
    !>                    HEADER_FULL (0, default) = logo + tagline,
    !>                    HEADER_SHORT (1) = tagline box only,
    !>                    HEADER_ASCII (2) = logo only
+   !>
+   !> Return the canonical banner as text with newline-terminated lines
+   !> @param[in] style Full (0), short (1), ASCII (2), or build information (3)
+   function moist_banner_text(style) result(text)
+      !> Banner selector
+      integer, intent(in) :: style
+      !> Host-printable banner text
+      character(len=:), allocatable :: text
+      !> Release and build metadata
+      character(len=:), allocatable :: version, line
+      !> Newline separator
+      character(len=1), parameter :: nl = achar(10)
+      text = ""
+      if (style == HEADER_FULL .or. style == HEADER_ASCII) then
+         text = "                            _   _     _             "//nl// &
+            "                _ __ ___   / \ (_)___| |_           "//nl// &
+            "     .---------| '_ ` _ \ /   \| / __| __|---------."//nl// &
+            "     |         | | | | | |     | \__ \ |_          |"//nl// &
+            "     |         |_| |_| |_|\___/|_|___/\__|         |"//nl// &
+            "     |                                             |"//nl
+      end if
+      if (style == HEADER_SHORT) text = "     .---------------------------------------------."//nl
+      if (style == HEADER_FULL .or. style == HEADER_SHORT) then
+         text = text//"     |       Modular and open-source               |"//nl// &
+            "     |            implicit solvation toolkit       |"//nl
+      end if
+      if (style >= 0 .and. style <= 2) text = text//"     '---------------------------------------------'"//nl// &
+            ""//nl
+      if (style == 3) then
+         call get_moist_version(string=version)
+         line = "moist v"//version//" ("//trim(git_commit)//")"
+         text = "     .---------------------------------------------."//nl//boxed(line)//nl
+         if (len_trim(build_host) > 0) text = text//boxed(trim(build_host))//nl
+         text = text//"     '---------------------------------------------'"//nl//nl
+      end if
+   contains
+      !> Center one build metadata line inside the banner
+      function boxed(value) result(row)
+         character(len=*), intent(in) :: value
+         character(len=:), allocatable :: row
+         integer :: left, right
+         left = max(0, (45-len(value))/2)
+         right = max(0, 45-len(value)-left)
+         row = "     |"//repeat(" ",left)//value//repeat(" ",right)//"|"
+      end function boxed
+   end function moist_banner_text
+
    subroutine moist_header(unit, style)
       integer, intent(in) :: unit
       integer, intent(in), optional :: style
-
-      integer :: s
-      logical :: show_logo, show_tagline
-
-      s = HEADER_FULL
-      if (present(style)) s = style
-
-      show_logo = (s == HEADER_FULL .or. s == HEADER_ASCII)
-      show_tagline = (s == HEADER_FULL .or. s == HEADER_SHORT)
-
-      if (show_logo) then
-         write (unit, "(a)") &
-            "                            _   _     _             ", &
-            "                _ __ ___   / \ (_)___| |_           ", &
-            "     .---------| '_ ` _ \ /   \| / __| __|---------.", &
-            "     |         | | | | | |     | \__ \ |_          |", &
-            "     |         |_| |_| |_|\___/|_|___/\__|         |", &
-            "     |                                             |"
-      end if
-
-      if (show_tagline) then
-         if (.not. show_logo) then
-            write (unit, "(a)") &
-               "     .---------------------------------------------."
-         end if
-         write (unit, "(a)") &
-            "     |       Modular and open-source               |", &
-            "     |            implicit solvation toolkit       |"
-      end if
-
-      write (unit, "(a)") &
-         "     '---------------------------------------------'", ""
-
+      integer :: selected
+      selected = HEADER_FULL
+      if (present(style)) selected = style
+      write(unit, "(a)", advance="no") moist_banner_text(selected)
    end subroutine moist_header
 
    !> Print the moist build banner + version and commit
    subroutine moist_build_header(unit)
-      !> Fortran I/O unit (6 = stdout)
+      !> Destination Fortran unit
       integer, intent(in) :: unit
-      character(len=:), allocatable :: version_string, line
-      integer :: inner
-      character(len=*), parameter :: top = &
-                                     "     .---------------------------------------------."
-      character(len=*), parameter :: bot = &
-                                     "     '---------------------------------------------'"
-
-      call get_moist_version(string=version_string)
-      line = "moist v"//trim(version_string)//" ("//trim(git_commit)//")"
-
-      ! Center the banner: inner width = box width minus 5 leading spaces and
-      ! the two corner characters; derived from `top` so the two stay in sync.
-      inner = len(top) - 7
-
-      write (unit, "(a)") top
-      write (unit, "(a)") boxed(line)
-      ! Second line only when moist was built into a host program; a standalone
-      ! build leaves build_host empty and the banner looks as it always did.
-      if (len_trim(build_host) > 0) then
-         write (unit, "(a)") boxed(trim(build_host))
-      end if
-      write (unit, "(a)") bot, ""
-
-   contains
-
-      !> One centred line of the box
-      function boxed(text) result(row)
-         !> Text to centre
-         character(len=*), intent(in) :: text
-         !> The finished row, borders included
-         character(len=:), allocatable :: row
-         integer :: pad_l, pad_r
-
-         pad_l = max(0, (inner - len(text))/2)
-         pad_r = max(0, inner - len(text) - pad_l)
-         row = "     |"//repeat(" ", pad_l)//text//repeat(" ", pad_r)//"|"
-      end function boxed
-
+      write(unit, "(a)", advance="no") moist_banner_text(3)
    end subroutine moist_build_header
 
    !> Print one-line version string, e.g. "moist version 0.5.0"
@@ -119,8 +103,9 @@ contains
 
    end subroutine moist_version_header
 
-   !> Print cavity construction banner.
-   !> If scheme is present, includes the scheme name in the header.
+   !> Print cavity construction banner
+   !>
+   !> - a present `scheme` puts the scheme name in the header
    subroutine cavity_header(unit, scheme)
       !> Fortran I/O unit (6 = stdout)
       integer, intent(in) :: unit

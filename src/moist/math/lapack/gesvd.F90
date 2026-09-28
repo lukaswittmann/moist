@@ -3,7 +3,7 @@
 module moist_math_lapack_gesvd
    use mctc_env, only: sp, dp
    use moist_math_lapack_kinds, only: lapack_ik
-   implicit none
+   implicit none(type, external)
    private
 
    public :: lapack_gesvd
@@ -12,6 +12,7 @@ module moist_math_lapack_gesvd
    interface lapack_gesvd
       pure subroutine sgesvd(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, info)
          import :: sp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: jobu
          character(len=1), intent(in) :: jobvt
          integer(lapack_ik), intent(in) :: m
@@ -29,6 +30,7 @@ module moist_math_lapack_gesvd
       end subroutine sgesvd
       pure subroutine dgesvd(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, info)
          import :: dp, lapack_ik
+         implicit none(type, external)
          character(len=1), intent(in) :: jobu
          character(len=1), intent(in) :: jobvt
          integer(lapack_ik), intent(in) :: m

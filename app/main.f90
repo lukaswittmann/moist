@@ -6,7 +6,7 @@ program driver
    use mctc_env, only : error_type
    use moist_cli, only : run_config, get_arguments
    use moist_driver, only : main
-   implicit none (type, external)
+   implicit none(type, external)
    !> Configuration data deteriming the driver behaviour
    type(run_config) :: config
    !> Error handling

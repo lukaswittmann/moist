@@ -6,7 +6,7 @@ module test_model_component_pcm_amat
                                              pcm_amat_surface_weights
    use moist_model_component_pcm_amat_kernel, only: pcm_amat_x_far
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   implicit none (type, external)
+   implicit none(type, external)
    private
 
    public :: collect_model_component_pcm_amat
@@ -94,7 +94,7 @@ contains
       q1 = [0.3_wp, -0.2_wp, 0.1_wp]
       q2 = [0.1_wp, 0.4_wp, -0.3_wp]
 
-      ! A non-positive width has no pair width, so the kernel is undefined.
+      ! A non-positive width has no pair width, so the kernel is undefined
       amat = 1.0_wp
       call assemble_pcm_amat([1.5_wp, 0.0_wp, 0.9_wp], f, xyz, amat, err)
       call check(error, allocated(err), more="a zero Gaussian width was accepted")
@@ -104,7 +104,7 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ! A non-positive switching factor divides the diagonal by zero.
+      ! A non-positive switching factor divides the diagonal by zero
       amat = 1.0_wp
       call assemble_pcm_amat(xi, [0.8_wp, -0.1_wp, 0.6_wp], xyz, amat, err)
       call check(error, allocated(err), more="a negative switching factor was accepted")
@@ -114,7 +114,7 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ! The output matrix must match the surface it is assembled on.
+      ! The output matrix must match the surface it is assembled on
       amat_small = 1.0_wp
       call assemble_pcm_amat(xi, f, xyz, amat_small, err)
       call check(error, allocated(err), more="a mis-shaped output matrix was accepted")
@@ -124,7 +124,7 @@ contains
       if (allocated(error)) return
       deallocate (err)
 
-      ! The adjoint route validates the same surface plus its own vectors.
+      ! The adjoint route validates the same surface plus its own vectors
       w_xi = 1.0_wp
       w_f = 1.0_wp
       w_xyz = 1.0_wp

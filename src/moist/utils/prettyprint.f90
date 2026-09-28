@@ -1,7 +1,7 @@
 module moist_utils_prettyprint
    use, intrinsic :: iso_fortran_env, only: output_unit, int8, int16, int32, int64, &
      & real32, real64
-   implicit none
+   implicit none(type, external)
    private
    public :: prettyprinter, new_prettyprinter
 
@@ -40,9 +40,10 @@ module moist_utils_prettyprint
 
 contains
 
-   !> Set output unit used by the pretty printer.
-   !> @param[inout] self Pretty printer instance.
-   !> @param[in]    iu   Fortran unit number for output.
+   !> Set output unit used by the pretty printer
+   !>
+   !> @param[inout] self Pretty printer instance
+   !> @param[in]    iu   Fortran unit number for output
    subroutine set_unit(self, iu)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -51,19 +52,20 @@ contains
       self%iu = iu
    end subroutine set_unit
 
-   !> Configure layout and numeric formatting options.
-   !> @param[inout] self       Pretty printer instance.
-   !> @param[in]    col_value  Column where first value starts.
-   !> @param[in]    col_value2 Column where second value starts in `kv2`.
-   !> @param[in]    indent_step Indentation increment for `push`/`pop`.
-   !> @param[in]    dot_gap    Spaces between label and dot leader.
-   !> @param[in]    dot_right  Minimum right-most dots in automatic mode.
-   !> @param[in]    dot_total  Exact total dots (`<0` enables automatic mode).
-   !> @param[in]    fmt_len    Base width to derive default numeric formats.
-   !> @param[in]    fmt_int    Override integer format.
-   !> @param[in]    fmt_real   Override fixed real format.
-   !> @param[in]    fmt_exp    Override exponential real format.
-   !> @param[in]    fmt_logical Override logical format.
+   !> Configure layout and numeric formatting options
+   !>
+   !> @param[inout] self       Pretty printer instance
+   !> @param[in]    col_value  Column where first value starts
+   !> @param[in]    col_value2 Column where second value starts in `kv2`
+   !> @param[in]    indent_step Indentation increment for `push`/`pop`
+   !> @param[in]    dot_gap    Spaces between label and dot leader
+   !> @param[in]    dot_right  Minimum right-most dots in automatic mode
+   !> @param[in]    dot_total  Exact total dots (`<0` enables automatic mode)
+   !> @param[in]    fmt_len    Base width to derive default numeric formats
+   !> @param[in]    fmt_int    Override integer format
+   !> @param[in]    fmt_real   Override fixed real format
+   !> @param[in]    fmt_exp    Override exponential real format
+   !> @param[in]    fmt_logical Override logical format
    subroutine set_layout(self, col_value, col_value2, indent_step, dot_gap, dot_right, dot_total, &
      & fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical)
       !> Pretty printer instance
@@ -84,7 +86,7 @@ contains
       if (.not. allocated(self%fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
       if (.not. allocated(self%fmt_real)) self%fmt_real = fixed_fmt(self%fmt_len, 6)
       if (.not. allocated(self%fmt_exp)) self%fmt_exp = exp_fmt(self%fmt_len, 2)
-      if (.not. allocated(self%fmt_logical)) self%fmt_logical = 'L1'
+      if (.not. allocated(self%fmt_logical)) self%fmt_logical = "L1"
 
       if (present(fmt_len)) then
          if (.not. present(fmt_int)) self%fmt_int = int_fmt(self%fmt_len)
@@ -98,19 +100,20 @@ contains
       if (present(fmt_logical)) self%fmt_logical = trim(fmt_logical)
    end subroutine set_layout
 
-   !> Construct a pretty printer with optional layout and format overrides.
-   !> @param[in] unit        Optional Fortran output unit.
-   !> @param[in] col_value   Optional column where first value starts.
-   !> @param[in] col_value2  Optional column where second value starts in `kv2`.
-   !> @param[in] indent_step Optional indentation increment for `push`/`pop`.
-   !> @param[in] dot_gap     Optional spaces between label and dot leader.
-   !> @param[in] dot_right   Optional minimum right-most dots in automatic mode.
-   !> @param[in] dot_total   Optional exact total dots (`<0` enables automatic mode).
-   !> @param[in] fmt_len     Optional base width to derive default numeric formats.
-   !> @param[in] fmt_int     Optional integer format override.
-   !> @param[in] fmt_real    Optional fixed real format override.
-   !> @param[in] fmt_exp     Optional exponential real format override.
-   !> @param[in] fmt_logical Optional logical format override.
+   !> Construct a pretty printer with optional layout and format overrides
+   !>
+   !> @param[in] unit        Optional Fortran output unit
+   !> @param[in] col_value   Optional column where first value starts
+   !> @param[in] col_value2  Optional column where second value starts in `kv2`
+   !> @param[in] indent_step Optional indentation increment for `push`/`pop`
+   !> @param[in] dot_gap     Optional spaces between label and dot leader
+   !> @param[in] dot_right   Optional minimum right-most dots in automatic mode
+   !> @param[in] dot_total   Optional exact total dots (`<0` enables automatic mode)
+   !> @param[in] fmt_len     Optional base width to derive default numeric formats
+   !> @param[in] fmt_int     Optional integer format override
+   !> @param[in] fmt_real    Optional fixed real format override
+   !> @param[in] fmt_exp     Optional exponential real format override
+   !> @param[in] fmt_logical Optional logical format override
    function new_prettyprinter(unit, col_value, col_value2, indent_step, dot_gap, dot_right, &
       & dot_total, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical) result(pp)
       !> Optional output unit
@@ -129,28 +132,31 @@ contains
          & fmt_int=fmt_int, fmt_real=fmt_real, fmt_exp=fmt_exp, fmt_logical=fmt_logical)
    end function new_prettyprinter
 
-   !> Print a blank line.
-   !> @param[inout] self Pretty printer instance.
+   !> Print a blank line
+   !>
+   !> @param[inout] self Pretty printer instance
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
-      write (self%iu, '(A)') ''
+      write (self%iu, "(A)") ""
    end subroutine blank
 
-   !> Print a section title at current indentation.
-   !> @param[inout] self  Pretty printer instance.
-   !> @param[in]    title Section title text.
+   !> Print a section title at current indentation
+   !>
+   !> @param[inout] self  Pretty printer instance
+   !> @param[in]    title Section title text
    subroutine section(self, title)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
       !> Section title
       character(*), intent(in) :: title
-      write (self%iu, '(A)') repeat(' ', self%indent)//trim(title)
+      write (self%iu, "(A)") repeat(" ", self%indent)//trim(title)
    end subroutine section
 
-   !> Print a section title and increase indentation level.
-   !> @param[inout] self  Pretty printer instance.
-   !> @param[in]    title Section title text.
+   !> Print a section title and increase indentation level
+   !>
+   !> @param[inout] self  Pretty printer instance
+   !> @param[in]    title Section title text
    subroutine push(self, title)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -160,21 +166,23 @@ contains
       self%indent = self%indent + self%indent_step
    end subroutine push
 
-   !> Decrease indentation level by `indent_step`.
-   !> @param[inout] self Pretty printer instance.
+   !> Decrease indentation level by `indent_step`
+   !>
+   !> @param[inout] self Pretty printer instance
    subroutine pop(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
       self%indent = max(0, self%indent - self%indent_step)
    end subroutine pop
 
-   !> Print one key-value line with optional unit and format override.
-   !> @param[inout] self    Pretty printer instance.
-   !> @param[in]    desc    Label shown on the left side.
-   !> @param[in]    val     Value to print.
-   !> @param[in]    unit    Optional unit text after the value.
-   !> @param[in]    fmt     Optional explicit format string for `val`.
-   !> @param[in]    use_exp Optional exponential-format selector when `fmt` is absent.
+   !> Print one key-value line with optional unit and format override
+   !>
+   !> @param[inout] self    Pretty printer instance
+   !> @param[in]    desc    Label shown on the left side
+   !> @param[in]    val     Value to print
+   !> @param[in]    unit    Optional unit text after the value
+   !> @param[in]    fmt     Optional explicit format string for `val`
+   !> @param[in]    use_exp Optional exponential-format selector when `fmt` is absent
    subroutine kv(self, desc, val, unit, fmt, use_exp)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -194,7 +202,7 @@ contains
 
       call self%set_layout()  ! ensure defaults are allocated
 
-      prefix = repeat(' ', self%indent)
+      prefix = repeat(" ", self%indent)
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else if (present(use_exp)) then
@@ -208,7 +216,7 @@ contains
       end if
       vstr = value_to_string(val, eff_fmt)
 
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
 
       nlead = max(0, (self%col_value - 1) - len(left))
 
@@ -219,7 +227,7 @@ contains
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -227,30 +235,32 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
       if (present(unit)) then
-         line = left//leader//' '//vstr//' '//trim(unit)
+         line = left//leader//" "//vstr//" "//trim(unit)
       else
-         line = left//leader//' '//trim(vstr)
+         line = left//leader//" "//trim(vstr)
       end if
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kv
 
-   !> Print one key with two values on the same line.
-   !> Useful for SI/AU pairs while keeping aligned second-column output.
-   !> @param[inout] self     Pretty printer instance.
-   !> @param[in]    desc     Label shown on the left side.
-   !> @param[in]    val1     First value.
-   !> @param[in]    unit1    Optional unit for first value.
-   !> @param[in]    val2     Second value.
-   !> @param[in]    unit2    Optional unit for second value.
-   !> @param[in]    fmt1     Optional explicit format for first value.
-   !> @param[in]    fmt2     Optional explicit format for second value.
-   !> @param[in]    use_exp1 Optional exponential-format selector for first value.
-   !> @param[in]    use_exp2 Optional exponential-format selector for second value.
+   !> Print one key with two values on the same line
+   !>
+   !> - useful for SI/AU pairs while keeping aligned second-column output
+   !>
+   !> @param[inout] self     Pretty printer instance
+   !> @param[in]    desc     Label shown on the left side
+   !> @param[in]    val1     First value
+   !> @param[in]    unit1    Optional unit for first value
+   !> @param[in]    val2     Second value
+   !> @param[in]    unit2    Optional unit for second value
+   !> @param[in]    fmt1     Optional explicit format for first value
+   !> @param[in]    fmt2     Optional explicit format for second value
+   !> @param[in]    use_exp1 Optional exponential-format selector for first value
+   !> @param[in]    use_exp2 Optional exponential-format selector for second value
    subroutine kv2(self, desc, val1, unit1, val2, unit2, fmt1, fmt2, use_exp1, use_exp2)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
@@ -299,19 +309,19 @@ contains
 
       vstr1 = value_to_string(val1, eff_fmt1)
       vstr2 = value_to_string(val2, eff_fmt2)
-      u1 = ''
-      u2 = ''
+      u1 = ""
+      u2 = ""
       if (present(unit1)) u1 = trim(unit1)
       if (present(unit2)) u2 = trim(unit2)
 
-      prefix = repeat(' ', self%indent)
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      prefix = repeat(" ", self%indent)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
       nlead = max(0, (self%col_value - 1) - len(left))
 
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -319,37 +329,40 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
-      line = left//leader//' '//vstr1
-      if (len(u1) > 0) line = line//' '//u1
+      line = left//leader//" "//vstr1
+      if (len(u1) > 0) line = line//" "//u1
       nspaces = (self%col_value2 - 1) - len(line)
       if (nspaces > 0) then
-         line = line//repeat(' ', nspaces)
+         line = line//repeat(" ", nspaces)
       else
-         line = line//'  '
+         line = line//"  "
       end if
       line = line//vstr2
-      if (len(u2) > 0) line = line//' '//u2
+      if (len(u2) > 0) line = line//" "//u2
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kv2
 
-   !> Print one key with three values on the same line and one shared trailing unit.
-   !> Useful for component triples while keeping aligned multi-column output.
-   !> @param[inout] self     Pretty printer instance.
-   !> @param[in]    desc     Label shown on the left side.
-   !> @param[in]    val1     First value.
-   !> @param[in]    val2     Second value.
-   !> @param[in]    val3     Third value.
-   !> @param[in]    unit     Optional unit printed once after the third value.
-   !> @param[in]    fmt1     Optional explicit format for first value.
-   !> @param[in]    fmt2     Optional explicit format for second value.
-   !> @param[in]    fmt3     Optional explicit format for third value.
-   !> @param[in]    use_exp1 Optional exponential-format selector for first value.
-   !> @param[in]    use_exp2 Optional exponential-format selector for second value.
-   !> @param[in]    use_exp3 Optional exponential-format selector for third value.
+   !> Print one key with three values on the same line and one shared
+   !> trailing unit
+   !>
+   !> - useful for component triples while keeping aligned multi-column output
+   !>
+   !> @param[inout] self     Pretty printer instance
+   !> @param[in]    desc     Label shown on the left side
+   !> @param[in]    val1     First value
+   !> @param[in]    val2     Second value
+   !> @param[in]    val3     Third value
+   !> @param[in]    unit     Optional unit printed once after the third value
+   !> @param[in]    fmt1     Optional explicit format for first value
+   !> @param[in]    fmt2     Optional explicit format for second value
+   !> @param[in]    fmt3     Optional explicit format for third value
+   !> @param[in]    use_exp1 Optional exponential-format selector for first value
+   !> @param[in]    use_exp2 Optional exponential-format selector for second value
+   !> @param[in]    use_exp3 Optional exponential-format selector for third value
    subroutine kvvv(self, desc, val1, val2, val3, unit, fmt1, fmt2, fmt3, use_exp1, use_exp2, &
      & use_exp3)
       !> Pretty printer instance
@@ -413,17 +426,17 @@ contains
       vstr1 = value_to_string(val1, eff_fmt1)
       vstr2 = value_to_string(val2, eff_fmt2)
       vstr3 = value_to_string(val3, eff_fmt3)
-      u = ''
+      u = ""
       if (present(unit)) u = trim(unit)
 
-      prefix = repeat(' ', self%indent)
-      left = prefix//trim(desc)//repeat(' ', self%dot_gap)
+      prefix = repeat(" ", self%indent)
+      left = prefix//trim(desc)//repeat(" ", self%dot_gap)
       nlead = max(0, (self%col_value - 1) - len(left))
 
       if (self%dot_total >= 0) then
          ndots = min(max(0, self%dot_total), nlead)
          nspaces = max(0, nlead - ndots)
-         leader = repeat(' ', nspaces)//repeat('.', ndots)
+         leader = repeat(" ", nspaces)//repeat(".", ndots)
       else
          if (len(left) >= self%col_value - 1 - self%dot_right) then
             ndots = self%dot_right
@@ -431,15 +444,15 @@ contains
             ndots = (self%col_value - 1) - len(left)
             ndots = max(self%dot_right, ndots)
          end if
-         leader = repeat('.', ndots)
+         leader = repeat(".", ndots)
       end if
 
-      line = left//leader//' '//vstr1
-      line = line//repeat(' ', value_gap)//vstr2
-      line = line//repeat(' ', value_gap)//vstr3
-      if (len(u) > 0) line = line//' '//u
+      line = left//leader//" "//vstr1
+      line = line//repeat(" ", value_gap)//vstr2
+      line = line//repeat(" ", value_gap)//vstr3
+      if (len(u) > 0) line = line//" "//u
 
-      write (self%iu, '(A)') line
+      write (self%iu, "(A)") line
    end subroutine kvvv
 
    function default_fmt(self, val) result(fmt)
@@ -463,9 +476,9 @@ contains
       type is (logical)
          fmt = self%fmt_logical
       type is (character(*))
-         fmt = 'A'
+         fmt = "A"
       class default
-         fmt = 'A'
+         fmt = "A"
       end select
    end function default_fmt
 
@@ -476,8 +489,8 @@ contains
       character(256) :: buf
       character(:), allocatable :: f
 
-      f = '('//trim(fmt)//')'
-      buf = ''
+      f = "("//trim(fmt)//")"
+      buf = ""
 
       select type (val)
       type is (integer(int8))
@@ -505,7 +518,7 @@ contains
       type is (character(*))
          buf = val
       class default
-         buf = '<unsupported type>'
+         buf = "<unsupported type>"
       end select
 
       s = trim(buf)
@@ -518,15 +531,15 @@ contains
       character(:), allocatable :: f
       integer :: idot, w
 
-      f = '('//trim(fmt)//')'
+      f = "("//trim(fmt)//")"
       write (buf, f) 0.0_real64
-      idot = index(buf, '.')
+      idot = index(buf, ".")
       w = len_trim(buf)
 
       if (idot > 1 .and. w > 0) then
-         s = repeat(' ', idot - 2)//'0.0'//repeat(' ', max(0, w - (idot + 1)))
+         s = repeat(" ", idot - 2)//"0.0"//repeat(" ", max(0, w - (idot + 1)))
       else
-         s = '0.0'
+         s = "0.0"
       end if
    end function zero_value_string
 
@@ -535,9 +548,9 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf, dbuf
 
-      write (wbuf, '(I0)') max(1, width)
-      write (dbuf, '(I0)') max(0, decimals)
-      fmt = 'F'//trim(wbuf)//'.'//trim(dbuf)
+      write (wbuf, "(I0)") max(1, width)
+      write (dbuf, "(I0)") max(0, decimals)
+      fmt = "F"//trim(wbuf)//"."//trim(dbuf)
    end function fixed_fmt
 
    function exp_fmt(width, decimals) result(fmt)
@@ -545,9 +558,9 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf, dbuf
 
-      write (wbuf, '(I0)') max(1, width)
-      write (dbuf, '(I0)') max(0, decimals)
-      fmt = 'ES'//trim(wbuf)//'.'//trim(dbuf)
+      write (wbuf, "(I0)") max(1, width)
+      write (dbuf, "(I0)") max(0, decimals)
+      fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
    end function exp_fmt
 
    function int_fmt(width) result(fmt)
@@ -555,8 +568,8 @@ contains
       character(:), allocatable :: fmt
       character(32) :: wbuf
 
-      write (wbuf, '(I0)') max(1, width - 7)
-      fmt = 'I'//trim(wbuf)
+      write (wbuf, "(I0)") max(1, width - 7)
+      fmt = "I"//trim(wbuf)
    end function int_fmt
 
    function default_real_fmt(self, val) result(fmt)

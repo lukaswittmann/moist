@@ -2,7 +2,7 @@ module moist_data_mass
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error
    use mctc_io_symbols, only: to_number
-   implicit none
+   implicit none(type, external)
    private
 
    public :: get_mass
@@ -94,7 +94,7 @@ contains
       eta = 0.0_wp
 
       if (num < 1 .or. num > max_elem) then
-         write (msg, '(a,i0,a,i0,a)') &
+         write (msg, "(a,i0,a,i0,a)") &
             "Atomic number ", num, " out of range [1, ", max_elem, "]"
          call fatal_error(error, trim(msg))
          return

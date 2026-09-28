@@ -1,42 +1,43 @@
-! This file is part of moist.
-!> Becke fuzzy-cell partitioning weights for atom-centered molecular grids.
+! Part of moist
+!> Becke fuzzy-cell partitioning weights for atom-centered molecular grids
 !>
 !> A. D. Becke, "A multicenter numerical integration scheme for polyatomic
-!> molecules", J. Chem. Phys. 88, 2547 (1988).
+!> molecules", J. Chem. Phys. 88, 2547 (1988)
 !>
 !> For a point `r` and a set of atoms A_1, ..., A_n, the Becke partition
 !> assigns non-negative weights `w_A(r)` that sum to unity:
-!>    sum_A w_A(r) = 1  for all r (provided atoms are distinct).
+!>    sum_A w_A(r) = 1  for all r (provided atoms are distinct)
+!>
 !> Each atomic grid contribution is multiplied by `w_A(r)` to avoid
-!> double counting in overlapping atomic spheres. Size-dependence is
-!> handled via the covalent-radius ratio (chi) adjustment from Becke's
-!> Eq. (A4)-(A6).
+!> double counting in overlapping atomic spheres; size-dependence is
+!> handled via the covalent-radius ratio (chi) adjustment of Becke's
+!> equations (A4)-(A6)
 !>
 !> Stiffness: the three-fold iteration of the cutoff polynomial
 !>    p(mu) = 1.5*mu - 0.5*mu**3
-!> (Becke k=3) is used, matching the original recommendation.
+!> (Becke k=3) is used, matching the original recommendation
 module moist_math_grid_becke
    use mctc_env, only: wp
    use moist_data_atomicrad, only: covalent_rad
-   implicit none
+   implicit none(type, external)
    private
 
    public :: becke_weights
 
 contains
 
-   !> Compute Becke partition weights for a single sample point.
+   !> Compute Becke partition weights for a single sample point
    !>
    !> Uses the size-adjusted (covalent-radius ratio) variant of Becke's
    !> smoothed Voronoi construction with `k = 3` iterations of the
-   !> cutoff polynomial.
+   !> cutoff polynomial
    !>
-   !> @param[in]  point     Sample point in bohr, shape (3).
-   !> @param[in]  nat       Number of atoms.
-   !> @param[in]  xyz       Atom positions in bohr, shape (3, nat).
-   !> @param[in]  numbers   Atomic numbers, shape (nat).
+   !> @param[in]  point     Sample point in bohr, shape (3)
+   !> @param[in]  nat       Number of atoms
+   !> @param[in]  xyz       Atom positions in bohr, shape (3, nat)
+   !> @param[in]  numbers   Atomic numbers, shape (nat)
    !> @param[out] weights   Per-atom partition weights, shape (nat);
-   !>                       sum(weights) = 1 for distinct atoms.
+   !>                       sum(weights) = 1 for distinct atoms
    pure subroutine becke_weights(point, nat, xyz, numbers, weights)
       !> Sample point in bohr
       real(wp), intent(in)  :: point(3)
@@ -78,10 +79,10 @@ contains
       end if
    end subroutine becke_weights
 
-   !> Three-fold iterated Becke cutoff polynomial p(x) = 1.5*x - 0.5*x**3.
+   !> Three-fold iterated Becke cutoff polynomial p(x) = 1.5*x - 0.5*x**3
    !>
-   !> Hardcoded for k = 3 (Becke's recommendation). Avoids the overhead
-   !> and pitfalls of a recursive implementation.
+   !> Hardcoded for k = 3 (Becke's recommendation), avoiding the overhead
+   !> and pitfalls of a recursive implementation
    pure function becke_k3(x) result(y)
       !> Input value in [-1, 1]
       real(wp), intent(in) :: x

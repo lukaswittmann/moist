@@ -134,7 +134,7 @@ contains
 
    end subroutine test_filter_size_audit
 
-   !> The keep criterion is `wleb*f > wleb_cut`, strictly and on the product.
+   !> The keep criterion is `wleb*f > wleb_cut`, strictly and on the product
    subroutine test_filter_cutoff_boundary(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -654,7 +654,7 @@ contains
    !> Build a cavity carrying every array `compact_grid_arrays` filters
    !>
    !> All arrays except `wleb` and `f` are tagged with `tag*`, so a surviving
-   !> point can be traced back to its original grid index field by field.
+   !> point can be traced back to its original grid index field by field
    !>
    !> @param[out]   cav  Cavity to populate
    !> @param[inout] ctx  Run context the cavity borrows (silenced here)
