@@ -2065,7 +2065,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
       integer :: i, n_left, n_right
 
-      ! Spheres of radius 1 centerd at x = -2 and x = +2. The anchor sits at
+      ! Spheres of radius 1 centered at x = -2 and x = +2. The anchor sits at
       ! the origin, equidistant from both surfaces at rho = 1
       ctx%nsphere = 2
       ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]

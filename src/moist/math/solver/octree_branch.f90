@@ -446,7 +446,7 @@ contains
 
    !> Offset of a box center from the anchor
    !>
-   !> The root is centerd on the anchor, so at depth `d` with half-width `h`
+   !> The root is centered on the anchor, so at depth `d` with half-width `h`
    !> the lattice cell `lat` sits at `h*(2*lat + 1 - 2**d)` -- exact in integer
    !> arithmetic, unlike accumulating half-steps while descending the tree
    !>
