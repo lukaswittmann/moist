@@ -1,6 +1,6 @@
 ! Generated from build_info.f90.in at build time; the version control
 ! placeholder below is replaced with the short git commit hash by meson
-! (vcs_tag) or by fpm_build.sh -- DO NOT edit the generated copy
+! (vcs_tag) or by CMake (configure_file) -- DO NOT edit the generated copy
 
 !> Build-time provenance for the moist library
 module moist_build_info
