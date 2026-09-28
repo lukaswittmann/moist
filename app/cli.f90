@@ -51,11 +51,6 @@ module moist_cli
       real(wp) :: pressure_si = 101325.0_wp
       character(64) :: solvent = ""
 
-      ! RISM model selection (rism1d/rism3d subcommands)
-      character(32) :: closure = "KH"
-      character(32) :: theory = "DRISM"
-      character(32) :: solver = "gmres"
-
       logical :: json = .false.
 
       logical :: grad = .false.
@@ -118,7 +113,7 @@ subroutine get_arguments(config, error)
    type(ArgumentParser), save :: parser
    type(ArgumentParser), save :: general_parent
    type(ArgumentParser), save :: model_parser
-   type(ArgumentParser), save :: model_subparsers(4)
+   type(ArgumentParser), save :: model_subparsers(1)
    type(ArgumentParser), save :: cavity_parser
    type(ArgumentParser), save :: cavity_subparsers(5)
    type(ArgumentParser), save :: drop_parser
@@ -127,7 +122,7 @@ subroutine get_arguments(config, error)
    type(ArgumentParser), save :: mc_subparsers(2)
    type(ArgumentParser), save :: solvent_parser
    type(Namespace) :: args
-   type(subsubparser_spec) :: model_specs(4)
+   type(subsubparser_spec) :: model_specs(1)
    type(subsubparser_spec) :: cavity_specs(4)
 
    character(len=:), allocatable :: version_string
@@ -158,12 +153,6 @@ subroutine get_arguments(config, error)
 
    call model_specs(1)%init("gems", "GEMS model", "moist model gems", &
       "Run the GEMS solvation model")
-   call model_specs(3)%init("rism1d", "RISM1D model", "moist model rism1d", &
-      "Run the RISM1D solvation model")
-   call model_specs(4)%init("rism3d", "RISM3D model", "moist model rism3d", &
-      "Run the RISM3D solvation model")
-   model_specs(3)%add_specific_args => add_model_rism_arguments
-   model_specs(4)%add_specific_args => add_model_rism_arguments
 
    call cavity_specs(1)%init("numsa", "NUMSA cavity", "moist cavity numsa", &
       "Construct NUMSA cavities")
@@ -228,21 +217,6 @@ subroutine get_arguments(config, error)
 
       call args%get("model_mode", config%mode)
       call args%get("input", config%input)
-
-      if (args%has_key("closure")) then
-         call args%get("closure", config%closure)
-         config%closure = trim(adjustl(config%closure))
-      end if
-
-      if (args%has_key("theory")) then
-         call args%get("theory", config%theory)
-         config%theory = trim(adjustl(config%theory))
-      end if
-
-      if (args%has_key("solver")) then
-         call args%get("solver", config%solver)
-         config%solver = trim(adjustl(config%solver))
-      end if
 
       if (args%has_key("charge")) then
          allocate(config%charge)
@@ -523,37 +497,6 @@ contains
          help="Calculate numerical gradients", &
          group_idx=grp_advanced)
    end subroutine add_model_shared_arguments
-
-
-   !> Add RISM-only arguments (theory, closure, solver) to a model subsubparser
-   !> @param[inout] p RISM model parser (rism1d or rism3d)
-   subroutine add_model_rism_arguments(p)
-      type(ArgumentParser), intent(inout) :: p
-      integer :: grp_rism
-
-      grp_rism = p%add_argument_group("RISM settings", &
-         "RISM theory, closure relation, and iterative solver")
-
-      call p%add_argument("--closure", default_val="KH", &
-         print_choices=.true., &
-         choices=[character(len=4) :: "HNC", "KH", "PY", &
-                  "PSE1", "PSE2", "PSE3", "PSE4"], &
-         metavar="CLOSURE", &
-         help="RISM closure relation", &
-         group_idx=grp_rism)
-      call p%add_argument("--theory", default_val="DRISM", &
-         print_choices=.true., &
-         choices=[character(len=5) :: "DRISM", "XRISM"], &
-         metavar="THEORY", &
-         help="RISM theory variant", &
-         group_idx=grp_rism)
-      call p%add_argument("--solver", default_val="gmres", &
-         print_choices=.true., &
-         choices=[character(len=6) :: "picard", "mdiis", "gmres", "hybrid", "lbfgs"], &
-         metavar="SOLVER", &
-         help="RISM iterative solver", &
-         group_idx=grp_rism)
-   end subroutine add_model_rism_arguments
 
 
    !> Configure the cavity subcommand parser
