@@ -43,7 +43,7 @@ the surface independently. ``PCMParameters`` applies to both CPCM and COSMO;
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
 native. Parameter objects are immutable and keyword-only.
-Scientific constraints are checked by the native constructor.
+Constraints are checked by the native constructor.
 Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``. 
 ``cavity.radius_model`` is the radius configuration; ``cavity.radii`` remains the computed per-sphere radii after an update.
 
