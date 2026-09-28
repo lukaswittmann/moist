@@ -16,7 +16,7 @@ module moist_output_citations
    type :: citation_entry_type
       !> Broad grouping: "General", "Cavities", "Models", or "Solvers"
       character(len=:), allocatable :: category
-      !> Short identifier, e.g. "iSwiG", "GEMS", "ALPB"
+      !> Short identifier, e.g. "iSwiG", "GEMS", "SMD"
       character(len=:), allocatable :: label
       !> Author list (single line)
       character(len=:), allocatable :: authors
@@ -29,7 +29,7 @@ module moist_output_citations
    end type citation_entry_type
 
    !> Number of entries in the registry
-   integer, parameter :: num_citations = 20
+   integer, parameter :: num_citations = 19
 
    !> The global citation registry, populated in init_citations()
    type(citation_entry_type), target :: moist_citations(num_citations)
@@ -110,15 +110,6 @@ contains
 
       moist_citations(8) = citation_entry_type( &
                            category="Models", &
-                           label="ALPB", &
-                           authors="Ehlert, S., Stahn, M., Spicher, S., Grimme, S.", &
-                           title="Robust and Efficient Implicit Solvation Model for "// &
-                           "Fast Semiempirical Methods.", &
-                           journal="J. Chem. Theory Comput. 2021, 17", &
-                           doi="https://doi.org/10.1021/acs.jctc.1c00471")
-
-      moist_citations(9) = citation_entry_type( &
-                           category="Models", &
                            label="SMD", &
                            authors="Marenich, A.V., Cramer, C.J., Truhlar, D.G.", &
                            title="Universal Solvation Model Based on Solute Electron Density "// &
@@ -127,15 +118,15 @@ contains
                            journal="J. Phys. Chem. B 2009, 113, 18", &
                            doi="https://doi.org/10.1021/jp810292n")
 
-      moist_citations(10) = citation_entry_type( &
-                            category="Solvers", &
-                            label="SLSQP", &
-                            authors="Kraft, D.", &
-                            title="A software package for sequential quadratic programming.", &
-                            journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
-                            doi="")
+      moist_citations(9) = citation_entry_type( &
+                           category="Solvers", &
+                           label="SLSQP", &
+                           authors="Kraft, D.", &
+                           title="A software package for sequential quadratic programming.", &
+                           journal="Tech. Rep. DFVLR-FB 88-28, DLR German Aerospace Center, 1988", &
+                           doi="")
 
-      moist_citations(11) = citation_entry_type( &
+      moist_citations(10) = citation_entry_type( &
                             category="Solvers", &
                             label="SLSQP", &
                             authors="Kraft, D.", &
@@ -144,7 +135,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1994, 20, 262-281", &
                             doi="https://doi.org/10.1145/192115.192124")
 
-      moist_citations(12) = citation_entry_type( &
+      moist_citations(11) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Byrd, R.H., Lu, P., Nocedal, J., Zhu, C.", &
@@ -152,7 +143,7 @@ contains
                             journal="SIAM J. Sci. Comput. 1995, 16, 1190-1208", &
                             doi="https://doi.org/10.1137/0916069")
 
-      moist_citations(13) = citation_entry_type( &
+      moist_citations(12) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Zhu, C., Byrd, R.H., Lu, P., Nocedal, J.", &
@@ -161,7 +152,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1997, 23, 550-560", &
                             doi="https://doi.org/10.1145/279232.279236")
 
-      moist_citations(14) = citation_entry_type( &
+      moist_citations(13) = citation_entry_type( &
                             category="Solvers", &
                             label="L-BFGS-B", &
                             authors="Morales, J.L., Nocedal, J.", &
@@ -170,7 +161,7 @@ contains
                             journal="ACM Trans. Math. Softw. 2011, 38, 7", &
                             doi="https://doi.org/10.1145/2049662.2049669")
 
-      moist_citations(15) = citation_entry_type( &
+      moist_citations(14) = citation_entry_type( &
                             category="Solvers", &
                             label="fmin", &
                             authors="Brent, R.P.", &
@@ -178,7 +169,7 @@ contains
                             journal="Prentice-Hall, Englewood Cliffs, NJ, 1973", &
                             doi="https://maths-people.anu.edu.au/~brent/pub/pub011.html")
 
-      moist_citations(16) = citation_entry_type( &
+      moist_citations(15) = citation_entry_type( &
                             category="Solvers", &
                             label="LSQR", &
                             authors="Paige, C.C., Saunders, M.A.", &
@@ -187,7 +178,7 @@ contains
                             journal="ACM Trans. Math. Softw. 1982, 8, 43-71", &
                             doi="https://doi.org/10.1145/355984.355989")
 
-      moist_citations(17) = citation_entry_type( &
+      moist_citations(16) = citation_entry_type( &
                             category="Solvers", &
                             label="LSMR", &
                             authors="Fong, D.C.-L., Saunders, M.A.", &
@@ -196,7 +187,7 @@ contains
                             journal="SIAM J. Sci. Comput. 2011, 33, 2950-2971", &
                             doi="https://doi.org/10.1137/10079687X")
 
-      moist_citations(18) = citation_entry_type( &
+      moist_citations(17) = citation_entry_type( &
                             category="Solvers", &
                             label="LUSOL", &
                             authors="Gill, P.E., Murray, W., Saunders, M.A., Wright, M.H.", &
@@ -204,7 +195,7 @@ contains
                             journal="Linear Algebra Appl. 1987, 88-89, 239-270", &
                             doi="https://doi.org/10.1016/0024-3795(87)90112-1")
 
-      moist_citations(19) = citation_entry_type( &
+      moist_citations(18) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Spooner, J., Yanciw, B., Wiebe, B., Weinberg, N.", &
@@ -212,7 +203,7 @@ contains
                             journal="J. Phys. Chem. A 2014, 118, 765-777", &
                             doi="https://doi.org/10.1021/jp410496t")
 
-      moist_citations(20) = citation_entry_type( &
+      moist_citations(19) = citation_entry_type( &
                             category="Models", &
                             label="Pressure-volume term (PV)", &
                             authors="Zeller, F., Pracht, P., Neudecker, T.", &
