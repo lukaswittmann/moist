@@ -104,7 +104,7 @@ class CavitySnapshotDROP(CavitySnapshot):
     ``wleb``
         ``(ngrid,)`` Lebedev quadrature weights.
     ``r_iI0``
-        ``(ngrid,)`` distance from each grid point to its owner sphere centre.
+        ``(ngrid,)`` distance from each grid point to its owner sphere center.
     ``rho``
         ``(ngrid,)`` distance each point was projected from its anchor.
     ``numbering``
@@ -203,7 +203,7 @@ class DensityResponse(_ImmutableArrayValue):
     phase; the gradient phase leaves the contraction out.  On a density-backed
     cavity, run the response phase before the gradient and reuse them: against
     your own ``d rho/dP`` they complete the Fock matrix, against the
-    basis-centre ``d rho/dR`` the nuclear gradient.  Going straight to the
+    basis-center ``d rho/dR`` the nuclear gradient.  Going straight to the
     gradient phase drops that term and nothing reports it.  Hessian weights
     use ``[point,b,a]`` for native ``(a,b,point)``.  They need not be
     symmetric; preserve both Cartesian axes in contractions.

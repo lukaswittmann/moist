@@ -1116,7 +1116,7 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: points(:, :)
       type(mctc_error), allocatable :: lsf_err
-      real(wp) :: centre(ndim), probe(ndim), lsf_centre, lsf_probe, r
+      real(wp) :: center(ndim), probe(ndim), lsf_center, lsf_probe, r
       integer :: icase, ipoint, idir, ithr, n_certified
 
       ! Unscreened, and at the cavity's production screening threshold. Screening
@@ -1145,21 +1145,21 @@ contains
          call get_test_points(mol, points)
 
          do ipoint = 1, size(points, 2)
-            centre = points(:, ipoint)
+            center = points(:, ipoint)
 
-            call lsf%prepare(centre, lsf_err)
+            call lsf%prepare(center, lsf_err)
             if (allocated(lsf_err)) then
                call test_failed(error, "LSF prepare failed: "//lsf_err%message)
                return
             end if
-            call lsf%f0(lsf_centre)
+            call lsf%f0(lsf_center)
 
-            r = lsf%exclusion_radius(lsf_centre)
+            r = lsf%exclusion_radius(lsf_center)
             if (r <= 0.0_wp) cycle
             n_certified = n_certified + 1
 
             do idir = 1, ndir
-               probe = centre + probe_frac*r*dirs(:, idir)/norm2(dirs(:, idir))
+               probe = center + probe_frac*r*dirs(:, idir)/norm2(dirs(:, idir))
 
                call lsf%prepare(probe, lsf_err)
                if (allocated(lsf_err)) then
@@ -1168,7 +1168,7 @@ contains
                end if
                call lsf%f0(lsf_probe)
 
-               if (lsf_probe*lsf_centre <= 0.0_wp) then
+               if (lsf_probe*lsf_center <= 0.0_wp) then
                   call test_failed(error, "exclusion radius over-claims on "// &
                                    test_label(icase)//": S changes sign inside "// &
                                    "the ball it certifies as surface-free")

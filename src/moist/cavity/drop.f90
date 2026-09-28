@@ -1050,7 +1050,7 @@ contains
          & self%anchor_wleb0)
       call query%add_real2("anchorxyz", "Unprojected anchor coordinates, bohr (3, ngrid)", self%anchorxyz)
       call query%add_real("rho", "Anchor-to-projected-point distance, bohr (ngrid)", self%rho)
-      call query%add_real("r_iI0", "Owner sphere centre to grid point distance, bohr (ngrid)", self%r_iI0)
+      call query%add_real("r_iI0", "Owner sphere center to grid point distance, bohr (ngrid)", self%r_iI0)
       call query%add_real("phi0", "Projection objective value at the point (ngrid)", self%phi0)
       call query%add_real("lambda0", "Projection Lagrange multiplier at the point (ngrid)", self%lambda0)
       call query%add_real("cpjac_scal0", "Closest-point Jacobian scaling (ngrid)", self%cpjac_scal0)

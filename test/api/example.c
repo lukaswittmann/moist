@@ -679,7 +679,7 @@ int test_h2o_cavity(void)
     }
 
     printf("  Cavity surface area: %.4f Bohr²\n", area);
-    printf("  Cavity volume: %.4f Bohr³\n", volume);
+    printf("  Cavity volume: %.4f Bohr^3\n", volume);
 
     if (read_drop_fields(error, cav, ngrid, &nmax, normal, wleb, r_iI0, f, rho)) {
         goto cleanup;

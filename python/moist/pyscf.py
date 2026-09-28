@@ -8,7 +8,7 @@ file, top to bottom:
    raw derivatives, the density callback an isodensity cavity evaluates, and
    the contractions of MOIST's response items into Fock and nuclear-gradient
    contributions.
-2. :class:`GaussianMoments` -- the GOSTSHYP half of the host: the three-centre
+2. :class:`GaussianMoments` -- the GOSTSHYP half of the host: the three-center
    Gaussian moment integrals a ``gaussian_moments`` request asks for, and the
    contraction of the returned amplitudes.
 3. :class:`PySCFSolvation` -- the driver.  It owns the model and one coupling
@@ -136,7 +136,7 @@ def _fakemol_gaussians(coords: np.ndarray, exponents: np.ndarray, angl: int):
 
 
 def _int3c1e(mol, centers, omega, angl, intor="int3c1e_cart"):
-    """Compute three-centre one-electron integrals over a Gaussian-per-grid-point fakemol."""
+    """Compute three-center one-electron integrals over a Gaussian-per-grid-point fakemol."""
     fakemol = _fakemol_gaussians(centers, omega, angl)
     nbas = mol.nbas
     shls_slice = (0, nbas, 0, nbas, nbas, nbas + fakemol.nbas)
@@ -913,13 +913,13 @@ class PySCFSolvation:
         ``model``
             Cavity motion and every term moist owns, from the gradient phase.
         ``potential``
-            The basis-centre derivative of the potential, contracted with the
+            The basis-center derivative of the potential, contracted with the
             potential adjoint.
         ``moments``
-            The basis-centre derivative of the Gaussian moments, contracted
+            The basis-center derivative of the Gaussian moments, contracted
             with the GOSTSHYP amplitudes (present only with a moment request).
         ``density``
-            The basis-centre derivative of the level set, contracted with the
+            The basis-center derivative of the level set, contracted with the
             density weights (present only on a density-dependent cavity).
         """
         self.evaluate(dm)
@@ -933,7 +933,7 @@ class PySCFSolvation:
         # The response phase's items, not the ones get_gradient just returned.
         # Both carry the same potential adjoint and amplitudes, but only the
         # response phase emits `density`, and its weights (dE/drho at fixed
-        # nuclei) are what the basis-centre route below contracts.  evaluate()
+        # nuclei) are what the basis-center route below contracts.  evaluate()
         # above ran that phase, so self.response holds them.
         response = self.response
         coords = self.model.cavity.xyz

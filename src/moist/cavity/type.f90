@@ -169,7 +169,7 @@ contains
 
       call query%add_real("radii", "Sphere radii, bohr (nsph)", self%radii)
       call query%add_real("asph", "Surface area per sphere, bohr**2 (nsph)", self%asph)
-      call query%add_real2("sphxyz", "Sphere centre coordinates, bohr (3, nsph)", self%sphxyz)
+      call query%add_real2("sphxyz", "Sphere center coordinates, bohr (3, nsph)", self%sphxyz)
 
    end subroutine list_cavity_fields_base
 

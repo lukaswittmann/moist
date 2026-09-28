@@ -136,7 +136,7 @@ module moist_channels_response
    !> the gradient phase leaves the contraction out -- a host that does not need
    !> them would otherwise pay for it. A host on a density-backed cavity runs
    !> the response phase first and carries the weights over: against its own
-   !> `d rho/dP` they complete the Fock matrix, against the basis-centre
+   !> `d rho/dP` they complete the Fock matrix, against the basis-center
    !> `d rho/dR` the nuclear gradient
    type, extends(response_item_type) :: density_response_type
       !> Weights for the density values (ngrid)

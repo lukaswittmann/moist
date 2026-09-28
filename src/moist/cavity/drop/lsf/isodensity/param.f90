@@ -24,6 +24,8 @@ module moist_cavity_drop_lsf_isodensity_param
       real(wp) :: scale = 1.0_wp / 1.0E-3_wp
 
       !* ------------------- Surface-free exclusion certificate ---------------- *!
+      ! These parameters are only used in the octree solver; these are used in order
+      ! to get an exclusion sphere based on the point-wise level set value
 
       !> Bound on `|grad ln rho|` outside the cavity, in 1/Bohr
       real(wp) :: log_grad_out = 8.0_wp

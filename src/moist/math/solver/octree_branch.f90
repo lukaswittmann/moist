@@ -17,11 +17,11 @@
 !>
 !> Algorithm -- best-first branch and bound on a cube octree:
 !>
-!>     root = cube(centre = anchor, half = rho_max)
+!>     root = cube(center = anchor, half = rho_max)
 !>     loop:
 !>       pop the box with the smallest lower bound on ||x - anchor||
 !>       if that bound exceeds rho_max  -> DONE, the rest of the ball is proven
-!>       if |S(centre)| >= circumradius -> discard, certified surface-free
+!>       if |S(center)| >= circumradius -> discard, certified surface-free
 !>       if the box is at seed size     -> keep as a survivor
 !>       else                           -> split into 8 and push
 !>
@@ -33,11 +33,11 @@
 !>
 !> `rho_max` also tightens itself as the search runs
 !>
-!> - a probed centre `c` of the opposite sign to the anchor means the segment
+!> - a probed center `c` of the opposite sign to the anchor means the segment
 !>   from the anchor to `c` crosses the surface, so the closest branch is no
 !>   further out than that crossing
 !> - the crossing cannot lie inside `c`'s own surface-free ball either, which
-!>   puts it a further `r` short of the centre:
+!>   puts it a further `r` short of the center:
 !>
 !>     rho_min <= ||c - anchor|| - r
 !>
@@ -155,8 +155,8 @@ module moist_math_solver_octree_branch
       !> Were tallies collected?
       logical :: dbg_valid = .false.
       !> Radius-tightening events: the box number, the distance to the probed
-      !> centre that produced the new upper bound, that distance less the
-      !> centre's own surface-free radius, and the resulting cap
+      !> center that produced the new upper bound, that distance less the
+      !> center's own surface-free radius, and the resulting cap
       integer :: dbg_tighten_box(max_logged_tightenings) = 0
       real(wp) :: dbg_tighten_raw(max_logged_tightenings) = 0.0_wp
       real(wp) :: dbg_tighten_hit(max_logged_tightenings) = 0.0_wp
@@ -178,14 +178,14 @@ module moist_math_solver_octree_branch
 
       !> Binary min-heap of pending boxes, keyed on the box's lower bound for
       !> ||x - anchor||. A box is stored as its octree depth plus its integer
-      !> lattice position at that depth, from which centre and half-width
+      !> lattice position at that depth, from which center and half-width
       !> follow exactly -- no accumulated floating-point drift down the tree
       real(wp), allocatable :: heap_key(:)
       integer, allocatable :: heap_depth(:)
       integer, allocatable :: heap_lat(:, :)
       integer :: heap_size = 0
 
-      !> Surviving leaves: lattice position, centre, the box's distance lower
+      !> Surviving leaves: lattice position, center, the box's distance lower
       !> bound (used to apply the final cap) and an estimate of how far the
       !> *surface inside that box* is from the anchor (used to rank them)
       !>
@@ -194,18 +194,18 @@ module moist_math_solver_octree_branch
       !> - the lower bound is quantized, so whole rings of leaves share one
       !>   value and a smooth patch becomes a plateau on which dozens of cells
       !>   look like minima
-      !> - the centre distance is worse: survivors form a slab straddling the
-      !>   surface, and a centre sitting inside the slab is nearer the anchor
+      !> - the center distance is worse: survivors form a slab straddling the
+      !>   surface, and a center sitting inside the slab is nearer the anchor
       !>   than the surface it stands for, which drags the ranking onto the
       !>   slab's inner face and spreads the minimum around a ring
-      !> - the estimate below corrects the centre distance by the level set
-      !>   value -- the surface lies |S| away from the centre, beyond it when
-      !>   the centre is on the anchor's side of the surface and nearer
+      !> - the estimate below corrects the center distance by the level set
+      !>   value -- the surface lies |S| away from the center, beyond it when
+      !>   the center is on the anchor's side of the surface and nearer
       !>   otherwise -- exact for a signed distance field with a locally flat
       !>   surface, and it puts the minimum where the surface actually comes
       !>   closest
       integer, allocatable :: surv_lat(:, :)
-      real(wp), allocatable :: surv_centre(:, :)
+      real(wp), allocatable :: surv_center(:, :)
       real(wp), allocatable :: surv_rho(:)
       real(wp), allocatable :: surv_rho_est(:)
       integer :: n_surv = 0
@@ -350,7 +350,7 @@ contains
       integer, intent(in) :: capacity
 
       integer, allocatable :: new_lat(:, :), new_order(:)
-      real(wp), allocatable :: new_centre(:, :), new_rho(:), new_rho_est(:)
+      real(wp), allocatable :: new_center(:, :), new_rho(:), new_rho_est(:)
       integer(int64), allocatable :: new_key(:), new_key_sorted(:)
       integer :: kept
 
@@ -358,7 +358,7 @@ contains
       if (allocated(self%surv_rho)) kept = min(self%n_surv, size(self%surv_rho))
 
       allocate (new_lat(3, capacity))
-      allocate (new_centre(3, capacity))
+      allocate (new_center(3, capacity))
       allocate (new_rho(capacity))
       allocate (new_rho_est(capacity))
       allocate (new_key(capacity))
@@ -367,13 +367,13 @@ contains
 
       if (kept > 0) then
          new_lat(:, 1:kept) = self%surv_lat(:, 1:kept)
-         new_centre(:, 1:kept) = self%surv_centre(:, 1:kept)
+         new_center(:, 1:kept) = self%surv_center(:, 1:kept)
          new_rho(1:kept) = self%surv_rho(1:kept)
          new_rho_est(1:kept) = self%surv_rho_est(1:kept)
       end if
 
       call move_alloc(new_lat, self%surv_lat)
-      call move_alloc(new_centre, self%surv_centre)
+      call move_alloc(new_center, self%surv_center)
       call move_alloc(new_rho, self%surv_rho)
       call move_alloc(new_rho_est, self%surv_rho_est)
       call move_alloc(new_key, self%surv_key)
@@ -394,7 +394,7 @@ contains
       if (allocated(self%heap_depth)) deallocate (self%heap_depth)
       if (allocated(self%heap_lat)) deallocate (self%heap_lat)
       if (allocated(self%surv_lat)) deallocate (self%surv_lat)
-      if (allocated(self%surv_centre)) deallocate (self%surv_centre)
+      if (allocated(self%surv_center)) deallocate (self%surv_center)
       if (allocated(self%surv_rho)) deallocate (self%surv_rho)
       if (allocated(self%surv_rho_est)) deallocate (self%surv_rho_est)
       if (allocated(self%surv_key)) deallocate (self%surv_key)
@@ -444,16 +444,16 @@ contains
       end do
    end function required_depth
 
-   !> Offset of a box centre from the anchor
+   !> Offset of a box center from the anchor
    !>
-   !> The root is centred on the anchor, so at depth `d` with half-width `h`
+   !> The root is centerd on the anchor, so at depth `d` with half-width `h`
    !> the lattice cell `lat` sits at `h*(2*lat + 1 - 2**d)` -- exact in integer
    !> arithmetic, unlike accumulating half-steps while descending the tree
    !>
    !> @param[in] self  Search instance
    !> @param[in] depth Octree depth
    !> @param[in] lat   Lattice position at that depth
-   !> @returns   d     Centre offset from the anchor (3)
+   !> @returns   d     center offset from the anchor (3)
    pure function box_offset(self, depth, lat) result(d)
       class(moist_math_octree_branch_type), intent(in) :: self
       integer, intent(in) :: depth
@@ -617,8 +617,8 @@ contains
       class(*), intent(in) :: context
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp) :: rho_cap, rho_hit, key, half, centre(3), lsf0, excl_radius
-      real(wp) :: child_key, excl_ratio, rho_centre, rho_cross
+      real(wp) :: rho_cap, rho_hit, key, half, center(3), lsf0, excl_radius
+      real(wp) :: child_key, excl_ratio, rho_center, rho_cross
       integer :: depth, lat(3), child_lat(3), leaf_depth
       integer :: ix, iy, iz, n_pushed
       logical :: ok, crosses, trace
@@ -736,9 +736,9 @@ contains
          end if
 
          half = box_half(self, depth)
-         centre = anchor + box_offset(self, depth, lat)
+         center = anchor + box_offset(self, depth, lat)
 
-         call probe(centre, lsf0, excl_radius, context)
+         call probe(center, lsf0, excl_radius, context)
 
          if (trace) then
             excl_ratio = 0.0_wp
@@ -747,22 +747,22 @@ contains
 
          crosses = lsf0_anchor /= 0.0_wp .and. lsf0*lsf0_anchor <= 0.0_wp
          if (crosses) then
-            rho_centre = norm2(centre - anchor)
-            rho_cross = max(0.0_wp, rho_centre - excl_radius)
+            rho_center = norm2(center - anchor)
+            rho_cross = max(0.0_wp, rho_center - excl_radius)
             if (rho_cross < rho_hit) then
                rho_hit = rho_cross
                rho_cap = min(rho_cap, sqrt(rho_hit*rho_hit + rho2_slack))
                if (self%n_tightenings < max_logged_tightenings) then
                   self%n_tightenings = self%n_tightenings + 1
                   self%dbg_tighten_box(self%n_tightenings) = self%n_boxes_visited
-                  self%dbg_tighten_raw(self%n_tightenings) = rho_centre
+                  self%dbg_tighten_raw(self%n_tightenings) = rho_center
                   self%dbg_tighten_hit(self%n_tightenings) = rho_hit
                   self%dbg_tighten_cap(self%n_tightenings) = rho_cap
                end if
             end if
          end if
 
-         ! Certified surface-free: the exclusion ball around the centre
+         ! Certified surface-free: the exclusion ball around the center
          ! swallows the box, so no zero of S lies inside it
          if (excl_radius >= half*sqrt(3.0_wp)) then
             if (trace) then
@@ -786,7 +786,7 @@ contains
             end if
             self%n_surv = self%n_surv + 1
             self%surv_lat(:, self%n_surv) = lat
-            self%surv_centre(:, self%n_surv) = centre
+            self%surv_center(:, self%n_surv) = center
             self%surv_rho(self%n_surv) = key
             if (trace) then
                self%dbg_kept(depth) = self%dbg_kept(depth) + 1
@@ -801,7 +801,7 @@ contains
             ! - the two coincide for a 1-Lipschitz LSF, but an LSF that must
             !   divide by a gradient bound (or works in density units) would
             !   rank nonsense
-            self%surv_rho_est(self%n_surv) = norm2(centre - anchor)
+            self%surv_rho_est(self%n_surv) = norm2(center - anchor)
             if (lsf0*lsf0_anchor >= 0.0_wp) then
                self%surv_rho_est(self%n_surv) = self%surv_rho_est(self%n_surv) + excl_radius
             else
@@ -871,7 +871,7 @@ contains
          n_kept = n_kept + 1
          if (n_kept /= i) then
             self%surv_lat(:, n_kept) = self%surv_lat(:, i)
-            self%surv_centre(:, n_kept) = self%surv_centre(:, i)
+            self%surv_center(:, n_kept) = self%surv_center(:, i)
             self%surv_rho(n_kept) = self%surv_rho(i)
             self%surv_rho_est(n_kept) = self%surv_rho_est(i)
          end if
@@ -921,7 +921,7 @@ contains
 
       if (self%seed_mode == octree_seed_per_leaf) then
          self%n_seeds = self%n_surv
-         self%seeds(:, 1:self%n_seeds) = self%surv_centre(:, 1:self%n_surv)
+         self%seeds(:, 1:self%n_seeds) = self%surv_center(:, 1:self%n_surv)
          return
       end if
 
@@ -953,7 +953,7 @@ contains
 
          if (.not. is_minimum) cycle
          self%n_seeds = self%n_seeds + 1
-         self%seeds(:, self%n_seeds) = self%surv_centre(:, i)
+         self%seeds(:, self%n_seeds) = self%surv_center(:, i)
       end do
    end subroutine collect_seeds
 
@@ -1186,7 +1186,7 @@ contains
       if (self%n_tightenings > 0) then
          plp = new_prettylistprinter( &
                widths=[10, 14, 14, 14, 14], &
-               headers=[character(len=14) :: "event", "at box", "centre at", &
+               headers=[character(len=14) :: "event", "at box", "center at", &
                         "surface within", "new rho_max"], &
                unit=self%unit, offset=4, column_gap=1)
          call plp%print_header()
@@ -1337,7 +1337,7 @@ contains
    !> @param[in]    depth      Depth of the box just examined
    !> @param[in]    lat        Its lattice position
    !> @param[in]    leaf_depth Deepest level this run can reach
-   !> @param[in]    lsf0       Level set value at the box centre
+   !> @param[in]    lsf0       Level set value at the box center
    !> @param[in]    excl_ratio Exclusion radius over the box circumradius; the
    !>                          box is certified surface-free once this reaches 1
    !> @param[in]    rho_lo     Distance lower bound of the box

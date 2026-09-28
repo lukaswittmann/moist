@@ -383,7 +383,7 @@ contains
       end do
    end subroutine build_points
 
-   !> Deterministic atom selection: first, middle and last centre, deduplicated
+   !> Deterministic atom selection: first, middle and last center, deduplicated
    !> while keeping ascending order. Small structures simply yield fewer
    !>
    !> @param[in]  nat  Number of atoms
@@ -1003,18 +1003,18 @@ contains
    !* ================================================================================= *!
 
    !> Guard the unscreened reference: `screening_threshold = 0` must leave
-   !> every centre active. If a future change to the SSD screen invalidates
+   !> every center active. If a future change to the SSD screen invalidates
    !> that, the fixture would silently stop being an unscreened reference
    !>
    !> @param[in]  nact   Active count reported by the LSF
-   !> @param[in]  nat    Number of centres
+   !> @param[in]  nat    Number of centers
    !> @param[in]  tag    Case tag, for the message
    !> @param[in]  ip     Evaluation-point index, for the message
    !> @param[out] error  testdrive failure
    subroutine assert_unscreened(nact, nat, tag, ip, error)
       !> Active count
       integer, intent(in) :: nact
-      !> Number of centres
+      !> Number of centers
       integer, intent(in) :: nat
       !> Case tag
       character(len=*), intent(in) :: tag

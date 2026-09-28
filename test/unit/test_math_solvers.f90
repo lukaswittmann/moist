@@ -46,8 +46,8 @@ module test_math_solvers
    !> a valid surface-free radius -- the same certificate the SvdW level set
    !> supplies, without pulling the whole cavity machinery into a solver test
    type :: sphere_union_context
-      !> Sphere centres (3, nsphere)
-      real(wp) :: centre(3, 2) = 0.0_wp
+      !> Sphere centers (3, nsphere)
+      real(wp) :: center(3, 2) = 0.0_wp
       !> Sphere radii
       real(wp) :: radius(2) = 1.0_wp
       !> Number of spheres actually used
@@ -2044,7 +2044,7 @@ contains
       select type (context)
       type is (sphere_union_context)
          do i = 1, context%nsphere
-            d = norm2(x - context%centre(:, i)) - context%radius(i)
+            d = norm2(x - context%center(:, i)) - context%radius(i)
             lsf0 = min(lsf0, d)
          end do
       class default
@@ -2065,11 +2065,11 @@ contains
       real(wp) :: anchor(3), lsf0, radius
       integer :: i, n_left, n_right
 
-      ! Spheres of radius 1 centred at x = -2 and x = +2. The anchor sits at
+      ! Spheres of radius 1 centerd at x = -2 and x = +2. The anchor sits at
       ! the origin, equidistant from both surfaces at rho = 1
       ctx%nsphere = 2
-      ctx%centre(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%centre(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius = [1.0_wp, 1.0_wp]
       anchor = 0.0_wp
 
@@ -2119,7 +2119,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
 
@@ -2152,7 +2152,7 @@ contains
                  message="search failed to tighten its own admissible radius")
    end subroutine test_octree_single_sphere
 
-   !> The sign-change bound is refined by the probed centre's own surface-free
+   !> The sign-change bound is refined by the probed center's own surface-free
    !> ball, which must leave it above the truth and should land close to it
    subroutine test_octree_sign_change_bound(error)
       type(error_type), allocatable, intent(out) :: error
@@ -2166,7 +2166,7 @@ contains
       real(wp), parameter :: slack = 0.25_wp
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 1.0_wp
       anchor = [3.0_wp, 0.0_wp, 0.0_wp]
 
@@ -2180,8 +2180,8 @@ contains
 
       ! The anchor sits 2 Bohr outside the sphere, so rho_min is exactly 2 and
       ! no correct run may certify less than sqrt(2^2 + slack) = 2.0616. A run
-      ! that bounds the crossing by the probed centre alone, without taking off
-      ! that centre's surface-free radius, stops around 2.1035 instead
+      ! that bounds the crossing by the probed center alone, without taking off
+      ! that center's surface-free radius, stops around 2.1035 instead
       call octree%run(anchor=anchor, lsf0_anchor=lsf0, rho_max=5.0_wp, &
                       rho2_slack=slack, probe=sphere_union_probe, &
                       context=ctx, error=solver_error)
@@ -2219,7 +2219,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 10.0_wp
       anchor = 0.0_wp
 
@@ -2260,8 +2260,8 @@ contains
       integer :: n_cluster, n_leaf
 
       ctx%nsphere = 2
-      ctx%centre(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
-      ctx%centre(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [-2.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius = [1.0_wp, 1.0_wp]
       anchor = 0.0_wp
 
@@ -2315,7 +2315,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
 
@@ -2348,7 +2348,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
 
@@ -2383,7 +2383,7 @@ contains
       real(wp) :: anchor(3), lsf0, radius
 
       ctx%nsphere = 1
-      ctx%centre(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
+      ctx%center(:, 1) = [0.0_wp, 0.0_wp, 0.0_wp]
       ctx%radius(1) = 2.0_wp
       anchor = [1.0_wp, 0.0_wp, 0.0_wp]
 

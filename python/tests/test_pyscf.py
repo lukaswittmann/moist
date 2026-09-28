@@ -653,7 +653,7 @@ def test_the_host_is_asked_for_the_potential_once_per_evaluation(monkeypatch):
 def test_a_model_without_a_moment_request_builds_no_gaussian_integrals(monkeypatch):
     """A model that does not ask for moments never makes the host form them.
 
-    The Gaussian moments are dense three-centre AO integrals. The model's
+    The Gaussian moments are dense three-center AO integrals. The model's
     own declaration decides whether they are requested; a CPCM model never
     requests them.
     """

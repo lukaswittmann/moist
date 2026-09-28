@@ -547,7 +547,7 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  * once and does not contract them again in the gradient phase. On a cavity
  * whose surface follows the density, run the response phase before the
  * gradient and reuse those weights: contracted with d rho/dP they complete
- * the Fock matrix, and with the basis-centre derivative d rho/dR they
+ * the Fock matrix, and with the basis-center derivative d rho/dR they
  * complete the nuclear gradient. Going straight to the gradient phase there
  * drops that term silently
  *
