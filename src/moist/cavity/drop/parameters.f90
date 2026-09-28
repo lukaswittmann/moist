@@ -172,11 +172,6 @@ module moist_cavity_drop_parameters
       !> Upper bound of the weight switching region (above: fully on, derived)
       real(wp) :: wleb_prune_to = 0.0_wp
 
-      !* ----------------------------- Disconnected points ---------------------------- *!
-
-      !> Point disconnection distance threshold (times the average grid point spacing)
-      real(wp) :: disconnection_thrs = 4.0_wp
-
    contains
       !> Initialize parameters to compiled defaults
       procedure :: init_defaults => init_cavity_drop_defaults
@@ -292,8 +287,6 @@ contains
       ! wleb_cut, see compute_derived)
       self%branch_weight_s = fresh%branch_weight_s
       self%branch_weight_floor = fresh%branch_weight_floor
-      ! Disconnected points
-      self%disconnection_thrs = fresh%disconnection_thrs
       !> Reset derived values; construction and file input recompute them
       self%wleb_cut = fresh%wleb_cut
       self%screening_threshold = fresh%screening_threshold
@@ -449,8 +442,6 @@ contains
       ! Branching (branch_dphi_max is derived from the two below)
       call self%register_real_scalar("branching.softmax_scale", self%branch_weight_s)
       call self%register_real_scalar("branching.weight_floor", self%branch_weight_floor)
-      ! Disconnected points
-      call self%register_real_scalar("disconnection.threshold", self%disconnection_thrs)
 
    end subroutine register_cavity_drop_entries
 
@@ -631,10 +622,6 @@ contains
       call pp%push("Screening:")
       call pp%kv("Cell grid full-scan below", self%cell_grid_full_scan_below, "atoms")
       call pp%kv("Cell grid fraction", self%cell_grid_fraction)
-      call pp%pop()
-
-      call pp%push("Disconnected points:")
-      call pp%kv("Distance threshold", self%disconnection_thrs)
       call pp%pop()
 
    end subroutine print_parameters
