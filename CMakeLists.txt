@@ -315,7 +315,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build.
   set(moist_test_suites
-    api parameters utils utils_timer utils_context utils_mem utils_prettylistprint
+    api parameters utils_timer utils_context utils_mem utils_prettylistprint
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
