@@ -141,7 +141,14 @@ else
   lib_deps += [lapack_dep, cc.find_library('blas' + sfx64)]
 endif
 
-# JSON parameter IO (used directly by moist_model_parameters)
+tomlf_dep = dependency(
+  'toml-f',
+  version: '>=0.4.0',
+  fallback: ['toml-f', 'tomlf_dep'],
+  default_options: ['default_library=static'],
+)
+lib_deps += tomlf_dep
+
 jonquil_dep = dependency(
   'jonquil',
   version: '>=0.3.0',
