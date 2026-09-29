@@ -299,6 +299,9 @@ module moist_api
    public :: get_cavity_field_real_api
    public :: get_cavity_field_int_api
    public :: get_cavity_field_bool_api
+   ! Named fields of a model's evaluation domain
+   public :: get_model_field_count_api, get_model_field_info_api, get_model_field_about_api
+   public :: get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api
    ! Legacy DROP API (deprecated - use the generic cavity operations above)
 
    ! Type-specific getters
@@ -3795,26 +3798,8 @@ contains
 
       call query%enumerate()
       call cav%ptr%list_fields(query)
-
-      if (ifield < 0 .or. ifield >= query%nfield) then
-         call api_error(error%ptr, "get_cavity_field_info", &
-            & "Field index out of range - use the count from get_cavity_field_count")
-         return
-      end if
-
-      associate (info => query%info(ifield + 1))
-         if (len(info%name) > max_field_name_len) then
-            call api_error(error%ptr, "get_cavity_field_info", "Field name exceeds MOIST_FIELD_NAME_MAX")
-            return
-         end if
-         call f_c_character(info%name, name, len(info%name) + 1)
-         local_dtype = info%dtype
-         local_rank = info%rank
-         dims = 1_c_int
-         dims(:local_rank) = info%dims(local_rank:1:-1)
-         local_count = info%count()
-      end associate
-      if (allocated(error%ptr)) return
+      if (.not. describe_field(error, query, ifield, "get_cavity_field_info", "get_cavity_field_count", &
+         & name, dims, local_dtype, local_rank, local_count)) return
       dtype = local_dtype
       rank = local_rank
       count = local_count
@@ -3879,7 +3864,7 @@ contains
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_real", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_real", query)) return
       if (.not. check_field_payload(error, query, field_real, &
-         & "get_cavity_field_real")) return
+         & "get_cavity_field_real", "get_cavity_field_info")) return
 
       values(:size(query%rvals)) = query%rvals
 
@@ -3916,7 +3901,7 @@ contains
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_int", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_int", query)) return
       if (.not. check_field_payload(error, query, field_int, &
-         & "get_cavity_field_int")) return
+         & "get_cavity_field_int", "get_cavity_field_info")) return
 
       values(:size(query%ivals)) = query%ivals
 
@@ -3949,11 +3934,253 @@ contains
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_bool", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_bool", query)) return
       if (.not. check_field_payload(error, query, field_bool, &
-         & "get_cavity_field_bool")) return
+         & "get_cavity_field_bool", "get_cavity_field_info")) return
 
       values(:size(query%lvals)) = logical(query%lvals, c_bool)
 
    end subroutine get_cavity_field_bool_api
+
+   !* ================================================================================= *!
+   !*                                 Named model fields                                *!
+   !* ================================================================================= *!
+
+   !> Number of named fields of the model's evaluation domain
+   !>
+   !> - the domain of every family through one handle: a continuum model
+   !>   forwards its cavity's fields, a volume model lists its grid, a family
+   !>   without a domain lists none
+   !> - like the cavity entries, no update is required; an unbuilt domain
+   !>   declares only what it holds
+   subroutine get_model_field_count_api(verror, vmodel, nfield) &
+         & bind(C, name=namespace//"get_model_field_count")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Number of available fields
+      integer(c_int), intent(inout), optional :: nfield
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(nfield)) then
+         call api_error(error%ptr, "get_model_field_count", "Required pointer 'nfield' is missing")
+         return
+      end if
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_count", error, model)) return
+
+      call query%enumerate()
+      call model%list_fields(query)
+      nfield = query%nfield
+
+   end subroutine get_model_field_count_api
+
+   !> Describe one field of the model's evaluation domain by position
+   !>
+   !> Same outputs as `get_cavity_field_info`
+   subroutine get_model_field_info_api(verror, vmodel, ifield, name, &
+         & dtype, rank, dims, count) &
+         & bind(C, name=namespace//"get_model_field_info")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Zero-based field index
+      integer(c_int), value :: ifield
+      !> Field name buffer
+      character(kind=c_char), intent(inout), optional :: name(*)
+      !> Field scalar type selector
+      integer(c_int), intent(inout), optional :: dtype
+      !> Number of field dimensions
+      integer(c_int), intent(inout), optional :: rank
+      !> Field dimensions
+      integer(c_int), intent(inout), optional :: dims(field_max_rank)
+      !> Number of available entries
+      integer(c_int), intent(inout), optional :: count
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Result staged until the operation succeeds
+      integer(c_int) :: local_dtype, local_rank, local_count
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(name)) then
+         call api_error(error%ptr, "get_model_field_info", "Required pointer 'name' is missing")
+         return
+      end if
+      if (.not. present(dtype)) then
+         call api_error(error%ptr, "get_model_field_info", "Required pointer 'dtype' is missing")
+         return
+      end if
+      if (.not. present(rank)) then
+         call api_error(error%ptr, "get_model_field_info", "Required pointer 'rank' is missing")
+         return
+      end if
+      if (.not. present(dims)) then
+         call api_error(error%ptr, "get_model_field_info", "Required pointer 'dims' is missing")
+         return
+      end if
+      if (.not. present(count)) then
+         call api_error(error%ptr, "get_model_field_info", "Required pointer 'count' is missing")
+         return
+      end if
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_info", error, model)) return
+
+      call query%enumerate()
+      call model%list_fields(query)
+      if (.not. describe_field(error, query, ifield, "get_model_field_info", "get_model_field_count", &
+         & name, dims, local_dtype, local_rank, local_count)) return
+      dtype = local_dtype
+      rank = local_rank
+      count = local_count
+
+   end subroutine get_model_field_info_api
+
+   !> Copy a model field description or query its full length
+   subroutine get_model_field_about_api(verror, vmodel, cname, about, capacity, length) &
+         & bind(C, name=namespace//"get_model_field_about")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> NUL-terminated field name
+      type(c_ptr), value, intent(in) :: cname
+      !> Caller-owned description buffer
+      character(kind=c_char), intent(inout), optional :: about(*)
+      !> Description buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field metadata and payload
+      type(field_query_type) :: query
+
+      if (.not. valid_string_output(verror, about, capacity, length, "get_model_field_about", error)) return
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_about", error, model)) return
+      if (.not. fetch_model_field(error, model, cname, "get_model_field_about", query)) return
+      call copy_string_output(query%hit%about, about, capacity, length)
+   end subroutine get_model_field_about_api
+
+   !> Read a real-valued model field by name
+   !>
+   !> Receives the `count` elements `get_model_field_info` reports
+   subroutine get_model_field_real_api(verror, vmodel, cname, values) &
+         & bind(C, name=namespace//"get_model_field_real")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      real(c_double), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_model_field_real", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_real", error, model)) return
+      if (.not. fetch_model_field(error, model, cname, "get_model_field_real", query)) return
+      if (.not. check_field_payload(error, query, field_real, &
+         & "get_model_field_real", "get_model_field_info")) return
+
+      values(:size(query%rvals)) = query%rvals
+
+   end subroutine get_model_field_real_api
+
+   !> Read an integer-valued model field by name
+   !>
+   !> Indices are handed out as the owner declares them, e.g. the cavity's
+   !> 0-based `owner`
+   subroutine get_model_field_int_api(verror, vmodel, cname, values) &
+         & bind(C, name=namespace//"get_model_field_int")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      integer(c_int), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_model_field_int", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_int", error, model)) return
+      if (.not. fetch_model_field(error, model, cname, "get_model_field_int", query)) return
+      if (.not. check_field_payload(error, query, field_int, &
+         & "get_model_field_int", "get_model_field_info")) return
+
+      values(:size(query%ivals)) = query%ivals
+
+   end subroutine get_model_field_int_api
+
+   !> Read a logical-valued model field by name
+   subroutine get_model_field_bool_api(verror, vmodel, cname, values) &
+         & bind(C, name=namespace//"get_model_field_bool")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      logical(c_bool), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_model_field_bool", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_field_model(verror, vmodel, "get_model_field_bool", error, model)) return
+      if (.not. fetch_model_field(error, model, cname, "get_model_field_bool", query)) return
+      if (.not. check_field_payload(error, query, field_bool, &
+         & "get_model_field_bool", "get_model_field_info")) return
+
+      values(:size(query%lvals)) = logical(query%lvals, c_bool)
+
+   end subroutine get_model_field_bool_api
 
    !> Resolve the error and cavity handles shared by the field entry points
    !>
@@ -4011,31 +4238,17 @@ contains
       !> Query walker
       type(field_query_type), intent(inout) :: query
 
+      !> Decoded field name
       character(len=:, kind=c_char), allocatable :: name
 
       ok = .false.
-
-      if (.not. c_associated(cname)) then
-         call api_error(error%ptr, origin, "Field name is missing")
-         return
-      end if
-      call c_f_character_ptr(cname, name, max_field_name_len)
-
-      if (len(name) == 0) then
-         call api_error(error%ptr, origin, "Field name is empty")
-         return
-      end if
-
+      if (.not. decode_field_name(error, cname, origin, name)) return
       call query%fetch(name)
       call cav%ptr%list_fields(query)
-
       if (.not. query%found) then
-         call api_error(error%ptr, origin, &
-            & "Cavity has no field '"//name//"' - it is either unknown or was not computed; "// &
-            & "enumerate the available fields with get_cavity_field_count/get_cavity_field_info")
+         call report_missing_field(error, origin, "Cavity", "cavity", name)
          return
       end if
-
       ok = .true.
 
    end function fetch_cavity_field
@@ -4043,7 +4256,7 @@ contains
    !> Check that a fetched field matches the requested element type and fits
    !>
    !> @return               Whether the payload may be copied out
-   logical function check_field_payload(error, query, dtype, origin) result(ok)
+   logical function check_field_payload(error, query, dtype, origin, info_entry) result(ok)
       !> Fortran error pointer
       type(vp_error), pointer, intent(in) :: error
       !> Query walker holding the fetched payload
@@ -4052,19 +4265,177 @@ contains
       integer, intent(in) :: dtype
       !> Entry point name used in error messages
       character(len=*), intent(in) :: origin
+      !> Descriptor entry of the same family, named in the diagnostic
+      character(len=*), intent(in) :: info_entry
 
       ok = .false.
 
       if (query%hit%dtype /= dtype) then
          call api_error(error%ptr, origin, &
             & "Field '"//query%hit%name//"' has a different element type - "// &
-            & "read the type tag from get_cavity_field_info")
+            & "read the type tag from "//info_entry)
          return
       end if
 
       ok = .true.
 
    end function check_field_payload
+
+   !> Copy the descriptor of one enumerated field into the C outputs
+   !>
+   !> - `dims` in C row-major order, slowest-varying first; unused entries 1
+   !> - nothing is written for an index outside the enumeration
+   !>
+   !> @return Whether the index named a field whose descriptor was written
+   logical function describe_field(error, query, ifield, origin, count_entry, name, dims, &
+         & dtype, rank, count) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Query walker holding an enumeration
+      type(field_query_type), intent(in) :: query
+      !> Zero-based field index
+      integer(c_int), intent(in) :: ifield
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Count entry of the same family, named in the diagnostic
+      character(len=*), intent(in) :: count_entry
+      !> Field name buffer
+      character(kind=c_char), intent(inout) :: name(*)
+      !> Field dimensions
+      integer(c_int), intent(inout) :: dims(field_max_rank)
+      !> Element type tag
+      integer(c_int), intent(out) :: dtype
+      !> Array rank, 0 for a scalar
+      integer(c_int), intent(out) :: rank
+      !> Number of elements a read writes
+      integer(c_int), intent(out) :: count
+
+      ok = .false.
+      dtype = 0
+      rank = 0
+      count = 0
+      if (ifield < 0 .or. ifield >= query%nfield) then
+         call api_error(error%ptr, origin, "Field index out of range - use the count from "//count_entry)
+         return
+      end if
+      associate (info => query%info(ifield + 1))
+         if (len(info%name) > max_field_name_len) then
+            call api_error(error%ptr, origin, "Field name exceeds MOIST_FIELD_NAME_MAX")
+            return
+         end if
+         call f_c_character(info%name, name, len(info%name) + 1)
+         dtype = info%dtype
+         rank = info%rank
+         dims = 1_c_int
+         dims(:rank) = info%dims(rank:1:-1)
+         count = info%count()
+      end associate
+      ok = .not. allocated(error%ptr)
+
+   end function describe_field
+
+   !> Decode a C field name, refusing a missing or empty one
+   !>
+   !> @return Whether the name decoded to a non-empty string
+   logical function decode_field_name(error, cname, origin, name) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Decoded field name
+      character(len=:, kind=c_char), allocatable, intent(out) :: name
+
+      ok = .false.
+      if (.not. c_associated(cname)) then
+         call api_error(error%ptr, origin, "Field name is missing")
+         return
+      end if
+      call c_f_character_ptr(cname, name, max_field_name_len)
+      if (len(name) == 0) then
+         call api_error(error%ptr, origin, "Field name is empty")
+         return
+      end if
+      ok = .true.
+
+   end function decode_field_name
+
+   !> Refuse a field name the owner did not declare
+   !>
+   !> @param[in] owner  Owner for the diagnostic, e.g. "Cavity"
+   !> @param[in] family Entry family, e.g. "cavity" for get_cavity_field_count
+   subroutine report_missing_field(error, origin, owner, family, name)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Owner for the diagnostic
+      character(len=*), intent(in) :: owner
+      !> Entry family
+      character(len=*), intent(in) :: family
+      !> Requested field name
+      character(len=*), intent(in) :: name
+
+      call api_error(error%ptr, origin, &
+         & owner//" has no field '"//name//"' - it is either unknown or was not computed; "// &
+         & "enumerate the available fields with get_"//family//"_field_count/get_"//family//"_field_info")
+
+   end subroutine report_missing_field
+
+   !> Resolve the error and model handles shared by the model field entry points
+   !>
+   !> @return Whether both handles resolved to a usable model
+   logical function resolve_field_model(verror, vmodel, origin, error, model) result(ok)
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(out) :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer, intent(out) :: model
+
+      ok = .false.
+      nullify (error)
+      nullify (model)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      call api_solvation_model(vmodel, origin, model, error%ptr)
+      ok = .not. allocated(error%ptr)
+
+   end function resolve_field_model
+
+   !> Look one named field up on a model's evaluation domain
+   !>
+   !> @return Whether the field was found
+   logical function fetch_model_field(error, model, cname, origin, query) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Solvation model of any family
+      class(solvation_model_type), pointer, intent(in) :: model
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Query walker
+      type(field_query_type), intent(inout) :: query
+      !> Decoded field name
+      character(len=:, kind=c_char), allocatable :: name
+
+      ok = .false.
+      if (.not. decode_field_name(error, cname, origin, name)) return
+      call query%fetch(name)
+      call model%list_fields(query)
+      if (.not. query%found) then
+         call report_missing_field(error, origin, "Model", "model", name)
+         return
+      end if
+      ok = .true.
+
+   end function fetch_model_field
 
    !* ================================================================================= *!
    !*                       Cavity and A-matrix gradients (Tier 3)                      *!

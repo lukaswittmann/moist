@@ -7,11 +7,14 @@
 !> - a family supplies only `update`, `get_energy`, `get_response`,
 !>   `get_gradient`, `atom_count` and the one coupling hook, `declare_pass`,
 !>   that declares its own requests and snapshots the coupling extents
+!> - a family with an evaluation domain overrides `list_fields` to publish
+!>   its named arrays; the base publishes none
 module moist_model_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_channels_response, only: response_type
+   use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_registry_type, &
       & moist_phase_energy, moist_phase_response, moist_phase_gradient, &
       & coupling_arm, coupling_invalidate
@@ -41,6 +44,8 @@ module moist_model_type
       procedure(model_atom_count_i), deferred :: atom_count
       !> Declare this family's coupling requests and record the extents
       procedure(declare_model_pass), deferred :: declare_pass
+      !> Declare the named fields of the evaluation domain; none by default
+      procedure :: list_fields => model_list_fields
 
       !> Whether the latest update completed
       procedure :: is_updated => model_is_updated
@@ -195,6 +200,19 @@ contains
       logical :: updated
       updated = self%updated
    end function model_is_updated
+
+   !> Declare the named fields of the model's evaluation domain
+   !>
+   !> Default: none; a family with a cavity or a grid overrides it
+   !>
+   !> @param[in] self Model
+   !> @param[in,out] query Field walker
+   subroutine model_list_fields(self, query)
+      !> Model
+      class(solvation_model_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+   end subroutine model_list_fields
 
    !> Invalidate cached results and host answers
    !>

@@ -2987,6 +2987,16 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     REQUIRE(!moist_check_error(error));
     moist_get_cavity_field_real(error, borrowed, "xi0", xi);
     REQUIRE(!moist_check_error(error));
+    /* The model field getters hand out the same grid, for any model family */
+    {
+        int nmodel = -1, ncavity = -2;
+        moist_get_model_field_count(error, model, &nmodel);
+        REQUIRE(!moist_check_error(error));
+        moist_get_cavity_field_count(error, borrowed, &ncavity);
+        REQUIRE(!moist_check_error(error) && nmodel == ncavity);
+        moist_get_model_field_real(error, model, "xi0", w_phi);
+        REQUIRE(!moist_check_error(error) && memcmp(w_phi, xi, ngrid * sizeof(double)) == 0);
+    }
     moist_delete_cavity(&borrowed);
     gaussian_nuclear_primitives(ngrid, xyz, xi, phi, dphi, dxi);
     const struct host_outputs host = {ngrid, phi, dphi, dxi, NULL, NULL, NULL, NULL};
