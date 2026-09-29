@@ -406,8 +406,8 @@ contains
    !>
    !> The molecular potential phi comes from the coupling's potential request
    !>
-   !> Like every accessor, this starts by reporting a stale mandatory request
-   !> of the armed phase (or a failure latched by a mis-shaped `set`) by name
+   !> A missing potential fails its read by name; completeness is the model's
+   !> entry check
    !>
    !> @param[in,out] self PCM component instance
    !> @param[in] coupling Host data carrying the molecular potential trace
@@ -429,9 +429,6 @@ contains
       real(wp) :: e_pcm
       !> Timer depth on entry, restored on every early return
       integer :: d0
-
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM energy", category=cat_energy)
@@ -476,8 +473,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
       call self%get_trace_response(coupling, cavity, response, error)
 
    end subroutine pcm_component_get_response
@@ -559,9 +554,6 @@ contains
       real(wp), allocatable :: w_xi(:)
       !> Potential adjoint of this component
       real(wp), allocatable :: w_phi(:)
-
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
 
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid

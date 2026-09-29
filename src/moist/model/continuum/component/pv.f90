@@ -69,7 +69,7 @@ contains
    !> Add the linear cavity-volume energy
    !>
    !> @param[inout] self     Component instance
-   !> @param[in]    coupling Host coupling data, only checked for stale requests
+   !> @param[in]    coupling Host coupling data, unused
    !> @param[inout] cavity   Live model cavity
    !> @param[inout] energy   Energy accumulator
    !> @param[out]   error    Error handling
@@ -85,8 +85,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
       if (.not. allocated(cavity%total_volume)) then
          call fatal_error(error, "Cavity volume is unavailable")
          return
@@ -98,7 +96,7 @@ contains
    !> No direct host-trace response is produced by a volume contribution
    !>
    !> @param[inout] self      Component instance
-   !> @param[in]    coupling  Host coupling data, only checked for stale requests
+   !> @param[in]    coupling  Host coupling data, unused
    !> @param[inout] cavity    Live model cavity, unused
    !> @param[inout] response  Response accumulator, unchanged
    !> @param[out]   error     Error handling
@@ -113,8 +111,6 @@ contains
       type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-
-      call coupling%check_mandatory(coupling%phase, error)
 
    end subroutine pv_get_response
 
@@ -173,7 +169,7 @@ contains
    !> its nuclear derivative is the contraction of `v1_rA` over the grid
    !>
    !> @param[inout] self     Component instance
-   !> @param[in]    coupling Host coupling data, only checked for stale requests
+   !> @param[in]    coupling Host coupling data, unused
    !> @param[inout] cavity   Live model cavity
    !> @param[inout] response Host part of the gradient phase, unchanged
    !> @param[inout] gradient Nuclear-gradient accumulator
@@ -192,8 +188,6 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
       if (self%pressure == 0.0_wp) return
       if (any(shape(gradient) /= [3, cavity%nsph])) then
          call fatal_error(error, "Cavity-volume gradient shape mismatch")

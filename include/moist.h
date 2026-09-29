@@ -823,22 +823,10 @@ moist_delete_cavity(moist_cavity* cavity) moist_API_SUFFIX__V_1_0;
 
 /// Named result fields (Tier 2 - everything a cavity holds, by name)
 ///
-/// A cavity declares the per-point and per-sphere arrays it currently holds,
-/// each under the name it uses internally. Enumerate them with
-/// moist_get_cavity_field_count + moist_get_cavity_field_info, then read one
-/// with the accessor matching its type tag. Extending a cavity with a new
-/// result needs no new entry point here
-///
-/// A field that was not computed is NOT declared: the optional DROP properties
-/// (curvature, grid-point density, ...) appear only once the matching property
-/// request was set; asking for one that is absent is an error, not a buffer
-/// of zeros. Nothing is written to a rejected buffer
-///
-/// Names are the cavity's own: `xyz`, `a`, `owner`, `radii` and `asph` carry
-/// exactly the values moist_get_cavity_results reports, `owner` 0-based
-/// included. DROP adds the projection results -- `numbering`, `anchor_id`,
-/// `branch`, `branch_count`, `wbranch`, `wleb`, `rho`, `r_iI0`, `normal0`,
-/// `converged` and the diagnostics -- and iSwiG adds its own `numbering`
+/// Enumerate with moist_get_cavity_field_count + moist_get_cavity_field_info,
+/// then read one with the accessor matching its type tag. A field that was not
+/// computed is not listed; nothing is written to a rejected buffer. Rules and
+/// conventions: docs/reference/fields.rst
 
 /// Element type tags reported by moist_get_cavity_field_info and
 /// moist_get_model_field_info. Values are
@@ -915,13 +903,9 @@ moist_get_cavity_field_bool(moist_error error,
 
 /// Named fields of a model's evaluation domain (Tier 2)
 ///
-/// The same named, typed arrays as the cavity field getters, read through the
-/// model handle for every model family: a continuum model reports its cavity's
-/// fields, a volume model its grid (`ngrid`, `natom`, `xyz`, `w`, `xi0`,
-/// `owner`), a model without an evaluation domain none. Enumerate them with
-/// moist_get_model_field_count + moist_get_model_field_info, then read one with
-/// the accessor matching its MOIST_FIELD_* tag. Like the cavity getters they
-/// need no update; a model that was not updated declares only what it holds
+/// The cavity field getters through a model handle, for every model family: a
+/// continuum model reports its cavity's fields, a volume model its grid. No
+/// update is required. See docs/reference/fields.rst
 
 /// Number of named fields of the model's evaluation domain
 /// Read it again after moist_update_model

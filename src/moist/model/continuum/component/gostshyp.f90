@@ -121,13 +121,13 @@ contains
    !> two amplitudes, all already zeroed on the inactive grid points and already
    !> scaled by the component's linear `scale` factor
    !>
-   !> @param[in]  self     Component instance
-   !> @param[in]  cavity   Live model cavity
-   !> @param[in]  gt       Host-supplied `<G_i>` (ngrid)
-   !> @param[in]  pt       Host-supplied `<(r - r_i) G_i>` (3, ngrid)
-   !> @param[out] omega    Gaussian widths, bohr**-2 (ngrid)
-   !> @param[out] ftilde   Normal-projected Gaussian gradient trace (ngrid)
-   !> @param[out] alpha    Amplitude conjugate to `g_uv,i` (ngrid)
+   !> @param[in]  self      Component instance
+   !> @param[in]  cavity    Live model cavity
+   !> @param[in]  gt        Host-supplied `<G_i>` (ngrid)
+   !> @param[in]  pt        Host-supplied `<(r - r_i) G_i>` (3, ngrid)
+   !> @param[out] omega     Gaussian widths, bohr**-2 (ngrid)
+   !> @param[out] ftilde    Normal-projected Gaussian gradient trace (ngrid)
+   !> @param[out] alpha     Amplitude conjugate to `g_uv,i` (ngrid)
    !> @param[out] beta      Amplitude conjugate to `-f_uv,i` (ngrid)
    !> @param[out] ninactive Grid points switched off by the floor (optional)
    subroutine gostshyp_amplitudes(self, cavity, gt, pt, omega, ftilde, alpha, beta, ninactive)
@@ -350,11 +350,7 @@ contains
       !> Diagnostic line
       character(len=80) :: report
 
-      ! A switched-off component asks nothing of the host, so the mandatory
-      ! check comes after the short circuit
       if (self%pressure == 0.0_wp .or. self%scale == 0.0_wp) return
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
       call read_moments(coupling, cavity, gt, pt, error=error)
       if (allocated(error)) return
       call gostshyp_amplitudes(self, cavity, gt, pt, omega, ftilde, alpha, beta, &
@@ -420,8 +416,6 @@ contains
       allocate (item%w_normal_deriv(cavity%ngrid), source=0.0_wp)
 
       if (self%pressure /= 0.0_wp .and. self%scale /= 0.0_wp) then
-         call coupling%check_mandatory(coupling%phase, error)
-         if (allocated(error)) return
          call read_moments(coupling, cavity, gt, pt, error=error)
          if (allocated(error)) return
          call gostshyp_amplitudes(self, cavity, gt, pt, omega, ftilde, alpha, beta)
@@ -561,8 +555,6 @@ contains
          call self%get_response(coupling, cavity, response, error)
          return
       end if
-      call coupling%check_mandatory(coupling%phase, error)
-      if (allocated(error)) return
       call fatal_error(error, "GOSTSHYP has no forward-mode nuclear gradient; use the "// &
          & "reverse-mode surface path (force_forward_gradient must stay disabled)")
 
