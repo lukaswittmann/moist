@@ -1,6 +1,3 @@
-srcs += files(
-  'lebedev.f90',
-  'radial.f90',
-  'becke.f90',
-  'molecular.f90',
-)
+subdir('1d')
+subdir('s2')
+subdir('3d')
