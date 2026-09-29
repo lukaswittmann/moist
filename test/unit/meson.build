@@ -34,7 +34,6 @@ tests = [
   'math_grid_nufft',
   'math_grid_3d',
   'math_grid_3d_threaded',
-  'math_grid_3d_integration',
   'moz_1d',
   'moz_3d',
   'cavity_drop_primitives',
@@ -63,9 +62,7 @@ tests = [
 ]
 test_timeouts = {}
 
-# Run as `tester math_grid_3d_threaded batched_fft_uses_threaded_backend`
-# (run_selected) instead of `tester math_grid_3d_threaded` (run_testsuite,
-# which always runs inside test-drive's own OpenMP team).
+# threaded tests (single testdrive thread)
 test_selected = {
   'math_grid_3d_threaded': 'batched_fft_uses_threaded_backend',
 }

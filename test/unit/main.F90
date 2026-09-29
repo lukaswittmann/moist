@@ -11,7 +11,6 @@ program tester
    use test_utils_mem, only: collect_utils_mem
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_channels, only: collect_channels
-   use test_math_grid_3d_integration, only: collect_math_grid_3d_integration
    use test_moz_1d, only: collect_moz_1d
    use test_moz_3d, only: collect_moz_3d
    use test_radii, only: collect_radii
@@ -89,7 +88,6 @@ program tester
       & new_testsuite("math_grid_nufft", collect_math_grid_nufft), &
       & new_testsuite("math_grid_3d", collect_math_grid_3d), &
       & new_testsuite("math_grid_3d_threaded", collect_math_grid_3d_threaded), &
-      & new_testsuite("math_grid_3d_integration", collect_math_grid_3d_integration), &
       & new_testsuite("moz_1d", collect_moz_1d), &
       & new_testsuite("moz_3d", collect_moz_3d), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &

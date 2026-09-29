@@ -7,6 +7,10 @@ module test_api
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io_structure, only: structure_type
+   use mctc_io, only: new_mol => new
+   use moist_context, only: moist_context_type, new_context
+   use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
    use moist_api, only: vp_cavity, vp_error, vp_response, response_get_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
       & vp_model, update_structure_api, set_custom_radii_atoms_api, &
@@ -19,7 +23,9 @@ module test_api
       & compute_cavity_gradient_api, compute_anchor_gradient_api, &
       & get_anchor_gradient_api, get_cavity_gradient_api, get_amat_gradient_api, &
       & contract_amat1_q1q2_surface_weights_api, &
-      & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api
+      & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api, &
+      & get_model_field_count_api, get_model_field_info_api, get_model_field_about_api, &
+      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api
    use moist_channels_fields, only: field_query_type
    use moist_cavity_type, only: cavity_type
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot
@@ -593,6 +599,9 @@ contains
                   new_unittest("stub_cavity_guards", test_stub_cavity_guards), &
                   new_unittest("model_handle_guards", test_model_handle_guards), &
                   new_unittest("model_phase_guards", test_model_phase_guards), &
+                  new_unittest("model_fields_forward_the_cavity", test_model_fields_continuum), &
+                  new_unittest("model_fields_of_a_volume_grid", test_model_fields_volume), &
+                  new_unittest("model_fields_empty_domain_and_guards", test_model_fields_guards), &
                   new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
                   new_unittest("amat_surface_weights", test_amat_surface_weights) &
@@ -2711,6 +2720,231 @@ contains
       deallocate (err)
 
    end subroutine test_model_phase_guards
+
+   !> The model field getters forward a continuum model's cavity fields: the
+   !> same count and values as the borrowed cavity, `owner` still 0-based
+   subroutine test_model_fields_continuum(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, viswig, vmodel, vpv, vcav
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      integer(c_int) :: nmodel, ncavity, ngrid(1)
+      real(c_double), allocatable :: model_xyz(:), cavity_xyz(:)
+      integer(c_int), allocatable :: model_owner(:), cavity_owner(:)
+      character(kind=c_char), allocatable, target :: name_ngrid(:), name_xyz(:), name_owner(:), name_none(:)
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      name_ngrid = c_string("ngrid")
+      name_xyz = c_string("xyz")
+      name_owner = c_string("owner")
+      name_none = c_string("no_such_field")
+      allocate (err)
+      verror = c_loc(err)
+      vcav = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpv)
+      call update_solvation_model_api(verror, vmodel, vmol)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+         vcav = get_solvation_model_cavity_api(verror, vmodel)
+         call get_model_field_count_api(verror, vmodel, nmodel)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_count(verror, vcav, ncavity)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field count failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, nmodel > 0 .and. nmodel == ncavity, more="model and cavity field counts differ")
+         if (allocated(error)) exit checks
+
+         call get_model_field_int_api(verror, vmodel, c_loc(name_ngrid), ngrid)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "ngrid through the model failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (model_xyz(3*ngrid(1)), cavity_xyz(3*ngrid(1)), model_owner(ngrid(1)), cavity_owner(ngrid(1)))
+         call get_model_field_real_api(verror, vmodel, c_loc(name_xyz), model_xyz)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_real(verror, vcav, c_loc(name_xyz), cavity_xyz)
+         if (.not. allocated(err%ptr)) call get_model_field_int_api(verror, vmodel, c_loc(name_owner), model_owner)
+         if (.not. allocated(err%ptr)) call moist_get_cavity_field_int(verror, vcav, c_loc(name_owner), cavity_owner)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field read failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(model_xyz == cavity_xyz), more="model xyz differs from the cavity's")
+         if (allocated(error)) exit checks
+         call check(error, all(model_owner == cavity_owner) .and. minval(model_owner) == 0, &
+            & more="model owner differs from the cavity's 0-based owner")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, vmodel, c_loc(name_none), model_xyz)
+         call expect_error(error, err, "[moist_get_model_field_real] Model has no field 'no_such_field'")
+      end block checks
+
+      if (c_associated(vcav)) call moist_delete_cavity(vcav)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call moist_delete_cavity(viswig)
+      call moist_delete_structure(vmol)
+      deallocate (err)
+
+   end subroutine test_model_fields_continuum
+
+   !> The model field getters reach a volume grid through the same handle:
+   !> a 3D MOZ model lists, describes and hands out its grid
+   subroutine test_model_fields_volume(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Model handle holding a 3D MOZ model
+      type(vp_model), pointer :: holder
+      type(moist_error_type), allocatable :: model_error
+      !> Run context, outlives the model
+      type(moist_context_type), target :: ctx
+      type(moist_math_grid_3d_cartesian_type) :: template
+      type(structure_type) :: mol
+      type(c_ptr) :: verror, vmodel
+      integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(2), count
+      integer(c_size_t) :: length
+      logical :: has_w, same
+      real(c_double) :: w(8), xyz(24)
+      logical(c_bool) :: flags(8)
+      character(kind=c_char) :: name(65)
+      character(kind=c_char), allocatable, target :: name_ngrid(:), name_w(:), name_xyz(:)
+
+      call new_context(ctx, verbosity=0)
+      call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      template%nx = 2
+      template%ny = 2
+      template%nz = 2
+      template%dr = 0.5_wp
+      name_ngrid = c_string("ngrid")
+      name_w = c_string("w")
+      name_xyz = c_string("xyz")
+      allocate (err, holder)
+      verror = c_loc(err)
+      vmodel = c_loc(holder)
+      allocate (model_moz_3d_type :: holder%ptr)
+      select type (model => holder%ptr)
+      type is (model_moz_3d_type)
+         call new_moz_3d_model(model, template, ctx, model_error)
+         if (.not. allocated(model_error)) call model%update(mol, model_error)
+      end select
+
+      checks: block
+         if (allocated(model_error)) then
+            call test_failed(error, "3D MOZ setup failed: "//model_error%message)
+            exit checks
+         end if
+         call get_model_field_count_api(verror, vmodel, nfield)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field count failed: "//err%ptr%message)
+            exit checks
+         end if
+         has_w = .false.
+         do ifield = 0, nfield - 1
+            call get_model_field_info_api(verror, vmodel, ifield, name, dtype, rank, dims, count)
+            if (allocated(err%ptr)) exit
+            if (name(1) == "w" .and. name(2) == c_null_char) then
+               has_w = dtype == 1_c_int .and. rank == 1_c_int .and. count == 8_c_int
+            end if
+         end do
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field info failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, has_w, more="the grid weights are not listed as a real (8) field")
+         if (allocated(error)) exit checks
+
+         call get_model_field_about_api(verror, vmodel, c_loc(name_w), capacity=0_c_size_t, length=length)
+         if (.not. allocated(err%ptr)) call get_model_field_int_api(verror, vmodel, c_loc(name_ngrid), ngrid)
+         if (.not. allocated(err%ptr)) call get_model_field_real_api(verror, vmodel, c_loc(name_w), w)
+         if (.not. allocated(err%ptr)) call get_model_field_real_api(verror, vmodel, c_loc(name_xyz), xyz)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Field read failed: "//err%ptr%message)
+            exit checks
+         end if
+         same = .false.
+         select type (model => holder%ptr)
+         type is (model_moz_3d_type)
+            same = all(w == model%grid%w) .and. all(xyz == reshape(model%grid%xyz, [24]))
+         end select
+         call check(error, length > 0 .and. ngrid(1) == 8 .and. same, &
+            & more="the model fields differ from the grid it owns")
+         if (allocated(error)) exit checks
+
+         flags = .false._c_bool
+         call get_model_field_bool_api(verror, vmodel, c_loc(name_w), flags)
+         call expect_error(error, err, "has a different element type - read the type tag from get_model_field_info")
+         call check_untouched(error, logical(any(flags)), "bool read of a real model field")
+      end block checks
+
+      deallocate (holder%ptr)
+      deallocate (holder, err)
+
+   end subroutine test_model_fields_volume
+
+   !> A model without an evaluation domain lists no fields and refuses every
+   !> name; missing and unbuilt handles are refused by name
+   subroutine test_model_fields_guards(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      !> Model handles: one never constructed, one holding a stub
+      type(vp_model), pointer :: empty_model, stub
+      type(c_ptr) :: verror
+      integer(c_int) :: nfield
+      real(c_double) :: values(1)
+      character(kind=c_char), allocatable, target :: name_xyz(:)
+
+      name_xyz = c_string("xyz")
+      allocate (err, empty_model, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+
+      checks: block
+         nfield = -1_c_int
+         call get_model_field_count_api(verror, c_loc(stub), nfield)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Count on a model without a domain failed: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, nfield, 0_c_int, more="a model without a domain listed fields")
+         if (allocated(error)) exit checks
+
+         values = -1.0_c_double
+         call get_model_field_real_api(verror, c_loc(stub), c_loc(name_xyz), values)
+         call expect_error(error, err, "[moist_get_model_field_real] Model has no field 'xyz'")
+         call check_untouched(error, any(values /= -1.0_c_double), "field read on a model without a domain")
+         if (allocated(error)) exit checks
+
+         nfield = -1_c_int
+         call get_model_field_count_api(verror, c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_model_field_count] Model handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "count on a missing model handle")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, c_loc(empty_model), c_loc(name_xyz), values)
+         call expect_error(error, err, "[moist_get_model_field_real] Model is not initialized")
+         if (allocated(error)) exit checks
+
+         call get_model_field_real_api(verror, c_loc(stub), c_null_ptr, values)
+         call expect_error(error, err, "[moist_get_model_field_real] Field name is missing")
+      end block checks
+
+      deallocate (stub%ptr)
+      deallocate (stub, empty_model, err)
+
+   end subroutine test_model_fields_guards
 
    !> Response reads name an empty or unterminated array name and an array the
    !> current item was accumulated without, at every rank, and leave the
