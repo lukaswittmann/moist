@@ -46,10 +46,10 @@ Construction
       .. code-block:: fortran
 
          use mctc_env, only : wp
-         use moist_model_components, only : solvation_model_component_gostshyp, &
+         use moist_model_continuum_component, only : model_continuum_component_gostshyp, &
             & new_component_gostshyp
 
-         type(solvation_model_component_gostshyp) :: gostshyp
+         type(model_continuum_component_gostshyp) :: gostshyp
 
          call new_component_gostshyp(gostshyp, pressure=1.699465e-3_wp)  ! 50 GPa
 
