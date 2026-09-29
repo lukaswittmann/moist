@@ -2,33 +2,34 @@
 module moist_api
    use moist_cavity_drop_lsf_isodensity_param, only: moist_cavity_drop_lsf_isodensity_param_type
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_char, c_double, &
       & c_f_pointer, c_funptr, c_int, c_int8_t, c_int64_t, c_loc, c_null_char, &
       & c_null_ptr, c_ptr, c_size_t, c_sizeof
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
    use moist_cavity_type, only: cavity_type
-   use moist_model_type, only: solvation_model_type, solvation_model_component_type
+   use moist_model_type, only: solvation_model_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
       & gaussian_moment_request_type, current_request, answer_flat, output_name_len
    use moist_channels_response, only: response_type, response_item_type, &
       & response_name_len, potential_adjoint_response_type, density_response_type, &
       & gostshyp_amplitude_response_type, current_response_item
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
                                              assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
                                              pcm_amat_nuclear_gradient
-   use moist_model_component_pcm_electrostatics, only: &
+   use moist_model_continuum_component_pcm_electrostatics, only: &
       pcm_electrostatic_nuclear_gradient
-   use moist_model_component_gostshyp, only: solvation_model_component_gostshyp, &
+   use moist_model_continuum_component_gostshyp, only: model_continuum_component_gostshyp, &
       & new_component_gostshyp
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, &
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, &
       & new_component_cpcm
-   use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, &
+   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, &
       & new_component_cosmo
-   use moist_model_component_pv, only: solvation_model_component_pv, new_component_pv
-   use moist_model_general, only: solvation_model_general, new_model_general
+   use moist_model_continuum_component_pv, only: model_continuum_component_pv, new_component_pv
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: radius_type, new_radii, radius_type_custom
    use moist_radii_custom, only: new_custom_radii_atoms, new_custom_radii_elements
@@ -219,15 +220,16 @@ module moist_api
    end type vp_model
 
    type :: vp_component
-      !> Run context owned by this handle until the component is copied into a
-      !> model; `solvation_model_general%add_component` re-points the copy at the
-      !> model context so the copy stays valid after this handle is deleted
+      !> Run context owned by this handle until the component is copied
+      !>
+      !> `model_continuum_type%add_component` re-points the copy at the model
+      !> context so the copy stays valid after this handle is deleted
       type(moist_context_type) :: ctx
       !> Concrete component owned by this opaque handle
-      class(solvation_model_component_type), allocatable :: ptr
+      class(model_continuum_component_type), allocatable :: ptr
    end type vp_component
 
-   !> Borrowed host handle for a coupling owned by its general model
+   !> Borrowed host handle for a coupling owned by its solvation model
    !>
    !> - the model must outlive this wrapper
    !> - deletion releases its collection
@@ -235,7 +237,7 @@ module moist_api
       !> Coupling owned by the parent model
       type(coupling_type), pointer :: ptr => null()
       !> Parent model whose registry owns the collection
-      type(solvation_model_general), pointer :: owner => null()
+      class(solvation_model_type), pointer :: owner => null()
    end type vp_coupling
 
    !> Response handle (`moist_response`), filled by the `get_*` reads
@@ -267,7 +269,7 @@ module moist_api
    public :: update_solvation_model_api
    public :: get_solvation_model_cavity_api
    public :: delete_solvation_model_api
-   ! General solvation model and its components
+   ! Continuum solvation model and its components
    public :: new_cpcm_component_api, new_cosmo_component_api
    public :: new_pv_component_api, new_gostshyp_component_api
    public :: delete_solvation_component_api
@@ -1838,7 +1840,7 @@ contains
          return
       end if
 
-      call borrow_general_cavity(model%ptr, cavity_ptr, message)
+      call borrow_continuum_cavity(model%ptr, cavity_ptr, message)
       if (allocated(message)) then
          call api_error(error%ptr, "get_model_cavity", message)
          return
@@ -1851,8 +1853,8 @@ contains
 
    end function get_solvation_model_cavity_api
 
-   !> Point at the cavity a general solvation model owns, without taking it
-   subroutine borrow_general_cavity(model, cavity_ptr, message)
+   !> Point at the cavity a continuum solvation model owns, without taking it
+   subroutine borrow_continuum_cavity(model, cavity_ptr, message)
       !> Solvation model that may own a cavity; borrowed pointer stays live,
       !> feeding a read-write handle
       class(solvation_model_type), intent(inout), target :: model
@@ -1863,18 +1865,15 @@ contains
 
       cavity_ptr => null()
 
-      select type (general => model)
-      type is (solvation_model_general)
-         if (.not. allocated(general%cavity)) then
-            message = "General model cavity is not initialized"
-            return
-         end if
-         cavity_ptr => general%cavity
+      select type (continuum => model)
+      type is (model_continuum_type)
+         if (allocated(continuum%cavity)) cavity_ptr => continuum%cavity
+         if (.not. associated(cavity_ptr)) message = "Cavity model is not initialized"
       class default
          message = "This solvation model type does not expose a cavity"
       end select
 
-   end subroutine borrow_general_cavity
+   end subroutine borrow_continuum_cavity
 
    !> Allocate either PCM-family component behind the common opaque handle
    subroutine new_pcm_component_common(verror, epsilon, solver, solver_tol, solver_maxiter, &
@@ -1900,7 +1899,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete PCM-family component
-      class(solvation_model_component_type), allocatable :: item
+      class(model_continuum_component_type), allocatable :: item
       !> Constructor error
       type(error_type), allocatable :: component_error
 
@@ -1911,17 +1910,17 @@ contains
       allocate (component)
       call new_context(component%ctx, verbosity=0, debug=.false.)
       if (use_cosmo) then
-         allocate (solvation_model_component_cosmo :: item)
+         allocate (model_continuum_component_cosmo :: item)
          select type (pcm => item)
-         type is (solvation_model_component_cosmo)
+         type is (model_continuum_component_cosmo)
             call new_component_cosmo(pcm, component%ctx, epsilon=real(epsilon, wp), error=component_error, &
                                      param=moist_pcm_parameters_type(solver=int(solver), &
                                      & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)))
          end select
       else
-         allocate (solvation_model_component_cpcm :: item)
+         allocate (model_continuum_component_cpcm :: item)
          select type (pcm => item)
-         type is (solvation_model_component_cpcm)
+         type is (model_continuum_component_cpcm)
             call new_component_cpcm(pcm, component%ctx, epsilon=real(epsilon, wp), error=component_error, &
                                     param=moist_pcm_parameters_type(solver=int(solver), &
                                     & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)))
@@ -1938,7 +1937,7 @@ contains
 
    end subroutine new_pcm_component_common
 
-   !> Create a CPCM component handle for use with a general model
+   !> Create a CPCM component handle for use with a continuum model
    function new_cpcm_component_api(verror, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
@@ -1957,7 +1956,7 @@ contains
 
    end function new_cpcm_component_api
 
-   !> Create a COSMO component handle for use with a general model
+   !> Create a COSMO component handle for use with a continuum model
    function new_cosmo_component_api(verror, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
@@ -1990,7 +1989,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete pressure-volume component
-      type(solvation_model_component_pv) :: item
+      type(model_continuum_component_pv) :: item
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -2025,7 +2024,7 @@ contains
       !> Component wrapper
       type(vp_component), pointer :: component
       !> Concrete GOSTSHYP component
-      type(solvation_model_component_gostshyp) :: item
+      type(model_continuum_component_gostshyp) :: item
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -2060,7 +2059,7 @@ contains
 
    end subroutine delete_solvation_component_api
 
-   !> Create a general solvation model around an owned copy of a cavity
+   !> Create a continuum solvation model around an owned copy of a cavity
    function new_general_solvation_model_api(verror, vcavity, c_debug, c_verbose) result(vmodel)
       !> Error handle
       type(c_ptr), value :: verror
@@ -2078,8 +2077,8 @@ contains
       type(vp_cavity), pointer :: cavity
       !> Model wrapper
       type(vp_model), pointer :: model
-      !> Concrete general model
-      type(solvation_model_general) :: general
+      !> Concrete continuum model
+      type(model_continuum_type) :: continuum
       !> Constructor error
       type(error_type), allocatable :: model_error
 
@@ -2099,24 +2098,24 @@ contains
 
       allocate (model)
       call new_context(model%ctx, verbosity=int(c_verbose), debug=logical(c_debug))
-      call new_model_general(general, cavity%ptr, model%ctx, model_error)
+      call new_continuum_model(continuum, cavity%ptr, model%ctx, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "new_model", model_error%message)
          call model%ctx%delete()
          deallocate (model)
          return
       end if
-      allocate (model%ptr, source=general)
+      allocate (model%ptr, source=continuum)
       vmodel = c_loc(model)
 
    end function new_general_solvation_model_api
 
-   !> Append a component to a general model
+   !> Append a component to a continuum model
    subroutine general_model_add_component_api(verror, vmodel, vcomponent) &
          & bind(C, name=namespace//"add_model_component")
       !> Error handle
       type(c_ptr), value :: verror
-      !> General-model handle
+      !> Continuum-model handle
       type(c_ptr), value :: vmodel
       !> Component handle
       type(c_ptr), value :: vcomponent
@@ -2146,15 +2145,15 @@ contains
          return
       end if
 
-      select type (general => model%ptr)
-      type is (solvation_model_general)
-         call general%add_component(component%ptr, model_error)
+      select type (continuum => model%ptr)
+      type is (model_continuum_type)
+         call continuum%add_component(component%ptr, model_error)
          if (allocated(model_error)) then
             call api_error(error%ptr, "add_model_component", model_error%message)
          end if
       class default
          call api_error(error%ptr, "add_model_component", &
-                        "Model is not a general solvation model")
+                        "Model is not a continuum solvation model")
       end select
 
    end subroutine general_model_add_component_api
@@ -2183,38 +2182,59 @@ contains
    ! - the failure is reported immediately, and the next model read names the
    !   output as missing unless a corrected answer arrives first
 
-   !> Decode a model handle as a general solvation model
-   subroutine api_general_model(vmodel, routine, general, error)
+   !> Decode a model handle as any solvation model
+   subroutine api_solvation_model(vmodel, routine, model, error)
       !> Model handle
       type(c_ptr), intent(in) :: vmodel
       !> Calling entry point
       character(len=*), intent(in) :: routine
-      !> Pointer to the general model, null on failure
-      type(solvation_model_general), pointer, intent(out) :: general
+      !> Pointer to the solvation model, null on failure
+      class(solvation_model_type), pointer, intent(out) :: model
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       !> Decoded model wrapper
-      type(vp_model), pointer :: model
+      type(vp_model), pointer :: decoded
 
-      general => null()
+      model => null()
       if (.not. c_associated(vmodel)) then
          call api_error(error, routine, "Model handle is missing")
          return
       end if
-      call c_f_pointer(vmodel, model)
-      if (.not. allocated(model%ptr)) then
+      call c_f_pointer(vmodel, decoded)
+      if (.not. allocated(decoded%ptr)) then
          call api_error(error, routine, "Model is not initialized")
          return
       end if
-      select type (ptr => model%ptr)
-      type is (solvation_model_general)
-         general => ptr
+      model => decoded%ptr
+
+   end subroutine api_solvation_model
+
+   !> Decode a model handle as a continuum solvation model
+   subroutine api_continuum_model(vmodel, routine, continuum, error)
+      !> Model handle
+      type(c_ptr), intent(in) :: vmodel
+      !> Calling entry point
+      character(len=*), intent(in) :: routine
+      !> Pointer to the continuum model, null on failure
+      type(model_continuum_type), pointer, intent(out) :: continuum
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Decoded solvation model of any family
+      class(solvation_model_type), pointer :: model
+
+      continuum => null()
+      call api_solvation_model(vmodel, routine, model, error)
+      if (allocated(error)) return
+      select type (ptr => model)
+      type is (model_continuum_type)
+         continuum => ptr
       class default
-         call api_error(error, routine, "Model is not a general solvation model")
+         call api_error(error, routine, "Model is not a continuum solvation model")
       end select
 
-   end subroutine api_general_model
+   end subroutine api_continuum_model
 
    !> Decode a coupling handle
    subroutine api_coupling_handle(vcpl, routine, cpl, error)
@@ -2343,7 +2363,7 @@ contains
 
    end subroutine api_copy_grid_tensor
 
-   !> Create the host coupling of a general model
+   !> Create the host coupling of a solvation model
    !>
    !> - runs `new_coupling` on the model: every component declares its requests
    !>   on the updated cavity
@@ -2358,8 +2378,8 @@ contains
       type(c_ptr) :: vcpl
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> New coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Model error
@@ -2370,17 +2390,17 @@ contains
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
 
-      call api_general_model(vmodel, "new_coupling", general, error%ptr)
+      call api_solvation_model(vmodel, "new_coupling", model, error%ptr)
       if (allocated(error%ptr)) return
 
       allocate (cpl)
-      call general%new_coupling(cpl%ptr, model_error)
+      call model%new_coupling(cpl%ptr, model_error)
       if (allocated(model_error)) then
          deallocate (cpl)
          call api_error(error%ptr, "new_coupling", model_error%message)
          return
       end if
-      cpl%owner => general
+      cpl%owner => model
       vcpl = c_loc(cpl)
 
    end function new_coupling_api
@@ -2451,9 +2471,9 @@ contains
    !> @param[in]  vcpl    Coupling handle
    !> @param[in]  routine Calling entry point
    !> @param[out] error   Decoded error wrapper
-   !> @param[out] general General model
+   !> @param[out] model   Solvation model of any family
    !> @param[out] cpl     Decoded coupling wrapper
-   subroutine api_decode_staging(verror, vmodel, vcpl, routine, error, general, cpl)
+   subroutine api_decode_staging(verror, vmodel, vcpl, routine, error, model, cpl)
       !> Error handle
       type(c_ptr), intent(in) :: verror
       !> Model handle
@@ -2464,20 +2484,20 @@ contains
       character(len=*), intent(in) :: routine
       !> Decoded error wrapper
       type(vp_error), pointer, intent(out) :: error
-      !> General model, null on failure
-      type(solvation_model_general), pointer, intent(out) :: general
+      !> Solvation model of any family, null on failure
+      class(solvation_model_type), pointer, intent(out) :: model
       !> Decoded coupling wrapper, null on failure
       type(vp_coupling), pointer, intent(out) :: cpl
       !> Coupling wrapper before validation completes
       type(vp_coupling), pointer :: decoded
 
       error => null()
-      general => null()
+      model => null()
       cpl => null()
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
-      call api_general_model(vmodel, routine, general, error%ptr)
+      call api_solvation_model(vmodel, routine, model, error%ptr)
       if (allocated(error%ptr)) return
       call api_coupling_handle(vcpl, routine, decoded, error%ptr)
       if (allocated(error%ptr)) return
@@ -2492,16 +2512,16 @@ contains
       type(c_ptr), value :: verror, vmodel, vcpl
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Model error
       type(error_type), allocatable :: model_error
 
-      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_energy", error, general, cpl)
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_energy", error, model, cpl)
       if (.not. associated(cpl)) return
-      call general%prepare_energy(cpl%ptr, model_error)
+      call model%prepare_energy(cpl%ptr, model_error)
       if (allocated(model_error)) call api_error(error%ptr, "prepare_model_energy", model_error%message)
 
    end subroutine general_model_prepare_energy_api
@@ -2513,16 +2533,16 @@ contains
       type(c_ptr), value :: verror, vmodel, vcpl
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Model error
       type(error_type), allocatable :: model_error
 
-      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_response", error, general, cpl)
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_response", error, model, cpl)
       if (.not. associated(cpl)) return
-      call general%prepare_response(cpl%ptr, model_error)
+      call model%prepare_response(cpl%ptr, model_error)
       if (allocated(model_error)) call api_error(error%ptr, "prepare_model_response", model_error%message)
 
    end subroutine general_model_prepare_response_api
@@ -2534,21 +2554,21 @@ contains
       type(c_ptr), value :: verror, vmodel, vcpl
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Model error
       type(error_type), allocatable :: model_error
 
-      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_gradient", error, general, cpl)
+      call api_decode_staging(verror, vmodel, vcpl, "prepare_model_gradient", error, model, cpl)
       if (.not. associated(cpl)) return
-      call general%prepare_gradient(cpl%ptr, model_error)
+      call model%prepare_gradient(cpl%ptr, model_error)
       if (allocated(model_error)) call api_error(error%ptr, "prepare_model_gradient", model_error%message)
 
    end subroutine general_model_prepare_gradient_api
 
-   !> Solvation energy of a general model from a staged coupling
+   !> Solvation energy of a solvation model from a staged coupling
    !>
    !> A missing required output of the energy phase, including one whose answer
    !> was rejected, is reported by name and the energy accumulator is unchanged
@@ -2564,8 +2584,8 @@ contains
       real(c_double), intent(inout), optional :: energy
       !> Decoded error handle for argument validation
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Fortran accumulator, added to the caller's only once the call succeeds
@@ -2581,13 +2601,13 @@ contains
          return
       end if
 
-      call api_general_model(vmodel, "get_model_energy", general, error%ptr)
+      call api_solvation_model(vmodel, "get_model_energy", model, error%ptr)
       if (allocated(error%ptr)) return
       call api_coupling_handle(vcpl, "get_model_energy", cpl, error%ptr)
       if (allocated(error%ptr)) return
 
       local = 0.0_wp
-      call general%get_energy(cpl%ptr, local, model_error)
+      call model%get_energy(cpl%ptr, local, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "get_model_energy", model_error%message)
          return
@@ -2596,7 +2616,7 @@ contains
 
    end subroutine general_model_get_energy_api
 
-   !> Host part of the response phase of a general model from a staged coupling
+   !> Host part of the response phase of a solvation model from a staged coupling
    !>
    !> - cleared on entry, then filled with the complete host part of the
    !>   response phase: the potential adjoint, the density weights of a field-dependent
@@ -2609,8 +2629,8 @@ contains
       type(c_ptr), value :: verror, vmodel, vcpl, vresp
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Decoded response wrapper
@@ -2622,21 +2642,21 @@ contains
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
 
-      call api_general_model(vmodel, "get_model_response", general, error%ptr)
+      call api_solvation_model(vmodel, "get_model_response", model, error%ptr)
       if (allocated(error%ptr)) return
       call api_coupling_handle(vcpl, "get_model_response", cpl, error%ptr)
       if (allocated(error%ptr)) return
       call api_response_handle(vresp, "get_model_response", resp, error%ptr)
       if (allocated(error%ptr)) return
 
-      call general%get_response(cpl%ptr, resp%ptr, model_error)
+      call model%get_response(cpl%ptr, resp%ptr, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "get_model_response", model_error%message)
       end if
 
    end subroutine general_model_get_response_api
 
-   !> Nuclear gradient of a general model from a staged coupling
+   !> Nuclear gradient of a solvation model from a staged coupling
    !>
    !> The response handle is cleared on entry and returns the host part of the
    !> gradient phase (the potential adjoint and GOSTSHYP amplitudes, which the host
@@ -2654,8 +2674,8 @@ contains
       type(c_ptr), value :: c_gradient
       !> Decoded error wrapper
       type(vp_error), pointer :: error
-      !> General model
-      type(solvation_model_general), pointer :: general
+      !> Solvation model of any family
+      class(solvation_model_type), pointer :: model
       !> Decoded coupling wrapper
       type(vp_coupling), pointer :: cpl
       !> Decoded response wrapper
@@ -2673,19 +2693,19 @@ contains
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
 
-      call api_general_model(vmodel, "get_model_gradient", general, error%ptr)
+      call api_solvation_model(vmodel, "get_model_gradient", model, error%ptr)
       if (allocated(error%ptr)) return
       call api_coupling_handle(vcpl, "get_model_gradient", cpl, error%ptr)
       if (allocated(error%ptr)) return
       call api_response_handle(vresp, "get_model_gradient", resp, error%ptr)
       if (allocated(error%ptr)) return
 
-      if (.not. general%updated) then
+      if (.not. model%is_updated()) then
          call api_error(error%ptr, "get_model_gradient", &
-                        "General model must be updated first")
+                        "Solvation model must be updated first")
          return
       end if
-      nat = general%cavity%nsph
+      nat = model%atom_count()
       if (.not. c_associated(c_gradient)) then
          call api_error(error%ptr, "get_model_gradient", &
                         "Null gradient pointer provided")
@@ -2698,7 +2718,7 @@ contains
       end if
 
       allocate (local(3, nat), source=0.0_wp)
-      call general%get_gradient(cpl%ptr, resp%ptr, local, model_error)
+      call model%get_gradient(cpl%ptr, resp%ptr, local, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "get_model_gradient", model_error%message)
          return
@@ -2722,21 +2742,21 @@ contains
       !> Error wrapper
       type(vp_error), pointer :: error
       !> Model owner
-      type(solvation_model_general), pointer :: general
+      type(model_continuum_type), pointer :: continuum
       !> Native view with reversed C axes
       real(c_double), pointer :: density(:, :)
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
-      call api_general_model(vmodel, "set_model_isodensity_density", general, error%ptr)
+      call api_continuum_model(vmodel, "set_model_isodensity_density", continuum, error%ptr)
       if (allocated(error%ptr)) return
       if (ncart < 1 .or. .not. c_associated(c_density)) then
          call api_error(error%ptr, "set_model_isodensity_density", "Invalid density buffer")
          return
       end if
       call c_f_pointer(c_density, density, [int(ncart), int(ncart)])
-      call general%set_isodensity_density(real(density, wp), error%ptr)
+      call continuum%set_isodensity_density(real(density, wp), error%ptr)
       call prefix_api_error(error%ptr, "set_model_isodensity_density")
    end subroutine set_model_isodensity_density_api
 
@@ -2867,8 +2887,9 @@ contains
 
    !> Answer one output of the current request
    !>
-   !> values is row-major (ngrid, dims...) with the leading extents of the output
-   !> and the cavity's grid size; moist reads exactly that many values
+   !> values is row-major (n, dims...) with the leading extents of the output
+   !> and n the point or atom count by the output's extent kind; moist reads
+   !> exactly that many values
    subroutine coupling_answer_api(verror, vcpl, c_name, values) &
       bind(C, name=namespace//"answer_coupling_request")
       !> Error handle
