@@ -3,7 +3,9 @@ subdir('blas')
 subdir('linalg')
 subdir('solver')
 subdir('sorter')
+subdir('quadrature')
 subdir('grid')
+subdir('fft')
 
 srcs += files(
   'adjacency_list.f90',
@@ -18,4 +20,5 @@ srcs += files(
   'packed_sym.f90',
   'trigonometry.f90',
   'grid.f90',
+  'fft.f90',
 )
