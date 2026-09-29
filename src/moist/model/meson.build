@@ -5,4 +5,5 @@ srcs += files(
   'parameters.f90',
   'type.f90',
   'continuum.f90',
+  'moz.f90',
 )
