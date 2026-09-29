@@ -100,7 +100,7 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 #: xxx/xyy/xzz, y picks xxy/yyy/yzz and z picks xxz/yyz/zzz.
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``.
+#: Mirrors ``overlap_floor`` in ``src/moist/model/continuum/component/gostshyp.f90``.
 #: Only :class:`GaussianMoments` diagnostics read this copy; the energy, Fock
 #: and gradient paths do not.
 _OVERLAP_FLOOR = 1.0e-9

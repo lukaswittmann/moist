@@ -113,7 +113,7 @@ PARAM_ABS_THR = PARAM_REL_THR / 10.0
 QUAD_ATOL = 1e-10
 QUAD_RTOL = 1e-9
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``
+#: Mirrors ``overlap_floor`` in ``src/moist/model/continuum/component/gostshyp.f90``
 OVERLAP_FLOOR = 1.0e-9
 #: A negative control must miss by at least this many tolerances
 VACUITY_FACTOR = 100.0

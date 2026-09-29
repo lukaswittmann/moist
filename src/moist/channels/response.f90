@@ -25,7 +25,7 @@ module moist_channels_response
 
    public :: response_item_type, response_type
    public :: potential_adjoint_response_type, density_response_type
-   public :: gostshyp_amplitude_response_type
+   public :: gostshyp_amplitude_response_type, atomic_multipole_adjoint_response_type
    public :: current_response_item, response_accumulate, response_clear
    public :: response_name_len
 
@@ -173,6 +173,29 @@ module moist_channels_response
       procedure, private :: add => gostshyp_amplitude_add
       procedure, private :: clear => gostshyp_amplitude_clear
    end type gostshyp_amplitude_response_type
+
+   !> Weights conjugate to the solute's per-atom multipoles, `dE/dq_A`,...
+   !>
+   !> Counterpart of the `atomic_multipoles` request; host contracts them
+   !> with its own derivatives of the charge model, `d q_A/dP` for the Fock
+   !> matrix and `d q_A/dR` at fixed density for the nuclear gradient
+   !>
+   !> Every array runs over the solute atoms; an array of a multipole
+   !> order the model never consumed is absent
+   type, extends(response_item_type) :: atomic_multipole_adjoint_response_type
+      !> Weights for the atomic charges (natom)
+      real(wp), allocatable :: dg_dq(:)
+      !> Weights for the atomic dipoles (3, natom)
+      real(wp), allocatable :: dg_dmu(:, :)
+      !> Weights for the atomic quadrupoles (3, 3, natom)
+      real(wp), allocatable :: dg_dtheta(:, :, :)
+      !> Weights for the site Gaussian widths (natom)
+      real(wp), allocatable :: dg_dwidth(:)
+   contains
+      procedure :: name => atomic_multipole_adjoint_name
+      procedure, private :: add => atomic_multipole_adjoint_add
+      procedure, private :: clear => atomic_multipole_adjoint_clear
+   end type atomic_multipole_adjoint_response_type
 
    !> Placeholder `response%item()` returns outside a `next()` window; no arrays
    type, extends(response_item_type) :: no_response_item_type
@@ -473,6 +496,60 @@ contains
       if (allocated(self%w_normal_deriv)) deallocate (self%w_normal_deriv)
 
    end subroutine gostshyp_amplitude_clear
+
+   !* ============================================================================== *!
+   !*                         Atomic multipole adjoint item                          *!
+   !* ============================================================================== *!
+
+
+   !> Name of the atomic multipole adjoint item
+   function atomic_multipole_adjoint_name(self) result(name)
+      !> Item
+      class(atomic_multipole_adjoint_response_type), intent(in) :: self
+      !> Name
+      character(len=response_name_len) :: name
+
+      name = "atomic_multipole_adjoint"
+
+   end function atomic_multipole_adjoint_name
+
+   !> Add another atomic multipole adjoint item into this one
+   subroutine atomic_multipole_adjoint_add(self, other, error)
+      !> Accumulator
+      class(atomic_multipole_adjoint_response_type), intent(inout) :: self
+      !> Item to add
+      class(response_item_type), intent(in) :: other
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (other)
+      type is (atomic_multipole_adjoint_response_type)
+         call accumulate_vector(self%dg_dq, other%dg_dq, "atomic_multipole_adjoint", "dg_dq", error)
+         if (allocated(error)) return
+         call accumulate_matrix(self%dg_dmu, other%dg_dmu, "atomic_multipole_adjoint", "dg_dmu", error)
+         if (allocated(error)) return
+         call accumulate_tensor3(self%dg_dtheta, other%dg_dtheta, "atomic_multipole_adjoint", &
+            & "dg_dtheta", error)
+         if (allocated(error)) return
+         call accumulate_vector(self%dg_dwidth, other%dg_dwidth, "atomic_multipole_adjoint", &
+            & "dg_dwidth", error)
+      class default
+         call type_mismatch("atomic_multipole_adjoint", error)
+      end select
+
+   end subroutine atomic_multipole_adjoint_add
+
+   !> Deallocate the multipole weights
+   subroutine atomic_multipole_adjoint_clear(self)
+      !> Item
+      class(atomic_multipole_adjoint_response_type), intent(inout) :: self
+
+      if (allocated(self%dg_dq)) deallocate (self%dg_dq)
+      if (allocated(self%dg_dmu)) deallocate (self%dg_dmu)
+      if (allocated(self%dg_dtheta)) deallocate (self%dg_dtheta)
+      if (allocated(self%dg_dwidth)) deallocate (self%dg_dwidth)
+
+   end subroutine atomic_multipole_adjoint_clear
 
    !* ============================================================================== *!
    !*                              Placeholder item                                  *!
