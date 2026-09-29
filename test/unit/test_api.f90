@@ -25,12 +25,16 @@ module test_api
       & contract_amat1_q1q2_surface_weights_api, &
       & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api, &
       & get_model_field_count_api, get_model_field_info_api, get_model_field_about_api, &
-      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api
+      & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api, &
+      & vp_coupling, coupling_answer_api
    use moist_channels_fields, only: field_query_type
    use moist_cavity_type, only: cavity_type
-   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot
+   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot, &
+      & coupling_register, coupling_arm, request_require, moist_phase_energy, &
+      & atomic_charge_request_type, radial_potential_request_type
    use moist_channels_response, only: density_response_type, &
-      & potential_adjoint_response_type, response_accumulate, response_type
+      & potential_adjoint_response_type, response_accumulate, response_type, &
+      & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
    use moist_model_type, only: solvation_model_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
@@ -603,6 +607,7 @@ contains
                   new_unittest("model_fields_of_a_volume_grid", test_model_fields_volume), &
                   new_unittest("model_fields_empty_domain_and_guards", test_model_fields_guards), &
                   new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
+                  new_unittest("site_resolved_outputs_refused", test_site_resolved_refused), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
                   new_unittest("amat_surface_weights", test_amat_surface_weights) &
                   ]
@@ -3004,6 +3009,89 @@ contains
       end block checks
 
    end subroutine test_response_unavailable_arrays
+
+   !> The C layer refuses by name what it has no layout for yet: an answer to
+   !> the (ngrid, natom) phi of `radial_potential` and the arrays of the charge
+   !> and radial potential adjoint items; a per-atom charge answer still passes
+   subroutine test_site_resolved_refused(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_coupling), target :: cpl
+      type(vp_response), target :: response
+      !> Coupling the wrapper borrows
+      type(coupling_type), target :: coupling
+      type(radial_potential_request_type) :: radial
+      type(atomic_charge_request_type) :: charges
+      type(atomic_charge_adjoint_response_type) :: charge_adjoint
+      type(radial_potential_adjoint_response_type) :: radial_adjoint
+      !> Answer and output buffers, seeded so any write is visible
+      real(c_double), target :: values(6)
+      !> NUL-terminated output and array names
+      character(kind=c_char), allocatable, target :: phi(:), q(:), dg_dq(:), dg_dphi(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      call request_require(radial, moist_phase_energy, "phi", err%ptr)
+      if (.not. allocated(err%ptr)) call request_require(charges, moist_phase_energy, "q", err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_begin_registration(coupling)
+         call coupling_register(coupling, "radial", radial, err%ptr)
+      end if
+      if (.not. allocated(err%ptr)) call coupling_register(coupling, "charges", charges, err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_snapshot(coupling, ngrid=3, natom=2)
+         call coupling_arm(coupling, moist_phase_energy, err%ptr)
+      end if
+      charge_adjoint%dg_dq = [1.0_c_double, 2.0_c_double]
+      radial_adjoint%dg_dphi = reshape([1.0_c_double, 2.0_c_double, 3.0_c_double, &
+         & 4.0_c_double, 5.0_c_double, 6.0_c_double], [3, 2])
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, charge_adjoint, err%ptr)
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, radial_adjoint, err%ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      cpl%ptr => coupling
+      phi = c_string("phi")
+      q = c_string("q")
+      dg_dq = c_string("dg_dq")
+      dg_dphi = c_string("dg_dphi")
+      values = 1.0_c_double
+
+      checks: block
+         call check(error, coupling%next(), more="radial_potential is not pending")
+         if (allocated(error)) exit checks
+         call coupling_answer_api(c_loc(err), c_loc(cpl), c_loc(phi), values)
+         call expect_error(error, err, &
+            & "[moist_answer_coupling_request] radial_potential: phi runs over (ngrid, natom)")
+         if (allocated(error)) exit checks
+         associate (item => coupling%request())
+            call check(error, item%is_missing("phi"), more="the refused radial answer was stored")
+         end associate
+         if (allocated(error)) exit checks
+         call check(error, coupling%next(), more="atomic_charges is not pending")
+         if (allocated(error)) exit checks
+         call coupling_answer_api(c_loc(err), c_loc(cpl), c_loc(q), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Per-atom answer refused: "//err%ptr%message)
+            exit checks
+         end if
+
+         values = sentinel
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(dg_dq), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] atomic_charge_adjoint has no array 'dg_dq'")
+         if (allocated(error)) exit checks
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call response_get_api(c_loc(err), c_loc(response), c_loc(dg_dphi), c_loc(values))
+         call expect_error(error, err, "[moist_get_response_array] radial_potential_adjoint has no array 'dg_dphi'")
+         if (allocated(error)) exit checks
+         call check_untouched(error, any(values /= sentinel), "response array buffer")
+      end block checks
+
+   end subroutine test_site_resolved_refused
 
    !> Gradient readers refuse capacities one short of the built cavity before
    !> writing a single element

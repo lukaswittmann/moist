@@ -12,7 +12,8 @@ module moist_api
    use moist_model_type, only: solvation_model_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
-      & gaussian_moment_request_type, current_request, answer_flat, output_name_len
+      & gaussian_moment_request_type, current_request, answer_flat, output_name_len, &
+      & coupling_extent_grid_atom
    use moist_channels_response, only: response_type, response_item_type, &
       & response_name_len, potential_adjoint_response_type, density_response_type, &
       & gostshyp_amplitude_response_type, current_response_item
@@ -2890,9 +2891,11 @@ contains
 
    !> Answer one output of the current request
    !>
-   !> values is row-major (n, dims...) with the leading extents of the output
-   !> and n the point or atom count by the output's extent kind; moist reads
-   !> exactly that many values
+   !> - values is row-major (n, dims...) with the leading extents of the output
+   !>   and n the point or atom count by the output's extent kind; moist reads
+   !>   exactly that many values
+   !> - an output over (ngrid, natom), such as `radial_potential` phi, is
+   !>   refused by name: its layout is not part of the C protocol yet
    subroutine coupling_answer_api(verror, vcpl, c_name, values) &
       bind(C, name=namespace//"answer_coupling_request")
       !> Error handle
@@ -2910,6 +2913,8 @@ contains
       type(vp_coupling), pointer :: cpl
       !> Decoded output name
       character(len=:, kind=c_char), allocatable :: name
+      !> Copy of the current request
+      class(coupling_request_type), allocatable :: item
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
       if (allocated(error%ptr)) deallocate (error%ptr)
@@ -2919,6 +2924,15 @@ contains
       if (allocated(error%ptr)) return
       if (.not. present(values)) then
          call api_error(error%ptr, "answer_coupling_request", "Null array pointer provided for '"//name//"'")
+         return
+      end if
+      call current_request(cpl%ptr, item, error%ptr)
+      call prefix_api_error(error%ptr, "answer_coupling_request")
+      if (allocated(error%ptr)) return
+      ! TODO: C layout of (ngrid, natom) outputs; refused until the C protocol names it
+      if (item%output_extent(name) == coupling_extent_grid_atom) then
+         call api_error(error%ptr, "answer_coupling_request", trim(item%name())//": "//name// &
+            & " runs over (ngrid, natom), which the C API does not answer yet")
          return
       end if
       call answer_flat(cpl%ptr, name, values, error%ptr)

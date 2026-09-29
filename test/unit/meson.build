@@ -4,8 +4,8 @@
 #
 #   tests             suite ids, passed to the tester as its argument
 #   test_timeouts     suite id -> timeout, for suites needing more than the default
-#   test_selected     suite id -> test name, for a suite that must be invoked as
-#                      `tester <suite> <test>` (test-drive's run_selected, no
+#   test_selected     suite id -> test names, for a suite whose tests must each be
+#                      invoked as `tester <suite> <test>` (test-drive's run_selected, no
 #                      enclosing OpenMP team) rather than `tester <suite>`
 #                      (run_testsuite, whose tests run inside test-drive's own
 #                      `!$omp parallel do`; see CONTRIBUTING.md:47)
@@ -49,6 +49,7 @@ tests = [
   'cavity_iswig',
   'cavity_numsa',
   'cavity_marchingcubes',
+  'cavity_surface_adjoint',
   'model_component_pcm_amat',
   'model_component_pcm_amat_kernel',
   'model_component_pcm_amat_assembly',
@@ -64,7 +65,10 @@ test_timeouts = {}
 
 # threaded tests (single testdrive thread)
 test_selected = {
-  'math_grid_3d_threaded': 'batched_fft_uses_threaded_backend',
+  'math_grid_3d_threaded': [
+    'batched_fft_uses_threaded_backend',
+    'batched_ifft_uses_threaded_backend',
+  ],
 }
 
 # Driver plus the shared fixture modules, which register no suite of their own.
@@ -86,13 +90,21 @@ tester = executable(
 )
 
 foreach t : tests
-  test_args = test_selected.has_key(t) ? [t, test_selected[t]] : [t]
-  test(
-    t,
-    tester,
-    args: test_args,
-    env: test_env,
-    is_parallel : true,
-    timeout: test_timeouts.get(t, 360),
-  )
+  runs = {t: [t]}
+  if test_selected.has_key(t)
+    runs = {}
+    foreach sel : test_selected[t]
+      runs += {t + '_' + sel: [t, sel]}
+    endforeach
+  endif
+  foreach name, test_args : runs
+    test(
+      name,
+      tester,
+      args: test_args,
+      env: test_env,
+      is_parallel : true,
+      timeout: test_timeouts.get(t, 360),
+    )
+  endforeach
 endforeach

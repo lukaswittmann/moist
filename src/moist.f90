@@ -25,10 +25,11 @@ module moist
       model_continuum_component_gostshyp, new_component_gostshyp, solver_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
       point_potential_request_type, gaussian_potential_request_type, gaussian_moment_request_type, &
-      atomic_multipole_request_type
+      atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, gostshyp_amplitude_response_type, &
-      & atomic_multipole_adjoint_response_type
+      & atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type, &
+      & radial_potential_adjoint_response_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type
    implicit none(type, external)
@@ -58,10 +59,11 @@ module moist
    public :: model_continuum_component_gostshyp, new_component_gostshyp, solver_type
    public :: coupling_type, coupling_request_type
    public :: point_potential_request_type, gaussian_potential_request_type, gaussian_moment_request_type
-   public :: atomic_multipole_request_type
+   public :: atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type
    public :: response_type, response_item_type
    public :: potential_adjoint_response_type, density_response_type, gostshyp_amplitude_response_type
-   public :: atomic_multipole_adjoint_response_type
+   public :: atomic_multipole_adjoint_response_type, atomic_charge_adjoint_response_type
+   public :: radial_potential_adjoint_response_type
    public :: moist_math_grid_3d_cartesian_type
    public :: moist_math_grid_3d_molecular_type
 

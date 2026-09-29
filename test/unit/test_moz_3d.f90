@@ -9,7 +9,7 @@ module test_moz_3d
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_grid_3d
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type
    use moist_channels_fields, only: field_query_type
-   use moist_channels_coupling, only: coupling_type
+   use moist_channels_coupling, only: coupling_type, coupling_request_type
    use moist_channels_response, only: response_type
    implicit none(type, external)
    private
@@ -22,15 +22,19 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("contract", check_moz_3d), &
-         & new_unittest("owned_grid", test_grid_model)]
+         & new_unittest("owned_grid", test_grid_model), &
+         & new_unittest("ec_requests_by_grid", check_ec_requests), &
+         & new_unittest("qat_and_multipoles_requests", check_charge_sources), &
+         & new_unittest("unknown_coupling_mode", check_unknown_mode)]
    end subroutine collect_moz_3d
 
    !> Drive a 3D MOZ model through the coupling protocol
    !>
    !> The model owns a copy of the configured grid, drives the
-   !> gaussian_potential request through the usual coupling protocol, then
-   !> reports pending theory once the mandatory output is answered; a
-   !> wrong-shape answer is rejected first
+   !> gaussian_potential and atomic_charges requests of the default "ec"
+   !> source through the usual coupling protocol, then reports pending theory
+   !> once the mandatory outputs are answered; a wrong-shape answer is
+   !> rejected first
    !>
    !> @param[out] error Test error
    subroutine check_moz_3d(error)
@@ -98,7 +102,14 @@ contains
          call test_failed(error, err%message)
          return
       end if
-      call check(error, .not. coupling%next(), more="gaussian_potential is the only request")
+      call check(error, coupling%next(), more="the tail charges must be pending")
+      if (allocated(error)) return
+      call coupling%answer("q", [0.0_wp], err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, .not. coupling%next(), more="gaussian_potential and atomic_charges are the only requests")
       if (allocated(error)) return
 
       energy = 9.0_wp
@@ -196,6 +207,206 @@ contains
          deallocate (domain)
       end do
    end subroutine test_grid_model
+
+   !> "ec", the 3D default, declares the grid potential next to the tail
+   !> charges; the grid picks the potential and whether its gradient needs
+   !> `dphi_dxi`
+   !>
+   !> - Cartesian: Gaussian widths fixed by the spacing, no `dphi_dxi`
+   !> - molecular with widths: they follow the weights, so `dphi_dxi` too
+   !> - molecular without widths: a bare point potential
+   !>
+   !> @param[out] error Test error
+   subroutine check_ec_requests(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(moist_math_grid_3d_molecular_type) :: molecular
+      !> Expected walks of the energy, response and gradient phases
+      character(len=96) :: walks(3)
+      integer :: kind
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      molecular%nrad = 8
+      molecular%lebedev_degree = 5
+      molecular%rmax = 5.0_wp
+      do kind = 1, 3
+         select case (kind)
+         case (1)
+            call new_updated_model(ctx, cart, model, err)
+            walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
+            walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi);atomic_charges(q*);"
+         case (2)
+            molecular%gaussian = .true.
+            call molecular%validate(err)
+            if (.not. allocated(err)) call new_updated_model(ctx, molecular, model, err)
+            walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
+            walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi*);atomic_charges(q*);"
+         case default
+            molecular%gaussian = .false.
+            call molecular%validate(err)
+            if (.not. allocated(err)) call new_updated_model(ctx, molecular, model, err)
+            walks(1) = "point_potential(phi*,dphi_dr);atomic_charges(q*);"
+            walks(3) = "point_potential(phi*,dphi_dr*);atomic_charges(q*);"
+         end select
+         walks(2) = walks(1)
+         call require_success(error, err)
+         if (allocated(error)) return
+         call check(error, model%coupling_mode == "ec", more="the 3D default source is not 'ec'")
+         if (allocated(error)) return
+         call check_phase_walks(error, model, walks)
+         if (allocated(error)) return
+      end do
+   end subroutine check_ec_requests
+
+   !> "qat" declares only the partial charges and "multipoles" only the
+   !> point multipoles, every output pending in every phase
+   !>
+   !> @param[out] error Test error
+   subroutine check_charge_sources(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      !> Expected walks of the energy, response and gradient phases
+      character(len=96) :: walks(3)
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      model%coupling_mode = "qat"
+      walks = "atomic_charges(q*);"
+      call check_phase_walks(error, model, walks)
+      if (allocated(error)) return
+      model%coupling_mode = "multipoles"
+      walks = "atomic_multipoles(q*,mu*,theta*);"
+      call check_phase_walks(error, model, walks)
+   end subroutine check_charge_sources
+
+   !> An unknown coupling source is refused by name and leaves no coupling behind
+   !>
+   !> @param[out] error Test error
+   subroutine check_unknown_mode(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(coupling_type), pointer :: coupling
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      model%coupling_mode = "bogus"
+      call model%new_coupling(coupling, err)
+      call check(error, allocated(err) .and. .not. associated(coupling), more="an unknown source was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D MOZ coupling_mode 'bogus' is not supported") > 0, more=err%message)
+   end subroutine check_unknown_mode
+
+   !> Stage the energy, response and gradient phases of a fresh coupling and
+   !> compare each walk, answering nothing, to the expected one
+   !>
+   !> @param[out] error Test error
+   !> @param[in,out] model Updated model with its coupling source set
+   !> @param[in] walks Expected walk summaries of the three phases
+   subroutine check_phase_walks(error, model, walks)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Updated model with its coupling source set
+      type(model_moz_3d_type), intent(inout), target :: model
+      !> Expected walk summaries of the three phases
+      character(len=*), intent(in) :: walks(:)
+      type(moist_error), allocatable :: err
+      type(coupling_type), pointer :: coupling
+      !> Phase labels for diagnostics
+      character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
+      integer :: phase
+
+      call model%new_coupling(coupling, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      do phase = 1, size(phases)
+         select case (phase)
+         case (1)
+            call model%prepare_energy(coupling, err)
+         case (2)
+            call model%prepare_response(coupling, err)
+         case default
+            call model%prepare_gradient(coupling, err)
+         end select
+         call require_success(error, err)
+         if (allocated(error)) exit
+         call check(error, walk_summary(coupling), trim(walks(phase)), &
+            & more=trim(model%coupling_mode)//" source, "//trim(phases(phase))//" phase")
+         if (allocated(error)) exit
+      end do
+      call model%release_coupling(coupling)
+   end subroutine check_phase_walks
+
+   !> One pass of the walk, answering nothing: each visited request with its
+   !> declared outputs, a missing one marked `*`, e.g. "atomic_charges(q*);"
+   !>
+   !> @param[in,out] coupling Staged coupling
+   function walk_summary(coupling) result(summary)
+      !> Staged coupling
+      type(coupling_type), intent(inout) :: coupling
+      !> Visited requests and their outputs
+      character(len=:), allocatable :: summary
+      !> Outputs a MOZ source may declare, in listing order
+      character(len=8), parameter :: outputs(6) = [character(len=8) :: &
+         & "phi", "dphi_dr", "dphi_dxi", "q", "mu", "theta"]
+      class(coupling_request_type), allocatable :: item
+      character(len=:), allocatable :: listed
+      integer :: i
+      summary = ""
+      do while (coupling%next())
+         item = coupling%request()
+         listed = ""
+         do i = 1, size(outputs)
+            if (item%output_extent(trim(outputs(i))) == 0) cycle
+            if (len(listed) > 0) listed = listed//","
+            listed = listed//trim(outputs(i))
+            if (item%is_missing(trim(outputs(i)))) listed = listed//"*"
+         end do
+         summary = summary//trim(item%name())//"("//listed//");"
+      end do
+   end function walk_summary
+
+   !> Construct a 3D MOZ model on a copy of `grid`, updated to one hydrogen atom
+   !>
+   !> @param[in] ctx Run context, outlives the model
+   !> @param[in] grid Spatial grid template
+   !> @param[out] model Updated model
+   !> @param[out] err Construction or update error
+   subroutine new_updated_model(ctx, grid, model, err)
+      !> Run context, outlives the model
+      type(moist_context_type), intent(in), target :: ctx
+      !> Spatial grid template
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Updated model
+      type(model_moz_3d_type), intent(out) :: model
+      !> Construction or update error
+      type(moist_error), allocatable, intent(out) :: err
+      type(structure_type) :: mol
+      call new_moz_3d_model(model, grid, ctx, err)
+      if (allocated(err)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call model%update(mol, err)
+   end subroutine new_updated_model
 
    !> Forward a library error into the test framework
    !>

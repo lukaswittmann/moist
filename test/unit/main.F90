@@ -39,6 +39,7 @@ program tester
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
    use test_cavity_drop_cpcm, only: collect_cavity_drop_cpcm
    use test_cavity_numsa, only: collect_cavity_numsa
+   use test_cavity_surface_adjoint, only: collect_cavity_surface_adjoint
    use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
    use test_math_solvers, only: collect_math_solvers
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
@@ -103,6 +104,7 @@ program tester
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
       & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &
+      & new_testsuite("cavity_surface_adjoint", collect_cavity_surface_adjoint), &
       & new_testsuite("model_component_pcm_amat", collect_model_component_pcm_amat), &
       & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
       & new_testsuite("model_component_pcm_amat_assembly", &
