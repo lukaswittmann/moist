@@ -12,10 +12,10 @@ module test_cavity_drop_cpcm
    use mstore, only: get_structure
    use test_helpers, only: fill_legacy_radii
    use moist_math_lapack, only: getrf, getri
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
       & assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
       & pcm_amat_nuclear_gradient
-   use moist_model_component_pcm_electrostatics, only: &
+   use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: iso_fortran_env, only: error_unit
@@ -111,6 +111,9 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
+
+      call check(error, cavity%nsph, mol%nat, "Updated cavity sphere count")
+      if (allocated(error)) return
 
       call cavity%get_gradient(cavity_error)
       if (allocated(cavity_error)) then

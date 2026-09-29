@@ -87,6 +87,9 @@ contains
          return
       end if
 
+      call check(error, cav%nsph, mol%nat, "Updated cavity sphere count")
+      if (allocated(error)) return
+
       do i = 1, mol%nat
          call check(error, cav%asph(i), ref(i), thr=thr2)
       end do

@@ -10,7 +10,7 @@ module test_cavity_iswig
    use moist_cavity, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_diagnostic, only: find_disconnected_cavities
    use moist_cavity_type, only: write_cavity_csv_debug
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
       & pcm_amat_surface_weights, pcm_amat_nuclear_gradient
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
@@ -101,6 +101,9 @@ contains
          call test_failed(error, cavity_error%message)
          return
       end if
+
+      call check(error, cav%nsph, mol%nat, "Updated cavity sphere count")
+      if (allocated(error)) return
 
       area_ref = 4.0_wp*pi*radii(1)**2
       call check(error, cav%total_area, area_ref, thr=1.0E-11_wp, &
@@ -1079,7 +1082,7 @@ contains
 
    !> Test the genuine iSwiG Amat
    subroutine test_amat_properties(error)
-      use moist_model_component_pcm_solvers, only: solve_pcm_cholesky
+      use moist_model_continuum_component_pcm_solvers, only: solve_pcm_cholesky
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -1181,7 +1184,7 @@ contains
 
    !> Cross-validation of the iSwiG CPCM electrostatics against ORCA 6.1.1
    subroutine test_amat_orca_reference(error)
-      use moist_model_component_pcm_solvers, only: solve_pcm_cholesky
+      use moist_model_continuum_component_pcm_solvers, only: solve_pcm_cholesky
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 

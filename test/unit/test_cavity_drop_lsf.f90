@@ -81,7 +81,7 @@ module test_cavity_drop_lsf
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
-   use moist_model_gems_utils, only: BuildSuperStructure
+   use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    implicit none(type, external)
    private

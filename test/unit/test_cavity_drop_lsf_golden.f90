@@ -240,8 +240,7 @@ contains
       call compare_stream(got, ref, path, error)
    end subroutine run_golden
 
-   !> Path of a fixture file. meson exports `MOIST_SOURCE_ROOT`; fpm runs the
-   !> tester from the project root, which the `.` default covers
+   !> Path of a fixture reference file
    !>
    !> @param[in] kind  `svdw` or `cfc`
    !> @returns         Full path of the fixture
