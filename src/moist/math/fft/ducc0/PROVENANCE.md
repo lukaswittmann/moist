@@ -1,7 +1,7 @@
 # Vendored ducc0 FFT sources
 
 Origin: **ducc0** (Distinctly Useful Code Collection) by Martin Reinecke: https://gitlab.mpcdf.mpg.de/mtr/ducc (https://github.com/mreineck/ducc)
-Tag: `ducc0_0_39_1` (commit `0c05255`, "add missing explicit template instantiations").
+Tag: `ducc0_0_39_1` (commit `0c0525521bc56d1b7bef8eb97a6debb6a3bfd33c`).
 Every file below is a byte-for-byte copy of `src/ducc0/<path>` at that tag; nothing was modified.
 
 ## License

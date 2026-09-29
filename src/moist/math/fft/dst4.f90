@@ -7,9 +7,9 @@
 !> which the backend provides directly (ducc0's type-4 DST with `ortho` off is
 !> exactly this convention`)
 !>
-!> It is its own inverse up to a factor of 2n, so one plan object serves both the
-!> forward and the inverse Fourier-Bessel direction; the callers apply the differing
-!> r/k weight diagonals around it
+!> Its own inverse up to a factor of 2n, so one plan object serves both
+!> the forward and the inverse Fourier-Bessel direction; callers apply
+!> the differing r/k weight diagonals around it
 !>
 !> The backend needs no plans, so `dst4_plan_type` carries only the transform
 !> geometry and `dst4_work_type` is empty; neither `init` nor `new_work` can
@@ -53,8 +53,10 @@ module moist_math_fft_dst4
 
 contains
 
-   !> Record the transform geometry; a non-positive length or batch count
-   !> records an empty plan, whose `execute` is a no-op
+   !> Record the transform geometry
+   !>
+   !> A non-positive length or batch count records an empty plan, whose
+   !> `execute` is a no-op
    !>
    !> @param[out] self    Initialised plan
    !> @param[in]  npts    Transform length
@@ -73,7 +75,7 @@ contains
 
    !> Reset the plan; idempotent
    !>
-   !> @param[inout] self  Plan instance
+   !> @param[in,out] self  Plan instance
    pure subroutine dst4_plan_destroy(self)
       !> Plan instance
       class(dst4_plan_type), intent(inout) :: self
@@ -96,7 +98,7 @@ contains
 
    !> Release the scratch; idempotent no-op with the current backend
    !>
-   !> @param[inout] self  Scratch instance
+   !> @param[in,out] self  Scratch instance
    pure subroutine dst4_work_destroy(self)
       !> Scratch instance
       class(dst4_work_type), intent(inout) :: self
@@ -105,11 +107,11 @@ contains
 
    !> Apply the unnormalised DST-IV to a single column
    !>
-   !> @param[in]    self  Plan instance (built with `nbatch == 1`)
-   !> @param[inout] work  Per-thread scratch (unused)
-   !> @param[inout] x     Input column of `npts` values; preserved
-   !> @param[out]   y     Transformed column of `npts` values
-   !> @param[out]   error Set if the ducc0 backend failed
+   !> @param[in]     self  Plan instance (built with `nbatch == 1`)
+   !> @param[in,out] work  Per-thread scratch (unused)
+   !> @param[in,out] x     Input column of `npts` values; preserved
+   !> @param[out]    y     Transformed column of `npts` values
+   !> @param[out]    error Set if the ducc0 backend failed
    subroutine dst4_execute_one(self, work, x, y, error)
       !> Plan instance
       class(dst4_plan_type), intent(in) :: self
@@ -130,11 +132,11 @@ contains
 
    !> Apply the unnormalised DST-IV to every column of a batch
    !>
-   !> @param[in]    self  Plan instance (built with a matching `nbatch`)
-   !> @param[inout] work  Per-thread scratch (unused)
-   !> @param[inout] x     Input columns, shape (npts, nbatch); preserved
-   !> @param[out]   y     Transformed columns, shape (npts, nbatch)
-   !> @param[out]   error Set if the ducc0 backend failed
+   !> @param[in]     self  Plan instance (built with a matching `nbatch`)
+   !> @param[in,out] work  Per-thread scratch (unused)
+   !> @param[in,out] x     Input columns, shape (npts, nbatch); preserved
+   !> @param[out]    y     Transformed columns, shape (npts, nbatch)
+   !> @param[out]    error Set if the ducc0 backend failed
    subroutine dst4_execute_all(self, work, x, y, error)
       !> Plan instance
       class(dst4_plan_type), intent(in) :: self
