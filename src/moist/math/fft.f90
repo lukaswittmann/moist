@@ -2,7 +2,7 @@
 !>
 !> - Transforms come from ducc0, vendored under `fft/ducc0/`
 !>   (BSD-3-Clause; see that directory's `PROVENANCE.md`), reached through
-!>   the small `extern "C"` shim in `fft/shim.cpp`; nothing downloaded, no
+!>   the small `extern "C"` shim in `fft/ducc0.cpp`; nothing downloaded, no
 !>   external FFT library needed
 !> - Plan-free backend: ducc0 builds and caches its plans internally, keyed
 !>   on the transform size; grid and trafo types carry no plan handles and
