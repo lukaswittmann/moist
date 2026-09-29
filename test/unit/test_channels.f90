@@ -5,15 +5,17 @@ module test_channels
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & coupling_request_type, coupling_registry_type, point_potential_request_type, &
-      & gaussian_potential_request_type, gaussian_moment_request_type, moist_phase_energy, &
+      & gaussian_potential_request_type, gaussian_moment_request_type, &
+      & atomic_multipole_request_type, coupling_extent_grid, coupling_extent_atom, &
+      & current_output_extent, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, request_name_len, coupling_register, &
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
       & coupling_make_view, coupling_close_view
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, &
-      & gostshyp_amplitude_response_type, current_response_item, response_accumulate, &
-      & response_clear
+      & gostshyp_amplitude_response_type, atomic_multipole_adjoint_response_type, &
+      & current_response_item, response_accumulate, response_clear
    use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
@@ -67,7 +69,12 @@ contains
          new_unittest("response_add_rejects_shape", test_response_add_rejects_shape), &
          new_unittest("response_density_every_rank", test_response_density_ranks), &
          new_unittest("response_add_rejects_vector_shape", test_response_vector_shape), &
-         new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add)]
+         new_unittest("response_placeholder_cannot_accumulate", test_response_placeholder_add), &
+         new_unittest("atom_extent_register_answer_read", test_atom_extent_round_trip), &
+         new_unittest("atom_extent_rejects_grid_shape", test_atom_extent_rejection), &
+         new_unittest("mixed_grid_and_atom_pass", test_mixed_extents), &
+         new_unittest("snapshot_without_grid", test_snapshot_without_grid), &
+         new_unittest("response_atomic_multipole_adjoint", test_response_multipole_adjoint)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -89,7 +96,7 @@ contains
       if (allocated(err)) return
       call coupling_register(coupling, "potential", point, err)
       if (allocated(err)) return
-      call coupling_snapshot(coupling, 2)
+      call coupling_snapshot(coupling, 2, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
    end subroutine fixture
 
@@ -123,7 +130,7 @@ contains
       call coupling_set_scope(coupling, 3)
       call coupling_register(coupling, "moments", moments, err)
       if (allocated(err)) return
-      call coupling_snapshot(coupling, 2)
+      call coupling_snapshot(coupling, 2, 0)
    end subroutine three_requests
 
    !> Canonical name of the current request, "no_current_request" outside a `next()` window
@@ -234,7 +241,7 @@ contains
       call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
       call check_moist_error(error, err, "phi answer")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 2)
+      call coupling_snapshot(coupling, 2, 0)
       call coupling_arm(coupling, moist_phase_gradient, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -242,7 +249,7 @@ contains
          call check(error, .not. item%is_missing("phi") .and. item%is_missing("dphi_dr"))
       end associate
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 3)
+      call coupling_snapshot(coupling, 3, 0)
       call coupling_arm(coupling, moist_phase_gradient, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -398,7 +405,7 @@ contains
       ! A correct pass finds phi still answered
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 2)
+      call coupling_snapshot(coupling, 2, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "re-preparation")
       if (allocated(error)) return
@@ -437,7 +444,7 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "Invalid local request name") > 0)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, .not. coupling%next(), more="a false condition still required phi")
       if (allocated(error)) return
@@ -467,7 +474,7 @@ contains
       if (allocated(error)) return
       call coupling_begin_registration(second)
       call coupling_register(second, "potential", item, err)
-      call coupling_snapshot(second, 2)
+      call coupling_snapshot(second, 2, 0)
       call coupling_arm(second, moist_phase_energy, err)
       call check_moist_error(error, err, "registration of a copy")
       if (allocated(error)) return
@@ -504,7 +511,7 @@ contains
          call coupling_set_scope(coupling, i)
          call coupling_register(coupling, "moments", moments, err)
       end do
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -548,14 +555,14 @@ contains
       type(point_potential_request_type) :: point
       type(gaussian_potential_request_type) :: gaussian
       call coupling_begin_registration(coupling)
-      call coupling_snapshot(coupling, 0)
+      call coupling_snapshot(coupling, 0, 0)
       call request_require(point, moist_phase_energy, "phi", err)
       call request_require(gaussian, moist_phase_energy, "phi", err)
       call coupling_register(coupling, "point", point, err)
       call coupling_register(coupling, "gaussian", gaussian, err)
       call check_moist_error(error, err, "registration")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, count_visits(coupling), 2)
    end subroutine test_distinct_kinds
@@ -569,7 +576,7 @@ contains
       call coupling_begin_registration(coupling)
       call request_require(point, moist_phase_energy, "dphi_dr", err)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -589,7 +596,7 @@ contains
       real(wp), allocatable :: phi(:)
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "unused", point, err)
-      call coupling_snapshot(coupling, 0)
+      call coupling_snapshot(coupling, 0, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -634,7 +641,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call check_moist_error(error, err, "registration without a begun pass")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 2)
+      call coupling_snapshot(coupling, 2, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -680,7 +687,7 @@ contains
       call check(error, index(err%message, "placeholder request 'no_current_request'") > 0 &
          & .and. index(err%message, "cannot be declared") > 0)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -1590,7 +1597,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call check_moist_error(error, err, "shared registration")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, count_visits(coupling), 1, more="matching inputs were not shared")
       if (allocated(error)) return
@@ -1600,7 +1607,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call coupling_set_scope(coupling, 3)
       call coupling_register(coupling, "moments", moments, err)
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "moments added")
       if (allocated(error)) return
@@ -1610,7 +1617,7 @@ contains
       call coupling_begin_registration(coupling)
       call coupling_set_scope(coupling, 1)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 1)
+      call coupling_snapshot(coupling, 1, 0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "moments dropped")
       if (allocated(error)) return
@@ -1663,5 +1670,263 @@ contains
       real(wp) :: nan
       nan = ieee_value(1.0_wp, ieee_quiet_nan)
    end function ieee_nan
+
+   !* ================================================================================= *!
+   !*                                  Output extents                                   *!
+   !* ================================================================================= *!
+
+   !> Advance the walk and report whether the request now current has this name
+   !>
+   !> Two statements on purpose: the operands of `.and.` may be evaluated in
+   !> any order, so `next()` and the name query never share one expression
+   function next_is(coupling, name) result(ok)
+      type(coupling_type), intent(inout) :: coupling
+      character(len=*), intent(in) :: name
+      logical :: ok
+      ok = coupling%next()
+      if (ok) ok = current_name(coupling) == name
+   end function next_is
+
+   !> A per-atom request registered next to a grid request on 2 points and 3
+   !> atoms, staged for the energy phase
+   subroutine atom_fixture(coupling, err)
+      type(coupling_type), intent(out) :: coupling
+      type(moist_error_type), allocatable, intent(out) :: err
+      type(point_potential_request_type) :: point
+      type(atomic_multipole_request_type) :: multipoles
+      call coupling_begin_registration(coupling)
+      call request_require(point, moist_phase_energy, "phi", err)
+      if (allocated(err)) return
+      call coupling_set_scope(coupling, 1)
+      call coupling_register(coupling, "potential", point, err)
+      if (allocated(err)) return
+      call request_require(multipoles, moist_phase_energy, "q", err)
+      if (allocated(err)) return
+      call request_require(multipoles, moist_phase_gradient, "mu", err)
+      if (allocated(err)) return
+      call coupling_set_scope(coupling, 2)
+      call coupling_register(coupling, "multipoles", multipoles, err)
+      if (allocated(err)) return
+      call coupling_snapshot(coupling, 2, 3)
+      call coupling_arm(coupling, moist_phase_energy, err)
+   end subroutine atom_fixture
+
+   !> The per-atom outputs declare the atom extent, take a (natom) answer and
+   !> hand it back unchanged through the component view
+   subroutine test_atom_extent_round_trip(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(atomic_multipole_request_type) :: probe
+      real(wp), allocatable :: q(:), mu(:, :)
+      integer :: extent
+      call atom_fixture(coupling, err)
+      call check_moist_error(error, err, "fixture")
+      if (allocated(error)) return
+      call request_require(probe, moist_phase_energy, "q", err)
+      call check_moist_error(error, err, "probe declaration")
+      if (allocated(error)) return
+      call check(error, probe%output_extent("q") == coupling_extent_atom &
+         & .and. probe%output_extent("theta") == coupling_extent_atom &
+         & .and. probe%output_extent("nothing") == 0, more="atomic_multipoles outputs run over atoms")
+      if (allocated(error)) return
+      ! Grid request first, then the per-atom one
+      call check(error, next_is(coupling, "point_potential"), more="first visit is the grid request")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "phi answer")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "atomic_multipoles"), more="second visit is the per-atom request")
+      if (allocated(error)) return
+      call current_output_extent(coupling, "q", extent, err)
+      call check_moist_error(error, err, "extent query")
+      if (allocated(error)) return
+      call check(error, extent, 3, "the atom extent is the snapshot's atom count")
+      if (allocated(error)) return
+      call current_output_extent(coupling, "phi", extent, err)
+      call check(error, allocated(err), more="an output of another request was accepted")
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("q", [0.5_wp, -0.25_wp, -0.25_wp], err)
+      call check_moist_error(error, err, "q answer")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="everything answered, the pass must end")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "energy completeness")
+      if (allocated(error)) return
+      ! The owning scope reads the per-atom answer back
+      call coupling_make_view(coupling, 2, view)
+      call view%read("multipoles", "q", q, err)
+      call check_moist_error(error, err, "q read")
+      if (allocated(error)) return
+      call check(error, size(q) == 3 .and. all(q == [0.5_wp, -0.25_wp, -0.25_wp]), more="per-atom answer read back unchanged")
+      if (allocated(error)) return
+      call view%read("multipoles", "mu", mu, err)
+      call check(error, allocated(err), more="an unanswered per-atom output was readable")
+      if (allocated(error)) return
+      call coupling_close_view(coupling)
+   end subroutine test_atom_extent_round_trip
+
+   !> A per-atom output answered on the grid extent (and vice versa) is rejected
+   !> by shape and stays missing
+   subroutine test_atom_extent_rejection(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      call atom_fixture(coupling, err)
+      call check_moist_error(error, err, "fixture")
+      if (allocated(error)) return
+      call check(error, coupling%next(), more="walk starts")
+      if (allocated(error)) return
+      ! Grid output on the atom extent
+      call coupling%answer("phi", [1.0_wp, 2.0_wp, 3.0_wp], err)
+      call check(error, allocated(err), more="grid output accepted with the atom extent")
+      if (allocated(error)) return
+      call check(error, index(err%message, "shape mismatch") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "phi retry")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "atomic_multipoles"), more="second visit is the per-atom request")
+      if (allocated(error)) return
+      ! Atom output on the grid extent
+      call coupling%answer("q", [1.0_wp, 2.0_wp], err)
+      call check(error, allocated(err), more="atom output accepted with the grid extent")
+      if (allocated(error)) return
+      deallocate (err)
+      associate (item => coupling%request())
+         call check(error, item%is_missing("q"), more="a rejected per-atom answer was kept")
+      end associate
+      if (allocated(error)) return
+      ! The vector-valued per-atom output also checks its leading extent
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check(error, coupling%next(), more="gradient walk visits the per-atom request")
+      if (allocated(error)) return
+      call coupling%answer("mu", spread([1.0_wp, 2.0_wp, 3.0_wp], 1, 2), err)
+      call check(error, allocated(err), more="dipole accepted with a wrong leading extent")
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("mu", spread([1.0_wp, 2.0_wp, 3.0_wp], 1, 3), err)
+      call check_moist_error(error, err, "dipole answer")
+   end subroutine test_atom_extent_rejection
+
+   !> Grid and per-atom requests interleave in one pass; the completeness check
+   !> names the per-atom output that is still missing
+   subroutine test_mixed_extents(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      call atom_fixture(coupling, err)
+      call check_moist_error(error, err, "fixture")
+      if (allocated(error)) return
+      call check(error, count_visits(coupling), 2, "one visit per request with a missing output")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check(error, allocated(err), more="an unanswered pass fails the completeness check")
+      if (allocated(error)) return
+      call check(error, index(err%message, "point_potential: missing required outputs: phi") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call check(error, coupling%next(), more="walk starts")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check(error, allocated(err), more="completeness names the per-atom output")
+      if (allocated(error)) return
+      call check(error, index(err%message, "atomic_multipoles: missing required outputs: q") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call check(error, next_is(coupling, "atomic_multipoles"), more="second visit is the per-atom request")
+      if (allocated(error)) return
+      call coupling%answer("q", [1.0_wp, 2.0_wp, 3.0_wp], err)
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "mixed pass complete")
+   end subroutine test_mixed_extents
+
+   !> A zero-grid snapshot still carries per-atom answers,
+   !> and a changed atom count drops them like a changed grid size
+   subroutine test_snapshot_without_grid(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      type(atomic_multipole_request_type) :: multipoles
+      call coupling_begin_registration(coupling)
+      call request_require(multipoles, moist_phase_energy, "q", err)
+      if (.not. allocated(err)) call coupling_register(coupling, "multipoles", multipoles, err)
+      call check_moist_error(error, err, "registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, 0, 2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check(error, coupling%next(), more="zero-grid walk starts")
+      if (allocated(error)) return
+      call coupling%answer("q", [1.0_wp, -1.0_wp], err)
+      call check_moist_error(error, err, "q answer without grid points")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "completeness without a grid")
+      if (allocated(error)) return
+      ! Same extents: the answer survives a new declaration pass
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "multipoles", multipoles, err)
+      call coupling_snapshot(coupling, 0, 2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check(error, .not. coupling%next(), more="an unchanged snapshot dropped the answer")
+      if (allocated(error)) return
+      ! A new atom count drops it
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "multipoles", multipoles, err)
+      call coupling_snapshot(coupling, 0, 3)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check(error, coupling%next(), more="a changed atom count kept the answer")
+   end subroutine test_snapshot_without_grid
+
+   !> The multipole adjoint item accumulates by dynamic type like the others
+   !> and rejects a shape change
+   subroutine test_response_multipole_adjoint(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(response_type) :: response
+      type(atomic_multipole_adjoint_response_type) :: item
+      type(potential_adjoint_response_type) :: charge
+
+      item%dg_dq = [1.0_wp, 2.0_wp]
+      call response_accumulate(response, item, err)
+      call check_moist_error(error, err, "first accumulate")
+      if (allocated(error)) return
+      item%dg_dmu = reshape([1.0_wp, 2.0_wp, 3.0_wp, 4.0_wp, 5.0_wp, 6.0_wp], [3, 2])
+      call response_accumulate(response, item, err)
+      call check_moist_error(error, err, "second accumulate")
+      if (allocated(error)) return
+      charge%w_phi = [0.5_wp]
+      call response_accumulate(response, charge, err)
+      call check_moist_error(error, err, "charge accumulate")
+      if (allocated(error)) return
+      call check(error, walk_names(response), "atomic_multipole_adjoint,potential_adjoint,")
+      if (allocated(error)) return
+      do while (response%next())
+         select type (current => response%item())
+         type is (atomic_multipole_adjoint_response_type)
+            call check(error, all(current%dg_dq == [2.0_wp, 4.0_wp]) &
+               & .and. allocated(current%dg_dmu) .and. .not. allocated(current%dg_dtheta) &
+               & .and. .not. allocated(current%dg_dwidth), &
+               & "charges summed twice, dipoles copied once, the rest absent")
+         type is (potential_adjoint_response_type)
+            call check(error, size(current%w_phi), 1)
+         class default
+            call test_failed(error, "unexpected response item "//current%name())
+         end select
+         if (allocated(error)) return
+      end do
+      item%dg_dq = [1.0_wp, 2.0_wp, 3.0_wp]
+      call response_accumulate(response, item, err)
+      call check(error, allocated(err), more="a changed atom count was accumulated")
+      if (allocated(error)) return
+      call check(error, index(err%message, "dg_dq") > 0, more=err%message)
+   end subroutine test_response_multipole_adjoint
 
 end module test_channels

@@ -25,7 +25,7 @@
 !>                                       - bare-component coupling, energy phase
 !>                                         answered with the point-charge trace
 !>   * `stage_model_point_charge_energy(error, model, qat, mol, coupling)`
-!>                                       - the same for a general model
+!>                                       - the same for a continuum model
 !>   * `get_test_cross(mol)` - five-carbon cross with concave seams
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h)` - 4-point central FD formula
@@ -664,25 +664,23 @@ contains
 
    end subroutine stage_point_charge_energy
 
-   !> Build a general model's coupling and answer its energy phase with the
+   !> Build a continuum model's coupling and answer its energy phase with the
    !> point-charge potential of `qat`
    !>
    !> The model-level counterpart of `stage_point_charge_energy`; the model
    !> must have been updated
    !>
    !> @param[out]   error    testdrive failure
-   !> @param[inout] model    Updated general model
+   !> @param[inout] model    Updated continuum model
    !> @param[in]    qat      Atomic point charges (nat)
    !> @param[in]    mol      Structure supplying the atom positions
    !> @param[out]   coupling Coupling built and staged for the energy phase
    subroutine stage_model_point_charge_energy(error, model, qat, mol, coupling)
 
       !> testdrive failure
-      !> Borrowed model cavity
-      class(cavity_type), pointer :: model_cavity
       type(error_type), allocatable, intent(out) :: error
 
-      !> Updated general model
+      !> Updated continuum model
       class(model_continuum_type), intent(inout), target :: model
 
       !> Atomic point charges
@@ -697,6 +695,9 @@ contains
       !> moist error
       type(moist_error_type), allocatable :: err
 
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: model_cavity
+
       call model%new_coupling(coupling, err)
       if (allocated(err)) then
          call test_failed(error, "coupling setup failed: "//err%message)
@@ -707,14 +708,30 @@ contains
          call test_failed(error, "energy-phase staging failed: "//err%message)
          return
       end if
-      call model%get_cavity(model_cavity, err)
-      if (allocated(err)) then
-         call test_failed(error, "cavity borrow failed: "//err%message)
-         return
-      end if
+      model_cavity => model%cavity
       call fill_point_charge_potential(model_cavity, coupling, qat, mol)
 
    end subroutine stage_model_point_charge_energy
+
+   !> Gaussian widths `xi0` of a cavity, read through its field declaration
+   !>
+   !> A Gaussian potential request on a cavity without widths is an
+   !> error, so it stops rather than silently probing with zero widths
+   !>
+   !> @param[in] cavity Cavity the coupling was prepared with
+   function cavity_xi0(cavity) result(xi0)
+      !> Cavity the coupling was prepared with
+      class(cavity_type), intent(in) :: cavity
+      !> Gaussian widths (ngrid)
+      real(wp), allocatable :: xi0(:)
+      !> Field walker in fetch mode
+      type(cavity_field_query_type) :: query
+
+      call query%fetch("xi0")
+      call cavity%list_fields(query)
+      if (.not. query%found) error stop "test helper: the cavity publishes no xi0 field"
+      xi0 = query%rvals
+   end function cavity_xi0
 
    !> Five-carbon cross, converted to bohr
    !>

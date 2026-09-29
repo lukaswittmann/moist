@@ -22,7 +22,7 @@ module test_api
       & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api
    use moist_cavity_fields, only: cavity_field_query_type
    use moist_cavity_type, only: cavity_type
-   use moist_channels_coupling, only: coupling_type
+   use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot
    use moist_channels_response, only: density_response_type, &
       & potential_adjoint_response_type, response_accumulate, response_type
    use moist_model_type, only: solvation_model_type
@@ -87,10 +87,11 @@ module test_api
       procedure :: list_fields => stub_cavity_fields
    end type stub_cavity
 
-   !> Test double: a solvation model that is not the general model
+   !> Test double: a solvation model that is not the continuum model, and
+   !> whose `update` never marks it usable
    type, extends(solvation_model_type) :: stub_model
    contains
-      !> Accept any structure
+      !> Accept any structure, but never mark the model updated
       procedure :: update => stub_model_update
       !> Contribute no energy
       procedure :: get_energy => stub_model_energy
@@ -98,6 +99,10 @@ module test_api
       procedure :: get_response => stub_model_response
       !> Contribute no gradient
       procedure :: get_gradient => stub_model_gradient
+      !> No owned geometry
+      procedure :: atom_count => stub_model_atom_count
+      !> Declare no coupling requests
+      procedure :: declare_pass => stub_model_declare_pass
    end type stub_model
 
    !> C bindings of the entry points under test
@@ -2545,8 +2550,9 @@ contains
    end subroutine test_stub_cavity_guards
 
    !> Model entry points name a missing or empty cavity, a missing or empty
-   !> model, a model that is not the general one, a model not updated yet and
-   !> an invalid density buffer, and a failed constructor returns no handle
+   !> model, a model not updated yet, a stub model rejected by a continuum-only
+   !> entry point, and an invalid density buffer, and a failed constructor
+   !> returns no handle
    subroutine test_model_handle_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -2567,8 +2573,8 @@ contains
          & "[moist_get_model_cavity] Model is not initialized", &
          & "[moist_get_model_cavity] This solvation model type does not expose a cavity", &
          & "[moist_new_coupling] Model is not initialized", &
-         & "[moist_new_coupling] Model is not a general solvation model", &
-         & "[moist_new_coupling] General model must be updated first", &
+         & "[moist_set_model_isodensity_density] Model is not a continuum solvation model", &
+         & "[moist_new_coupling] Solvation model must be updated first", &
          & "[moist_set_model_isodensity_density] Invalid density buffer", &
          & "[moist_set_model_isodensity_density] Invalid density buffer"]
       integer :: icase
@@ -2608,7 +2614,7 @@ contains
          case (8)
             handle = new_coupling_api(verror, c_loc(empty_model))
          case (9)
-            handle = new_coupling_api(verror, c_loc(stub))
+            call moist_set_model_isodensity_density(verror, c_loc(stub), 1_c_int, c_loc(density))
          case (10)
             handle = new_coupling_api(verror, vmodel)
          case (11)
@@ -2630,7 +2636,7 @@ contains
 
    end subroutine test_model_handle_guards
 
-   !> Refusals that need an updated general model: a component added after the
+   !> Refusals that need an updated continuum model: a component added after the
    !> update, a gradient read on a model that was never updated, and a NULL
    !> gradient buffer
    !>
@@ -2687,7 +2693,7 @@ contains
          vresp = new_response_api(verror)
          gradient = sentinel
          call general_model_get_gradient_api(verror, vfresh, vcpl, vresp, 2_c_int, c_loc(gradient))
-         call expect_error(error, err, "[moist_get_model_gradient] General model must be updated first")
+         call expect_error(error, err, "[moist_get_model_gradient] Solvation model must be updated first")
          call check_untouched(error, any(gradient /= sentinel), "gradient of a model never updated")
          if (allocated(error)) exit checks
 
@@ -3014,5 +3020,26 @@ contains
       !> Never set
       type(moist_error_type), allocatable, intent(out) :: error
    end subroutine stub_model_gradient
+
+   !> Stub atom count: the stub owns no geometry
+   function stub_model_atom_count(self) result(nat)
+      !> Stub model
+      class(stub_model), intent(in) :: self
+      !> Atom count
+      integer :: nat
+      nat = 0
+   end function stub_model_atom_count
+
+   !> Stub declaration: no coupling requests
+   subroutine stub_model_declare_pass(self, coupling, error)
+      !> Stub model
+      class(stub_model), intent(inout) :: self
+      !> Coupling to declare
+      type(coupling_type), intent(inout) :: coupling
+      !> Never set
+      type(moist_error_type), allocatable, intent(out) :: error
+      call coupling_begin_registration(coupling)
+      call coupling_snapshot(coupling, 0, 0)
+   end subroutine stub_model_declare_pass
 
 end module test_api

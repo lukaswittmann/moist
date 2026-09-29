@@ -350,7 +350,7 @@ contains
 
    !> Model-level gradient: reverse path must equal the legacy forward path
    !>
-   !> This is the only test that drives `general_get_gradient` over a cavity
+   !> This is the only test that drives `continuum_get_gradient` over a cavity
    !> that supports the surface contraction -- the model suite uses an iSwiG
    !> cavity, which falls back to the forward path -- so it is what actually
    !> exercises the component hooks `get_gradient_surface_weights` and
@@ -363,10 +363,6 @@ contains
    !> @param[out] error  Error handle
    subroutine test_model_forward_reverse(error)
       !> Error handle
-      !> Borrowed model cavity
-      class(cavity_type), pointer :: model_fwd_cavity
-      !> Borrowed model cavity
-      class(cavity_type), pointer :: model_rev_cavity
       type(error_type), allocatable, intent(out) :: error
 
       !> Dielectric constant and pressure of the probe model
@@ -390,6 +386,8 @@ contains
       type(potential_adjoint_response_type), allocatable :: charge_rev, charge_fwd
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
+      !> Borrowed model cavities
+      class(cavity_type), pointer :: cav_rev, cav_fwd
 
       real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
       real(wp) :: diff, scale
@@ -415,6 +413,8 @@ contains
       call build_model(model_fwd, cavity, ctx, pcm_component, pv_component, mol, error)
       if (allocated(error)) return
       call model_fwd%use_forward_gradient(.true.)
+      cav_rev => model_rev%cavity
+      cav_fwd => model_fwd%cavity
 
       ! Point-charge potential trace plus its total position weight
       call stage_model_point_charge_energy(error, model_rev, qat_vals, mol, coupling)
@@ -430,8 +430,8 @@ contains
          call test_failed(error, "gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(model_rev%cavity, coupling)
-      call fill_point_charge_field(model_rev%cavity, coupling, qat_vals, mol)
+      call fill_missing_with_zeros(cav_rev, coupling)
+      call fill_point_charge_field(cav_rev, coupling, qat_vals, mol)
 
       allocate (grad_rev(3, nat), source=0.0_wp)
       allocate (grad_fwd(3, nat), source=0.0_wp)
@@ -444,7 +444,7 @@ contains
       call stage_model_point_charge_energy(error, model_fwd, qat_vals, mol, coupling)
       if (allocated(error)) return
       call model_fwd%prepare_gradient(coupling, err)
-      call fill_point_charge_field(model_fwd%cavity, coupling, qat_vals, mol)
+      call fill_point_charge_field(cav_fwd, coupling, qat_vals, mol)
       call model_fwd%get_gradient(coupling, response_fwd, grad_fwd, err)
       if (allocated(err)) then
          call test_failed(error, "forward model gradient failed: "//err%message)

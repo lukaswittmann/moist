@@ -1,11 +1,12 @@
-!> Unit tests for the general list-based solvation model
+!> Unit tests for the continuum list-based solvation model
 !>
-!> Covers the model container itself rather than any single component: that a
-!> component driven through the model reproduces the procedural result, that
-!> several components sum, and that the lifecycle guards fire. Per-component
-!> numerics live in the `test_model_component_*` suites
-module test_model_general
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+!> Covers the model container itself rather than any single component
+!>
+!> - a component driven through the model reproduces the procedural result
+!> - several components sum, and the lifecycle guards fire
+!> - per-component numerics live in the `test_model_component_*` suites
+module test_model_continuum
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use test_helpers, only: component_view
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -14,11 +15,12 @@ module test_model_general
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
-   use moist_model_general, only: solvation_model_general, new_model_general
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_cavity_iswig, only: cavity_type_iswig
+   use moist_cavity_type, only: cavity_type
    use moist_radii, only: radius_type_static
    use moist_context, only: moist_context_type, new_context
    use test_helpers, only: build_test_cavity, stage_model_point_charge_energy, &
@@ -27,7 +29,7 @@ module test_model_general
    implicit none(type, external)
    private
 
-   public :: collect_model_general
+   public :: collect_model_continuum
 
    !> Tolerance for values that must agree to roundoff
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
@@ -36,30 +38,34 @@ module test_model_general
 
 contains
 
-!> Collect the general-model test suite
-   subroutine collect_model_general(testsuite)
+!> Collect the continuum-model test suite
+!>
+!> @param[out] testsuite Collection of tests
+   subroutine collect_model_continuum(testsuite)
 
       !> Collection of tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
-         & new_unittest("general_model_cpcm", test_general_model_smoke), &
-         & new_unittest("general_model_cpcm_pv", test_general_model_pv_smoke), &
-         & new_unittest("general_model_guards", test_general_model_guards) &
+         & new_unittest("continuum_model_cpcm", test_continuum_model_smoke), &
+         & new_unittest("continuum_model_cpcm_pv", test_continuum_model_pv_smoke), &
+         & new_unittest("continuum_model_guards", test_continuum_model_guards) &
          & ]
 
-   end subroutine collect_model_general
+   end subroutine collect_model_continuum
 
-!> Single-component coverage for the general list-based solvation model
-   subroutine test_general_model_smoke(error)
+!> Single-component coverage for the continuum list-based solvation model
+!>
+!> @param[out] error Test error
+   subroutine test_continuum_model_smoke(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_cpcm) :: pcm_component, pcm_reference
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_cpcm) :: pcm_component, pcm_reference
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type), pointer :: coupling
@@ -83,9 +89,9 @@ contains
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       if (allocated(err)) then
-         call test_failed(error, "General-model construction failed: "//err%message)
+         call test_failed(error, "Continuum-model construction failed: "//err%message)
          return
       end if
 
@@ -95,14 +101,14 @@ contains
       energy = 0.0_wp
       call model%get_energy(coupling, energy, err)
       call check(error, allocated(err), &
-         & more="general-model energy was available before the first update")
+         & more="continuum-model energy was available before the first update")
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
 
       call new_component_cpcm(pcm_component, ctx, epsilon=epsilon, error=err, &
          param=moist_pcm_parameters_type(solver=solver_type%cholesky))
       if (allocated(err)) then
-         call test_failed(error, "General-model CPCM construction failed: "//err%message)
+         call test_failed(error, "Continuum-model CPCM construction failed: "//err%message)
          return
       end if
       call model%add_component(pcm_component, err)
@@ -113,7 +119,7 @@ contains
 
       call model%update(mol, err)
       if (allocated(err)) then
-         call test_failed(error, "General-model update failed: "//err%message)
+         call test_failed(error, "Continuum-model update failed: "//err%message)
          return
       end if
       call stage_model_point_charge_energy(error, model, qat_vals, mol, coupling)
@@ -122,7 +128,7 @@ contains
       energy = 0.0_wp
       call model%get_energy(coupling, energy, err)
       if (allocated(err)) then
-         call test_failed(error, "General-model energy failed: "//err%message)
+         call test_failed(error, "Continuum-model energy failed: "//err%message)
          return
       end if
 
@@ -146,7 +152,7 @@ contains
       end if
 
       call check(error, energy, reference_energy, thr=thr2, &
-         & message="general model did not reproduce the procedural CPCM energy")
+         & message="continuum model did not reproduce the procedural CPCM energy")
       if (allocated(error)) return
 
       energy = 3.0_wp
@@ -163,21 +169,21 @@ contains
       ! The response must carry the potential adjoint (the CPCM charges)
       call model%prepare_response(coupling, err)
       if (allocated(err)) then
-         call test_failed(error, "General-model response staging failed: "//err%message)
+         call test_failed(error, "Continuum-model response staging failed: "//err%message)
          return
       end if
       call model%get_response(coupling, response, err)
       if (allocated(err)) then
-         call test_failed(error, "General-model response failed: "//err%message)
+         call test_failed(error, "Continuum-model response failed: "//err%message)
          return
       end if
       call copy_potential_adjoint(response, charge)
       call check(error, allocated(charge), &
-         & more="general model did not expose the CPCM potential adjoint")
+         & more="continuum model did not expose the CPCM potential adjoint")
       if (allocated(error)) return
       call check(error, maxval(abs(charge%w_phi - pcm_reference%q)), 0.0_wp, &
          & thr=thr2, &
-         & message="general-model CPCM charges differ from the procedural reference")
+         & message="continuum-model CPCM charges differ from the procedural reference")
       if (allocated(error)) return
 
       ! Components are frozen once the model has been updated
@@ -191,34 +197,38 @@ contains
       deallocate (model%cavity)
       call model%update(mol, err)
       call check(error, allocated(err), &
-         & more="general-model update without a cavity was not rejected")
+         & more="continuum-model update without a cavity was not rejected")
       if (allocated(error)) return
-      call check(error, .not. model%updated, &
-         & more="failed general-model update left the model marked usable")
+      call check(error, .not. model%is_updated(), &
+         & more="failed continuum-model update left the model marked usable")
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
       energy = 0.0_wp
       call model%get_energy(coupling, energy, err)
       call check(error, allocated(err), &
-         & more="general-model energy remained available after a failed update")
+         & more="continuum-model energy remained available after a failed update")
 
-   end subroutine test_general_model_smoke
+   end subroutine test_continuum_model_smoke
 
-!> Smoke test for a two-component (CPCM + PV) general solvation model
-   subroutine test_general_model_pv_smoke(error)
+!> Smoke test for a two-component (CPCM + PV) continuum solvation model
+!>
+!> @param[out] error Test error
+   subroutine test_continuum_model_pv_smoke(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_general), target :: model_pcm, model_pv, model_zero
-      type(solvation_model_component_cpcm) :: pcm_component
+      type(model_continuum_type), target :: model_pcm, model_pv, model_zero
+      type(model_continuum_component_cpcm) :: pcm_component
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type), pointer :: coupling, coupling_pcm, coupling_zero
       type(response_type) :: response
       type(potential_adjoint_response_type), allocatable :: charge
+      !> Borrowed surface views of the three model domains
+      class(cavity_type), pointer :: cav_pv, cav_pcm, cav_zero
       real(wp) :: energy_pcm, energy_pv, energy_zero, volume
       real(wp), allocatable :: gradient_pcm(:, :), gradient_pv(:, :)
       real(wp), allocatable :: gradient_zero(:, :), volume_gradient(:, :)
@@ -268,11 +278,18 @@ contains
          return
       end if
 
+      cav_pcm => model_pcm%cavity
+      cav_pv => model_pv%cavity
+      cav_zero => model_zero%cavity
+
       ! One coupling for all three models
       call stage_model_point_charge_energy(error, model_pv, qat_vals, mol, coupling)
       if (allocated(error)) return
 
-      volume = model_pv%cavity%total_volume
+      volume = cav_pv%total_volume
+      call check(error, cav_pcm%ngrid == cav_pv%ngrid .and. cav_zero%ngrid == cav_pv%ngrid, &
+         & "the three models were not built on the same cavity surface")
+      if (allocated(error)) return
 
       energy_pcm = 0.0_wp
       call stage_model_point_charge_energy(error, model_pcm, qat_vals, mol, coupling_pcm)
@@ -341,8 +358,8 @@ contains
          call test_failed(error, "Gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(model_pv%cavity, coupling)
-      call fill_point_charge_field(model_pv%cavity, coupling, qat_vals, mol)
+      call fill_missing_with_zeros(cav_pv, coupling)
+      call fill_point_charge_field(cav_pv, coupling, qat_vals, mol)
 
       allocate (gradient_pcm(3, mol%nat), source=0.0_wp)
       allocate (gradient_pv(3, mol%nat), source=0.0_wp)
@@ -350,7 +367,7 @@ contains
       allocate (volume_gradient(3, mol%nat), source=0.0_wp)
 
       call model_pcm%prepare_gradient(coupling_pcm, err)
-      call fill_point_charge_field(model_pcm%cavity, coupling_pcm, qat_vals, mol)
+      call fill_point_charge_field(cav_pcm, coupling_pcm, qat_vals, mol)
       call model_pcm%get_gradient(coupling_pcm, response, gradient_pcm, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM-only gradient failed: "//err%message)
@@ -362,23 +379,23 @@ contains
          return
       end if
       call model_zero%prepare_gradient(coupling_zero, err)
-      call fill_point_charge_field(model_zero%cavity, coupling_zero, qat_vals, mol)
+      call fill_point_charge_field(cav_zero, coupling_zero, qat_vals, mol)
       call model_zero%get_gradient(coupling_zero, response, gradient_zero, err)
       if (allocated(err)) then
          call test_failed(error, "CPCM+PV(0) gradient failed: "//err%message)
          return
       end if
       ! The reverse-mode gradient contracts the surface adjoints directly
-      call model_pv%cavity%get_gradient(err)
+      call cav_pv%get_gradient(err)
       if (allocated(err)) then
          call test_failed(error, "Cavity forward gradient failed: "//err%message)
          return
       end if
-      if (.not. allocated(model_pv%cavity%v1_rA)) then
+      if (.not. allocated(cav_pv%v1_rA)) then
          call test_failed(error, "Cavity produced no per-point volume derivatives")
          return
       end if
-      volume_gradient = sum(model_pv%cavity%v1_rA, dim=3)
+      volume_gradient = sum(cav_pv%v1_rA, dim=3)
 
       ! The PV gradient is the pressure-scaled cavity-volume gradient
       call check(error, maxval(abs(gradient_pv - gradient_pcm - pressure*volume_gradient)), &
@@ -401,11 +418,15 @@ contains
       call check(error, maxval(abs(gradient_zero - 3.0_wp - 2.0_wp*gradient_pcm)), &
                  0.0_wp, thr=thr2, message="Repeated gradient getters must accumulate")
 
-   end subroutine test_general_model_pv_smoke
+   end subroutine test_continuum_model_pv_smoke
 
-!> A coupling minted by one model is refused by every other model, and a model
-!> without an internal isodensity cavity refuses a density
-   subroutine test_general_model_guards(error)
+!> Foreign-coupling and isodensity-density guard checks
+!>
+!> A coupling minted by one model is refused by every other model, and a
+!> model without an internal isodensity cavity refuses a density
+!>
+!> @param[out] error Test error
+   subroutine test_continuum_model_guards(error)
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -415,9 +436,9 @@ contains
       !> Molecular structure
       type(structure_type) :: mol
       !> Owning model and a second, independent model
-      type(solvation_model_general), target :: model_a, model_b
+      type(model_continuum_type), target :: model_a, model_b
       !> Only component of both models
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Cavity template copied into both models
       type(cavity_type_iswig) :: cavity
       !> Radius model storage
@@ -484,19 +505,19 @@ contains
       call check(error, index(err%message, "requires an internal isodensity cavity") > 0, &
          & more="unexpected error message: "//err%message)
       if (allocated(error)) return
-      call check(error, .not. model_b%updated, &
+      call check(error, .not. model_b%is_updated(), &
          & more="a refused density left the model marked usable")
 
    contains
 
-      !> Assemble and update a PV-only general model
+      !> Assemble and update a PV-only continuum model
       !>
       !> @param[out] model Model to build
       subroutine build_model(model)
          !> Model to build
-         type(solvation_model_general), intent(out) :: model
+         type(model_continuum_type), intent(out) :: model
 
-         call new_model_general(model, cavity, ctx, err)
+         call new_continuum_model(model, cavity, ctx, err)
          if (.not. allocated(err)) call model%add_component(pv_component, err)
          if (.not. allocated(err)) call model%update(mol, err)
          if (allocated(err)) call test_failed(error, "Model setup failed: "//err%message)
@@ -518,14 +539,24 @@ contains
          deallocate (err)
       end subroutine check_foreign
 
-   end subroutine test_general_model_guards
+   end subroutine test_continuum_model_guards
 
-!> Assemble an updated general model from a CPCM component and an optional
-!> PV component at the requested pressure
+!> Assemble an updated continuum model from CPCM and an optional PV component
+!>
+!> PV is appended at the requested pressure when `with_pv` is set
+!>
+!> @param[out] model Model to build
+!> @param[in] cavity Cavity template copied into the model
+!> @param[in] ctx Run context owned by the caller
+!> @param[in] pcm_component CPCM component template
+!> @param[in] with_pv Whether to append a PV component
+!> @param[in] pressure Pressure of the PV component
+!> @param[in] mol Molecular structure
+!> @param[out] error Error handling
    subroutine build_pv_model(model, cavity, ctx, pcm_component, with_pv, pressure, mol, error)
 
       !> Model to build
-      type(solvation_model_general), intent(out) :: model
+      type(model_continuum_type), intent(out) :: model
 
       !> Cavity template copied into the model
       type(cavity_type_iswig), intent(in) :: cavity
@@ -534,7 +565,7 @@ contains
       type(moist_context_type), intent(in), target :: ctx
 
       !> CPCM component template
-      type(solvation_model_component_cpcm), intent(in) :: pcm_component
+      type(model_continuum_component_cpcm), intent(in) :: pcm_component
 
       !> Whether to append a PV component
       logical, intent(in) :: with_pv
@@ -548,9 +579,9 @@ contains
       !> Error handling
       type(moist_error_type), allocatable, intent(out) :: error
 
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
 
-      call new_model_general(model, cavity, ctx, error)
+      call new_continuum_model(model, cavity, ctx, error)
       if (allocated(error)) return
       call model%add_component(pcm_component, error)
       if (allocated(error)) return
@@ -563,4 +594,4 @@ contains
 
    end subroutine build_pv_model
 
-end module test_model_general
+end module test_model_continuum
