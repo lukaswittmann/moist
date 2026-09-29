@@ -8,7 +8,9 @@ those licenses (in particular the BSD source- and binary-redistribution clauses)
 Each third-party component remains under its own terms; its license is listed alongside
 it below.
 
-## Vendored code (copied into the source tree and locally modified)
+## Vendored code
+
+### With local modifications
 
 These numerical components were copied from upstream repositories — primarily by
 Jacob Williams (https://github.com/jacobwilliams) — and then modified for use in `moist`.
@@ -22,6 +24,17 @@ Jacob Williams (https://github.com/jacobwilliams) — and then modified for use 
 | LSQR | `src/moist/math/linalg/lsqr/` | jacobwilliams/LSQR (tag 1.1.0) | M. Saunders (SOL, Stanford); modern Fortran by J. Williams | BSD-3-Clause (+ CPL-1.0 original, + LAPACK BSD) | `src/moist/math/linalg/lsqr/LICENSE` |
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
+
+### Without local modifications
+
+These are pinned to an exact upstream commit/tag and compiled in place by both the meson and CMake builds.
+See each directory's `PROVENANCE.md` for the exact file list, origin and pinned revision.
+
+| Component | Path in `moist` | Upstream repository | Pinned revision | License | License file |
+|---|---|---|---|---|---|
+| FINUFFT (non-uniform FFT) | `src/moist/math/fft/finufft/` | flatironinstitute/finufft | commit `0e9c10409580c482656b3f840c9d875f98c3a066` (2.6.0-dev) | Apache-2.0 | `src/moist/math/fft/finufft/LICENSE`, `NOTICE` |
+| xsimd (SIMD wrappers, header-only) | `src/moist/math/fft/xsimd/` | xtensor-stack/xsimd | commit `6842624fc8adafd7168a999e7150b384411da448` | BSD-3-Clause | `src/moist/math/fft/xsimd/LICENSE` |
+| ducc0 FFT (16-file subset) | `src/moist/math/fft/ducc0/` | mreineck/ducc, tag `ducc0_0_39_1` (commit `0c0525521bc56d1b7bef8eb97a6debb6a3bfd33c`) | see tag | BSD-3-Clause (only dual-licensed files are vendored; moist takes the BSD-3-Clause option) | full text in the header of every file, also collected in `src/moist/math/fft/ducc0/LICENSE`; provenance and closure in `src/moist/math/fft/ducc0/PROVENANCE.md` |
 
 ## Bundled subprojects
 
