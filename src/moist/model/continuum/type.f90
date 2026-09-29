@@ -11,9 +11,9 @@ module moist_model_continuum_type
    use moist_model_type, only: solvation_model_type
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
-      & coupling_registry_type, moist_phase_energy, moist_phase_response, &
+      & moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
-      & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
+      & coupling_snapshot, coupling_check_mandatory, &
       & coupling_make_view, coupling_close_view
 
    implicit none(type, external)
@@ -33,52 +33,25 @@ module moist_model_continuum_type
       class(cavity_type), allocatable :: cavity
       !> Ordered heterogeneous component collection
       type(solvation_component_slot), allocatable :: components(:)
-      !> Whether the latest model update completed successfully
-      logical :: updated = .false.
-      !> Registry of model-owned host calculations
-      type(coupling_registry_type), private :: couplings
       !> Component declarations are frozen after the first attempted update
       logical :: configured = .false.
       !> Force the legacy forward nuclear-gradient path
       logical :: force_forward_gradient = .false.
    contains
       final :: destroy_model
-      !> Invalidate results and all model-owned couplings
-      procedure, private :: invalidate => invalidate_model
-      procedure :: is_updated => model_is_updated
       procedure :: atom_count => model_atom_count
       procedure :: use_forward_gradient => model_use_forward_gradient
-      procedure :: get_cavity => borrow_cavity
       procedure :: set_isodensity_density => set_cavity_density
       procedure :: add_component
       procedure :: update => continuum_update
       procedure :: get_energy => continuum_get_energy
       procedure :: get_response => continuum_get_response
       procedure :: get_gradient => continuum_get_gradient
-      !> Build a model-owned coupling and declare its requests
-      procedure :: new_coupling => continuum_new_coupling
-      procedure :: release_coupling => continuum_release_coupling
-      !> Stage one phase of the coupling (declare, record the grid size, arm)
-      procedure, private :: stage => continuum_stage_coupling
-      !> Stage the energy phase
-      procedure :: prepare_energy => continuum_prepare_energy
-      !> Stage the response phase
-      procedure :: prepare_response => continuum_prepare_response
-      !> Stage the gradient phase
-      procedure :: prepare_gradient => continuum_prepare_gradient
+      !> Declare the cavity and component requests of one coupling pass
+      procedure :: declare_pass => declare_continuum_pass
    end type model_continuum_type
 
 contains
-
-   !> Invalidate cached results and host answers
-   !>
-   !> @param[in,out] self Model
-   subroutine invalidate_model(self)
-      !> Model
-      class(model_continuum_type), intent(inout) :: self
-      self%updated = .false.
-      call self%couplings%invalidate()
-   end subroutine invalidate_model
 
    !> Construct an empty continuum model around an owned copy of a cavity
    !>
@@ -168,9 +141,8 @@ contains
       !> Component index
       integer :: i
 
-      self%updated = .false.
+      call self%invalidate()
       self%configured = .true.
-      call self%couplings%invalidate()
       if (.not. allocated(self%cavity)) then
          call fatal_error(error, "Continuum model has no cavity")
          return
@@ -211,11 +183,9 @@ contains
       !> Component-local borrowed read interface
       type(coupling_view_type) :: view
 
-      if (.not. self%couplings%owns(coupling)) then
-         call fatal_error(error, "Coupling belongs to a different model")
-         return
-      end if
-      call require_updated(self, error)
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call self%require_updated(error)
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, error)
       if (allocated(error)) return
@@ -261,11 +231,9 @@ contains
       !> Component-local borrowed read interface
       type(coupling_view_type) :: view
 
-      if (.not. self%couplings%owns(coupling)) then
-         call fatal_error(error, "Coupling belongs to a different model")
-         return
-      end if
-      call require_updated(self, error)
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call self%require_updated(error)
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_response, error)
       if (allocated(error)) return
@@ -327,11 +295,9 @@ contains
       !> Component-local borrowed read interface
       type(coupling_view_type) :: view
 
-      if (.not. self%couplings%owns(coupling)) then
-         call fatal_error(error, "Coupling belongs to a different model")
-         return
-      end if
-      call require_updated(self, error)
+      call self%require_owned(coupling, error)
+      if (allocated(error)) return
+      call self%require_updated(error)
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_gradient, error)
       if (allocated(error)) return
@@ -420,161 +386,14 @@ contains
 
    end subroutine declare_continuum_pass
 
-   !> Build the host coupling of an updated model
-   !>
-   !> - multiple couplings may coexist; release unused ones with
-   !>   `release_coupling`
-   !>
-   !> @param[in,out] self Instance
-   !> @param[out] coupling Host coupling
-   !> @param[out] error Error handling
-   subroutine continuum_new_coupling(self, coupling, error)
-      !> Updated continuum model
-      class(model_continuum_type), intent(inout), target :: self
-      !> Coupling to build
-      type(coupling_type), pointer, intent(out) :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      nullify (coupling)
-      call require_updated(self, error)
-      if (allocated(error)) return
-      call self%couplings%mint(coupling, error)
-      if (allocated(error)) return
-      call declare_continuum_pass(self, coupling, error)
-      if (allocated(error)) call self%release_coupling(coupling)
-
-   end subroutine continuum_new_coupling
-
-   !> Release a coupling before destroying its parent model
-   !>
-   !> @param[in,out] self Instance
-   !> @param[in,out] coupling Host coupling
-   subroutine continuum_release_coupling(self, coupling)
-      !> Owning model
-      class(model_continuum_type), intent(inout), target :: self
-      !> Coupling to release; other aliases must no longer be used
-      type(coupling_type), pointer, intent(inout) :: coupling
-      call self%couplings%release(coupling)
-   end subroutine continuum_release_coupling
-
-   !> Stage per-output requirements and preserve still-valid raw answers
-   !>
-   !> - energy staging starts a new host evaluation; response and gradient
-   !>   staging reuse outputs until geometry or declared scientific inputs change
-   !> - every staging starts a new host walk: `next()` begins at the first request
-   !>
-   !> @param[in,out] self     Updated continuum model
-   !> @param[in,out] coupling Coupling built by `new_coupling`
-   !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
-   !> @param[out]   error    Foreign coupling, invalid phase or failed declaration
-   subroutine continuum_stage_coupling(self, coupling, phase, error)
-      !> Updated continuum model
-      class(model_continuum_type), intent(inout) :: self
-      !> Coupling built by `new_coupling`
-      type(coupling_type), intent(inout), target :: coupling
-      !> Phase index
-      integer, intent(in) :: phase
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call require_updated(self, error)
-      if (allocated(error)) return
-      if (.not. self%couplings%owns(coupling)) then
-         call fatal_error(error, "Coupling belongs to a different model")
-         return
-      end if
-      if (phase == moist_phase_energy) call coupling_invalidate(coupling)
-      call declare_continuum_pass(self, coupling, error)
-      if (allocated(error)) return
-      call coupling_arm(coupling, phase, error)
-
-   end subroutine continuum_stage_coupling
-
-   !> Stage the energy phase of the coupling
-   !>
-   !> @param[in,out] self Instance
-   !> @param[in,out] coupling Host coupling
-   !> @param[out] error Error handling
-   subroutine continuum_prepare_energy(self, coupling, error)
-      !> Updated continuum model
-      class(model_continuum_type), intent(inout) :: self
-      !> Coupling built by `new_coupling`
-      type(coupling_type), intent(inout), target :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call self%stage(coupling, moist_phase_energy, error)
-
-   end subroutine continuum_prepare_energy
-
-   !> Stage the response phase of the coupling
-   !>
-   !> @param[in,out] self Instance
-   !> @param[in,out] coupling Host coupling
-   !> @param[out] error Error handling
-   subroutine continuum_prepare_response(self, coupling, error)
-      !> Updated continuum model
-      class(model_continuum_type), intent(inout) :: self
-      !> Coupling built by `new_coupling`
-      type(coupling_type), intent(inout), target :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call self%stage(coupling, moist_phase_response, error)
-
-   end subroutine continuum_prepare_response
-
-   !> Stage the gradient phase of the coupling
-   !>
-   !> @param[in,out] self Instance
-   !> @param[in,out] coupling Host coupling
-   !> @param[out] error Error handling
-   subroutine continuum_prepare_gradient(self, coupling, error)
-      !> Updated continuum model
-      class(model_continuum_type), intent(inout) :: self
-      !> Coupling built by `new_coupling`
-      type(coupling_type), intent(inout), target :: coupling
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      call self%stage(coupling, moist_phase_gradient, error)
-
-   end subroutine continuum_prepare_gradient
-
-   !> Require a successfully updated model
-   !>
-   !> @param[in] self Instance
-   !> @param[out] error Error handling
-   subroutine require_updated(self, error)
-      !> Continuum model
-      class(model_continuum_type), intent(in) :: self
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      if (.not. self%updated) call fatal_error(error, "General model must be updated first")
-
-   end subroutine require_updated
-
    !> Release collections owned by the model; borrowed handles must not outlive it
    !>
    !> @param[in,out] self Instance
    subroutine destroy_model(self)
       !> Model being destroyed
       type(model_continuum_type), intent(inout) :: self
-      call self%couplings%clear()
+      call self%clear_couplings()
    end subroutine destroy_model
-
-   !> Whether the latest update completed
-   !>
-   !> @param[in] self Model
-   function model_is_updated(self) result(updated)
-      !> Model
-      class(model_continuum_type), intent(in) :: self
-      !> Update status
-      logical :: updated
-      updated = self%updated
-   end function model_is_updated
 
    !> Number of atoms in the owned geometry
    !>
@@ -600,23 +419,6 @@ contains
       self%force_forward_gradient = enabled
    end subroutine model_use_forward_gradient
 
-   !> Borrow the cavity with an error before construction
-   !>
-   !> @param[in] self Model owning the cavity
-   !> @param[out] cavity Borrowed cavity
-   !> @param[out] error Missing cavity
-   subroutine borrow_cavity(self, cavity, error)
-      !> Model owning the cavity
-      class(model_continuum_type), intent(in), target :: self
-      !> Borrowed cavity
-      class(cavity_type), pointer, intent(out) :: cavity
-      !> Missing cavity
-      type(error_type), allocatable, intent(out) :: error
-      nullify (cavity)
-      if (allocated(self%cavity)) cavity => self%cavity
-      if (.not. associated(cavity)) call fatal_error(error, "Cavity model is not initialized")
-   end subroutine borrow_cavity
-
    !> Install density data and invalidate the model
    !>
    !> @param[in,out] self Model owning the cavity
@@ -629,13 +431,9 @@ contains
       real(wp), intent(in) :: density(:, :)
       !> Incompatible cavity or density
       type(error_type), allocatable, intent(out) :: error
-      !> Borrowed continuum cavity
-      class(cavity_type), pointer :: cavity
       call self%invalidate()
-      nullify (cavity)
-      if (allocated(self%cavity)) cavity => self%cavity
-      if (associated(cavity)) then
-         select type (cavity)
+      if (allocated(self%cavity)) then
+         select type (cavity => self%cavity)
          type is (cavity_type_drop)
             if (allocated(cavity%lsf_model)) then
                select type (lsf => cavity%lsf_model)

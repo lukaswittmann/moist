@@ -1,6 +1,6 @@
 !> Typed cavity component interface and standalone coupling lifecycle
 module moist_model_continuum_component_type
-   use mctc_env, only: wp, error_type, fatal_error
+   use mctc_env, only: wp, error_type
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
@@ -19,7 +19,7 @@ module moist_model_continuum_component_type
    type, abstract :: model_continuum_component_type
       !> Borrowed run context (verbosity/debug/timer)
       !>
-      !> Set at construction and owned by the top-level caller, never allocated or freed by the component
+      !> Set at construction; owned by the caller, never allocated or freed here
       type(moist_context_type), pointer :: ctx => null()
       !> Name of the component
       character(len=:), allocatable :: name
@@ -84,7 +84,7 @@ module moist_model_continuum_component_type
          class(model_continuum_component_type), intent(inout) :: self
          !> Molecular structure data
          type(structure_type), intent(in) :: mol
-         !> Domain the model is built on
+         !> Cavity the model is built on
          class(cavity_type), intent(inout) :: cavity
          !> Error handling
          type(error_type), allocatable, intent(out) :: error
@@ -204,9 +204,9 @@ contains
       class(model_continuum_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_view_type), intent(in) :: coupling
-      !> Domain data
+      !> Cavity data
       class(cavity_type), intent(in) :: cavity
-      !> Domain adjoint accumulator (a surface accumulator on a cavity)
+      !> Surface-adjoint accumulator (a surface accumulator on a cavity)
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -233,7 +233,7 @@ contains
       class(model_continuum_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_view_type), intent(in) :: coupling
-      !> Domain adjoint accumulator (a surface accumulator on a cavity)
+      !> Surface-adjoint accumulator (a surface accumulator on a cavity)
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       !> Expected grid size of the component's cavity
       integer, intent(in) :: ngrid
@@ -259,9 +259,9 @@ contains
       class(model_continuum_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_view_type), intent(in) :: coupling
-      !> Domain data
+      !> Cavity data
       class(cavity_type), intent(in) :: cavity
-      !> Domain adjoint accumulator (a surface accumulator on a cavity)
+      !> Surface-adjoint accumulator (a surface accumulator on a cavity)
       class(cavity_surface_adjoint_type), intent(inout) :: acc
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -286,7 +286,7 @@ contains
       class(model_continuum_component_type), intent(inout) :: self
       !> Wavefunction data
       class(coupling_view_type), intent(in) :: coupling
-      !> Domain data
+      !> Cavity data
       class(cavity_type), intent(inout) :: cavity
       !> Nuclear-gradient accumulator
       real(wp), intent(inout) :: gradient(:, :)
@@ -304,7 +304,7 @@ contains
    subroutine declare_component_coupling_default(self, cavity, coupling, error)
       !> Solvation component
       class(model_continuum_component_type), intent(in) :: self
-      !> Domain the model is built on
+      !> Cavity the model is built on
       class(cavity_type), intent(in) :: cavity
       !> Coupling being declared
       type(coupling_type), intent(inout) :: coupling
