@@ -3,7 +3,16 @@ name: Release Static-ish Binary
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
+  pull_request:
+    paths:
+      - .github/workflows/release-static.yml
+      - meson.build
+      - meson_options.txt
+      - config/**
+      - app/**
+      - src/moist/math/fft/**
+      - subprojects/*.wrap
   workflow_dispatch:
     inputs:
       tag:
@@ -12,30 +21,44 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
+
+# Tag and manual runs each get their own group; only PR runs cancel each other
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   build-release:
-    runs-on: ubuntu-22.04
+    name: build-release (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x86_64,  os: ubuntu-24.04}
+          - {arch: aarch64, os: ubuntu-24.04-arm}
     container:
-      image: quay.io/pypa/manylinux_2_28_x86_64
+      image: quay.io/pypa/manylinux_2_28_${{ matrix.arch }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install dependencies
         run: |
-          dnf install -y gcc-toolset-11-gcc gcc-toolset-11-gcc-gfortran lapack-devel
+          dnf install -y lapack-devel
           /opt/python/cp310-cp310/bin/pip install meson ninja
-          echo "/opt/rh/gcc-toolset-11/root/usr/bin" >> "$GITHUB_PATH"
           echo "/opt/python/cp310-cp310/bin" >> "$GITHUB_PATH"
 
       - name: Configure with Meson
         env:
           FC: gfortran
           CC: gcc
+          CXX: g++
+          # gfortran drives the link and ignores -static-libstdc++; libstdc++ is bundled below
           LDFLAGS: -static-libgfortran -static-libgcc
         run: |
           meson setup build \
@@ -46,14 +69,18 @@ jobs:
       - name: Build with Meson
         run: meson compile -C build
 
+      - name: Run tests
+        run: meson test -C build --suite moist --print-errorlogs
+
       - name: Prepare distributable bundle
         id: prepare
         env:
-          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name || 'manual' }}
+          TAG_NAME: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event.inputs.tag || github.ref_name || 'manual' }}
         run: |
           set -euo pipefail
 
-          tag="${TAG_NAME}"
+          # Branch names may contain '/', which breaks the tarball and artifact names
+          tag="${TAG_NAME//\//-}"
           arch="$(uname -m)"
           asset_base="moist-${tag}-linux-${arch}"
 
@@ -61,6 +88,7 @@ jobs:
           mkdir -p dist/lib
 
           cp build/app/moist dist/moist
+          ldd dist/moist
 
           # Bundle non-glibc runtime dependencies for easier redistribution.
           ldd dist/moist \
@@ -86,25 +114,40 @@ jobs:
           sha256sum "${asset_base}.tar.gz" > "${asset_base}.sha256"
 
           {
+            echo "tag=${tag}"
             echo "asset_tar=${asset_base}.tar.gz"
             echo "asset_sha=${asset_base}.sha256"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload workflow artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: moist-release-${{ github.event.inputs.tag || github.ref_name || 'manual' }}
+          name: moist-release-${{ steps.prepare.outputs.tag }}-${{ matrix.arch }}
           path: |
             ${{ steps.prepare.outputs.asset_tar }}
             ${{ steps.prepare.outputs.asset_sha }}
 
+  # Only this job may write; the build job runs PR code
+  publish-release:
+    needs: build-release
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          pattern: moist-release-*
+          merge-multiple: true
+
       - name: Publish GitHub release assets
-        if: github.event_name == 'push' || github.event.inputs.tag != ''
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
           append_body: true
           files: |
-            ${{ steps.prepare.outputs.asset_tar }}
-            ${{ steps.prepare.outputs.asset_sha }}
+            moist-*.tar.gz
+            moist-*.sha256

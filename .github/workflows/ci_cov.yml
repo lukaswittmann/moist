@@ -36,7 +36,7 @@ jobs:
         uses: fortran-lang/setup-fortran@be037f0a45b1160f139d4ccd0b96f9e9bfd6a682 # v1.10.0
         with:
           compiler: gcc
-          version: '14'
+          version: '15'
 
       - name: Install dependencies (Linux)
         run: |
@@ -75,13 +75,15 @@ jobs:
 
       - name: Set compiler environment
         run: |
-          echo "FC=gfortran" >> "$GITHUB_ENV"
-          echo "CC=gcc" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
+          {
+            echo "FC=gfortran-15"
+            echo "CC=gcc-15"
+            echo "CXX=g++-15"
+          } >> "$GITHUB_ENV"
 
-      - name: Point gcov at the gcc 14 toolchain
+      - name: Point gcov at the gcc 15 toolchain
         run: |
-          sudo ln -sf "$(command -v gcov-14)" /usr/local/bin/gcov
+          sudo ln -sf "$(command -v gcov-15)" /usr/local/bin/gcov
           gcov --version | head -n1
 
       - name: Build with coverage instrumentation
