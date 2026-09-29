@@ -52,7 +52,7 @@ module test_helpers
    use mstore_but14diol, only: get_but14diol_records
    use mstore_upu23, only: get_upu23_records
    use moist_cavity_type, only: cavity_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_model_continuum, only: model_continuum_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
@@ -61,7 +61,8 @@ module test_helpers
                           radius_type_static, new_cosmo_radii
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & point_potential_request_type, gaussian_potential_request_type, moist_phase_energy, &
-      & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view
+      & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view, &
+      & coupling_check_mandatory
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       density_response_type, gostshyp_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
@@ -725,7 +726,7 @@ contains
       !> Gaussian widths (ngrid)
       real(wp), allocatable :: xi0(:)
       !> Field walker in fetch mode
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       call query%fetch("xi0")
       call cavity%list_fields(query)
@@ -955,16 +956,20 @@ contains
 
    !> Borrow a component-local view for a single test invocation
    !>
-   !> A coupling nobody staged, e.g. the default one of a request-free
-   !> component, is armed for the energy phase first
+   !> - a coupling nobody staged, e.g. the default one of a request-free
+   !>   component, is armed for the energy phase first
+   !> - the staged phase then passes the model's completeness check; a failure
+   !>   is dropped, as the component's read names the same missing output
    function component_view(coupling) result(view)
       type(coupling_type), target, intent(inout) :: coupling
       type(coupling_view_type) :: view
       type(moist_error_type), allocatable :: err
       call coupling_make_view(coupling, 1, view)
-      if (view%phase /= 0) return
-      call coupling_arm(coupling, moist_phase_energy, err)
-      call coupling_make_view(coupling, 1, view)
+      if (view%phase == 0) then
+         call coupling_arm(coupling, moist_phase_energy, err)
+         call coupling_make_view(coupling, 1, view)
+      end if
+      call coupling_check_mandatory(coupling, view%phase, err)
    end function component_view
 
    !> Read the four moment outputs of a fixture with exactly one moment calculation
