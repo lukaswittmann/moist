@@ -1,3 +1,4 @@
+// Modified for moist: OpenMP chunks are work-shared ("moist patch"), see PROVENANCE.md
 #pragma once
 
 #include <algorithm>
@@ -90,10 +91,11 @@ void FINUFFT_PLAN_T<TF>::onedim_fseries_kernel(BIGINT nf,
   std::vector<BIGINT> brk(nt + 1); // start indices for each thread
   for (int t = 0; t <= nt; ++t)    // split nout mode indices btw threads
     brk[t] = (BIGINT)(0.5 + nout * t / (double)nt);
-#pragma omp parallel num_threads(nt)
-  {                                                // each thread gets own chunk to do
-    int t = MY_OMP_GET_THREAD_NUM();
-    std::complex<TF> aj[MAX_NQUAD];                // phase rotator for this thread
+  // moist patch: the nt chunks are work-shared (omp for) rather than owned by thread
+  // number, since OpenMP may run fewer threads than requested (e.g. nested regions)
+#pragma omp parallel for num_threads(nt) schedule(static, 1)
+  for (int t = 0; t < nt; ++t) {                   // each chunk of the output array
+    std::complex<TF> aj[MAX_NQUAD];                // phase rotator for this chunk
     for (int n = 0; n < q; ++n)
       aj[n] = std::pow(a[n], (TF)brk[t]);          // init phase factors for chunk
     for (BIGINT j = brk[t]; j < brk[t + 1]; ++j) { // loop along output array

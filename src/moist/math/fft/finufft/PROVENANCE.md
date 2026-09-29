@@ -4,8 +4,8 @@ Origin: **FINUFFT** (Flatiron Institute Nonuniform Fast Fourier Transform) by th
 Institute / Simons Foundation: https://github.com/flatironinstitute/finufft
 Commit: `0e9c10409580c482656b3f840c9d875f98c3a066` (2.6.0-dev, the FINUFFT revision this pin
 matches in `subprojects/finufft.wrap`'s former `revision` field before that wrap was removed).
-Every file below is a byte-for-byte copy of the upstream path at that commit; nothing was
-modified. Relative paths under `include/`, `src/` and `fortran/` are kept identical to upstream
+Every file below is a byte-for-byte copy of the upstream path at that commit, except the two
+patched headers listed under "Local modifications". Relative paths under `include/`, `src/` and `fortran/` are kept identical to upstream
 so the sources' own `#include` directives resolve unchanged.
 
 ## License
@@ -85,3 +85,15 @@ DUCC0-backed, Fortran-enabled `finufft` target (`src/CMakeLists.txt`'s `FINUFFT_
 is upstream test-only scaffolding; nothing in this subset includes it, so it is not vendored.
 GPU sources (`src/cuda/`, `include/cufinufft*`) are never reached from the CPU build and are not
 vendored either.
+
+## Local modifications
+
+`include/finufft/spread.hpp` (`bin_sort_multithread_impl`) and `include/finufft/makeplan.hpp`
+(`onedim_fseries_kernel`) split their work into `nt` chunks and let OpenMP thread `t` own chunk
+`t`. That assumes `num_threads(nt)` always yields `nt` threads. A nested region (e.g. inside
+test-drive's parallel suite runner or a host's own parallel region) runs fewer: the bin sort then
+reads unsized per-thread histograms and crashes, and the kernel series is left partly
+uncomputed. Both loops now work-share the chunks with `omp for schedule(static, 1)`. The results
+are unchanged, since each chunk's arithmetic does not depend on the thread. The changes carry a
+"moist patch" comment and a header notice (Apache-2.0 section 4(b)); `diff` against upstream
+`0e9c104` shows them. Unfixed upstream as of 2026-09-29; drop the patch once upstream fixes it.

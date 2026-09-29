@@ -1,3 +1,4 @@
+// Modified for moist: OpenMP chunks are work-shared ("moist patch"), see PROVENANCE.md
 #pragma once
 
 #include <finufft/plan.hpp>
@@ -627,77 +628,85 @@ inline void bin_sort_multithread_impl(std::vector<BIGINT> &ret, UBIGINT M, const
   std::vector<uint32_t> bin_offset(nbins);
   std::vector<uint32_t> thread_totals(nt);
 
+  // moist patch: the nt chunks are work-shared (omp for) rather than owned by thread
+  // number, since OpenMP may run fewer threads than requested (e.g. nested regions)
+  const BIGINT bin_chunk = (nbins + nt - 1) / nt;
+  auto chunk_simd        = [&](int t) {
+    return brk[t] + ((brk[t + 1] - brk[t]) & UBIGINT(-simd_size));
+  };
+
 #pragma omp parallel num_threads(nt)
   {
-    const int t            = MY_OMP_GET_THREAD_NUM();
-    const auto chunk_start = brk[t];
-    const auto chunk_end   = brk[t + 1];
-    const auto chunk_simd =
-        chunk_start + ((chunk_end - chunk_start) & UBIGINT(-simd_size));
-
-    // each thread allocates its own histogram
-    counts[t].resize(nbins, 0);
-    auto &my_counts = counts[t];
-
-    // counting pass: SIMD bin compute, scalar accumulate
-    UBIGINT i;
-    for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = compute_bins(i);
-      const auto bin_array = to_array(bin);
-      for (std::size_t j = 0; j < simd_size; ++j) ++my_counts[bin_array[j]];
+    // counting pass: SIMD bin compute, scalar accumulate, one histogram per chunk
+#pragma omp for schedule(static, 1)
+    for (int t = 0; t < nt; ++t) {
+      counts[t].resize(nbins, 0);
+      auto &my_counts     = counts[t];
+      const auto simd_end = chunk_simd(t);
+      UBIGINT i;
+      for (i = brk[t]; i < simd_end; i += simd_size) {
+        const auto bin       = compute_bins(i);
+        const auto bin_array = to_array(bin);
+        for (std::size_t j = 0; j < simd_size; ++j) ++my_counts[bin_array[j]];
+      }
+      for (; i < brk[t + 1]; i++) ++my_counts[compute_bin_scalar(i)];
     }
-    for (; i < chunk_end; i++) ++my_counts[compute_bin_scalar(i)];
-
-    // ensure all threads have finished counting before computing offsets
-#pragma omp barrier
 
     // Phase 1+2a (parallel): per-bin totals and local exclusive prefix sum.
-    // Each thread owns a static chunk of bins; stores its running total.
-    const BIGINT bin_chunk = (nbins + nt - 1) / nt;
-    const BIGINT bin_start = t * bin_chunk;
-    const BIGINT bin_end   = std::min(bin_start + bin_chunk, nbins);
-    uint32_t running       = 0;
-    for (BIGINT b = bin_start; b < bin_end; ++b) {
-      uint32_t total = 0;
-      for (int tt = 0; tt < nt; ++tt) total += counts[tt][b];
-      bin_offset[b] = running;
-      running += total;
+    // Each chunk owns a static range of bins; stores its running total.
+#pragma omp for schedule(static, 1)
+    for (int t = 0; t < nt; ++t) {
+      const BIGINT bin_start = t * bin_chunk;
+      const BIGINT bin_end   = std::min(bin_start + bin_chunk, nbins);
+      uint32_t running       = 0;
+      for (BIGINT b = bin_start; b < bin_end; ++b) {
+        uint32_t total = 0;
+        for (int tt = 0; tt < nt; ++tt) total += counts[tt][b];
+        bin_offset[b] = running;
+        running += total;
+      }
+      thread_totals[t] = running;
     }
-    thread_totals[t] = running;
 
-#pragma omp barrier
-
-    // Phase 2b (sequential): prefix sum over per-thread totals (O(nt))
+    // Phase 2b (sequential): prefix sum over per-chunk totals (O(nt))
 #pragma omp single
     std::exclusive_scan(thread_totals.begin(), thread_totals.end(), thread_totals.begin(),
                         uint32_t{0});
 
-    // Phase 3 (parallel): finalize global offsets and per-thread offsets
-    const uint32_t thread_prefix = thread_totals[t];
-    for (BIGINT b = bin_start; b < bin_end; ++b) {
-      uint32_t off = bin_offset[b] + thread_prefix;
-      for (int tt = 0; tt < nt; ++tt) {
-        uint32_t tmp  = counts[tt][b];
-        counts[tt][b] = off;
-        off += tmp;
+    // Phase 3 (parallel): finalize global offsets and per-chunk offsets
+#pragma omp for schedule(static, 1)
+    for (int t = 0; t < nt; ++t) {
+      const BIGINT bin_start = t * bin_chunk;
+      const BIGINT bin_end   = std::min(bin_start + bin_chunk, nbins);
+      for (BIGINT b = bin_start; b < bin_end; ++b) {
+        uint32_t off = bin_offset[b] + thread_totals[t];
+        for (int tt = 0; tt < nt; ++tt) {
+          uint32_t tmp  = counts[tt][b];
+          counts[tt][b] = off;
+          off += tmp;
+        }
       }
     }
-
-#pragma omp barrier
 
     // placement pass: SIMD bin compute, scalar placement
-    for (i = chunk_start; i < chunk_simd; i += simd_size) {
-      const auto bin       = compute_bins(i);
-      const auto bin_array = to_array(bin);
-      for (std::size_t j = 0; j < simd_size; ++j) {
-        ret[my_counts[bin_array[j]]] = BIGINT(j + i);
-        ++my_counts[bin_array[j]];
+#pragma omp for schedule(static, 1)
+    for (int t = 0; t < nt; ++t) {
+      auto &my_counts     = counts[t];
+      const auto simd_end = chunk_simd(t);
+      UBIGINT i;
+      for (i = brk[t]; i < simd_end; i += simd_size) {
+        const auto bin       = compute_bins(i);
+        const auto bin_array = to_array(bin);
+        for (std::size_t j = 0; j < simd_size; ++j) {
+          ret[my_counts[bin_array[j]]] = BIGINT(j + i);
+          ++my_counts[bin_array[j]];
+        }
       }
-    }
-    for (; i < chunk_end; i++) {
-      const auto bin      = compute_bin_scalar(i);
-      ret[my_counts[bin]] = BIGINT(i);
-      ++my_counts[bin];
+      for (; i < brk[t + 1]; i++) {
+        const auto bin      = compute_bin_scalar(i);
+        ret[my_counts[bin]] = BIGINT(i);
+        ++my_counts[bin];
+      }
     }
   }
 }
