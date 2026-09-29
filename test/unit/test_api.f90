@@ -11,7 +11,7 @@ module test_api
    use moist_context, only: moist_context_type, new_context
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
-   use moist_api, only: vp_cavity, vp_error, vp_response, response_get_api, &
+   use moist_api, only: vp_cavity, vp_error, vp_response, get_response_field_real_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
       & vp_model, update_structure_api, set_custom_radii_atoms_api, &
       & set_custom_radii_elements_api, update_solvation_model_api, &
@@ -26,12 +26,16 @@ module test_api
       & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api, &
       & get_model_field_count_api, get_model_field_info_api, get_model_field_about_api, &
       & get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api, &
-      & vp_coupling, coupling_answer_api
-   use moist_channels_fields, only: field_query_type
+      & vp_coupling, coupling_answer_api, next_coupling_request_api, &
+      & get_response_field_count_api, get_response_field_info_api, get_response_field_about_api, &
+      & get_coupling_request_field_count_api, get_coupling_request_field_info_api, &
+      & get_coupling_request_field_about_api, get_coupling_request_field_real_api
+   use moist_channels_fields, only: field_query_type, field_real
    use moist_cavity_type, only: cavity_type
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot, &
       & coupling_register, coupling_arm, request_require, moist_phase_energy, &
-      & atomic_charge_request_type, radial_potential_request_type
+      & atomic_charge_request_type, radial_potential_request_type, &
+      & point_potential_request_type, gaussian_moment_request_type
    use moist_channels_response, only: density_response_type, &
       & potential_adjoint_response_type, response_accumulate, response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
@@ -274,7 +278,7 @@ module test_api
          character(kind=c_char), intent(inout), optional :: name(*)
          integer(c_int), intent(inout), optional :: dtype
          integer(c_int), intent(inout), optional :: rank
-         integer(c_int), intent(inout), optional :: dims(2)
+         integer(c_int), intent(inout), optional :: dims(3)
          integer(c_int), intent(inout), optional :: count
       end subroutine moist_get_cavity_field_info
 
@@ -607,7 +611,9 @@ contains
                   new_unittest("model_fields_of_a_volume_grid", test_model_fields_volume), &
                   new_unittest("model_fields_empty_domain_and_guards", test_model_fields_guards), &
                   new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
-                  new_unittest("site_resolved_outputs_refused", test_site_resolved_refused), &
+                  new_unittest("site_resolved_answer_refused_adjoints_read", test_site_resolved_answer_and_adjoints), &
+                  new_unittest("response_fields_describe_the_current_item", test_response_fields), &
+                  new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
                   new_unittest("amat_surface_weights", test_amat_surface_weights) &
                   ]
@@ -994,7 +1000,7 @@ contains
       type(vp_error), pointer :: err
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph, nfield
-      integer(c_int) :: dtype, rank, dims(2), count
+      integer(c_int) :: dtype, rank, dims(3), count
       character(kind=c_char), target :: name(64)
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
@@ -1037,7 +1043,7 @@ contains
       !> Name buffer, seeded so any write is visible
       character(kind=c_char), intent(inout) :: name(:)
       !> Descriptor outputs, seeded so a cleared value is distinguishable
-      integer(c_int), intent(out) :: dtype, rank, dims(2), count
+      integer(c_int), intent(out) :: dtype, rank, dims(3), count
 
       name = "Z"
       dtype = -1_c_int
@@ -1056,18 +1062,18 @@ contains
       !> Name buffer that must still carry its seed
       character(kind=c_char), intent(in) :: name(:)
       !> Descriptor outputs that must retain their sentinel values
-      integer(c_int), intent(in) :: dtype, rank, dims(2), count
+      integer(c_int), intent(in) :: dtype, rank, dims(3), count
 
       if (dtype /= -1_c_int .or. rank /= -1_c_int .or. count /= -1_c_int) then
-         call test_failed(error, "get_cavity_field_info changed the descriptor for "//what)
+         call test_failed(error, "Field info changed the descriptor for "//what)
          return
       end if
       if (any(dims /= -1_c_int)) then
-         call test_failed(error, "get_cavity_field_info changed extents for "//what)
+         call test_failed(error, "Field info changed extents for "//what)
          return
       end if
       if (any(name /= "Z")) then
-         call test_failed(error, "get_cavity_field_info wrote a name for "//what)
+         call test_failed(error, "Field info wrote a name for "//what)
       end if
 
    end subroutine check_unchanged_info
@@ -1556,9 +1562,9 @@ contains
 
    end subroutine test_iso_callback_fails_mid_loop
 
-   !> Response copies write exactly the logical shape at all ranks, leave the
-   !> rest of a larger buffer untouched, and name a missing current item, an
-   !> array the current item does not have and a NULL buffer
+   !> Response field reads write exactly the logical shape at all ranks, leave
+   !> the rest of a larger buffer untouched, and name a missing current item,
+   !> an array the current item does not have and a NULL buffer
    !>
    !> @param[out] error Test failure
    subroutine test_response_arrays(error)
@@ -1593,8 +1599,8 @@ contains
       bogus = c_string("w_bogus")
 
       ! Arrays are read from the item the walk stopped at, and none is current yet
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] No current response item - call next() first")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] No current response item - call next() first")
       if (allocated(error)) return
       call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
       if (allocated(error)) return
@@ -1603,13 +1609,13 @@ contains
       rho = sentinel
       grad = sentinel
       hess = sentinel
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_loc(grad))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), grad)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), c_loc(hess))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), hess)
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
       call check(error, all(rho(:2) == density%w_rho))
@@ -1623,14 +1629,14 @@ contains
       if (allocated(error)) return
 
       ! An array the current item does not have and a NULL buffer are named
-      call response_get_api(c_loc(err), c_loc(response), c_loc(bogus), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] density has no array 'w_bogus'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(bogus), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] density has no field 'w_bogus'")
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_phi), c_loc(rho))
-      call check_api_error(error, err, "[moist_get_response_array] density has no array 'w_phi'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), rho)
+      call check_api_error(error, err, "[moist_get_response_field_real] density has no field 'w_phi'")
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_null_ptr)
-      call check_api_error(error, err, "Null array pointer provided for 'w_grad_rho'")
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho))
+      call check_api_error(error, err, "Required pointer 'values' is missing")
       if (allocated(error)) return
 
       ! The pass ends after the only item, and nothing is current any more
@@ -1638,7 +1644,7 @@ contains
       if (allocated(error)) return
       call check(error, .not. allocated(err%ptr))
       if (allocated(error)) return
-      call response_get_api(c_loc(err), c_loc(response), c_loc(w_rho), c_loc(rho))
+      call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_rho), rho)
       call check_api_error(error, err, "No current response item - call next() first")
    end subroutine test_response_arrays
 
@@ -2102,7 +2108,7 @@ contains
       case ("get_cavity_field_count")
          call moist_get_cavity_field_count(verror, c_null_ptr)
       case ("get_cavity_field_info")
-         allocate (name(65), dtype, rank, dims(2), count)
+         allocate (name(65), dtype, rank, dims(3), count)
          if (omit == 1) deallocate (name)
          if (omit == 2) deallocate (dtype)
          if (omit == 3) deallocate (rank)
@@ -2495,7 +2501,7 @@ contains
       type(vp_cavity), pointer :: cav
       type(c_ptr) :: verror, vstub
       !> Field descriptor outputs
-      integer(c_int) :: dtype, rank, dims(2), count
+      integer(c_int) :: dtype, rank, dims(3), count
       character(kind=c_char) :: name(66)
       !> Caller buffers, seeded so any write is visible
       real(c_double), target :: amat0(2, 2), xi(2), q(2), w_xi(2), w_f(2), w_xyz(3, 2)
@@ -2819,7 +2825,7 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: template
       type(structure_type) :: mol
       type(c_ptr) :: verror, vmodel
-      integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(2), count
+      integer(c_int) :: nfield, ifield, ngrid(1), dtype, rank, dims(3), count
       integer(c_size_t) :: length
       logical :: has_w, same
       real(c_double) :: w(8), xyz(24)
@@ -2951,7 +2957,7 @@ contains
 
    end subroutine test_model_fields_guards
 
-   !> Response reads name an empty or unterminated array name and an array the
+   !> Response reads refuse an empty name, an unknown one and an array the
    !> current item was accumulated without, at every rank, and leave the
    !> caller's buffer alone
    subroutine test_response_unavailable_arrays(error)
@@ -2982,27 +2988,27 @@ contains
       values = sentinel
 
       checks: block
-         ! The name is decoded before the walk is consulted, so no item is needed
-         call response_get_api(c_loc(err), c_loc(response), c_loc(empty), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         ! Names are looked up on the current item, so a walk comes first
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(overlong), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] Invalid output name")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(empty), values)
+         call expect_error(error, err, "[moist_get_response_field_real] Field name is empty")
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(overlong), values)
+         call expect_error(error, err, "[moist_get_response_field_real] potential_adjoint has no field '" &
+            & //repeat("w", 40)//"'")
+         if (allocated(error)) exit checks
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_error(error, err, "[moist_get_response_field_real] potential_adjoint has no field 'w_phi'")
          if (allocated(error)) exit checks
 
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_phi), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_phi' is not available")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_grad_rho'")
          if (allocated(error)) exit checks
-
-         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
-         if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_grad_rho), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_grad_rho' is not available")
-         if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] 'w_hess_rho' is not available")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_hess_rho'")
          if (allocated(error)) exit checks
 
          call check_untouched(error, any(values /= sentinel), "response array buffer")
@@ -3010,10 +3016,11 @@ contains
 
    end subroutine test_response_unavailable_arrays
 
-   !> The C layer refuses by name what it has no layout for yet: an answer to
-   !> the (ngrid, natom) phi of `radial_potential` and the arrays of the charge
-   !> and radial potential adjoint items; a per-atom charge answer still passes
-   subroutine test_site_resolved_refused(error)
+   !> The C layer refuses by name what it has no layout for yet, an answer to
+   !> the (ngrid, natom) phi of `radial_potential`; a per-atom charge answer
+   !> passes, and the charge and radial potential adjoint arrays read back
+   !> through the response fields in Fortran order
+   subroutine test_site_resolved_answer_and_adjoints(error)
       type(error_type), allocatable, intent(out) :: error
       !> Native wrappers
       type(vp_error), target :: err
@@ -3080,18 +3087,423 @@ contains
          values = sentinel
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(dg_dq), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] atomic_charge_adjoint has no array 'dg_dq'")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(dg_dq), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Charge adjoint read refused: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(values(:2) == charge_adjoint%dg_dq) .and. all(values(3:) == sentinel), &
+            & more="charge adjoint read back wrong")
          if (allocated(error)) exit checks
          call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
          if (allocated(error)) exit checks
-         call response_get_api(c_loc(err), c_loc(response), c_loc(dg_dphi), c_loc(values))
-         call expect_error(error, err, "[moist_get_response_array] radial_potential_adjoint has no array 'dg_dphi'")
-         if (allocated(error)) exit checks
-         call check_untouched(error, any(values /= sentinel), "response array buffer")
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(dg_dphi), values)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Radial potential adjoint read refused: "//err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(values == reshape(radial_adjoint%dg_dphi, [6])), &
+            & more="radial potential adjoint read back wrong")
       end block checks
 
-   end subroutine test_site_resolved_refused
+   end subroutine test_site_resolved_answer_and_adjoints
+
+   !* ================================================================================= *!
+   !*                       Named response item and request fields                      *!
+   !* ================================================================================= *!
+
+   !> Seed the descriptor outputs so a write, or its absence, is visible
+   subroutine seed_field_info(name, dtype, rank, dims, count)
+      !> Name buffer
+      character(kind=c_char), intent(out) :: name(:)
+      !> Descriptor outputs
+      integer(c_int), intent(out) :: dtype, rank, dims(3), count
+      name = "Z"
+      dtype = -1_c_int
+      rank = -1_c_int
+      dims = -1_c_int
+      count = -1_c_int
+   end subroutine seed_field_info
+
+   !> Fortran copy of a NUL-terminated buffer
+   pure function c_buffer_text(buffer) result(text)
+      !> Buffer written by a C entry point
+      character(kind=c_char), intent(in) :: buffer(:)
+      !> Text before the terminator
+      character(len=:), allocatable :: text
+      integer :: ichar
+      allocate (character(len=c_string_len(buffer)) :: text)
+      do ichar = 1, len(text)
+         text(ichar:ichar) = buffer(ichar)
+      end do
+   end function c_buffer_text
+
+   !> Fail with the API diagnostic when an entry point reported one
+   subroutine expect_success(error, err, what)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> API error handle produced by the entry point
+      type(vp_error), pointer, intent(in) :: err
+      !> Call being checked, used in the failure message
+      character(len=*), intent(in) :: what
+      if (allocated(err%ptr)) call test_failed(error, what//" failed: "//err%ptr%message)
+   end subroutine expect_success
+
+   !> A descriptor written by a `_field_info` entry point: a real array of the
+   !> given name with its extents in C order, slowest-varying first
+   subroutine check_c_descriptor(error, name, dtype, rank, dims, count, expected_name, expected_dims)
+      !> Test-drive error
+      type(error_type), allocatable, intent(out) :: error
+      !> Name buffer written by the entry point
+      character(kind=c_char), intent(in) :: name(:)
+      !> Descriptor outputs written by the entry point
+      integer(c_int), intent(in) :: dtype, rank, dims(3), count
+      !> Expected name
+      character(len=*), intent(in) :: expected_name
+      !> Expected C extents; the size is the rank
+      integer(c_int), intent(in) :: expected_dims(:)
+      !> Extents padded with ones to MOIST_FIELD_MAX_RANK
+      integer(c_int) :: padded(3)
+      padded = 1_c_int
+      padded(:size(expected_dims)) = expected_dims
+      call check(error, c_buffer_text(name), expected_name, "field name")
+      if (allocated(error)) return
+      call check(error, dtype == field_real .and. rank == size(expected_dims) .and. all(dims == padded) &
+         & .and. count == product(expected_dims), more="descriptor of '"//expected_name//"'")
+   end subroutine check_c_descriptor
+
+   !> The response field family describes the current item: the count, each
+   !> array with its Fortran shape reversed into C order, the description
+   !> through a length query and a copy, and a read in Fortran order; outside
+   !> a pass, for an index past the count, an undeclared name and missing
+   !> outputs it fails by name and leaves the caller's outputs alone
+   subroutine test_response_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_response), target :: response
+      !> Items accumulated in this order, with distinct values
+      type(potential_adjoint_response_type) :: adjoint
+      type(density_response_type) :: density
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      !> Descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Description buffer and its reported length
+      character(kind=c_char), allocatable :: about(:)
+      integer(c_size_t) :: length
+      !> Read buffer, longer than every array so a write past the count shows
+      real(c_double) :: values(20)
+      !> NUL-terminated array names
+      character(kind=c_char), allocatable, target :: w_phi(:), w_hess_rho(:), bogus(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+      integer :: i
+
+      adjoint%w_phi = [1.0_c_double, 2.0_c_double, 3.0_c_double]
+      allocate (density%w_rho(2), source=4.0_c_double)
+      allocate (density%w_grad_rho(3, 2), source=5.0_c_double)
+      density%w_hess_rho = reshape([(real(i, c_double), i=1, 18)], [3, 3, 2])
+      call response_accumulate(response%ptr, adjoint, err%ptr)
+      if (.not. allocated(err%ptr)) call response_accumulate(response%ptr, density, err%ptr)
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      w_phi = c_string("w_phi")
+      w_hess_rho = c_string("w_hess_rho")
+      bogus = c_string("w_bogus")
+
+      checks: block
+         ! Arrays belong to the item the walk stopped at, and none is current yet
+         nfield = -1_c_int
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_count] No current response item - call next() first")
+         call check_untouched(error, nfield /= -1_c_int, "response field count outside a pass")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_info] No current response item - call next() first")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "response info outside a pass", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, &
+            & "[moist_get_response_field_about] No current response item - call next() first")
+         if (allocated(error)) exit checks
+
+         ! The potential adjoint declares its one array
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_success(error, err, "potential_adjoint count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "potential_adjoint declares one array")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_phi info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_phi", [3_c_int])
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_response_field_info_api(c_loc(err), c_loc(response), 1_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_response_field_info] Field index out of range - "// &
+            & "use the count from get_response_field_count")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "response index past the count", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+
+         ! Length query, then a copy of exactly the declared description
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "w_phi about length")
+         if (allocated(error)) exit checks
+         call query%fetch("w_phi")
+         call adjoint%list_fields(query)
+         call check(error, length == len(query%hit%about, c_size_t), more="w_phi about length")
+         if (allocated(error)) exit checks
+         allocate (about(length + 1))
+         about = "Z"
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), about, length + 1, length)
+         call expect_success(error, err, "w_phi about copy")
+         if (allocated(error)) exit checks
+         call check(error, c_buffer_text(about), query%hit%about, "w_phi description")
+         if (allocated(error)) exit checks
+
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_success(error, err, "w_phi read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:3) == adjoint%w_phi) .and. all(values(4:) == sentinel), &
+            & more="w_phi read back wrong")
+         if (allocated(error)) exit checks
+
+         ! The density lists its three ranks, each shape reversed into C order
+         call check(error, logical(next_response_item_api(c_loc(err), c_loc(response))))
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response), nfield)
+         call expect_success(error, err, "density count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 3_c_int, "density declares three arrays")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_rho", [2_c_int])
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 1_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_grad_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_grad_rho", [2_c_int, 3_c_int])
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 2_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "w_hess_rho info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "w_hess_rho", [2_c_int, 3_c_int, 3_c_int])
+         if (allocated(error)) exit checks
+
+         ! The rank-3 read is the Fortran array flattened, C row-major over the reversed dims
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_hess_rho), values)
+         call expect_success(error, err, "w_hess_rho read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:18) == [(real(i, c_double), i=1, 18)]) .and. all(values(19:) == sentinel), &
+            & more="w_hess_rho read back wrong")
+         if (allocated(error)) exit checks
+
+         ! An undeclared name, a name from the other item and missing outputs are named
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(bogus), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] density has no field 'w_bogus'")
+         if (allocated(error)) exit checks
+         values = sentinel
+         call get_response_field_real_api(c_loc(err), c_loc(response), c_loc(w_phi), values)
+         call expect_error(error, err, "[moist_get_response_field_real] density has no field 'w_phi'")
+         call check_untouched(error, any(values /= sentinel), "read of an undeclared response array")
+         if (allocated(error)) exit checks
+         call get_response_field_count_api(c_loc(err), c_loc(response))
+         call expect_error(error, err, "[moist_get_response_field_count] Required pointer 'nfield' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, dtype=dtype, rank=rank, &
+            & dims=dims, count=count)
+         call expect_error(error, err, "[moist_get_response_field_info] Required pointer 'name' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_info_api(c_loc(err), c_loc(response), 0_c_int, name, dtype, rank, count=count)
+         call expect_error(error, err, "[moist_get_response_field_info] Required pointer 'dims' is missing")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), about, 4_c_size_t)
+         call expect_error(error, err, "[moist_get_response_field_about] Length output is required")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_loc(w_phi), &
+            & capacity=4_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] Invalid buffer or capacity")
+         if (allocated(error)) exit checks
+         call get_response_field_about_api(c_loc(err), c_loc(response), c_null_ptr, &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_response_field_about] Field name is missing")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_response_field_count_api(c_loc(err), c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_response_field_count] Response handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "response field count without a handle")
+      end block checks
+
+   end subroutine test_response_fields
+
+   !> The coupling request field family describes the inputs of the current
+   !> request: a point request lists none and refuses `width` by name, a
+   !> Gaussian moment request lists its exponents over the grid, describes
+   !> and reads them back; outside a pass and for missing outputs it fails by
+   !> name and leaves the caller's outputs alone
+   subroutine test_coupling_request_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      !> Native wrappers
+      type(vp_error), target :: err
+      type(vp_coupling), target :: cpl
+      !> Coupling the wrapper borrows, walked point first
+      type(coupling_type), target :: coupling
+      type(point_potential_request_type) :: point
+      type(gaussian_moment_request_type) :: moments
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      !> Descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Description buffer and its reported length
+      character(kind=c_char), allocatable :: about(:)
+      integer(c_size_t) :: length
+      !> Read buffer, longer than the exponents so a write past the count shows
+      real(c_double) :: values(5)
+      !> NUL-terminated input name
+      character(kind=c_char), allocatable, target :: width(:)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      moments%width = [0.5_c_double, 1.5_c_double, 2.5_c_double]
+      call request_require(point, moist_phase_energy, "phi", err%ptr)
+      if (.not. allocated(err%ptr)) call request_require(moments, moist_phase_energy, "gt", err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_begin_registration(coupling)
+         call coupling_register(coupling, "point", point, err%ptr)
+      end if
+      if (.not. allocated(err%ptr)) call coupling_register(coupling, "moments", moments, err%ptr)
+      if (.not. allocated(err%ptr)) then
+         call coupling_snapshot(coupling, ngrid=3)
+         call coupling_arm(coupling, moist_phase_energy, err%ptr)
+      end if
+      if (allocated(err%ptr)) then
+         call test_failed(error, "Setup failed: "//err%ptr%message)
+         return
+      end if
+      cpl%ptr => coupling
+      width = c_string("width")
+
+      checks: block
+         ! Inputs belong to the request the walk stopped at, and none is current yet
+         nfield = -1_c_int
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_error(error, err, &
+            & "[moist_get_coupling_request_field_count] No current coupling request - call next() first")
+         call check_untouched(error, nfield /= -1_c_int, "request field count outside a pass")
+         if (allocated(error)) exit checks
+         values = sentinel
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_error(error, err, &
+            & "[moist_get_coupling_request_field_real] No current coupling request - call next() first")
+         call check_untouched(error, any(values /= sentinel), "request field read outside a pass")
+         if (allocated(error)) exit checks
+
+         ! A point request has no inputs
+         call check(error, logical(next_coupling_request_api(c_loc(err), c_loc(cpl))), &
+            & more="point_potential is not pending")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_success(error, err, "point_potential count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 0_c_int, "point_potential declares inputs")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_coupling_request_field_info] Field index out of range - "// &
+            & "use the count from get_coupling_request_field_count")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "point_potential index 0", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] point_potential has no field 'width' - "// &
+            & "it is either unknown or was not computed; enumerate the available fields with "// &
+            & "get_coupling_request_field_count/get_coupling_request_field_info")
+         call check_untouched(error, any(values /= sentinel), "read of width on a point request")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=0_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_coupling_request_field_about] point_potential has no field 'width'")
+         if (allocated(error)) exit checks
+
+         ! The moment request lists its exponents, one per grid point
+         call check(error, logical(next_coupling_request_api(c_loc(err), c_loc(cpl))), &
+            & more="gaussian_moments is not pending")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl), nfield)
+         call expect_success(error, err, "gaussian_moments count")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "gaussian_moments declares one input")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "width info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "width", [3_c_int])
+         if (allocated(error)) exit checks
+
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "width about length")
+         if (allocated(error)) exit checks
+         call query%fetch("width")
+         call moments%list_fields(query)
+         call check(error, length == len(query%hit%about, c_size_t), more="width about length")
+         if (allocated(error)) exit checks
+         allocate (about(length + 1))
+         about = "Z"
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), about, length + 1, length)
+         call expect_success(error, err, "width about copy")
+         if (allocated(error)) exit checks
+         call check(error, c_buffer_text(about), query%hit%about, "width description")
+         if (allocated(error)) exit checks
+
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width), values)
+         call expect_success(error, err, "width read")
+         if (allocated(error)) exit checks
+         call check(error, all(values(:3) == moments%width) .and. all(values(4:) == sentinel), &
+            & more="width read back wrong")
+         if (allocated(error)) exit checks
+
+         ! Missing outputs, a missing name and a missing handle are named
+         call get_coupling_request_field_count_api(c_loc(err), c_loc(cpl))
+         call expect_error(error, err, "[moist_get_coupling_request_field_count] Required pointer 'nfield' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_info_api(c_loc(err), c_loc(cpl), 0_c_int, name, dtype, rank, count=count)
+         call expect_error(error, err, "[moist_get_coupling_request_field_info] Required pointer 'dims' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_loc(width))
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] Required pointer 'values' is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_real_api(c_loc(err), c_loc(cpl), c_null_ptr, values)
+         call expect_error(error, err, "[moist_get_coupling_request_field_real] Field name is missing")
+         if (allocated(error)) exit checks
+         call get_coupling_request_field_about_api(c_loc(err), c_loc(cpl), c_loc(width), &
+            & capacity=4_c_size_t, length=length)
+         call expect_error(error, err, "[moist_get_coupling_request_field_about] Invalid buffer or capacity")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_coupling_request_field_count_api(c_loc(err), c_null_ptr, nfield)
+         call expect_error(error, err, "[moist_get_coupling_request_field_count] Coupling handle is missing")
+         call check_untouched(error, nfield /= -1_c_int, "request field count without a handle")
+      end block checks
+
+   end subroutine test_coupling_request_fields
 
    !> Gradient readers refuse capacities one short of the built cavity before
    !> writing a single element

@@ -18,7 +18,7 @@
 !>                                         derivative outputs
 !>   * `submit(coupling, name, values)` - answer the current request or stop
 !>   * `copy_potential_adjoint(response, item)`, `copy_density(response, item)`,
-!>     `copy_gostshyp_amplitude(response, item)` - copy of one response item,
+!>     `copy_gaussian_amplitude(response, item)` - copy of one response item,
 !>                                         unallocated when absent; walks a
 !>                                         full pass, so the cursor is rewound
 !>   * `stage_point_charge_energy(error, component, cavity, qat, mol, coupling)`
@@ -64,14 +64,14 @@ module test_helpers
       & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view, &
       & coupling_check_mandatory
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      density_response_type, gostshyp_amplitude_response_type
+      density_response_type, gaussian_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
    use testdrive, only: error_type, test_failed
    implicit none(type, external)
    private
 
    public :: component_view, submit, read_fixture_moments
-   public :: copy_potential_adjoint, copy_density, copy_gostshyp_amplitude
+   public :: copy_potential_adjoint, copy_density, copy_gaussian_amplitude
    public :: center_at_origin
    public :: get_test_structures
    public :: get_test_radii
@@ -1044,17 +1044,17 @@ contains
       end do
    end subroutine copy_density
 
-   !> Copy of the GOSTSHYP amplitude item, unallocated when the response has none
+   !> Copy of the Gaussian amplitude item, unallocated when the response has none
    !>
    !> Walks the whole pass, so the response cursor is rewound on return
-   subroutine copy_gostshyp_amplitude(response, item)
+   subroutine copy_gaussian_amplitude(response, item)
       type(response_type), intent(inout) :: response
-      type(gostshyp_amplitude_response_type), allocatable, intent(out) :: item
+      type(gaussian_amplitude_response_type), allocatable, intent(out) :: item
       do while (response%next())
          select type (found => response%item())
-         type is (gostshyp_amplitude_response_type)
+         type is (gaussian_amplitude_response_type)
             item = found
          end select
       end do
-   end subroutine copy_gostshyp_amplitude
+   end subroutine copy_gaussian_amplitude
 end module test_helpers

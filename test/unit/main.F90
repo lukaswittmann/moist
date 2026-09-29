@@ -24,7 +24,8 @@ program tester
    use test_math_grid, only: collect_math_grid
    use test_math_quadrature, only: collect_math_quadrature
    use test_math_grid_s2, only: collect_math_grid_s2
-   use test_math_fft, only: collect_math_fft
+   use test_math_fft_dst4, only: collect_math_fft_dst4
+   use test_math_fft_3d, only: collect_math_fft_3d
    use test_finufft, only: collect_finufft
    use test_math_grid_nufft, only: collect_math_grid_nufft
    use test_math_grid_3d, only: collect_math_grid_3d
@@ -84,7 +85,8 @@ program tester
       & new_testsuite("math_grid", collect_math_grid), &
       & new_testsuite("math_quadrature", collect_math_quadrature), &
       & new_testsuite("math_grid_s2", collect_math_grid_s2), &
-      & new_testsuite("math_fft", collect_math_fft), &
+      & new_testsuite("math_fft_dst4", collect_math_fft_dst4), &
+      & new_testsuite("math_fft_3d", collect_math_fft_3d), &
       & new_testsuite("finufft", collect_finufft), &
       & new_testsuite("math_grid_nufft", collect_math_grid_nufft), &
       & new_testsuite("math_grid_3d", collect_math_grid_3d), &

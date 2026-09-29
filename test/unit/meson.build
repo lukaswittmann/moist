@@ -29,7 +29,8 @@ tests = [
   'math_grid',
   'math_quadrature',
   'math_grid_s2',
-  'math_fft',
+  'math_fft_dst4',
+  'math_fft_3d',
   'finufft',
   'math_grid_nufft',
   'math_grid_3d',
@@ -68,6 +69,8 @@ test_selected = {
   'math_grid_3d_threaded': [
     'batched_fft_uses_threaded_backend',
     'batched_ifft_uses_threaded_backend',
+    'molecular_nufft_type12_threaded',
+    'molecular_nufft_type3_threaded',
   ],
 }
 

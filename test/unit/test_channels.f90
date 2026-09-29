@@ -15,9 +15,10 @@ module test_channels
       & coupling_make_view, coupling_close_view
    use moist_channels_response, only: response_type, response_item_type, &
       & potential_adjoint_response_type, density_response_type, &
-      & gostshyp_amplitude_response_type, atomic_multipole_adjoint_response_type, &
+      & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
       & current_response_item, response_accumulate, response_clear
+   use moist_channels_fields, only: field_query_type, field_real, field_max_rank
    use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
@@ -85,7 +86,12 @@ contains
          new_unittest("radial_potential_answer_and_read", test_radial_potential), &
          new_unittest("radial_potential_refuses_missing_counts", test_radial_potential_counts), &
          new_unittest("response_atomic_charge_adjoint", test_response_charge_adjoint), &
-         new_unittest("response_radial_potential_adjoint", test_response_radial_adjoint)]
+         new_unittest("response_radial_potential_adjoint", test_response_radial_adjoint), &
+         new_unittest("response_items_declare_their_arrays", test_response_list_fields), &
+         new_unittest("response_unfilled_arrays_not_declared", test_response_list_partial), &
+         new_unittest("placeholders_declare_nothing", test_placeholders_list_nothing), &
+         new_unittest("request_inputs_declared", test_request_list_fields), &
+         new_unittest("field_query_add_real3", test_field_query_add_real3)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -1330,7 +1336,7 @@ contains
       type(moist_error_type), allocatable :: err
       type(response_type) :: response
       type(potential_adjoint_response_type) :: charge
-      type(gostshyp_amplitude_response_type) :: amplitude
+      type(gaussian_amplitude_response_type) :: amplitude
       type(density_response_type) :: density
 
       allocate (charge%w_phi, source=[1.0_wp, 2.0_wp, 3.0_wp])
@@ -1359,7 +1365,7 @@ contains
       call response_accumulate(response, density, err)
       call check_moist_error(error, err, "density accumulate")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,gostshyp_amplitude,density,")
+      call check(error, walk_names(response), "potential_adjoint,gaussian_amplitude,density,")
       if (allocated(error)) return
 
       ! One pass contracting each kind, as a host does
@@ -1367,7 +1373,7 @@ contains
          select type (item => response%item())
          type is (potential_adjoint_response_type)
             call check(error, all(item%w_phi == [2.0_wp, 3.0_wp, 4.0_wp]), "two accumulations sum")
-         type is (gostshyp_amplitude_response_type)
+         type is (gaussian_amplitude_response_type)
             call check(error, all(item%w_overlap == 1.0_wp) &
                & .and. all(item%w_normal_deriv == [7.0_wp, 8.0_wp]), &
                & "overlap summed twice, normal derivative copied once")
@@ -1410,7 +1416,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(response_type) :: response
-      type(gostshyp_amplitude_response_type) :: amplitude
+      type(gaussian_amplitude_response_type) :: amplitude
       call two_items(response, err)
       call check_moist_error(error, err, "two items")
       if (allocated(error)) return
@@ -1423,7 +1429,7 @@ contains
       if (allocated(error)) return
       call check(error, item_name(response), "no_current_item", more="accumulate kept the current item")
       if (allocated(error)) return
-      call check(error, walk_names(response), "potential_adjoint,density,gostshyp_amplitude,")
+      call check(error, walk_names(response), "potential_adjoint,density,gaussian_amplitude,")
       if (allocated(error)) return
       call check(error, response%next())
       if (allocated(error)) return
@@ -1576,7 +1582,7 @@ contains
    end subroutine test_response_density_ranks
 
    !> A differently sized rank-1 array is refused for the potential adjoint and
-   !> for the first GOSTSHYP amplitude, and the stored item is left unchanged
+   !> for the first Gaussian amplitude, and the stored item is left unchanged
    !>
    !> @param[out] error Test failure
    subroutine test_response_vector_shape(error)
@@ -1588,8 +1594,8 @@ contains
       type(response_type) :: response
       !> Potential adjoint item
       type(potential_adjoint_response_type) :: charge
-      !> GOSTSHYP amplitude item
-      type(gostshyp_amplitude_response_type) :: amplitude
+      !> Gaussian amplitude item
+      type(gaussian_amplitude_response_type) :: amplitude
 
       allocate (charge%w_phi, source=[1.0_wp, 2.0_wp, 3.0_wp])
       call response_accumulate(response, charge, err)
@@ -1614,7 +1620,7 @@ contains
       call response_accumulate(response, amplitude, err)
       call check(error, allocated(err), more="a shorter w_overlap was accumulated")
       if (allocated(error)) return
-      call check(error, index(err%message, "'gostshyp_amplitude'") > 0 &
+      call check(error, index(err%message, "'gaussian_amplitude'") > 0 &
          & .and. index(err%message, "'w_overlap'") > 0, "error names item and array")
       if (allocated(error)) return
 
@@ -1622,7 +1628,7 @@ contains
          select type (item => response%item())
          type is (potential_adjoint_response_type)
             call check(error, all(item%w_phi == [1.0_wp, 2.0_wp, 3.0_wp]), "stored w_phi unchanged")
-         type is (gostshyp_amplitude_response_type)
+         type is (gaussian_amplitude_response_type)
             ! The refusal stops before the normal derivative is summed
             call check(error, all(item%w_overlap == [1.0_wp, 2.0_wp]) &
                & .and. all(item%w_normal_deriv == [3.0_wp, 4.0_wp]), "stored amplitudes unchanged")
@@ -2541,5 +2547,413 @@ contains
       call check(error, index(err%message, "Response item 'radial_potential_adjoint': accumulated 'dg_dphi'") > 0, &
          & more=err%message)
    end subroutine test_response_radial_adjoint
+
+   !* ================================================================================= *!
+   !*                              Self-describing arrays                               *!
+   !* ================================================================================= *!
+
+   !> Enumerate what an item declares, through the polymorphic binding
+   subroutine list_item(item, query)
+      !> Item to describe
+      class(response_item_type), intent(in) :: item
+      !> Enumeration result
+      type(field_query_type), intent(out) :: query
+      call query%enumerate()
+      call item%list_fields(query)
+   end subroutine list_item
+
+   !> An enumeration holds `nfield` descriptors and copied no payload
+   subroutine check_listing(error, query, owner, nfield)
+      type(error_type), allocatable, intent(out) :: error
+      !> Walker holding an enumeration
+      type(field_query_type), intent(in) :: query
+      !> Owner named in the failure message
+      character(len=*), intent(in) :: owner
+      !> Expected number of declared fields
+      integer, intent(in) :: nfield
+      call check(error, query%nfield, nfield, owner//" declares a different number of arrays")
+      if (allocated(error)) return
+      call check(error, .not. allocated(query%rvals) .and. .not. allocated(query%ivals) &
+         & .and. .not. allocated(query%lvals), more=owner//": listing copied a payload")
+   end subroutine check_listing
+
+   !> One enumerated descriptor: a described real array of the given name and
+   !> Fortran extents, counted as their product
+   subroutine check_declared(error, query, ifield, name, dims)
+      type(error_type), allocatable, intent(out) :: error
+      !> Walker holding an enumeration
+      type(field_query_type), intent(in) :: query
+      !> 1-based position in the enumeration
+      integer, intent(in) :: ifield
+      !> Expected name
+      character(len=*), intent(in) :: name
+      !> Expected extents, fastest-varying first; the size is the rank
+      integer, intent(in) :: dims(:)
+      !> Extents padded with ones to the highest rank
+      integer :: padded(field_max_rank)
+      padded = 1
+      padded(:size(dims)) = dims
+      if (ifield > query%nfield) then
+         call test_failed(error, "'"//name//"' is not declared")
+         return
+      end if
+      associate (info => query%info(ifield))
+         call check(error, info%name, name, "declaration order")
+         if (allocated(error)) return
+         call check(error, info%dtype == field_real .and. info%rank == size(dims) &
+            & .and. all(info%dims == padded) .and. info%count() == product(dims), &
+            & more="descriptor of '"//name//"'")
+         if (allocated(error)) return
+         call check(error, len(info%about) > 0, more="'"//name//"' has no description")
+      end associate
+   end subroutine check_declared
+
+   !> A fetched real array: its descriptor and its payload flattened in
+   !> Fortran order
+   subroutine check_fetched(error, query, name, dims, values)
+      type(error_type), allocatable, intent(out) :: error
+      !> Walker after a fetch
+      type(field_query_type), intent(in) :: query
+      !> Fetched name
+      character(len=*), intent(in) :: name
+      !> Expected extents, fastest-varying first
+      integer, intent(in) :: dims(:)
+      !> Expected payload in Fortran order
+      real(wp), intent(in) :: values(:)
+      !> Extents padded with ones to the highest rank
+      integer :: padded(field_max_rank)
+      padded = 1
+      padded(:size(dims)) = dims
+      call check(error, query%found, more="'"//name//"' was not found")
+      if (allocated(error)) return
+      call check(error, query%hit%name, name, "fetched name")
+      if (allocated(error)) return
+      call check(error, query%hit%dtype == field_real .and. query%hit%rank == size(dims) &
+         & .and. all(query%hit%dims == padded), more="fetched descriptor of '"//name//"'")
+      if (allocated(error)) return
+      call check(error, allocated(query%rvals) .and. .not. allocated(query%ivals) &
+         & .and. .not. allocated(query%lvals), more="'"//name//"' has no real payload")
+      if (allocated(error)) return
+      call check(error, size(query%rvals), size(values), "payload size of '"//name//"'")
+      if (allocated(error)) return
+      call check(error, all(query%rvals == values), more="'"//name//"' is not flattened in Fortran order")
+   end subroutine check_fetched
+
+   !> Fetch one array of an item and compare it with `check_fetched`
+   subroutine check_item_fetch(error, item, name, dims, values)
+      type(error_type), allocatable, intent(out) :: error
+      !> Item to read
+      class(response_item_type), intent(in) :: item
+      !> Array name
+      character(len=*), intent(in) :: name
+      !> Expected extents, fastest-varying first
+      integer, intent(in) :: dims(:)
+      !> Expected payload in Fortran order
+      real(wp), intent(in) :: values(:)
+      type(field_query_type) :: query
+      call query%fetch(name)
+      call item%list_fields(query)
+      call check_fetched(error, query, name, dims, values)
+   end subroutine check_item_fetch
+
+   !> A fetch of a name the item did not declare finds and copies nothing
+   subroutine check_item_absent(error, item, name)
+      type(error_type), allocatable, intent(out) :: error
+      !> Item to read
+      class(response_item_type), intent(in) :: item
+      !> Array name
+      character(len=*), intent(in) :: name
+      type(field_query_type) :: query
+      call query%fetch(name)
+      call item%list_fields(query)
+      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+         & more=trim(item%name())//" declares '"//name//"'")
+   end subroutine check_item_absent
+
+   !> Every response item declares exactly its filled arrays under the
+   !> component names with their Fortran extents; a listing copies nothing and
+   !> a fetch hands the payload out flattened in Fortran order, rank 3 included
+   subroutine test_response_list_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(potential_adjoint_response_type) :: adjoint
+      type(density_response_type) :: density
+      type(gaussian_amplitude_response_type) :: amplitude
+      type(atomic_multipole_adjoint_response_type) :: multipoles
+      type(atomic_charge_adjoint_response_type) :: charges
+      type(radial_potential_adjoint_response_type) :: radial
+      type(field_query_type) :: query
+      !> Distinct values, offset per array, so a transpose or a mix-up shows
+      real(wp) :: seq(18)
+      integer :: i
+      seq = [(real(i, wp), i=1, 18)]
+
+      adjoint%w_phi = seq(:3)
+      call list_item(adjoint, query)
+      call check_listing(error, query, "potential_adjoint", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "w_phi", [3])
+      if (allocated(error)) return
+      call check_item_fetch(error, adjoint, "w_phi", [3], seq(:3))
+      if (allocated(error)) return
+
+      density%w_rho = 100.0_wp + seq(:2)
+      density%w_grad_rho = reshape(200.0_wp + seq(:6), [3, 2])
+      density%w_hess_rho = reshape(300.0_wp + seq, [3, 3, 2])
+      call list_item(density, query)
+      call check_listing(error, query, "density", 3)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "w_rho", [2])
+      if (allocated(error)) return
+      call check_declared(error, query, 2, "w_grad_rho", [3, 2])
+      if (allocated(error)) return
+      call check_declared(error, query, 3, "w_hess_rho", [3, 3, 2])
+      if (allocated(error)) return
+      call check_item_fetch(error, density, "w_rho", [2], 100.0_wp + seq(:2))
+      if (allocated(error)) return
+      call check_item_fetch(error, density, "w_grad_rho", [3, 2], 200.0_wp + seq(:6))
+      if (allocated(error)) return
+      call check_item_fetch(error, density, "w_hess_rho", [3, 3, 2], 300.0_wp + seq)
+      if (allocated(error)) return
+
+      amplitude%w_overlap = 100.0_wp + seq(:4)
+      amplitude%w_normal_deriv = 200.0_wp + seq(:4)
+      call list_item(amplitude, query)
+      call check_listing(error, query, "gaussian_amplitude", 2)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "w_overlap", [4])
+      if (allocated(error)) return
+      call check_declared(error, query, 2, "w_normal_deriv", [4])
+      if (allocated(error)) return
+      call check_item_fetch(error, amplitude, "w_overlap", [4], 100.0_wp + seq(:4))
+      if (allocated(error)) return
+      call check_item_fetch(error, amplitude, "w_normal_deriv", [4], 200.0_wp + seq(:4))
+      if (allocated(error)) return
+
+      multipoles%dg_dq = 100.0_wp + seq(:2)
+      multipoles%dg_dmu = reshape(200.0_wp + seq(:6), [3, 2])
+      multipoles%dg_dtheta = reshape(300.0_wp + seq, [3, 3, 2])
+      call list_item(multipoles, query)
+      call check_listing(error, query, "atomic_multipole_adjoint", 3)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "dg_dq", [2])
+      if (allocated(error)) return
+      call check_declared(error, query, 2, "dg_dmu", [3, 2])
+      if (allocated(error)) return
+      call check_declared(error, query, 3, "dg_dtheta", [3, 3, 2])
+      if (allocated(error)) return
+      call check_item_fetch(error, multipoles, "dg_dq", [2], 100.0_wp + seq(:2))
+      if (allocated(error)) return
+      call check_item_fetch(error, multipoles, "dg_dmu", [3, 2], 200.0_wp + seq(:6))
+      if (allocated(error)) return
+      call check_item_fetch(error, multipoles, "dg_dtheta", [3, 3, 2], 300.0_wp + seq)
+      if (allocated(error)) return
+
+      charges%dg_dq = seq(:5)
+      call list_item(charges, query)
+      call check_listing(error, query, "atomic_charge_adjoint", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "dg_dq", [5])
+      if (allocated(error)) return
+      call check_item_fetch(error, charges, "dg_dq", [5], seq(:5))
+      if (allocated(error)) return
+
+      ! Three radii of two sites, points fastest
+      radial%dg_dphi = reshape(seq(:6), [3, 2])
+      call list_item(radial, query)
+      call check_listing(error, query, "radial_potential_adjoint", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "dg_dphi", [3, 2])
+      if (allocated(error)) return
+      call check_item_fetch(error, radial, "dg_dphi", [3, 2], seq(:6))
+   end subroutine test_response_list_fields
+
+   !> An array an item was filled without is neither listed nor fetched: every
+   !> multipole order is optional, and so is every density rank
+   subroutine test_response_list_partial(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(atomic_multipole_adjoint_response_type) :: charges_only, quadrupoles_only, empty
+      type(density_response_type) :: hessian_only
+      type(field_query_type) :: query
+      integer :: i
+
+      charges_only%dg_dq = [1.0_wp, 2.0_wp]
+      call list_item(charges_only, query)
+      call check_listing(error, query, "multipoles with charges only", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "dg_dq", [2])
+      if (allocated(error)) return
+      call check_item_absent(error, charges_only, "dg_dmu")
+      if (allocated(error)) return
+      call check_item_absent(error, charges_only, "dg_dtheta")
+      if (allocated(error)) return
+
+      quadrupoles_only%dg_dtheta = reshape([(real(i, wp), i=1, 9)], [3, 3, 1])
+      call list_item(quadrupoles_only, query)
+      call check_listing(error, query, "multipoles with quadrupoles only", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "dg_dtheta", [3, 3, 1])
+      if (allocated(error)) return
+      call check_item_fetch(error, quadrupoles_only, "dg_dtheta", [3, 3, 1], [(real(i, wp), i=1, 9)])
+      if (allocated(error)) return
+      call check_item_absent(error, quadrupoles_only, "dg_dq")
+      if (allocated(error)) return
+
+      call list_item(empty, query)
+      call check_listing(error, query, "multipoles without arrays", 0)
+      if (allocated(error)) return
+      call check_item_absent(error, empty, "dg_dq")
+      if (allocated(error)) return
+
+      allocate (hessian_only%w_hess_rho(3, 3, 2), source=1.0_wp)
+      call list_item(hessian_only, query)
+      call check_listing(error, query, "density with Hessian weights only", 1)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "w_hess_rho", [3, 3, 2])
+      if (allocated(error)) return
+      call check_item_absent(error, hessian_only, "w_rho")
+      if (allocated(error)) return
+      call check_item_absent(error, hessian_only, "w_grad_rho")
+   end subroutine test_response_list_partial
+
+   !> Outside a walk the placeholder item and the placeholder request declare
+   !> nothing, and a fetch of any name finds nothing
+   subroutine test_placeholders_list_nothing(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(response_type) :: response
+      type(coupling_type) :: coupling
+      type(field_query_type) :: query
+      class(response_item_type), allocatable :: item
+      class(coupling_request_type), allocatable :: request
+
+      item = response%item()
+      call check(error, trim(item%name()), "no_current_item")
+      if (allocated(error)) return
+      call list_item(item, query)
+      call check_listing(error, query, "no_current_item", 0)
+      if (allocated(error)) return
+      call check_item_absent(error, item, "w_phi")
+      if (allocated(error)) return
+
+      request = coupling%request()
+      call check(error, trim(request%name()), "no_current_request")
+      if (allocated(error)) return
+      call query%enumerate()
+      call request%list_fields(query)
+      call check_listing(error, query, "no_current_request", 0)
+      if (allocated(error)) return
+      call query%fetch("width")
+      call request%list_fields(query)
+      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+         & more="the placeholder request declares 'width'")
+   end subroutine test_placeholders_list_nothing
+
+   !> A request declares the inputs its kind carries: the registered Gaussian
+   !> moment request lists its exponents over the snapshot's points, the other
+   !> kinds and a moment request without exponents list nothing
+   subroutine test_request_list_fields(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      type(gaussian_moment_request_type) :: bare
+      type(field_query_type) :: query
+      class(coupling_request_type), allocatable :: request
+      integer :: visits
+
+      call three_requests(coupling, err)
+      call check_moist_error(error, err, "three requests")
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+
+      ! The walk hands out copies, and each copy describes itself
+      visits = 0
+      do while (coupling%next())
+         visits = visits + 1
+         request = coupling%request()
+         call query%enumerate()
+         call request%list_fields(query)
+         select case (trim(request%name()))
+         case ("gaussian_moments")
+            call check_listing(error, query, "gaussian_moments", 1)
+            if (allocated(error)) return
+            ! Two exponents, one per point of the snapshot
+            call check_declared(error, query, 1, "width", [2])
+            if (allocated(error)) return
+            call query%fetch("width")
+            call request%list_fields(query)
+            call check_fetched(error, query, "width", [2], [1.0_wp, 2.0_wp])
+         case default
+            call check_listing(error, query, trim(request%name()), 0)
+            if (allocated(error)) return
+            call query%fetch("width")
+            call request%list_fields(query)
+            call check(error, .not. query%found, more=trim(request%name())//" declares 'width'")
+         end select
+         if (allocated(error)) return
+      end do
+      call check(error, visits, 3, "the energy walk visits every request")
+      if (allocated(error)) return
+
+      ! Unset exponents are not declared
+      call query%enumerate()
+      call bare%list_fields(query)
+      call check_listing(error, query, "gaussian_moments without exponents", 0)
+   end subroutine test_request_list_fields
+
+   !> Declare a rank-1, a rank-3 and an unallocated rank-3 array, as an
+   !> owner's `list_fields` would
+   subroutine declare_mixed(query, vector, tensor, missing)
+      !> Walker in either mode
+      type(field_query_type), intent(inout) :: query
+      !> Rank-1 neighbour declared first
+      real(wp), allocatable, intent(in) :: vector(:)
+      !> Rank-3 array under test
+      real(wp), allocatable, intent(in) :: tensor(:, :, :)
+      !> Never allocated
+      real(wp), allocatable, intent(in) :: missing(:, :, :)
+      call query%add_real("vector", "Rank-1 neighbour", vector)
+      call query%add_real3("tensor", "Rank-3 array (2, 3, 4)", tensor)
+      call query%add_real3("missing", "Never allocated", missing)
+   end subroutine declare_mixed
+
+   !> `add_real3` on its own: a rank-3 array is listed with its Fortran extents
+   !> and fetched flattened in Fortran order next to a rank-1 neighbour; an
+   !> unallocated one is declared in neither mode and an unknown name is not found
+   subroutine test_field_query_add_real3(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(field_query_type) :: query
+      real(wp), allocatable :: vector(:), tensor(:, :, :), missing(:, :, :)
+      integer :: i
+      vector = [-1.0_wp, -2.0_wp]
+      tensor = reshape([(real(i, wp), i=1, 24)], [2, 3, 4])
+
+      call query%enumerate()
+      call declare_mixed(query, vector, tensor, missing)
+      call check_listing(error, query, "add_real3", 2)
+      if (allocated(error)) return
+      call check_declared(error, query, 1, "vector", [2])
+      if (allocated(error)) return
+      call check_declared(error, query, 2, "tensor", [2, 3, 4])
+      if (allocated(error)) return
+      call check(error, query%index_of("missing"), 0, "an unallocated array was listed")
+      if (allocated(error)) return
+
+      call query%fetch("tensor")
+      call declare_mixed(query, vector, tensor, missing)
+      call check_fetched(error, query, "tensor", [2, 3, 4], [(real(i, wp), i=1, 24)])
+      if (allocated(error)) return
+
+      call query%fetch("missing")
+      call declare_mixed(query, vector, tensor, missing)
+      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+         & more="an unallocated array was fetched")
+      if (allocated(error)) return
+
+      call query%fetch("unknown")
+      call declare_mixed(query, vector, tensor, missing)
+      call check(error, .not. query%found .and. .not. allocated(query%rvals), &
+         & more="an undeclared name was fetched")
+   end subroutine test_field_query_add_real3
 
 end module test_channels
