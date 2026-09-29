@@ -228,6 +228,7 @@ endif()
 target_link_libraries(moist PUBLIC
   mctc-lib::mctc-lib
   jonquil::jonquil
+  toml-f::toml-f
   LAPACK::LAPACK
   BLAS::BLAS
 )
@@ -278,6 +279,13 @@ if(MOIST_TESTS)
 
   moist_add_subproject(test-drive)
   moist_add_subproject(mstore)
+  if(MOIST_OPENMP)
+    foreach(tgt test-drive-lib mstore-lib)
+      if(TARGET ${tgt})
+        target_link_libraries(${tgt} PRIVATE OpenMP::OpenMP_Fortran)
+      endif()
+    endforeach()
+  endif()
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
@@ -285,20 +293,22 @@ if(MOIST_TESTS)
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
-    math_quadrature math_grid_s2 math_fft finufft math_grid_nufft math_grid_3d
+    math_quadrature math_grid_s2 math_fft_dst4 math_fft_3d finufft math_grid_nufft math_grid_3d
     math_grid_3d_threaded moz_1d moz_3d
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
-    cavity_iswig cavity_numsa cavity_marchingcubes
+    cavity_iswig cavity_numsa cavity_marchingcubes cavity_surface_adjoint
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
     model_component_pcm_electrostatics model_component_pcm_cpcm
     model_component_gostshyp model_component_pv
     model_continuum channels model_coupling
   )
-  # Run as a selected test, outside test-drive's OpenMP team
-  set(moist_test_selected_math_grid_3d_threaded batched_fft_uses_threaded_backend)
+  # Each run as a selected test, outside test-drive's OpenMP team
+  set(moist_test_selected_math_grid_3d_threaded
+    batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
+    molecular_nufft_type12_threaded molecular_nufft_type3_threaded)
 
   set(moist_test_srcs
     "${_unit}/main.F90"
@@ -332,8 +342,17 @@ if(MOIST_TESTS)
   endif()
 
   foreach(suite IN LISTS moist_test_suites)
-    add_test(NAME ${suite} COMMAND moist-tester ${suite} ${moist_test_selected_${suite}})
-    set_tests_properties(${suite} PROPERTIES
+    if(DEFINED moist_test_selected_${suite})
+      set(runs "")
+      foreach(sel IN LISTS moist_test_selected_${suite})
+        add_test(NAME ${suite}_${sel} COMMAND moist-tester ${suite} ${sel})
+        list(APPEND runs ${suite}_${sel})
+      endforeach()
+    else()
+      add_test(NAME ${suite} COMMAND moist-tester ${suite})
+      set(runs ${suite})
+    endif()
+    set_tests_properties(${runs} PROPERTIES
       ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
       TIMEOUT 360
     )
