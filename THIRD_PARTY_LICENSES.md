@@ -10,11 +10,6 @@ it below.
 
 ## Vendored code
 
-### With local modifications
-
-These numerical components were copied from upstream repositories — primarily by
-Jacob Williams (https://github.com/jacobwilliams) — and then modified for use in `moist`.
-
 | Component | Path in `moist` | Upstream repository | Original author(s) | License | License file |
 |---|---|---|---|---|---|
 | SLSQP (+ BVLS) | `src/moist/math/solver/slsqp/` | jacobwilliams/slsqp | Dieter Kraft (1988); ACM (1994); BVLS: Lawson & Hanson (netlib, public domain); modern Fortran by J. Williams | BSD-3-Clause (+ MIT-style original grant) | `src/moist/math/solver/slsqp/LICENSE` |
@@ -25,10 +20,8 @@ Jacob Williams (https://github.com/jacobwilliams) — and then modified for use 
 | LSMR | `src/moist/math/linalg/lsmr/` | jacobwilliams/LSMR (tag 1.0.0) | D. Fong & M. Saunders (SOL, Stanford) | BSD-2-Clause | `src/moist/math/linalg/lsmr/LICENSE` |
 | LUSOL | `src/moist/math/linalg/lusol/` | jacobwilliams/lusol (tag 1.0.0) | Systems Optimization Laboratory, Stanford University | MIT OR BSD-3-Clause | `src/moist/math/linalg/lusol/LICENSE` |
 
-### Without local modifications
-
-These are pinned to an exact upstream commit/tag and compiled in place by both the meson and CMake builds.
-See each directory's `PROVENANCE.md` for the exact file list, origin and pinned revision.
+They are unmodified except for two OpenMP fixes in FINUFFT's `spread.hpp` and `makeplan.hpp`.
+See each directory's `PROVENANCE.md` for the exact file list, origin, pinned revision and local patches.
 
 | Component | Path in `moist` | Upstream repository | Pinned revision | License | License file |
 |---|---|---|---|---|---|
