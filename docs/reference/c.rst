@@ -80,8 +80,8 @@ Rejected coupling answers follow the invalidation rules in :doc:`coupling`.
 ``moist_get_error`` takes a buffer and a pointer to its positive
 ``int`` capacity. It NUL-terminates and truncates; no error produces an empty string.
 
-``moist_get_banner``, ``moist_get_version_string`` and
-``moist_get_cavity_field_about`` take capacity by value and return
+``moist_get_banner``, ``moist_get_version_string``,
+``moist_get_cavity_field_about`` and ``moist_get_model_field_about`` take capacity by value and return
 the full text length through a required ``size_t *length``, excluding the terminator.
 Pass NULL and zero to query the length, then allocate ``length + 1`` bytes.
 Truncation is successful and detectable as ``length >= capacity``. Positive-capacity buffers are always
@@ -89,14 +89,17 @@ NUL-terminated; errors leave ``length`` unchanged. The host prints banner text
 to its own stream. Capacities above ``SIZE_MAX/2`` are rejected.
 
 Field names are bounded by ``MOIST_FIELD_NAME_MAX`` (excluding the terminator);
-allocate ``MOIST_FIELD_NAME_MAX + 1`` bytes for ``moist_get_cavity_field_info``.
+allocate ``MOIST_FIELD_NAME_MAX + 1`` bytes for ``moist_get_cavity_field_info`` and
+``moist_get_model_field_info``. The ``moist_get_model_field_*`` getters read the
+same named fields through a model handle, for every model family: a continuum
+model reports its cavity's fields, a volume model its grid.
 
 Arrays use flat C row-major order, with the last axis contiguous.
 Dimensions reverse the native Fortran dimensions without rearranging the buffer.
 For example, positions and gradients are ``[natoms][3]``; grid vectors are
 ``[ngrid][3]``. Named-field descriptors report these C dimensions. The entries
 of the host loop -- the coupling and response entries below and the cavity
-field getters -- take no size: moist reads or writes exactly the documented
+and model field getters -- take no size: moist reads or writes exactly the documented
 shape, and the host allocates it. ``moist_get_cavity_results``,
 ``moist_get_cavity_gaussian``, ``moist_assemble_amat``,
 ``moist_get_model_gradient`` and the gradient-tensor getters take ``int``

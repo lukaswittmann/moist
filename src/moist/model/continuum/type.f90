@@ -10,6 +10,7 @@ module moist_model_continuum_type
    use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
    use moist_model_type, only: solvation_model_type
    use moist_channels_response, only: response_type, response_clear
+   use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
@@ -49,6 +50,8 @@ module moist_model_continuum_type
       procedure :: get_gradient => continuum_get_gradient
       !> Declare the cavity and component requests of one coupling pass
       procedure :: declare_pass => declare_continuum_pass
+      !> Publish the fields of the owned cavity
+      procedure :: list_fields => continuum_list_fields
    end type model_continuum_type
 
 contains
@@ -406,6 +409,18 @@ contains
       nat = 0
       if (allocated(self%cavity)) nat = self%cavity%nsph
    end function model_atom_count
+
+   !> Publish the fields of the owned cavity, its evaluation domain
+   !>
+   !> @param[in] self Model
+   !> @param[in,out] query Field walker
+   subroutine continuum_list_fields(self, query)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+      if (allocated(self%cavity)) call self%cavity%list_fields(query)
+   end subroutine continuum_list_fields
 
    !> Select the forward gradient reference path
    !>

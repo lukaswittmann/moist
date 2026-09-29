@@ -36,10 +36,10 @@
  * - No-size entries: moist_answer_coupling_request,
  *   moist_get_coupling_request_width, moist_get_response_array, the two name
  *   getters moist_get_coupling_request_name/moist_get_response_item_name,
- *   and the moist_get_cavity_field_* entries
+ *   and the moist_get_cavity_field_* and moist_get_model_field_* entries
  * - Each reads or writes exactly the grid size of the coupling, response or
  *   cavity and the extents of the named output, array or field: a row-major
- *   (ngrid, dims...) array, or the `count` moist_get_cavity_field_info reports
+ *   (ngrid, dims...) array, or the `count` the matching *_field_info reports
  * - Not checked against the buffer size; host allocates the documented shape
  * - Names written with terminator into MOIST_NAME_MAX + 1 characters
  *   (field names: MOIST_FIELD_NAME_MAX + 1)
@@ -503,9 +503,9 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  *    retries what is still missing; false also reports a failure, check err
  *    after the loop. Leaving the loop early resumes the pass at the next call
  * 4. For the current request, read its name, ask which outputs are missing,
- *    compute them on the cavity grid -- read the grid from the model's cavity
- *    via moist_get_model_cavity + moist_get_cavity_field_real ("xyz", "xi0",
- *    ...) -- and submit each with moist_answer_coupling_request. A rejected
+ *    compute them on the model's grid -- read it with
+ *    moist_get_model_field_real ("xyz", "xi0", ...), which works for every
+ *    model family -- and submit each with moist_answer_coupling_request. A rejected
  *    output stays missing until a valid retry; the others survive
  * 5. Call the moist_get_model_* entry matching the staged phase; fails by
  *    name on a wrong staging or any missing output, evaluation does not
@@ -840,14 +840,15 @@ moist_delete_cavity(moist_cavity* cavity) moist_API_SUFFIX__V_1_0;
 /// `branch`, `branch_count`, `wbranch`, `wleb`, `rho`, `r_iI0`, `normal0`,
 /// `converged` and the diagnostics -- and iSwiG adds its own `numbering`
 
-/// Element type tags reported by moist_get_cavity_field_info. Values are
+/// Element type tags reported by moist_get_cavity_field_info and
+/// moist_get_model_field_info. Values are
 /// part of the contract; read a field with the accessor matching its tag
 #define MOIST_FIELD_REAL 1
 #define MOIST_FIELD_INT 2
 #define MOIST_FIELD_BOOL 3
 
 /// Highest rank a field can have, i.e. the length of the `dims` buffer
-/// moist_get_cavity_field_info writes
+/// the *_field_info entries write
 #define MOIST_FIELD_MAX_RANK 2
 /// Maximum field-name length excluding the NUL terminator. Mirrored by
 /// `max_field_name_len` (api.f90)
@@ -911,6 +912,65 @@ moist_get_cavity_field_bool(moist_error error,
                             moist_cavity cavity,
                             const char* name,
                             bool* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Named fields of a model's evaluation domain (Tier 2)
+///
+/// The same named, typed arrays as the cavity field getters, read through the
+/// model handle for every model family: a continuum model reports its cavity's
+/// fields, a volume model its grid (`ngrid`, `natom`, `xyz`, `w`, `xi0`,
+/// `owner`), a model without an evaluation domain none. Enumerate them with
+/// moist_get_model_field_count + moist_get_model_field_info, then read one with
+/// the accessor matching its MOIST_FIELD_* tag. Like the cavity getters they
+/// need no update; a model that was not updated declares only what it holds
+
+/// Number of named fields of the model's evaluation domain
+/// Read it again after moist_update_model
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_count(moist_error error,
+                            moist_model model,
+                            int* nfield) moist_API_SUFFIX__V_1_0;
+
+/// Describe one model field by position; outputs as moist_get_cavity_field_info
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_info(moist_error error,
+                           moist_model model,
+                           int index /* : 0-based, below the count from
+                                        moist_get_model_field_count */,
+                           char* name /* [MOIST_FIELD_NAME_MAX + 1] */,
+                           int* dtype /* : one of MOIST_FIELD_* */,
+                           int* rank /* : 0 for a scalar */,
+                           int* dims /* [MOIST_FIELD_MAX_RANK] */,
+                           int* count /* : elements a read writes */) moist_API_SUFFIX__V_1_0;
+
+/// Copy a model field description or query its length, following
+/// moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_about(moist_error error, moist_model model,
+                            const char* name, char* about,
+                            size_t capacity, size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_REAL model field by name: the `count` elements
+/// moist_get_model_field_info reports, rank-2 fields flat in row-major order
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_real(moist_error error,
+                           moist_model model,
+                           const char* name,
+                           double* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_INT model field by name; indices as the owner declares
+/// them, e.g. a cavity's 0-based `owner`
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_int(moist_error error,
+                          moist_model model,
+                          const char* name,
+                          int* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_BOOL model field by name
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_bool(moist_error error,
+                           moist_model model,
+                           const char* name,
+                           bool* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
 /// Assemble A-matrix and compute xi values
 /// Must be called before accessing xi or using the A-matrix
