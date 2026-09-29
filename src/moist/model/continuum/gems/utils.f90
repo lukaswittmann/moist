@@ -1,4 +1,4 @@
-module moist_model_gems_utils
+module moist_model_continuum_gems_utils
    use mctc_env, only: wp
    use mctc_io, only: structure_type, &
       & new_structure
@@ -75,4 +75,4 @@ contains
 
    end subroutine BuildSuperStructure
 
-end module moist_model_gems_utils
+end module moist_model_continuum_gems_utils

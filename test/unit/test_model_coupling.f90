@@ -8,7 +8,7 @@
 module test_model_coupling
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
@@ -21,11 +21,11 @@ module test_model_coupling
       & response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_type, only: cavity_type
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv, &
-      & solvation_model_component_gostshyp, new_component_gostshyp
-   use moist_model_general, only: solvation_model_general, new_model_general
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
+      & model_continuum_component_gostshyp, new_component_gostshyp
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -82,13 +82,13 @@ contains
    end subroutine collect_model_coupling
 
    subroutine test_invalidation(error)
-      type(error_type), allocatable, intent(out) :: error
+            type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: first, second
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
@@ -133,8 +133,8 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: original
-      type(solvation_model_general), allocatable, target :: copied
+      type(model_continuum_type), target :: original
+      type(model_continuum_type), allocatable, target :: copied
       type(coupling_type), pointer :: coupling
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
@@ -163,8 +163,8 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_cpcm) :: pcm1, pcm2
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_cpcm) :: pcm1, pcm2
       type(coupling_type), pointer :: coupling
       type(response_type) :: response
       real(wp) :: energies(4)
@@ -177,7 +177,7 @@ contains
       allocate(gradients(3, mol%nat, 4), source=0.0_wp)
       energies = 0.0_wp
       do k = 1, 4
-         call new_model_general(model, cavity, ctx, err)
+         call new_continuum_model(model, cavity, ctx, err)
          if (k == 1 .or. k == 3) call model%add_component(pcm1, err)
          if (k /= 3) call model%add_component(pcm2, err)
          if (k == 2) call model%add_component(pcm1, err)
@@ -211,13 +211,13 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_gostshyp) :: component
       type(coupling_type), pointer :: coupling
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_gostshyp(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -242,7 +242,7 @@ contains
       if (allocated(error)) return
       call check(error, .not. coupling%next(), more="GOSTSHYP declares one request")
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_gostshyp(component, 0.0_wp)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -264,13 +264,13 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_pv) :: component
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_pv) :: component
       type(coupling_type), pointer :: coupling
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_pv(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -378,7 +378,7 @@ contains
    !>                            components can still be added
    subroutine cpcm_model(model, cavity, ctx, mol, with_pv, error, configure_only)
       !> Model to build
-      type(solvation_model_general), intent(out) :: model
+      type(model_continuum_type), intent(out) :: model
       !> Cavity template copied into the model
       class(cavity_type), intent(in) :: cavity
       !> Run context owned by the caller
@@ -393,10 +393,10 @@ contains
       logical, intent(in), optional :: configure_only
 
       type(moist_error_type), allocatable :: err
-      type(solvation_model_component_cpcm) :: cpcm
-      type(solvation_model_component_pv) :: pv
+      type(model_continuum_component_cpcm) :: cpcm
+      type(model_continuum_component_pv) :: pv
 
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       if (failed(error, err, "model setup")) return
       if (with_pv) then
          call new_component_pv(pv, test_pressure)
@@ -429,7 +429,7 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model, other
+      type(model_continuum_type), target :: model, other
       type(coupling_type), pointer :: coupling, foreign
       !> Previous response and sentinel charge
       type(response_type) :: response
@@ -532,8 +532,8 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_gostshyp) :: gostshyp
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_gostshyp) :: gostshyp
       type(coupling_type), pointer :: coupling
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
@@ -587,7 +587,7 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: coupling
       !> Potential answer on the current grid
       real(wp), allocatable :: phi(:)
@@ -639,7 +639,7 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: coupling
       type(response_type) :: response
       real(wp), allocatable :: gradient(:, :)

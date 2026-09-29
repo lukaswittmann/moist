@@ -18,10 +18,10 @@ module test_cavity_drop_born_fit
    use mstore, only : get_structure
    use moist_cavity_drop, only : cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only : moist_cavity_drop_lsf_svdw_type
-   use moist_math_grid_lebedev, only : get_angular_grid, grid_size, &
+   use moist_math_quadrature_lebedev, only : get_angular_grid, grid_size, &
       lebedev_order_from_num
-   use moist_model_component_pcm_solvers, only : solve_pcm_cholesky
-   use moist_model_component_pcm_amat, only : assemble_pcm_amat
+   use moist_model_continuum_component_pcm_solvers, only : solve_pcm_cholesky
+   use moist_model_continuum_component_pcm_amat, only : assemble_pcm_amat
    use moist_radii, only : new_radii_custom_atoms, radius_type
    use moist_utils_prettylistprint, only : prettylistprinter, new_prettylistprinter
    use testdrive, only : new_unittest, unittest_type, error_type, test_failed

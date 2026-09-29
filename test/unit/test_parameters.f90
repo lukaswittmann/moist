@@ -12,8 +12,8 @@ module test_parameters
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_cavity_drop_lsf_isodensity_callback, only: moist_cavity_drop_lsf_isodensity_callback_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
    implicit none(type, external)
@@ -159,7 +159,7 @@ contains
       type(moist_cavity_drop_lsf_isodensity_callback_type) :: rho
       type(cavity_type_drop) :: drop
       type(cavity_type_iswig) :: iswig
-      type(solvation_model_component_cpcm) :: pcm
+      type(model_continuum_component_cpcm) :: pcm
 
       call new_context(ctx, verbosity=0)
       shape%blend_k = 7.0_wp

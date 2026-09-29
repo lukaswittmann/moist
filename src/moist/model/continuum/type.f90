@@ -1,34 +1,35 @@
-!> General list-driven solvation model
-module moist_model_general
+!> Typed continuum model with direct accumulation and family-owned geometry
+module moist_model_continuum_type
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
-   use moist_model_type, only: solvation_model_type, solvation_model_component_type
+   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type
+   use moist_cavity_drop, only: cavity_type_drop
+   use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
+   use moist_model_type, only: solvation_model_type
    use moist_channels_response, only: response_type, response_clear
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & coupling_registry_type, moist_phase_energy, moist_phase_response, &
       & moist_phase_gradient, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
       & coupling_make_view, coupling_close_view
-   use moist_cavity_drop, only: cavity_type_drop
-   use moist_cavity_drop_lsf_isodensity_internal, only: moist_cavity_drop_lsf_isodensity_internal_type
-   use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
 
    implicit none(type, external)
    private
 
-   public :: solvation_model_general, new_model_general
+   public :: model_continuum_type, new_continuum_model
 
    !> Owning box that makes heterogeneous components storable in one array
    type :: solvation_component_slot
       !> Concrete component owned by this slot
-      class(solvation_model_component_type), allocatable :: item
+      class(model_continuum_component_type), allocatable :: item
    end type solvation_component_slot
 
-   !> General solvation model with one cavity and an ordered component list
-   type, extends(solvation_model_type) :: solvation_model_general
-      !> Authoritative cavity shared by all components
+   !> Typed continuum model with one cavity and an ordered component list
+   type, extends(solvation_model_type) :: model_continuum_type
+      !> Owned geometry shared by this family's components
       class(cavity_type), allocatable :: cavity
       !> Ordered heterogeneous component collection
       type(solvation_component_slot), allocatable :: components(:)
@@ -42,57 +43,54 @@ module moist_model_general
       logical :: force_forward_gradient = .false.
    contains
       final :: destroy_model
-      procedure :: set_isodensity_density
+      !> Invalidate results and all model-owned couplings
+      procedure, private :: invalidate => invalidate_model
+      procedure :: is_updated => model_is_updated
+      procedure :: atom_count => model_atom_count
+      procedure :: use_forward_gradient => model_use_forward_gradient
+      procedure :: get_cavity => borrow_cavity
+      procedure :: set_isodensity_density => set_cavity_density
       procedure :: add_component
-      procedure :: update => general_update
-      procedure :: get_energy => general_get_energy
-      procedure :: get_response => general_get_response
-      procedure :: get_gradient => general_get_gradient
+      procedure :: update => continuum_update
+      procedure :: get_energy => continuum_get_energy
+      procedure :: get_response => continuum_get_response
+      procedure :: get_gradient => continuum_get_gradient
       !> Build a model-owned coupling and declare its requests
-      procedure :: new_coupling => general_new_coupling
-      procedure :: release_coupling => general_release_coupling
+      procedure :: new_coupling => continuum_new_coupling
+      procedure :: release_coupling => continuum_release_coupling
       !> Stage one phase of the coupling (declare, record the grid size, arm)
-      procedure, private :: stage => general_stage_coupling
+      procedure, private :: stage => continuum_stage_coupling
       !> Stage the energy phase
-      procedure :: prepare_energy => general_prepare_energy
+      procedure :: prepare_energy => continuum_prepare_energy
       !> Stage the response phase
-      procedure :: prepare_response => general_prepare_response
+      procedure :: prepare_response => continuum_prepare_response
       !> Stage the gradient phase
-      procedure :: prepare_gradient => general_prepare_gradient
-   end type solvation_model_general
+      procedure :: prepare_gradient => continuum_prepare_gradient
+   end type model_continuum_type
 
 contains
 
-   !> Install internal isodensity data and invalidate all model results
-   subroutine set_isodensity_density(self, density, error)
-      !> Model owning the cavity
-      class(solvation_model_general), intent(inout) :: self
-      !> Cartesian-monomial density matrix
-      real(wp), intent(in) :: density(:, :)
-      !> Invalid cavity or density
-      type(error_type), allocatable, intent(out) :: error
-
+   !> Invalidate cached results and host answers
+   !>
+   !> @param[in,out] self Model
+   subroutine invalidate_model(self)
+      !> Model
+      class(model_continuum_type), intent(inout) :: self
       self%updated = .false.
       call self%couplings%invalidate()
-      if (allocated(self%cavity)) then
-         select type (cavity => self%cavity)
-         type is (cavity_type_drop)
-            if (allocated(cavity%lsf_model)) then
-               select type (lsf => cavity%lsf_model)
-               type is (moist_cavity_drop_lsf_isodensity_internal_type)
-                  call lsf%set_density(density, error)
-                  return
-               end select
-            end if
-         end select
-      end if
-      call fatal_error(error, "Model requires an internal isodensity cavity")
-   end subroutine set_isodensity_density
+   end subroutine invalidate_model
 
-   !> Construct an empty general model around an owned copy of a cavity
-   subroutine new_model_general(self, cavity, ctx, error)
-      !> General model
-      type(solvation_model_general), intent(out) :: self
+   !> Construct an empty continuum model around an owned copy of a cavity
+   !>
+   !> The geometry copy must not carry state bound to its own address
+   !>
+   !> @param[out] self Instance
+   !> @param[in] cavity Live cavity
+   !> @param[in] ctx Borrowed run context
+   !> @param[out] error Error handling
+   subroutine new_continuum_model(self, cavity, ctx, error)
+      !> Continuum model
+      type(model_continuum_type), intent(out) :: self
       !> Cavity configuration to copy
       class(cavity_type), intent(in) :: cavity
       !> Shared run context, which must outlive the model
@@ -114,14 +112,18 @@ contains
       self%updated = .false.
       self%configured = .false.
 
-   end subroutine new_model_general
+   end subroutine new_continuum_model
 
    !> Append an owned copy of a component before the first update
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in] component Compatible component to copy
+   !> @param[out] error Error handling
    subroutine add_component(self, component, error)
-      !> General model
-      class(solvation_model_general), intent(inout) :: self
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Component to copy
-      class(solvation_model_component_type), intent(in) :: component
+      class(model_continuum_component_type), intent(in) :: component
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -130,6 +132,10 @@ contains
       !> Slot index and old slot count
       integer :: i, n
 
+      if (.not. allocated(self%cavity)) then
+         call fatal_error(error, "Construct the model before adding components")
+         return
+      end if
       if (self%configured) then
          call fatal_error(error, "Components cannot be added after model update")
          return
@@ -146,10 +152,14 @@ contains
 
    end subroutine add_component
 
-   !> Update the authoritative cavity and every component
-   subroutine general_update(self, mol, error)
-      !> General model
-      class(solvation_model_general), intent(inout) :: self
+   !> Update the cavity and every component
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in] mol Molecular structure
+   !> @param[out] error Error handling
+   subroutine continuum_update(self, mol, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Molecular structure
       class(structure_type), intent(in) :: mol
       !> Error handling
@@ -162,7 +172,7 @@ contains
       self%configured = .true.
       call self%couplings%invalidate()
       if (.not. allocated(self%cavity)) then
-         call fatal_error(error, "General model has no cavity")
+         call fatal_error(error, "Continuum model has no cavity")
          return
       end if
       call self%cavity%update(mol, error)
@@ -173,15 +183,20 @@ contains
       end do
       self%updated = .true.
 
-   end subroutine general_update
+   end subroutine continuum_update
 
    !> Accumulate the energy of every component
    !>
    !> Requires a coupling staged by `prepare_energy`; reports any other staged
    !> phase, then every missing output of the energy phase, by name
-   subroutine general_get_energy(self, coupling, energy, error)
-      !> General model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[in,out] energy Energy accumulator
+   !> @param[out] error Error handling
+   subroutine continuum_get_energy(self, coupling, energy, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(inout), target :: coupling
       !> Energy accumulator
@@ -213,7 +228,7 @@ contains
       end do
       energy = energy + local_energy
 
-   end subroutine general_get_energy
+   end subroutine continuum_get_energy
 
    !> Assemble the host part of the response phase
    !>
@@ -224,9 +239,14 @@ contains
    !> - components accumulate into it within this call
    !> - the coupling must be staged by `prepare_response`; a stale mandatory
    !>   request of the response phase is then reported by name
-   subroutine general_get_response(self, coupling, response, error)
-      !> General model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[in,out] response Host response accumulator
+   !> @param[out] error Error handling
+   subroutine continuum_get_response(self, coupling, response, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(inout), target :: coupling
       !> Response list, cleared after input validation
@@ -234,7 +254,7 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      !> Shared surface accumulator
+      !> Shared cavity adjoint accumulator
       type(cavity_surface_adjoint_type) :: acc
       !> Component index
       integer :: i
@@ -250,6 +270,7 @@ contains
       call coupling_check_mandatory(coupling, moist_phase_response, error)
       if (allocated(error)) return
       call response_clear(response)
+
       call acc%init(self%cavity%ngrid)
       do i = 1, size(self%components)
          call coupling_make_view(coupling, i, view)
@@ -263,7 +284,7 @@ contains
       end do
       call self%cavity%get_surface_response(acc, response, error)
 
-   end subroutine general_get_response
+   end subroutine continuum_get_response
 
    !> Accumulate the nuclear gradient of every component
    !>
@@ -273,7 +294,7 @@ contains
    !>
    !> - in reverse mode (the default) the components never see `get_gradient`,
    !>   so that part is collected through their `get_response` after the
-   !>   surface contraction
+   !>   cavity contraction
    !> - in forward mode every component emits it from its own `get_gradient`
    !> - the two branches are exclusive, so nothing is counted twice
    !> - the coupling must be staged by `prepare_gradient`; a stale mandatory
@@ -281,9 +302,15 @@ contains
    !> - the components' own checks run against the armed phase, so the
    !>   reverse-path `get_response` calls do not demand the response-phase
    !>   requests again
-   subroutine general_get_gradient(self, coupling, response, gradient, error)
-      !> General model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[in,out] response Host response accumulator
+   !> @param[in,out] gradient Nuclear gradient accumulator
+   !> @param[out] error Error handling
+   subroutine continuum_get_gradient(self, coupling, response, gradient, error)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Host coupling data
       class(coupling_type), intent(inout), target :: coupling
       !> Response list, cleared after input validation
@@ -309,15 +336,15 @@ contains
       call coupling_check_mandatory(coupling, moist_phase_gradient, error)
       if (allocated(error)) return
       if (any(shape(gradient) /= [3, self%cavity%nsph])) then
-         call fatal_error(error, "General-model gradient shape mismatch")
+         call fatal_error(error, "Continuum-model gradient shape mismatch")
          return
       end if
       call response_clear(response)
       allocate (local(3, self%cavity%nsph), source=0.0_wp)
 
       if (.not. self%force_forward_gradient) then
-         ! Reverse mode: every component states its surface adjoint, the cavity
-         ! contracts the lot once, and nothing builds a nuclear Jacobian
+         ! Reverse mode: every component states its geometry adjoint, the
+         ! cavity contracts the lot once, and nothing builds a nuclear Jacobian
          block
             type(cavity_surface_adjoint_type) :: acc
 
@@ -356,22 +383,22 @@ contains
 
       gradient = gradient + local
 
-   end subroutine general_get_gradient
+   end subroutine continuum_get_gradient
 
    !* ================================================================================= *!
    !*                            Coupling declaration and staging                       *!
    !* ================================================================================= *!
 
-   !> Declare cavity and component requests, then record the grid size
+   !> Declare cavity and component requests, then record the extents
    !>
    !> Calculations with matching inputs are shared between components
    !>
-   !> @param[in,out] self     Updated general model
+   !> @param[in,out] self     Updated continuum model
    !> @param[in,out] coupling Coupling to declare
    !> @param[out]   error    Error handling
-   subroutine declare_general_pass(self, coupling, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: self
+   subroutine declare_continuum_pass(self, coupling, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Coupling to declare
       type(coupling_type), intent(inout) :: coupling
       !> Error handling
@@ -389,17 +416,21 @@ contains
          call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
          if (allocated(error)) return
       end do
-      call coupling_snapshot(coupling, self%cavity%ngrid)
+      call coupling_snapshot(coupling, self%cavity%ngrid, self%cavity%nsph)
 
-   end subroutine declare_general_pass
+   end subroutine declare_continuum_pass
 
    !> Build the host coupling of an updated model
    !>
    !> - multiple couplings may coexist; release unused ones with
    !>   `release_coupling`
-   subroutine general_new_coupling(self, coupling, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout), target :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine continuum_new_coupling(self, coupling, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout), target :: self
       !> Coupling to build
       type(coupling_type), pointer, intent(out) :: coupling
       !> Error handling
@@ -410,19 +441,22 @@ contains
       if (allocated(error)) return
       call self%couplings%mint(coupling, error)
       if (allocated(error)) return
-      call declare_general_pass(self, coupling, error)
+      call declare_continuum_pass(self, coupling, error)
       if (allocated(error)) call self%release_coupling(coupling)
 
-   end subroutine general_new_coupling
+   end subroutine continuum_new_coupling
 
    !> Release a coupling before destroying its parent model
-   subroutine general_release_coupling(self, coupling)
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   subroutine continuum_release_coupling(self, coupling)
       !> Owning model
-      class(solvation_model_general), intent(inout), target :: self
+      class(model_continuum_type), intent(inout), target :: self
       !> Coupling to release; other aliases must no longer be used
       type(coupling_type), pointer, intent(inout) :: coupling
       call self%couplings%release(coupling)
-   end subroutine general_release_coupling
+   end subroutine continuum_release_coupling
 
    !> Stage per-output requirements and preserve still-valid raw answers
    !>
@@ -430,13 +464,13 @@ contains
    !>   staging reuse outputs until geometry or declared scientific inputs change
    !> - every staging starts a new host walk: `next()` begins at the first request
    !>
-   !> @param[in,out] self     Updated general model
+   !> @param[in,out] self     Updated continuum model
    !> @param[in,out] coupling Coupling built by `new_coupling`
    !> @param[in]    phase    Phase index, `moist_phase_energy` and so on
    !> @param[out]   error    Foreign coupling, invalid phase or failed declaration
-   subroutine general_stage_coupling(self, coupling, phase, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: self
+   subroutine continuum_stage_coupling(self, coupling, phase, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Phase index
@@ -451,16 +485,20 @@ contains
          return
       end if
       if (phase == moist_phase_energy) call coupling_invalidate(coupling)
-      call declare_general_pass(self, coupling, error)
+      call declare_continuum_pass(self, coupling, error)
       if (allocated(error)) return
       call coupling_arm(coupling, phase, error)
 
-   end subroutine general_stage_coupling
+   end subroutine continuum_stage_coupling
 
    !> Stage the energy phase of the coupling
-   subroutine general_prepare_energy(self, coupling, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine continuum_prepare_energy(self, coupling, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
@@ -468,12 +506,16 @@ contains
 
       call self%stage(coupling, moist_phase_energy, error)
 
-   end subroutine general_prepare_energy
+   end subroutine continuum_prepare_energy
 
    !> Stage the response phase of the coupling
-   subroutine general_prepare_response(self, coupling, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine continuum_prepare_response(self, coupling, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
@@ -481,12 +523,16 @@ contains
 
       call self%stage(coupling, moist_phase_response, error)
 
-   end subroutine general_prepare_response
+   end subroutine continuum_prepare_response
 
    !> Stage the gradient phase of the coupling
-   subroutine general_prepare_gradient(self, coupling, error)
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: self
+   !>
+   !> @param[in,out] self Instance
+   !> @param[in,out] coupling Host coupling
+   !> @param[out] error Error handling
+   subroutine continuum_prepare_gradient(self, coupling, error)
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout) :: self
       !> Coupling built by `new_coupling`
       type(coupling_type), intent(inout), target :: coupling
       !> Error handling
@@ -494,12 +540,15 @@ contains
 
       call self%stage(coupling, moist_phase_gradient, error)
 
-   end subroutine general_prepare_gradient
+   end subroutine continuum_prepare_gradient
 
    !> Require a successfully updated model
+   !>
+   !> @param[in] self Instance
+   !> @param[out] error Error handling
    subroutine require_updated(self, error)
-      !> General model
-      class(solvation_model_general), intent(in) :: self
+      !> Continuum model
+      class(model_continuum_type), intent(in) :: self
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -508,9 +557,96 @@ contains
    end subroutine require_updated
 
    !> Release collections owned by the model; borrowed handles must not outlive it
+   !>
+   !> @param[in,out] self Instance
    subroutine destroy_model(self)
       !> Model being destroyed
-      type(solvation_model_general), intent(inout) :: self
+      type(model_continuum_type), intent(inout) :: self
       call self%couplings%clear()
    end subroutine destroy_model
-end module moist_model_general
+
+   !> Whether the latest update completed
+   !>
+   !> @param[in] self Model
+   function model_is_updated(self) result(updated)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> Update status
+      logical :: updated
+      updated = self%updated
+   end function model_is_updated
+
+   !> Number of atoms in the owned geometry
+   !>
+   !> @param[in] self Model
+   function model_atom_count(self) result(nat)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> Atom count
+      integer :: nat
+      nat = 0
+      if (allocated(self%cavity)) nat = self%cavity%nsph
+   end function model_atom_count
+
+   !> Select the forward gradient reference path
+   !>
+   !> @param[in,out] self Model
+   !> @param[in] enabled Whether to use forward geometry derivatives
+   subroutine model_use_forward_gradient(self, enabled)
+      !> Model
+      class(model_continuum_type), intent(inout) :: self
+      !> Whether to use forward geometry derivatives
+      logical, intent(in) :: enabled
+      self%force_forward_gradient = enabled
+   end subroutine model_use_forward_gradient
+
+   !> Borrow the cavity with an error before construction
+   !>
+   !> @param[in] self Model owning the cavity
+   !> @param[out] cavity Borrowed cavity
+   !> @param[out] error Missing cavity
+   subroutine borrow_cavity(self, cavity, error)
+      !> Model owning the cavity
+      class(model_continuum_type), intent(in), target :: self
+      !> Borrowed cavity
+      class(cavity_type), pointer, intent(out) :: cavity
+      !> Missing cavity
+      type(error_type), allocatable, intent(out) :: error
+      nullify (cavity)
+      if (allocated(self%cavity)) cavity => self%cavity
+      if (.not. associated(cavity)) call fatal_error(error, "Cavity model is not initialized")
+   end subroutine borrow_cavity
+
+   !> Install density data and invalidate the model
+   !>
+   !> @param[in,out] self Model owning the cavity
+   !> @param[in] density Cartesian-monomial density matrix
+   !> @param[out] error Incompatible cavity or density
+   subroutine set_cavity_density(self, density, error)
+      !> Model owning the cavity
+      class(model_continuum_type), intent(inout), target :: self
+      !> Cartesian-monomial density matrix
+      real(wp), intent(in) :: density(:, :)
+      !> Incompatible cavity or density
+      type(error_type), allocatable, intent(out) :: error
+      !> Borrowed continuum cavity
+      class(cavity_type), pointer :: cavity
+      call self%invalidate()
+      nullify (cavity)
+      if (allocated(self%cavity)) cavity => self%cavity
+      if (associated(cavity)) then
+         select type (cavity)
+         type is (cavity_type_drop)
+            if (allocated(cavity%lsf_model)) then
+               select type (lsf => cavity%lsf_model)
+               type is (moist_cavity_drop_lsf_isodensity_internal_type)
+                  call lsf%set_density(density, error)
+                  return
+               end select
+            end if
+         end select
+      end if
+      call fatal_error(error, "Model requires an internal isodensity cavity")
+   end subroutine set_cavity_density
+
+end module moist_model_continuum_type

@@ -52,8 +52,9 @@ module test_helpers
    use mstore_but14diol, only: get_but14diol_records
    use mstore_upu23, only: get_upu23_records
    use moist_cavity_type, only: cavity_type
-   use moist_model_type, only: solvation_model_component_type
-   use moist_model_general, only: solvation_model_general
+   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type
+   use moist_model_continuum, only: model_continuum_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
@@ -89,6 +90,7 @@ module test_helpers
    public :: check_moist_error
    public :: fill_legacy_radii
    public :: build_numbering_map
+   public :: cavity_xi0
 
    !> Default n for get_test_structures (must be a multiple of 5)
    integer, parameter :: default_n_structures = 5
@@ -424,9 +426,12 @@ contains
       integer :: i, j
       !> Separation vector and its length
       real(wp) :: r_vec(3), r_dist
+      !> Gaussian widths of the cavity, read by name
+      real(wp), allocatable :: xi0(:)
       !> Separation below which the singular self-term is skipped
       real(wp), parameter :: min_dist = 1.0e-10_wp
 
+      if (gaussian) xi0 = cavity_xi0(cavity)
       allocate (phi(cavity%ngrid), source=0.0_wp)
       do i = 1, cavity%ngrid
          do j = 1, mol%nat
@@ -434,7 +439,7 @@ contains
             r_dist = sqrt(sum(r_vec**2))
             if (r_dist < min_dist) cycle
             if (gaussian) then
-               phi(i) = phi(i) + qat(j)*erf(cavity%xi0(i)*r_dist)/r_dist
+               phi(i) = phi(i) + qat(j)*erf(xi0(i)*r_dist)/r_dist
             else
                phi(i) = phi(i) + qat(j)/r_dist
             end if
@@ -516,9 +521,12 @@ contains
       integer :: i, j
       !> Separation vector, its length, and the potential gradient
       real(wp) :: r_vec(3), r_dist, grad_phi(3), x, screening
+      !> Gaussian widths of the cavity, read by name
+      real(wp), allocatable :: xi0(:)
       !> Separation below which the singular self-term is skipped
       real(wp), parameter :: min_dist = 1.0e-10_wp
 
+      if (gaussian) xi0 = cavity_xi0(cavity)
       allocate (w_xyz(3, cavity%ngrid), w_xi(cavity%ngrid), source=0.0_wp)
       do i = 1, cavity%ngrid
          grad_phi(:) = 0.0_wp
@@ -528,7 +536,7 @@ contains
             if (r_dist < min_dist) cycle
             screening = 1.0_wp
             if (gaussian) then
-               x = cavity%xi0(i)*r_dist
+               x = xi0(i)*r_dist
                screening = erf(x) - 2.0_wp*x*exp(-x*x)/sqrt(acos(-1.0_wp))
                w_xi(i) = w_xi(i) + qat(j)*2.0_wp*exp(-x*x)/sqrt(acos(-1.0_wp))
             end if
@@ -625,7 +633,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       !> Component whose requests the coupling declares
-      class(solvation_model_component_type), intent(inout) :: component
+      class(model_continuum_component_type), intent(inout) :: component
 
       !> Updated cavity
       class(cavity_type), intent(in) :: cavity
@@ -670,10 +678,12 @@ contains
    subroutine stage_model_point_charge_energy(error, model, qat, mol, coupling)
 
       !> testdrive failure
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: model_cavity
       type(error_type), allocatable, intent(out) :: error
 
       !> Updated general model
-      class(solvation_model_general), intent(inout) :: model
+      class(model_continuum_type), intent(inout), target :: model
 
       !> Atomic point charges
       real(wp), intent(in) :: qat(:)
@@ -697,7 +707,12 @@ contains
          call test_failed(error, "energy-phase staging failed: "//err%message)
          return
       end if
-      call fill_point_charge_potential(model%cavity, coupling, qat, mol)
+      call model%get_cavity(model_cavity, err)
+      if (allocated(err)) then
+         call test_failed(error, "cavity borrow failed: "//err%message)
+         return
+      end if
+      call fill_point_charge_potential(model_cavity, coupling, qat, mol)
 
    end subroutine stage_model_point_charge_energy
 
