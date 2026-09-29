@@ -20,7 +20,7 @@ module test_api
       & get_anchor_gradient_api, get_cavity_gradient_api, get_amat_gradient_api, &
       & contract_amat1_q1q2_surface_weights_api, &
       & contract_surface_lsf_weights_extended_api, contract_pcm_nuclear_gradient_api
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
    use moist_cavity_type, only: cavity_type
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot
    use moist_channels_response, only: density_response_type, &
@@ -2967,7 +2967,7 @@ contains
       !> Stub cavity
       class(stub_cavity), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call query%add_real(self%field_name, "Stub widths", self%xi0)
 
@@ -3039,7 +3039,7 @@ contains
       !> Never set
       type(moist_error_type), allocatable, intent(out) :: error
       call coupling_begin_registration(coupling)
-      call coupling_snapshot(coupling, 0, 0)
+      call coupling_snapshot(coupling)
    end subroutine stub_model_declare_pass
 
 end module test_api

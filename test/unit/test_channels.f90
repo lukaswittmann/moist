@@ -7,7 +7,7 @@ module test_channels
       & coupling_request_type, coupling_registry_type, point_potential_request_type, &
       & gaussian_potential_request_type, gaussian_moment_request_type, &
       & atomic_multipole_request_type, coupling_extent_grid, coupling_extent_atom, &
-      & current_output_extent, moist_phase_energy, &
+      & current_output_extent, answer_flat, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, request_name_len, coupling_register, &
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
@@ -74,6 +74,7 @@ contains
          new_unittest("atom_extent_rejects_grid_shape", test_atom_extent_rejection), &
          new_unittest("mixed_grid_and_atom_pass", test_mixed_extents), &
          new_unittest("snapshot_without_grid", test_snapshot_without_grid), &
+         new_unittest("snapshot_refuses_outputs_without_a_count", test_missing_extent), &
          new_unittest("response_atomic_multipole_adjoint", test_response_multipole_adjoint)]
    end subroutine collect_channels
 
@@ -96,7 +97,7 @@ contains
       if (allocated(err)) return
       call coupling_register(coupling, "potential", point, err)
       if (allocated(err)) return
-      call coupling_snapshot(coupling, 2, 0)
+      call coupling_snapshot(coupling, ngrid=2)
       call coupling_arm(coupling, moist_phase_energy, err)
    end subroutine fixture
 
@@ -130,7 +131,7 @@ contains
       call coupling_set_scope(coupling, 3)
       call coupling_register(coupling, "moments", moments, err)
       if (allocated(err)) return
-      call coupling_snapshot(coupling, 2, 0)
+      call coupling_snapshot(coupling, ngrid=2)
    end subroutine three_requests
 
    !> Canonical name of the current request, "no_current_request" outside a `next()` window
@@ -241,7 +242,7 @@ contains
       call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
       call check_moist_error(error, err, "phi answer")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 2, 0)
+      call coupling_snapshot(coupling, ngrid=2)
       call coupling_arm(coupling, moist_phase_gradient, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -249,7 +250,7 @@ contains
          call check(error, .not. item%is_missing("phi") .and. item%is_missing("dphi_dr"))
       end associate
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 3, 0)
+      call coupling_snapshot(coupling, ngrid=3)
       call coupling_arm(coupling, moist_phase_gradient, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -405,7 +406,7 @@ contains
       ! A correct pass finds phi still answered
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 2, 0)
+      call coupling_snapshot(coupling, ngrid=2)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "re-preparation")
       if (allocated(error)) return
@@ -444,7 +445,7 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "Invalid local request name") > 0)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, .not. coupling%next(), more="a false condition still required phi")
       if (allocated(error)) return
@@ -474,7 +475,7 @@ contains
       if (allocated(error)) return
       call coupling_begin_registration(second)
       call coupling_register(second, "potential", item, err)
-      call coupling_snapshot(second, 2, 0)
+      call coupling_snapshot(second, ngrid=2)
       call coupling_arm(second, moist_phase_energy, err)
       call check_moist_error(error, err, "registration of a copy")
       if (allocated(error)) return
@@ -511,7 +512,7 @@ contains
          call coupling_set_scope(coupling, i)
          call coupling_register(coupling, "moments", moments, err)
       end do
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -555,14 +556,14 @@ contains
       type(point_potential_request_type) :: point
       type(gaussian_potential_request_type) :: gaussian
       call coupling_begin_registration(coupling)
-      call coupling_snapshot(coupling, 0, 0)
+      call coupling_snapshot(coupling, ngrid=0)
       call request_require(point, moist_phase_energy, "phi", err)
       call request_require(gaussian, moist_phase_energy, "phi", err)
       call coupling_register(coupling, "point", point, err)
       call coupling_register(coupling, "gaussian", gaussian, err)
       call check_moist_error(error, err, "registration")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, count_visits(coupling), 2)
    end subroutine test_distinct_kinds
@@ -576,7 +577,7 @@ contains
       call coupling_begin_registration(coupling)
       call request_require(point, moist_phase_energy, "dphi_dr", err)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, coupling%next())
       if (allocated(error)) return
@@ -596,7 +597,7 @@ contains
       real(wp), allocatable :: phi(:)
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "unused", point, err)
-      call coupling_snapshot(coupling, 0, 0)
+      call coupling_snapshot(coupling, ngrid=0)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -641,7 +642,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call check_moist_error(error, err, "registration without a begun pass")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 2, 0)
+      call coupling_snapshot(coupling, ngrid=2)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -687,7 +688,7 @@ contains
       call check(error, index(err%message, "placeholder request 'no_current_request'") > 0 &
          & .and. index(err%message, "cannot be declared") > 0)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "staging")
       if (allocated(error)) return
@@ -1597,7 +1598,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call check_moist_error(error, err, "shared registration")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, count_visits(coupling), 1, more="matching inputs were not shared")
       if (allocated(error)) return
@@ -1607,7 +1608,7 @@ contains
       call coupling_register(coupling, "potential", point, err)
       call coupling_set_scope(coupling, 3)
       call coupling_register(coupling, "moments", moments, err)
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "moments added")
       if (allocated(error)) return
@@ -1617,7 +1618,7 @@ contains
       call coupling_begin_registration(coupling)
       call coupling_set_scope(coupling, 1)
       call coupling_register(coupling, "potential", point, err)
-      call coupling_snapshot(coupling, 1, 0)
+      call coupling_snapshot(coupling, ngrid=1)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check_moist_error(error, err, "moments dropped")
       if (allocated(error)) return
@@ -1707,7 +1708,7 @@ contains
       call coupling_set_scope(coupling, 2)
       call coupling_register(coupling, "multipoles", multipoles, err)
       if (allocated(err)) return
-      call coupling_snapshot(coupling, 2, 3)
+      call coupling_snapshot(coupling, ngrid=2, natom=3)
       call coupling_arm(coupling, moist_phase_energy, err)
    end subroutine atom_fixture
 
@@ -1848,7 +1849,7 @@ contains
       call check_moist_error(error, err, "mixed pass complete")
    end subroutine test_mixed_extents
 
-   !> A zero-grid snapshot still carries per-atom answers,
+   !> A snapshot without a grid still carries per-atom answers,
    !> and a changed atom count drops them like a changed grid size
    subroutine test_snapshot_without_grid(error)
       type(error_type), allocatable, intent(out) :: error
@@ -1860,7 +1861,7 @@ contains
       if (.not. allocated(err)) call coupling_register(coupling, "multipoles", multipoles, err)
       call check_moist_error(error, err, "registration")
       if (allocated(error)) return
-      call coupling_snapshot(coupling, 0, 2)
+      call coupling_snapshot(coupling, natom=2)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, coupling%next(), more="zero-grid walk starts")
       if (allocated(error)) return
@@ -1873,17 +1874,117 @@ contains
       ! Same extents: the answer survives a new declaration pass
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "multipoles", multipoles, err)
-      call coupling_snapshot(coupling, 0, 2)
+      call coupling_snapshot(coupling, natom=2)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, .not. coupling%next(), more="an unchanged snapshot dropped the answer")
       if (allocated(error)) return
       ! A new atom count drops it
       call coupling_begin_registration(coupling)
       call coupling_register(coupling, "multipoles", multipoles, err)
-      call coupling_snapshot(coupling, 0, 3)
+      call coupling_snapshot(coupling, natom=3)
       call coupling_arm(coupling, moist_phase_energy, err)
       call check(error, coupling%next(), more="a changed atom count kept the answer")
    end subroutine test_snapshot_without_grid
+
+   !> An output whose count the snapshot did not give is refused on every
+   !> answer route, for both extent kinds; a given zero is an empty extent
+   subroutine test_missing_extent(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      type(point_potential_request_type) :: point
+      type(atomic_multipole_request_type) :: multipoles
+      real(wp) :: empty(0)
+      integer :: extent
+      call request_require(point, moist_phase_energy, "phi", err)
+      if (.not. allocated(err)) call request_require(multipoles, moist_phase_energy, "q", err)
+      call check_moist_error(error, err, "requirements")
+      if (allocated(error)) return
+      ! Point count only: the per-atom output is refused
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "potential", point, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "multipoles", multipoles, err)
+      call check_moist_error(error, err, "registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "point_potential"), more="first visit is the grid request")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "phi with a point count")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "atomic_multipoles"), more="second visit is the per-atom request")
+      if (allocated(error)) return
+      call current_output_extent(coupling, "q", extent, err)
+      call check(error, allocated(err), more="an atom extent was reported without an atom count")
+      if (allocated(error)) return
+      call check(error, index(err%message, "q needs an atom count; the snapshot has none") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      ! Nothing is read from the flat buffer
+      call answer_flat(coupling, "q", [1.0_wp, -1.0_wp], err)
+      call check(error, allocated(err), more="a flat answer was accepted without an atom count")
+      if (allocated(error)) return
+      call check(error, index(err%message, "atomic_multipoles: q needs an atom count") > 0, more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call coupling%answer("q", [1.0_wp, -1.0_wp], err)
+      call check(error, allocated(err), more="an answer was accepted without an atom count")
+      if (allocated(error)) return
+      deallocate (err)
+      associate (item => coupling%request())
+         call check(error, item%is_missing("q"), more="a refused answer was kept")
+      end associate
+      if (allocated(error)) return
+      ! Atom count only: the grid output is refused, and dropping the point count dropped phi
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "potential", point, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "multipoles", multipoles, err)
+      call check_moist_error(error, err, "second registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, natom=2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "second staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "point_potential"), more="dropping the point count kept phi")
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check(error, allocated(err), more="an answer was accepted without a point count")
+      if (allocated(error)) return
+      call check(error, index(err%message, "point_potential: phi needs a point count; the snapshot has none") > 0, &
+         & more=err%message)
+      if (allocated(error)) return
+      deallocate (err)
+      call check(error, next_is(coupling, "atomic_multipoles"), more="second visit is the per-atom request")
+      if (allocated(error)) return
+      call answer_flat(coupling, "q", [1.0_wp, -1.0_wp], err)
+      call check_moist_error(error, err, "q with an atom count")
+      if (allocated(error)) return
+      ! A given zero is an empty extent, not an absent one
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "potential", point, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "multipoles", multipoles, err)
+      call check_moist_error(error, err, "third registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=0, natom=2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "zero-grid staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "point_potential"), more="zero-grid walk visits the grid request")
+      if (allocated(error)) return
+      call coupling%answer("phi", empty, err)
+      call check_moist_error(error, err, "empty phi on a zero grid")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "atomic_multipoles"), more="giving the point count kept q")
+      if (allocated(error)) return
+      call coupling%answer("q", [1.0_wp, -1.0_wp], err)
+      call check_moist_error(error, err, "q next to a zero grid")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "zero-grid pass complete")
+   end subroutine test_missing_extent
 
    !> The multipole adjoint item accumulates by dynamic type like the others
    !> and rejects a shape change
