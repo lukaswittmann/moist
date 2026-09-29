@@ -18,7 +18,8 @@
 !> 4*pi*r^2 dr volume measure; the 3D grids sample the full Cartesian field
 !>
 !> A handful of structural tests (Chebyshev FBT adjoint identity, idempotent
-!> destroy, molecular-grid pruning) round out the suite
+!> destroy, molecular-grid pruning) round out the suite, plus the Chebyshev
+!> Fourier-Bessel transforms of a Gaussian against its closed-form transform
 module test_math_grid
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
@@ -65,12 +66,19 @@ contains
          new_unittest("grid_molecular_nufft_dc_mode", test_grid_molecular_nufft), &
          new_unittest("chebyshev_radial_fbt_adjoint", test_cheb_radial_fbt_adjoint), &
          new_unittest("chebyshev_radial_fbt_batched", test_cheb_radial_fbt_batched), &
+         new_unittest("chebyshev_radial_fbt_matches_analytic", test_cheb_radial_fbt_analytic), &
          new_unittest("chebyshev_radial_destroy_idempotent", test_cheb_radial_destroy), &
          new_unittest("molecular_grid_integrate_constant", test_mol_grid_integrate_const), &
          new_unittest("molecular_grid_qc_handymod_smoke", test_mol_grid_qc_handymod_smoke), &
          new_unittest("molecular_grid_uniform_regression", test_mol_grid_uniform_regression), &
          new_unittest("molecular_grid_destroy_idempotent", test_mol_grid_destroy), &
-         new_unittest("molecular_grid_pruning_threshold", test_mol_grid_pruning) &
+         new_unittest("molecular_grid_pruning_threshold", test_mol_grid_pruning), &
+         new_unittest("bad_chebyshev_nr_zero", test_bad_cheb_nr_zero, should_fail=.true.), &
+         new_unittest("bad_chebyshev_nk_zero", test_bad_cheb_nk_zero, should_fail=.true.), &
+         new_unittest("bad_chebyshev_p_r_zero", test_bad_cheb_p_r_zero, should_fail=.true.), &
+         new_unittest("bad_chebyshev_p_k_negative", test_bad_cheb_p_k_negative, should_fail=.true.), &
+         new_unittest("bad_chebyshev_p_r_nan", test_bad_cheb_p_r_nan, should_fail=.true.), &
+         new_unittest("bad_chebyshev_p_k_inf", test_bad_cheb_p_k_inf, should_fail=.true.) &
          ]
    end subroutine collect_math_grid
 
@@ -783,6 +791,74 @@ contains
       relerr = maxval(abs(loop - batch))/max(1.0_wp, maxval(abs(loop)))
    end function batched_relerr
 
+   !> Both Chebyshev transforms of a Gaussian match its closed-form 3D Fourier transform
+   !>
+   !> - `f(r) = exp(-a r^2)` has `F(k) = (pi/a)^(3/2) exp(-k^2/(4a))`;
+   !>   `fbt_r2k(f)` is checked against `F`, `fbt_k2r(F)` against `f`, which
+   !>   pins the absolute prefactors of both matrices
+   !> - Compared on nodes `k <= 10` and `r <= 10` only; beyond, `F` and `f`
+   !>   are below round-off
+   !> - The outer mapped nodes reach r, k ~ 1e4 with spacings far beyond the
+   !>   `sin(kr)` period; there both transforms return quadrature aliasing of
+   !>   up to 8e-4 of the peak instead of ~0
+   !> - Measured in the window: 3.7e-15 forward (relative to `F(0)`) and
+   !>   3.9e-15 backward (absolute) at nr = nk = 200, p_r = 1, p_k = 1.5,
+   !>   a = 0.7; at the 64/80 nodes of the sibling tests the window error is
+   !>   still quadrature-limited (5e-8 forward, 9e-7 backward)
+   !>
+   !> @param[out] error  Test failure
+   subroutine test_cheb_radial_fbt_analytic(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      integer, parameter :: nr = 200, nk = 200
+      !> Gaussian exponent (bohr^-2)
+      real(wp), parameter :: expo = 0.7_wp
+      !> Largest r (bohr) and k (1/bohr) compared
+      real(wp), parameter :: window = 10.0_wp
+      !> Acceptance bound, relative to the peak of the reference
+      real(wp), parameter :: thr = 3.0e-14_wp
+      type(moist_math_grid_1d_chebyshev_type), target :: cgrid
+      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(mctc_error), allocatable :: merr
+      real(wp) :: f(nr), fk(nk), got_k(nk), got_r(nr), peak, err_k, err_r
+
+      call new_chebyshev_radial_grid(cgrid, nr, 1.0_wp, nk, 1.5_wp, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message); return
+      end if
+      call cgrid%new_trafo(trafo, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message); return
+      end if
+
+      peak = (pi/expo)**1.5_wp
+      f = exp(-expo*cgrid%r**2)
+      fk = peak*exp(-cgrid%k**2/(4.0_wp*expo))
+
+      call trafo%fbt_r2k(f, got_k, merr)
+      if (.not. allocated(merr)) call trafo%fbt_k2r(fk, got_r, merr)
+      call trafo%destroy()
+      if (allocated(merr)) then
+         call cgrid%destroy()
+         call test_failed(error, merr%message); return
+      end if
+
+      err_k = huge(1.0_wp)
+      err_r = huge(1.0_wp)
+      if (all(ieee_is_finite(got_k)) .and. all(ieee_is_finite(got_r)) .and. &
+         & any(cgrid%k <= window) .and. any(cgrid%r <= window)) then
+         err_k = maxval(abs(got_k - fk), mask=cgrid%k <= window)/peak
+         err_r = maxval(abs(got_r - f), mask=cgrid%r <= window)
+      end if
+      call cgrid%destroy()
+
+      call check(error, err_k <= thr, &
+         & "Chebyshev fbt_r2k of a Gaussian deviates from its analytic transform")
+      if (allocated(error)) return
+      call check(error, err_r <= thr, &
+         & "Chebyshev fbt_k2r of the analytic transform deviates from the Gaussian")
+   end subroutine test_cheb_radial_fbt_analytic
+
    !> Destroying the Chebyshev grid (and its trafo) twice must be a safe no-op
    !>
    !> @param[out] error  Test failure
@@ -977,5 +1053,122 @@ contains
       end do
       call grid%destroy()
    end subroutine test_mol_grid_pruning
+
+   ! --------------------------------------------------------------------------
+   ! Chebyshev radial grid constructor: invalid parameters
+   ! --------------------------------------------------------------------------
+
+   !> Fail an expected-failure test only on the targeted library error
+   !>
+   !> - Used by `should_fail=.true.` tests, where test-drive inverts the
+   !>   verdict: a raised test failure passes, a clean return fails
+   !> - Fails the test only when `err` names `expected`; no error or a
+   !>   different one returns cleanly, so the test is reported as failed
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  err       library error, possibly unallocated
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine expect_error(error, err, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error, possibly unallocated
+      type(mctc_error), allocatable, intent(in) :: err
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      if (.not. allocated(err)) return
+      if (index(err%message, expected) > 0) call test_failed(error, err%message)
+   end subroutine expect_error
+
+   !> Build a Chebyshev radial grid from invalid parameters, expecting one error
+   !>
+   !> @param[out] error     test failure, set only on the expected error
+   !> @param[in]  nr        number of r-space nodes
+   !> @param[in]  p_r       r-space scale (bohr)
+   !> @param[in]  nk        number of k-space nodes
+   !> @param[in]  p_k       k-space scale (1/bohr)
+   !> @param[in]  expected  substring the expected error message must contain
+   subroutine run_bad_cheb(error, nr, p_r, nk, p_k, expected)
+      !> Test failure, set only on the expected error
+      type(error_type), allocatable, intent(out) :: error
+      !> Number of r-space nodes
+      integer, intent(in) :: nr
+      !> r-space scale
+      real(wp), intent(in) :: p_r
+      !> Number of k-space nodes
+      integer, intent(in) :: nk
+      !> k-space scale
+      real(wp), intent(in) :: p_k
+      !> Substring the expected error message must contain
+      character(len=*), intent(in) :: expected
+
+      type(moist_math_grid_1d_chebyshev_type) :: grid
+      type(mctc_error), allocatable :: merr
+
+      call new_chebyshev_radial_grid(grid, nr, p_r, nk, p_k, merr)
+      call expect_error(error, merr, expected)
+   end subroutine run_bad_cheb
+
+   !> No r-space nodes is refused
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_nr_zero(error)
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 0, 1.0_wp, 16, 1.0_wp, "at least one r- and one k-space node")
+   end subroutine test_bad_cheb_nr_zero
+
+   !> No k-space nodes is refused
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_nk_zero(error)
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 16, 1.0_wp, 0, 1.0_wp, "at least one r- and one k-space node")
+   end subroutine test_bad_cheb_nk_zero
+
+   !> A zero r-space scale is refused rather than dividing by r = 0
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_p_r_zero(error)
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 16, 0.0_wp, 16, 1.0_wp, "positive scales")
+   end subroutine test_bad_cheb_p_r_zero
+
+   !> A negative k-space scale is refused rather than building negative k nodes
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_p_k_negative(error)
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 16, 1.0_wp, 16, -1.0_wp, "positive scales")
+   end subroutine test_bad_cheb_p_k_negative
+
+   !> A NaN r-space scale is refused; `p <= 0` is false for NaN
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_p_r_nan(error)
+      use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 16, ieee_value(1.0_wp, ieee_quiet_nan), 16, 1.0_wp, "finite scales")
+   end subroutine test_bad_cheb_p_r_nan
+
+   !> An infinite k-space scale is refused
+   !>
+   !> @param[out] error  test failure, set on the expected error
+   subroutine test_bad_cheb_p_k_inf(error)
+      use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
+      !> Test failure, set on the expected error
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_bad_cheb(error, 16, 1.0_wp, 16, ieee_value(1.0_wp, ieee_positive_inf), "finite scales")
+   end subroutine test_bad_cheb_p_k_inf
 
 end module test_math_grid

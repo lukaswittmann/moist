@@ -334,6 +334,8 @@ contains
       type(coupling_type), pointer :: coupling
       !> Phase labels for diagnostics
       character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
+      !> Walk of the current phase
+      character(len=:), allocatable :: summary
       integer :: phase
 
       call model%new_coupling(coupling, err)
@@ -350,7 +352,8 @@ contains
          end select
          call require_success(error, err)
          if (allocated(error)) exit
-         call check(error, walk_summary(coupling), trim(walks(phase)), &
+         call walk_summary(coupling, summary)
+         call check(error, summary, trim(walks(phase)), &
             & more=trim(model%coupling_mode)//" source, "//trim(phases(phase))//" phase")
          if (allocated(error)) exit
       end do
@@ -360,12 +363,16 @@ contains
    !> One pass of the walk, answering nothing: each visited request with its
    !> declared outputs, a missing one marked `*`, e.g. "atomic_charges(q*);"
    !>
+   !> A subroutine: gfortran returns a deferred-length function result through
+   !> a static (thread-shared) length temporary, which races between tests
+   !>
    !> @param[in,out] coupling Staged coupling
-   function walk_summary(coupling) result(summary)
+   !> @param[out] summary Visited requests and their outputs
+   subroutine walk_summary(coupling, summary)
       !> Staged coupling
       type(coupling_type), intent(inout) :: coupling
       !> Visited requests and their outputs
-      character(len=:), allocatable :: summary
+      character(len=:), allocatable, intent(out) :: summary
       !> Outputs a MOZ source may declare, in listing order
       character(len=8), parameter :: outputs(6) = [character(len=8) :: &
          & "phi", "dphi_dr", "dphi_dxi", "q", "mu", "theta"]
@@ -384,7 +391,7 @@ contains
          end do
          summary = summary//trim(item%name())//"("//listed//");"
       end do
-   end function walk_summary
+   end subroutine walk_summary
 
    !> Construct a 3D MOZ model on a copy of `grid`, updated to one hydrogen atom
    !>

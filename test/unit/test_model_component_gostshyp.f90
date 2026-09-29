@@ -10,14 +10,14 @@
 !>
 module test_model_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
-   use test_helpers, only: component_view, submit, read_fixture_moments, copy_gostshyp_amplitude
+   use test_helpers, only: component_view, submit, read_fixture_moments, copy_gaussian_amplitude
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type
-   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
+   use moist_channels_response, only: response_type, gaussian_amplitude_response_type
    use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop, only: cavity_type_drop
@@ -337,7 +337,7 @@ contains
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -379,7 +379,7 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       if (.not. allocated(amplitude)) then
          call test_failed(error, "GOSTSHYP wrote no host amplitudes")
          return
@@ -664,7 +664,7 @@ contains
       !> Response list receiving the zero amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
 
@@ -695,7 +695,7 @@ contains
       ! A switched-off component is present and contributing nothing, so it
       ! still publishes its item -- filled with exact zeros. Leaving it
       ! absent would be indistinguishable from having no GOSTSHYP at all
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       call check(error, allocated(amplitude), &
          & more="GOSTSHYP dropped its host amplitudes at "//label)
       if (allocated(error)) return
@@ -729,7 +729,7 @@ contains
          !> Host part of the gradient phase
          type(response_type) :: gradient_response
          !> Copy of the gradient-phase amplitude item
-         type(gostshyp_amplitude_response_type), allocatable :: gradient_amplitude
+         type(gaussian_amplitude_response_type), allocatable :: gradient_amplitude
 
          gradient = sentinel
          call component%get_gradient(component_view(coupling), cavity, gradient_response, &
@@ -740,7 +740,7 @@ contains
          call check(error, maxval(abs(gradient - sentinel)), 0.0_wp, thr=0.0_wp, &
             & more="GOSTSHYP moved the gradient at "//label)
          if (allocated(error)) return
-         call copy_gostshyp_amplitude(gradient_response, gradient_amplitude)
+         call copy_gaussian_amplitude(gradient_response, gradient_amplitude)
          call check(error, allocated(gradient_amplitude), &
             & more="GOSTSHYP gradient dropped its host amplitudes at "//label)
          if (allocated(error)) return
@@ -911,7 +911,7 @@ contains
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
-      type(gostshyp_amplitude_response_type), allocatable :: amplitude
+      type(gaussian_amplitude_response_type), allocatable :: amplitude
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -966,7 +966,7 @@ contains
          call test_failed(error, "GOSTSHYP potential failed: "//err%message)
          return
       end if
-      call copy_gostshyp_amplitude(response, amplitude)
+      call copy_gaussian_amplitude(response, amplitude)
       call check(error, allocated(amplitude), &
          & more="GOSTSHYP wrote no host amplitudes")
       if (allocated(error)) return
