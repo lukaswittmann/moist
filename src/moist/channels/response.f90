@@ -501,8 +501,9 @@ contains
    !*                         Atomic multipole adjoint item                          *!
    !* ============================================================================== *!
 
-
    !> Name of the atomic multipole adjoint item
+   !>
+   !> @param[in] self Item
    function atomic_multipole_adjoint_name(self) result(name)
       !> Item
       class(atomic_multipole_adjoint_response_type), intent(in) :: self
@@ -514,6 +515,10 @@ contains
    end function atomic_multipole_adjoint_name
 
    !> Add another atomic multipole adjoint item into this one
+   !>
+   !> @param[in,out] self Accumulator
+   !> @param[in] other Item to add
+   !> @param[out] error Error handling
    subroutine atomic_multipole_adjoint_add(self, other, error)
       !> Accumulator
       class(atomic_multipole_adjoint_response_type), intent(inout) :: self
@@ -540,6 +545,8 @@ contains
    end subroutine atomic_multipole_adjoint_add
 
    !> Deallocate the multipole weights
+   !>
+   !> @param[in,out] self Item
    subroutine atomic_multipole_adjoint_clear(self)
       !> Item
       class(atomic_multipole_adjoint_response_type), intent(inout) :: self

@@ -78,7 +78,7 @@ typedef struct moist_component_s* moist_component;
 
 /// PCM linear-solver selection, as accepted by the CPCM and COSMO constructors
 /// Mirrors the Fortran `solver_type` enumerator in
-/// src/moist/model/component/pcm/type.f90; numeric values are ABI
+/// src/moist/model/continuum/component/pcm/type.f90; numeric values are ABI
 typedef enum {
     /// Explicit matrix inversion
     moist_pcm_solver_inversion = 1,
@@ -96,7 +96,7 @@ typedef struct moist_cavity_s* moist_cavity;
 /// Radii model class
 typedef struct moist_radii_s* moist_radii;
 
-/// Host coupling class: the request list of one general model, minted by
+/// Host coupling class: the request list of one solvation model, minted by
 /// moist_new_coupling and staged per phase by the moist_prepare_model_*
 /// entry points (see HOST COUPLING PROTOCOL below)
 typedef struct moist_coupling_s* moist_coupling;
@@ -485,7 +485,7 @@ moist_API_ENTRY void moist_API_CALL
 moist_delete_component(moist_component* component) moist_API_SUFFIX__V_1_0;
 
 
-/// Append a copied component to a general model before its first update
+/// Append a copied component to a continuum model before its first update
 moist_API_ENTRY void moist_API_CALL
 moist_add_model_component(moist_error error, moist_model model, moist_component component) moist_API_SUFFIX__V_1_0;
 
