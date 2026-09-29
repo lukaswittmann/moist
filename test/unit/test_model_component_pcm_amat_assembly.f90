@@ -4,7 +4,7 @@ module test_model_component_pcm_amat_assembly
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
    use test_helpers, only: get_test_structures, center_at_origin, &
                            get_test_cavity_iswig, rel_deviation
    use test_model_component_pcm_amat, only: count_branches, nmol, nleb_survey

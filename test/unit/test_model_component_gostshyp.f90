@@ -18,7 +18,7 @@ module test_model_component_gostshyp
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type, gaussian_moment_request_type
    use moist_channels_response, only: response_type, gostshyp_amplitude_response_type
-   use moist_model_components, only: solvation_model_component_gostshyp, new_component_gostshyp
+   use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_drop, only: cavity_type_drop
    use test_model_component_helper, only: surface_fixture, &
@@ -288,7 +288,7 @@ contains
       !> Test failure information
       type(error_type), allocatable, intent(out) :: error
       !> Component whose moment request the coupling declares
-      type(solvation_model_component_gostshyp), intent(inout) :: component
+      type(model_continuum_component_gostshyp), intent(inout) :: component
       !> Synthetic DROP surface
       type(cavity_type_drop), intent(in) :: cavity
       !> Coupling staged for the energy phase
@@ -333,7 +333,7 @@ contains
       !> Moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
@@ -435,7 +435,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Fixture mirroring the synthetic surface for the harness
@@ -543,7 +543,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Analytic surface weights
       type(cavity_surface_adjoint_type) :: weights
       !> Radial normal field
@@ -597,7 +597,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Radial normal field
       real(wp) :: normals(3, ngrid_sw)
       !> Dummy molecular geometry
@@ -647,7 +647,7 @@ contains
       !> Test failure information
       type(error_type), allocatable, intent(out) :: error
       !> Component under test
-      type(solvation_model_component_gostshyp), intent(inout) :: component
+      type(model_continuum_component_gostshyp), intent(inout) :: component
       !> Coupling whose moment request is unanswered
       type(coupling_type), intent(inout), target :: coupling
       !> Synthetic DROP surface.  Not `intent(in)`: the component's own energy
@@ -778,7 +778,7 @@ contains
       type(cavity_type_drop) :: cavity
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Cavity missing its surface arrays
       type(cavity_type_drop) :: bare
       !> Radial normal field
@@ -907,7 +907,7 @@ contains
       !> The moments read back from the coupling
       real(wp), allocatable :: gt(:), pt(:, :), mt(:, :, :), rt(:, :)
       !> Component under test
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_component_gostshyp) :: component
       !> Response list receiving the amplitudes
       type(response_type) :: response
       !> Copy of the amplitude item of the response
