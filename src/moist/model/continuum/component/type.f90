@@ -340,7 +340,7 @@ contains
       call coupling_set_scope(coupling, 1)
       call self%declare_coupling(cavity, coupling, error)
       if (allocated(error)) return
-      call coupling_snapshot(coupling, cavity%ngrid, cavity%nsph)
+      call coupling_snapshot(coupling, ngrid=cavity%ngrid, natom=cavity%nsph)
 
    end subroutine declare_component_pass
 

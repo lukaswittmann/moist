@@ -382,7 +382,7 @@ contains
          call self%components(i)%item%declare_coupling(self%cavity, coupling, error)
          if (allocated(error)) return
       end do
-      call coupling_snapshot(coupling, self%cavity%ngrid, self%cavity%nsph)
+      call coupling_snapshot(coupling, self%cavity%ngrid)
 
    end subroutine declare_continuum_pass
 

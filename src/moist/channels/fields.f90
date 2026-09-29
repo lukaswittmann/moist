@@ -1,57 +1,61 @@
-!> Self-describing table of the per-point and per-sphere results a cavity holds
-module moist_cavity_fields
+!> Self-describing table of the named arrays a cavity, grid or model hands out
+!>
+!> The read-only channel next to `coupling` (host inputs) and `response`
+!> (adjoints): the owner declares its arrays through a `list_fields`
+!> binding, the host lists them or fetches one by name
+module moist_channels_fields
    use mctc_env, only: wp, error_type, fatal_error
 
    implicit none(type, external)
    private
 
-   public :: cavity_field_info_type, cavity_field_query_type
-   public :: cavity_field_real, cavity_field_int, cavity_field_bool
-   public :: cavity_field_max_rank
+   public :: field_info_type, field_query_type
+   public :: field_real, field_int, field_bool
+   public :: field_max_rank
 
    !> Element type tags, mirrored by the `MOIST_FIELD_*` macros in moist.h;
    !> the values are part of the public C contract and must not be renumbered
-   integer, parameter :: cavity_field_real = 1
-   integer, parameter :: cavity_field_int = 2
-   integer, parameter :: cavity_field_bool = 3
+   integer, parameter :: field_real = 1
+   integer, parameter :: field_int = 2
+   integer, parameter :: field_bool = 3
 
    !> Highest array rank a field can have
-   integer, parameter :: cavity_field_max_rank = 2
+   integer, parameter :: field_max_rank = 2
 
-   !> Shape and type of one readable cavity field
-   type :: cavity_field_info_type
-      !> Lookup key, always the cavity's own name for the array
+   !> Shape and type of one readable field
+   type :: field_info_type
+      !> Lookup key, always the owner's own name for the array
       character(len=:), allocatable :: name
       !> One-line description of what the field holds
       character(len=:), allocatable :: about
-      !> One of `cavity_field_real`, `cavity_field_int`, `cavity_field_bool`
-      integer :: dtype = cavity_field_real
+      !> One of `field_real`, `field_int`, `field_bool`
+      integer :: dtype = field_real
       !> Array rank; 0 marks a scalar
       integer :: rank = 0
       !> Extent of each dimension, fastest-varying first; unused entries are 1
-      integer :: dims(cavity_field_max_rank) = 1
+      integer :: dims(field_max_rank) = 1
    contains
       !> Number of elements the field writes
       procedure :: count => field_element_count
-   end type cavity_field_info_type
+   end type field_info_type
 
-   !> Walker handed to `cavity_type%list_fields`
+   !> Walker handed to a `list_fields` binding
    !>
    !> - enumeration mode collects a descriptor per declared field
    !> - fetch mode copies out the one field whose name matches `want` and
    !>   ignores the rest, so listing stays cheap and reading copies exactly
    !>   one array
-   type :: cavity_field_query_type
+   type :: field_query_type
       !> Name being fetched; unallocated while enumerating
       character(len=:), allocatable :: want
       !> Descriptors of every declared field (enumeration mode)
-      type(cavity_field_info_type), allocatable :: info(:)
+      type(field_info_type), allocatable :: info(:)
       !> Number of entries filled in `info`
       integer :: nfield = 0
-      !> Whether the fetched name was declared by the cavity
+      !> Whether the fetched name was declared by the owner
       logical :: found = .false.
       !> Shape and type of the fetched field
-      type(cavity_field_info_type) :: hit
+      type(field_info_type) :: hit
       !> Fetched payload, flattened in Fortran order; one of the three is
       !> allocated according to `hit%dtype`
       real(wp), allocatable :: rvals(:)
@@ -65,7 +69,7 @@ module moist_cavity_fields
       !> Index of a name in `info`, or 0 when it was not declared
       procedure :: index_of => query_index_of
 
-      !> Declare a per-point or per-sphere real array
+      !> Declare a real array, e.g. per point or per atom
       procedure :: add_real
       !> Declare a rank-2 real array, e.g. (3, ngrid)
       procedure :: add_real2
@@ -82,7 +86,7 @@ module moist_cavity_fields
 
       !> Record a declaration; reports whether the payload is wanted
       procedure, private :: record
-   end type cavity_field_query_type
+   end type field_query_type
 
 contains
 
@@ -95,7 +99,7 @@ contains
    !> @param[in] self  Field descriptor
    !> @return          Product of the declared extents; 1 for a scalar
    pure integer function field_element_count(self) result(count)
-      class(cavity_field_info_type), intent(in) :: self
+      class(field_info_type), intent(in) :: self
       integer :: idim
 
       count = 1
@@ -113,7 +117,7 @@ contains
    !>
    !> @param[inout] self  Query walker
    subroutine query_enumerate(self)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
 
       call reset_query(self)
       if (allocated(self%info)) deallocate (self%info)
@@ -127,7 +131,7 @@ contains
    !> @param[inout] self  Query walker
    !> @param[in]    name  Field to fetch
    subroutine query_fetch(self, name)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field to fetch
       character(len=*), intent(in) :: name
 
@@ -140,7 +144,7 @@ contains
    !>
    !> @param[inout] self  Query walker
    subroutine reset_query(self)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
 
       if (allocated(self%want)) deallocate (self%want)
       if (allocated(self%rvals)) deallocate (self%rvals)
@@ -154,9 +158,9 @@ contains
    !>
    !> @param[in] self  Query walker holding an enumeration result
    !> @param[in] name  Field to look for
-   !> @return          1-based index, or 0 when the cavity does not have it
+   !> @return          1-based index, or 0 when it was not declared
    pure integer function query_index_of(self, name) result(pos)
-      class(cavity_field_query_type), intent(in) :: self
+      class(field_query_type), intent(in) :: self
       !> Field to look for
       character(len=*), intent(in) :: name
       integer :: ifield
@@ -186,7 +190,7 @@ contains
    !> @param[in]    dims   Extents, fastest-varying first
    !> @return              True when the caller should copy the payload
    logical function record(self, name, about, dtype, rank, dims) result(wanted)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -198,8 +202,8 @@ contains
       !> Extents, fastest-varying first
       integer, intent(in) :: dims(:)
 
-      type(cavity_field_info_type) :: info
-      type(cavity_field_info_type), allocatable :: grown(:)
+      type(field_info_type) :: info
+      type(field_info_type), allocatable :: grown(:)
 
       wanted = .false.
 
@@ -234,14 +238,14 @@ contains
 
    end function record
 
-   !> Declare a real array indexed by grid point or sphere
+   !> Declare a real array, e.g. indexed by grid point or atom
    !>
    !> @param[inout] self    Query walker
    !> @param[in]    name    Field name
    !> @param[in]    about   One-line description
    !> @param[in]    values  Backing array; an unallocated array is not declared
    subroutine add_real(self, name, about, values)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -250,7 +254,7 @@ contains
       real(wp), allocatable, intent(in) :: values(:)
 
       if (.not. allocated(values)) return
-      if (.not. self%record(name, about, cavity_field_real, 1, [size(values)])) return
+      if (.not. self%record(name, about, field_real, 1, [size(values)])) return
       self%rvals = values
 
    end subroutine add_real
@@ -262,7 +266,7 @@ contains
    !> @param[in]    about   One-line description
    !> @param[in]    values  Backing array; an unallocated array is not declared
    subroutine add_real2(self, name, about, values)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -271,7 +275,7 @@ contains
       real(wp), allocatable, intent(in) :: values(:, :)
 
       if (.not. allocated(values)) return
-      if (.not. self%record(name, about, cavity_field_real, 2, shape(values))) return
+      if (.not. self%record(name, about, field_real, 2, shape(values))) return
       self%rvals = reshape(values, [size(values)])
 
    end subroutine add_real2
@@ -287,7 +291,7 @@ contains
    !> @param[in]    values      Backing array; an unallocated array is not declared
    !> @param[in]    zero_based  Subtract one on read (default false)
    subroutine add_int(self, name, about, values, zero_based)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -303,7 +307,7 @@ contains
       if (present(zero_based)) shift = zero_based
 
       if (.not. allocated(values)) return
-      if (.not. self%record(name, about, cavity_field_int, 1, [size(values)])) return
+      if (.not. self%record(name, about, field_int, 1, [size(values)])) return
       if (shift) then
          self%ivals = values - 1
       else
@@ -319,7 +323,7 @@ contains
    !> @param[in]    about   One-line description
    !> @param[in]    values  Backing array; an unallocated array is not declared
    subroutine add_bool(self, name, about, values)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -328,7 +332,7 @@ contains
       logical, allocatable, intent(in) :: values(:)
 
       if (.not. allocated(values)) return
-      if (.not. self%record(name, about, cavity_field_bool, 1, [size(values)])) return
+      if (.not. self%record(name, about, field_bool, 1, [size(values)])) return
       self%lvals = values
 
    end subroutine add_bool
@@ -340,7 +344,7 @@ contains
    !> @param[in]    about  One-line description
    !> @param[in]    value  Backing scalar; an unallocated scalar is not declared
    subroutine add_real_scalar(self, name, about, value)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -349,7 +353,7 @@ contains
       real(wp), allocatable, intent(in) :: value
 
       if (.not. allocated(value)) return
-      if (.not. self%record(name, about, cavity_field_real, 0, [integer ::])) return
+      if (.not. self%record(name, about, field_real, 0, [integer ::])) return
       self%rvals = [value]
 
    end subroutine add_real_scalar
@@ -361,7 +365,7 @@ contains
    !> @param[in]    about  One-line description
    !> @param[in]    value  Backing scalar; an unallocated scalar is not declared
    subroutine add_int_scalar(self, name, about, value)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -370,19 +374,19 @@ contains
       integer, allocatable, intent(in) :: value
 
       if (.not. allocated(value)) return
-      if (.not. self%record(name, about, cavity_field_int, 0, [integer ::])) return
+      if (.not. self%record(name, about, field_int, 0, [integer ::])) return
       self%ivals = [value]
 
    end subroutine add_int_scalar
 
-   !> Declare a plain integer scalar that the cavity always carries
+   !> Declare a plain integer scalar that the owner always carries
    !>
    !> @param[inout] self   Query walker
    !> @param[in]    name   Field name
    !> @param[in]    about  One-line description
    !> @param[in]    value  Value to report
    subroutine add_int_value(self, name, about, value)
-      class(cavity_field_query_type), intent(inout) :: self
+      class(field_query_type), intent(inout) :: self
       !> Field name
       character(len=*), intent(in) :: name
       !> One-line description
@@ -390,9 +394,9 @@ contains
       !> Value to report
       integer, intent(in) :: value
 
-      if (.not. self%record(name, about, cavity_field_int, 0, [integer ::])) return
+      if (.not. self%record(name, about, field_int, 0, [integer ::])) return
       self%ivals = [value]
 
    end subroutine add_int_value
 
-end module moist_cavity_fields
+end module moist_channels_fields

@@ -45,8 +45,8 @@ module moist_api
    use moist_cavity_drop_lsf_isodensity_internal, only: &
       moist_cavity_drop_lsf_isodensity_internal_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
-   use moist_cavity_fields, only: cavity_field_query_type, cavity_field_max_rank, &
-      & cavity_field_real, cavity_field_int, cavity_field_bool
+   use moist_channels_fields, only: field_query_type, field_max_rank, &
+      & field_real, field_int, field_bool
    use moist_version, only: get_moist_version
    use moist_output_ascii, only: moist_banner_text
    implicit none(type, external)
@@ -3707,7 +3707,7 @@ contains
       integer(c_int) :: local_nfield
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -3750,7 +3750,7 @@ contains
       !> Number of field dimensions
       integer(c_int), intent(inout), optional :: rank
       !> Field dimensions
-      integer(c_int), intent(inout), optional :: dims(cavity_field_max_rank)
+      integer(c_int), intent(inout), optional :: dims(field_max_rank)
       !> Number of available entries
       integer(c_int), intent(inout), optional :: count
       !> Decoded error handle for argument validation
@@ -3763,7 +3763,7 @@ contains
       integer(c_int) :: local_count
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -3841,7 +3841,7 @@ contains
       !> Decoded cavity handle
       type(vp_cavity), pointer :: cav
       !> Field metadata and payload
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. valid_string_output(verror, about, capacity, length, "get_cavity_field_about", error)) return
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_about", error, cav)) return
@@ -3867,7 +3867,7 @@ contains
       type(vp_error), pointer :: error
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -3878,7 +3878,7 @@ contains
       end if
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_real", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_real", query)) return
-      if (.not. check_field_payload(error, query, cavity_field_real, &
+      if (.not. check_field_payload(error, query, field_real, &
          & "get_cavity_field_real")) return
 
       values(:size(query%rvals)) = query%rvals
@@ -3904,7 +3904,7 @@ contains
       type(vp_error), pointer :: error
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -3915,7 +3915,7 @@ contains
       end if
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_int", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_int", query)) return
-      if (.not. check_field_payload(error, query, cavity_field_int, &
+      if (.not. check_field_payload(error, query, field_int, &
          & "get_cavity_field_int")) return
 
       values(:size(query%ivals)) = query%ivals
@@ -3937,7 +3937,7 @@ contains
       type(vp_error), pointer :: error
       !> Fortran cavity pointer
       type(vp_cavity), pointer :: cav
-      type(cavity_field_query_type) :: query
+      type(field_query_type) :: query
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -3948,7 +3948,7 @@ contains
       end if
       if (.not. resolve_field_cavity(verror, vcav, "get_cavity_field_bool", error, cav)) return
       if (.not. fetch_cavity_field(error, cav, cname, "get_cavity_field_bool", query)) return
-      if (.not. check_field_payload(error, query, cavity_field_bool, &
+      if (.not. check_field_payload(error, query, field_bool, &
          & "get_cavity_field_bool")) return
 
       values(:size(query%lvals)) = logical(query%lvals, c_bool)
@@ -4009,7 +4009,7 @@ contains
       !> Entry point name used in error messages
       character(len=*), intent(in) :: origin
       !> Query walker
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       character(len=:, kind=c_char), allocatable :: name
 
@@ -4047,7 +4047,7 @@ contains
       !> Fortran error pointer
       type(vp_error), pointer, intent(in) :: error
       !> Query walker holding the fetched payload
-      type(cavity_field_query_type), intent(in) :: query
+      type(field_query_type), intent(in) :: query
       !> Element type the caller asked for
       integer, intent(in) :: dtype
       !> Entry point name used in error messages

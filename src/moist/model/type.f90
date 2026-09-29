@@ -164,8 +164,8 @@ module moist_model_type
 
       !> Declare this family's coupling requests, then record the extents
       !>
-      !> Called on an updated model; ends with `coupling_snapshot(coupling,
-      !> ngrid, natom)` on the family's own evaluation domain
+      !> Called on an updated model; ends with `coupling_snapshot`, giving the
+      !> counts the family's own evaluation domain has (`ngrid`, `natom`)
       !>
       !> @param[in,out] self Updated solvation model
       !> @param[in,out] coupling Coupling to declare

@@ -13,7 +13,7 @@ module moist_cavity_iswig
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
 
    implicit none(type, external)
    private
@@ -105,7 +105,7 @@ contains
       !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call list_cavity_fields_base(self, query)
 
