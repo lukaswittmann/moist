@@ -26,6 +26,7 @@ module moist_channels_response
    public :: response_item_type, response_type
    public :: potential_adjoint_response_type, density_response_type
    public :: gostshyp_amplitude_response_type, atomic_multipole_adjoint_response_type
+   public :: atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
    public :: current_response_item, response_accumulate, response_clear
    public :: response_name_len
 
@@ -189,13 +190,39 @@ module moist_channels_response
       real(wp), allocatable :: dg_dmu(:, :)
       !> Weights for the atomic quadrupoles (3, 3, natom)
       real(wp), allocatable :: dg_dtheta(:, :, :)
-      !> Weights for the site Gaussian widths (natom)
-      real(wp), allocatable :: dg_dwidth(:)
    contains
       procedure :: name => atomic_multipole_adjoint_name
       procedure, private :: add => atomic_multipole_adjoint_add
       procedure, private :: clear => atomic_multipole_adjoint_clear
    end type atomic_multipole_adjoint_response_type
+
+   !> Weights conjugate to the solute's per-atom partial charges, `dE/dq_A`
+   !>
+   !> Counterpart of the `atomic_charges` request; the host contracts them
+   !> with its own `d q_A/dR` and its charge operator, `d q_A/dP` for the
+   !> Fock matrix
+   type, extends(response_item_type) :: atomic_charge_adjoint_response_type
+      !> Weights for the atomic charges (natom)
+      real(wp), allocatable :: dg_dq(:)
+   contains
+      procedure :: name => atomic_charge_adjoint_name
+      procedure, private :: add => atomic_charge_adjoint_add
+      procedure, private :: clear => atomic_charge_adjoint_clear
+   end type atomic_charge_adjoint_response_type
+
+   !> Weights conjugate to the site-resolved radial potential, `dE/dphi_a(r_i)`
+   !>
+   !> Counterpart of the `radial_potential` request; the host contracts them
+   !> with its own site-decomposed potential operator for the Fock matrix
+   !> and with its own d phi / dR for the nuclear gradient
+   type, extends(response_item_type) :: radial_potential_adjoint_response_type
+      !> Weights for the radial potential values (ngrid, natom)
+      real(wp), allocatable :: dg_dphi(:, :)
+   contains
+      procedure :: name => radial_potential_adjoint_name
+      procedure, private :: add => radial_potential_adjoint_add
+      procedure, private :: clear => radial_potential_adjoint_clear
+   end type radial_potential_adjoint_response_type
 
    !> Placeholder `response%item()` returns outside a `next()` window; no arrays
    type, extends(response_item_type) :: no_response_item_type
@@ -535,9 +562,6 @@ contains
          if (allocated(error)) return
          call accumulate_tensor3(self%dg_dtheta, other%dg_dtheta, "atomic_multipole_adjoint", &
             & "dg_dtheta", error)
-         if (allocated(error)) return
-         call accumulate_vector(self%dg_dwidth, other%dg_dwidth, "atomic_multipole_adjoint", &
-            & "dg_dwidth", error)
       class default
          call type_mismatch("atomic_multipole_adjoint", error)
       end select
@@ -554,9 +578,108 @@ contains
       if (allocated(self%dg_dq)) deallocate (self%dg_dq)
       if (allocated(self%dg_dmu)) deallocate (self%dg_dmu)
       if (allocated(self%dg_dtheta)) deallocate (self%dg_dtheta)
-      if (allocated(self%dg_dwidth)) deallocate (self%dg_dwidth)
 
    end subroutine atomic_multipole_adjoint_clear
+
+   !* ============================================================================== *!
+   !*                          Atomic charge adjoint item                            *!
+   !* ============================================================================== *!
+
+   !> Name of the atomic charge adjoint item
+   !>
+   !> @param[in] self Item
+   function atomic_charge_adjoint_name(self) result(name)
+      !> Item
+      class(atomic_charge_adjoint_response_type), intent(in) :: self
+      !> Name
+      character(len=response_name_len) :: name
+
+      name = "atomic_charge_adjoint"
+
+   end function atomic_charge_adjoint_name
+
+   !> Add another atomic charge adjoint item into this one
+   !>
+   !> @param[in,out] self Accumulator
+   !> @param[in] other Item to add
+   !> @param[out] error Error handling
+   subroutine atomic_charge_adjoint_add(self, other, error)
+      !> Accumulator
+      class(atomic_charge_adjoint_response_type), intent(inout) :: self
+      !> Item to add
+      class(response_item_type), intent(in) :: other
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (other)
+      type is (atomic_charge_adjoint_response_type)
+         call accumulate_vector(self%dg_dq, other%dg_dq, "atomic_charge_adjoint", "dg_dq", error)
+      class default
+         call type_mismatch("atomic_charge_adjoint", error)
+      end select
+
+   end subroutine atomic_charge_adjoint_add
+
+   !> Deallocate the charge weights
+   !>
+   !> @param[in,out] self Item
+   subroutine atomic_charge_adjoint_clear(self)
+      !> Item
+      class(atomic_charge_adjoint_response_type), intent(inout) :: self
+
+      if (allocated(self%dg_dq)) deallocate (self%dg_dq)
+
+   end subroutine atomic_charge_adjoint_clear
+
+   !* ============================================================================== *!
+   !*                         Radial potential adjoint item                          *!
+   !* ============================================================================== *!
+
+   !> Name of the radial potential adjoint item
+   !>
+   !> @param[in] self Item
+   function radial_potential_adjoint_name(self) result(name)
+      !> Item
+      class(radial_potential_adjoint_response_type), intent(in) :: self
+      !> Name
+      character(len=response_name_len) :: name
+
+      name = "radial_potential_adjoint"
+
+   end function radial_potential_adjoint_name
+
+   !> Add another radial potential adjoint item into this one
+   !>
+   !> @param[in,out] self Accumulator
+   !> @param[in] other Item to add
+   !> @param[out] error Error handling
+   subroutine radial_potential_adjoint_add(self, other, error)
+      !> Accumulator
+      class(radial_potential_adjoint_response_type), intent(inout) :: self
+      !> Item to add
+      class(response_item_type), intent(in) :: other
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (other)
+      type is (radial_potential_adjoint_response_type)
+         call accumulate_matrix(self%dg_dphi, other%dg_dphi, "radial_potential_adjoint", "dg_dphi", error)
+      class default
+         call type_mismatch("radial_potential_adjoint", error)
+      end select
+
+   end subroutine radial_potential_adjoint_add
+
+   !> Deallocate the radial potential weights
+   !>
+   !> @param[in,out] self Item
+   subroutine radial_potential_adjoint_clear(self)
+      !> Item
+      class(radial_potential_adjoint_response_type), intent(inout) :: self
+
+      if (allocated(self%dg_dphi)) deallocate (self%dg_dphi)
+
+   end subroutine radial_potential_adjoint_clear
 
    !* ============================================================================== *!
    !*                              Placeholder item                                  *!
