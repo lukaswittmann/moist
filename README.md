@@ -18,16 +18,11 @@
 
 To build this project from the source code in this repository you need to have
 - a Fortran compiler supporting Fortran 2008
-- a C++17 compiler for the vendored FFT backend and FINUFFT (g++ of the same
-  release as gfortran, or icpx with ifx)
-- [cmake](https://cmake.org) version 3.25 or newer (FINUFFT is built through
-  its own CMake project, also under meson)
+- a C compiler and a C++17 compiler of the same toolchain (gcc/g++ with gfortran, or icx/icpx with ifx)
 - one of the supported build systems:
   - [meson](https://mesonbuild.com) version 0.57 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.7 or newer
   - [cmake](https://cmake.org) version 3.25 or newer, with a build-system backend, *i.e.* [ninja](https://ninja-build.org) version 1.10 or newer
 - a LAPACK / BLAS provider, like MKL or OpenBLAS
-
-Currently this project supports GCC and Intel compilers.
 
 #### Building with meson
 
