@@ -28,7 +28,7 @@ module moist_model_continuum_component_gostshyp
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
-   use moist_channels_response, only: response_type, gostshyp_amplitude_response_type, &
+   use moist_channels_response, only: response_type, gaussian_amplitude_response_type, &
       & response_accumulate
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & gaussian_moment_request_type, moist_phase_energy, moist_phase_response, &
@@ -406,7 +406,7 @@ contains
       !> Gaussian widths, traces and amplitudes
       real(wp), allocatable :: omega(:), ftilde(:), alpha(:), beta(:)
       !> Amplitude item of this component
-      type(gostshyp_amplitude_response_type) :: item
+      type(gaussian_amplitude_response_type) :: item
 
       ! A component switched off by zero pressure or zero scale still publishes
       ! its item, filled with zeros: present and contributing nothing, which is

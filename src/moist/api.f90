@@ -12,11 +12,8 @@ module moist_api
    use moist_model_type, only: solvation_model_type
    use moist_model_continuum_component_type, only: model_continuum_component_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type, &
-      & gaussian_moment_request_type, current_request, answer_flat, output_name_len, &
-      & coupling_extent_grid_atom
-   use moist_channels_response, only: response_type, response_item_type, &
-      & response_name_len, potential_adjoint_response_type, density_response_type, &
-      & gostshyp_amplitude_response_type, current_response_item
+      & current_request, answer_flat, output_name_len, coupling_extent_grid_atom
+   use moist_channels_response, only: response_type, response_item_type, current_response_item
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
                                              assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
@@ -55,7 +52,7 @@ module moist_api
 
    character(len=*), parameter :: namespace = "moist_"
    integer, parameter :: api_max_cstr = 4096
-   !> Longest cavity field name the API will scan for
+   !> Longest field name the API will scan for
    integer, parameter :: max_field_name_len = 64
 
    !> Frozen 1.0 drop layout; a future addition needs a new versioned type
@@ -284,8 +281,8 @@ module moist_api
    public :: general_model_get_gradient_api
    public :: next_coupling_request_api, coupling_request_name_api
    public :: coupling_request_missing_api
-   public :: coupling_answer_api, coupling_get_gaussian_moment_width_api
-   public :: next_response_item_api, response_item_name_api, response_get_api
+   public :: coupling_answer_api
+   public :: next_response_item_api, response_item_name_api
    ! Type-specific constructors
 
    ! Generic cavity operations
@@ -303,6 +300,11 @@ module moist_api
    ! Named fields of a model's evaluation domain
    public :: get_model_field_count_api, get_model_field_info_api, get_model_field_about_api
    public :: get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api
+   ! Named arrays of the current response item and inputs of the current request
+   public :: get_response_field_count_api, get_response_field_info_api
+   public :: get_response_field_about_api, get_response_field_real_api
+   public :: get_coupling_request_field_count_api, get_coupling_request_field_info_api
+   public :: get_coupling_request_field_about_api, get_coupling_request_field_real_api
    ! Legacy DROP API (deprecated - use the generic cavity operations above)
 
    ! Type-specific getters
@@ -2013,8 +2015,8 @@ contains
    !>
    !> - no own density traces; the host answers the coupling's Gaussian-moment
    !>   request (`moist_answer_coupling_request` with "gt", "pt", "mt", "rt") in every phase
-   !> - amplitudes read back as the "gostshyp_amplitude" item of the response
-   !>   walk (`moist_next_response_item`, then `moist_get_response_array`)
+   !> - amplitudes read back as the "gaussian_amplitude" item of the response
+   !>   walk (`moist_next_response_item`, then `moist_get_response_field_real`)
    function new_gostshyp_component_api(verror, pressure) result(vcomponent) &
          & bind(C, name=namespace//"new_gostshyp_component")
       !> Error handle
@@ -2280,93 +2282,6 @@ contains
 
    end subroutine api_response_handle
 
-   !> Copy a rank-1 grid array into a caller buffer of the same size
-   subroutine api_copy_grid_vector(routine, label, src, c_dst, error)
-      !> Calling entry point
-      character(len=*), intent(in) :: routine
-      !> Name of the array
-      character(len=*), intent(in) :: label
-      !> Source array, possibly unallocated
-      real(wp), allocatable, intent(in) :: src(:)
-      !> Destination buffer
-      type(c_ptr), intent(in) :: c_dst
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Destination view
-      real(c_double), pointer :: dst(:)
-
-      if (.not. allocated(src)) then
-         call api_error(error, routine, "'"//label//"' is not available on this coupling")
-         return
-      end if
-      if (.not. c_associated(c_dst)) then
-         call api_error(error, routine, "Null array pointer provided for '"//label//"'")
-         return
-      end if
-      call c_f_pointer(c_dst, dst, shape(src))
-      dst = real(src, c_double)
-
-   end subroutine api_copy_grid_vector
-
-   !> Copy a rank-2 `(3, ngrid)` grid array into a caller buffer of the same size
-   subroutine api_copy_grid_matrix(routine, label, src, c_dst, error)
-      !> Calling entry point
-      character(len=*), intent(in) :: routine
-      !> Name of the array
-      character(len=*), intent(in) :: label
-      !> Source array, possibly unallocated
-      real(wp), allocatable, intent(in) :: src(:, :)
-      !> Destination buffer
-      type(c_ptr), intent(in) :: c_dst
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Destination view
-      real(c_double), pointer :: dst(:, :)
-
-      if (.not. allocated(src)) then
-         call api_error(error, routine, "'"//label//"' is not available on this coupling")
-         return
-      end if
-      if (.not. c_associated(c_dst)) then
-         call api_error(error, routine, "Null array pointer provided for '"//label//"'")
-         return
-      end if
-      call c_f_pointer(c_dst, dst, shape(src))
-      dst = real(src, c_double)
-
-   end subroutine api_copy_grid_matrix
-
-   !> Copy a rank-3 `(3, 3, ngrid)` grid array into an equal-size caller buffer
-   subroutine api_copy_grid_tensor(routine, label, src, c_dst, error)
-      !> Calling entry point
-      character(len=*), intent(in) :: routine
-      !> Name of the array
-      character(len=*), intent(in) :: label
-      !> Source array, possibly unallocated
-      real(wp), allocatable, intent(in) :: src(:, :, :)
-      !> Destination buffer
-      type(c_ptr), intent(in) :: c_dst
-      !> Error handling
-      type(error_type), allocatable, intent(out) :: error
-
-      !> Destination view
-      real(c_double), pointer :: dst(:, :, :)
-
-      if (.not. allocated(src)) then
-         call api_error(error, routine, "'"//label//"' is not available on this coupling")
-         return
-      end if
-      if (.not. c_associated(c_dst)) then
-         call api_error(error, routine, "Null array pointer provided for '"//label//"'")
-         return
-      end if
-      call c_f_pointer(c_dst, dst, shape(src))
-      dst = real(src, c_double)
-
-   end subroutine api_copy_grid_tensor
-
    !> Create the host coupling of a solvation model
    !>
    !> - runs `new_coupling` on the model: every component declares its requests
@@ -2624,9 +2539,9 @@ contains
    !>
    !> - cleared on entry, then filled with the complete host part of the
    !>   response phase: the potential adjoint, the density weights of a field-dependent
-   !>   cavity and the GOSTSHYP amplitudes, whichever the model produces
+   !>   cavity and the Gaussian amplitudes, whichever the model produces
    !> - walk it with `moist_next_response_item` and copy the arrays of each item
-   !>   with `moist_get_response_array`
+   !>   with `moist_get_response_field_real`
    subroutine general_model_get_response_api(verror, vmodel, vcpl, vresp) &
          & bind(C, name=namespace//"get_model_response")
       !> Error, model, coupling and response handles
@@ -2663,7 +2578,7 @@ contains
    !> Nuclear gradient of a solvation model from a staged coupling
    !>
    !> The response handle is cleared on entry and returns the host part of the
-   !> gradient phase (the potential adjoint and GOSTSHYP amplitudes, which the host
+   !> gradient phase (the potential adjoint and Gaussian amplitudes, which the host
    !> contracts with its own geometry derivatives). `gradient` is Fortran
    !> `(3, nat_cap)`; only the leading `nat` columns are written, after the
    !> capacity check
@@ -2863,8 +2778,8 @@ contains
       output = logical(item%is_missing(name), c_bool)
    end subroutine coupling_request_missing_api
 
-   !> Decode a NUL-terminated output or field name argument
-   subroutine api_output_name(c_name, routine, name, error, max_len)
+   !> Decode a NUL-terminated output name argument
+   subroutine api_output_name(c_name, routine, name, error)
       !> NUL-terminated name
       type(c_ptr), intent(in) :: c_name
       !> Calling entry point
@@ -2873,17 +2788,12 @@ contains
       character(len=:, kind=c_char), allocatable, intent(out) :: name
       !> Missing or invalid name
       type(error_type), allocatable, intent(out) :: error
-      !> Name capacity, output names by default
-      integer, intent(in), optional :: max_len
       logical :: truncated
-      integer :: cap
-      cap = output_name_len
-      if (present(max_len)) cap = max_len
       if (.not. c_associated(c_name)) then
          call api_error(error, routine, "Output name is missing")
          return
       end if
-      call c_f_character_ptr(c_name, name, cap + 1, truncated)
+      call c_f_character_ptr(c_name, name, output_name_len + 1, truncated)
       if (truncated .or. len(name) == 0) then
          call api_error(error, routine, "Invalid output name")
       end if
@@ -2938,39 +2848,6 @@ contains
       call answer_flat(cpl%ptr, name, values, error%ptr)
       call prefix_api_error(error%ptr, "answer_coupling_request")
    end subroutine coupling_answer_api
-
-   !> Copy the Gaussian moment exponents of the current request, ngrid values
-   subroutine coupling_get_gaussian_moment_width_api(verror, vcpl, c_values) &
-      bind(C, name=namespace//"get_coupling_request_width")
-      !> Error handle
-      type(c_ptr), value, intent(in) :: verror
-      !> Coupling handle
-      type(c_ptr), value, intent(in) :: vcpl
-      !> Caller-owned array buffer
-      type(c_ptr), value, intent(in) :: c_values
-      !> Decoded error wrapper
-      type(vp_error), pointer :: error
-      !> Decoded coupling wrapper
-      type(vp_coupling), pointer :: cpl
-      !> Copy of the current request
-      class(coupling_request_type), allocatable :: item
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      call api_coupling_handle(vcpl, "get_coupling_request_width", cpl, error%ptr)
-      if (allocated(error%ptr)) return
-      call current_request(cpl%ptr, item, error%ptr)
-      call prefix_api_error(error%ptr, "get_coupling_request_width")
-      if (allocated(error%ptr)) return
-      select type (item)
-      type is (gaussian_moment_request_type)
-         call api_copy_grid_vector("get_coupling_request_width", "width", item%width, &
-                                   & c_values, error%ptr)
-      class default
-         call api_error(error%ptr, "get_coupling_request_width", &
-            & trim(item%name())//" has no input 'width'")
-      end select
-   end subroutine coupling_get_gaussian_moment_width_api
 
    !> Advance to the next item of the response
    !>
@@ -3029,82 +2906,6 @@ contains
       if (allocated(error%ptr)) return
       call f_c_character(trim(item%name()), name, len_trim(item%name()) + 1)
    end subroutine response_item_name_api
-
-   !> Copy one named array of the current response item
-   !>
-   !> - C row-major with the grid axis first; writes exactly the array's
-   !>   ngrid * dims values into the caller's buffer
-   !> - reads the item the cursor stopped at, as an answer writes the current
-   !>   request; an array that item does not have is refused by name
-   subroutine response_get_api(verror, vresp, c_array, c_values) &
-         & bind(C, name=namespace//"get_response_array")
-      !> Error handle
-      type(c_ptr), value, intent(in) :: verror
-      !> Response handle
-      type(c_ptr), value, intent(in) :: vresp
-      !> NUL-terminated array name
-      type(c_ptr), value, intent(in) :: c_array
-      !> Output buffer
-      type(c_ptr), value, intent(in) :: c_values
-      !> Decoded error wrapper
-      type(vp_error), pointer :: error
-      !> Decoded response wrapper
-      type(vp_response), pointer :: resp
-      !> Decoded array name
-      character(len=:, kind=c_char), allocatable :: array
-      !> Copy of the current item
-      class(response_item_type), allocatable :: item
-      !> Whether the current item has the array
-      logical :: known
-      !> Public entry point name
-      character(len=*), parameter :: routine = "get_response_array"
-
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      call api_response_handle(vresp, routine, resp, error%ptr)
-      if (allocated(error%ptr)) return
-      call api_output_name(c_array, routine, array, error%ptr, response_name_len)
-      if (allocated(error%ptr)) return
-      call current_response_item(resp%ptr, item, error%ptr)
-      call prefix_api_error(error%ptr, routine)
-      if (allocated(error%ptr)) return
-      known = .true.
-      select type (item)
-      type is (potential_adjoint_response_type)
-         select case (array)
-         case ("w_phi")
-            call api_copy_grid_vector(routine, array, item%w_phi, c_values, error%ptr)
-         case default
-            known = .false.
-         end select
-      type is (density_response_type)
-         select case (array)
-         case ("w_rho")
-            call api_copy_grid_vector(routine, array, item%w_rho, c_values, error%ptr)
-         case ("w_grad_rho")
-            call api_copy_grid_matrix(routine, array, item%w_grad_rho, c_values, error%ptr)
-         case ("w_hess_rho")
-            call api_copy_grid_tensor(routine, array, item%w_hess_rho, c_values, error%ptr)
-         case default
-            known = .false.
-         end select
-      type is (gostshyp_amplitude_response_type)
-         select case (array)
-         case ("w_overlap")
-            call api_copy_grid_vector(routine, array, item%w_overlap, c_values, error%ptr)
-         case ("w_normal_deriv")
-            call api_copy_grid_vector(routine, array, item%w_normal_deriv, c_values, error%ptr)
-         case default
-            known = .false.
-         end select
-      class default
-         known = .false.
-      end select
-      if (.not. known) then
-         call api_error(error%ptr, routine, trim(item%name())//" has no array '"//array//"'")
-      end if
-   end subroutine response_get_api
 
    !> Report the Cartesian-component layout of an internal isodensity basis
    !>
@@ -4450,6 +4251,459 @@ contains
       ok = .true.
 
    end function fetch_model_field
+
+   !* ================================================================================= *!
+   !*                       Named response item and request fields                      *!
+   !* ================================================================================= *!
+
+   !> Number of named arrays of the current response item
+   !>
+   !> - the item the walk stopped at; an error when none is current
+   !> - an array the item was accumulated without is not listed
+   subroutine get_response_field_count_api(verror, vresp, nfield) &
+         & bind(C, name=namespace//"get_response_field_count")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Response handle
+      type(c_ptr), value :: vresp
+      !> Number of available fields
+      integer(c_int), intent(inout), optional :: nfield
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Copy of the current item
+      class(response_item_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(nfield)) then
+         call api_error(error%ptr, "get_response_field_count", "Required pointer 'nfield' is missing")
+         return
+      end if
+      if (.not. resolve_field_response(verror, vresp, "get_response_field_count", error, item)) return
+
+      call query%enumerate()
+      call item%list_fields(query)
+      nfield = query%nfield
+
+   end subroutine get_response_field_count_api
+
+   !> Describe one array of the current response item by position
+   !>
+   !> Same outputs as `get_cavity_field_info`: `dims` slowest-varying first,
+   !> the reverse of the Fortran shape
+   subroutine get_response_field_info_api(verror, vresp, ifield, name, &
+         & dtype, rank, dims, count) &
+         & bind(C, name=namespace//"get_response_field_info")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Response handle
+      type(c_ptr), value :: vresp
+      !> Zero-based field index
+      integer(c_int), value :: ifield
+      !> Field name buffer
+      character(kind=c_char), intent(inout), optional :: name(*)
+      !> Field scalar type selector
+      integer(c_int), intent(inout), optional :: dtype
+      !> Number of field dimensions
+      integer(c_int), intent(inout), optional :: rank
+      !> Field dimensions
+      integer(c_int), intent(inout), optional :: dims(field_max_rank)
+      !> Number of available entries
+      integer(c_int), intent(inout), optional :: count
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Result staged until the operation succeeds
+      integer(c_int) :: local_dtype, local_rank, local_count
+      !> Copy of the current item
+      class(response_item_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(name)) then
+         call api_error(error%ptr, "get_response_field_info", "Required pointer 'name' is missing")
+         return
+      end if
+      if (.not. present(dtype)) then
+         call api_error(error%ptr, "get_response_field_info", "Required pointer 'dtype' is missing")
+         return
+      end if
+      if (.not. present(rank)) then
+         call api_error(error%ptr, "get_response_field_info", "Required pointer 'rank' is missing")
+         return
+      end if
+      if (.not. present(dims)) then
+         call api_error(error%ptr, "get_response_field_info", "Required pointer 'dims' is missing")
+         return
+      end if
+      if (.not. present(count)) then
+         call api_error(error%ptr, "get_response_field_info", "Required pointer 'count' is missing")
+         return
+      end if
+      if (.not. resolve_field_response(verror, vresp, "get_response_field_info", error, item)) return
+
+      call query%enumerate()
+      call item%list_fields(query)
+      if (.not. describe_field(error, query, ifield, "get_response_field_info", "get_response_field_count", &
+         & name, dims, local_dtype, local_rank, local_count)) return
+      dtype = local_dtype
+      rank = local_rank
+      count = local_count
+
+   end subroutine get_response_field_info_api
+
+   !> Copy an array description of the current response item or query its full length
+   subroutine get_response_field_about_api(verror, vresp, cname, about, capacity, length) &
+         & bind(C, name=namespace//"get_response_field_about")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Response handle
+      type(c_ptr), value, intent(in) :: vresp
+      !> NUL-terminated field name
+      type(c_ptr), value, intent(in) :: cname
+      !> Caller-owned description buffer
+      character(kind=c_char), intent(inout), optional :: about(*)
+      !> Description buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Copy of the current item
+      class(response_item_type), allocatable :: item
+      !> Field metadata and payload
+      type(field_query_type) :: query
+
+      if (.not. valid_string_output(verror, about, capacity, length, "get_response_field_about", error)) return
+      if (.not. resolve_field_response(verror, vresp, "get_response_field_about", error, item)) return
+      if (.not. fetch_response_field(error, item, cname, "get_response_field_about", query)) return
+      call copy_string_output(query%hit%about, about, capacity, length)
+   end subroutine get_response_field_about_api
+
+   !> Read a real array of the current response item by name
+   !>
+   !> Receives the `count` elements `get_response_field_info` reports, flat in
+   !> Fortran order, i.e. C row-major with the reversed `dims`
+   subroutine get_response_field_real_api(verror, vresp, cname, values) &
+         & bind(C, name=namespace//"get_response_field_real")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Response handle
+      type(c_ptr), value :: vresp
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      real(c_double), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Copy of the current item
+      class(response_item_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_response_field_real", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_field_response(verror, vresp, "get_response_field_real", error, item)) return
+      if (.not. fetch_response_field(error, item, cname, "get_response_field_real", query)) return
+      if (.not. check_field_payload(error, query, field_real, &
+         & "get_response_field_real", "get_response_field_info")) return
+
+      values(:size(query%rvals)) = query%rvals
+
+   end subroutine get_response_field_real_api
+
+   !> Number of named inputs of the current coupling request
+   !>
+   !> - the request the walk stopped at; an error when none is current
+   !> - inputs the component chose, e.g. the Gaussian moment exponents;
+   !>   a kind without inputs lists none
+   subroutine get_coupling_request_field_count_api(verror, vcpl, nfield) &
+         & bind(C, name=namespace//"get_coupling_request_field_count")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Coupling handle
+      type(c_ptr), value :: vcpl
+      !> Number of available fields
+      integer(c_int), intent(inout), optional :: nfield
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Copy of the current request
+      class(coupling_request_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(nfield)) then
+         call api_error(error%ptr, "get_coupling_request_field_count", "Required pointer 'nfield' is missing")
+         return
+      end if
+      if (.not. resolve_field_request(verror, vcpl, "get_coupling_request_field_count", error, item)) return
+
+      call query%enumerate()
+      call item%list_fields(query)
+      nfield = query%nfield
+
+   end subroutine get_coupling_request_field_count_api
+
+   !> Describe one input of the current coupling request by position
+   !>
+   !> Same outputs as `get_cavity_field_info`: `dims` slowest-varying first,
+   !> the reverse of the Fortran shape
+   subroutine get_coupling_request_field_info_api(verror, vcpl, ifield, name, &
+         & dtype, rank, dims, count) &
+         & bind(C, name=namespace//"get_coupling_request_field_info")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Coupling handle
+      type(c_ptr), value :: vcpl
+      !> Zero-based field index
+      integer(c_int), value :: ifield
+      !> Field name buffer
+      character(kind=c_char), intent(inout), optional :: name(*)
+      !> Field scalar type selector
+      integer(c_int), intent(inout), optional :: dtype
+      !> Number of field dimensions
+      integer(c_int), intent(inout), optional :: rank
+      !> Field dimensions
+      integer(c_int), intent(inout), optional :: dims(field_max_rank)
+      !> Number of available entries
+      integer(c_int), intent(inout), optional :: count
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Result staged until the operation succeeds
+      integer(c_int) :: local_dtype, local_rank, local_count
+      !> Copy of the current request
+      class(coupling_request_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(name)) then
+         call api_error(error%ptr, "get_coupling_request_field_info", "Required pointer 'name' is missing")
+         return
+      end if
+      if (.not. present(dtype)) then
+         call api_error(error%ptr, "get_coupling_request_field_info", "Required pointer 'dtype' is missing")
+         return
+      end if
+      if (.not. present(rank)) then
+         call api_error(error%ptr, "get_coupling_request_field_info", "Required pointer 'rank' is missing")
+         return
+      end if
+      if (.not. present(dims)) then
+         call api_error(error%ptr, "get_coupling_request_field_info", "Required pointer 'dims' is missing")
+         return
+      end if
+      if (.not. present(count)) then
+         call api_error(error%ptr, "get_coupling_request_field_info", "Required pointer 'count' is missing")
+         return
+      end if
+      if (.not. resolve_field_request(verror, vcpl, "get_coupling_request_field_info", error, item)) return
+
+      call query%enumerate()
+      call item%list_fields(query)
+      if (.not. describe_field(error, query, ifield, "get_coupling_request_field_info", "get_coupling_request_field_count", &
+         & name, dims, local_dtype, local_rank, local_count)) return
+      dtype = local_dtype
+      rank = local_rank
+      count = local_count
+
+   end subroutine get_coupling_request_field_info_api
+
+   !> Copy an input description of the current request or query its full length
+   subroutine get_coupling_request_field_about_api(verror, vcpl, cname, about, capacity, length) &
+         & bind(C, name=namespace//"get_coupling_request_field_about")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Coupling handle
+      type(c_ptr), value, intent(in) :: vcpl
+      !> NUL-terminated field name
+      type(c_ptr), value, intent(in) :: cname
+      !> Caller-owned description buffer
+      character(kind=c_char), intent(inout), optional :: about(*)
+      !> Description buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Copy of the current request
+      class(coupling_request_type), allocatable :: item
+      !> Field metadata and payload
+      type(field_query_type) :: query
+
+      if (.not. valid_string_output(verror, about, capacity, length, "get_coupling_request_field_about", error)) return
+      if (.not. resolve_field_request(verror, vcpl, "get_coupling_request_field_about", error, item)) return
+      if (.not. fetch_request_field(error, item, cname, "get_coupling_request_field_about", query)) return
+      call copy_string_output(query%hit%about, about, capacity, length)
+   end subroutine get_coupling_request_field_about_api
+
+   !> Read a real input of the current coupling request by name
+   !>
+   !> Receives the `count` elements `get_coupling_request_field_info` reports, flat in
+   !> Fortran order, i.e. C row-major with the reversed `dims`
+   subroutine get_coupling_request_field_real_api(verror, vcpl, cname, values) &
+         & bind(C, name=namespace//"get_coupling_request_field_real")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Coupling handle
+      type(c_ptr), value :: vcpl
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      real(c_double), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Copy of the current request
+      class(coupling_request_type), allocatable :: item
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_coupling_request_field_real", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_field_request(verror, vcpl, "get_coupling_request_field_real", error, item)) return
+      if (.not. fetch_request_field(error, item, cname, "get_coupling_request_field_real", query)) return
+      if (.not. check_field_payload(error, query, field_real, &
+         & "get_coupling_request_field_real", "get_coupling_request_field_info")) return
+
+      values(:size(query%rvals)) = query%rvals
+
+   end subroutine get_coupling_request_field_real_api
+
+   !> Resolve the error and response handles and copy the current item
+   !>
+   !> @return Whether an item is current and was copied
+   logical function resolve_field_response(verror, vresp, origin, error, item) result(ok)
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Response handle
+      type(c_ptr), value :: vresp
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(out) :: error
+      !> Copy of the current item
+      class(response_item_type), allocatable, intent(out) :: item
+      !> Decoded response handle
+      type(vp_response), pointer :: resp
+
+      ok = .false.
+      nullify (error)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      call api_response_handle(vresp, origin, resp, error%ptr)
+      if (allocated(error%ptr)) return
+      call current_response_item(resp%ptr, item, error%ptr)
+      call prefix_api_error(error%ptr, origin)
+      ok = .not. allocated(error%ptr)
+
+   end function resolve_field_response
+
+   !> Look one named array up on the current response item
+   !>
+   !> @return Whether the item declares the array
+   logical function fetch_response_field(error, item, cname, origin, query) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Copy of the current item
+      class(response_item_type), intent(in) :: item
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Query walker
+      type(field_query_type), intent(inout) :: query
+      !> Decoded field name
+      character(len=:, kind=c_char), allocatable :: name
+
+      ok = .false.
+      if (.not. decode_field_name(error, cname, origin, name)) return
+      call query%fetch(name)
+      call item%list_fields(query)
+      if (.not. query%found) then
+         call report_missing_field(error, origin, trim(item%name()), "response", name)
+         return
+      end if
+      ok = .true.
+
+   end function fetch_response_field
+
+   !> Resolve the error and coupling handles and copy the current request
+   !>
+   !> @return Whether a request is current and was copied
+   logical function resolve_field_request(verror, vcpl, origin, error, item) result(ok)
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Coupling handle
+      type(c_ptr), value :: vcpl
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(out) :: error
+      !> Copy of the current request
+      class(coupling_request_type), allocatable, intent(out) :: item
+      !> Decoded coupling handle
+      type(vp_coupling), pointer :: cpl
+
+      ok = .false.
+      nullify (error)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      call api_coupling_handle(vcpl, origin, cpl, error%ptr)
+      if (allocated(error%ptr)) return
+      call current_request(cpl%ptr, item, error%ptr)
+      call prefix_api_error(error%ptr, origin)
+      ok = .not. allocated(error%ptr)
+
+   end function resolve_field_request
+
+   !> Look one named input up on the current coupling request
+   !>
+   !> @return Whether the request declares the input
+   logical function fetch_request_field(error, item, cname, origin, query) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Copy of the current request
+      class(coupling_request_type), intent(in) :: item
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Query walker
+      type(field_query_type), intent(inout) :: query
+      !> Decoded field name
+      character(len=:, kind=c_char), allocatable :: name
+
+      ok = .false.
+      if (.not. decode_field_name(error, cname, origin, name)) return
+      call query%fetch(name)
+      call item%list_fields(query)
+      if (.not. query%found) then
+         call report_missing_field(error, origin, trim(item%name()), "coupling_request", name)
+         return
+      end if
+      ok = .true.
+
+   end function fetch_request_field
 
    !* ================================================================================= *!
    !*                       Cavity and A-matrix gradients (Tier 3)                      *!

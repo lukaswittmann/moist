@@ -10,6 +10,8 @@
 !>   what it finds
 !> - a default branch that stops the host is the one check that no item goes
 !>   uncontracted: unlike an unanswered request, a skipped item fails nowhere
+!> - every item also declares its arrays through `list_fields`, so they can be
+!>   listed and read by name without selecting on the type
 !>
 !> Within one model call the items are accumulators over components
 !>
@@ -19,13 +21,14 @@
 !>   calls and every walk starts afresh
 module moist_channels_response
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_fields, only: field_query_type
 
    implicit none(type, external)
    private
 
    public :: response_item_type, response_type
    public :: potential_adjoint_response_type, density_response_type
-   public :: gostshyp_amplitude_response_type, atomic_multipole_adjoint_response_type
+   public :: gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type
    public :: atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type
    public :: current_response_item, response_accumulate, response_clear
    public :: response_name_len
@@ -46,6 +49,8 @@ module moist_channels_response
    contains
       !> Short fixed-length name for diagnostics, e.g. "potential_adjoint"
       procedure(response_item_name), deferred :: name
+      !> Declare the item's arrays, named like its components
+      procedure(response_item_list_fields), deferred :: list_fields
       procedure(response_item_add), deferred, private :: add
       procedure(response_item_clear), deferred, private :: clear
    end type response_item_type
@@ -61,6 +66,19 @@ module moist_channels_response
          !> Name, blank padded
          character(len=response_name_len) :: name
       end function response_item_name
+
+      !> Declare every allocated array of a response item
+      !>
+      !> Field names are the component names; an array the item was
+      !> accumulated without is not declared
+      subroutine response_item_list_fields(self, query)
+         import :: response_item_type, field_query_type
+         implicit none(type, external)
+         !> Item to describe
+         class(response_item_type), intent(in) :: self
+         !> Field walker
+         type(field_query_type), intent(inout) :: query
+      end subroutine response_item_list_fields
 
       !> Add another item of the same dynamic type into this one
       !>
@@ -114,6 +132,7 @@ module moist_channels_response
       real(wp), allocatable :: w_phi(:)
    contains
       procedure :: name => potential_adjoint_name
+      procedure :: list_fields => potential_adjoint_list_fields
       procedure, private :: add => potential_adjoint_add
       procedure, private :: clear => potential_adjoint_clear
    end type potential_adjoint_response_type
@@ -148,6 +167,7 @@ module moist_channels_response
       real(wp), allocatable :: w_hess_rho(:, :, :)
    contains
       procedure :: name => density_name
+      procedure :: list_fields => density_list_fields
       procedure, private :: add => density_add
       procedure, private :: clear => density_clear
    end type density_response_type
@@ -164,16 +184,17 @@ module moist_channels_response
    !> - both signs are folded in here
    !> - grid points the model has switched off carry exactly zero, so the mask
    !>   propagates without the host repeating it
-   type, extends(response_item_type) :: gostshyp_amplitude_response_type
+   type, extends(response_item_type) :: gaussian_amplitude_response_type
       !> Overlap amplitudes (ngrid)
       real(wp), allocatable :: w_overlap(:)
       !> Normal derivative amplitudes (ngrid)
       real(wp), allocatable :: w_normal_deriv(:)
    contains
-      procedure :: name => gostshyp_amplitude_name
-      procedure, private :: add => gostshyp_amplitude_add
-      procedure, private :: clear => gostshyp_amplitude_clear
-   end type gostshyp_amplitude_response_type
+      procedure :: name => gaussian_amplitude_name
+      procedure :: list_fields => gaussian_amplitude_list_fields
+      procedure, private :: add => gaussian_amplitude_add
+      procedure, private :: clear => gaussian_amplitude_clear
+   end type gaussian_amplitude_response_type
 
    !> Weights conjugate to the solute's per-atom multipoles, `dE/dq_A`,...
    !>
@@ -192,6 +213,7 @@ module moist_channels_response
       real(wp), allocatable :: dg_dtheta(:, :, :)
    contains
       procedure :: name => atomic_multipole_adjoint_name
+      procedure :: list_fields => atomic_multipole_adjoint_list_fields
       procedure, private :: add => atomic_multipole_adjoint_add
       procedure, private :: clear => atomic_multipole_adjoint_clear
    end type atomic_multipole_adjoint_response_type
@@ -206,6 +228,7 @@ module moist_channels_response
       real(wp), allocatable :: dg_dq(:)
    contains
       procedure :: name => atomic_charge_adjoint_name
+      procedure :: list_fields => atomic_charge_adjoint_list_fields
       procedure, private :: add => atomic_charge_adjoint_add
       procedure, private :: clear => atomic_charge_adjoint_clear
    end type atomic_charge_adjoint_response_type
@@ -220,6 +243,7 @@ module moist_channels_response
       real(wp), allocatable :: dg_dphi(:, :)
    contains
       procedure :: name => radial_potential_adjoint_name
+      procedure :: list_fields => radial_potential_adjoint_list_fields
       procedure, private :: add => radial_potential_adjoint_add
       procedure, private :: clear => radial_potential_adjoint_clear
    end type radial_potential_adjoint_response_type
@@ -228,6 +252,7 @@ module moist_channels_response
    type, extends(response_item_type) :: no_response_item_type
    contains
       procedure :: name => no_item_name
+      procedure :: list_fields => no_item_list_fields
       procedure, private :: add => no_item_add
       procedure, private :: clear => no_item_clear
    end type no_response_item_type
@@ -402,6 +427,20 @@ contains
 
    end function potential_adjoint_name
 
+   !> Declare the potential weights
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine potential_adjoint_list_fields(self, query)
+      !> Item
+      class(potential_adjoint_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("w_phi", "dE/dphi on the cavity grid (ngrid)", self%w_phi)
+
+   end subroutine potential_adjoint_list_fields
+
    !> Add another potential adjoint item into this one
    subroutine potential_adjoint_add(self, other, error)
       !> Accumulator
@@ -444,6 +483,22 @@ contains
 
    end function density_name
 
+   !> Declare the density weights
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine density_list_fields(self, query)
+      !> Item
+      class(density_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("w_rho", "dE/drho on the cavity grid (ngrid)", self%w_rho)
+      call query%add_real2("w_grad_rho", "dE/d(grad rho) on the cavity grid (3, ngrid)", self%w_grad_rho)
+      call query%add_real3("w_hess_rho", "dE/d(hess rho) on the cavity grid (3, 3, ngrid)", self%w_hess_rho)
+
+   end subroutine density_list_fields
+
    !> Add another density item into this one
    subroutine density_add(self, other, error)
       !> Accumulator
@@ -478,51 +533,68 @@ contains
    end subroutine density_clear
 
    !* ============================================================================== *!
-   !*                           GOSTSHYP amplitude item                              *!
+   !*                           Gaussian amplitude item                              *!
    !* ============================================================================== *!
 
-   !> Name of the GOSTSHYP amplitude item
-   function gostshyp_amplitude_name(self) result(name)
+   !> Name of the Gaussian amplitude item
+   function gaussian_amplitude_name(self) result(name)
       !> Item
-      class(gostshyp_amplitude_response_type), intent(in) :: self
+      class(gaussian_amplitude_response_type), intent(in) :: self
       !> Name
       character(len=response_name_len) :: name
 
-      name = "gostshyp_amplitude"
+      name = "gaussian_amplitude"
 
-   end function gostshyp_amplitude_name
+   end function gaussian_amplitude_name
 
-   !> Add another GOSTSHYP amplitude item into this one
-   subroutine gostshyp_amplitude_add(self, other, error)
+   !> Declare the amplitudes
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine gaussian_amplitude_list_fields(self, query)
+      !> Item
+      class(gaussian_amplitude_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("w_overlap", "dE/dg_i, conjugate to the overlap blocks <u|G_i|v> (ngrid)", &
+         & self%w_overlap)
+      call query%add_real("w_normal_deriv", "dE/df_i, conjugate to the blocks n_i . grad <u|G_i|v> (ngrid)", &
+         & self%w_normal_deriv)
+
+   end subroutine gaussian_amplitude_list_fields
+
+   !> Add another Gaussian amplitude item into this one
+   subroutine gaussian_amplitude_add(self, other, error)
       !> Accumulator
-      class(gostshyp_amplitude_response_type), intent(inout) :: self
+      class(gaussian_amplitude_response_type), intent(inout) :: self
       !> Item to add
       class(response_item_type), intent(in) :: other
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
       select type (other)
-      type is (gostshyp_amplitude_response_type)
+      type is (gaussian_amplitude_response_type)
          call accumulate_vector(self%w_overlap, other%w_overlap, &
-            & "gostshyp_amplitude", "w_overlap", error)
+            & "gaussian_amplitude", "w_overlap", error)
          if (allocated(error)) return
          call accumulate_vector(self%w_normal_deriv, other%w_normal_deriv, &
-            & "gostshyp_amplitude", "w_normal_deriv", error)
+            & "gaussian_amplitude", "w_normal_deriv", error)
       class default
-         call type_mismatch("gostshyp_amplitude", error)
+         call type_mismatch("gaussian_amplitude", error)
       end select
 
-   end subroutine gostshyp_amplitude_add
+   end subroutine gaussian_amplitude_add
 
    !> Deallocate the amplitudes
-   subroutine gostshyp_amplitude_clear(self)
+   subroutine gaussian_amplitude_clear(self)
       !> Item
-      class(gostshyp_amplitude_response_type), intent(inout) :: self
+      class(gaussian_amplitude_response_type), intent(inout) :: self
 
       if (allocated(self%w_overlap)) deallocate (self%w_overlap)
       if (allocated(self%w_normal_deriv)) deallocate (self%w_normal_deriv)
 
-   end subroutine gostshyp_amplitude_clear
+   end subroutine gaussian_amplitude_clear
 
    !* ============================================================================== *!
    !*                         Atomic multipole adjoint item                          *!
@@ -540,6 +612,22 @@ contains
       name = "atomic_multipole_adjoint"
 
    end function atomic_multipole_adjoint_name
+
+   !> Declare the multipole weights the model consumed
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine atomic_multipole_adjoint_list_fields(self, query)
+      !> Item
+      class(atomic_multipole_adjoint_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("dg_dq", "dE/dq of the atomic charges (natom)", self%dg_dq)
+      call query%add_real2("dg_dmu", "dE/dmu of the atomic dipoles (3, natom)", self%dg_dmu)
+      call query%add_real3("dg_dtheta", "dE/dtheta of the atomic quadrupoles (3, 3, natom)", self%dg_dtheta)
+
+   end subroutine atomic_multipole_adjoint_list_fields
 
    !> Add another atomic multipole adjoint item into this one
    !>
@@ -598,6 +686,20 @@ contains
 
    end function atomic_charge_adjoint_name
 
+   !> Declare the charge weights
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine atomic_charge_adjoint_list_fields(self, query)
+      !> Item
+      class(atomic_charge_adjoint_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real("dg_dq", "dE/dq of the atomic charges (natom)", self%dg_dq)
+
+   end subroutine atomic_charge_adjoint_list_fields
+
    !> Add another atomic charge adjoint item into this one
    !>
    !> @param[in,out] self Accumulator
@@ -648,6 +750,21 @@ contains
 
    end function radial_potential_adjoint_name
 
+   !> Declare the radial potential weights
+   !>
+   !> @param[in]    self   Item
+   !> @param[inout] query  Field walker
+   subroutine radial_potential_adjoint_list_fields(self, query)
+      !> Item
+      class(radial_potential_adjoint_response_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      call query%add_real2("dg_dphi", "dE/dphi of the site-resolved radial potential (ngrid, natom)", &
+         & self%dg_dphi)
+
+   end subroutine radial_potential_adjoint_list_fields
+
    !> Add another radial potential adjoint item into this one
    !>
    !> @param[in,out] self Accumulator
@@ -697,6 +814,18 @@ contains
       name = "no_current_item"
 
    end function no_item_name
+
+   !> The placeholder holds no arrays, so it declares none
+   !>
+   !> @param[in]    self   Placeholder
+   !> @param[inout] query  Field walker
+   subroutine no_item_list_fields(self, query)
+      !> Placeholder
+      class(no_response_item_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+   end subroutine no_item_list_fields
 
    !> The placeholder stands for no item, so nothing accumulates into it
    !>

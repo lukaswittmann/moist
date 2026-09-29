@@ -72,7 +72,7 @@ Construction
 
          gostshyp = ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)
 
-The component cannot form its own density traces. Hosts answer the ``gaussian_moments`` request in every phase and contract the ``gostshyp_amplitude`` item of the response; see the :ref:`host requests <coupling-requests>` and :ref:`gostshyp-fortran` for the outputs required per phase.
+The component cannot form its own density traces. Hosts answer the ``gaussian_moments`` request in every phase and contract the ``gaussian_amplitude`` item of the response; see the :ref:`host requests <coupling-requests>` and :ref:`gostshyp-fortran` for the outputs required per phase.
 
 PySCF
 -----

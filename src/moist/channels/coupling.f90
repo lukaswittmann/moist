@@ -24,6 +24,7 @@ module moist_channels_coupling
    use, intrinsic :: iso_fortran_env, only: int64
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_channels_fields, only: field_query_type
    implicit none(type, external)
    private
    public :: coupling_type, coupling_view_type, coupling_registry_type
@@ -100,7 +101,8 @@ module moist_channels_coupling
    !>
    !> Kinds declare their outputs once in `declare`; every accessor works by
    !> output name, so a new kind adds no per-output code. A host sees a copy
-   !> through `coupling%request()`: its kind, `name()` and `is_missing(name)`
+   !> through `coupling%request()`: its kind, `name()`, `is_missing(name)` and
+   !> the inputs it declares through `list_fields`
    type, abstract :: coupling_request_type
       private
       !> Named outputs, filled by `declare` on first use
@@ -112,6 +114,8 @@ module moist_channels_coupling
       procedure(request_name), deferred :: name
       !> Whether an output is required by the staged phase and still unanswered
       procedure :: is_missing => request_is_missing
+      !> Declare the kind's inputs; none by default
+      procedure :: list_fields => request_list_fields
       procedure(request_declare), deferred, private :: declare
       procedure, private :: ensure_outputs => request_ensure_outputs
       procedure, private :: request_add_vector, request_add_array
@@ -178,6 +182,7 @@ module moist_channels_coupling
       real(wp), allocatable :: width(:)
    contains
       procedure :: name => gaussian_moment_name
+      procedure :: list_fields => gaussian_moment_list_fields
       procedure, private :: declare => gaussian_moment_declare
       procedure, private :: same_inputs => moment_same_inputs
    end type gaussian_moment_request_type
@@ -630,6 +635,17 @@ contains
       missing = self%is_required(name) .and. .not. self%is_available(name)
    end function request_is_missing
 
+   !> A kind without inputs declares no fields
+   !>
+   !> @param[in]    self   Request to describe
+   !> @param[inout] query  Field walker
+   subroutine request_list_fields(self, query)
+      !> Request to describe
+      class(coupling_request_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+   end subroutine request_list_fields
+
    !> Number of required outputs without valid answers
    !>
    !> @param[in] self Request to inspect
@@ -778,6 +794,18 @@ contains
       if (allocated(error)) return
       call self%add("rt", [3], error)
    end subroutine gaussian_moment_declare
+
+   !> Inputs of the gaussian_moments calculation: the moment exponents
+   !>
+   !> @param[in]    self   Request to describe
+   !> @param[inout] query  Field walker
+   subroutine gaussian_moment_list_fields(self, query)
+      !> Request to describe
+      class(gaussian_moment_request_type), intent(in) :: self
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+      call query%add_real("width", "Gaussian moment exponents in bohr**(-2) (ngrid)", self%width)
+   end subroutine gaussian_moment_list_fields
 
    !> Name of the atomic_multipoles calculation
    !>

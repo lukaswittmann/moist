@@ -2,7 +2,8 @@
 !>
 !> The read-only channel next to `coupling` (host inputs) and `response`
 !> (adjoints): the owner declares its arrays through a `list_fields`
-!> binding, the host lists them or fetches one by name
+!> binding, the host lists them or fetches one by name; response items and
+!> request inputs describe their arrays the same way
 module moist_channels_fields
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -20,7 +21,7 @@ module moist_channels_fields
    integer, parameter :: field_bool = 3
 
    !> Highest array rank a field can have
-   integer, parameter :: field_max_rank = 2
+   integer, parameter :: field_max_rank = 3
 
    !> Shape and type of one readable field
    type :: field_info_type
@@ -73,6 +74,8 @@ module moist_channels_fields
       procedure :: add_real
       !> Declare a rank-2 real array, e.g. (3, ngrid)
       procedure :: add_real2
+      !> Declare a rank-3 real array, e.g. (3, 3, ngrid)
+      procedure :: add_real3
       !> Declare an integer array
       procedure :: add_int
       !> Declare a logical array
@@ -279,6 +282,27 @@ contains
       self%rvals = reshape(values, [size(values)])
 
    end subroutine add_real2
+
+   !> Declare a rank-3 real array, stored and handed out in Fortran order
+   !>
+   !> @param[inout] self    Query walker
+   !> @param[in]    name    Field name
+   !> @param[in]    about   One-line description
+   !> @param[in]    values  Backing array; an unallocated array is not declared
+   subroutine add_real3(self, name, about, values)
+      class(field_query_type), intent(inout) :: self
+      !> Field name
+      character(len=*), intent(in) :: name
+      !> One-line description
+      character(len=*), intent(in) :: about
+      !> Backing array
+      real(wp), allocatable, intent(in) :: values(:, :, :)
+
+      if (.not. allocated(values)) return
+      if (.not. self%record(name, about, field_real, 3, shape(values))) return
+      self%rvals = reshape(values, [size(values)])
+
+   end subroutine add_real3
 
    !> Declare an integer array
    !>

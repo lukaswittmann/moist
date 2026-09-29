@@ -274,7 +274,7 @@ coefficients for the host's integrals.
      - None of its own
    * - GOSTSHYP
      - ``gaussian_moments`` (``gt``, ``pt``, ``mt``, ``rt``)
-     - ``gostshyp_amplitude`` (``w_overlap``, ``w_normal_deriv``)
+     - ``gaussian_amplitude`` (``w_overlap``, ``w_normal_deriv``)
 
 On a density-backed cavity (the isodensity level sets) the response of every
 model additionally carries the ``density`` item, which belongs to the cavity
@@ -359,10 +359,12 @@ to reproduce the requested pressure:
 
    call new_component_gostshyp(gostshyp, pressure=50.0_wp*gpa_to_au)
 
-The ``gaussian_moments`` request carries the exponents ``width``; read them
-from the request, never recompute them. Answer only its missing outputs, and
-contract ``w_overlap`` and ``w_normal_deriv`` with the host's Gaussian
-integrals. See :ref:`coupling-requests` for the outputs required per phase.
+The ``gaussian_moments`` request (``gaussian_moment_request_type``) carries
+the exponents in ``request%width``; read them from the request, never
+recompute them. Answer only its missing outputs, and contract ``w_overlap``
+and ``w_normal_deriv`` of the ``gaussian_amplitude`` item
+(``gaussian_amplitude_response_type``) with the host's Gaussian integrals.
+See :ref:`coupling-requests` for the outputs required per phase.
 
 Building a list-based model
 ---------------------------
@@ -398,10 +400,10 @@ The ``moist`` umbrella module re-exports what the evaluation loop needs: every
 parameter type, ``cavity_type_drop`` and ``new_cavity_drop``, ``radius_type``
 and the generic ``new_radii``, the model and component types with their
 constructors and ``solver_type``, the coupling and request types, the response
-type with its items, and ``wp``, ``error_type``, ``fatal_error`` and
-``structure_type`` from mctc-lib. Everything else the examples above use --
-the context, the other cavities, the concrete radii and LSF types, the
-diagnostics -- comes from its own module.
+type with its items, ``field_query_type``, and ``wp``, ``error_type``,
+``fatal_error`` and ``structure_type`` from mctc-lib. Everything else the
+examples above use -- the context, the other cavities, the concrete radii and
+LSF types, the diagnostics -- comes from its own module.
 
 ``coupling_type`` and ``response_type`` carry only the host bindings
 (``next``, ``request``, ``answer``; ``next``, ``item``); declaring, staging and
@@ -486,6 +488,10 @@ non-finite value or a missing current request comes back as an error.
 ``response%item()`` likewise returns a polymorphic copy of the current item,
 with its arrays as components (``item%w_phi``), and the placeholder
 ``no_current_item`` outside a walk.
+Items and requests also bind ``list_fields(query)``, which declares the same
+arrays as :doc:`fields` to a ``field_query_type``: after ``query%enumerate()``
+it fills ``query%info``, after ``query%fetch(name)`` it copies that one array
+into ``query%rvals``. The typed components remain the way to read them.
 ``get_gradient(coupling, response, gradient, error)`` fills the response with
 the host part of the gradient phase, walked the same way, and adds to
 ``gradient(3, nat)``.

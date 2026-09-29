@@ -225,11 +225,13 @@ a loop that ran to the end lets the next one start a new pass.
 
 A ``Response`` is a plain value copied out of the native result: iterating it
 yields the items the model produced, in native order, as
-``PotentialAdjointResponse``, ``DensityResponse`` or
-``GostshypAmplitudeResponse``. Each item has the native item name as its
-``name`` class attribute and its arrays as attributes named as in the response
-table, with the grid axis first. The :doc:`pyscf` module drives these loops for
-PySCF.
+``PotentialAdjointResponse``, ``DensityResponse``,
+``GaussianAmplitudeResponse``, ``AtomicMultipoleAdjointResponse``,
+``AtomicChargeAdjointResponse`` or ``RadialPotentialAdjointResponse``. Each
+item has the native item name as its ``name`` class attribute and its arrays
+as attributes named as their Fortran components, with the dimensions reversed.
+``AtomicMultipoleAdjointResponse`` arrays the model did not compute are
+``None``. The :doc:`pyscf` module drives these loops for PySCF.
 
 API
 ---

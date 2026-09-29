@@ -56,7 +56,7 @@ The ``model_continuum_type`` owns one cavity and an ordered list of components:
 1. Construct the model from a cavity and add all components before the first update; the model stores copies of both.
 2. ``update`` refreshes the cavity first, then every component.
 3. ``get_energy`` sums the component energies.
-4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gostshyp_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
+4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gaussian_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
 5. ``get_gradient`` adds the direct nuclear terms, contracts the gradient-side surface weights through the cavity, and refills the response with the same direct items.
 
 Construction Example
