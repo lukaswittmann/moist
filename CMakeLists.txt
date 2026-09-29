@@ -286,7 +286,7 @@ if(MOIST_TESTS)
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
     math_quadrature math_grid_s2 math_fft finufft math_grid_nufft math_grid_3d
-    math_grid_3d_threaded math_grid_3d_integration moz_1d moz_3d
+    math_grid_3d_threaded moz_1d moz_3d
     cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
