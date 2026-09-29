@@ -118,8 +118,8 @@ Both leave their accumulator unchanged on failure. ``get_response(coupling)``
 returns a fresh ``Response``.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
-``a`` and ``f`` mirror ``model%cavity`` in Fortran, and ``cavity.get(name)``
-reads any other field the cavity holds. ``Structure`` copies input arrays on
+``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of
+its :doc:`fields`. ``Structure`` copies input arrays on
 construction and update; mutating an input NumPy array cannot change the
 stored geometry, call ``update`` explicitly. See :doc:`coupling` for the
 protocol Python drives with ``for request in coupling``,

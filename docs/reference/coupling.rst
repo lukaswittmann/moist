@@ -99,8 +99,8 @@ The density weights retained from the response phase supply the additional contr
 Grid inputs
 -----------
 
-Grid inputs are fields of the model's cavity: ``xyz``, ``xi0``, ``normal0``, ``a``, ``f`` and its other per-point arrays. Read these fields through the language's cavity API.
-The coupling keeps no copy of the grid and has no grid accessor of its own. A model update invalidates every coupling, so a staged coupling always refers to the current cavity.
+Grid inputs are :doc:`fields` of the model: ``xyz``, ``xi0`` and the other per-point arrays of its evaluation domain.
+The coupling keeps no copy of the grid and has no grid accessor of its own. A model update invalidates every coupling, so a staged coupling always refers to the current grid.
 
 .. _coupling-requests:
 

@@ -56,7 +56,7 @@ cavity or model using them.
 
 ``moist_delete(handle)`` dispatches to the typed deletion function in C and C++.
 Deletion sets the supplied handle to NULL; deleting an already-NULL handle is safe.
-Requests, outputs, response items and cavity fields are addressed by name
+Requests, outputs, response items and fields are addressed by name
 (NUL-terminated strings of at most ``MOIST_NAME_MAX`` or ``MOIST_FIELD_NAME_MAX``
 characters); there are no numeric tags. Requests and response items have no
 handles or indices: a cursor makes one current at a time.
@@ -88,16 +88,10 @@ Truncation is successful and detectable as ``length >= capacity``. Positive-capa
 NUL-terminated; errors leave ``length`` unchanged. The host prints banner text
 to its own stream. Capacities above ``SIZE_MAX/2`` are rejected.
 
-Field names are bounded by ``MOIST_FIELD_NAME_MAX`` (excluding the terminator);
-allocate ``MOIST_FIELD_NAME_MAX + 1`` bytes for ``moist_get_cavity_field_info`` and
-``moist_get_model_field_info``. The ``moist_get_model_field_*`` getters read the
-same named fields through a model handle, for every model family: a continuum
-model reports its cavity's fields, a volume model its grid.
-
 Arrays use flat C row-major order, with the last axis contiguous.
 Dimensions reverse the native Fortran dimensions without rearranging the buffer.
 For example, positions and gradients are ``[natoms][3]``; grid vectors are
-``[ngrid][3]``. Named-field descriptors report these C dimensions. The entries
+``[ngrid][3]``. The entries
 of the host loop -- the coupling and response entries below and the cavity
 and model field getters -- take no size: moist reads or writes exactly the documented
 shape, and the host allocates it. ``moist_get_cavity_results``,
@@ -164,7 +158,7 @@ Evaluation example
 This example evaluates energy and the Fock contribution for PCM on a cavity
 fixed with respect to the density. The model has already been updated;
 ``host_potential`` and ``host_fock`` stand for the host's integral routines.
-Read grid inputs from the borrowed model cavity. Allocate name buffers with
+Read grid inputs as model :doc:`fields`. Allocate name buffers with
 ``MOIST_NAME_MAX + 1`` characters.
 
 ``moist_get_coupling_request_missing`` reads the current state on every call,
@@ -174,12 +168,11 @@ including answers submitted earlier in the same pass.
 
    moist_coupling cpl = moist_new_coupling(err, model);
    moist_response resp = moist_new_response(err);
-   moist_cavity cav = moist_get_model_cavity(err, model);
-   int ngrid, nsph;
-   moist_get_cavity_sizes(err, cav, &ngrid, &nsph);
+   int ngrid;
+   moist_get_model_field_int(err, model, "ngrid", &ngrid);
    /* Check err after each call. Allocate xyz[3*ngrid], xi[ngrid], phi[ngrid], w_phi[ngrid]. */
-   moist_get_cavity_field_real(err, cav, "xyz", xyz);
-   moist_get_cavity_field_real(err, cav, "xi0", xi);
+   moist_get_model_field_real(err, model, "xyz", xyz);
+   moist_get_model_field_real(err, model, "xi0", xi);
 
    moist_prepare_model_energy(err, model, cpl);
    while (moist_next_coupling_request(err, cpl)) {
@@ -219,7 +212,6 @@ including answers submitted earlier in the same pass.
 
    moist_delete_response(&resp);
    moist_delete_coupling(&cpl);
-   moist_delete_cavity(&cav);
 
 ``moist_get_model_gradient`` adds into ``gradient[nat_cap][3]`` and fills the
 response with the host part of the gradient phase. For density-dependent
