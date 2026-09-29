@@ -7,7 +7,6 @@ test(
   ),
 )
 
-add_languages('cpp', required: true, native: false)
 test(
   'api-cpp',
   executable(

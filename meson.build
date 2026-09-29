@@ -12,7 +12,8 @@ project(
 )
 lib_version = meson.project_version().split('-')[0]
 install = not (meson.is_subproject() and get_option('default_library') == 'static')
-has_cc = add_languages('c', required: get_option('api') or get_option('python'), native: false)
+# C (C API tests, Python shim) and C++ (ducc0 FFT, FINUFFT)
+add_languages('c', 'cpp', required: true, native: false)
 
 # General configuration information
 inc_dirs = []
@@ -22,6 +23,9 @@ subdir('config')
 # Collect source of the project
 srcs = []
 subdir('src')
+
+is_libcxx = cxx.get_define('_LIBCPP_VERSION', prefix: '#include <cstddef>') != ''
+lib_deps += cxx.find_library(is_libcxx ? 'c++' : 'stdc++')
 
 # Library target
 moist_lib = library(

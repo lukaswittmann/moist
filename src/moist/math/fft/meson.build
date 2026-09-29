@@ -9,9 +9,9 @@
 #   directory
 fft_inc = include_directories('.')
 # Threads and, when enabled, OpenMP for every C++ target of the backend
-fft_cpp_deps = [threads_dep]
+fft_cpp_deps = [dependency('threads')]
 if get_option('openmp')
-  fft_cpp_deps += dependency('openmp', language: 'cpp')
+  fft_cpp_deps += omp_dep
 endif
 
 fft_lib = static_library(
