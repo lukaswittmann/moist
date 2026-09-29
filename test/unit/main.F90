@@ -11,6 +11,9 @@ program tester
    use test_utils_mem, only: collect_utils_mem
    use test_utils_prettylistprint, only: collect_utils_prettylistprint
    use test_channels, only: collect_channels
+   use test_math_grid_3d_integration, only: collect_math_grid_3d_integration
+   use test_moz_1d, only: collect_moz_1d
+   use test_moz_3d, only: collect_moz_3d
    use test_radii, only: collect_radii
    use test_data, only: collect_data
    use test_math_linalg, only: collect_math_linalg
@@ -20,6 +23,13 @@ program tester
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
    use test_math_grid, only: collect_math_grid
+   use test_math_quadrature, only: collect_math_quadrature
+   use test_math_grid_s2, only: collect_math_grid_s2
+   use test_math_fft, only: collect_math_fft
+   use test_finufft, only: collect_finufft
+   use test_math_grid_nufft, only: collect_math_grid_nufft
+   use test_math_grid_3d, only: collect_math_grid_3d
+   use test_math_grid_3d_threaded, only: collect_math_grid_3d_threaded
    use test_cavity_iswig, only: collect_cavity_iswig
    use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
@@ -42,7 +52,7 @@ program tester
    use test_model_component_pcm_cpcm, only: collect_model_component_pcm_cpcm
    use test_model_component_gostshyp, only: collect_model_component_gostshyp
    use test_model_component_pv, only: collect_model_component_pv
-   use test_model_general, only: collect_model_general
+   use test_model_continuum, only: collect_model_continuum
    use test_model_coupling, only: collect_model_coupling
 
    implicit none(type, external)
@@ -72,6 +82,16 @@ program tester
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
       & new_testsuite("math_grid", collect_math_grid), &
+      & new_testsuite("math_quadrature", collect_math_quadrature), &
+      & new_testsuite("math_grid_s2", collect_math_grid_s2), &
+      & new_testsuite("math_fft", collect_math_fft), &
+      & new_testsuite("finufft", collect_finufft), &
+      & new_testsuite("math_grid_nufft", collect_math_grid_nufft), &
+      & new_testsuite("math_grid_3d", collect_math_grid_3d), &
+      & new_testsuite("math_grid_3d_threaded", collect_math_grid_3d_threaded), &
+      & new_testsuite("math_grid_3d_integration", collect_math_grid_3d_integration), &
+      & new_testsuite("moz_1d", collect_moz_1d), &
+      & new_testsuite("moz_3d", collect_moz_3d), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
@@ -96,7 +116,7 @@ program tester
       & new_testsuite("model_component_pcm_cpcm", collect_model_component_pcm_cpcm), &
       & new_testsuite("model_component_gostshyp", collect_model_component_gostshyp), &
       & new_testsuite("model_component_pv", collect_model_component_pv), &
-      & new_testsuite("model_general", collect_model_general), &
+      & new_testsuite("model_continuum", collect_model_continuum), &
       & new_testsuite("model_coupling", collect_model_coupling) &
       & ]
 
