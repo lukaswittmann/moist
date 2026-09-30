@@ -14,10 +14,12 @@
   [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.13-informational)](#tested-platforms)
 </div>
 
+MOIST is a modular library for implicit solvation in molecular quantum chemistry, usable from Fortran, C, and Python.
+It provides modern, smooth and differentiable cavity construction schemes (vdW iSwiG, SvdW-DROP, and isodensity-DROP), efficient polarizable continuum models (PCMs), pressure models (GOSTSHYP), and statistical solvation models (Reference Interaction Site Model, RISM), all implemented with performance and differentiability in mind.
 
 > [!Note]
 >  MOIST is currently in a pre-release state and is actively developed.  Contributions and discussions are very welcome!
-> 
+
 ### Tested platforms
 
 Every combination below builds and passes the full test suite in [CI](https://github.com/lukaswittmann/moist/actions/workflows/ci_build.yml).
