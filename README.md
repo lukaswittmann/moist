@@ -8,14 +8,16 @@
   [![Documentation](https://readthedocs.org/projects/moist/badge/?version=latest)](https://moist.readthedocs.io/en/latest/?badge=latest)
   [![Coverage](https://codecov.io/gh/lukaswittmann/moist/branch/main/graph/badge.svg)](https://codecov.io/gh/lukaswittmann/moist)
 
-  [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational)](#tested-platforms)
+  <!-- [![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-informational)](#tested-platforms)
   [![Compilers](https://img.shields.io/badge/compilers-GCC%2014--16%20%7C%20Intel%20ifx%202025-informational)](#tested-platforms)
   [![Build systems](https://img.shields.io/badge/build%20systems-meson%20%7C%20CMake-informational)](#tested-platforms)
-  [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.13-informational)](#tested-platforms)
+  [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.13-informational)](#tested-platforms) -->
+
 </div>
 
-MOIST is a modular library for implicit solvation in molecular quantum chemistry, usable from Fortran, C, and Python.
-It provides modern, smooth and differentiable cavity construction schemes (vdW iSwiG, SvdW-DROP, and isodensity-DROP), efficient polarizable continuum models (PCMs), pressure models (GOSTSHYP), and statistical solvation models (Reference Interaction Site Model, RISM), all implemented with performance and differentiability in mind.
+<img align="right" src="docs/_static/moist_portal_animated.svg" alt="Animated MOIST logo with a drop falling through portals" width="240">
+
+MOIST is a modular library for implicit solvation in molecular quantum chemistry, usable from Fortran, C, and Python. It provides modern, smooth and differentiable cavity construction schemes (vdW iSwiG, SvdW-DROP, and isodensity-DROP), efficient polarizable continuum models (PCMs), pressure models (GOSTSHYP), and statistical solvation models (Reference Interaction Site Model, RISM), all implemented with performance and differentiability in mind.
 
 > [!Note]
 >  MOIST is currently in a pre-release state and is actively developed.  Contributions and discussions are very welcome!

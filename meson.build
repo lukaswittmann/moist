@@ -59,7 +59,7 @@ subdir('app')
 # Package the license files
 moist_lic = files(
   'LICENSE',
-  'THIRD_PARTY_LICENSES.md',
+  'THIRD_PARTY_NOTICES.md',
 )
 
 moist_header = files(
