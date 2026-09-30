@@ -153,8 +153,9 @@ jobs:
           cmake --build build
           ctest --test-dir build --output-on-failure -j 4
 
+  # MSYS2 ships only its current GCC (16.x), not a pinned gnu15
   windows:
-    name: windows-x86_64 (${{ matrix.build }}, msys2-gnu15)
+    name: windows-x86_64 (${{ matrix.build }}, msys2-gcc)
     runs-on: windows-2025
     timeout-minutes: 60
     defaults:
