@@ -222,7 +222,6 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  # As in config/meson.build; logicals makes .true. 1, as C's bool expects
   set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals)
   target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
