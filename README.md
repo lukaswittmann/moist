@@ -223,6 +223,12 @@ There is no dedicated toolkit paper yet, so for now please cite `moist` using th
   Based on Discretization via Reference-Onto-Surface Projection*, ChemRxiv 2026.
   <https://doi.org/10.26434/chemrxiv.15003893/v2>
 
+For the isodensity cavity (ρ-DROP), please also cite
+
+- L. Wittmann, *From Density to Boundary and Back: A Fully Differentiable,
+  Self-Consistent Isodensity Cavity*, ChemRxiv 2026.
+  <https://doi.org/10.26434/chemrxiv.15007095/v1>
+
 The full, context-appropriate citation list is maintained inside the program and printed by
 
 ```sh
