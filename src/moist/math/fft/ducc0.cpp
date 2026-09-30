@@ -24,8 +24,9 @@
 // Inner FFT threading may change rounding because scalar and SIMD line kernels
 // are not bitwise identical. Numerical agreement is tested across thread counts.
 //
-// Every entry point below returns an int status (0 = success, 1 = a ducc0
-// exception other than bad_alloc, 2 = std::bad_alloc) instead of void. ducc0
+// Every entry point below returns an int status (0 = success, 1 = a negative
+// extent or a ducc0 exception other than bad_alloc, 2 = std::bad_alloc)
+// instead of void. ducc0
 // throws on allocation failure and on backend errors, and a C++ exception
 // unwinding through the Fortran frames that call these functions would abort
 // the process rather than give the caller a chance to report it, so no
@@ -35,6 +36,7 @@
 #include <cstddef>
 #include <algorithm>
 #include <exception>
+#include <initializer_list>
 #include <new>
 #include <functional>
 #include <utility>
@@ -129,6 +131,15 @@ int status_from_exception() noexcept
    catch (...) { return status_error; }
 }
 
+//! True if any extent is negative; a negative int would wrap to a huge
+//! size_t and address memory far outside the caller's buffers
+inline bool any_negative(std::initializer_list<int> extents) noexcept
+{
+   for (const int n : extents)
+      if (n < 0) return true;
+   return false;
+}
+
 //! Execute one batched transform with a bounded, affinity-aware OpenMP team.
 //! Existing outer regions and builds without OpenMP retain a serial transform.
 //! Returns a status code; no exception escapes this function, threaded or not.
@@ -199,13 +210,15 @@ void c2c_pass(int m0, int m1, int m2, int s0, int s1, const double *in,
 
 extern "C" {
 
-//! In-place-safe 3D complex-to-complex transform, unnormalised unless `fct`
+//! Out-of-place 3D complex-to-complex transform, unnormalised unless `fct`
 //! says otherwise. `forward` selects the sign of the exponent (nonzero =
-//! forward, exp(-i k x)).
-//! @return status  Zero on success, nonzero if the backend failed
+//! forward, exp(-i k x)). The Fortran binding declares `in` and `out` as
+//! distinct dummies, so a Fortran caller may not pass one array as both.
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_c2c_3d(int n0, int n1, int n2, const double *in, double *out,
                       int forward, double fct)
 {
+   if (any_negative({n0, n1, n2})) return status_error;
    try {
       const std::size_t s0 = static_cast<std::size_t>(n0);
       const std::size_t s1 = static_cast<std::size_t>(n1);
@@ -223,12 +236,14 @@ int moist_fft_c2c_3d(int n0, int n1, int n2, const double *in, double *out,
 }
 
 //! Single-axis pass of a 3D complex transform over a sub-block, out of place.
-//! `fct` multiplies each value once the pass has finished it.
-//! @return status  Zero on success, nonzero if the backend failed
+//! `fct` multiplies each value once the pass has finished it. Negative
+//! strides are valid ducc0 views; only the extents are checked.
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_c2c_3d_pass(int m0, int m1, int m2, int s0, int s1,
                            const double *in, double *out, int axis, int forward,
                            double fct)
 {
+   if (any_negative({m0, m1, m2})) return status_error;
    try {
       c2c_pass(m0, m1, m2, s0, s1, in, out, axis, forward, fct);
    } catch (...) {
@@ -238,11 +253,12 @@ int moist_fft_c2c_3d_pass(int m0, int m1, int m2, int s0, int s1,
 }
 
 //! Single-axis pass of a 3D complex transform over a sub-block, in place.
-//! @return status  Zero on success, nonzero if the backend failed
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_c2c_3d_pass_inplace(int m0, int m1, int m2, int s0, int s1,
                                    double *data, int axis, int forward,
                                    double fct)
 {
+   if (any_negative({m0, m1, m2})) return status_error;
    try {
       c2c_pass(m0, m1, m2, s0, s1, data, data, axis, forward, fct);
    } catch (...) {
@@ -254,10 +270,11 @@ int moist_fft_c2c_3d_pass_inplace(int m0, int m1, int m2, int s0, int s1,
 //! 3D real-to-complex transform. The half spectrum is produced along the last
 //! (fastest, x) axis, so `out` holds n0*n1*(n2/2+1) complex values. `in` is
 //! left untouched.
-//! @return status  Zero on success, nonzero if the backend failed
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_r2c_3d(int n0, int n1, int n2, const double *in, double *out,
                       double fct)
 {
+   if (any_negative({n0, n1, n2})) return status_error;
    try {
       const std::size_t s0 = static_cast<std::size_t>(n0);
       const std::size_t s1 = static_cast<std::size_t>(n1);
@@ -281,10 +298,11 @@ int moist_fft_r2c_3d(int n0, int n1, int n2, const double *in, double *out,
 //! transformed in place in `in` before the final c2r pass. ducc0's const c2r
 //! runs the same passes on a freshly allocated copy, so the result is
 //! bitwise identical while the per-call scratch allocation disappears.
-//! @return status  Zero on success, nonzero if the backend failed
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_c2r_3d(int n0, int n1, int n2, double *in, double *out,
                       double fct)
 {
+   if (any_negative({n0, n1, n2})) return status_error;
    try {
       const std::size_t s0 = static_cast<std::size_t>(n0);
       const std::size_t s1 = static_cast<std::size_t>(n1);
@@ -304,28 +322,32 @@ int moist_fft_c2r_3d(int n0, int n1, int n2, double *in, double *out,
 //! Batched 3D transforms: the site dimension is not transformed. One thread
 //! pool distributes FFT lines across sites AND spatial dimensions. The caller
 //! passes one thread inside an existing OpenMP region to avoid nested teams.
-//! @return status  Zero on success, nonzero if the backend failed
+//! The views are built inside the transform so their allocations sit under
+//! the exception guard of `with_fft_threads`.
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_r2c_3d_batch(int n0, int n1, int n2, int nb, const double *in,
                            double *out, double fct, int nthreads)
 {
+   if (any_negative({n0, n1, n2, nb})) return status_error;
    const std::size_t z=n0, y=n1, x=n2, b=nb, h=x/2+1;
-   cfmav<double> mi(in, shape_t{b,z,y,x});
-   vfmav<cplx> mo(reinterpret_cast<cplx *>(out), shape_t{b,z,y,h});
    return with_fft_threads(nthreads, [&](std::size_t nt) {
+      cfmav<double> mi(in, shape_t{b,z,y,x});
+      vfmav<cplx> mo(reinterpret_cast<cplx *>(out), shape_t{b,z,y,h});
       ducc0::r2c(mi, mo, shape_t{1,2,3}, true, fct, nt);
    });
 }
 
 //! Inverse batched transform; the input is destroyed (see `moist_fft_c2r_3d`)
 //! and fct supplies normalization.
-//! @return status  Zero on success, nonzero if the backend failed
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_c2r_3d_batch(int n0, int n1, int n2, int nb, double *in,
                            double *out, double fct, int nthreads)
 {
+   if (any_negative({n0, n1, n2, nb})) return status_error;
    const std::size_t z=n0, y=n1, x=n2, b=nb, h=x/2+1;
-   vfmav<cplx> mi(reinterpret_cast<cplx *>(in), shape_t{b,z,y,h});
-   vfmav<double> mo(out, shape_t{b,z,y,x});
    return with_fft_threads(nthreads, [&](std::size_t nt) {
+      vfmav<cplx> mi(reinterpret_cast<cplx *>(in), shape_t{b,z,y,h});
+      vfmav<double> mo(out, shape_t{b,z,y,x});
       ducc0::c2r_mut(mi, mo, shape_t{1,2,3}, false, fct, nt);
    });
 }
@@ -336,10 +358,11 @@ int moist_fft_c2r_3d_batch(int n0, int n1, int n2, int nb, double *in,
 //! row-major (nbatch, npts) array in memory, so the transform runs over axis 1.
 //! ducc0's type-4 DST with `ortho = false` is FFTW's `RODFT11`:
 //!   y_k = 2 sum_j x_j sin(pi (j+1/2)(k+1/2) / npts).
-//! @return status  Zero on success, nonzero if the backend failed
+//! @return status  Zero on success, nonzero on a negative extent or if the backend failed
 int moist_fft_dst4(int npts, int nbatch, const double *in, double *out,
                     double fct)
 {
+   if (any_negative({npts, nbatch})) return status_error;
    try {
       const std::size_t n = static_cast<std::size_t>(npts);
       const std::size_t nb = static_cast<std::size_t>(nbatch);

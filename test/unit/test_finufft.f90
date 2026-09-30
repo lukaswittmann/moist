@@ -6,6 +6,7 @@
 module test_finufft
    use mctc_env, only: wp
    use iso_fortran_env, only: int64
+   use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr
    use finufft_mod, only: finufft_opts
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
@@ -25,6 +26,38 @@ module test_finufft
    real(wp), parameter :: thr = 5.0e-9_wp
    !> pi = acos(-1.0_wp)
    real(wp), parameter :: pi = 3.14159265358979323846_wp
+
+   !> FINUFFT entry points with the options argument as a C pointer, so a null
+   !> pointer (default options) is passed without an unassociated Fortran pointer
+   interface
+      subroutine finufft1d1_default(nj, xj, cj, iflag, eps, ms, fk, opts, ier) &
+         & bind(c, name="finufft1d1_")
+         import :: c_int, c_int64_t, c_double, c_double_complex, c_ptr
+         integer(c_int64_t), intent(in) :: nj
+         real(c_double), intent(in) :: xj(*)
+         complex(c_double_complex), intent(in) :: cj(*)
+         integer(c_int), intent(in) :: iflag
+         real(c_double), intent(in) :: eps
+         integer(c_int64_t), intent(in) :: ms
+         complex(c_double_complex), intent(inout) :: fk(*)
+         type(c_ptr), value :: opts
+         integer(c_int), intent(out) :: ier
+      end subroutine finufft1d1_default
+
+      subroutine finufft_makeplan_default(ttype, dim, n_modes, iflag, ntrans, eps, plan, opts, ier) &
+         & bind(c, name="finufft_makeplan_")
+         import :: c_int, c_int64_t, c_double, c_ptr
+         integer(c_int), intent(in) :: ttype
+         integer(c_int), intent(in) :: dim
+         integer(c_int64_t), intent(in) :: n_modes(*)
+         integer(c_int), intent(in) :: iflag
+         integer(c_int), intent(in) :: ntrans
+         real(c_double), intent(in) :: eps
+         integer(c_int64_t), intent(out) :: plan
+         type(c_ptr), value :: opts
+         integer(c_int), intent(out) :: ier
+      end subroutine finufft_makeplan_default
+   end interface
 
 contains
 
@@ -48,16 +81,13 @@ contains
    subroutine test_1d1_default(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Null pointer selects FINUFFT's default options
-      type(finufft_opts), pointer :: defopts => null()
-      external :: finufft1d1
-
       real(wp), allocatable :: xj(:)
       complex(wp), allocatable :: cj(:), fk(:)
       integer :: iflag, ier
 
       call make_problem(xj, cj, fk, iflag)
-      call finufft1d1(npts, xj, cj, iflag, tol, nmodes, fk, defopts, ier)
+      ! Null options pointer selects FINUFFT's default options
+      call finufft1d1_default(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
 
       call check(error, ier == 0, "finufft1d1 (default opts) returned nonzero status")
       if (allocated(error)) return
@@ -103,9 +133,7 @@ contains
    subroutine test_makeplan_eps_too_small(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Null pointer selects FINUFFT's default options
-      type(finufft_opts), pointer :: defopts => null()
-      external :: finufft_makeplan, finufft_destroy
+      external :: finufft_destroy
 
       integer :: ttype, dim, ntrans, iflag, ier
       integer(int64) :: n_modes(3)
@@ -121,7 +149,7 @@ contains
       n_modes = [4_int64, 4_int64, 4_int64]
       bad_tol = 1.0e-20_wp
 
-      call finufft_makeplan(ttype, dim, n_modes, iflag, ntrans, bad_tol, plan, defopts, ier)
+      call finufft_makeplan_default(ttype, dim, n_modes, iflag, ntrans, bad_tol, plan, c_null_ptr, ier)
 
       call check(error, ier /= 0, &
          & "finufft_makeplan with eps=1e-20 must return a nonzero status, not abort")

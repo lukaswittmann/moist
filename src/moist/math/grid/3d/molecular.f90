@@ -12,8 +12,9 @@ module moist_math_grid_3d_molecular
    use moist_math_quadrature_becke, only: becke_weights
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type, &
                                       integrand_3d
-   use, intrinsic :: iso_c_binding, only: c_double, c_double_complex
+   use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
+!$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    implicit none(type, external)
    private
 
@@ -228,6 +229,9 @@ module moist_math_grid_3d_molecular
    !> mutable internal scratch, so a prepared trafo must be executed from a
    !> single thread (the batched call threads `nv` internally) rather than
    !> shared across OpenMP threads
+   !> The plans also fix the worker count at `prepare` (one inside an OpenMP
+   !> region, otherwise `omp_get_max_threads()`); a later thread-count change
+   !> takes effect only after the next `prepare`
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_molecular_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
       class(moist_math_grid_3d_molecular_type), pointer :: grid => null()
@@ -1818,6 +1822,10 @@ contains
       ! CMCL mode ordering (-N/2 .. N/2-1, x fastest): the layout the type-1/2
       ! route depends on, and the one molecular_grid_kpoint inverts
       opts%modeord = 0
+      ! Explicit worker count, the Cartesian policy; left at 0 FINUFFT would
+      ! take OMP_NUM_THREADS or the core count and ignore omp_set_num_threads
+      opts%nthreads = 1_c_int
+!$    if (.not. omp_in_parallel()) opts%nthreads = int(omp_get_max_threads(), c_int)
 
       m_npts = int(ngrid, int64)
       nk_npts = int(npts_k, int64)

@@ -1,5 +1,5 @@
 !> Assembly of the Gaussian PCM interaction matrix and dense derivatives
-submodule(moist_model_continuum_component_pcm_amat) moist_model_continuum_component_pcm_amat_assembly
+submodule(moist_model_continuum_component_pcm_amat) moist_model_continuum_component_pcm_amat_build
    use mctc_env, only: fatal_error
    use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far, &
       pcm_amat_far_value_row, pcm_amat_near_value, pcm_amat_near_grad, &
@@ -277,4 +277,4 @@ contains
       !$omp end parallel do
    end subroutine assemble_pcm_amat_with_gradient
 
-end submodule moist_model_continuum_component_pcm_amat_assembly
+end submodule moist_model_continuum_component_pcm_amat_build

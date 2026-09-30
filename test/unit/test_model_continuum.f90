@@ -69,6 +69,8 @@ contains
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type), pointer :: coupling
+      !> Coupling this model never minted, for the pre-update guard
+      type(coupling_type), target :: foreign
       type(response_type) :: response
       type(potential_adjoint_response_type), allocatable :: charge
       real(wp) :: energy, reference_energy
@@ -96,10 +98,9 @@ contains
       end if
 
       ! An accessor must refuse to run before the first update
-      ! (and before a coupling can be built)
-      nullify (coupling)
+      ! (no coupling can be built yet, so a foreign one stands in)
       energy = 0.0_wp
-      call model%get_energy(coupling, energy, err)
+      call model%get_energy(foreign, energy, err)
       call check(error, allocated(err), &
          & more="continuum-model energy was available before the first update")
       if (allocated(error)) return

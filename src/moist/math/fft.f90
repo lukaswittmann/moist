@@ -12,8 +12,8 @@
 !>   `moist_fft_c2r_3d_batch`), which destroy their complex input, like
 !>   FFTW's c2r
 !> - Every entry point returns an `integer(c_int)` status: zero on success,
-!>   nonzero if the ducc0 backend failed (allocation failure or an
-!>   exception caught at the C++ boundary); callers must check it
+!>   nonzero on a negative extent or if the ducc0 backend failed (allocation
+!>   failure or an exception caught at the C++ boundary); callers must check it
 module moist_math_fft
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    implicit none(type, external)
@@ -85,6 +85,8 @@ module moist_math_fft
       !> 3D complex-to-complex transform of a column-major field
       !>
       !> x fastest, i.e. logical extents (n0, n1, n2) = (nz, ny, nx)
+      !> Out of place: `in` and `out` must be distinct arrays; in-place work
+      !> goes through `moist_fft_c2c_3d_pass_inplace`
       !>
       !> @param[in]  n0       Slowest-varying extent (z)
       !> @param[in]  n1       Middle extent (y)

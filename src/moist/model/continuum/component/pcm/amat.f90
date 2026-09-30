@@ -1,7 +1,7 @@
 !> Gaussian PCM interaction-matrix interface
 !>
 !> Matrix assembly and derivative contractions are implemented in
-!> [[moist_model_continuum_component_pcm_amat_assembly]] and
+!> [[moist_model_continuum_component_pcm_amat_build]] and
 !> [[moist_model_continuum_component_pcm_amat_adjoint]] submodules; generated pair
 !> mathematics in [[moist_model_continuum_component_pcm_amat_kernel]]
 module moist_model_continuum_component_pcm_amat

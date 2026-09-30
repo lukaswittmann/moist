@@ -27,6 +27,12 @@ subdir('src')
 is_libcxx = cxx.get_define('_LIBCPP_VERSION', prefix: '#include <cstddef>') != ''
 lib_deps += cxx.find_library(is_libcxx ? 'c++' : 'stdc++')
 
+# Windows DLLs export every symbol, which clashes with the executables' own static subprojects
+moist_link_args = []
+if host_machine.system() == 'windows'
+  moist_link_args = cxx.get_supported_link_arguments('-Wl,--exclude-libs,ALL')
+endif
+
 # Library target
 moist_lib = library(
   meson.project_name(),
@@ -34,6 +40,7 @@ moist_lib = library(
   version: lib_version,
   dependencies: lib_deps,
   include_directories: inc_dirs,
+  link_args: moist_link_args,
   install: install,
 )
 

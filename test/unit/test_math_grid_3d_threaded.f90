@@ -8,7 +8,7 @@
 !>   against the analytic Gaussian FT and a serial run
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
-!$    & omp_get_max_active_levels, omp_set_max_active_levels
+!$    & omp_get_max_active_levels
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -263,8 +263,8 @@ contains
    !> - Preconditions checked by `enter_threaded`, plus a nonzero OpenMP
    !>   max-active-levels: FINUFFT opens its own parallel regions, which an
    !>   `OMP_MAX_ACTIVE_LEVELS=0` environment would serialise
-   !> - FINUFFT sizes its team from `OMP_NUM_THREADS` (or the physical core
-   !>   count), read once per process, not from `omp_set_num_threads`
+   !> - The trafo plans with `omp_get_max_threads()` workers, so
+   !>   `omp_set_num_threads` sizes FINUFFT's team
    !> - Thread count and grid are restored on every exit path
    !>
    !> @param[out] error       test failure, or set by `skip_test`
@@ -316,9 +316,8 @@ contains
    !> - Forward against the analytic FT (see `analytic_ft_error`)
    !> - Forward and backward against a serial run of the same transform,
    !>   relative to the serial maximum, at the requested NUFFT tolerance
-   !> - Serial run: OpenMP max-active-levels 0 collapses every FINUFFT team to
-   !>   one thread; `omp_set_num_threads(1)` would not, since FINUFFT asks for
-   !>   its planned thread count explicitly
+   !> - Serial run under `omp_set_num_threads(1)`, the host-side throttle the
+   !>   trafo must honour when it plans
    !> - Measured threaded vs serial: 7e-16 for one column (summation order in
    !>   the spreader), bitwise for three (one column per thread either way)
    !>
@@ -342,7 +341,7 @@ contains
       real(wp), allocatable :: f(:, :), g_thr(:, :), g_ser(:, :)
       complex(wp), allocatable :: fk_thr(:, :), fk_ser(:, :)
       real(wp) :: cen(3, nv), alpha(nv), scale, dev
-      integer :: iv, j, levels
+      integer :: iv, j, nthreads
 
       do iv = 1, nv
          alpha(iv) = 1.0_wp + 0.3_wp*real(iv - 1, wp)
@@ -359,11 +358,11 @@ contains
       call nufft_both_ways(error, mg, use_type12, f, fk_thr, g_thr)
       if (allocated(error)) return
 
-      levels = 1
-!$    levels = omp_get_max_active_levels()
-!$    call omp_set_max_active_levels(0)
+      nthreads = 1
+!$    nthreads = omp_get_max_threads()
+!$    call omp_set_num_threads(1)
       call nufft_both_ways(error, mg, use_type12, f, fk_ser, g_ser)
-!$    call omp_set_max_active_levels(levels)
+!$    call omp_set_num_threads(nthreads)
       if (allocated(error)) return
 
       dev = 0.0_wp

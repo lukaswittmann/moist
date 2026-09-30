@@ -10,7 +10,7 @@ module test_math_fft_3d
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_fft, only: moist_fft_c2c_3d, moist_fft_c2c_3d_pass, &
       & moist_fft_c2c_3d_pass_inplace, moist_fft_r2c_3d, moist_fft_c2r_3d, &
-      & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
+      & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch, moist_fft_dst4
    implicit none(type, external)
    private
 
@@ -55,6 +55,7 @@ contains
                   new_unittest("c2r_matches_c2c_backward", test_c2r_backward), &
                   new_unittest("batch_matches_single", test_batch), &
                   new_unittest("zero_extent_is_noop", test_zero_extent), &
+                  new_unittest("negative_extent_is_rejected", test_negative_extent), &
                   new_unittest("rejected_pass_leaves_data_untouched", test_rejected_pass), &
                   new_unittest("bad_pass_axis_too_large", test_pass_axis_large_fails, should_fail=.true.), &
                   new_unittest("bad_pass_axis_negative", test_pass_axis_negative_fails, should_fail=.true.), &
@@ -1059,6 +1060,48 @@ contains
       call check(error, all(x == (1.0_wp, 2.0_wp)) .and. all(xr == 1.0_wp), &
          & "zero-extent transform modified its input")
    end subroutine test_zero_extent
+
+   !> Negative extents return status 1 and touch nothing
+   !>
+   !> - Checked in the shim before any view is built; a negative extent would
+   !>   otherwise wrap to a huge size_t and address far outside the buffers
+   !> - One negative extent on each entry point, buffers prefilled with a
+   !>   sentinel stay bit-identical
+   !>
+   !> @param[out] error  test failure
+   subroutine test_negative_extent(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      complex(cwp), parameter :: sentinel = (-7.25_wp, 3.5_wp)
+      real(c_double), parameter :: rsentinel = -7.25_wp
+      complex(cwp) :: x(8), y(8)
+      real(c_double) :: xr(8), yr(8)
+      integer(c_int) :: status(9)
+
+      x = (1.0_wp, 2.0_wp)
+      xr = 1.0_wp
+      y = sentinel
+      yr = rsentinel
+      status(1) = moist_fft_c2c_3d(-1_c_int, 2_c_int, 2_c_int, x, y, 1_c_int, 1.0_wp)
+      status(2) = moist_fft_c2c_3d_pass(2_c_int, -2_c_int, 2_c_int, 4_c_int, 2_c_int, x, y, &
+         & 0_c_int, 1_c_int, 1.0_wp)
+      status(3) = moist_fft_c2c_3d_pass_inplace(2_c_int, 2_c_int, -2_c_int, 4_c_int, 2_c_int, y, &
+         & 1_c_int, 0_c_int, 1.0_wp)
+      status(4) = moist_fft_r2c_3d(2_c_int, -1_c_int, 2_c_int, xr, y, 1.0_wp)
+      status(5) = moist_fft_c2r_3d(2_c_int, 2_c_int, -2_c_int, x, yr, 1.0_wp)
+      status(6) = moist_fft_r2c_3d_batch(2_c_int, 2_c_int, 2_c_int, -1_c_int, xr, y, 1.0_wp, 1_c_int)
+      status(7) = moist_fft_c2r_3d_batch(-2_c_int, 2_c_int, 2_c_int, 1_c_int, x, yr, 1.0_wp, 2_c_int)
+      status(8) = moist_fft_dst4(-4_c_int, 1_c_int, xr, yr, 1.0_wp)
+      status(9) = moist_fft_dst4(4_c_int, -1_c_int, xr, yr, 1.0_wp)
+      call check(error, all(status == status_error), "negative extent did not return status 1")
+      if (allocated(error)) return
+      call check(error, all(y == sentinel) .and. all(yr == rsentinel), &
+         & "negative-extent transform wrote to its output")
+      if (allocated(error)) return
+      call check(error, all(x == (1.0_wp, 2.0_wp)) .and. all(xr == 1.0_wp), &
+         & "negative-extent transform modified its input")
+   end subroutine test_negative_extent
 
    !> Rejected pass reports status 1 and leaves both buffers untouched
    !>
