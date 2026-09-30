@@ -34,7 +34,6 @@ module test_cavity_drop_lsf_golden
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type
    use mstore, only: get_structure
-   use moist_utils_env, only: get_env
    use test_helpers, only: get_test_radii, check_moist_error, rel_deviation
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -227,7 +226,7 @@ contains
       type(golden_record_type), allocatable :: ref(:)
       character(len=:), allocatable :: path
 
-      path = golden_path(kind)
+      call golden_path(kind, path)
 
       call traverse(kind, got, error)
       if (allocated(error)) return
@@ -242,16 +241,23 @@ contains
 
    !> Path of a fixture reference file
    !>
-   !> @param[in] kind  `svdw` or `cfc`
-   !> @returns         Full path of the fixture
-   function golden_path(kind) result(path)
+   !> - a subroutine without get_env: gfortran shares the length of a deferred-length
+   !>   function result between threads, and test-drive runs the kinds in parallel
+   !>
+   !> @param[in]  kind  `svdw` or `cfc`
+   !> @param[out] path  Full path of the fixture
+   subroutine golden_path(kind, path)
       !> Concrete selector
       character(len=*), intent(in) :: kind
-      character(len=:), allocatable :: path
+      !> Full path of the fixture
+      character(len=:), allocatable, intent(out) :: path
+      character(len=4096) :: root
+      integer :: length, stat
 
-      path = get_env("MOIST_SOURCE_ROOT", default=".")//"/test/unit/data/lsf_golden_" &
-             //kind//".txt"
-   end function golden_path
+      call get_environment_variable("MOIST_SOURCE_ROOT", root, length, stat)
+      if (stat /= 0 .or. length == 0) root = "."
+      path = trim(root)//"/test/unit/data/lsf_golden_"//kind//".txt"
+   end subroutine golden_path
 
    !* ================================================================================= *!
    !*                                   Traversal                                       *!

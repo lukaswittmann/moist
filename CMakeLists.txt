@@ -222,7 +222,9 @@ if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
   endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  target_compile_options(moist PRIVATE -traceback -fp-model=precise)
+  # As in config/meson.build; logicals makes .true. 1, as C's bool expects
+  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals)
+  target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
 target_link_libraries(moist PUBLIC
@@ -238,6 +240,12 @@ if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()
 
+# ifx takes `main` from its own runtime (for_main.o), which only its driver links
+set(MOIST_EXE_LINKER_LANGUAGE CXX)
+if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+  set(MOIST_EXE_LINKER_LANGUAGE Fortran)
+endif()
+
 add_executable(moist-exe
   app/main.f90
   app/cli.f90
@@ -246,7 +254,7 @@ add_executable(moist-exe
 set_target_properties(moist-exe PROPERTIES
   OUTPUT_NAME moist
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/app-modules"
-  LINKER_LANGUAGE CXX  # as for moist
+  LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}
 )
 target_link_libraries(moist-exe PRIVATE moist fclap)
 
@@ -322,10 +330,12 @@ if(MOIST_TESTS)
   add_executable(moist-tester ${moist_test_srcs})
   set_target_properties(moist-tester PROPERTIES
     Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-modules"
-    LINKER_LANGUAGE CXX  # as for moist
+    LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}
   )
   if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_compile_options(moist-tester PRIVATE -ffree-line-length-none -fbacktrace)
+  elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+    target_compile_options(moist-tester PRIVATE ${MOIST_INTEL_FFLAGS})
   endif()
   target_link_libraries(moist-tester PRIVATE
     moist mstore::mstore test-drive::test-drive)
