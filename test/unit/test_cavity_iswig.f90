@@ -49,10 +49,61 @@ contains
          & new_unittest("amat_properties", test_amat_properties), &
          & new_unittest("amat_gradient", test_amat_gradient), &
          & new_unittest("amat_orca_reference", test_amat_orca_reference), &
-         & new_unittest("surface_gradient", test_surface_gradient) &
+         & new_unittest("surface_gradient", test_surface_gradient), &
+         & new_unittest("unsupported_lebedev_size", test_unsupported_lebedev_size) &
          & ]
 
    end subroutine collect_cavity_iswig
+
+   !> Lebedev sizes without a fitted iSwiG width are refused by name
+   !>
+   !> - 74 has negative weights, 38 is a valid rule without a fitted value,
+   !>   7 is no Lebedev size
+   !> - All three must be reported as unsupported in iSwiG, before any grid
+   !>   is built
+   !>
+   !> @param[out] error  Test failure
+   subroutine test_unsupported_lebedev_size(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: sizes(3) = [74, 38, 7]
+      type(structure_type) :: mol
+      type(cavity_type_iswig), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      class(radius_type), allocatable :: radius_model
+      real(wp) :: xyz(3, 1)
+      integer :: isize
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx)
+
+      xyz(:, 1) = 0.0_wp
+      call new(mol, [1], xyz)
+      call new_radii_custom_atoms([2.0_wp], radius_model, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      do isize = 1, size(sizes)
+         allocate (cav)
+         call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
+            param=moist_cavity_iswig_parameters_type(num_leb=sizes(isize)))
+         if (.not. allocated(cavity_error)) call cav%update(mol, error=cavity_error)
+         if (.not. allocated(cavity_error)) then
+            call test_failed(error, "iSwiG accepted a Lebedev size without a fitted width")
+            return
+         end if
+         call check(error, index(cavity_error%message, "Unsupported Lebedev size in iSwiG") > 0, &
+            & more="unexpected error message: "//cavity_error%message)
+         if (allocated(error)) return
+         deallocate (cav, cavity_error)
+      end do
+
+   end subroutine test_unsupported_lebedev_size
 
    !> Smoke test for spherical cavity
    subroutine test_spherical_cavity(error)

@@ -16,8 +16,7 @@ module moist_cavity_numsa
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
-   use moist_math_grid_s2_grid, only: moist_math_grid_s2_type
-   use moist_math_grid_s2_generator_lebedev, only: new_lebedev_grid
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
 
    implicit none(type, external)
    private
@@ -301,7 +300,7 @@ contains
 
       integer :: iat, jat, ij, izp
       !> Angular quadrature filling the cached grid, solid-angle weights summing to 4*pi
-      type(moist_math_grid_s2_type) :: leb
+      type(moist_math_grid_angular_type) :: leb
       real(wp) :: ws, rr
 
       ! Set number of atoms

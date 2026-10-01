@@ -7,8 +7,7 @@ module moist_cavity_iswig
    use mctc_env, only: error_type, fatal_error, wp
    use, intrinsic :: iso_fortran_env, only: output_unit
 
-   use moist_math_grid_s2_grid, only: moist_math_grid_s2_type
-   use moist_math_grid_s2_generator_lebedev, only: new_lebedev_grid
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
@@ -472,7 +471,7 @@ contains
       integer :: iswig_order
 
       !> Angular quadrature filling the cache, solid-angle weights summing to 4*pi
-      type(moist_math_grid_s2_type) :: leb
+      type(moist_math_grid_angular_type) :: leb
 
       !> Error message buffer
       character(len=256) :: msg

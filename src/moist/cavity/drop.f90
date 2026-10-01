@@ -8,9 +8,8 @@ module moist_cavity_drop
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
-   use moist_math_quadrature_lebedev, only: lebedev_order_from_num
-   use moist_math_grid_s2_grid, only: moist_math_grid_s2_type
-   use moist_math_grid_s2_generator_lebedev, only: new_lebedev_grid
+   use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
@@ -905,7 +904,7 @@ contains
       !> Lebedev order index of the requested size
       integer :: oleb
       !> Unit-sphere grid whose nodes and weights are moved into the cache
-      type(moist_math_grid_s2_type) :: leb
+      type(moist_math_grid_angular_type) :: leb
 
       ! Map requested num_leb to Lebedev order index
       call lebedev_order_from_num(self%param%num_leb, oleb, error, positive_weights_only=.true.)
