@@ -3,7 +3,6 @@ subdir('blas')
 subdir('linalg')
 subdir('solver')
 subdir('sorter')
-subdir('quadrature')
 subdir('grid')
 subdir('fft')
 
