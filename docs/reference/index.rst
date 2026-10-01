@@ -15,5 +15,6 @@ The PySCF integration is documented under :doc:`python`.
    coupling
    fields
    fortran
+   grids
    c
    python
