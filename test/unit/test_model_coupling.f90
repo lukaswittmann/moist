@@ -56,7 +56,7 @@ module test_model_coupling
       &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
       &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
 
-   !> DROP (SvdW) parameters of the O-C-H fixture, as in the golden suite
+   !> DROP (SvdW) parameters of the O-C-H fixture, as in `cavity_drop_nuclear_adjoint`
    integer, parameter :: nleb_drop = 50
    real(wp), parameter :: drop_blend_k = 2.5_wp
    real(wp), parameter :: drop_blend_3b = 1.0_wp

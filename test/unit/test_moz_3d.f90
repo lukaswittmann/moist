@@ -7,7 +7,9 @@ module test_moz_3d
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_grid_3d
-   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type
+   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_grid
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
+   use test_helpers, only: get_qc_handymod_recipe
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type
    use moist_channels_response, only: response_type
@@ -137,74 +139,76 @@ contains
    !>
    !> @param[out] error Test error
    subroutine test_grid_model(error)
-      !> Borrowed typed model domain
-      class(moist_math_grid_3d_type), pointer :: model_domain
+      !> Borrowed typed model grid
+      class(moist_math_grid_3d_type), pointer :: model_grid
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_math_grid_3d_cartesian_type) :: cart
       type(moist_math_grid_3d_molecular_type) :: molecular
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(model_moz_3d_type), target :: model
       type(moist_context_type), target :: ctx
       type(structure_type) :: mol
-      class(moist_math_grid_3d_type), allocatable :: domain
+      class(moist_math_grid_3d_type), allocatable :: grid
       type(field_query_type) :: query
       real(wp), allocatable :: original(:, :)
-      integer :: kind
+      integer :: kind, template_ngrid
 
       call new_context(ctx, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call new_cartesian_grid_3d(cart, 4, 6, 8, 0.5_wp, error=err)
       call require_success(error, err)
       if (allocated(error)) return
-      molecular%nrad = 8
-      molecular%lebedev_degree = 5
-      molecular%rmax = 5.0_wp
-      call molecular%validate(err)
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe)
       call require_success(error, err)
       if (allocated(error)) return
       do kind = 1, 2
          if (kind == 1) then
-            allocate (domain, source=cart)
+            allocate (grid, source=cart)
          else
-            allocate (domain, source=molecular)
+            allocate (grid, source=molecular)
          end if
-         call new_moz_3d_model(model, domain, ctx, err)
+         call new_moz_3d_model(model, grid, ctx, err)
          call require_success(error, err)
          if (allocated(error)) return
+         template_ngrid = grid%ngrid
          call model%update(mol, err)
          call require_success(error, err)
          if (allocated(error)) return
-         model_domain => model%grid
-         call check(error, model_domain%natom, 1)
+         call check(error, grid%ngrid, template_ngrid, "updating the model must leave the template untouched")
+         if (allocated(error)) return
+         model_grid => model%grid
+         call check(error, model_grid%natom, 1)
          if (allocated(error)) return
          call query%fetch("w")
          call model%list_fields(query)
          call check(error, query%found)
          if (allocated(error)) return
-         model_domain => model%grid
-         call check(error, size(query%rvals), model_domain%ngrid)
+         model_grid => model%grid
+         call check(error, size(query%rvals), model_grid%ngrid)
          if (allocated(error)) return
-         model_domain => model%grid
-         original = model_domain%xyz
+         model_grid => model%grid
+         original = model_grid%xyz
          mol%xyz(1, 1) = mol%xyz(1, 1) + 0.25_wp
-         call domain%update(mol, err)
+         call grid%update(mol, err)
          call require_success(error, err)
          if (allocated(error)) return
-         model_domain => model%grid
-         call check(error, all(model_domain%xyz == original), "model must own an independent grid copy")
+         model_grid => model%grid
+         call check(error, all(model_grid%xyz == original), "model must own an independent grid copy")
          if (allocated(error)) return
-         model_domain => model%grid
-         select type (g => model_domain)
+         model_grid => model%grid
+         select type (g => model_grid)
          type is (moist_math_grid_3d_cartesian_type)
             call check(error, g%ngrid, 4*6*8)
          type is (moist_math_grid_3d_molecular_type)
             call check(error, g%has_kgrid)
          class default
-            call test_failed(error, "model did not retain the concrete grid domain")
+            call test_failed(error, "model did not retain the concrete grid grid")
          end select
          if (allocated(error)) return
-         deallocate (domain)
+         deallocate (grid)
       end do
    end subroutine test_grid_model
 
@@ -224,7 +228,9 @@ contains
       type(moist_context_type), target :: ctx
       type(model_moz_3d_type), target :: model
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(moist_math_grid_3d_molecular_type) :: molecular
+      !> Molecular grids with and without Gaussian widths
+      type(moist_math_grid_3d_molecular_type) :: widths, points
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
       integer :: kind
@@ -233,9 +239,11 @@ contains
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       call require_success(error, err)
       if (allocated(error)) return
-      molecular%nrad = 8
-      molecular%lebedev_degree = 5
-      molecular%rmax = 5.0_wp
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(widths, err, recipe=recipe, gaussian=.true.)
+      if (.not. allocated(err)) call new_molecular_grid(points, err, recipe=recipe)
+      call require_success(error, err)
+      if (allocated(error)) return
       do kind = 1, 3
          select case (kind)
          case (1)
@@ -243,15 +251,11 @@ contains
             walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
             walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi);atomic_charges(q*);"
          case (2)
-            molecular%gaussian = .true.
-            call molecular%validate(err)
-            if (.not. allocated(err)) call new_updated_model(ctx, molecular, model, err)
+            call new_updated_model(ctx, widths, model, err)
             walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
             walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi*);atomic_charges(q*);"
          case default
-            molecular%gaussian = .false.
-            call molecular%validate(err)
-            if (.not. allocated(err)) call new_updated_model(ctx, molecular, model, err)
+            call new_updated_model(ctx, points, model, err)
             walks(1) = "point_potential(phi*,dphi_dr);atomic_charges(q*);"
             walks(3) = "point_potential(phi*,dphi_dr*);atomic_charges(q*);"
          end select
