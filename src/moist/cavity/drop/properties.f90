@@ -128,7 +128,7 @@ contains
                d = sqrt(d2)
                kval = kernel%f0(d)
                self%rho_grid_anchor(igrid) = self%rho_grid_anchor(igrid) &
-                                             + kval*self%ang_weight(jj)*(4.0_wp*pi)
+                                             + kval*self%ang_weight(jj)
             end if
          end do
       end do

@@ -16,8 +16,8 @@ module moist_cavity_numsa
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use mctc_io, only: structure_type
-   use moist_math_grid_s2_lebedev, only: moist_math_grid_s2_lebedev_type, new_s2_grid_lebedev
-   use mctc_io_constants, only: pi
+   use moist_math_grid_s2_grid, only: moist_math_grid_s2_type
+   use moist_math_grid_s2_generator_lebedev, only: new_lebedev_grid
 
    implicit none(type, external)
    private
@@ -68,7 +68,7 @@ module moist_cavity_numsa
       integer, allocatable :: ppind(:, :)
       !> Lebedev angular grid points (3, num_leb)
       real(wp), allocatable :: ang_grid(:, :)
-      !> Lebedev quadrature weights (num_leb)
+      !> Lebedev solid-angle weights (num_leb), summing to 4*pi
       real(wp), allocatable :: ang_weight(:)
       !> Neighbor-list cutoff radius (bohr)
       real(wp) :: srcut
@@ -189,6 +189,7 @@ contains
       ! initialize the internal numsa state and neighbour list
       call init_numsa(self, mol%num(mol%id), self%radii, self%probe, self%num_leb, &
                       self%offset, self%smoothing, error)
+      if (allocated(error)) return
       call update_nnlist(self, mol%xyz)
 
       allocate (surface(nat))
@@ -299,9 +300,8 @@ contains
       type(error_type), intent(out), allocatable :: error
 
       integer :: iat, jat, ij, izp
-      !> Angular quadrature used to fill the cached grid; swapping the S2
-      !> scheme is a one-line change here
-      type(moist_math_grid_s2_lebedev_type) :: leb
+      !> Angular quadrature filling the cached grid, solid-angle weights summing to 4*pi
+      type(moist_math_grid_s2_type) :: leb
       real(wp) :: ws, rr
 
       ! Set number of atoms
@@ -384,19 +384,11 @@ contains
 
       ! Set up the angular quadrature grid through the S2 grid type and cache
       ! its nodes and weights in the plain arrays the integrators consume
-      call new_s2_grid_lebedev(leb, error, npts=nang)
+      call new_lebedev_grid(leb, error, npts=nang)
       if (allocated(error)) return
 
-      if (allocated(self%ang_grid)) deallocate (self%ang_grid)
-      if (allocated(self%ang_weight)) deallocate (self%ang_weight)
-      allocate (self%ang_grid(3, nang))
-      allocate (self%ang_weight(nang))
-      self%ang_grid(:, :) = leb%points
-      self%ang_weight(:) = leb%weights
-      call leb%destroy()
-
-      ! Scale weights for full sphere (Lebedev weights integrate to 1)
-      self%ang_weight(:) = self%ang_weight*4.0_wp*pi
+      call move_alloc(leb%points, self%ang_grid)
+      call move_alloc(leb%weights, self%ang_weight)
 
    end subroutine init_numsa
 
