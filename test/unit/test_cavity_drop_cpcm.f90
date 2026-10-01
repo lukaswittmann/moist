@@ -64,9 +64,56 @@ contains
                   new_unittest("mb16_43_19", test_mb16_43_19), &
                   new_unittest("but14diol_1", test_but14diol_1), &
                   new_unittest("but14diol_32", test_but14diol_32), &
-                  new_unittest("il16_008", test_il16_008) &
+                  new_unittest("il16_008", test_il16_008), &
+                  new_unittest("negative_weight_lebedev_rejected", test_negative_weight_lebedev) &
                   ]
    end subroutine collect_cavity_drop_cpcm
+
+   !> DROP refuses the 74-point Lebedev rule, which has negative weights
+   !>
+   !> - At construction, where no fitted Born zeta exists for that size
+   !> - In `update`, if the size is changed on a constructed cavity: the
+   !>   Lebedev cache must not hand negative weights to the surface
+   !>
+   !> @param[out] error  Test failure
+   subroutine test_negative_weight_lebedev(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_drop), allocatable :: cavity
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      type(mctc_error), allocatable :: cavity_error
+      !> Local run context borrowed by the cavities built here
+      type(moist_context_type), target :: ctx
+
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.4_wp], [3, 2]))
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
+
+      allocate (cavity)
+      call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74))
+      call check(error, allocated(cavity_error), "DROP was constructed with the 74-point Lebedev rule")
+      if (allocated(error)) return
+      deallocate (cavity, cavity_error)
+
+      allocate (cavity)
+      call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      cavity%param%num_leb = 74
+      call cavity%update(mol, error=cavity_error)
+      if (.not. allocated(cavity_error)) then
+         call test_failed(error, "DROP update accepted the 74-point Lebedev rule")
+         return
+      end if
+      call check(error, index(cavity_error%message, "negative weights") > 0, &
+         & "unexpected error message: "//cavity_error%message)
+   end subroutine test_negative_weight_lebedev
 
    !> Test the contracted A-matrix gradient against the explicit tensor
    !> contraction of the dense derivative built by

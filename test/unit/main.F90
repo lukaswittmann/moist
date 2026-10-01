@@ -22,19 +22,24 @@ program tester
    use test_math_sorters, only: collect_math_sorters
    use test_math_trig, only: collect_math_trig
    use test_math_grid, only: collect_math_grid
-   use test_math_quadrature, only: collect_math_quadrature
-   use test_math_grid_s2, only: collect_math_grid_s2
+   use test_math_grid_radial_rule, only: collect_math_grid_radial_rule
+   use test_math_grid_radial, only: collect_math_grid_radial
+   use test_math_grid_radial_trafo, only: collect_math_grid_radial_trafo
+   use test_math_grid_angular, only: collect_math_grid_angular
+   use test_math_grid_atomic, only: collect_math_grid_atomic
    use test_math_fft_dst4, only: collect_math_fft_dst4
    use test_math_fft_3d, only: collect_math_fft_3d
    use test_finufft, only: collect_finufft
    use test_math_grid_nufft, only: collect_math_grid_nufft
    use test_math_grid_3d, only: collect_math_grid_3d
    use test_math_grid_3d_threaded, only: collect_math_grid_3d_threaded
+   use test_math_grid_3d_partition, only: collect_math_grid_3d_partition
+   use test_math_grid_3d_molecular, only: collect_math_grid_3d_molecular
    use test_cavity_iswig, only: collect_cavity_iswig
    use test_cavity_drop_primitives, only: collect_cavity_drop_primitives
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
-   use test_cavity_drop_lsf_golden, only: collect_cavity_drop_lsf_golden
+   use test_cavity_drop_lsf_reference, only: collect_cavity_drop_lsf_reference
    use test_cavity_drop_isodensity, only: collect_cavity_drop_isodensity
    use test_cavity_drop_gradient, only: collect_cavity_drop_gradient
    use test_cavity_drop_nuclear_adjoint, only: collect_cavity_drop_nuclear_adjoint
@@ -44,6 +49,7 @@ program tester
    use test_cavity_marchingcubes, only: collect_cavity_marchingcubes
    use test_math_solvers, only: collect_math_solvers
    use test_cavity_drop_integration, only: collect_cavity_drop_integration
+   use test_cavity_reference, only: collect_cavity_reference
    use test_cavity_drop_filter, only: collect_cavity_drop_filter
    use test_model_component_pcm_amat, only: collect_model_component_pcm_amat
    use test_model_component_pcm_amat_kernel, only: collect_model_component_pcm_amat_kernel
@@ -83,20 +89,25 @@ program tester
       & new_testsuite("math_sorters", collect_math_sorters), &
       & new_testsuite("math_trig", collect_math_trig), &
       & new_testsuite("math_grid", collect_math_grid), &
-      & new_testsuite("math_quadrature", collect_math_quadrature), &
-      & new_testsuite("math_grid_s2", collect_math_grid_s2), &
+      & new_testsuite("math_grid_radial_rule", collect_math_grid_radial_rule), &
+      & new_testsuite("math_grid_radial", collect_math_grid_radial), &
+      & new_testsuite("math_grid_radial_trafo", collect_math_grid_radial_trafo), &
+      & new_testsuite("math_grid_angular", collect_math_grid_angular), &
+      & new_testsuite("math_grid_atomic", collect_math_grid_atomic), &
       & new_testsuite("math_fft_dst4", collect_math_fft_dst4), &
       & new_testsuite("math_fft_3d", collect_math_fft_3d), &
       & new_testsuite("finufft", collect_finufft), &
       & new_testsuite("math_grid_nufft", collect_math_grid_nufft), &
       & new_testsuite("math_grid_3d", collect_math_grid_3d), &
       & new_testsuite("math_grid_3d_threaded", collect_math_grid_3d_threaded), &
+      & new_testsuite("math_grid_3d_partition", collect_math_grid_3d_partition), &
+      & new_testsuite("math_grid_3d_molecular", collect_math_grid_3d_molecular), &
       & new_testsuite("moz_1d", collect_moz_1d), &
       & new_testsuite("moz_3d", collect_moz_3d), &
       & new_testsuite("cavity_drop_primitives", collect_cavity_drop_primitives), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
-      & new_testsuite("cavity_drop_lsf_golden", collect_cavity_drop_lsf_golden), &
+      & new_testsuite("cavity_drop_lsf_reference", collect_cavity_drop_lsf_reference), &
       & new_testsuite("cavity_drop_isodensity", collect_cavity_drop_isodensity), &
       & new_testsuite("cavity_drop_gradient", collect_cavity_drop_gradient), &
       & new_testsuite("cavity_drop_nuclear_adjoint", collect_cavity_drop_nuclear_adjoint), &
@@ -106,6 +117,7 @@ program tester
       & new_testsuite("cavity_iswig", collect_cavity_iswig), &
       & new_testsuite("cavity_numsa", collect_cavity_numsa), &
       & new_testsuite("cavity_marchingcubes", collect_cavity_marchingcubes), &
+      & new_testsuite("cavity_reference", collect_cavity_reference), &
       & new_testsuite("cavity_surface_adjoint", collect_cavity_surface_adjoint), &
       & new_testsuite("model_component_pcm_amat", collect_model_component_pcm_amat), &
       & new_testsuite("model_component_pcm_amat_kernel", collect_model_component_pcm_amat_kernel), &
