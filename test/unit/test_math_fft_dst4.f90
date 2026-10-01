@@ -5,9 +5,10 @@
 !> - Backend: DST-IV against the defining sum with an exactly reduced phase
 !> - Identities: batched call matches single column, DST-IV is its own inverse
 !>   up to 2n
-!> - Radial grid: Fourier-Bessel round trip is exact, adjoint identity, and a
-!>   Gaussian with a closed-form transform pins the absolute prefactors
-!> - Error paths (`should_fail`): uniform radial grid rejects zero points and
+!> - Radial trafo on the uniform pair: Fourier-Bessel round trip is exact,
+!>   adjoint identity, and a Gaussian with a closed-form transform pins the
+!>   absolute prefactors
+!> - Error paths (`should_fail`): uniform radial pair rejects zero points and
 !>   zero, NaN or infinite spacing
 module test_math_fft_dst4
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite, ieee_value, ieee_quiet_nan, &
@@ -16,9 +17,8 @@ module test_math_fft_dst4
    use mctc_env_error, only: mctc_error => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_fft_dst4, only: dst4_plan_type, dst4_work_type
-   use moist_math_grid_1d_base, only: moist_math_grid_1d_trafo_type
-   use moist_math_grid_1d_uniform, only: moist_math_grid_1d_uniform_type, &
-      & new_uniform_radial_grid
+   use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, new_uniform_radial_pair
+   use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
    implicit none(type, external)
    private
 
@@ -162,20 +162,23 @@ contains
       call plan%destroy()
    end subroutine dst4_once
 
-   !> Build a uniform radial grid and its trafo
+   !> Build a uniform radial pair and its DST-IV trafo
    !>
    !> @param[out] error  Set on failure
-   !> @param[out] grid   Initialised grid (must be a target)
-   !> @param[out] trafo  Trafo bound to `grid`
+   !> @param[out] rgrid  r-space grid
+   !> @param[out] kgrid  k-space grid (k values in `%r`)
+   !> @param[out] trafo  Trafo selected by the factory
    !> @param[in]  npts   Node count
    !> @param[in]  dr     Node spacing (bohr)
-   subroutine make_grid(error, grid, trafo, npts, dr)
+   subroutine make_grid(error, rgrid, kgrid, trafo, npts, dr)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Initialised grid
-      type(moist_math_grid_1d_uniform_type), intent(out), target :: grid
-      !> Trafo bound to `grid`
-      class(moist_math_grid_1d_trafo_type), allocatable, intent(out) :: trafo
+      !> r-space grid
+      type(moist_math_grid_radial_type), intent(out) :: rgrid
+      !> k-space grid
+      type(moist_math_grid_radial_type), intent(out) :: kgrid
+      !> Trafo selected by the factory
+      class(moist_math_grid_radial_trafo_type), allocatable, intent(out) :: trafo
       !> Node count
       integer, intent(in) :: npts
       !> Node spacing
@@ -183,11 +186,11 @@ contains
 
       type(mctc_error), allocatable :: merr
 
-      call new_uniform_radial_grid(grid, npts, dr, merr)
+      call new_uniform_radial_pair(rgrid, kgrid, npts, dr, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      call grid%new_trafo(trafo, merr)
+      call new_radial_trafo(trafo, rgrid, kgrid, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -293,7 +296,7 @@ contains
    end subroutine test_dst4_involution
 
    ! --------------------------------------------------------------------------
-   ! Uniform radial grid constructor: invalid parameters
+   ! Uniform radial pair constructor: invalid parameters
    ! --------------------------------------------------------------------------
 
    !> Fail an expected-failure test only on the targeted library error
@@ -324,10 +327,10 @@ contains
    subroutine test_bad_uniform_npts_zero(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_uniform_type) :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
-      call new_uniform_radial_grid(grid, 0, 0.1_wp, merr)
+      call new_uniform_radial_pair(rgrid, kgrid, 0, 0.1_wp, merr)
       call expect_error(error, merr, "at least one point")
    end subroutine test_bad_uniform_npts_zero
 
@@ -337,10 +340,10 @@ contains
    subroutine test_bad_uniform_dr_zero(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_uniform_type) :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
-      call new_uniform_radial_grid(grid, 16, 0.0_wp, merr)
+      call new_uniform_radial_pair(rgrid, kgrid, 16, 0.0_wp, merr)
       call expect_error(error, merr, "positive spacing")
    end subroutine test_bad_uniform_dr_zero
 
@@ -352,10 +355,10 @@ contains
    subroutine test_bad_uniform_dr_nan(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_uniform_type) :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
-      call new_uniform_radial_grid(grid, 16, ieee_value(1.0_wp, ieee_quiet_nan), merr)
+      call new_uniform_radial_pair(rgrid, kgrid, 16, ieee_value(1.0_wp, ieee_quiet_nan), merr)
       call expect_error(error, merr, "finite spacing")
    end subroutine test_bad_uniform_dr_nan
 
@@ -365,15 +368,15 @@ contains
    subroutine test_bad_uniform_dr_inf(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_uniform_type) :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
-      call new_uniform_radial_grid(grid, 16, ieee_value(1.0_wp, ieee_positive_inf), merr)
+      call new_uniform_radial_pair(rgrid, kgrid, 16, ieee_value(1.0_wp, ieee_positive_inf), merr)
       call expect_error(error, merr, "finite spacing")
    end subroutine test_bad_uniform_dr_inf
 
    ! --------------------------------------------------------------------------
-   ! Layer 3: the radial grid built on the DST-IV
+   ! Layer 3: the radial trafo built on the DST-IV
    ! --------------------------------------------------------------------------
 
    !> `fbt_k2r . fbt_r2k` is the identity, not merely an approximation
@@ -389,17 +392,17 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: npts = 256
       real(wp), parameter :: dr = 0.05_wp
-      type(moist_math_grid_1d_uniform_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       integer :: i
       real(wp) :: f(npts), g(npts), back(npts)
 
-      call make_grid(error, grid, trafo, npts, dr)
+      call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
 
       do i = 1, npts
-         f(i) = exp(-0.7_wp*grid%r(i)**2)*(1.0_wp + 0.4_wp*grid%r(i))
+         f(i) = exp(-0.7_wp*rgrid%r(i)**2)*(1.0_wp + 0.4_wp*rgrid%r(i))
       end do
 
       call trafo%fbt_r2k(f, g, merr)
@@ -412,9 +415,6 @@ contains
       end if
       call check(error, relerr(back, f), 0.0_wp, thr=1.0e-13_wp)
       if (allocated(error)) return
-
-      call trafo%destroy()
-      call grid%destroy()
    end subroutine test_fbt_round_trip
 
    !> The batched `fbt_*_all` entry points must agree with the single-column ones
@@ -427,18 +427,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: npts = 128, nb = 4
       real(wp), parameter :: dr = 0.08_wp
-      type(moist_math_grid_1d_uniform_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       integer :: i, ic
       real(wp) :: f(npts, nb), gall(npts, nb), one(npts)
 
-      call make_grid(error, grid, trafo, npts, dr)
+      call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
 
       do ic = 1, nb
          do i = 1, npts
-            f(i, ic) = exp(-(0.4_wp + 0.2_wp*ic)*grid%r(i)**2)
+            f(i, ic) = exp(-(0.4_wp + 0.2_wp*ic)*rgrid%r(i)**2)
          end do
       end do
 
@@ -467,9 +467,6 @@ contains
          call check(error, relerr(gall(:, ic), one), 0.0_wp, thr=1.0e-14_wp)
          if (allocated(error)) return
       end do
-
-      call trafo%destroy()
-      call grid%destroy()
    end subroutine test_fbt_batched
 
    !> A zero-width batch on a freshly built trafo must not crash
@@ -485,12 +482,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: npts = 32
       real(wp), parameter :: dr = 0.1_wp
-      type(moist_math_grid_1d_uniform_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       real(wp) :: f(npts, 0), g(npts, 0)
 
-      call make_grid(error, grid, trafo, npts, dr)
+      call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
 
       call trafo%fbt_r2k_all(f, g, merr)
@@ -508,9 +505,6 @@ contains
       call trafo%fbt_k2r_adj_all(f, g, merr)
       call check(error, .not. allocated(merr), "empty-batch backward-adjoint transform reported an error")
       if (allocated(error)) return
-
-      call trafo%destroy()
-      call grid%destroy()
    end subroutine test_fbt_batched_empty
 
    !> `<FBT_rk a, b> = <a, FBT_rk^T b>`
@@ -529,19 +523,19 @@ contains
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: npts = 96
       real(wp), parameter :: dr = 0.1_wp
-      type(moist_math_grid_1d_uniform_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       integer :: i
       real(wp) :: a(npts), b(npts), fa(npts), atb(npts)
       real(wp) :: lhs, rhs, scal
 
-      call make_grid(error, grid, trafo, npts, dr)
+      call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
 
       do i = 1, npts
-         a(i) = signal(i)*exp(-0.2_wp*grid%r(i))
-         b(i) = signal(i + 41)*exp(-0.15_wp*grid%k(i))
+         a(i) = signal(i)*exp(-0.2_wp*rgrid%r(i))
+         b(i) = signal(i + 41)*exp(-0.15_wp*kgrid%r(i))
       end do
 
       call trafo%fbt_r2k(a, fa, merr)
@@ -571,9 +565,6 @@ contains
       scal = max(norm2(fa)*norm2(b), 1.0e-30_wp)
       call check(error, abs(lhs - rhs)/scal, 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
-
-      call trafo%destroy()
-      call grid%destroy()
    end subroutine test_fbt_adjoint
 
    !> Both transforms of a Gaussian match its closed-form 3D Fourier transform
@@ -598,18 +589,18 @@ contains
       !> Acceptance bound, relative to the reference maximum
       real(wp), parameter :: thr = 3.0e-15_wp
       real(wp), parameter :: pi = acos(-1.0_wp)
-      type(moist_math_grid_1d_uniform_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       integer :: ic
       real(wp) :: f(npts, 2), fk(npts, 2), got(npts, 2)
 
-      call make_grid(error, grid, trafo, npts, dr)
+      call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
 
       do ic = 1, 2
-         f(:, ic) = exp(-expo(ic)*grid%r**2)
-         fk(:, ic) = (pi/expo(ic))**1.5_wp*exp(-grid%k**2/(4.0_wp*expo(ic)))
+         f(:, ic) = exp(-expo(ic)*rgrid%r**2)
+         fk(:, ic) = (pi/expo(ic))**1.5_wp*exp(-kgrid%r**2/(4.0_wp*expo(ic)))
       end do
 
       call trafo%fbt_r2k(f(:, 1), got(:, 1), merr)
@@ -643,9 +634,6 @@ contains
          call check(error, relerr(got(:, ic), f(:, ic)), 0.0_wp, thr=thr)
          if (allocated(error)) return
       end do
-
-      call trafo%destroy()
-      call grid%destroy()
    end subroutine test_fbt_analytic
 
 end module test_math_fft_dst4

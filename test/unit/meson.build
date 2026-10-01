@@ -81,7 +81,7 @@ test_selected = {
   ],
   'math_grid_3d_partition': [
     'compact_switches',
-    'lko_locality',
+    'nuclear_derivative_continuity',
     'power_geometry',
     'partition_invariance',
     'large_coincident_partition',

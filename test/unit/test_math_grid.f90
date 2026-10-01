@@ -1,13 +1,13 @@
 !> Test suite for the moist math/grid submodule
 !>
-!> The central goal is to verify that every concrete grid type integrates
-!> analytically known functions to its expected accuracy; all four grid
-!> types are driven through the abstract bases ([[moist_math_grid_1d_base]],
-!> [[moist_math_grid_3d_base]]) via shared checker routines, so the same
-!> assertions exercise polymorphic dispatch of `integrate` / `integrate_field`
-!> / `measure` / `point` for:
+!> The central goal is to verify that every grid integrates analytically
+!> known functions to its expected accuracy; the 3D grids are driven through
+!> the abstract base ([[moist_math_grid_3d_base]]) and the radial grids
+!> through the concrete [[moist_math_grid_radial_grid]] type via shared checker
+!> routines, so the same assertions exercise `integrate` / `integrate_field`
+!> / `point` for:
 !>
-!>   1D radial:  uniform (equidistant) and Chebyshev-2 grids
+!>   Radial:     uniform pair (equidistant) and Chebyshev-II + Becke grids
 !>   3D volume:  Cartesian (uniform box) and atom-centered molecular grids
 !>
 !> Reference integrals (all over R^3, lengths in bohr):
@@ -18,8 +18,9 @@
 !> 4*pi*r^2 dr volume measure; the 3D grids sample the full Cartesian field
 !>
 !> A handful of structural tests (Chebyshev FBT adjoint identity, idempotent
-!> destroy, molecular-grid pruning) round out the suite, plus the Chebyshev
-!> Fourier-Bessel transforms of a Gaussian against its closed-form transform
+!> molecular-grid destroy, molecular-grid pruning) round out the suite, plus
+!> the Chebyshev Fourier-Bessel transforms of a Gaussian against its
+!> closed-form transform; the radial transforms come from `new_radial_trafo`
 module test_math_grid
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
@@ -28,18 +29,20 @@ module test_math_grid
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use test_helpers, only: center_at_origin
+   use test_helpers, only: center_at_origin, get_uniform_recipe, get_qc_handymod_recipe
    use moist_math_grid, only: moist_math_grid_3d_molecular_type, moist_math_grid_3d_type, &
-      & new_molecular_grid, new_molecular_grid_uniform, new_molecular_grid_uniform_qc_handymod, &
-      & molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo
+      & new_molecular_grid, molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, &
+      & new_molecular_grid_trafo, moist_math_grid_atomic_recipe_type, &
+      & moist_math_grid_atomic_recipe_override_type, default_element_recipes
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
       & new_cartesian_grid_3d
-   use moist_math_grid_1d_base, only: moist_math_grid_1d_type, &
-      & moist_math_grid_1d_trafo_type
-   use moist_math_grid_1d_uniform, only: moist_math_grid_1d_uniform_type, &
-      & new_uniform_radial_grid
-   use moist_math_grid_1d_chebyshev, only: moist_math_grid_1d_chebyshev_type, &
-      & new_chebyshev_radial_grid
+   use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_chebyshev2_type, &
+      & new_chebyshev2_rule
+   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_becke_type, &
+      & new_becke_mapping
+   use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, &
+      & moist_math_grid_radial_recipe_type, new_radial_grid, new_uniform_radial_pair
+   use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
    implicit none(type, external)
    private
 
@@ -67,7 +70,6 @@ contains
          new_unittest("chebyshev_radial_fbt_adjoint", test_cheb_radial_fbt_adjoint), &
          new_unittest("chebyshev_radial_fbt_batched", test_cheb_radial_fbt_batched), &
          new_unittest("chebyshev_radial_fbt_matches_analytic", test_cheb_radial_fbt_analytic), &
-         new_unittest("chebyshev_radial_destroy_idempotent", test_cheb_radial_destroy), &
          new_unittest("molecular_grid_integrate_constant", test_mol_grid_integrate_const), &
          new_unittest("molecular_grid_qc_handymod_smoke", test_mol_grid_qc_handymod_smoke), &
          new_unittest("molecular_grid_uniform_regression", test_mol_grid_uniform_regression), &
@@ -89,13 +91,13 @@ contains
    !> Spherically symmetric unit Gaussian f(r) = exp(-r^2)
    !>
    !> @param[in] r  Radius (bohr)
-   pure function gaussian_unit_1d(r) result(val)
+   pure function gaussian_unit_radial(r) result(val)
       !> Radius (bohr)
       real(wp), intent(in) :: r
       !> exp(-r^2)
       real(wp) :: val
       val = exp(-r*r)
-   end function gaussian_unit_1d
+   end function gaussian_unit_radial
 
    !> 3D unit Gaussian f(r) = exp(-(x^2+y^2+z^2))
    !>
@@ -151,21 +153,21 @@ contains
    ! Shared, fully type-agnostic checkers (operate on the abstract bases)
    ! --------------------------------------------------------------------------
 
-   !> Integrate exp(-r^2) over R^3 through the abstract 1D radial grid
+   !> Integrate exp(-r^2) over R^3 through a radial grid
    !>
    !> Compares to 4*pi*integral_0^inf r^2 exp(-r^2) dr = pi^(3/2); both the
    !> analytic-sampling `integrate` and the tabulated-field `integrate_field`
    !> paths must hit the reference to the same tolerance
    !>
    !> @param[out] error  Test error
-   !> @param[in]  grid   Any concrete 1D radial grid, via its abstract base
+   !> @param[in]  grid   Radial grid with dr weights
    !> @param[in]  thr    Absolute tolerance on the quadrature
    !> @param[in]  tag    Short grid label used in failure messages
    subroutine check_radial_gaussian(error, grid, thr, tag)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
-      !> Grid under test (abstract base)
-      class(moist_math_grid_1d_type), intent(in) :: grid
+      !> Grid under test
+      type(moist_math_grid_radial_type), intent(in) :: grid
       !> Absolute tolerance
       real(wp), intent(in) :: thr
       !> Grid label
@@ -175,14 +177,14 @@ contains
       real(wp), allocatable :: f(:)
       integer :: i
 
-      call grid%integrate(gaussian_unit_1d, res)
+      call grid%integrate(gaussian_unit_radial, res)
       call check(error, res, pi*sqrt(pi), thr=thr, &
          & more=tag//": radial Gaussian integral deviates from pi^(3/2)")
       if (allocated(error)) return
 
       allocate (f(grid%npts))
       do i = 1, grid%npts
-         f(i) = gaussian_unit_1d(grid%r(i))
+         f(i) = gaussian_unit_radial(grid%r(i))
       end do
       call grid%integrate_field(f, field_res)
       call check(error, field_res, pi*sqrt(pi), thr=thr, &
@@ -269,7 +271,7 @@ contains
    end subroutine check_3d_modulated
 
    ! --------------------------------------------------------------------------
-   ! 1D radial grids
+   ! Radial grids
    ! --------------------------------------------------------------------------
 
    !> Uniform (equidistant) radial grid integrates a Gaussian on R^3
@@ -281,44 +283,100 @@ contains
    subroutine test_grid_uniform_radial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_uniform_type), target :: ugrid
-      class(moist_math_grid_1d_type), pointer :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
       ! 2000 nodes at dr = 0.01 bohr -> r_max = 20 bohr; the even-Gaussian
       ! midpoint rule is then round-off-limited (~1e-15) -- few enough terms
       ! that the summation round-off stays far below the threshold
-      call new_uniform_radial_grid(ugrid, 2000, 0.01_wp, merr)
+      call new_uniform_radial_pair(rgrid, kgrid, 2000, 0.01_wp, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      grid => ugrid
-      call check_radial_gaussian(error, grid, 1.0e-13_wp, "uniform")
-      call grid%destroy()
+      call check_radial_gaussian(error, rgrid, 1.0e-13_wp, "uniform")
    end subroutine test_grid_uniform_radial
 
    !> Chebyshev-2 radial grid integrates the same Gaussian
    !>
-   !> The non-uniform nodes are driven through the abstract base
+   !> Chebyshev-II rule with a Becke mapping, the r grid of the Chebyshev pair
    !>
    !> @param[out] error  Test failure
    subroutine test_grid_chebyshev_radial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_chebyshev_type), target :: cgrid
-      class(moist_math_grid_1d_type), pointer :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
       ! 400 r- and k-nodes; the Chebyshev-2 rule then resolves the Gaussian to
       ! round-off (~1e-14)
-      call new_chebyshev_radial_grid(cgrid, 400, 1.0_wp, 400, 1.0_wp, merr)
+      call make_chebyshev_pair(rgrid, kgrid, 400, 1.0_wp, 400, 1.0_wp, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      grid => cgrid
-      call check_radial_gaussian(error, grid, 1.0e-13_wp, "chebyshev")
-      call grid%destroy()
+      call check_radial_gaussian(error, rgrid, 1.0e-13_wp, "chebyshev")
    end subroutine test_grid_chebyshev_radial
+
+   !> Chebyshev-II + Becke radial pair with fixed scales, the dense-trafo pair
+   !>
+   !> Nodes (1 + x)/(1 - x)*p on the Chebyshev second-kind nodes x, weights dr
+   !> (dk); a scale error comes from the mapping, a count error from the grid
+   !>
+   !> @param[out] rgrid  r-space grid
+   !> @param[out] kgrid  k-space grid
+   !> @param[in]  nr     Number of r-space nodes
+   !> @param[in]  p_r    r-space scale (bohr)
+   !> @param[in]  nk     Number of k-space nodes
+   !> @param[in]  p_k    k-space scale (1/bohr)
+   !> @param[out] merr   Library error
+   subroutine make_chebyshev_pair(rgrid, kgrid, nr, p_r, nk, p_k, merr)
+      !> r-space grid
+      type(moist_math_grid_radial_type), intent(out) :: rgrid
+      !> k-space grid
+      type(moist_math_grid_radial_type), intent(out) :: kgrid
+      !> Number of r-space nodes
+      integer, intent(in) :: nr
+      !> r-space scale
+      real(wp), intent(in) :: p_r
+      !> Number of k-space nodes
+      integer, intent(in) :: nk
+      !> k-space scale
+      real(wp), intent(in) :: p_k
+      !> Library error
+      type(mctc_error), allocatable, intent(out) :: merr
+
+      call make_chebyshev_grid(rgrid, nr, p_r, merr)
+      if (allocated(merr)) return
+      call make_chebyshev_grid(kgrid, nk, p_k, merr)
+   end subroutine make_chebyshev_pair
+
+   !> One Chebyshev-II + Becke radial grid with a fixed scale
+   !>
+   !> @param[out] grid  Radial grid
+   !> @param[in]  n     Number of nodes
+   !> @param[in]  p     Becke scale
+   !> @param[out] merr  Library error
+   subroutine make_chebyshev_grid(grid, n, p, merr)
+      !> Radial grid
+      type(moist_math_grid_radial_type), intent(out) :: grid
+      !> Number of nodes
+      integer, intent(in) :: n
+      !> Becke scale
+      real(wp), intent(in) :: p
+      !> Library error
+      type(mctc_error), allocatable, intent(out) :: merr
+
+      type(moist_math_grid_radial_rule_chebyshev2_type) :: rule
+      type(moist_math_grid_radial_mapping_becke_type) :: becke
+      type(moist_math_grid_radial_recipe_type) :: recipe
+
+      call new_chebyshev2_rule(rule)
+      call new_becke_mapping(becke, merr, scale=p)
+      if (allocated(merr)) return
+      allocate (recipe%rule, source=rule)
+      allocate (recipe%mapping, source=becke)
+      recipe%npts = n
+      call new_radial_grid(grid, recipe, 1, merr)
+   end subroutine make_chebyshev_grid
 
    ! --------------------------------------------------------------------------
    ! 3D volume grids
@@ -406,11 +464,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       class(moist_math_grid_3d_type), pointer :: grid
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid(mgrid, mol, merr)
+      call default_element_recipes(recipe, overrides, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -436,11 +499,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       class(moist_math_grid_3d_type), pointer :: grid
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid_uniform(mgrid, mol, nrad=300, nang=1202, error=merr)
+      call get_uniform_recipe(recipe, overrides, 300, 1202, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -465,11 +533,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       class(moist_math_grid_3d_type), pointer :: grid
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid_uniform(mgrid, mol, nrad=300, nang=1202, error=merr)
+      call get_uniform_recipe(recipe, overrides, 300, 1202, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -500,6 +573,8 @@ contains
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(moist_math_grid_3d_molecular_trafo_type) :: trafo
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       real(wp), allocatable :: field(:, :)
       complex(wp), allocatable :: fk(:, :)
       real(wp) :: kvec(3), dc_ref, phase
@@ -511,8 +586,10 @@ contains
       !> Clamp the radial extent so the auto-sized reciprocal grid stays small:
       !> a molecular grid otherwise keeps far, low-weight shells that bloat the
       !> bounding box (and the NUFFT grid) far beyond what this test needs
-      call new_molecular_grid_uniform(mgrid, mol, nrad=40, nang=110, error=merr, &
-         & rmax=6.0_wp)
+      call get_uniform_recipe(recipe, overrides, 40, 110, merr, rmax=6.0_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -595,26 +672,26 @@ contains
    !> The Chebyshev FBT adjoints must be exact transposes of the forward/backward transforms
    !>
    !> In the Euclidean inner product: <F a, b> = <a, F^T b>; driven through
-   !> the abstract trafo base
+   !> the abstract trafo base returned by `new_radial_trafo`
    !>
    !> @param[out] error  Test failure
    subroutine test_cheb_radial_fbt_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: nr = 64, nk = 80
-      type(moist_math_grid_1d_chebyshev_type), target :: cgrid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       real(wp) :: ar(nr), bk(nk), fwd(nk), adj(nr)
       real(wp) :: br(nr), ak(nk), bwd(nr), adjk(nk)
       real(wp) :: lhs, rhs
       integer :: i
       type(mctc_error), allocatable :: merr
 
-      call new_chebyshev_radial_grid(cgrid, nr, 1.2_wp, nk, 1.5_wp, merr)
+      call make_chebyshev_pair(rgrid, kgrid, nr, 1.2_wp, nk, 1.5_wp, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      call cgrid%new_trafo(trafo, merr)
+      call new_radial_trafo(trafo, rgrid, kgrid, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -641,11 +718,7 @@ contains
       rhs = sum(ar*adj)
       call check(error, abs(lhs - rhs) <= 1.0e-10_wp*(abs(lhs) + abs(rhs) + 1.0_wp), &
          & "Chebyshev fbt_r2k adjoint identity failed")
-      if (allocated(error)) then
-         call trafo%destroy()
-         call cgrid%destroy()
-         return
-      end if
+      if (allocated(error)) return
 
       ! Backward B (k->r) vs its adjoint B^T (r->k): <B ak, br> = <ak, B^T br>
       call trafo%fbt_k2r(ak, bwd, merr)
@@ -660,9 +733,6 @@ contains
       rhs = sum(ak*adjk)
       call check(error, abs(lhs - rhs) <= 1.0e-10_wp*(abs(lhs) + abs(rhs) + 1.0_wp), &
          & "Chebyshev fbt_k2r adjoint identity failed")
-
-      call trafo%destroy()
-      call cgrid%destroy()
    end subroutine test_cheb_radial_fbt_adjoint
 
    !> The batched (`fbt_*_all`) Chebyshev transforms must reproduce the scalar loop
@@ -677,8 +747,8 @@ contains
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       integer, parameter :: nr = 64, nk = 80, nb = 4
-      type(moist_math_grid_1d_chebyshev_type), target :: cgrid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       real(wp) :: fr(nr, nb), fk(nk, nb)
       real(wp) :: loop_k(nk, nb), batch_k(nk, nb)
       real(wp) :: loop_r(nr, nb), batch_r(nr, nb)
@@ -686,11 +756,11 @@ contains
       integer :: i, j
       type(mctc_error), allocatable :: merr
 
-      call new_chebyshev_radial_grid(cgrid, nr, 1.2_wp, nk, 1.5_wp, merr)
+      call make_chebyshev_pair(rgrid, kgrid, nr, 1.2_wp, nk, 1.5_wp, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      call cgrid%new_trafo(trafo, merr)
+      call new_radial_trafo(trafo, rgrid, kgrid, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -758,9 +828,6 @@ contains
       end if
       relerr = max(relerr, batched_relerr(loop_k, batch_k))
 
-      call trafo%destroy()
-      call cgrid%destroy()
-
       call check(error, relerr <= 1.0e-12_wp, &
          & "Chebyshev batched transform disagrees with the scalar loop")
    end subroutine test_cheb_radial_fbt_batched
@@ -817,40 +884,37 @@ contains
       real(wp), parameter :: window = 10.0_wp
       !> Acceptance bound, relative to the peak of the reference
       real(wp), parameter :: thr = 3.0e-14_wp
-      type(moist_math_grid_1d_chebyshev_type), target :: cgrid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
       type(mctc_error), allocatable :: merr
       real(wp) :: f(nr), fk(nk), got_k(nk), got_r(nr), peak, err_k, err_r
 
-      call new_chebyshev_radial_grid(cgrid, nr, 1.0_wp, nk, 1.5_wp, merr)
+      call make_chebyshev_pair(rgrid, kgrid, nr, 1.0_wp, nk, 1.5_wp, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
-      call cgrid%new_trafo(trafo, merr)
+      call new_radial_trafo(trafo, rgrid, kgrid, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
 
       peak = (pi/expo)**1.5_wp
-      f = exp(-expo*cgrid%r**2)
-      fk = peak*exp(-cgrid%k**2/(4.0_wp*expo))
+      f = exp(-expo*rgrid%r**2)
+      fk = peak*exp(-kgrid%r**2/(4.0_wp*expo))
 
       call trafo%fbt_r2k(f, got_k, merr)
       if (.not. allocated(merr)) call trafo%fbt_k2r(fk, got_r, merr)
-      call trafo%destroy()
       if (allocated(merr)) then
-         call cgrid%destroy()
          call test_failed(error, merr%message); return
       end if
 
       err_k = huge(1.0_wp)
       err_r = huge(1.0_wp)
       if (all(ieee_is_finite(got_k)) .and. all(ieee_is_finite(got_r)) .and. &
-         & any(cgrid%k <= window) .and. any(cgrid%r <= window)) then
-         err_k = maxval(abs(got_k - fk), mask=cgrid%k <= window)/peak
-         err_r = maxval(abs(got_r - f), mask=cgrid%r <= window)
+         & any(kgrid%r <= window) .and. any(rgrid%r <= window)) then
+         err_k = maxval(abs(got_k - fk), mask=kgrid%r <= window)/peak
+         err_r = maxval(abs(got_r - f), mask=rgrid%r <= window)
       end if
-      call cgrid%destroy()
 
       call check(error, err_k <= thr, &
          & "Chebyshev fbt_r2k of a Gaussian deviates from its analytic transform")
@@ -858,33 +922,6 @@ contains
       call check(error, err_r <= thr, &
          & "Chebyshev fbt_k2r of the analytic transform deviates from the Gaussian")
    end subroutine test_cheb_radial_fbt_analytic
-
-   !> Destroying the Chebyshev grid (and its trafo) twice must be a safe no-op
-   !>
-   !> @param[out] error  Test failure
-   subroutine test_cheb_radial_destroy(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_1d_chebyshev_type), target :: grid
-      class(moist_math_grid_1d_trafo_type), allocatable :: trafo
-      type(mctc_error), allocatable :: merr
-
-      call new_chebyshev_radial_grid(grid, 32, 1.0_wp, 32, 1.0_wp, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message); return
-      end if
-      call grid%new_trafo(trafo, merr)
-      if (allocated(merr)) then
-         call test_failed(error, merr%message); return
-      end if
-
-      call trafo%destroy()
-      call trafo%destroy()
-      call grid%destroy()
-      call grid%destroy()
-      call check(error, grid%npts == 0 .and. grid%nk == 0, &
-         & "Chebyshev grid not reset after destroy")
-   end subroutine test_cheb_radial_destroy
 
    !> %integrate(f=1, result) should return sum(weights) on the molecular grid
    !>
@@ -895,11 +932,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       real(wp) :: result, expected
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid(grid, mol, merr)
+      call default_element_recipes(recipe, overrides, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -922,12 +964,15 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       real(wp) :: total_weight
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid_uniform_qc_handymod(grid, mol, nrad=2000, &
-         & lebedev_degree=77, error=merr, rmin=0.0_wp, rmax=6.0_wp, m=0.1_wp)
+      call get_qc_handymod_recipe(recipe, merr, nrad=2000, degree=77, rmin=0.0_wp, rmax=6.0_wp, &
+         & m=0.1_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -951,7 +996,7 @@ contains
       call grid%destroy()
    end subroutine test_mol_grid_qc_handymod_smoke
 
-   !> The new qc-HandyMod path must not perturb existing uniform Chebyshev grids
+   !> A midpoint x HandyMod grid built in between must not perturb uniform Chebyshev grids
    !>
    !> @param[out] error  Test failure
    subroutine test_mol_grid_uniform_regression(error)
@@ -960,13 +1005,18 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type) :: before_grid, qc_grid, after_grid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       integer :: npts_before
       real(wp) :: weight_before
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
 
-      call new_molecular_grid_uniform(before_grid, mol, nrad=12, nang=26, error=merr, rmax=3.0_wp)
+      call get_uniform_recipe(recipe, overrides, 12, 26, merr, rmax=3.0_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(before_grid, merr, recipe=recipe, &
+         & overrides=overrides, reciprocal=.false.)
+      if (.not. allocated(merr)) call before_grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -974,15 +1024,19 @@ contains
       npts_before = before_grid%ngrid
       weight_before = sum(before_grid%w)
 
-      call new_molecular_grid_uniform_qc_handymod(qc_grid, mol, nrad=16, &
-         & lebedev_degree=7, error=merr, rmin=0.0_wp, rmax=3.0_wp, m=0.1_wp)
+      call get_qc_handymod_recipe(recipe, merr, nrad=16, degree=7, rmin=0.0_wp, rmax=3.0_wp, m=0.1_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(qc_grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call qc_grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          call before_grid%destroy()
          return
       end if
 
-      call new_molecular_grid_uniform(after_grid, mol, nrad=12, nang=26, error=merr, rmax=3.0_wp)
+      call get_uniform_recipe(recipe, overrides, 12, 26, merr, rmax=3.0_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(after_grid, merr, recipe=recipe, &
+         & overrides=overrides, reciprocal=.false.)
+      if (.not. allocated(merr)) call after_grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          call before_grid%destroy()
@@ -1010,10 +1064,15 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid(grid, mol, merr)
+      call default_element_recipes(recipe, overrides, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -1036,11 +1095,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       integer :: i
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid(grid, mol, merr)
+      call default_element_recipes(recipe, overrides, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -1055,7 +1119,7 @@ contains
    end subroutine test_mol_grid_pruning
 
    ! --------------------------------------------------------------------------
-   ! Chebyshev radial grid constructor: invalid parameters
+   ! Chebyshev radial pair: invalid parameters
    ! --------------------------------------------------------------------------
 
    !> Fail an expected-failure test only on the targeted library error
@@ -1080,7 +1144,9 @@ contains
       if (index(err%message, expected) > 0) call test_failed(error, err%message)
    end subroutine expect_error
 
-   !> Build a Chebyshev radial grid from invalid parameters, expecting one error
+   !> Build a Chebyshev radial pair from invalid parameters, expecting one error
+   !>
+   !> Scales are refused by the Becke mapping, node counts by the radial grid
    !>
    !> @param[out] error     test failure, set only on the expected error
    !> @param[in]  nr        number of r-space nodes
@@ -1102,10 +1168,10 @@ contains
       !> Substring the expected error message must contain
       character(len=*), intent(in) :: expected
 
-      type(moist_math_grid_1d_chebyshev_type) :: grid
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
 
-      call new_chebyshev_radial_grid(grid, nr, p_r, nk, p_k, merr)
+      call make_chebyshev_pair(rgrid, kgrid, nr, p_r, nk, p_k, merr)
       call expect_error(error, merr, expected)
    end subroutine run_bad_cheb
 
@@ -1116,7 +1182,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 0, 1.0_wp, 16, 1.0_wp, "at least one r- and one k-space node")
+      call run_bad_cheb(error, 0, 1.0_wp, 16, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nr_zero
 
    !> No k-space nodes is refused
@@ -1126,7 +1192,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 16, 1.0_wp, 0, 1.0_wp, "at least one r- and one k-space node")
+      call run_bad_cheb(error, 16, 1.0_wp, 0, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nk_zero
 
    !> A zero r-space scale is refused rather than dividing by r = 0
@@ -1136,7 +1202,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 16, 0.0_wp, 16, 1.0_wp, "positive scales")
+      call run_bad_cheb(error, 16, 0.0_wp, 16, 1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_r_zero
 
    !> A negative k-space scale is refused rather than building negative k nodes
@@ -1146,7 +1212,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 16, 1.0_wp, 16, -1.0_wp, "positive scales")
+      call run_bad_cheb(error, 16, 1.0_wp, 16, -1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_k_negative
 
    !> A NaN r-space scale is refused; `p <= 0` is false for NaN
@@ -1157,7 +1223,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 16, ieee_value(1.0_wp, ieee_quiet_nan), 16, 1.0_wp, "finite scales")
+      call run_bad_cheb(error, 16, ieee_value(1.0_wp, ieee_quiet_nan), 16, 1.0_wp, "scale must be finite")
    end subroutine test_bad_cheb_p_r_nan
 
    !> An infinite k-space scale is refused
@@ -1168,7 +1234,7 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
 
-      call run_bad_cheb(error, 16, 1.0_wp, 16, ieee_value(1.0_wp, ieee_positive_inf), "finite scales")
+      call run_bad_cheb(error, 16, 1.0_wp, 16, ieee_value(1.0_wp, ieee_positive_inf), "scale must be finite")
    end subroutine test_bad_cheb_p_k_inf
 
 end module test_math_grid

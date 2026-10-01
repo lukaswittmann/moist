@@ -15,10 +15,13 @@ module test_math_grid_nufft
    use moist_math_grid_3d_base, only: moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
       & new_cartesian_grid_3d
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
+      & moist_math_grid_atomic_recipe_override_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_grid_uniform, molecular_grid_set_kgrid, &
+      & new_molecular_grid, molecular_grid_set_kgrid, &
       & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, &
       & default_nufft_tol
+   use test_helpers, only: get_uniform_recipe
 
    implicit none(type, external)
    private
@@ -58,6 +61,7 @@ contains
                   new_unittest("nufft_type12_matches_type3", test_type12_vs_type3_molecular), &
                   new_unittest("nufft_type12_matches_type3_uniform", test_type12_vs_type3_uniform), &
                   new_unittest("nufft_trafo_stale_after_update", test_trafo_stale_after_update), &
+                  new_unittest("nufft_trafo_stale_after_reconstruction", test_trafo_stale_after_reconstruction), &
                   new_unittest("nufft_trafo_destroy_recreate", test_trafo_destroy_recreate) &
                   ]
    end subroutine collect_math_grid_nufft
@@ -97,11 +101,15 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       type(mctc_error_type), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
 
       ready = .false.
       call probe_structure(mol)
-      call new_molecular_grid_uniform(mg, mol, probe_nrad, probe_nang, merr, &
-                                      rmax=probe_rmax)
+      call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
+      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+                                                         reciprocal=.false.)
+      if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -301,7 +309,7 @@ contains
    !> @param[in]  fk             numerical transform, length nk
    !> @param[in]  nk             number of reciprocal points
    !> @param[in]  kref           phase reference of the transform (bohr)
-   !> @param[in]  cen            gaussian centre (bohr)
+   !> @param[in]  cen            gaussian center (bohr)
    !> @param[in]  mg             molecular grid supplying kpoint (if selected)
    !> @param[in]  use_molecular  whether to read k-points from `mg`
    !> @param[in]  cg             cartesian grid supplying kpoint (if selected)
@@ -313,7 +321,7 @@ contains
       integer, intent(in) :: nk
       !> Phase reference of the transform
       real(wp), intent(in) :: kref(3)
-      !> Gaussian centre
+      !> Gaussian center
       real(wp), intent(in) :: cen(3)
       !> Molecular grid
       type(moist_math_grid_3d_molecular_type), intent(in) :: mg
@@ -438,6 +446,8 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mg
       type(mctc_error_type), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       real(wp), allocatable :: f(:)
       real(wp) :: reference, coarse, fine, cen(3), val
       integer :: j
@@ -450,11 +460,13 @@ contains
 
       do j = 1, 2
          if (j == 1) then
-            call new_molecular_grid_uniform(mg, mol, probe_nrad, probe_nang, merr, &
-                                            rmax=probe_rmax)
+            call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
          else
-            call new_molecular_grid_uniform(mg, mol, 100, 590, merr, rmax=probe_rmax)
+            call get_uniform_recipe(recipe, overrides, 100, 590, merr, rmax=probe_rmax)
          end if
+         if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+                                                            reciprocal=.false.)
+         if (.not. allocated(merr)) call mg%update(mol, merr)
          if (allocated(merr)) then
             call test_failed(error, merr%message)
             return
@@ -485,13 +497,13 @@ contains
    !> Tabulate `exp(-(|r - cen| - r0)^2)` on the grid points
    !>
    !> @param[in]  mg   molecular grid
-   !> @param[in]  cen  shell centre (bohr)
+   !> @param[in]  cen  shell center (bohr)
    !> @param[in]  r0   shell radius (bohr)
    !> @param[out] f    field values, length npts
    pure subroutine shell_field(mg, cen, r0, f)
       !> Molecular grid
       type(moist_math_grid_3d_molecular_type), intent(in) :: mg
-      !> Shell centre
+      !> Shell center
       real(wp), intent(in) :: cen(3)
       !> Shell radius
       real(wp), intent(in) :: r0
@@ -538,12 +550,12 @@ contains
    !> `exp(-a |r - c|^2)`
    !>
    !> @param[in]  r    evaluation point (bohr)
-   !> @param[in]  c    gaussian centre (bohr)
+   !> @param[in]  c    gaussian center (bohr)
    !> @param[in]  a    exponent (bohr^-2)
    pure function gaussian(r, c, a) result(val)
       !> Evaluation point
       real(wp), intent(in) :: r(3)
-      !> Gaussian centre
+      !> Gaussian center
       real(wp), intent(in) :: c(3)
       !> Exponent
       real(wp), intent(in) :: a
@@ -612,7 +624,7 @@ contains
       allocate (f(mg%ngrid, nv), g12(mg%ngrid, nv), g3(mg%ngrid, nv))
       allocate (fk12(mg%npts_k, nv), fk3(mg%npts_k, nv), fin(mg%npts_k, nv))
 
-      !> Off-centre Gaussians per column, nontrivial phase against `kref = point(1)`
+      !> Off-center Gaussians per column, nontrivial phase against `kref = point(1)`
       do iv = 1, nv
          do i = 1, mg%ngrid
             r = mg%point(i)
@@ -667,12 +679,16 @@ contains
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mg
       type(mctc_error_type), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       real(wp) :: dev_f, dev_b
       logical :: ready
 
       call probe_structure(mol)
-      call new_molecular_grid_uniform(mg, mol, probe_nrad, probe_nang, merr, &
-                                      rmax=probe_rmax)
+      call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
+      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+                                                         reciprocal=.false.)
+      if (.not. allocated(merr)) call mg%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message)
          return
@@ -809,6 +825,59 @@ contains
       call mg%destroy()
    end subroutine test_trafo_stale_after_update
 
+   !> Check that a stale trafo refuses to transform after its grid was constructed again
+   !>
+   !> - Same recipe, same sequence of update and `molecular_grid_set_kgrid`, one
+   !>   atom moved: the point count is unchanged, so only a generation
+   !>   counter that survives `new_molecular_grid` catches the stale plans
+   !>
+   !> @param[out] error  propagated test failure
+   subroutine test_trafo_stale_after_reconstruction(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(mctc_error_type), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
+      real(wp), allocatable :: f(:, :)
+      complex(wp), allocatable :: fk(:, :)
+      logical :: ready
+
+      call setup_probe(mol, mg, trafo, ready, error)
+      if (allocated(error) .or. .not. ready) then
+         call mg%destroy()
+         return
+      end if
+
+      mol%xyz(1, 1) = mol%xyz(1, 1) + 0.05_wp
+      call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
+      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+                                                         reciprocal=.false.)
+      if (.not. allocated(merr)) call mg%update(mol, merr)
+      if (.not. allocated(merr)) call molecular_grid_set_kgrid(mg, probe_dr, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         call trafo%destroy()
+         call mg%destroy()
+         return
+      end if
+
+      allocate (f(mg%ngrid, 1), fk(mg%npts_k, 1))
+      f = 0.0_wp
+      call trafo%fft_r2k(f, fk, merr)
+      call check(error, allocated(merr), &
+                 "a trafo must refuse to transform after its grid was constructed again")
+      if (.not. allocated(error)) then
+         call check(error, index(merr%message, "geometry changed") > 0, &
+                    "the stale-trafo error must name the geometry-generation mismatch")
+      end if
+      call trafo%destroy()
+      call mg%destroy()
+   end subroutine test_trafo_stale_after_reconstruction
+
    !> Check destroy of a stale trafo and fresh prepare on the updated grid
    !>
    !> @param[out] error  propagated test failure
@@ -858,7 +927,7 @@ contains
       end do
       call forward(error, trafo, f, fk)
       if (.not. allocated(error)) then
-         ! Same bound as test_forward_analytic; 3.1e-4 measured, 4.3e-2 with the pre-update centre
+         ! Same bound as test_forward_analytic; 3.1e-4 measured, 4.3e-2 with the pre-update center
          call max_ft_error(fk(:, 1), mg%npts_k, mg%kref, cen, mg, .true., cg, emax)
          call check(error, emax <= 1.0e-3_wp, &
                     "recreated molecular NUFFT disagrees with the analytic Gaussian FT")

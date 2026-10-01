@@ -300,15 +300,16 @@ if(MOIST_TESTS)
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
-    math_quadrature math_grid_s2 math_fft_dst4 math_fft_3d finufft math_grid_nufft math_grid_3d
-    math_quadrature_rule math_grid_1d math_grid_1d_trafo
-    math_grid_s2_generator math_grid_atomic
+    math_fft_dst4 math_fft_3d finufft math_grid_nufft math_grid_3d
+    math_grid_radial_rule math_grid_radial math_grid_radial_trafo
+    math_grid_angular math_grid_atomic
     math_grid_3d_threaded moz_1d moz_3d
     math_grid_3d_partition
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
+    math_grid_3d_molecular
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
-    cavity_drop_integration cavity_drop_integration_cfc cavity_drop_filter cavity_drop_cpcm
-    cavity_iswig cavity_numsa cavity_marchingcubes cavity_golden cavity_surface_adjoint
+    cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
+    cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
     model_component_pcm_electrostatics model_component_pcm_cpcm
@@ -318,12 +319,13 @@ if(MOIST_TESTS)
   # Each run as a selected test, outside test-drive's OpenMP team
   set(moist_test_selected_math_grid_3d_threaded
     batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
-    molecular_nufft_type12_threaded molecular_nufft_type3_threaded)
+    molecular_nufft_type12_threaded molecular_nufft_type3_threaded
+    radial_trafo_one_per_thread)
   set(moist_test_selected_math_grid_3d_partition
-    matches_per_point_becke_k1 matches_per_point_becke_k3 matches_per_point_ssf
+    compact_switches nuclear_derivative_continuity power_geometry partition_invariance large_coincident_partition
     partition_of_unity ssf_bond_axis_hard_zeros ssf_owned_near_nucleus
-    single_atom_weight_one batch_matches_single_points threaded_matches_serial
-    nested_call_inside_parallel_region)
+    single_atom_weight_one homonuclear_analytic_weights batch_matches_single_points
+    threaded_matches_serial nested_call_inside_parallel_region)
 
   set(moist_test_srcs
     "${_unit}/main.F90"

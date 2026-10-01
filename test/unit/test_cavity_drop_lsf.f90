@@ -1,14 +1,9 @@
-!> Orchestrator-level unit tests for the DROP level set functions (LSF)
+!> DROP level-set unit tests
 !>
-!> Each common FD check is written once against the abstract
-!> [[moist_cavity_drop_lsf_type]] and dispatched twice in the collector:
-!> once for the SvdW concrete ([[moist_cavity_drop_lsf_svdw_type]]) and
-!> once for the CFC concrete ([[moist_cavity_drop_lsf_cfc_type]]). The
-!> SvdW dispatch additionally sweeps over the blend_k x gamma parameter
-!> grid that exercises SvdW's body-order weights; CFC has no analogous
-!> knob and runs with its compiled defaults only
+!> Shared FD checks use [[moist_cavity_drop_lsf_type]] for SvdW and CFC
+!> SvdW sweeps `blend_k` x `gamma`; CFC uses compiled defaults
 !>
-!> Common checks (run for both concretes):
+!> Shared checks:
 !>   * `sign_convention`     interior < 0, exterior > 0
 !>   * `neighbor_cutoff`     screening-threshold sweep vs threshold=0 ref
 !>   * `f1_r_fd`             grad vs 4-point central FD of f0
@@ -18,57 +13,41 @@
 !>   * `f2_r_rA_fd`          mixed deriv vs FD of grad
 !>   * `f3_rr_rA_fd`         mixed third deriv vs FD of Hessian
 !>
-!> Radius-derivative checks, both concretes. Their radius channels rest on
-!> opposite structures -- SvdW's `d/dR_a` is a diagonal rescaling of an atom's
-!> own tensors, CFC's a genuine extra derivative of a two-center kernel -- so
-!> the same FD says two different things:
+!> Radius checks for both concretes:
+!> SvdW rescales one atom's tensors; CFC differentiates a two-center kernel
 !>   * `f1_rad_fd`           radius grad vs FD of f0
 !>   * `f2_r_rad_fd`         mixed spatial-radius deriv vs FD of grad
 !>   * `f3_rr_rad_fd`        mixed third radius deriv vs FD of Hessian
 !>   * `radrad_fd`           `f{2,3,4}_*_radrad` vs a one-radius FD of the
 !>                           `f*_rad` ladder, element by element
 !>   * `ra_rad_fd`           `f{2,3,4}_*_rA_rad` vs a one-radius FD of the
-!>                           `f*_rA` ladder. Also pins the *order* of the two
-!>                           atom slots, which that block is not symmetric in
+!>                           `f*_rA` ladder; pins asymmetric atom-slot order
 !>   * `hvp_rad_fd`          radius row of the joint position/radius HVP vs
 !>                           FD of the `f*_rad` ladder along `(v, vr)`
 !>   * `hvp_ra_joint_fd`     nuclear row of the same HVP, `vrad` supplied, vs
 !>                           FD of the `f*_rA` ladder along `(v, vr)`
-!>   * `radius_pairwise`     both HVP rows against the *uncontracted* blocks
-!>                           `f*_radrad` and `f*_rA_rad`. No finite differences:
-!>                           an exact contraction identity, so it pins the two
-!>                           uncontracted families at roundoff where every other
-!>                           radius test only reaches FD accuracy
-!>   * `empty_active`        every accessor above at a point where screening
-!>                           rejects all atoms. The one check that inspects a
-!>                           whole result buffer instead of its active prefix
-!> All the FD ones above take CFC's looser thresholds; see [[radius_fd_thr]]
+!>   * `radius_pairwise`     exact HVP contraction of `f*_radrad` and
+!>                           `f*_rA_rad` at roundoff
+!>   * `empty_active`        full result buffers with all atoms screened
+!> CFC FD thresholds: [[radius_fd_thr]]
 !>
-!> High-order extensions, registered once per concrete because the SvdW
-!> dispatch sweeps a blend_k x gamma parameter grid that CFC has no analogue of
-!> (its four shape parameters are compiled-in constants):
+!> High-order extensions, one registration per concrete:
 !>   * `f2_rArB`, `f3_r_rArB`                  pure/mixed nuclear seconds
 !>   * `f4_rrrr`, `f4_rrr_rA`, `f4_rr_rArB`    fourth-order derivatives
 !>   * `normalized_f1_rA`                      normalized LSF nuclear grad
 !>   * `contracted_vs_pairwise`                every `tangent_*` / `hvp_*`
 !>                                             against the uncontracted tensors
-!>   * `exclusion_radius_never_overclaims`     the certified ball really is
-!>                                             free of surface, at every
-!>                                             sampling point of the fixture
+!>   * `exclusion_radius_never_overclaims`     surface-free certified balls
 !>
 !> SvdW-only:
 !>   * `body_order_scaling`                    1b/2b/3b weight reduction
 !>   * `point_on_nucleus_is_finite`            CFC has no on-nucleus singularity
 !>
-!> Test fixtures come from the shared MB16-43/Heavy28/Amino20x4/But14diol/UPU23
-!> palette in `test_helpers::get_test_structures`. Per-atom radii come from
-!> the project's standard CPCM table via `get_test_radii`, and sampling
-!> points come from `get_test_points`
+!> Structures: MB16-43/Heavy28/Amino20x4/But14diol/UPU23 via `get_test_structures`
+!> CPCM radii via `get_test_radii`; samples via `get_test_points`
 !>
-!> Nuclear-derivative FDs bypass `lsf%update(mol, radii)` (which would
-!> re-init the concrete's per-atom caches and reset `max_deriv`) by calling
-!> the base's `lsf%set_centers(...)`, which only moves the atoms and rebuilds
-!> the spatial sort and screening bounds
+!> Nuclear FDs use `set_centers` to preserve caches and `max_deriv`
+!> Rebuild spatial sort and screening bounds after atom moves
 module test_cavity_drop_lsf
    use moist_cavity_drop_lsf_cfc_param, only: moist_cavity_drop_lsf_cfc_param_type
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
@@ -90,52 +69,36 @@ module test_cavity_drop_lsf
 
    integer, parameter :: ndim = 3
 
-   !> Concrete LSF selector strings; used by [[init_lsf]]
-   character(len=*), parameter :: kind_svdw = "svdw"
-   character(len=*), parameter :: kind_cfc = "cfc"
-
-   !> Tolerance of the Hessian-free consistency check. The two dispatch
-   !> branches of the generated SvdW kernel share a value and a gradient but
-   !> not a common-subexpression schedule, so they agree to roundoff, not bits
+   !> Hessian-free consistency tolerance
+   !>
+   !> SvdW derivative branches use different expression schedules; roundoff agreement
    real(wp), parameter :: HESSFREE_ABS = 1.0e-14_wp
    real(wp), parameter :: HESSFREE_REL = 1.0e-12_wp
 
-   !> Poison written into every result buffer by the empty-active-list check
+   !> Result-buffer poison for empty active lists
    real(wp), parameter :: EMPTY_POISON = -1.0e30_wp
 
    real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
    real(wp), parameter :: ABS_THR = 2.0e-10_wp
    real(wp), parameter :: REL_THR = 1.0e-9_wp
 
-   !> Finite-difference thresholds of the CFC-only high-order block
+   !> CFC high-order FD thresholds
    !>
-   !> CFC's exponents (a1 = -15, a2 = -9) make the level set vary on a length
-   !> scale of R/15 rather than SvdW's 3/k, so at the shared `STEP_SIZE` a
-   !> fourth-order central difference carries correspondingly more truncation
-   !> error. Measured, not guessed: the order-4 checks (`f4_rrrr`, `f4_rrr_rA`,
-   !> `f4_rr_rArB`) fail at SvdW's `2e-10 / 1e-9` and pass at `1e-9 / 1e-8`, so
-   !> the true stencil error sits in that decade; these values leave one decade
-   !> of headroom above it for other platforms. The orders below four pass at
-   !> the SvdW thresholds and are not relaxed by this being loose -- they are
-   !> additionally pinned at roundoff by `cfc_contracted_vs_pairwise`, which
-   !> compares two independent derivation ladders rather than a difference
-   !> quotient
+   !> - CFC exponents (-15, -9): length scale R/15 vs SvdW's 3/k
+   !> - Order-4 stencil error at `STEP_SIZE`: between `2e-10 / 1e-9` and
+   !>   `1e-9 / 1e-8`; thresholds leave one decade of platform headroom
+   !> - Lower orders retain SvdW thresholds
+   !> - `cfc_contracted_vs_pairwise` checks independent ladders at roundoff
    real(wp), parameter :: CFC_ABS_THR = 1.0e-8_wp
    real(wp), parameter :: CFC_REL_THR = 1.0e-7_wp
 
-   !> Sampling points per structure in the finite-difference drivers
+   !> FD sampling points per structure
    !>
-   !> CFC gets fewer than SvdW purely because of cost: one CFC evaluation runs an
-   !> `O(n_active^2)` pair kernel where SvdW runs `O(n_active)` power sums, which
-   !> makes a CFC point roughly 300x a SvdW one. The two counts buy different
-   !> amounts of the *same* thing -- the points are independent samples of one
-   !> pointwise identity, so the fourth through seventh add far less than the
-   !> first three. The diversity that actually matters (five chemistries, five
-   !> sizes, and for SvdW the 5x2 blend/gamma sweep) is untouched
+   !> - CFC pair kernel `O(n_active^2)`, about 300x SvdW per point
+   !> - Independent pointwise samples; later points add less coverage
+   !> - Five chemistries and sizes; SvdW 5x2 blend/gamma sweep
    !>
-   !> Safe to tune: `get_test_points` seeds its sampler from `mol%nat` alone, so a
-   !> smaller count returns a strict *prefix* of the same sequence rather than a
-   !> different draw. Shrinking it can only remove points, never move them
+   !> `get_test_points` seed depends only on `mol%nat`; smaller counts keep a prefix
    integer, parameter :: n_points_svdw = 7
    integer, parameter :: n_points_cfc = 1
 
@@ -228,12 +191,11 @@ contains
    !*                              Local helpers                                        *!
    !* ================================================================================= *!
 
-   !> Allocate a fresh polymorphic LSF of the requested concrete kind and
-   !> bind it to the given molecule. Optional `blend_k` / `blend_2b` /
-   !> `blend_3b` apply only when `kind == "svdw"` (CFC has no equivalent knob)
-   !> Optional `screening_threshold` sets the inherited base-type field
-   !> *before* `new`/`update` so the SSD system picks it up; default is
-   !> 0 (no screening), matching the rest of the suite
+   !> Create and bind a polymorphic LSF
+   !>
+   !> SvdW-only blend overrides; CFC uses fixed shape parameters
+   !> Set screening threshold before `new`/`update` propagates it to SSD
+   !> Default threshold 0 disables screening
    !>
    !> @param[out] lsf                 polymorphic LSF allocatable
    !> @param[in]  mol                 molecular structure to bind
@@ -247,19 +209,19 @@ contains
    subroutine init_lsf(lsf, mol, radii, max_deriv, kind, blend_k, blend_2b, &
                        blend_3b, screening_threshold)
       class(moist_cavity_drop_lsf_type), allocatable, intent(out) :: lsf
-      !> Molecular structure to bind to the LSF
+      !> Bound molecular structure
       type(structure_type), intent(in) :: mol
       !> Per-atom radii (size mol%nat)
       real(wp), intent(in) :: radii(:)
-      !> Highest spatial derivative order to enable
+      !> Maximum spatial derivative order
       integer, intent(in) :: max_deriv
       !> Concrete kind selector: "svdw" or "cfc"
       character(len=*), intent(in) :: kind
-      !> Optional SvdW blend_k override (ignored for CFC)
+      !> Optional SvdW blend_k override
       real(wp), intent(in), optional :: blend_k
-      !> Optional SvdW blend_2b override (ignored for CFC)
+      !> Optional SvdW blend_2b override
       real(wp), intent(in), optional :: blend_2b
-      !> Optional SvdW blend_3b override (ignored for CFC)
+      !> Optional SvdW blend_3b override
       real(wp), intent(in), optional :: blend_3b
       !> Optional screening threshold (default 0, no screening)
       real(wp), intent(in), optional :: screening_threshold
@@ -273,14 +235,14 @@ contains
       if (present(screening_threshold)) thr = screening_threshold
 
       select case (kind)
-      case (kind_svdw)
+      case ("svdw")
          tmp_svdw%screening_threshold = thr
          call param%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
          call tmp_svdw%new(param)
          call tmp_svdw%update(mol, radii)
          call tmp_svdw%set_max_deriv(max_deriv)
          allocate (lsf, source=tmp_svdw)
-      case (kind_cfc)
+      case ("cfc")
          tmp_cfc%screening_threshold = thr
          call tmp_cfc%new()
          call tmp_cfc%update(mol, radii)
@@ -291,13 +253,10 @@ contains
       end select
    end subroutine init_lsf
 
-   !> Refresh only the geometry on the underlying concrete (no full LSF
-   !> re-init). Used by nuclear-derivative FDs to perturb atom positions
-   !> without wiping `max_deriv` or other concrete caches
+   !> Refresh atom positions without resetting LSF caches or `max_deriv`
    !>
-   !> `set_centers` is part of the abstract base API, so no `select type`
-   !> dispatch is needed; `radii` is accepted only to keep the call sites
-   !> reading as "move these atoms, keep these radii"
+   !> Base API `set_centers` needs no concrete dispatch
+   !> `radii` retained for call-site clarity
    !>
    !> @param[inout] lsf      polymorphic LSF (must be allocated)
    !> @param[in]    centers  perturbed positions (3, mol%nat)
@@ -316,15 +275,11 @@ contains
       call lsf%set_centers(centers)
    end subroutine refresh_ssd
 
-   !> Prepare the LSF at a displaced geometry, failing the test if it cannot
+   !> Prepare a displaced LSF or fail the test
    !>
-   !> The prepare at the *base* geometry is checked inline in every driver,
-   !> because it sits next to the active-list identity check that follows it
-   !> The displaced prepares inside the FD loops have no such context, and an
-   !> unreported failure there is the worst kind: `f0` and friends would return
-   !> the values of the previous point, and the difference quotient built from
-   !> them looks like an ordinary numerical disagreement rather than a broken
-   !> setup. A `.true.` return is the caller's signal to return at once
+   !> Base preparation checked beside active-list identity
+   !> Displaced preparation failures would reuse prior values in FD quotients
+   !> `.true.` signals immediate caller return
    !>
    !> @param[inout] lsf   Polymorphic LSF, prepared in place
    !> @param[in]    point Sampling point
@@ -353,18 +308,16 @@ contains
    !> SvdW dispatch for the sign-convention check
    subroutine test_svdw_sign_convention(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_sign_convention(error, kind_svdw)
+      call run_sign_convention(error, "svdw")
    end subroutine test_svdw_sign_convention
 
    !> CFC dispatch for the sign-convention check
    subroutine test_cfc_sign_convention(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_sign_convention(error, kind_cfc)
+      call run_sign_convention(error, "cfc")
    end subroutine test_cfc_sign_convention
 
-   !> Verifies LSF is negative deep inside an atom (high PD) and positive
-   !> outside (low PD). Uses LiH explicitly - a small heteronuclear
-   !> diatomic with a clear inside/outside
+   !> Check negative interior and positive exterior LSF on LiH
    subroutine run_sign_convention(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -380,7 +333,7 @@ contains
       call get_test_radii(mol, radii)
       call init_lsf(lsf, mol, radii, 0, kind)
 
-      ! Inside: lies on atom 1, well inside the cavity
+      ! Atom 1 center, inside the cavity
       inside_pt = mol%xyz(:, 1) + [0.05_wp, 0.05_wp, 0.0_wp]
       call lsf%prepare(inside_pt, lsf_err)
       if (allocated(lsf_err)) then
@@ -393,7 +346,7 @@ contains
          return
       end if
 
-      ! Outside: well beyond the molecular bounding box along +x
+      ! Beyond molecular bounds along +x
       outside_pt = [maxval(mol%xyz(1, :)) + 20.0_wp, 0.0_wp, 0.0_wp]
       call lsf%prepare(outside_pt, lsf_err)
       call lsf%f0(val_outside)
@@ -406,40 +359,25 @@ contains
    !> SvdW dispatch for the molecule-pair separation check
    subroutine test_svdw_screening_separation(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_screening_separation(error, kind_svdw)
+      call run_screening_separation(error, "svdw")
    end subroutine test_svdw_screening_separation
 
    !> CFC dispatch for the molecule-pair separation check
    subroutine test_cfc_screening_separation(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_screening_separation(error, kind_cfc)
+      call run_screening_separation(error, "cfc")
    end subroutine test_cfc_screening_separation
 
-   !> Verify screening in the regime it is actually used: a stationary centers
-   !> molecule with a copy of itself pulled away from it, sampling the LSF only
-   !> at points near the centers molecule (never far out in vacuum)
+   !> Check screening as a copied molecule separates from fixed centers
    !>
-   !> Unlike `run_neighbor_cutoff`, which marches the evaluation point outward
-   !> until conditioning degrades, here the points stay near the stationary
-   !> centers molecule (well-conditioned, val ~ 0) and screening is driven by
-   !> the *separation* of the moving copy: when adjacent its atoms are within
-   !> the SSD cutoff and contribute (screened == unscreened); as it recedes
-   !> past the cutoff (~25-30 bohr for the production threshold) its atoms are
-   !> dropped, but by then their contribution is ~threshold, so the screened
-   !> LSF still tracks the unscreened reference within ~ntot^2 * X
+   !> Sample near fixed centers at `val ~ 0`; vary copy separation
+   !> Adjacent copy contributes; copy beyond ~25-30 bohr gets screened
+   !> Screened LSF tracks unscreened reference within ~`ntot**2 * thr`
    !>
-   !> The centers and moving molecules are the same structure (a homo-dimer
-   !> separation), joined with [[BuildSuperStructure]] (centers first, moving
-   !> copy appended), so the moving atoms carry user ids > `nc`; that lets the
-   !> realism guard confirm the moving copy contributes when adjacent and is
-   !> fully screened away when far - the contribute->screen transition that
-   !> makes this a non-vacuous test of production-style screening
+   !> [[BuildSuperStructure]] appends moving copy after fixed centers
+   !> Moving atom IDs > `nc` expose contribute-to-screen transition
    !>
-   !> The SvdW blending weights are pinned to the legacy set
-   !> (`svdw_legacy_blend_*`) rather than the shipped defaults: the bound
-   !> `ntot**2 * thr` is derived for unit 2b/3b weights, and this test is about
-   !> the SSD screening machinery, not about whichever blending the production
-   !> cavity currently ships
+   !> Legacy SvdW weights keep 2b/3b at unity for `ntot**2 * thr` bound
    subroutine run_screening_separation(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -461,7 +399,7 @@ contains
       call get_test_structures(mols, 10)
 
       do icase = 1, size(mols)
-         ! Center and moving molecules; the centers stays fixed, the other is translated
+         ! Fixed centers and translated copy
          center_mol = mols(icase)
          call center_at_origin(center_mol)
          nc = center_mol%nat
@@ -473,7 +411,7 @@ contains
             do istep = 0, separation_n_steps
                gap = real(istep, wp)*separation_gap_step
 
-               ! Create superstructure from two molecules
+               ! Join fixed and moving molecules
                moving_mol = center_mol
                shift = maxval(center_mol%xyz(1, :)) - minval(moving_mol%xyz(1, :)) + gap
                moving_mol%xyz(1, :) = moving_mol%xyz(1, :) + shift
@@ -499,8 +437,7 @@ contains
                   call lsf_scr%prepare(points(:, ip), lsf_err)
                   call lsf_scr%f0(val_scr)
 
-                  ! The three body term introduces the largest errors prop. to thr * natoms^2
-                  ! This is because the three body term is inside ntot^2 terms; thus we use this as the thr
+                  ! Three-body error scales as `thr * ntot**2`
                   call check(error, val_scr, val_ref, thr=real(ntot, wp)**2*thr, &
                              more="screened lsf diverged from unscreened during separation (lower than natoms^2*thr)")
                   if (allocated(error)) return
@@ -513,9 +450,7 @@ contains
 
    end subroutine run_screening_separation
 
-   !> True if any currently-active atom belongs to the moving copy (user id
-   !> > `nc`, the centers molecule's atom count), i.e. the moving molecule
-   !> still contributes after screening. Reflects the most recent `prepare`
+   !> Active moving atom after latest `prepare` (user ID > `nc`)
    logical function any_moving_active(lsf, nc) result(active)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       integer, intent(in) :: nc
@@ -530,18 +465,13 @@ contains
       end do
    end function any_moving_active
 
-   !> Assert that the active list is the unscreened identity
+   !> Require unscreened active-list identity
    !>
-   !> Every nuclear- and radius-derivative accessor returns *active*-indexed
-   !> results: slot `i` belongs to `active_atom(i)`, and slots above
-   !> `active_count()` are never written. The FD drivers below allocate their
-   !> analytic buffers at `nat` and index them with user-space atom ids, which is
-   !> only correct while `init_lsf` leaves screening off. Assert that rather than
-   !> assume it -- a screened fixture would otherwise compare uninitialized
-   !> memory against a finite difference instead of failing
+   !> Accessor slot `i` belongs to `active_atom(i)`; higher slots unwritten
+   !> FD buffers use `nat` and user IDs; valid only with screening off
+   !> Guard against uninitialised comparisons from screened fixtures
    !>
-   !> Call once after the first `prepare` of each geometry; the active list does
-   !> not change under the FD displacements used here
+   !> Check after first `prepare`; FD displacements preserve active list
    !>
    !> @param[out] error Set if the active list is screened or reordered
    !> @param[in]  lsf   LSF instance, after `prepare`
@@ -570,13 +500,13 @@ contains
    !> SvdW dispatch for the spatial gradient FD check
    subroutine test_svdw_f1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_r_fd(error, kind_svdw)
+      call run_f1_r_fd(error, "svdw")
    end subroutine test_svdw_f1_r_fd
 
    !> CFC dispatch for the spatial gradient FD check
    subroutine test_cfc_f1_r_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_r_fd(error, kind_cfc)
+      call run_f1_r_fd(error, "cfc")
    end subroutine test_cfc_f1_r_fd
 
    !> grad vs 4-point central FD of f0
@@ -639,13 +569,13 @@ contains
    !> SvdW dispatch for the spatial Hessian FD check
    subroutine test_svdw_f2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rr_fd(error, kind_svdw)
+      call run_f2_rr_fd(error, "svdw")
    end subroutine test_svdw_f2_rr_fd
 
    !> CFC dispatch for the spatial Hessian FD check
    subroutine test_cfc_f2_rr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_rr_fd(error, kind_cfc)
+      call run_f2_rr_fd(error, "cfc")
    end subroutine test_cfc_f2_rr_fd
 
    !> Hessian vs 4-point FD of grad
@@ -712,18 +642,18 @@ contains
    !> SvdW dispatch for the spatial third-derivative FD check
    subroutine test_svdw_f3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rrr_fd(error, kind_svdw)
+      call run_f3_rrr_fd(error, "svdw")
    end subroutine test_svdw_f3_rrr_fd
 
    !> CFC dispatch for the spatial third-derivative FD check
    subroutine test_cfc_f3_rrr_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rrr_fd(error, kind_cfc)
+      call run_f3_rrr_fd(error, "cfc")
    end subroutine test_cfc_f3_rrr_fd
 
-   !> Third spatial derivative vs FD of Hessian (both pulled from
-   !> f3_rrr so the FD and analytic branches share the same
-   !> internal code path; matters at -O3)
+   !> Third spatial derivative vs FD of Hessian
+   !>
+   !> Both branches use `f3_rrr` to share the internal path at -O3
    subroutine run_f3_rrr_fd(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -803,13 +733,13 @@ contains
    !> SvdW dispatch for the nuclear gradient FD check
    subroutine test_svdw_f1_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rA_fd(error, kind_svdw)
+      call run_f1_rA_fd(error, "svdw")
    end subroutine test_svdw_f1_rA_fd
 
    !> CFC dispatch for the nuclear gradient FD check
    subroutine test_cfc_f1_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rA_fd(error, kind_cfc)
+      call run_f1_rA_fd(error, "cfc")
    end subroutine test_cfc_f1_rA_fd
 
    !> Nuclear-position gradient vs FD of f0
@@ -893,13 +823,13 @@ contains
    !> SvdW dispatch for the mixed spatial-nuclear FD check
    subroutine test_svdw_f2_r_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rA_fd(error, kind_svdw)
+      call run_f2_r_rA_fd(error, "svdw")
    end subroutine test_svdw_f2_r_rA_fd
 
    !> CFC dispatch for the mixed spatial-nuclear FD check
    subroutine test_cfc_f2_r_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rA_fd(error, kind_cfc)
+      call run_f2_r_rA_fd(error, "cfc")
    end subroutine test_cfc_f2_r_rA_fd
 
    !> Mixed spatial-nuclear second derivative vs FD of spatial grad
@@ -985,13 +915,13 @@ contains
    !> SvdW dispatch for the mixed third FD check
    subroutine test_svdw_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rA_fd(error, kind_svdw)
+      call run_f3_rr_rA_fd(error, "svdw")
    end subroutine test_svdw_f3_rr_rA_fd
 
    !> CFC dispatch for the mixed third FD check
    subroutine test_cfc_f3_rr_rA_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rA_fd(error, kind_cfc)
+      call run_f3_rr_rA_fd(error, "cfc")
    end subroutine test_cfc_f3_rr_rA_fd
 
    !> Mixed third derivative (Hess w.r.t. spatial coords, grad w.r.t
@@ -1079,29 +1009,23 @@ contains
    !*                          Radius-derivative FD tests                               *!
    !* ================================================================================= *!
    !
-   ! `R_a` is the *radius* of an active atom, not its position, so `f3_rr_rad`
-   ! and its lower orders carry no trailing derivative index: the rank equals the
-   ! spatial order. These three checks differ from the `_rA` block above in one
-   ! further respect. A nuclear FD can move atoms with `set_centers`, which only
-   ! rebuilds the spatial sort; a radius FD cannot, because the radii are baked
-   ! into every concrete's per-atom cache. `refresh_radii` therefore goes through
-   ! the full `update` and restores `max_deriv` afterwards
+   ! `R_a` denotes radius; `f3_rr_rad` rank equals spatial order
+   ! Nuclear FDs use `set_centers`; radius FDs need cached-radii `update`
+   ! `refresh_radii` restores `max_deriv` after the update
    !
-   ! Both concretes are registered. Their radius channels are built on opposite
-   ! structures -- SvdW's `d/dR_a` is a diagonal rescaling of the atom's own
-   ! tensors, CFC's is a genuine extra derivative of a two-center kernel -- so
-   ! running the same FD against both is worth more than running it twice
+   ! SvdW radius derivative rescales one atom's tensors
+   ! CFC radius derivative differentiates a two-center kernel
 
    !> SvdW dispatch for the radius gradient FD check
    subroutine test_svdw_f1_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rad_fd(error, kind_svdw)
+      call run_f1_rad_fd(error, "svdw")
    end subroutine test_svdw_f1_rad_fd
 
    !> CFC dispatch for the radius gradient FD check
    subroutine test_cfc_f1_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f1_rad_fd(error, kind_cfc)
+      call run_f1_rad_fd(error, "cfc")
    end subroutine test_cfc_f1_rad_fd
 
    !> Radius gradient dS/dR_a vs FD of f0
@@ -1185,13 +1109,13 @@ contains
    !> SvdW dispatch for the mixed spatial-radius FD check
    subroutine test_svdw_f2_r_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rad_fd(error, kind_svdw)
+      call run_f2_r_rad_fd(error, "svdw")
    end subroutine test_svdw_f2_r_rad_fd
 
    !> CFC dispatch for the mixed spatial-radius FD check
    subroutine test_cfc_f2_r_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f2_r_rad_fd(error, kind_cfc)
+      call run_f2_r_rad_fd(error, "cfc")
    end subroutine test_cfc_f2_r_rad_fd
 
    !> Mixed spatial-radius second derivative vs FD of the spatial gradient
@@ -1277,30 +1201,23 @@ contains
    !> SvdW dispatch for the mixed third radius FD check
    subroutine test_svdw_f3_rr_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rad_fd(error, kind_svdw)
+      call run_f3_rr_rad_fd(error, "svdw")
    end subroutine test_svdw_f3_rr_rad_fd
 
    !> CFC dispatch for the mixed third radius FD check
    subroutine test_cfc_f3_rr_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f3_rr_rad_fd(error, kind_cfc)
+      call run_f3_rr_rad_fd(error, "cfc")
    end subroutine test_cfc_f3_rr_rad_fd
 
-   !> FD thresholds of the deep radius checks: CFC gets the same headroom the
-   !> CFC high-order block gets, and for the same reason
+   !> FD thresholds for deep radius checks
    !>
-   !> CFC's radius derivatives grow faster than its nuclear ones. Both bring
-   !> down a factor `|a1| s_a / R_a ~ 7.5`, but `R_a` sits in a *denominator*, so
-   !> each further `d/dR_a` also differentiates `1/R_a` and picks up the extra
-   !> quotient terms; the nuclear derivative has no such chain. That is why
-   !> `f3_rr_rA` clears the tight thresholds for CFC at this step size and
-   !> `f3_rr_rad` does not
+   !> CFC radius derivatives add quotient terms from `1/R_a`
+   !> Nuclear derivatives lack that chain; `f3_rr_rA` clears tighter thresholds
    !>
-   !> Measured, not guessed: at `STEP_SIZE` the three deep radius checks miss the
-   !> tight thresholds by 2-3x, and at half the step all three clear them, which
-   !> is the h**4 the stencil promises and not a defect. `f1_rad` and `f2_r_rad`
-   !> stay on the tight thresholds -- they pass there, and a check that can be
-   !> strict should be
+   !> Deep checks miss tight thresholds by 2-3x at `STEP_SIZE`
+   !> Half step clears them, consistent with fourth-order stencil error
+   !> `f1_rad` and `f2_r_rad` retain tight thresholds
    !>
    !> @param[in]  kind    LSF kind
    !> @param[out] thr_abs Absolute threshold
@@ -1314,7 +1231,7 @@ contains
       real(wp), intent(out) :: thr_rel
 
       select case (kind)
-      case (kind_cfc)
+      case ("cfc")
          thr_abs = CFC_ABS_THR
          thr_rel = CFC_REL_THR
       case default
@@ -1410,32 +1327,26 @@ contains
    !*                Uncontracted two-radius and nuclear-radius FD tests                *!
    !* ================================================================================= *!
    !
-   ! [[run_radius_contracted_vs_pairwise]] ties `f*_radrad` and `f*_rA_rad` to the
-   ! two `hvp_*` rows exactly, but only through one fixed direction pair, and the
-   ! `hvp_*` FD checks differentiate along that same pair. An error shared between
-   ! the two families that cancels in that one contraction survives all three. The
-   ! two drivers below close the hole by differencing element by element: a single
-   ! radius is perturbed on its own, and the entire first-derivative ladder of the
-   ! other slot is differenced against it
+   ! [[run_radius_contracted_vs_pairwise]] checks one direction pair
+   ! Shared errors can cancel under that contraction
+   ! Perturb one radius and difference every element of the other slot
    !
-   ! Perturbing the radius of atom `b` and differencing
-   !   * the `f*_rad` ladder gives the `f*_radrad` column `(.., :, b)`
-   !   * the `f*_rA`  ladder gives the `f*_rA_rad` column `(.., :, b)`
-   ! The second is what pins the *order* of the two atom slots. That family is not
-   ! symmetric in them -- the first index carries a position derivative, the second
-   ! a radius one -- so a transposed implementation can still satisfy the
-   ! contraction identity and fails only here
+   ! Radius perturbation of atom `b` yields:
+   !   * `f*_rad` FD: `f*_radrad(.., :, b)`
+   !   * `f*_rA` FD: `f*_rA_rad(.., :, b)`
+   ! Nuclear-radius slots differ: position first, radius second
+   ! Elementwise FD catches transposition hidden by contraction
 
    !> SvdW dispatch for the two-radius block FD check
    subroutine test_svdw_radrad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radrad_fd(error, kind_svdw)
+      call run_radrad_fd(error, "svdw")
    end subroutine test_svdw_radrad_fd
 
    !> CFC dispatch for the two-radius block FD check
    subroutine test_cfc_radrad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radrad_fd(error, kind_cfc)
+      call run_radrad_fd(error, "cfc")
    end subroutine test_cfc_radrad_fd
 
    !> `f{2,3,4}_*_radrad` vs a one-radius FD of the whole `f*_rad` ladder
@@ -1528,13 +1439,13 @@ contains
    !> SvdW dispatch for the nuclear-radius block FD check
    subroutine test_svdw_rA_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_rA_rad_fd(error, kind_svdw)
+      call run_rA_rad_fd(error, "svdw")
    end subroutine test_svdw_rA_rad_fd
 
    !> CFC dispatch for the nuclear-radius block FD check
    subroutine test_cfc_rA_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_rA_rad_fd(error, kind_cfc)
+      call run_rA_rad_fd(error, "cfc")
    end subroutine test_cfc_rA_rad_fd
 
    !> `f{2,3,4}_*_rA_rad` vs a one-radius FD of the whole `f*_rA` ladder
@@ -1636,31 +1547,20 @@ contains
    !*                    Joint position/radius Hessian-vector products                  *!
    !* ================================================================================= *!
    !
-   ! With `R = R(X)` the contraction direction of the level-set HVP is the joint
-   ! pair `(v_B, vr_B)`. The two checks below step the whole molecule along that
-   ! joint direction at once -- centers by `eps*v`, radii by `eps*vr` -- and
-   ! difference the corresponding first-derivative ladder. That is a genuine
-   ! end-to-end test of the composition: it fails if either half of the
-   ! contraction is missing, and it fails if the two halves are mixed up, because
-   ! `v` and `vr` are chosen unrelated to each other
+   ! For `R = R(X)`, HVP direction combines `(v_B, vr_B)`
+   ! Step centers by `eps*v` and radii by `eps*vr`
+   ! Independent directions expose missing or swapped contraction terms
    !
    ! Two rows are covered:
    !   * `hvp_f*_rad`  radius row, `d/dR_a` retained  -- FD of `f*_rad`
    !   * `hvp_f*_rA`   nuclear row with `vrad` passed -- FD of `f*_rA`
-   ! Between them they exercise all four blocks of the joint Hessian, including
-   ! the radius-radius coupling between different atoms, which no per-atom
-   ! quantity can produce
+   ! Both rows cover all four joint-Hessian blocks, including cross-atom radii
 
-   !> Deterministic, non-symmetric joint direction field, normalized to max 1
+   !> Deterministic asymmetric joint direction, max norm 1
    !>
-   !> The normalization is what makes the FD checks that use this field hold at
-   !> the shared `ABS_THR`/`REL_THR`. The direction sets the *effective* step:
-   !> stepping by `eps*v` with `max|v| = m` gives a four-point central difference
-   !> a truncation error scaling like `(m*eps)**4`, so an unnormalized field whose
-   !> entries grow with the atom index (m ~ 4 at nat = 16) costs two orders of
-   !> magnitude of accuracy for nothing. Scaling to `max|v| = 1` is measured, not
-   !> guessed: without it these checks land at ~1e-9 relative, just above
-   !> `REL_THR`, and the miss grows with molecule size
+   !> FD error scales as `(max|v|*eps)**4`
+   !> Unscaled `max|v| ~ 4` at `nat = 16` yields ~1e-9 relative error
+   !> Unit scaling meets shared `ABS_THR`/`REL_THR`
    !>
    !> @param[in]  nat  Number of atoms
    !> @param[out] v    Nuclear displacement directions [3, nat]
@@ -1680,8 +1580,7 @@ contains
          v(1, ia) = 0.31_wp*real(mod(ia, 7) + 1, wp) - 0.7_wp
          v(2, ia) = -0.17_wp*real(mod(ia, 5) + 1, wp) + 0.4_wp
          v(3, ia) = 0.23_wp*real(mod(ia, 3) + 1, wp)
-         ! Deliberately unrelated to `v`: a real radius model ties the two, and a
-         ! fixture that respected that tie could hide a term mixing them
+         ! Independent of `v` to expose mixed terms
          vrad(ia) = 0.19_wp*real(mod(ia, 4) + 1, wp) - 0.43_wp
       end do
 
@@ -1695,31 +1594,26 @@ contains
    !> SvdW dispatch for the uncontracted radius-block cross-check
    subroutine test_svdw_radius_pairwise(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radius_contracted_vs_pairwise(error, kind_svdw)
+      call run_radius_contracted_vs_pairwise(error, "svdw")
    end subroutine test_svdw_radius_pairwise
 
    !> CFC dispatch for the uncontracted radius-block cross-check
    subroutine test_cfc_radius_pairwise(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_radius_contracted_vs_pairwise(error, kind_cfc)
+      call run_radius_contracted_vs_pairwise(error, "cfc")
    end subroutine test_cfc_radius_pairwise
 
-   !> Contract the uncontracted radius blocks and recover both `hvp_*` rows
+   !> Recover both `hvp_*` rows from uncontracted radius blocks
    !>
-   !> No finite differences anywhere: with `R = R(X)` the joint Hessian-vector
-   !> product is an exact contraction of the four uncontracted blocks, so this
-   !> holds to roundoff and is a far sharper gate than the FD tests above. It is
-   !> the only check that pins `f*_radrad` and `f*_rA_rad` at `REL_THR` rather
-   !> than at the loosened radius-FD thresholds (see [[radius_fd_thr]])
+   !> Exact joint-Hessian contraction for `R = R(X)`; roundoff agreement
+   !> Pin `f*_radrad` and `f*_rA_rad` at `REL_THR`
    !>
-   !> Both rows are verified, which matters because the nuclear-radius block is *not*
-   !> symmetric in its two atom indices:
+   !> Both rows retain asymmetric nuclear-radius atom slots:
    !>
    !>    hvp_f{n}_rad(A)  = sum_B [ v_B . f_rA_rad(:, B, A) + vr_B f_radrad(A, B) ]
-   !>    hvp_f{n}_rA(A,s) = sum_B [ v_B . f_rArB(s, A, :, B) + vr_B f_rA_rad(s, A, B) ]
+   !>    hvp_f{n}_rA(A,s) = sum_B[v_B . f_rArB(s,A,:,B) + vr_B f_rA_rad(s,A,B)]
    !>
-   !> The first reads the nuclear-radius block with the position index on B, the second
-   !> with it on A. A transposed implementation passes neither
+   !> Position index on B in radius row; on A in nuclear row
    subroutine run_radius_contracted_vs_pairwise(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -1876,13 +1770,13 @@ contains
    !> SvdW dispatch for the radius-row HVP FD check
    subroutine test_svdw_hvp_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rad_fd(error, kind_svdw)
+      call run_hvp_rad_fd(error, "svdw")
    end subroutine test_svdw_hvp_rad_fd
 
    !> CFC dispatch for the radius-row HVP FD check
    subroutine test_cfc_hvp_rad_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rad_fd(error, kind_cfc)
+      call run_hvp_rad_fd(error, "cfc")
    end subroutine test_cfc_hvp_rad_fd
 
    !> Radius row `hvp_f*_rad` vs joint-direction FD of the `f*_rad` ladder
@@ -1978,13 +1872,13 @@ contains
    !> SvdW dispatch for the joint nuclear-row HVP FD check
    subroutine test_svdw_hvp_rA_joint_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rA_joint_fd(error, kind_svdw)
+      call run_hvp_rA_joint_fd(error, "svdw")
    end subroutine test_svdw_hvp_rA_joint_fd
 
    !> CFC dispatch for the joint nuclear-row HVP FD check
    subroutine test_cfc_hvp_rA_joint_fd(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_hvp_rA_joint_fd(error, kind_cfc)
+      call run_hvp_rA_joint_fd(error, "cfc")
    end subroutine test_cfc_hvp_rA_joint_fd
 
    !> Nuclear row `hvp_f*_rA(v, res, vrad)` vs joint-direction FD of `f*_rA`
@@ -2087,31 +1981,25 @@ contains
    !*                        Accessors at an empty active list                          *!
    !* ================================================================================= *!
    !
-   ! Screening is allowed to reject every atom -- a point far enough outside the
-   ! molecule contributes nothing -- and that leaves the accessors with no owned
-   ! slot to write. Their normal contract, "writes the first `active_count()`
-   ! slots and leaves the rest alone", degenerates there, and since every result
-   ! is `intent(out)` a bare early return would hand back a buffer the caller is
-   ! not allowed to read. The check below is the only one in this file that
-   ! inspects a *whole* result buffer rather than its active prefix, so it is
-   ! also the only one that can see that difference
+   ! Far-field screening may reject every atom
+   ! `intent(out)` results still require defined buffers at active_count() = 0
+   ! Inspect full buffers; other checks inspect only active prefixes
    !
-   ! Every buffer is poisoned first. Poison surviving the call is exactly the
-   ! symptom: it means the accessor returned without defining its result
+   ! Surviving buffer poison exposes undefined accessor results
 
    !> SvdW dispatch for the empty-active-list check
    subroutine test_svdw_empty_active(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_empty_active(error, kind_svdw)
+      call run_empty_active(error, "svdw")
    end subroutine test_svdw_empty_active
 
    !> CFC dispatch for the empty-active-list check
    subroutine test_cfc_empty_active(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_empty_active(error, kind_cfc)
+      call run_empty_active(error, "cfc")
    end subroutine test_cfc_empty_active
 
-   !> Every radius-channel accessor must define its result when nothing is active
+   !> Check radius-accessor results with no active atoms
    subroutine run_empty_active(error, kind)
       type(error_type), allocatable, intent(out) :: error
       character(len=*), intent(in) :: kind
@@ -2130,8 +2018,7 @@ contains
       call get_test_radii(mol, radii)
       nat = mol%nat
 
-      ! A nonzero threshold is what lets screening reject everything; at the
-      ! default 0 every atom stays a candidate however far away the point is
+      ! Nonzero threshold permits an empty active list
       call init_lsf(lsf, mol, radii, 3, kind, screening_threshold=1.0e-10_wp)
       point = [5.0e2_wp, 5.0e2_wp, 5.0e2_wp]
       if (prepare_failed(lsf, point, error)) return
@@ -2194,8 +2081,7 @@ contains
       call check_all_zero(error, reshape(g3, [size(g3)]), "hvp_f3_rr_rad")
       if (allocated(error)) return
 
-      ! Nuclear row, both with and without a radius direction: the two take
-      ! different branches inside CFC, and only one of them allocates
+      ! CFC nuclear-row branches with and without radius direction
       h1 = EMPTY_POISON; h2 = EMPTY_POISON; h3 = EMPTY_POISON
       call lsf%hvp_f1_rA(v, h1)
       call lsf%hvp_f2_r_rA(v, h2)
@@ -2235,10 +2121,9 @@ contains
                  message=name//" left its result undefined at an empty active list")
    end subroutine check_all_zero
 
-   !> Rebind the LSF to a jointly perturbed geometry and radius vector
+   !> Rebind LSF to perturbed positions and radii
    !>
-   !> `set_centers` alone will not do: the radii move too, and every concrete
-   !> bakes those into its per-atom cache at `update` time
+   !> Radius changes require `update` to refresh per-atom caches
    !>
    !> @param[inout] lsf     Polymorphic LSF, rebound in place
    !> @param[in]    mol     Molecular structure supplying everything but xyz
@@ -2265,14 +2150,10 @@ contains
       call lsf%set_max_deriv(3)
    end subroutine refresh_joint
 
-   !> Rebind the LSF to a perturbed radius vector
+   !> Rebind LSF to perturbed radii
    !>
-   !> The nuclear FDs get away with `set_centers`, which only moves atoms and
-   !> rebuilds the spatial sort. Radii cannot be perturbed that way: every
-   !> concrete bakes them into its per-atom cache at `update` time, so a radius
-   !> FD has to re-run the full `update`. That resets `max_deriv`, hence the
-   !> explicit restore -- without it the first `f012_r` after a perturbation
-   !> would abort in `require_deriv` rather than return a wrong number
+   !> Radius FDs need full `update` for per-atom caches
+   !> Restore `max_deriv` afterward to keep `f012_r` valid
    !>
    !> @param[inout] lsf   Polymorphic LSF, rebound in place
    !> @param[in]    mol   Molecular structure (unchanged)
@@ -2299,13 +2180,13 @@ contains
    !> SvdW dispatch for the Hessian-free value+gradient consistency check
    subroutine test_svdw_f012_hessfree(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f012_hessfree(error, kind_svdw)
+      call run_f012_hessfree(error, "svdw")
    end subroutine test_svdw_f012_hessfree
 
    !> CFC dispatch for the Hessian-free value+gradient consistency check
    subroutine test_cfc_f012_hessfree(error)
       type(error_type), allocatable, intent(out) :: error
-      call run_f012_hessfree(error, kind_cfc)
+      call run_f012_hessfree(error, "cfc")
    end subroutine test_cfc_f012_hessfree
 
    !> `f012_r` skips the Hessian pass when `lsf2_rr` is not requested
@@ -2341,13 +2222,8 @@ contains
                   end if
                   ! Hessian skipped (no lsf2_rr) vs Hessian computed
                   !
-                  ! Agreement is to a few ULP, not bit-for-bit: the SvdW kernel
-                  ! is code-generated with a separate common-subexpression set
-                  ! per derivative order, so the order-1 and order-2 branches
-                  ! reach the same value and gradient by different (equally
-                  ! valid) associations. The measured spread is ~1e-14 relative;
-                  ! what this test still pins is that skipping the Hessian does
-                  ! not change the *answer*
+                  ! SvdW branches use different expression associations
+                  ! Value and gradient agree within a few ULP (~1e-14 relative)
                   call lsf%f012_r(lsf0=v0, lsf1_r=g0)
                   call lsf%f012_r(lsf0=v1, lsf1_r=g1, lsf2_rr=h)
                   call check(error, v0, v1, thr_abs=HESSFREE_ABS, thr_rel=HESSFREE_REL, &
@@ -2370,17 +2246,15 @@ contains
    !*                       SvdW-only sweep helpers                                     *!
    !* ================================================================================= *!
 
-   !> Pick the (blend, gamma) sweep dimensions for the requested kind
-   !> SvdW iterates over the parameter grid; CFC runs a single configuration
-   !> Sampling points per structure for a kind-dispatched driver
+   !> Sampling points per structure for one concrete
    !>
-   !> See the [[n_points_cfc]] note above for why the two kinds differ
+   !> CFC count reflects pair-kernel cost; see [[n_points_cfc]]
    pure function fd_points(kind) result(npts)
       !> Concrete kind selector
       character(len=*), intent(in) :: kind
       !> Number of sampling points to request from `get_test_points`
       integer :: npts
-      if (kind == kind_cfc) then
+      if (kind == "cfc") then
          npts = n_points_cfc
       else
          npts = n_points_svdw
@@ -2394,7 +2268,7 @@ contains
       integer, intent(out) :: nblend
       !> Number of gamma values to sweep
       integer, intent(out) :: ngamma
-      if (kind == kind_svdw) then
+      if (kind == "svdw") then
          nblend = n_svdw_blends
          ngamma = n_svdw_gammas
       else
@@ -2403,17 +2277,15 @@ contains
       end if
    end subroutine svdw_sweep_sizes
 
-   !> i-th SvdW blend_k value, or huge() (treated as "absent") for CFC
-   !> Returned as a function so init_lsf's optional argument is only
-   !> defined for the SvdW kind
+   !> SvdW blend_k value, or `huge()` sentinel for CFC
    pure function svdw_sweep_blend(kind, i) result(val)
       character(len=*), intent(in) :: kind
       integer, intent(in) :: i
       real(wp) :: val
-      if (kind == kind_svdw) then
+      if (kind == "svdw") then
          val = svdw_blend_k_values(i)
       else
-         ! Placeholder; CFC call sites pass this via "optional" wrapping below
+         ! CFC placeholder for optional argument wrapper
          val = 0.0_wp
       end if
    end function svdw_sweep_blend
@@ -2423,7 +2295,7 @@ contains
       character(len=*), intent(in) :: kind
       integer, intent(in) :: i
       real(wp) :: val
-      if (kind == kind_svdw) then
+      if (kind == "svdw") then
          val = svdw_gamma_values(i)
       else
          val = 0.0_wp
@@ -2436,13 +2308,9 @@ contains
 
    !> SvdW nuclear-position second derivative (f2_rArB) vs FD of f1_rA
    !>
-   !> `f2_rArB` is *active-indexed*, like its `f3_r_rArB` and
-   !> `f4_rr_rArB` siblings: `analytic(:, iA, :, iB)` is the block for the
-   !> atoms `active_atom(iA)` / `active_atom(iB)`, and the result is sized
-   !> `(3, n_active, 3, n_active)`. The FD reference below is built per user-space
-   !> atom, so the test asserts the two agree slot by slot after translating the
-   !> active index; with `screening_threshold = 0` every atom stays active and the
-   !> translation is the identity, which the guard below pins down
+   !> Active-indexed `(3, n_active, 3, n_active)` result
+   !> `analytic(:, iA, :, iB)` maps to `active_atom(iA/B)`
+   !> FD uses user IDs; threshold 0 and identity guard align indices
    subroutine test_svdw_f2_rArB(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type), allocatable :: mols(:)
@@ -2466,8 +2334,7 @@ contains
          call get_test_points(mol, points)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         ! FD buffers are sized by mol%nat only and reused across the
-         ! (iblend, igamma, ipt) sweep
+         ! Reuse `mol%nat`-sized FD buffers across parameter sweep
          if (allocated(rA_fwd)) deallocate (rA_fwd)
          if (allocated(rA_fwd2)) deallocate (rA_fwd2)
          if (allocated(rA_bwd)) deallocate (rA_bwd)
@@ -2494,9 +2361,7 @@ contains
                      return
                   end if
                   call prim%f2_rArB(analytic)
-                  ! Active-indexed result, so assert the shape and defer the
-                  ! identity check to the shared helper before the atom loops
-                  ! below index `analytic` with user-space ids
+                  ! Check shape and active-index identity before user-ID reads
                   call check(error, size(analytic, 2), prim%active_count())
                   if (allocated(error)) return
                   call check_identity_active(error, prim, mol%nat)
@@ -2565,10 +2430,8 @@ contains
          call get_test_points(mol, points)
          allocate (centers_base(ndim, mol%nat), centers_local(ndim, mol%nat))
          centers_base = mol%xyz
-         ! f3_r_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
-         ! non-allocatable assumed-shape; passing unallocated allocatables
-         ! is undefined behavior, so size the dummies up front. All
-         ! buffers depend only on mol%nat, so allocate once per icase
+         ! Allocate `intent(in)` assumed-shape buffers before `f3_r_rArB`
+         ! Sizes depend only on `mol%nat`; reuse per case
          if (allocated(dummy_rA)) deallocate (dummy_rA)
          if (allocated(r_rA_fwd)) deallocate (r_rA_fwd)
          if (allocated(r_rA_fwd2)) deallocate (r_rA_fwd2)
@@ -2844,10 +2707,8 @@ contains
          do iat = 1, mol%nat
             atomic_numbers(iat) = mol%num(mol%id(iat))
          end do
-         ! f4_rr_rArB declares lsf1_rA and lsf2_r_rA as intent(in)
-         ! non-allocatable assumed-shape; passing unallocated allocatables
-         ! is undefined behavior, so size the dummies to the active-atom
-         ! count up front. Both depend only on mol%nat
+         ! Allocate `intent(in)` assumed-shape buffers before `f4_rr_rArB`
+         ! Size by active-atom count
          if (allocated(dummy_rA)) deallocate (dummy_rA)
          if (allocated(dummy_r_rA)) deallocate (dummy_r_rA)
          allocate (dummy_rA(ndim, mol%nat), dummy_r_rA(ndim, ndim, mol%nat))
@@ -3020,22 +2881,18 @@ contains
       end do
    end subroutine test_svdw_normalized_f1_rA
 
-   !> SvdW body-order weight reduction sanity check
+   !> Check SvdW body-order weight reductions
    !>
-   !> Verify that selecting blend_2b=1 (pure pair-mean) collapses to the
-   !> average of two atom SSDs, and blend_3b=1 (pure triple-mean) collapses
-   !> to the mean of three atom SSDs
+   !> `blend_2b=1`: mean of two atom SSDs
+   !> `blend_3b=1`: mean of three atom SSDs
    !* ================================================================================= *!
    !*                    Direction-contracted nuclear derivatives                       *!
    !* ================================================================================= *!
 
-   !> The `tangent_*` / `hvp_*` / `vjp_*` accessors must equal the explicit contraction
+   !> Check `tangent_*`, `hvp_*`, and `vjp_*` contractions
    !>
-   !> All three families exist only so a caller never has to form the full nuclear
-   !> tensors; that is worth nothing unless they agree with them. This contracts
-   !> the full tensors by hand against the same direction field and compares
-   !> Cheap and total: it exercises every contracted binding against an
-   !> independently derived sibling rather than against a finite difference
+   !> Compare each binding with explicit full-tensor contraction
+   !> Independent sibling checks at roundoff, without finite differences
    subroutine test_svdw_contracted(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type), allocatable :: mols(:)
@@ -3063,7 +2920,7 @@ contains
          call get_test_radii(mol, radii)
          call get_test_points(mol, points)
 
-         ! A deterministic, non-symmetric direction field
+         ! Deterministic asymmetric direction field
          if (allocated(v)) deallocate (v)
          allocate (v(ndim, nat))
          do iA = 1, nat
@@ -3240,19 +3097,13 @@ contains
    !*                              CFC-only extension tests                             *!
    !* ================================================================================= *!
    !
-   ! The CFC twins of the SvdW-only block above. They are separate subroutines
-   ! rather than shared dispatches because the SvdW originals sweep the
-   ! `blend_k` x `gamma` parameter grid, which CFC has no analogue of: its four
-   ! shape parameters are compiled-in constants. Everything else -- fixtures,
-   ! step size, FD stencil, index conventions -- is identical, so the two blocks
-   ! can be diffed against each other
+   ! CFC counterparts of SvdW high-order checks
+   ! Separate dispatch: SvdW sweeps `blend_k` x `gamma`; CFC shape is fixed
+   ! Shared fixtures, step, stencil, and index conventions
    !
-   ! CFC's exponents (a1 = -15, a2 = -9) make its high-order derivatives an order
-   ! of magnitude stiffer than SvdW's, so the fourth-order finite differences
-   ! carry visibly more truncation error at the shared step size. That is what
-   ! `CFC_ABS_THR` / `CFC_REL_THR` are for; they are FD-stencil headroom, not a
-   ! statement about the analytic derivatives, which the exact
-   ! `cfc_contracted_vs_pairwise` cross-check below pins at roundoff
+   ! CFC exponents (-15, -9) increase order-4 FD truncation error
+   ! `CFC_ABS_THR` / `CFC_REL_THR` allow stencil headroom
+   ! `cfc_contracted_vs_pairwise` checks analytic derivatives at roundoff
 
    !> CFC nuclear-position second derivative (f2_rArB) vs FD of f1_rA
    subroutine test_cfc_f2_rArB(error)
@@ -3299,9 +3150,7 @@ contains
                return
             end if
             call prim%f2_rArB(analytic)
-            ! Active-indexed result: assert the shape and that the active list
-            ! is the identity here, so the atom loops below may index
-            ! `analytic` with user-space ids
+            ! Check active shape and identity before user-ID reads
             call check(error, size(analytic, 2), prim%active_count())
             if (allocated(error)) return
             call check(error, prim%active_count(), mol%nat)
@@ -3735,16 +3584,11 @@ contains
       end do
    end subroutine test_cfc_normalized_f1_rA
 
-   !> The CFC `tangent_*` / `hvp_*` accessors must equal the explicit contraction
+   !> Check CFC `tangent_*` and `hvp_*` contractions
    !>
-   !> The CFC twin of [[test_svdw_contracted]], and the highest-value single test
-   !> of this block: it exercises all four `tangent_*` and all three `hvp_*`
-   !> bindings against the uncontracted tensors they are supposed to summarise,
-   !> which are themselves finite-difference tested above. The two sides are
-   !> genuinely independent -- the contracted families come out of a different
-   !> derivation ladder in the generated kernel (`tg`/`hv`) than the uncontracted
-   !> ones (`qn`/`qq`), and a sign or index error in either shows up here at
-   !> roundoff rather than at finite-difference resolution
+   !> Four `tangent_*` and three `hvp_*` bindings vs uncontracted tensors
+   !> Independent kernel ladders: contracted `tg`/`hv`, uncontracted `qn`/`qq`
+   !> Expose sign and index errors at roundoff
    subroutine test_cfc_contracted(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type), allocatable :: mols(:)
@@ -3772,7 +3616,7 @@ contains
          call get_test_radii(mol, radii)
          call get_test_points(mol, points, n_points_cfc)
 
-         ! A deterministic, non-symmetric direction field
+         ! Deterministic asymmetric direction field
          if (allocated(v)) deallocate (v)
          allocate (v(ndim, nat))
          do iA = 1, nat
@@ -3896,10 +3740,8 @@ contains
             end do
 
             !* ---------------------------- vjp_f1_rA --------------------------- *!
-            ! The reverse mirror of `tangent_*`: the jet indices are contracted
-            ! away, the nuclear index survives. The weights are deliberately
-            ! non-symmetric in `w2` -- a kernel that folded the Hessian slot
-            ! into a symmetric half would pass a symmetric probe and fail here
+            ! Reverse `tangent_*`: contract jet indices, retain nuclear index
+            ! Asymmetric `w2` exposes folded Hessian slots
             w0_adj = 0.37_wp
             w1_adj = [0.19_wp, -0.53_wp, 0.71_wp]
             do k = 1, ndim
@@ -3921,9 +3763,7 @@ contains
             end do
 
             !* --------------------------- vjp_f1_rad --------------------------- *!
-            ! The same contraction against the radius ladder. A radius is a
-            ! scalar parameter, so the surviving index is the atom alone and
-            ! the result is one number per active slot
+            ! Radius-ladder contraction; one scalar per active atom
             call prim%f3_rr_rad(rad1, rad2, rad3)
             call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
             do iA = 1, prim%active_count()
@@ -3935,11 +3775,8 @@ contains
             end do
 
             !* ---------------- nuclear Hessian exchange symmetry ---------------- *!
-            ! d2S/(dR_A dR_B) must equal d2S/(dR_B dR_A) under a simultaneous
-            ! swap of both nuclear slots. The two sides come from *different*
-            ! kernel calls (the `qq` cross block is built with A in the pair's
-            ! `a` slot and B in its `b` slot, and vice versa), so this is a real
-            ! check of the two-nucleus lift, not an identity
+            ! Swap both nuclear slots in d2S/(dR_A dR_B)
+            ! Compare distinct `qq` pair calls with A/B reversed
             do iB = 1, prim%active_count()
                do iA = 1, prim%active_count()
                   do t_ax = 1, ndim
@@ -3960,18 +3797,13 @@ contains
    !*                          A point sitting on a nucleus                             *!
    !* ================================================================================= *!
 
-   !> No accessor may produce NaN or Inf at a point that lands on a nucleus
+   !> Require finite accessors at a nucleus
    !>
-   !> The signed sphere distance `||r - R_A||` is not differentiable there, and
-   !> the generated kernel divides by it from the first derivative onwards. The
-   !> LSF intercepts that case (see `atom_tensors`): the atom keeps its value
-   !> contribution and loses every derivative one, which is the convention the
-   !> retired SSD fill used. This pins that the guard is actually in the path of
-   !> *every* accessor -- a single unguarded call site would show up as a NaN
+   !> `||r - R_A||` is nondifferentiable at nucleus; kernel divides by it
+   !> `atom_tensors` keeps value and zeros derivative contributions
+   !> Exercise guard through every accessor
    !>
-   !> The value is additionally checked for continuity against a point a
-   !> whisker off the nucleus: `f0` itself is continuous there, only its
-   !> derivatives are not
+   !> Check continuous `f0` against a nearby point
    subroutine test_svdw_on_nucleus(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -4090,7 +3922,7 @@ contains
                  "hvp_* is not finite on a nucleus")
       if (allocated(error)) return
 
-      ! The value is continuous across the nucleus even though its slope is not
+      ! Value continuous across nucleus; slope discontinuous
       point = centers(:, 2) + [nudge, 0.0_wp, 0.0_wp]
       call prim%prepare(point, lsf_err)
       call prim%f0(f0_near)
@@ -4098,7 +3930,7 @@ contains
                  more="f0 jumps at a nucleus")
    end subroutine test_svdw_on_nucleus
 
-   !> Is this scalar a finite number?
+   !> Finiteness of a scalar
    !>
    !> @param[in] x Value to test
    !> @returns     `.true.` unless `x` is NaN or infinite
@@ -4108,7 +3940,7 @@ contains
       ok = (x == x) .and. abs(x) <= huge(1.0_wp)
    end function finite0
 
-   !> Is every element of a rank-1 array finite?
+   !> Finiteness of a rank-1 array
    !>
    !> @param[in] x Array to test
    !> @returns     `.true.` unless any element is NaN or infinite
@@ -4122,7 +3954,7 @@ contains
       end do
    end function finiten
 
-   !> Is every element of a vector finite?
+   !> Finiteness of a vector
    !>
    !> @param[in] x Vector to test
    !> @returns     `.true.` unless any element is NaN or infinite
@@ -4132,7 +3964,7 @@ contains
       ok = finiten(x)
    end function finite1
 
-   !> Is every element of a matrix finite?
+   !> Finiteness of a matrix
    !>
    !> @param[in] x Matrix to test
    !> @returns     `.true.` unless any element is NaN or infinite
@@ -4142,7 +3974,7 @@ contains
       ok = finiten(reshape(x, [size(x)]))
    end function finite2
 
-   !> Is every element of a rank-3 tensor finite?
+   !> Finiteness of a rank-3 tensor
    !>
    !> @param[in] x Tensor to test
    !> @returns     `.true.` unless any element is NaN or infinite
@@ -4154,10 +3986,8 @@ contains
 
    !> Signed distance from a point to a sphere surface
    !>
-   !> The reference expression the body-order reduction is checked against
-   !> Spelled out here rather than imported: the level set function no longer
-   !> owns a signed-distance module, the kernel is symbolic in the screening
-   !> factors instead
+   !> Reference for body-order reduction
+   !> Local expression; LSF has no signed-distance module
    !>
    !> @param[in] point  Evaluation coordinates [3]
    !> @param[in] center Sphere center [3]
@@ -4241,20 +4071,14 @@ contains
    !*                        Surface-free exclusion certificate                          *!
    !* ================================================================================= *!
 
-   !> Probe the boundary of every ball the LSF certifies as surface-free
+   !> Probe certified surface-free ball boundaries
    !>
-   !> `exclusion_radius(S(x))` promises that `S` has no zero inside `B(x, r)`
-   !> The certified branch search rests entirely on that promise -- a radius one
-   !> per cent too large silently hides branches -- so this walks a spread of
-   !> points, takes the radius the LSF claims and insists `S` keeps its sign on
-   !> the boundary of the ball it claims
+   !> `exclusion_radius(S(x))` promises no zero inside `B(x, r)`
+   !> Require unchanged sign across each claimed boundary
    !>
-   !> Sampling stops just inside at `0.999 r`, because a claim can be tight:
-   !> SvdW's `r = |S|` puts points at exactly `r` on the surface
+   !> Probe `0.999 r` to allow tight SvdW `r = |S|` claims
    !>
-   !> `n_certified` counts the points that produced a positive radius. A caller
-   !> has to check it: an LSF certifying nothing everywhere would pass every
-   !> probe below without ever being tested
+   !> Caller checks `n_certified > 0` to avoid vacuous success
    !>
    !> @param[inout] lsf          LSF bound to the structure the points came from
    !> @param[in]    points       Sampling points (3, npoint)
@@ -4278,8 +4102,7 @@ contains
       real(wp) :: lsf_center, lsf_probe, r
       integer :: ipoint, idir
 
-      ! A deterministic spread of probe directions; no RNG, so a failure here
-      ! reproduces exactly
+      ! Deterministic probe directions for reproducible failures
       integer, parameter :: ndir = 14
       real(wp), parameter :: dirs(ndim, ndir) = reshape([ &
                              1.0_wp, 0.0_wp, 0.0_wp, -1.0_wp, 0.0_wp, 0.0_wp, &
@@ -4328,11 +4151,9 @@ contains
       end do
    end subroutine probe_exclusion_balls
 
-   !> The SvdW exclusion radius must never over-claim, at any blend sharpness
+   !> Check SvdW exclusion radius across blend sharpness
    !>
-   !> The claim is `r = |S(x)|` from the 1-Lipschitz property, and it is tight,
-   !> so this is the one certificate whose probes can legitimately sit arbitrarily
-   !> close to the surface
+   !> Tight `r = |S(x)|` claim from 1-Lipschitz property
    subroutine test_svdw_exclusion_radius(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -4346,7 +4167,7 @@ contains
       call get_test_points(mol, points)
 
       do iblend = 1, n_svdw_blends
-         call init_lsf(lsf, mol, radii, 0, kind_svdw, &
+         call init_lsf(lsf, mol, radii, 0, "svdw", &
                        blend_k=svdw_blend_k_values(iblend))
 
          call probe_exclusion_balls(lsf, points, n_certified, error)
@@ -4360,10 +4181,8 @@ contains
       end do
    end subroutine test_svdw_exclusion_radius
 
-   !> The 1-Lipschitz bound needs non-negative blend coefficients. With a
-   !> negative one the weighted mean of unit vectors becomes an extrapolation,
-   !> the bound is lost, and the LSF must decline to certify anything rather
-   !> than hand back a radius it cannot stand behind
+   !> Negative blend coefficients invalidate 1-Lipschitz bound
+   !> Require no certificate under extrapolated weights
    subroutine test_svdw_exclusion_radius_gate(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -4374,24 +4193,20 @@ contains
       call get_structure(mol, "MB16-43", "LiH")
       call get_test_radii(mol, radii)
 
-      call init_lsf(lsf, mol, radii, 0, kind_svdw, blend_2b=1.0_wp)
+      call init_lsf(lsf, mol, radii, 0, "svdw", blend_2b=1.0_wp)
       call check(error, lsf%exclusion_radius(-1.0_wp), 1.0_wp, thr=0.0_wp, &
                  message="non-negative blends should certify r = |S|")
       if (allocated(error)) return
 
-      call init_lsf(lsf, mol, radii, 0, kind_svdw, blend_2b=-1.0_wp)
+      call init_lsf(lsf, mol, radii, 0, "svdw", blend_2b=-1.0_wp)
       call check(error, lsf%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="a negative blend coefficient must certify nothing")
    end subroutine test_svdw_exclusion_radius_gate
 
-   !> The CFC exclusion radius must never over-claim
+   !> Check CFC exclusion radius
    !>
-   !> CFC's `S = -log PD` is not a distance, so its claim is `r = |S| / L` with
-   !> `L` the cached Lipschitz bound of the log pseudo-density. `L` is a proven
-   !> over-estimate of `sup ||grad S||` rather than the exact supremum, so unlike
-   !> SvdW's the balls are typically a factor of a few smaller than they could
-   !> be -- the direction that makes the certificate safe. This checks the
-   !> promise itself, not its sharpness
+   !> `S = -log PD`; claim `r = |S| / L` with cached Lipschitz bound
+   !> Conservative `L >= sup ||grad S||` favors smaller, safe balls
    subroutine test_cfc_exclusion_radius(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -4400,11 +4215,8 @@ contains
       real(wp), allocatable :: radii(:), points(:, :)
       integer :: icase, n_certified, n_total
 
-      ! The bound carries an `(n - 1)**(1/m)` term and picks its length scale
-      ! from the two smallest radii in the structure, so it is swept over the
-      ! whole fixture palette rather than one molecule: the failure mode being
-      ! guarded against is a bound that is fine for one size and radius mix and
-      ! too large for another
+      ! Sweep fixture sizes and radii for `(n - 1)**(1/m)` bound
+      ! Length scale uses two smallest radii
       call get_test_structures(mols, 10)
 
       n_total = 0
@@ -4412,7 +4224,7 @@ contains
          call get_test_radii(mols(icase), radii)
          call get_test_points(mols(icase), points)
 
-         call init_lsf(lsf, mols(icase), radii, 0, kind_cfc)
+         call init_lsf(lsf, mols(icase), radii, 0, "cfc")
 
          call probe_exclusion_balls(lsf, points, n_certified, error)
          if (allocated(error)) return
@@ -4425,14 +4237,12 @@ contains
       end if
    end subroutine test_cfc_exclusion_radius
 
-   !> The CFC certificate covers one family of parameterizations, not all of them
+   !> CFC certificate parameter limits
    !>
-   !> The closed form rests on three properties of the shape parameters: both
-   !> exponents decay (`a1, a2 < 0`), the pair term is non-negative (`c >= 0` and
-   !> `m` even, which is also what keeps `PD` positive and `log PD` defined), and
-   !> the pair term decays faster than the atomic one (`2|a2| > |a1|`), which is
-   !> what lets a pair gradient be charged against the atoms it sits between
-   !> Break any of them and the answer has to be "no certificate"
+   !> - Decaying exponents: `a1, a2 < 0`
+   !> - Nonnegative pair term: `c >= 0`, even `m`; positive `PD`
+   !> - Faster pair decay: `2|a2| > |a1|`
+   !> Any violation disables certification
    subroutine test_cfc_exclusion_radius_gate(error)
       type(error_type), allocatable, intent(out) :: error
 
@@ -4444,10 +4254,8 @@ contains
       call get_structure(mol, "MB16-43", "LiH")
       call get_test_radii(mol, radii)
 
-      ! Diedenhofen-Klamt defaults on LiH: the two CPCM radii are 2.46 and 3.87
-      ! Bohr, giving L = 8.4 / Bohr and a certified radius of 0.119 Bohr per unit
-      ! of |S|. The band only has to catch a formula that lost a radius, an
-      ! exponent or a unit
+      ! LiH CPCM radii 2.46 and 3.87 Bohr; L = 8.4 / Bohr
+      ! Certificate 0.119 Bohr per |S|; catches radius, exponent, or unit errors
       call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=4))
       call cfc%update(mol, radii)
       r = cfc%exclusion_radius(-1.0_wp)
@@ -4457,12 +4265,12 @@ contains
          return
       end if
 
-      ! The certificate is linear in the value it is given
+      ! Certificate linear in supplied value
       call check(error, cfc%exclusion_radius(-3.0_wp), 3.0_wp*r, thr=0.0_wp, &
                  message="the certified radius must scale with |S|")
       if (allocated(error)) return
 
-      ! 2|a2| < |a1|: the pair term outlives the atomic terms that pay for it
+      ! `2|a2| < |a1|`: pair term outlives atomic terms
       call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=-15.0_wp, a2=-7.0_wp, c=5.0_wp, m=4))
       call cfc%update(mol, radii)
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
@@ -4470,21 +4278,21 @@ contains
                  "must certify nothing")
       if (allocated(error)) return
 
-      ! Odd pair power: `u**m` is not `|u|**m` and `PD` can go negative
+      ! Odd `m`: `u**m` may make `PD` negative
       call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=3))
       call cfc%update(mol, radii)
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="an odd pair power must certify nothing")
       if (allocated(error)) return
 
-      ! Negative coupling: same loss of positivity from the other direction
+      ! Negative coupling can make `PD` negative
       call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=-15.0_wp, a2=-9.0_wp, c=-5.0_wp, m=4))
       call cfc%update(mol, radii)
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="a negative pair coupling must certify nothing")
       if (allocated(error)) return
 
-      ! A growing atomic term is not a level set this bound covers either
+      ! Growing atomic term lies outside the bound
       call cfc%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=1.0_wp, a2=-9.0_wp, c=5.0_wp, m=4))
       call cfc%update(mol, radii)
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &

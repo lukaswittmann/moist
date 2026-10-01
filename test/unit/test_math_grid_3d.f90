@@ -18,17 +18,19 @@ module test_math_grid_3d
    use mctc_io_constants, only: pi
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
-   use test_helpers, only: center_at_origin
+   use test_helpers, only: center_at_origin, get_uniform_recipe, get_handymod_recipe, &
+      & get_qc_handymod_recipe
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_r2c_3d_batch
    use moist_math_grid_3d_base, only: moist_math_grid_3d_type, moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
       & new_cartesian_grid_3d
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
+      & moist_math_grid_atomic_recipe_override_type, default_element_recipes
+   use moist_math_grid_3d_partition, only: becke_partition_weights
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_grid, new_molecular_grid_uniform, new_molecular_grid_uniform_handymod, &
-      & new_molecular_grid_uniform_qc_handymod, &
-      & molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo
-   use moist_math_quadrature_becke, only: becke_weights
+      & new_molecular_grid, molecular_grid_set_kgrid, moist_math_grid_3d_molecular_trafo_type, &
+      & new_molecular_grid_trafo
    implicit none(type, external)
    private
 
@@ -100,7 +102,7 @@ contains
                      & should_fail=.true.), &
                   new_unittest("molecular_bad_point_count", test_point_count_overflow_fails, &
                      & should_fail=.true.), &
-                  new_unittest("molecular_bad_fractional_handymod_m", test_handymod_fractional_fails, &
+                  new_unittest("molecular_bad_nonpositive_handymod_m", test_handymod_nonpositive_fails, &
                      & should_fail=.true.), &
                   new_unittest("molecular_bad_huge_handymod_m", test_handymod_huge_fails, should_fail=.true.), &
                   new_unittest("molecular_trafo_bad_unprepared_forward", test_trafo_unprepared_r2k_fails, &
@@ -597,10 +599,16 @@ contains
       type(mctc_error), allocatable, intent(out) :: err
 
       type(structure_type) :: mol
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
 
       call get_structure(mol, "MB16-43", "H2")
       call center_at_origin(mol)
-      call new_molecular_grid_uniform(mgrid, mol, nrad=12, nang=26, error=err, rmax=4.0_wp)
+      call get_uniform_recipe(recipe, overrides, 12, 26, err, rmax=4.0_wp)
+      if (allocated(err)) return
+      call new_molecular_grid(mgrid, err, recipe=recipe, overrides=overrides, reciprocal=.false.)
+      if (allocated(err)) return
+      call mgrid%update(mol, err)
       if (allocated(err)) return
       call molecular_grid_set_kgrid(mgrid, 0.8_wp, err)
       if (allocated(err)) return
@@ -765,6 +773,8 @@ contains
       type(moist_math_grid_3d_molecular_trafo_type) :: mtrafo
       type(moist_math_grid_3d_cartesian_type), target :: cgrid
       class(moist_math_grid_3d_trafo_type), allocatable :: ctrafo
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
 
       !> Softened LJ + screened Coulomb model parameters (see field helper)
       real(wp), parameter :: dsoft = 3.5_wp, kappa = 0.5_wp
@@ -789,8 +799,10 @@ contains
       end do
 
       ! --- Molecular grid + NUFFT of the field ---
-      call new_molecular_grid_uniform(mgrid, mol, nrad=40, nang=110, error=merr, &
-         & rmax=8.0_wp)
+      call get_uniform_recipe(recipe, overrides, 40, 110, merr, rmax=8.0_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(mgrid, merr, recipe=recipe, &
+         & overrides=overrides, reciprocal=.false.)
+      if (.not. allocated(merr)) call mgrid%update(mol, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
@@ -905,7 +917,7 @@ contains
       call cgrid%destroy()
    end subroutine test_ft_lj_coulomb
 
-   !> Direct quadrature constructors retain their recipe across geometry changes
+   !> Molecular grids retain their recipe across geometry changes
    !>
    !> - Every recipe: translation moves points rigidly and keeps the weights
    !> - After a small stretch, update matches a freshly constructed grid
@@ -964,9 +976,10 @@ contains
       end do
    end subroutine test_direct_updates
 
-   !> Direct molecular updates retain the configured reciprocal reference convention
+   !> Molecular updates retain an explicitly set reciprocal reference convention
    !>
-   !> - Default centroid reference and explicit reference
+   !> - Grid built without a reciprocal grid, then `molecular_grid_set_kgrid`
+   !>   with the first-point reference and with an explicit reference
    !> - update keeps kref, mode counts and spacings, translation moves kref with
    !>   the molecule, rebuild keeps the translated kref
    subroutine test_direct_period(error)
@@ -974,6 +987,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol
       real(wp) :: reference(3), dk(3), shift(3)
       integer :: modes(3), policy
@@ -982,7 +996,9 @@ contains
       do policy = 1, 2
          call new(mol, [1, 1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
             & 0.0_wp, 1.0_wp, 0.0_wp, 10.0_wp, 0.0_wp, 0.0_wp], [3, 3]))
-         call new_molecular_grid_uniform_qc_handymod(grid, mol, 8, 17, err, 0.0_wp, 4.0_wp, 2.0_wp)
+         call get_qc_handymod_recipe(recipe, err, nrad=8, degree=17, rmin=0.0_wp, rmax=4.0_wp, m=2.0_wp)
+         if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe, reciprocal=.false.)
+         if (.not. allocated(err)) call grid%update(mol, err)
          call require_success(error, err)
          if (allocated(error)) return
          if (policy == 1) then
@@ -1018,40 +1034,59 @@ contains
       end do
    end subroutine test_direct_period
 
-   !> Exercise direct constructors with non-default partitioning and angular settings
+   !> Construct and realize molecular grids with non-default partitioning and angular settings
    !>
-   !> @param[out] grid    molecular grid
+   !> 1. Per-element defaults, Becke k = 2, pruning threshold 0.05
+   !> 2. Chebyshev-II x Becke, radial cutoffs [0.1, 5], SSF
+   !> 3. Chebyshev-II x HandyMod, Becke k = 1, pruning threshold 0.1
+   !> 4. Midpoint x HandyMod, constant degree 5, SSF
+   !> 5. Midpoint x HandyMod, arc bands with floor and cap, Becke k = 1
+   !>
+   !> @param[out] grid    molecular grid, realized at `mol`
    !> @param[in]  mol     molecular structure
-   !> @param[in]  recipe  constructor selection, 1 to 5
+   !> @param[in]  recipe  recipe selection, 1 to 5
    !> @param[out] error   library error, set for an unknown recipe
    subroutine construct_direct_grid(grid, mol, recipe, error)
       !> Molecular grid
       type(moist_math_grid_3d_molecular_type), intent(out) :: grid
       !> Molecular structure
       type(structure_type), intent(in) :: mol
-      !> Constructor selection
+      !> Recipe selection
       integer, intent(in) :: recipe
       !> Library error
       type(mctc_error), allocatable, intent(out) :: error
+
+      type(moist_math_grid_atomic_recipe_type) :: atomic
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
+
       select case (recipe)
       case (1)
-         call new_molecular_grid(grid, mol, error, becke_k=2, becke_thr=0.05_wp)
+         call default_element_recipes(atomic, overrides, error)
+         if (.not. allocated(error)) call new_molecular_grid(grid, error, recipe=atomic, &
+            & overrides=overrides, becke_k=2, pruning_threshold=0.05_wp, reciprocal=.false.)
       case (2)
-         call new_molecular_grid_uniform(grid, mol, 12, 26, error, &
-            & rmin=0.1_wp, rmax=5.0_wp, becke_ssf_a=0.64_wp)
+         call get_uniform_recipe(atomic, overrides, 12, 26, error, rmin=0.1_wp, rmax=5.0_wp)
+         if (.not. allocated(error)) call new_molecular_grid(grid, error, recipe=atomic, &
+            & overrides=overrides, ssf_a=0.64_wp, reciprocal=.false.)
       case (3)
-         call new_molecular_grid_uniform_handymod(grid, mol, 12, 26, error, &
-            & 0.0_wp, 5.0_wp, 2, becke_k=1, becke_thr=0.1_wp)
+         call get_handymod_recipe(atomic, 12, 26, 0.0_wp, 5.0_wp, 2.0_wp, error)
+         if (.not. allocated(error)) call new_molecular_grid(grid, error, recipe=atomic, &
+            & becke_k=1, pruning_threshold=0.1_wp, reciprocal=.false.)
       case (4)
-         call new_molecular_grid_uniform_qc_handymod(grid, mol, 12, 5, error, &
-            & 0.0_wp, 5.0_wp, 2.0_wp, becke_ssf_a=0.64_wp)
+         call get_qc_handymod_recipe(atomic, error, nrad=12, degree=5, rmin=0.0_wp, rmax=5.0_wp, &
+            & m=2.0_wp)
+         if (.not. allocated(error)) call new_molecular_grid(grid, error, recipe=atomic, &
+            & ssf_a=0.64_wp, reciprocal=.false.)
       case (5)
-         call new_molecular_grid_uniform_qc_handymod(grid, mol, 12, 5, error, &
-            & 0.0_wp, 5.0_wp, 2.0_wp, becke_k=1, arc_r=[1.0_wp], &
-            & arc_a=[0.5_wp, 1.0_wp], nang_min=110, nang_max=302)
+         call get_qc_handymod_recipe(atomic, error, nrad=12, rmin=0.0_wp, rmax=5.0_wp, m=2.0_wp, &
+            & arc_r=[1.0_wp], arc_a=[0.5_wp, 1.0_wp], nang_min=110, nang_max=302)
+         if (.not. allocated(error)) call new_molecular_grid(grid, error, recipe=atomic, &
+            & becke_k=1, reciprocal=.false.)
       case default
          call fatal_error(error, "unknown test quadrature recipe")
       end select
+      if (allocated(error)) return
+      call grid%update(mol, error)
    end subroutine construct_direct_grid
 
    !> Forward a library error into the test framework
@@ -1141,17 +1176,18 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: domain
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol
       real(wp), allocatable :: xyz(:, :), weights(:)
       integer, allocatable :: owner(:)
       real(wp) :: shift(3), dk(3), center(3)
       integer :: modes(3), i
+      !> Outer HandyMod radius (bohr)
+      real(wp), parameter :: rmax = 4.0_wp
 
-      domain%nrad = 12
-      domain%rmax = 4.0_wp
-      domain%dr = 1.0_wp
-      domain%kbuffer = 1.0_wp
-      call domain%validate(err)
+      call get_qc_handymod_recipe(recipe, err, nrad=12, rmax=rmax)
+      if (.not. allocated(err)) call new_molecular_grid(domain, err, recipe=recipe, dr=1.0_wp, &
+         & kbuffer=1.0_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call new(mol, [1, 1], reshape([-0.7_wp, 0.0_wp, 0.0_wp, 0.7_wp, 0.0_wp, 0.0_wp], [3, 2]))
@@ -1189,7 +1225,7 @@ contains
       call check(error, all(domain%owner >= 1 .and. domain%owner <= mol%nat))
       if (allocated(error)) return
       do i = 1, domain%ngrid
-         if (sqrt(sum((domain%xyz(:, i) - mol%xyz(:, domain%owner(i)))**2)) >= domain%rmax) then
+         if (sqrt(sum((domain%xyz(:, i) - mol%xyz(:, domain%owner(i)))**2)) >= rmax) then
             call test_failed(error, "molecular point does not follow its owning atom")
             return
          end if
@@ -1229,12 +1265,11 @@ contains
       real(wp) :: volume
       integer :: zero_mode
       real(wp), parameter :: two_pi = 8.0_wp*atan(1.0_wp)
+      type(moist_math_grid_atomic_recipe_type) :: recipe
 
-      domain%nrad = 12
-      domain%rmax = 4.0_wp
-      domain%dr = 1.0_wp
-      domain%nufft_tol = 1.0e-10_wp
-      call domain%validate(err)
+      call get_qc_handymod_recipe(recipe, err, nrad=12, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(domain, err, recipe=recipe, dr=1.0_wp, &
+         & nufft_tol=1.0e-10_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
@@ -1290,14 +1325,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: domain
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol
 
-      domain%nrad = 8
-      domain%rmax = 4.0_wp
-      domain%gaussian = .true.
-      domain%xi0_factor = 1.2_wp
-      domain%ssf_a = 0.64_wp
-      call domain%validate(err)
+      call get_qc_handymod_recipe(recipe, err, nrad=8, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(domain, err, recipe=recipe, gaussian=.true., &
+         & xi0_factor=1.2_wp, ssf_a=0.64_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call new(mol, [1, 1], reshape([-0.7_wp, 0.0_wp, 0.0_wp, 0.7_wp, 0.0_wp, 0.0_wp], [3, 2]))
@@ -1306,7 +1339,7 @@ contains
       if (allocated(error)) return
       call check(error, allocated(domain%xi0) .and. domain%has_geometry_dependent_xi0())
       if (allocated(error)) return
-      call check(error, maxval(abs(domain%xi0**3*domain%w - domain%xi0_factor**3)) < 1.0e-13_wp)
+      call check(error, maxval(abs(domain%xi0**3*domain%w - domain%get_xi0_factor()**3)) < 1.0e-13_wp)
       if (allocated(error)) return
       call check(error, size(domain%xi0), domain%ngrid)
    end subroutine test_molecular_gaussian
@@ -1320,27 +1353,23 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: domain, raw
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol, atom
-      real(wp), allocatable :: before(:), expected(:)
-      real(wp) :: point(3), partition(2), weight
+      real(wp), allocatable :: before(:), expected(:), points(:, :), partition(:)
+      real(wp) :: point(3), weight
       integer :: i, j, site, step, previous_count, modes(3)
 
-      domain%nrad = 8
-      domain%rmax = 4.0_wp
-      domain%dr = 1.0_wp
-      domain%becke_k = 1
+      call get_qc_handymod_recipe(recipe, err, nrad=8, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(raw, err, recipe=recipe, dr=1.0_wp, becke_k=1)
       call new(atom, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      raw = domain
-      call raw%validate(err)
       if (.not. allocated(err)) call raw%update(atom, err)
       call require_success(error, err)
       if (allocated(error)) return
-      domain%pruning_threshold = 0.1_wp
-      call domain%validate(err)
+      call new_molecular_grid(domain, err, recipe=recipe, dr=1.0_wp, becke_k=1, pruning_threshold=0.1_wp)
       call require_success(error, err)
       if (allocated(error)) return
       call new(mol, [1, 1], reshape([-0.7_wp, 0.0_wp, 0.0_wp, 0.7_wp, 0.0_wp, 0.0_wp], [3, 2]))
-      allocate (before(2*raw%ngrid), expected(2*raw%ngrid))
+      allocate (before(2*raw%ngrid), expected(2*raw%ngrid), points(3, raw%ngrid), partition(raw%ngrid))
       previous_count = 0
       do step = 1, 2
          call domain%update(mol, err)
@@ -1350,11 +1379,15 @@ contains
          expected = 0.0_wp
          do site = 1, 2
             do i = 1, raw%ngrid
-               point = raw%xyz(:, i) + mol%xyz(:, site)
-               call becke_weights(point, 2, mol%xyz, [1, 1], partition, stiffness=domain%becke_k)
-               weight = raw%w(i)*partition(site)
+               points(:, i) = raw%xyz(:, i) + mol%xyz(:, site)
+            end do
+            call becke_partition_weights(site, points, mol%xyz, [1, 1], partition, &
+               & stiffness=domain%get_becke_k())
+            do i = 1, raw%ngrid
+               point = points(:, i)
+               weight = raw%w(i)*partition(i)
                expected((site - 1)*raw%ngrid + i) = weight
-               if (partition(site) < domain%pruning_threshold .or. abs(weight) < 1.0e-14_wp) cycle
+               if (partition(i) < domain%get_pruning_threshold() .or. abs(weight) < 1.0e-14_wp) cycle
                j = j + 1
                call check(error, j <= domain%ngrid, "domain omitted a retained quadrature point")
                if (allocated(error)) return
@@ -1386,15 +1419,19 @@ contains
    !>
    !> - Cartesian: rebuild picks up new nx, dr and xi0_factor, centered on the
    !>   molecule, settings survive destroy and update
-   !> - Molecular: rebuild picks up new nrad, gaussian and xi0_factor, nufft_tol is kept
+   !> - Molecular: quadrature settings are fixed at construction, so rebuild
+   !>   keeps them and a new grid picks up nrad, gaussian and xi0_factor;
+   !>   `molecular_grid_set_kgrid` replaces the reciprocal settings, rebuild
+   !>   re-sizes with them and keeps nufft_tol
    subroutine test_grid_settings(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(moist_math_grid_3d_molecular_type) :: molecular
+      type(moist_math_grid_3d_molecular_type) :: molecular, refined
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol
-      integer :: count
+      integer :: count, coarse(3), modes(3)
 
       call new(mol, [1], reshape([0.2_wp, -0.4_wp, 0.6_wp], [3, 1]))
       cart%nx = 4
@@ -1426,52 +1463,100 @@ contains
       if (allocated(error)) return
       call check(error, maxval(abs(cart%xi0 - 4.0_wp)) < 1.0e-14_wp)
       if (allocated(error)) return
-      molecular%nrad = 8
-      molecular%lebedev_degree = 5
-      molecular%rmax = 4.0_wp
-      molecular%dr = 1.0_wp
-      molecular%nufft_tol = 1.0e-8_wp
-      call molecular%update(mol, err)
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe, dr=1.0_wp, &
+         & nufft_tol=1.0e-8_wp)
+      if (.not. allocated(err)) call molecular%update(mol, err)
       call require_success(error, err)
       if (allocated(error)) return
       count = molecular%ngrid
-      molecular%nrad = 16
-      molecular%gaussian = .true.
-      molecular%xi0_factor = 1.3_wp
+      coarse = [molecular%nkx, molecular%nky, molecular%nkz]
       call molecular%rebuild(err)
       call require_success(error, err)
       if (allocated(error)) return
-      call check(error, molecular%ngrid, 2*count)
+      call check(error, molecular%ngrid, count, "rebuild must keep the constructed quadrature")
       if (allocated(error)) return
-      call check(error, maxval(abs(molecular%xi0**3*molecular%w - 1.3_wp**3)) < 1.0e-13_wp)
+      call check(error, .not. allocated(molecular%xi0), "rebuild must keep point potentials")
       if (allocated(error)) return
-      call check(error, molecular%nufft_tol, 1.0e-8_wp, thr=epsilon(1.0_wp))
+      call get_qc_handymod_recipe(recipe, err, nrad=16, degree=5, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(refined, err, recipe=recipe, dr=1.0_wp, &
+         & nufft_tol=1.0e-8_wp, gaussian=.true., xi0_factor=1.3_wp)
+      if (.not. allocated(err)) call refined%update(mol, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      call check(error, refined%ngrid, 2*count)
+      if (allocated(error)) return
+      call check(error, maxval(abs(refined%xi0**3*refined%w - 1.3_wp**3)) < 1.0e-13_wp)
+      if (allocated(error)) return
+      call molecular_grid_set_kgrid(molecular, 0.5_wp, err, buffer=1.5_wp, reference=mol%xyz(:, 1))
+      call require_success(error, err)
+      if (allocated(error)) return
+      modes = [molecular%nkx, molecular%nky, molecular%nkz]
+      call check(error, all(modes > coarse), "a finer dr must enlarge the reciprocal grid")
+      if (allocated(error)) return
+      call molecular%rebuild(err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      call check(error, all([molecular%nkx, molecular%nky, molecular%nkz] == modes), &
+         & "rebuild must re-size with the stored reciprocal settings")
+      if (allocated(error)) return
+      call check(error, molecular%get_dr(), 0.5_wp, thr=epsilon(1.0_wp))
+      if (allocated(error)) return
+      call check(error, molecular%get_kbuffer(), 1.5_wp, thr=epsilon(1.0_wp))
+      if (allocated(error)) return
+      call check(error, molecular%get_nufft_tol(), 1.0e-8_wp, thr=epsilon(1.0_wp))
    end subroutine test_grid_settings
 
    !> Molecular grid stays usable after a rejected update
    !>
-   !> - Fractional integer-HandyMod exponent is rejected
-   !> - Restoring a valid exponent lets the same grid update cleanly
+   !> - An oxygen override whose radial cutoff removes every node fails the
+   !>   first update that meets oxygen, inside the assembly
+   !> - The rejected update leaves the realized points unchanged
+   !> - The same grid then updates cleanly on a geometry without oxygen
    subroutine test_update_recovers(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: domain
-      type(structure_type) :: mol
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type) :: overrides(1)
+      type(structure_type) :: mol, water
+      real(wp), allocatable :: xyz(:, :)
+      real(wp) :: shift(3)
 
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
-      call new_molecular_grid_uniform_handymod(domain, mol, 8, 26, err, 0.0_wp, 4.0_wp, 2)
+      call new(water, [8, 1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.43_wp, -0.98_wp, &
+         & 0.0_wp, -1.43_wp, -0.98_wp], [3, 3]))
+      call get_handymod_recipe(recipe, 8, 26, 0.0_wp, 4.0_wp, 2.0_wp, err)
+      if (.not. allocated(err)) call get_handymod_recipe(overrides(1)%recipe, 8, 26, 0.0_wp, 4.0_wp, &
+         & 2.0_wp, err)
       call require_success(error, err)
       if (allocated(error)) return
-      domain%m = 2.5_wp
-      call domain%update(mol, err)
-      call check(error, allocated(err), "fractional integer-HandyMod exponent must fail")
+      ! Every HandyMod node lies below rmax = 4, so this cutoff empties the oxygen grid
+      overrides(1)%elements = [8]
+      overrides(1)%recipe%radial%rcut_lower = 5.0_wp
+      call new_molecular_grid(domain, err, recipe=recipe, overrides=overrides)
+      if (.not. allocated(err)) call domain%update(mol, err)
+      call require_success(error, err)
       if (allocated(error)) return
-      domain%m = 2.0_wp
+      xyz = domain%xyz
+      call domain%update(water, err)
+      call check(error, allocated(err), "an oxygen grid without radial nodes must fail the update")
+      if (allocated(error)) return
+      call check(error, index(err%message, "cutoffs removed every node") > 0, err%message)
+      if (allocated(error)) return
+      call check(error, domain%ngrid == size(xyz, 2) .and. all(domain%xyz == xyz), &
+         & "a rejected update must leave the realized points unchanged")
+      if (allocated(error)) return
+      shift = [0.1_wp, -0.2_wp, 0.3_wp]
+      mol%xyz(:, 1) = shift
       call domain%update(mol, err)
       call require_success(error, err)
       if (allocated(error)) return
-      call check(error, domain%ngrid > 0, "recovered grid has no points")
+      call check(error, domain%ngrid == size(xyz, 2), "recovered grid lost points")
+      if (allocated(error)) return
+      call check(error, maxval(abs(domain%xyz - xyz - spread(shift, 2, domain%ngrid))) < 2.0e-15_wp, &
+         & "recovered grid does not follow its atom")
    end subroutine test_update_recovers
 
    !> Single-atom structure at the origin
@@ -1653,37 +1738,37 @@ contains
       call expect_error(error, err, "before new_trafo")
    end subroutine test_cartesian_trafo_fails
 
-   !> Zero Becke-SSF parameter fails molecular validation, set on the expected error
+   !> Zero Becke-SSF parameter fails molecular construction, set on the expected error
    subroutine test_molecular_ssf_a_fails(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
 
-      grid%ssf_a = 0.0_wp
-      call grid%validate(err)
+      call new_molecular_grid(grid, err, ssf_a=0.0_wp)
       call expect_error(error, err, "ssf_a must be in (0, 1]")
    end subroutine test_molecular_ssf_a_fails
 
-   !> Pruning threshold of one fails molecular validation, set on the expected error
+   !> Pruning threshold of one fails molecular construction, set on the expected error
    subroutine test_molecular_pruning_fails(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
 
-      grid%pruning_threshold = 1.0_wp
-      call grid%validate(err)
+      call new_molecular_grid(grid, err, pruning_threshold=1.0_wp)
       call expect_error(error, err, "pruning_threshold must be in [0, 1)")
    end subroutine test_molecular_pruning_fails
 
-   !> Molecular rebuild before any update fails, set on the expected error
+   !> Molecular rebuild of a constructed grid before any update fails, set on the expected error
    subroutine test_molecular_rebuild_fails(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
 
+      call new_molecular_grid(grid, err)
+      if (allocated(err)) return
       call grid%rebuild(err)
       call expect_error(error, err, "update before rebuild")
    end subroutine test_molecular_rebuild_fails
@@ -1693,13 +1778,15 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err
       type(structure_type) :: mol
 
       call single_atom(mol)
       mol%xyz(3, 1) = ieee_value(1.0_wp, ieee_quiet_nan)
-      grid%nrad = 4
-      grid%rmax = 4.0_wp
+      call get_qc_handymod_recipe(recipe, err, nrad=4, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe)
+      if (allocated(err)) return
       call grid%update(mol, err)
       call expect_error(error, err, "coordinates must be finite")
    end subroutine test_molecular_coords_fails
@@ -1709,12 +1796,14 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err
       type(structure_type) :: mol
 
       call single_atom(mol)
-      grid%nrad = 4
-      grid%dr = 1.0e-12_wp
+      call get_qc_handymod_recipe(recipe, err, nrad=4)
+      if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe, dr=1.0e-12_wp)
+      if (allocated(err)) return
       call grid%update(mol, err)
       call expect_error(error, err, "reciprocal grid is too large")
    end subroutine test_molecular_kcount_fails
@@ -1726,66 +1815,69 @@ contains
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       type(mctc_error), allocatable :: err
       type(structure_type) :: mol
 
       call single_atom(mol)
-      call new_molecular_grid_uniform(grid, mol, 1000000, 5810, err, rmax=4.0_wp)
+      call get_uniform_recipe(recipe, overrides, 1000000, 5810, err, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (allocated(err)) return
+      call grid%update(mol, err)
       call expect_error(error, err, "point count exceeds")
    end subroutine test_point_count_overflow_fails
 
-   !> Fractional integer-HandyMod exponent fails, set on the expected error
-   subroutine test_handymod_fractional_fails(error)
+   !> Non-positive HandyMod parameter fails the recipe, set on the expected error
+   subroutine test_handymod_nonpositive_fails(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err
-      type(structure_type) :: mol
 
-      call single_atom(mol)
-      call new_molecular_grid_uniform_handymod(grid, mol, 8, 26, err, 0.0_wp, 4.0_wp, 2)
-      if (allocated(err)) return
-      grid%m = 2.5_wp
-      call grid%update(mol, err)
-      call expect_error(error, err, "representable integer m")
-   end subroutine test_handymod_fractional_fails
+      call get_handymod_recipe(recipe, 8, 26, 0.0_wp, 4.0_wp, 0.0_wp, err)
+      call expect_error(error, err, "HandyMod mapping: m must be > 0")
+   end subroutine test_handymod_nonpositive_fails
 
-   !> Integer-HandyMod exponent beyond the default integer range fails, set on the expected error
+   !> HandyMod parameter too large for the radial interval fails the recipe, set on the expected error
+   !>
+   !> - 2**m - 1 must stay below rmax - rmin; m = 1000 keeps 2**m finite
    subroutine test_handymod_huge_fails(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
-      type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err
-      type(structure_type) :: mol
 
-      call single_atom(mol)
-      call new_molecular_grid_uniform_handymod(grid, mol, 8, 26, err, 0.0_wp, 4.0_wp, 2)
-      if (allocated(err)) return
-      grid%m = huge(1.0_wp)
-      call grid%update(mol, err)
-      call expect_error(error, err, "representable integer m")
+      call get_handymod_recipe(recipe, 8, 26, 0.0_wp, 4.0_wp, 1000.0_wp, err)
+      call expect_error(error, err, "HandyMod mapping: rmax - rmin must be greater than 2^m - 1")
    end subroutine test_handymod_huge_fails
 
-   !> Direct grid built without a reciprocal grid keeps none across update and rebuild
+   !> Grid constructed without a reciprocal grid keeps none across update and rebuild
    subroutine test_rebuild_no_kgrid(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       type(structure_type) :: mol
 
       call new(mol, [1, 1], reshape([-0.7_wp, 0.0_wp, 0.0_wp, 0.7_wp, 0.0_wp, 0.0_wp], [3, 2]))
-      call new_molecular_grid_uniform(grid, mol, 8, 26, err, rmin=0.0_wp, rmax=4.0_wp)
+      call get_uniform_recipe(recipe, overrides, 8, 26, err, rmin=0.0_wp, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe, overrides=overrides, &
+         & reciprocal=.false.)
+      if (.not. allocated(err)) call grid%update(mol, err)
       call require_success(error, err)
       if (allocated(error)) return
       call check(error, .not. grid%has_kgrid .and. grid%npts_k == 0, &
-         & "a direct constructor must not create a k-grid on its own")
+         & "a grid constructed with reciprocal = .false. must not create a k-grid on its own")
       if (allocated(error)) return
       mol%xyz(1, 2) = mol%xyz(1, 2) + 0.2_wp
       call grid%update(mol, err)
       call require_success(error, err)
       if (allocated(error)) return
-      call check(error, .not. grid%has_kgrid, "update of a k-gridless direct grid must not create one")
+      call check(error, .not. grid%has_kgrid, "update of a k-gridless grid must not create one")
       if (allocated(error)) return
       call grid%rebuild(err)
       call require_success(error, err)
@@ -1800,19 +1892,21 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(mctc_error), allocatable :: err
       type(moist_math_grid_3d_molecular_type) :: grid
+      type(moist_math_grid_atomic_recipe_type) :: recipe
       type(structure_type) :: mol
       real(wp) :: centroid(3), offset(3)
 
-      grid%nrad = 8
-      grid%rmax = 4.0_wp
-      grid%dr = 1.0_wp
+      call get_qc_handymod_recipe(recipe, err, nrad=8, rmax=4.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(grid, err, recipe=recipe, dr=1.0_wp)
+      call require_success(error, err)
+      if (allocated(error)) return
       call new(mol, [1, 1], reshape([-0.7_wp, 0.0_wp, 0.0_wp, 0.7_wp, 0.0_wp, 0.0_wp], [3, 2]))
       call grid%update(mol, err)
       call require_success(error, err)
       if (allocated(error)) return
       centroid = sum(mol%xyz, dim=2)/real(mol%nat, wp)
       offset = [0.5_wp, 0.2_wp, 0.0_wp]
-      call molecular_grid_set_kgrid(grid, grid%dr, err, reference=centroid + offset)
+      call molecular_grid_set_kgrid(grid, grid%get_dr(), err, reference=centroid + offset)
       call require_success(error, err)
       if (allocated(error)) return
       call check(error, maxval(abs(grid%kref - centroid - offset)) < 1.0e-13_wp)

@@ -6,6 +6,7 @@
 !> - Companion of `math_grid_3d` (batched FFT) and `math_grid_nufft` (NUFFT)
 !> - NUFFT: type 1/2 and type 3, both directions, one column and a batch,
 !>   against the analytic Gaussian FT and a serial run
+!> - Radial transforms: one trafo per thread, cloned from a shared template
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
 !$    & omp_get_max_active_levels
@@ -19,9 +20,19 @@ module test_math_grid_3d_threaded
    use moist_math_grid_3d_base, only: moist_math_grid_3d_trafo_type
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, &
       & new_cartesian_grid_3d
+   use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_chebyshev2_type, &
+      & new_chebyshev2_rule
+   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_becke_type, &
+      & new_becke_mapping
+   use moist_math_grid_radial_grid, only: moist_math_grid_radial_type, &
+      & moist_math_grid_radial_recipe_type, new_radial_grid, new_uniform_radial_pair
+   use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, new_radial_trafo
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type, &
+      & moist_math_grid_atomic_recipe_override_type
    use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, &
-      & new_molecular_grid_uniform, molecular_grid_set_kgrid, &
+      & new_molecular_grid, molecular_grid_set_kgrid, &
       & moist_math_grid_3d_molecular_trafo_type, new_molecular_grid_trafo, default_nufft_tol
+   use test_helpers, only: get_uniform_recipe
    use, intrinsic :: iso_c_binding, only: c_int
    implicit none(type, external)
    private
@@ -68,7 +79,8 @@ contains
                   new_unittest("batched_fft_uses_threaded_backend", test_threaded_batch), &
                   new_unittest("batched_ifft_uses_threaded_backend", test_threaded_round_trip), &
                   new_unittest("molecular_nufft_type12_threaded", test_nufft_type12_threaded), &
-                  new_unittest("molecular_nufft_type3_threaded", test_nufft_type3_threaded) &
+                  new_unittest("molecular_nufft_type3_threaded", test_nufft_type3_threaded), &
+                  new_unittest("radial_trafo_one_per_thread", test_radial_trafo_per_thread) &
                   ]
    end subroutine collect_math_grid_3d_threaded
 
@@ -277,6 +289,8 @@ contains
 
       type(structure_type) :: mol
       type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       type(mctc_error), allocatable :: merr
       integer :: max_threads, max_levels, k
 
@@ -292,7 +306,10 @@ contains
                                           0.0_wp, 0.0_wp, 0.0_wp, &
                                           1.43_wp, 0.0_wp, 1.11_wp, &
                                           -1.43_wp, 0.0_wp, 1.11_wp], [3, 3]))
-         call new_molecular_grid_uniform(mg, mol, nufft_nrad, nufft_nang, merr, rmax=nufft_rmax)
+         call get_uniform_recipe(recipe, overrides, nufft_nrad, nufft_nang, merr, rmax=nufft_rmax)
+         if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, &
+                                                            overrides=overrides, reciprocal=.false.)
+         if (.not. allocated(merr)) call mg%update(mol, merr)
          if (.not. allocated(merr)) call molecular_grid_set_kgrid(mg, nufft_dr, merr)
          if (allocated(merr)) then
             call test_failed(error, merr%message)
@@ -311,7 +328,7 @@ contains
    !> Threaded forward and backward NUFFT of an `nv`-column Gaussian block
    !>
    !> - Column `iv` holds `exp(-a_iv |r - c_iv|^2)`, `a_iv = 1 + 0.3 (iv - 1)`,
-   !>   centre stepped 0.2 bohr per column along (1, -1, 1) from `origin`;
+   !>   center stepped 0.2 bohr per column along (1, -1, 1) from `origin`;
    !>   every column differs in width and phase
    !> - Forward against the analytic FT (see `analytic_ft_error`)
    !> - Forward and backward against a serial run of the same transform,
@@ -323,7 +340,7 @@ contains
    !>
    !> @param[out]    error       test failure
    !> @param[in,out] mg          molecular grid with its reciprocal grid set
-   !> @param[in]     origin      centre of the first Gaussian (bohr)
+   !> @param[in]     origin      center of the first Gaussian (bohr)
    !> @param[in]     use_type12  transform route, `.false.` for type 3
    !> @param[in]     nv          number of columns
    subroutine check_threaded_nufft(error, mg, origin, use_type12, nv)
@@ -331,7 +348,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Molecular grid with its reciprocal grid set
       type(moist_math_grid_3d_molecular_type), intent(inout), target :: mg
-      !> Centre of the first Gaussian
+      !> Center of the first Gaussian
       real(wp), intent(in) :: origin(3)
       !> Transform route
       logical, intent(in) :: use_type12
@@ -456,14 +473,14 @@ contains
    !>
    !> @param[in] mg     molecular grid supplying k-points and `kref`
    !> @param[in] fk     numerical transform of one column, length npts_k
-   !> @param[in] cen    Gaussian centre (bohr)
+   !> @param[in] cen    Gaussian center (bohr)
    !> @param[in] alpha  Gaussian exponent (bohr^-2)
    function analytic_ft_error(mg, fk, cen, alpha) result(emax)
       !> Molecular grid supplying k-points and `kref`
       type(moist_math_grid_3d_molecular_type), intent(in) :: mg
       !> Numerical transform of one column
       complex(wp), intent(in) :: fk(:)
-      !> Gaussian centre
+      !> Gaussian center
       real(wp), intent(in) :: cen(3)
       !> Gaussian exponent
       real(wp), intent(in) :: alpha
@@ -478,7 +495,7 @@ contains
       emax = 0.0_wp
       do j = 1, mg%npts_k
          kvec = mg%kpoint(j)
-         if (norm2(kvec) > pi/mg%dr) cycle
+         if (norm2(kvec) > pi/mg%get_dr()) cycle
          phase = dot_product(kvec, cen - mg%kref)
          fex = f0*exp(-sum(kvec**2)/(4.0_wp*alpha))*cmplx(cos(phase), -sin(phase), wp)
          dev = abs(fk(j) - fex)/f0
@@ -489,5 +506,145 @@ contains
          emax = max(emax, dev)
       end do
    end function analytic_ft_error
+
+   !> One Chebyshev-II + Becke radial grid with a fixed scale
+   !>
+   !> @param[out] grid  Radial grid, tagged for the quadrature trafo
+   !> @param[in]  n     Number of nodes
+   !> @param[in]  p     Becke scale
+   !> @param[out] merr  Construction error
+   subroutine chebyshev_becke_grid(grid, n, p, merr)
+      !> Radial grid
+      type(moist_math_grid_radial_type), intent(out) :: grid
+      !> Number of nodes
+      integer, intent(in) :: n
+      !> Becke scale
+      real(wp), intent(in) :: p
+      !> Construction error
+      type(mctc_error), allocatable, intent(out) :: merr
+
+      type(moist_math_grid_radial_rule_chebyshev2_type) :: rule
+      type(moist_math_grid_radial_mapping_becke_type) :: becke
+      type(moist_math_grid_radial_recipe_type) :: recipe
+
+      call new_chebyshev2_rule(rule)
+      call new_becke_mapping(becke, merr, scale=p)
+      if (allocated(merr)) return
+      allocate (recipe%rule, source=rule)
+      allocate (recipe%mapping, source=becke)
+      recipe%npts = n
+      call new_radial_grid(grid, recipe, 1, merr)
+   end subroutine chebyshev_becke_grid
+
+   !> Worker of the radial per-thread test: clone the template once, transform every nteam-th column
+   !>
+   !> @param[in]     template  Shared template trafo, read only
+   !> @param[in]     it        Worker index, 1..nteam
+   !> @param[in]     nteam     Number of workers
+   !> @param[in]     f         r-space fields, shape (nr, nb)
+   !> @param[in,out] g         k-space results, shape (nk, nb); this worker's columns written
+   !> @param[in,out] h         r-space results of the forward adjoint, shape (nr, nb)
+   !> @param[out]    stat      0 on success
+   subroutine radial_trafo_worker(template, it, nteam, f, g, h, stat)
+      !> Shared template trafo
+      class(moist_math_grid_radial_trafo_type), intent(in) :: template
+      !> Worker index
+      integer, intent(in) :: it
+      !> Number of workers
+      integer, intent(in) :: nteam
+      !> r-space fields
+      real(wp), intent(in) :: f(:, :)
+      !> k-space results
+      real(wp), intent(inout) :: g(:, :)
+      !> r-space results of the forward adjoint
+      real(wp), intent(inout) :: h(:, :)
+      !> 0 on success
+      integer, intent(out) :: stat
+
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
+      type(mctc_error), allocatable :: merr
+      integer :: j
+
+      stat = 0
+      allocate (trafo, source=template)
+      do j = it, size(f, 2), nteam
+         call trafo%fbt_r2k(f(:, j), g(:, j), merr)
+         if (.not. allocated(merr)) call trafo%fbt_r2k_adj(g(:, j), h(:, j), merr)
+         if (allocated(merr)) then
+            stat = 1
+            return
+         end if
+      end do
+   end subroutine radial_trafo_worker
+
+   !> One radial trafo per OpenMP thread, cloned from a shared template, matches the serial result
+   !>
+   !> - DST-IV on a uniform pair and the quadrature trafo on a
+   !>   Chebyshev-II + Becke pair
+   !> - The same trafo code runs serially and per thread, so the results
+   !>   must be equal, not merely close
+   !>
+   !> @param[out] error  Test failure, or set by `skip_test`
+   subroutine test_radial_trafo_per_thread(error)
+      !> Test failure, or set by `skip_test`
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: nteam = 4, nb = 12
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: template
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: f(:, :), g(:, :), h(:, :), gref(:, :), href(:, :)
+      integer :: icase, it, i, j, max_threads, stat(nteam)
+
+      call enter_threaded(error, max_threads)
+      if (allocated(error)) return
+
+      do icase = 1, 2
+         if (icase == 1) then
+            call new_uniform_radial_pair(rgrid, kgrid, 96, 0.1_wp, merr)
+         else
+            call chebyshev_becke_grid(rgrid, 64, 1.2_wp, merr)
+            if (.not. allocated(merr)) call chebyshev_becke_grid(kgrid, 80, 1.5_wp, merr)
+         end if
+         if (.not. allocated(merr)) call new_radial_trafo(template, rgrid, kgrid, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            exit
+         end if
+
+         allocate (f(template%nr, nb), g(template%nk, nb), h(template%nr, nb))
+         allocate (gref(template%nk, nb), href(template%nr, nb))
+         do j = 1, nb
+            do i = 1, template%nr
+               f(i, j) = sin(0.37_wp*real(i, wp) + real(j, wp))
+            end do
+         end do
+         do j = 1, nb
+            call template%fbt_r2k(f(:, j), gref(:, j), merr)
+            if (.not. allocated(merr)) call template%fbt_r2k_adj(gref(:, j), href(:, j), merr)
+            if (allocated(merr)) exit
+         end do
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            exit
+         end if
+
+         !$omp parallel do schedule(static) num_threads(nteam) default(none) &
+         !$omp shared(template, f, g, h, stat)
+         do it = 1, nteam
+            call radial_trafo_worker(template, it, nteam, f, g, h, stat(it))
+         end do
+         !$omp end parallel do
+
+         call check(error, all(stat == 0), "Per-thread radial transform reported an error")
+         if (allocated(error)) exit
+         call check(error, all(g == gref) .and. all(h == href), &
+            & "Per-thread radial trafo clones do not reproduce the serial result")
+         if (allocated(error)) exit
+         deallocate (template, f, g, h, gref, href)
+      end do
+
+!$    call omp_set_num_threads(max_threads)
+   end subroutine test_radial_trafo_per_thread
 
 end module test_math_grid_3d_threaded
