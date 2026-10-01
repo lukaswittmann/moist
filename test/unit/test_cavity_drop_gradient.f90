@@ -18,6 +18,7 @@ module test_cavity_drop_gradient
    use mstore, only: get_structure
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: iso_fortran_env, only: error_unit
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -258,6 +259,9 @@ contains
 
       do iat = 1, mol%nat
          do idir = 1, ndim
+            call check(error, ieee_is_finite(num_dA_drA(idir, iat)) .and. &
+                       ieee_is_finite(num_dV_drA(idir, iat)), "Non-finite total area or volume FD reference")
+            if (allocated(error)) return
             call check(error, en_dA_drA(idir, iat), num_dA_drA(idir, iat), &
                        thr_abs=ABS_THR, thr_rel=REL_THR, &
                        more="Total area gradient mismatch")
@@ -871,17 +875,33 @@ contains
       end do
 
       !> Compare analytic vs numeric for valid gridpoints only; every nuclear direction must
-      !  retain at least a single point each FD step. Without this, no points left would indicate
-      !  a pass!
+      !  retain at least a single point each FD step
+      !  Without this, no points left would indicate a pass!
       do iat = 1, mol%nat
          do idir = 1, ndim
             call check(error, count(valid_gridpoint(idir, iat, :)) > 0, &
                        "No valid FD comparisons for atom "//to_string(iat)// &
                        " direction "//to_string(idir))
             if (allocated(error)) return
+            do igrid = 1, ngrid_set
+               if (.not. valid_gridpoint(idir, iat, igrid)) cycle
+               call check(error, &
+                          all(ieee_is_finite(num_xyz1_rA(:, idir, iat, igrid))) .and. &
+                          ieee_is_finite(num_r_iI1_rA(idir, iat, igrid)) .and. &
+                          all(ieee_is_finite(num_normal1_rA(idir, iat, :, igrid))) .and. &
+                          ieee_is_finite(num_cpjac1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_wleb1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_w_f1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_xi1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_iswig1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_area1_rA(idir, iat, igrid)) .and. &
+                          ieee_is_finite(num_volume1_rA(idir, iat, igrid)), &
+                          "Non-finite FD reference for atom "//to_string(iat)// &
+                          " direction "//to_string(idir)//" point "//to_string(igrid))
+               if (allocated(error)) return
+            end do
          end do
       end do
-
 
       ! Test 1: Gridpoint positions
       max_diff = 0.0_wp
@@ -1480,6 +1500,9 @@ contains
                do idir = 1, ndim
                   if (.not. valid(idir, iat, igrid)) cycle
                   ncompared(ich) = ncompared(ich) + 1
+                  call check(error, ieee_is_finite(num_adj(idir, iat, igrid, ich)), &
+                             "Non-finite surface adjoint FD reference")
+                  if (allocated(error)) return
                   call check(error, en_adj(idir, iat, igrid, ich), &
                              num_adj(idir, iat, igrid, ich), &
                              thr_abs=ADJ_ABS, thr_rel=ADJ_REL, &
