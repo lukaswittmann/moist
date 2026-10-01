@@ -16,7 +16,7 @@ module test_model_component_pv
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop, only: cavity_type_drop
@@ -83,7 +83,7 @@ contains
       !> Radius model pinning the sphere radius exactly
       class(radius_type), allocatable :: radius_model
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Energy accumulator and the analytic reference volume
@@ -217,7 +217,7 @@ contains
       !> Cavity rebuilt at the reference and at every displaced geometry
       type(cavity_type_iswig) :: cavity
       !> Components at unit and at scaled pressure
-      type(solvation_model_component_pv) :: pv_component, pv_scaled
+      type(model_continuum_component_pv) :: pv_component, pv_scaled
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Gradient accumulators at unit and at scaled pressure
@@ -367,7 +367,7 @@ contains
       !> Synthetic DROP surface carrying the volume adjoint fields
       type(cavity_type_drop) :: cavity
       !> Components at finite and at zero pressure
-      type(solvation_model_component_pv) :: pv_component, pv_zero
+      type(model_continuum_component_pv) :: pv_component, pv_zero
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Analytic surface weights, and a prefilled accumulator PV must not touch
@@ -515,7 +515,7 @@ contains
       !> Host coupling data, never read by PV
       type(coupling_type) :: coupling
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Gradient accumulator carrying a sentinel
       real(wp), allocatable :: gradient(:, :)
       !> Host part of the gradient phase, unused by PV
@@ -595,7 +595,7 @@ contains
       !> Potential accumulator PV must leave alone
       type(response_type) :: response
       !> Component under test
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_component_pv) :: pv_component
       !> Energy accumulator carrying a sentinel
       real(wp) :: energy
       !> Gradient accumulator of the wrong shape

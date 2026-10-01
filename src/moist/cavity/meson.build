@@ -1,7 +1,6 @@
 subdir('drop')
 
 srcs += files(
-  'fields.f90',
   'type.f90',
   'surface_adjoint.f90',
   'diagnostic.f90',

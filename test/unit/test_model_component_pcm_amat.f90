@@ -2,9 +2,9 @@
 module test_model_component_pcm_amat
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
                                              pcm_amat_surface_weights
-   use moist_model_component_pcm_amat_kernel, only: pcm_amat_x_far
+   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far
    use testdrive, only: new_unittest, unittest_type, error_type, check
    implicit none(type, external)
    private

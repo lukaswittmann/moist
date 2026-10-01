@@ -3,9 +3,20 @@
 Installing MOIST
 ================
 
-Requirements: a Fortran 2018 compiler (GCC or Intel), BLAS/LAPACK, and meson
-with ninja, cmake with ninja, or fpm. A C compiler is needed for the C API and
-the Python extension; Python 3.10 with CFFI and NumPy for the Python API.
+Requirements:
+
+- Fortran 2018 compiler (GCC or Intel)
+- C and C++17 compilers from the same toolchain (gcc/g++ or icx/icpx)
+- BLAS/LAPACK
+- meson or CMake 3.25+, with ninja
+- Python 3.10 with CFFI and NumPy (Python API only)
+
+On macOS, Apple Clang has no OpenMP: use a conda-forge toolchain or Homebrew
+GCC, or build with ``-Dopenmp=false``.
+
+For a build used only on the local machine, pass ``-march=native`` via
+``-Dfortran_args``/``-Dcpp_args`` and enable link-time optimisation with
+``-Db_lto=true`` (CMake: ``-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON``).
 
 Meson
 -----
@@ -56,19 +67,6 @@ CMake
 The meson options map onto ``-DMOIST_LAPACK``, ``-DMOIST_ILP64``,
 ``-DMOIST_OPENMP``, ``-DMOIST_API`` and ``-DMOIST_TESTS`` with the same
 defaults. CMake does not build the Python API.
-
-fpm
----
-
-.. code-block:: sh
-
-   fpm build
-   fpm test
-   fpm run -- --help
-
-As a dependency, add ``moist.git = "https://github.com/lukaswittmann/moist"``
-under ``[dependencies]``. The fpm build provides the Fortran API and the
-``moist`` program, not the C API.
 
 Python
 ------

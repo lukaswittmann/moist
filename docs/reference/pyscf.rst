@@ -140,7 +140,7 @@ MOIST owns (``model``), the basis-center derivative of the potential
 (``potential``), of the level set (``density``, isodensity cavities only) and
 of the Gaussian moments (``moments``, GOSTSHYP only). The host's own
 contractions walk the response and dispatch on each item:
-``potential_adjoint``, ``density`` and ``gostshyp_amplitude``, each present
+``potential_adjoint``, ``density`` and ``gaussian_amplitude``, each present
 only when the model produces it; an item the driver does not know raises.
 
 API

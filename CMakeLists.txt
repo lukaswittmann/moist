@@ -1,93 +1,68 @@
-# CMake build for the moist implicit-solvation library. This mirrors the
-# canonical Meson build (meson.build + meson_options.txt + config/meson.build);
-# Meson remains the reference build system. The CMake build embeds the vendored
-# Fortran dependencies under subprojects/ via add_subdirectory and resolves
-# BLAS/LAPACK/OpenMP through CMake's standard find modules.
-#
-# Quick start:
-#   cmake -B build-cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
-#   cmake --build build-cmake
-# Produces the static library libmoist.a and the CLI executable `moist`.
+# CMake build for moist; the meson build (meson.build, config/meson.build) is the reference.
+#   cmake -B build-cmake -G Ninja && cmake --build build-cmake
 
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.25)
 
-# Read the single source of truth for the version (the VERSION file).
+# project(VERSION) accepts only the numeric part of VERSION (e.g. 1.0.0-alpha.1)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" MOIST_VERSION_FULL)
 string(STRIP "${MOIST_VERSION_FULL}" MOIST_VERSION_FULL)
-# The VERSION file may carry a semver pre-release suffix (e.g. 0.6.0-alpha.1).
-# Meson keeps the full string in meson.project_version() but derives the numeric
-# library version with split('-')[0]; CMake's project(VERSION) is stricter still
-# and accepts only numeric major[.minor[.patch[.tweak]]]. Strip from the first
-# '-' for project(), and keep the full string in MOIST_VERSION_FULL for display.
 string(REGEX REPLACE "-.*$" "" MOIST_VERSION "${MOIST_VERSION_FULL}")
 
 project(
   moist
   VERSION "${MOIST_VERSION}"
   DESCRIPTION "Modular and Open-source Implicit Solvation Toolkit"
-  LANGUAGES Fortran C
+  LANGUAGES Fortran C CXX
 )
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-# ---------------------------------------------------------------------------
-# Options (mirrors meson_options.txt)
-# ---------------------------------------------------------------------------
+# icx/icpx default to a fast FP model, like ifx
+foreach(lang C CXX)
+  if(CMAKE_${lang}_COMPILER_ID MATCHES "Intel")
+    add_compile_options($<$<COMPILE_LANGUAGE:${lang}>:-fp-model=precise>)
+  endif()
+endforeach()
+
+# Options (mirror meson_options.txt)
 set(MOIST_LAPACK "auto" CACHE STRING "Linear algebra backend")
-# Mirrors the `lapack` combo in meson_options.txt.
 set_property(CACHE MOIST_LAPACK PROPERTY STRINGS
   auto mkl mkl-rt openblas netlib accelerate custom)
-# Mirrors meson's `custom_libraries`: the libraries to link for the custom
-# backend -- absolute paths, plain names resolved by the linker, or -L/-l flags
-# passed through as list items.
 set(MOIST_CUSTOM_LIBRARIES "" CACHE STRING
-  "Libraries for the custom LAPACK backend (mirror of meson custom_libraries)")
+  "Libraries for the custom LAPACK backend: paths, names or -L/-l flags")
 option(MOIST_OPENMP "Use OpenMP parallelisation"            ON)
 option(MOIST_API    "Build C API using iso_c_binding"       ON)
 option(MOIST_ILP64  "Enable BLAS/LAPACK ilp64 support"      OFF)
 option(MOIST_TESTS  "Build the moist unit test suite (ctest)" ON)
 
-# Default to an optimized-with-debug build, matching meson's debugoptimized.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type" FORCE)
 endif()
 
-# ---------------------------------------------------------------------------
-# Third-party dependencies (BLAS / LAPACK / OpenMP)
-#
-# Resolved BEFORE the vendored subprojects so that the LAPACK::LAPACK /
-# BLAS::BLAS / OpenMP::OpenMP_Fortran imported targets already exist; the
-# subprojects guard their own lookups with `if(NOT TARGET ...)` and therefore
-# reuse ours instead of falling back to a network FetchContent.
-# ---------------------------------------------------------------------------
-# The `custom` backend mirrors meson: link exactly the libraries named in
-# MOIST_CUSTOM_LIBRARIES and synthesise the LAPACK::LAPACK / BLAS::BLAS imported
-# targets the rest of this file (and the vendored subprojects) link against, so
-# no find_package lookup runs. Every other backend maps onto a CMake BLA_VENDOR
-# and resolves through FindBLAS/FindLAPACK.
+# BLAS/LAPACK/OpenMP first: the subprojects' `if(NOT TARGET ...)` guards then reuse them
 if(MOIST_LAPACK STREQUAL "custom")
   if(NOT MOIST_CUSTOM_LIBRARIES)
-    message(FATAL_ERROR
-      "MOIST_LAPACK=custom requires -DMOIST_CUSTOM_LIBRARIES=... "
-      "(mirror of meson's custom_libraries)")
+    message(FATAL_ERROR "MOIST_LAPACK=custom requires -DMOIST_CUSTOM_LIBRARIES=...")
   endif()
+  # One library set provides both
   add_library(BLAS::BLAS INTERFACE IMPORTED)
   set_target_properties(BLAS::BLAS PROPERTIES
     INTERFACE_LINK_LIBRARIES "${MOIST_CUSTOM_LIBRARIES}")
-  # A single library set covers both, so LAPACK::LAPACK just chains BLAS::BLAS.
   add_library(LAPACK::LAPACK INTERFACE IMPORTED)
   set_target_properties(LAPACK::LAPACK PROPERTIES
     INTERFACE_LINK_LIBRARIES "BLAS::BLAS")
 else()
   if(MOIST_LAPACK STREQUAL "mkl")
-    set(BLA_VENDOR Intel10_64lp)        # MKL, multi-library interface
+    set(BLA_VENDOR Intel10_64lp)
   elseif(MOIST_LAPACK STREQUAL "mkl-rt")
-    set(BLA_VENDOR Intel10_64_dyn)      # MKL single dynamic library (mkl_rt)
+    set(BLA_VENDOR Intel10_64_dyn)
   elseif(MOIST_LAPACK STREQUAL "openblas")
     set(BLA_VENDOR OpenBLAS)
   elseif(MOIST_LAPACK STREQUAL "netlib")
     set(BLA_VENDOR Generic)
   elseif(MOIST_LAPACK STREQUAL "accelerate")
-    # Apple's Accelerate framework ships BLAS/LAPACK with macOS and exposes the
-    # legacy LP64 interface only -- guard both, mirroring config/meson.build.
     if(NOT APPLE)
       message(FATAL_ERROR "The accelerate backend is only available on macOS")
     endif()
@@ -101,38 +76,69 @@ else()
   if(MOIST_ILP64)
     set(BLA_SIZEOF_INTEGER 8)
   endif()
-
   find_package(BLAS REQUIRED)
   find_package(LAPACK REQUIRED)
 endif()
 
 if(MOIST_OPENMP)
-  find_package(OpenMP REQUIRED COMPONENTS Fortran)
+  find_package(OpenMP REQUIRED COMPONENTS Fortran CXX)
 endif()
+find_package(Threads REQUIRED)
 
-# ---------------------------------------------------------------------------
-# Vendored Fortran subprojects
-#
-# These ship CMakeLists that define a compiled target `<name>-lib` plus an
-# INTERFACE facade `<name>`, but NOT the namespaced `<name>::<name>` alias that
-# their dependents probe for (that alias is only created on install(EXPORT)).
-# We add each in topological order and synthesise the `::` alias ourselves so
-# every `if(NOT TARGET <name>::<name>)` guard short-circuits -- keeping the
-# whole graph offline. EXCLUDE_FROM_ALL stops their unconditional app/ and
-# test/ subdirectories from compiling (they are still configured, so referenced
-# targets such as mstore::mstore must exist).
-# ---------------------------------------------------------------------------
-# Silence the subprojects' own test/app suites.
+# C++ FFT backend (ducc0 subset + shim) and FINUFFT on top of it, as OBJECT
+# libraries so their objects land in libmoist itself (static and shared)
+set(_fft_dir "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/math/fft")
+set(_finufft_dir "${_fft_dir}/finufft")
+add_library(moist_fft OBJECT
+  "${_fft_dir}/ducc0.cpp"
+  "${_fft_dir}/ducc0/infra/string_utils.cc"
+  "${_fft_dir}/ducc0/infra/threading.cc"
+  "${_fft_dir}/ducc0/infra/mav.cc"
+)
+target_include_directories(moist_fft PUBLIC "${_fft_dir}")
+
+# Like upstream: the precision sources once for double and once with FINUFFT_SINGLE
+set(FINUFFT_PRECISION_SOURCES
+  "${_finufft_dir}/src/makeplan.cpp"
+  "${_finufft_dir}/src/setpts.cpp"
+  "${_finufft_dir}/src/execute.cpp"
+  "${_finufft_dir}/src/spreadinterp.cpp"
+  "${_finufft_dir}/src/spreadinterp_1d.cpp"
+  "${_finufft_dir}/src/spreadinterp_2d.cpp"
+  "${_finufft_dir}/src/spreadinterp_3d.cpp"
+)
+add_library(finufft_common OBJECT
+  "${_finufft_dir}/src/common/kernel.cpp"
+  "${_finufft_dir}/src/common/pswf.cpp"
+  "${_finufft_dir}/src/common/utils.cpp"
+)
+add_library(finufft_f32 OBJECT ${FINUFFT_PRECISION_SOURCES})
+target_compile_definitions(finufft_f32 PRIVATE FINUFFT_SINGLE)
+add_library(finufft OBJECT ${FINUFFT_PRECISION_SOURCES}
+  "${_finufft_dir}/src/fft.cpp"
+  "${_finufft_dir}/src/c_interface.cpp"
+  "${_finufft_dir}/src/utils.cpp"
+  "${_finufft_dir}/fortran/finufftfort.cpp"
+)
+foreach(tgt finufft_common finufft_f32 finufft)
+  target_include_directories(${tgt} PRIVATE
+    "${_finufft_dir}/include" "${_fft_dir}/xsimd/include" "${_fft_dir}")
+  target_compile_definitions(${tgt} PRIVATE FINUFFT_USE_DUCC0)
+endforeach()
+foreach(tgt moist_fft finufft_common finufft_f32 finufft)
+  target_link_libraries(${tgt} PUBLIC Threads::Threads)
+  if(MOIST_OPENMP)
+    target_link_libraries(${tgt} PUBLIC OpenMP::OpenMP_CXX)
+  endif()
+endforeach()
+
+# Vendored Fortran subprojects, in dependency order; the `<name>::<name>` aliases
+# satisfy their own `if(NOT TARGET ...)` lookups, so nothing is fetched
 set(BUILD_TESTING            OFF CACHE BOOL "" FORCE)  # toml-f, fclap, mstore, ...
 set(ENABLE_TESTING           OFF CACHE BOOL "" FORCE)  # jonquil
 set(TESTDRIVE_BUILD_TESTING  OFF CACHE BOOL "" FORCE)  # test-drive
 
-# mctc-lib calls enable_testing()/add_test() with no BUILD_TESTING guard,
-# registering ctest cases for its own *-tester binaries -- which are
-# EXCLUDE_FROM_ALL here and never built, so the cases would dangle as "Not Run".
-# Shadow add_test() with a flag-gated no-op (the builtin stays reachable as
-# _add_test) so only moist's own suite, which flips _moist_allow_tests on,
-# registers. Safe because the subproject does not call set_tests_properties.
+# mctc-lib registers its tests unconditionally; only moist's suite may add tests
 set(_moist_allow_tests OFF)
 function(add_test)
   if(_moist_allow_tests)
@@ -140,63 +146,36 @@ function(add_test)
   endif()
 endfunction()
 
-set(_moist_subprojects "${CMAKE_CURRENT_SOURCE_DIR}/subprojects")
-
-# Helper: add a vendored subproject and expose its `<name>::<name>` alias.
 function(moist_add_subproject name)
   if(NOT TARGET "${name}")
-    add_subdirectory("${_moist_subprojects}/${name}" EXCLUDE_FROM_ALL)
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/subprojects/${name}" EXCLUDE_FROM_ALL)
   endif()
   if(NOT TARGET "${name}::${name}")
     add_library("${name}::${name}" ALIAS "${name}")
   endif()
 endfunction()
 
-# Build vendored dependencies as position-independent static libraries.
 set(_moist_shared_library "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-
-#                        depends on
-moist_add_subproject(toml-f)       # (leaf)
-moist_add_subproject(fclap)        # (leaf, CLI only)
-moist_add_subproject(jonquil)      # toml-f
+moist_add_subproject(toml-f)
+moist_add_subproject(fclap)
+moist_add_subproject(jonquil)
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  # Jonquil's JSON visitor is recursive; gfortran requires this explicitly.
-  target_compile_options(jonquil-lib PRIVATE -frecursive)
+  target_compile_options(jonquil-lib PRIVATE -frecursive)  # recursive JSON visitor
 endif()
-moist_add_subproject(mctc-lib)     # jonquil, toml-f (WITH_JSON)
+moist_add_subproject(mctc-lib)
 set(BUILD_SHARED_LIBS "${_moist_shared_library}")
-# test-drive and mstore are test-only and added under MOIST_TESTS below.
 
-# ---------------------------------------------------------------------------
-# moist source list
-#
-# Globbed to track the ~35 meson.build fragments without hand-mirroring them;
-# CMake derives Fortran module compile order automatically, so listing order is
-# irrelevant. CONFIGURE_DEPENDS re-globs on rebuild. Conditional source sets
-# follow the same gating as the meson build.
-# ---------------------------------------------------------------------------
+# Globbed sources (including the vendored finufft_mod.f90); CMake orders the modules
 file(GLOB_RECURSE moist_srcs CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.f90"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.F90"
 )
-
-# The committed build_info.f90 is the fpm fallback ("unknown"); we regenerate it
-# from build_info.f90.in with the live git commit, so drop the committed copy to
-# avoid a duplicate moist_build_info module.
-list(REMOVE_ITEM moist_srcs
-  "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/build_info.f90")
-
-# api.f90 only when the C API (or Python extension) is requested.
 if(NOT MOIST_API)
-  list(REMOVE_ITEM moist_srcs
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/api.f90")
+  list(REMOVE_ITEM moist_srcs "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/api.f90")
 endif()
 
-# Build-info: stamp the short git commit (fallback "unknown" outside a checkout).
 find_package(Git QUIET)
-set(VCS_TAG "unknown")
 if(Git_FOUND)
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
@@ -205,9 +184,9 @@ if(Git_FOUND)
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
   )
-  if(NOT VCS_TAG)
-    set(VCS_TAG "unknown")
-  endif()
+endif()
+if(NOT VCS_TAG)
+  set(VCS_TAG "unknown")
 endif()
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/src/moist/build_info.f90.in"
@@ -216,55 +195,56 @@ configure_file(
 )
 list(APPEND moist_srcs "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.f90")
 
-# ---------------------------------------------------------------------------
-# moist library
-# ---------------------------------------------------------------------------
 add_library(moist ${moist_srcs})
 set_target_properties(moist PROPERTIES
   VERSION "${PROJECT_VERSION}"
   SOVERSION "${PROJECT_VERSION_MAJOR}"
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include"
+  # A Fortran-driven link turns C++ exceptions from ducc0/FINUFFT into aborts
+  LINKER_LANGUAGE CXX
 )
 target_include_directories(moist PUBLIC
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>"
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
-
-# ILP64 integer-kind macros are consumed by the preprocessed .F90 sources and
-# are unconditional in the meson build.
 if(MOIST_ILP64)
   target_compile_definitions(moist PRIVATE IK=i8 MOIST_ILP64=1)
 else()
   target_compile_definitions(moist PRIVATE IK=i4 MOIST_ILP64=0)
 endif()
 
-# Compiler-specific flags (mirrors config/meson.build + moist_fortran_args).
 if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
-  target_compile_options(moist PRIVATE
-    -ffree-line-length-none -fbacktrace
-    -fopenmp-simd
-  )
+  target_compile_options(moist PRIVATE -ffree-line-length-none -fbacktrace -fopenmp-simd)
+  # GCC 14+ heap trampolines; never libgcc_eh, whose unwinder aborts C++ exceptions
+  find_library(MOIST_LIBHEAPT_W NAMES heapt_w
+    HINTS ${CMAKE_Fortran_IMPLICIT_LINK_DIRECTORIES})
+  if(MOIST_LIBHEAPT_W)
+    target_link_libraries(moist PUBLIC ${MOIST_LIBHEAPT_W})
+  endif()
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
-  # -fp-model=precise: ifx defaults to a fast FP model that reassociates
-  # reductions / contracts FMAs, diverging from gfortran and rounding the
-  # analytic-vs-reference tests over tolerance. Mirrors config/meson.build.
-  target_compile_options(moist PRIVATE -traceback -fp-model=precise)
+  set(MOIST_INTEL_FFLAGS -traceback -fp-model=precise -fpscomp logicals)
+  target_compile_options(moist PRIVATE "$<$<COMPILE_LANGUAGE:Fortran>:${MOIST_INTEL_FFLAGS}>")
 endif()
 
-# Link the dependency stack (matches lib_deps in config/meson.build).
 target_link_libraries(moist PUBLIC
   mctc-lib::mctc-lib
   jonquil::jonquil
+  toml-f::toml-f
   LAPACK::LAPACK
   BLAS::BLAS
 )
+# PRIVATE keeps the C++ include directories off moist's consumers
+target_link_libraries(moist PRIVATE moist_fft finufft finufft_f32 finufft_common)
 if(MOIST_OPENMP)
   target_link_libraries(moist PUBLIC OpenMP::OpenMP_Fortran)
 endif()
 
-# ---------------------------------------------------------------------------
-# CLI application (app/) -> executable `moist`
-# ---------------------------------------------------------------------------
+# ifx takes `main` from its own runtime (for_main.o), which only its driver links
+set(MOIST_EXE_LINKER_LANGUAGE CXX)
+if(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+  set(MOIST_EXE_LINKER_LANGUAGE Fortran)
+endif()
+
 add_executable(moist-exe
   app/main.f90
   app/cli.f90
@@ -273,13 +253,10 @@ add_executable(moist-exe
 set_target_properties(moist-exe PROPERTIES
   OUTPUT_NAME moist
   Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/app-modules"
-  LINKER_LANGUAGE Fortran
+  LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}
 )
 target_link_libraries(moist-exe PRIVATE moist fclap)
 
-# ---------------------------------------------------------------------------
-# Install rules
-# ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 install(TARGETS moist moist-exe
   ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
@@ -287,50 +264,69 @@ install(TARGETS moist moist-exe
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
 )
 if(MOIST_API)
-  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/moist.h"
-    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+  install(FILES include/moist.h DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 endif()
 install(DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/moist"
   FILES_MATCHING PATTERN "*.mod")
 
-# ---------------------------------------------------------------------------
-# Unit test suite (test/unit/) -> ctest
-#
-# Mirrors test/meson.build + test/unit/meson.build: a single `tester` binary is
-# dispatched once per suite (the suite name is argv[1]), linked against moist
-# and the mstore molecular fixtures. Each suite is registered as its own ctest
-# case with the MOIST_SOURCE_ROOT env var the tests use to locate reference
-# data. Run with `ctest --test-dir <build> --output-on-failure`.
-# ---------------------------------------------------------------------------
+set(_licenses "${CMAKE_INSTALL_DATADIR}/licenses/moist")
+install(FILES LICENSE THIRD_PARTY_NOTICES.md DESTINATION "${_licenses}")
+foreach(vendor ducc0 finufft xsimd)
+  install(FILES "${_fft_dir}/${vendor}/LICENSE"
+    DESTINATION "${_licenses}" RENAME "LICENSE-${vendor}")
+endforeach()
+install(FILES "${_finufft_dir}/NOTICE" DESTINATION "${_licenses}" RENAME NOTICE-finufft)
+
+# Unit tests: one tester binary, run once per suite (mirrors test/unit/meson.build)
 if(MOIST_TESTS)
   enable_testing()
-  set(_moist_allow_tests ON)  # re-enable the shadowed add_test() for moist's suite
+  set(_moist_allow_tests ON)
   set(_unit "${CMAKE_CURRENT_SOURCE_DIR}/test/unit")
 
-  # Test-only subprojects (mirrors test/meson.build, which resolves both inside
-  # the test tree rather than in lib_deps).
-  moist_add_subproject(test-drive)  # (leaf)
-  moist_add_subproject(mstore)      # mctc-lib
+  moist_add_subproject(test-drive)
+  moist_add_subproject(mstore)
+  if(MOIST_OPENMP)
+    foreach(tgt test-drive-lib mstore-lib)
+      if(TARGET ${tgt})
+        target_link_libraries(${tgt} PRIVATE OpenMP::OpenMP_Fortran)
+      endif()
+    endforeach()
+  endif()
 
-  # Kept in sync with the `tests` list in test/unit/meson.build.
+  # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
     api parameters utils_timer utils_context utils_mem utils_prettylistprint
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
-    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_golden
+    math_fft_dst4 math_fft_3d finufft math_grid_nufft math_grid_3d
+    math_grid_radial_rule math_grid_radial math_grid_radial_trafo
+    math_grid_angular math_grid_atomic
+    math_grid_3d_threaded moz_1d moz_3d
+    math_grid_3d_partition
+    math_grid_3d_molecular
+    cavity_drop_primitives cavity_drop_cfc cavity_drop_lsf cavity_drop_lsf_reference
     cavity_drop_isodensity cavity_drop_gradient cavity_drop_nuclear_adjoint
     cavity_drop_integration cavity_drop_filter cavity_drop_cpcm
-    cavity_iswig cavity_numsa cavity_marchingcubes
+    cavity_iswig cavity_numsa cavity_marchingcubes cavity_reference cavity_surface_adjoint
     model_component_pcm_amat model_component_pcm_amat_kernel
     model_component_pcm_amat_assembly model_component_pcm_amat_adjoint
     model_component_pcm_electrostatics model_component_pcm_cpcm
     model_component_gostshyp model_component_pv
-    model_general channels model_coupling
+    model_continuum channels model_coupling
   )
+  # Each run as a selected test, outside test-drive's OpenMP team
+  set(moist_test_selected_math_grid_3d_threaded
+    batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
+    molecular_nufft_type12_threaded molecular_nufft_type3_threaded
+    radial_trafo_one_per_thread)
+  set(moist_test_selected_math_grid_3d_partition
+    compact_switches nuclear_derivative_continuity power_geometry partition_invariance large_coincident_partition
+    partition_of_unity ssf_bond_axis_hard_zeros ssf_owned_near_nucleus
+    single_atom_weight_one homonuclear_analytic_weights batch_matches_single_points
+    threaded_matches_serial nested_call_inside_parallel_region)
 
-  # Driver plus the shared fixture modules, which register no suite of their own.
   set(moist_test_srcs
     "${_unit}/main.F90"
     "${_unit}/test_helpers.f90"
@@ -343,31 +339,39 @@ if(MOIST_TESTS)
   add_executable(moist-tester ${moist_test_srcs})
   set_target_properties(moist-tester PROPERTIES
     Fortran_MODULE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-modules"
-    LINKER_LANGUAGE Fortran
+    LINKER_LANGUAGE ${MOIST_EXE_LINKER_LANGUAGE}
   )
-  # main.F90 selects suites with the same #ifdefs as the library build.
   if(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_compile_options(moist-tester PRIVATE -ffree-line-length-none -fbacktrace)
+  elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+    target_compile_options(moist-tester PRIVATE ${MOIST_INTEL_FFLAGS})
   endif()
   target_link_libraries(moist-tester PRIVATE
     moist mstore::mstore test-drive::test-drive)
 
   if(MOIST_API)
-    enable_language(CXX)
     add_executable(moist-api-tester test/api/example.c)
     set_property(TARGET moist-api-tester PROPERTY C_STANDARD 11)
     target_link_libraries(moist-api-tester PRIVATE moist)
     add_test(NAME api-c COMMAND moist-api-tester)
     add_executable(moist-api-cpp-tester test/api/cpp.cpp)
     set_property(TARGET moist-api-cpp-tester PROPERTY CXX_STANDARD 11)
-    set_property(TARGET moist-api-cpp-tester PROPERTY CXX_EXTENSIONS OFF)
     target_link_libraries(moist-api-cpp-tester PRIVATE moist)
     add_test(NAME api-cpp COMMAND moist-api-cpp-tester)
   endif()
 
   foreach(suite IN LISTS moist_test_suites)
-    add_test(NAME ${suite} COMMAND moist-tester ${suite})
-    set_tests_properties(${suite} PROPERTIES
+    if(DEFINED moist_test_selected_${suite})
+      set(runs "")
+      foreach(sel IN LISTS moist_test_selected_${suite})
+        add_test(NAME ${suite}_${sel} COMMAND moist-tester ${suite} ${sel})
+        list(APPEND runs ${suite}_${sel})
+      endforeach()
+    else()
+      add_test(NAME ${suite} COMMAND moist-tester ${suite})
+      set(runs ${suite})
+    endif()
+    set_tests_properties(${runs} PROPERTIES
       ENVIRONMENT "MOIST_SOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
       TIMEOUT 360
     )

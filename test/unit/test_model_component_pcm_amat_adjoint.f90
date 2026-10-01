@@ -1,6 +1,6 @@
 !> Adjoint-level unit tests for the Gaussian PCM interaction matrix
 !>
-!> [[moist_model_component_pcm_amat_adjoint]] contracts the derivative of the
+!> [[moist_model_continuum_component_pcm_amat_adjoint]] contracts the derivative of the
 !> matrix into O(ngrid) surface-variable weights and then folds those weights
 !> against the cavity's nuclear derivative arrays
 !>
@@ -16,7 +16,7 @@ module test_model_component_pcm_amat_adjoint
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
    use moist_cavity_iswig, only: cavity_type_iswig
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
                                              assemble_pcm_amat_with_gradient, &
                                              pcm_amat_surface_weights, &
                                              pcm_amat_nuclear_gradient

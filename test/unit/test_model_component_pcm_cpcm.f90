@@ -1,7 +1,7 @@
 !> Unit tests for the CPCM solvation model component
 module test_model_component_pcm_cpcm
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use test_helpers, only: component_view
    use mctc_env, only: wp
    use mctc_io_constants, only: pi
@@ -11,11 +11,11 @@ module test_model_component_pcm_cpcm
    use mstore, only: get_structure
    use moist_channels_coupling, only: coupling_type, gaussian_potential_request_type
    use moist_channels_response, only: response_type
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_component_pcm_cosmo, only: solvation_model_component_cosmo, new_component_cosmo
-   use moist_model_component_pcm_solvers, only: solve_pcm_lu
-   use moist_model_component_pcm_amat, only: assemble_pcm_amat
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_cosmo, only: model_continuum_component_cosmo, new_component_cosmo
+   use moist_model_continuum_component_pcm_solvers, only: solve_pcm_lu
+   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_cavity_drop_lsf_isodensity_internal, only: &
@@ -92,7 +92,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       class(radius_type), allocatable :: radius_model
@@ -213,7 +213,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -318,7 +318,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -390,7 +390,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
+      type(model_continuum_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       !> Coupling carrying the point-charge trace, and one whose potential
       !> request is answered directly with the array read back from it
@@ -491,7 +491,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Never built: declares no potential request at all
       type(coupling_type) :: coupling
@@ -556,7 +556,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_internal, pcm_external
+      type(model_continuum_component_cpcm) :: pcm_internal, pcm_external
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -641,7 +641,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(coupling_type) :: coupling
       !> Never updated; only its (empty) grid data reach the component
       type(cavity_type_iswig) :: cavity
@@ -675,7 +675,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -729,7 +729,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -789,7 +789,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_reused, pcm_fresh
+      type(model_continuum_component_cpcm) :: pcm_reused, pcm_fresh
       type(cavity_type_iswig) :: cavity_small, cavity_large
       !> One potential trace per cavity grid
       type(coupling_type) :: coupling_small, coupling_large
@@ -904,7 +904,7 @@ contains
       !> Molecular structure
       type(structure_type) :: mol
       !> Component under test
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       !> Two cavities of the same molecule on different Lebedev grids
       type(cavity_type_iswig) :: cavity_small, cavity_large
       !> One potential trace per cavity grid
@@ -1020,7 +1020,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       type(radius_type_static) :: radius_model
@@ -1125,7 +1125,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model, pcm_fresh
+      type(model_continuum_component_cpcm) :: pcm_model, pcm_fresh
       type(cavity_type_iswig) :: cavity
       type(radius_type_static) :: radius_model
       type(coupling_type) :: coupling
@@ -1272,7 +1272,7 @@ contains
       !> System name for error messages
       character(len=*), intent(in) :: system_name
 
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1365,7 +1365,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp) :: energy_array
@@ -1581,8 +1581,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
 
-      type(solvation_model_component_cpcm) :: pcm_model
-      type(solvation_model_component_cosmo) :: cosmo_model
+      type(model_continuum_component_cpcm) :: pcm_model
+      type(model_continuum_component_cosmo) :: cosmo_model
       !> Dielectric constants that must be rejected
       real(wp), parameter :: bad_epsilon(*) = [0.0_wp, 0.5_wp, -1.0_wp]
       !> Index over the rejected dielectric constants
@@ -1640,7 +1640,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type) :: mol
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_drop) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(surface_fixture) :: surface
@@ -1679,6 +1679,7 @@ contains
       call new(mol, [1], xyz_mol)
 
       ! Synthetic surface carrying only the fields the CPCM matrix reads
+      cavity%nsph = mol%nat
       cavity%ngrid = ngrid_sw
       allocate (cavity%a, source=sw_areas)
       allocate (cavity%xi0, source=sw_xis)
@@ -1755,7 +1756,6 @@ contains
          & 0.0_wp, thr=thr, message="type-bound xyz weights disagree with PCM weights")
       if (allocated(error)) return
 
-      cavity%nsph = 1
       allocate (cavity%xi1_rA(3, 1, ngrid_sw))
       allocate (cavity%f1_rA(3, 1, ngrid_sw))
       allocate (cavity%xyz1_rA(3, 3, 1, ngrid_sw))
@@ -1894,7 +1894,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(cavity_surface_adjoint_type) :: weights
       type(coupling_type) :: coupling
@@ -2090,7 +2090,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> Point-charge potential trace, refilled on every displaced cavity
       type(coupling_type) :: coupling
@@ -2262,7 +2262,7 @@ contains
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: trial
       !> PCM component and molecular cavity
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       !> External coupling data
       type(coupling_type), target :: coupling
@@ -2528,7 +2528,7 @@ contains
 
       type(structure_type), allocatable :: mols(:)
       type(structure_type) :: shifted
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)
@@ -2641,7 +2641,7 @@ contains
       type(moist_error_type), allocatable :: err
 
       type(structure_type), allocatable :: mols(:)
-      type(solvation_model_component_cpcm) :: pcm_model
+      type(model_continuum_component_cpcm) :: pcm_model
       type(cavity_type_iswig) :: cavity
       type(coupling_type) :: coupling
       real(wp), allocatable :: qat(:)

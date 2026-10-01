@@ -42,8 +42,7 @@
 *.gcov
 coverage.xml
 
-# Meson subproject artifacts (transitive wraps + lock are auto-generated)
-subprojects/toml-f.wrap
+# Meson subproject lock (auto-generated)
 .wraplock
 
 # Python files

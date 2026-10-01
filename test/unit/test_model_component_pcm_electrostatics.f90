@@ -5,7 +5,7 @@ module test_model_component_pcm_electrostatics
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type
-   use moist_model_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
+   use moist_model_continuum_component_pcm_electrostatics, only: pcm_electrostatic_nuclear_gradient, &
       & pcm_electrostatic_direct_gradient
    use test_helpers, only: get_test_structures, get_test_points, center_at_origin, &
                            fd4_scalar, fd4_offsets

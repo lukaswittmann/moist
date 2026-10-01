@@ -99,8 +99,8 @@ The density weights retained from the response phase supply the additional contr
 Grid inputs
 -----------
 
-Grid inputs are fields of the model's cavity: ``xyz``, ``xi0``, ``normal0``, ``a``, ``f`` and its other per-point arrays. Read these fields through the language's cavity API.
-The coupling keeps no copy of the grid and has no grid accessor of its own. A model update invalidates every coupling, so a staged coupling always refers to the current cavity.
+Grid inputs are :doc:`fields` of the model: ``xyz``, ``xi0`` and the other per-point arrays of its evaluation domain.
+The coupling keeps no copy of the grid and has no grid accessor of its own. A model update invalidates every coupling, so a staged coupling always refers to the current grid.
 
 .. _coupling-requests:
 
@@ -133,7 +133,7 @@ PCM uses the Gaussian operator ``erf(xi*r)/r`` consistently in the potential, Fo
 The point operator is a separate request for components requiring bare Coulomb potentials.
 
 Gaussian moment widths are exponents in bohr**-2, chosen by GOSTSHYP as ``pi*ln(2)/a`` from the per-point area.
-They are a request input, not a cavity field: read them from the request, never recompute them.
+They are a :doc:`field <fields>` of the request, not of the cavity: read them from the request, never recompute them.
 
 PCM requires ``phi`` in every phase.
 It requires both derivatives for the gradient, and for the response only when the cavity geometry follows the density.
@@ -162,7 +162,7 @@ The host contracts each with its own derivative of the quantity it is conjugate 
      - ``w_rho(ngrid)``, ``w_grad_rho(3, ngrid)``, ``w_hess_rho(3, 3, ngrid)``
      - The cavity surface follows the host density (the isodensity level sets),
        response phase only
-   * - ``gostshyp_amplitude``
+   * - ``gaussian_amplitude``
      - ``w_overlap(ngrid)``, ``w_normal_deriv(ngrid)``
      - A GOSTSHYP component is present
 
@@ -176,7 +176,7 @@ On a density-backed cavity the host therefore runs the response phase before the
 Going straight to the gradient phase loses that term, and nothing reports the loss.
 
 The host reads a response the way it walks a coupling. The response's ``next()`` makes each item current once per pass, in the order the model produced them, and returns false after the last one, rewinding for the next pass; on an empty response it returns false at once.
-The item's name tells which item is current, and its arrays keep the names of the table.
+The item's name tells which item is current, and its arrays keep the names of the table and are its :doc:`fields`.
 ``get_response`` and ``get_gradient`` refill the response and restart the walk.
 Contract every item the host knows and stop on any other: ``get_*`` reports an unanswered request, but nothing reports a response item the host skipped, and its term would silently be missing from the Fock matrix or the gradient.
 
@@ -222,7 +222,7 @@ Evaluation does not consume answers.
 On a coupling that is not staged, ``next()`` returns false without an error; ``get_*`` then reports the staging problem.
 
 A request is current only after ``next()`` returned true.
-It identifies the requested quantity, its named outputs and any request-specific inputs, such as the Gaussian moment ``width``.
+It identifies the requested quantity, its named outputs and any request-specific inputs, such as the Gaussian moment ``width``; the inputs are its :doc:`fields`.
 The language APIs describe whether the requirement state is read live or from a snapshot.
 
 A missing output is a required output without a valid answer.

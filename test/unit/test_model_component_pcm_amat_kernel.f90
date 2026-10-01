@@ -1,7 +1,7 @@
 !> Kernel-level unit tests for the auto-generated Gaussian PCM pair kernel
 module test_model_component_pcm_amat_kernel
    use mctc_env_accuracy, only: wp
-   use moist_model_component_pcm_amat_kernel, only: pcm_amat_x_far, &
+   use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far, &
       pcm_amat_x_taylor, pcm_amat_boys012, pcm_amat_width2, &
       pcm_amat_far_value, pcm_amat_far_grad, pcm_amat_far_hess, &
       pcm_amat_far_value_row, pcm_amat_far_grad_row, &

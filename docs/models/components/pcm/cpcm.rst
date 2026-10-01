@@ -26,10 +26,10 @@ Construction
       .. code-block:: fortran
 
          use mctc_env, only : wp
-         use moist_model_components, only : solvation_model_component_cpcm, &
+         use moist_model_continuum_component, only : model_continuum_component_cpcm, &
             & new_component_cpcm, solver_type, moist_pcm_parameters_type
 
-         type(solvation_model_component_cpcm) :: cpcm
+         type(model_continuum_component_cpcm) :: cpcm
 
          call new_component_cpcm(cpcm, ctx, epsilon=78.4_wp, error=error, &
             & param=moist_pcm_parameters_type(solver=solver_type%cholesky))

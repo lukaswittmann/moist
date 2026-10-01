@@ -5,185 +5,227 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+# A new push cancels the running PR build; pushes to main each get their own group
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   version-sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - name: Run version sync check
         run: bash config/sync-version.sh --check
 
-  ubuntu:
-    name: ubuntu (${{ matrix.toolchain.build }}, ${{ matrix.toolchain.name }})
-    runs-on: ubuntu-24.04
+  # System toolchains: apt GCC (PPA) and oneAPI on Linux, Homebrew GCC on macOS
+  native:
+    name: ${{ matrix.platform }} (${{ matrix.build }}, ${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false
       matrix:
-        toolchain:
-          - {build: meson, name: gnu13,   compiler: gcc,   version: '13',     fc: gfortran, cc: gcc}
-          - {build: meson, name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
-          - {build: meson, name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
-          - {build: meson, name: gnu14-ilp64, compiler: gcc, version: '14', fc: gfortran, cc: gcc, ilp64: true, meson_args: '-Dilp64=true -Dlapack=openblas'}
-          - {build: fpm,   name: gnu14,   compiler: gcc,   version: '14',     fc: gfortran, cc: gcc}
-          - {build: fpm,   name: intel25, compiler: intel, version: '2025.1', mkl_version: '2025.1', fc: ifx, cc: icx}
+        include:
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 30}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
+          - {platform: linux-arm64, os: ubuntu-24.04-arm, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
+          - {platform: linux-arm64, os: ubuntu-24.04-arm, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
+          - {platform: macos-arm64, os: macos-15, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: accelerate, timeout: 45}
+          - {platform: macos-arm64, os: macos-15, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: accelerate, timeout: 45}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install compiler
-        uses: fortran-lang/setup-fortran@v1
+        id: setup-fortran
+        uses: fortran-lang/setup-fortran@be037f0a45b1160f139d4ccd0b96f9e9bfd6a682 # v1.10.0
         with:
-          compiler: ${{ matrix.toolchain.compiler }}
-          version: ${{ matrix.toolchain.version }}
+          compiler: ${{ matrix.compiler }}
+          version: ${{ matrix.version }}
 
       - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y meson ninja-build liblapack-dev libunwind-dev
+          sudo apt-get install -y meson ninja-build cmake liblapack-dev libunwind-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install meson ninja
 
       - name: Install ILP64 BLAS/LAPACK
-        if: matrix.toolchain.ilp64
+        if: contains(matrix.meson_args, 'ilp64')
         run: sudo apt-get install -y libopenblas64-dev
 
       - name: Install Intel MKL
-        if: matrix.toolchain.compiler == 'intel'
+        if: matrix.compiler == 'intel'
         run: |
           sudo apt-get install -y \
-            intel-oneapi-mkl-${{ matrix.toolchain.mkl_version }} \
-            intel-oneapi-mkl-devel-${{ matrix.toolchain.mkl_version }}
+            intel-oneapi-mkl-${{ matrix.version }} \
+            intel-oneapi-mkl-devel-${{ matrix.version }}
 
       - name: Setup Intel oneAPI environment
-        if: matrix.toolchain.compiler == 'intel'
+        if: matrix.compiler == 'intel'
         run: |
           source /opt/intel/oneapi/setvars.sh --force
           printenv >> "$GITHUB_ENV"
 
       - name: Set compiler environment
         run: |
-          echo "FC=${{ matrix.toolchain.fc }}" >> "$GITHUB_ENV"
-          echo "CC=${{ matrix.toolchain.cc }}" >> "$GITHUB_ENV"
-
-      - name: Install fpm
-        if: matrix.toolchain.build == 'fpm'
-        uses: fortran-lang/setup-fpm@v10
-        with:
-          fpm-version: 'v0.13.0'
+          {
+            echo "FC=${{ steps.setup-fortran.outputs.fc }}"
+            echo "CC=${{ steps.setup-fortran.outputs.cc }}"
+            echo "CXX=${{ steps.setup-fortran.outputs.cxx }}"
+            echo "FFLAGS=${{ matrix.fflags }}"
+            echo "CXXFLAGS=${{ matrix.cxxflags }}"
+          } >> "$GITHUB_ENV"
 
       - name: Build and test (meson)
-        if: matrix.toolchain.build == 'meson'
+        if: matrix.build == 'meson'
         run: |
-          meson setup build ${{ matrix.toolchain.meson_args }}
+          meson setup build -Dlapack=${{ matrix.lapack }} ${{ matrix.meson_args }}
           meson compile -C build
-          meson test -C build --suite moist --print-errorlogs
+          meson test -C build --suite moist --print-errorlogs ${{ matrix.test_args }}
 
-      - name: Build and test (fpm)
-        if: matrix.toolchain.build == 'fpm'
+      - name: Build and test (cmake)
+        if: matrix.build == 'cmake'
         run: |
-          export OMP_STACKSIZE=128M
-          fflags="-fopenmp"
-          if [ "${{ matrix.toolchain.compiler }}" = "intel" ]; then fflags="$fflags -fp-model=precise -fpscomp logicals"; fi
-          fpm build --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
-          fpm test --compiler "$FC" --c-compiler "$CC" --flag "$fflags" --link-flag -fopenmp
+          meson subprojects download
+          cmake -B build -G Ninja -DMOIST_LAPACK=${{ matrix.lapack }}
+          cmake --build build
+          ctest --test-dir build --output-on-failure -j 4
 
-  macos:
-    name: macos (${{ matrix.toolchain.build }}, ${{ matrix.toolchain.name }})
-    runs-on: macos-14
+  # conda-forge toolchains; the compiler activation sets FC/CC/CXX and the flags
+  conda:
+    name: ${{ matrix.platform }} (${{ matrix.build }}, conda-gnu15)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    defaults:
+      run:
+        shell: bash -el {0}
     strategy:
       fail-fast: false
       matrix:
-        toolchain:
-          - {build: meson, name: gnu13, compiler: gcc, version: '13'}
-          - {build: meson, name: gnu14, compiler: gcc, version: '14'}
-          - {build: fpm,   name: gnu14, compiler: conda-gcc, version: '14.3'}
+        platform: [linux-x86_64, linux-arm64, macos-arm64]
+        build: [meson, cmake]
+        include:
+          - {platform: linux-x86_64, os: ubuntu-24.04, lapack: openblas, timeout: 30,
+             packages: 'gfortran_linux-64=15.2 gcc_linux-64=15.2 gxx_linux-64=15.2 openblas'}
+          - {platform: linux-arm64, os: ubuntu-24.04-arm, lapack: openblas, timeout: 30,
+             packages: 'gfortran_linux-aarch64=15.2 gcc_linux-aarch64=15.2 gxx_linux-aarch64=15.2 openblas'}
+          # clang/libc++ and llvm-openmp as in the local dev env
+          - {platform: macos-arm64, os: macos-15, lapack: accelerate, timeout: 45,
+             packages: 'gfortran_osx-arm64=15.2 clang_osx-arm64=19 clangxx_osx-arm64=19 llvm-openmp'}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - name: Install compiler
-        if: matrix.toolchain.compiler == 'gcc'
-        id: setup-fortran
-        uses: fortran-lang/setup-fortran@v1
+      - name: Install toolchain (conda-forge)
+        uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462 # v2.0.7
         with:
-          compiler: ${{ matrix.toolchain.compiler }}
-          version: ${{ matrix.toolchain.version }}
-
-      - name: Install compiler and fpm (conda-forge)
-        if: matrix.toolchain.compiler == 'conda-gcc'
-        uses: mamba-org/setup-micromamba@v2
-        with:
-          environment-name: fortran
-          create-args: gfortran=${{ matrix.toolchain.version }} fpm=0.13.0
+          environment-name: moist
+          create-args: ${{ matrix.packages }} meson=1.12 ninja=1.13 cmake=4.4
           condarc: |
             channels:
               - conda-forge
           init-shell: bash
-
-      - name: Install dependencies (macOS)
-        run: brew install meson ninja
-
-      - name: Install fpm
-        if: matrix.toolchain.build == 'fpm' && matrix.toolchain.compiler != 'conda-gcc'
-        uses: fortran-lang/setup-fpm@v10
-        with:
-          fpm-version: 'v0.13.0'
-
-      - name: Install netlib LAPACK (macOS fpm)
-        if: matrix.toolchain.build == 'fpm'
-        run: brew install lapack
-
-      - name: Set compiler environment
-        if: matrix.toolchain.compiler == 'gcc'
-        run: |
-          # Resolve `gcc`/`gfortran` on macOS
-          echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
-          echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
-
-      - name: Set compiler environment (conda-forge)
-        if: matrix.toolchain.compiler == 'conda-gcc'
-        shell: bash -leo pipefail {0}
-        run: |
-          echo "FC=$(command -v gfortran)" >> "$GITHUB_ENV"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          dirname "$(command -v fpm)" >> "$GITHUB_PATH"
+          cache-environment: true
 
       - name: Build and test (meson)
-        if: matrix.toolchain.build == 'meson'
+        if: matrix.build == 'meson'
         run: |
-          meson setup build -Dlapack=accelerate
+          meson setup build -Dlapack=${{ matrix.lapack }}
           meson compile -C build
           meson test -C build --suite moist --print-errorlogs
 
-      - name: Build and test (fpm)
-        if: matrix.toolchain.build == 'fpm'
+      - name: Build and test (cmake)
+        if: matrix.build == 'cmake'
         run: |
-          export SDKROOT="$(xcrun --show-sdk-path)"
-          export OMP_STACKSIZE=128M
-          flags="-O2 -fopenmp"
-          link_flag="-fopenmp -L$(brew --prefix lapack)/lib"
-          fpm build --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
-          fpm test --compiler "$FC" --c-compiler "$CC" --flag "$flags" --link-flag "$link_flag"
+          meson subprojects download
+          cmake -B build -G Ninja -DMOIST_LAPACK=${{ matrix.lapack }}
+          cmake --build build
+          ctest --test-dir build --output-on-failure -j 4
+
+  # MSYS2 ships only its current GCC (16.x), not a pinned gnu15
+  windows:
+    name: windows-x86_64 (${{ matrix.build }}, msys2-gcc)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        build: [meson, cmake]
+    steps:
+      # Keep LF line endings in sources and test data
+      - name: Disable autocrlf
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Install toolchain (MSYS2 UCRT64)
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          update: true
+          install: git
+          pacboy: >-
+            gcc:p gcc-fortran:p meson:p ninja:p cmake:p pkgconf:p openblas:p
+
+      - name: Build and test (meson)
+        if: matrix.build == 'meson'
+        run: |
+          meson setup build -Dlapack=openblas
+          meson compile -C build
+          meson test -C build --suite moist --print-errorlogs
+
+      - name: Build and test (cmake)
+        if: matrix.build == 'cmake'
+        run: |
+          meson subprojects download
+          cmake -B build -G Ninja -DMOIST_LAPACK=openblas
+          cmake --build build
+          ctest --test-dir build --output-on-failure -j 4
 
   python:
-    name: python (${{ matrix.name }}, gnu14, pyscf)
+    name: python (${{ matrix.platform }}, py${{ matrix.python }}, gnu15, pyscf)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: ubuntu, os: ubuntu-24.04, lapack: auto}
-          - {name: macos,  os: macos-14,     lapack: accelerate}
+          - {platform: linux-x86_64, os: ubuntu-24.04,     python: '3.10', lapack: auto}
+          - {platform: linux-x86_64, os: ubuntu-24.04,     python: '3.13', lapack: auto}
+          - {platform: linux-arm64,  os: ubuntu-24.04-arm, python: '3.13', lapack: auto}
+          - {platform: macos-arm64,  os: macos-15,         python: '3.13', lapack: accelerate}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install compiler
         id: setup-fortran
-        uses: fortran-lang/setup-fortran@v1
+        uses: fortran-lang/setup-fortran@be037f0a45b1160f139d4ccd0b96f9e9bfd6a682 # v1.10.0
         with:
           compiler: gcc
-          version: '14'
+          version: '15'
 
       - name: Set compiler environment
         run: |
-          echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
-          echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+          {
+            echo "FC=${{ steps.setup-fortran.outputs.fc }}"
+            echo "CC=${{ steps.setup-fortran.outputs.cc }}"
+            echo "CXX=${{ steps.setup-fortran.outputs.cxx }}"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -195,9 +237,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install meson ninja
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
+          python-version: ${{ matrix.python }}
 
       - name: Install Python dependencies
         run: python -m pip install --upgrade cffi setuptools pytest numpy pyscf==2.13.1
@@ -212,28 +254,33 @@ jobs:
           meson test -C build --suite moist --print-errorlogs
 
   wheel:
-    name: wheel (${{ matrix.name }}, gnu14, pyscf)
+    name: wheel (${{ matrix.platform }}, gnu15, pyscf)
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {name: ubuntu, os: ubuntu-24.04, lapack: auto}
-          - {name: macos,  os: macos-14,     lapack: accelerate}
+          - {platform: linux-x86_64, os: ubuntu-24.04,     lapack: auto}
+          - {platform: linux-arm64,  os: ubuntu-24.04-arm, lapack: auto}
+          - {platform: macos-arm64,  os: macos-15,         lapack: accelerate}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Install compiler
         id: setup-fortran
-        uses: fortran-lang/setup-fortran@v1
+        uses: fortran-lang/setup-fortran@be037f0a45b1160f139d4ccd0b96f9e9bfd6a682 # v1.10.0
         with:
           compiler: gcc
-          version: '14'
+          version: '15'
 
       - name: Set compiler environment
         run: |
-          echo "FC=${{ steps.setup-fortran.outputs.fc }}" >> "$GITHUB_ENV"
-          echo "CC=${{ steps.setup-fortran.outputs.cc }}" >> "$GITHUB_ENV"
+          {
+            echo "FC=${{ steps.setup-fortran.outputs.fc }}"
+            echo "CC=${{ steps.setup-fortran.outputs.cc }}"
+            echo "CXX=${{ steps.setup-fortran.outputs.cxx }}"
+          } >> "$GITHUB_ENV"
 
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
@@ -245,9 +292,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install meson ninja
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip pytest numpy pyscf==2.13.1

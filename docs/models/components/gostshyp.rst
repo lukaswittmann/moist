@@ -46,10 +46,10 @@ Construction
       .. code-block:: fortran
 
          use mctc_env, only : wp
-         use moist_model_components, only : solvation_model_component_gostshyp, &
+         use moist_model_continuum_component, only : model_continuum_component_gostshyp, &
             & new_component_gostshyp
 
-         type(solvation_model_component_gostshyp) :: gostshyp
+         type(model_continuum_component_gostshyp) :: gostshyp
 
          call new_component_gostshyp(gostshyp, pressure=1.699465e-3_wp)  ! 50 GPa
 
@@ -72,7 +72,7 @@ Construction
 
          gostshyp = ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)
 
-The component cannot form its own density traces. Hosts answer the ``gaussian_moments`` request in every phase and contract the ``gostshyp_amplitude`` item of the response; see the :ref:`host requests <coupling-requests>` and :ref:`gostshyp-fortran` for the outputs required per phase.
+The component cannot form its own density traces. Hosts answer the ``gaussian_moments`` request in every phase and contract the ``gaussian_amplitude`` item of the response; see the :ref:`host requests <coupling-requests>` and :ref:`gostshyp-fortran` for the outputs required per phase.
 
 PySCF
 -----

@@ -14,7 +14,8 @@ module test_data
    use moist_data_radii_legacy, only: get_radius, get_radius_func, &
       & get_upper_bound, rad_type
    use moist_data_solvents, only: get_solvent_id, max_solvents, &
-      & solvation_system_type, new_solvation_system
+      & solvation_system_type, new_solvation_system, solvent_multipole_data_type, &
+      & get_solvent_charges, get_solvent_multipoles
 
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 
@@ -82,6 +83,9 @@ contains
                   new_unittest("solvent_system_constructs", test_solvent_system_constructs), &
                   new_unittest("solvent_system_validates_input", test_solvent_system_validation), &
                   new_unittest("solvent_system_all_ids", test_solvent_system_all_ids), &
+                  new_unittest("solvent_new_geometries", test_solvent_new_geometries), &
+                  new_unittest("solvent_charge_data", test_solvent_charge_data), &
+                  new_unittest("solvent_system_charge_accessors", test_solvent_system_charge_accessors), &
                   new_unittest("solvent_surface_tension_units", test_solvent_surface_tension_units) &
                   ]
    end subroutine collect_data
@@ -1078,6 +1082,160 @@ contains
          deallocate (err)
       end do
    end subroutine test_solvent_system_all_ids
+
+   !> Optimized geometries replace placeholders and include the final catalog entry
+   subroutine test_solvent_new_geometries(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(solvation_system_type) :: system
+      type(moist_error_type), allocatable :: err
+
+      call new_solvation_system(system, 8, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "optimized geometry for ID 8 unavailable: "//err%message)
+         return
+      end if
+      call check(error, system%solv_mol%nat, 14)
+      if (allocated(error)) return
+      call check(error, system%solv_mol%xyz(1, 1), 1.08149752174966_wp*aatoau, thr=1.0e-12_wp)
+      if (allocated(error)) return
+
+      call new_solvation_system(system, 180, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "optimized geometry for ID 180 unavailable: "//err%message)
+         return
+      end if
+      call check(error, system%solv_mol%nat, 13)
+   end subroutine test_solvent_new_geometries
+
+   !> Charge schemes and MBIS moments retain archive ordering and environment values
+   subroutine test_solvent_charge_data(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(solvent_multipole_data_type) :: multipoles
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: charges(:)
+      integer :: id, ienv, imodel, nat
+      character(len=9), parameter :: environments(3) = [character(len=9) :: &
+         "gas", "solvent", "conductor"]
+      character(len=9), parameter :: models(4) = [character(len=9) :: &
+         "hirshfeld", "resp", "mbis", "chelpg"]
+
+      do id = 1, 187
+         if (id == 94) cycle
+         do ienv = 1, size(environments)
+            call get_solvent_multipoles(id, environments(ienv), "mbis", multipoles, err)
+            if (allocated(err)) then
+               call test_failed(error, "multipole data unavailable: "//err%message)
+               return
+            end if
+            nat = size(multipoles%monopole)
+            call check(error, all(shape(multipoles%dipole) == [3, nat]), &
+               "dipole shape does not match atom count")
+            if (allocated(error)) return
+            call check(error, all(shape(multipoles%quadrupole) == [6, nat]), &
+               "quadrupole shape does not match atom count")
+            if (allocated(error)) return
+            call check(error, all(shape(multipoles%octupole) == [10, nat]), &
+               "octupole shape does not match atom count")
+            if (allocated(error)) return
+            do imodel = 1, size(models)
+               call get_solvent_charges(id, environments(ienv), models(imodel), charges, err)
+               if (allocated(err)) then
+                  call test_failed(error, "charge data unavailable: "//err%message)
+                  return
+               end if
+               call check(error, size(charges), nat)
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+
+      call get_solvent_charges(175, "gas", "mbis", charges, err)
+      call check(error, charges(1), -0.854498_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+      call get_solvent_multipoles(175, "gas", "mbis", multipoles, err)
+      call check(error, multipoles%monopole(1), -0.854500_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+      call check(error, multipoles%dipole(3, 1), 0.198841_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+      call get_solvent_charges(22, "solvent", "mbis", charges, err)
+      call check(error, size(charges), 14)
+      if (allocated(error)) return
+      call get_solvent_charges(94, "gas", "mbis", charges, err)
+      call check(error, allocated(err), "excluded ID 94 should return an error")
+      if (allocated(error)) return
+      deallocate (err)
+      call get_solvent_multipoles(175, "unknown", "mbis", multipoles, err)
+      call check(error, allocated(err), "unknown environment should return an error")
+   end subroutine test_solvent_charge_data
+
+   !> Type-bound accessors select charge and multipole models independently
+   subroutine test_solvent_system_charge_accessors(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(solvation_system_type) :: system
+      type(solvent_multipole_data_type) :: multipoles
+      type(moist_error_type), allocatable :: err
+      real(wp), allocatable :: charges(:)
+      character(len=9), parameter :: models(4) = [character(len=9) :: &
+         "hirshfeld", "resp", "mbis", "chelpg"]
+      real(wp), parameter :: water_gas_charge(4) = [ &
+         -0.302821_wp, -0.702136_wp, -0.854498_wp, -0.702403_wp]
+      integer :: i
+
+      call new_solvation_system(system, 175, error=err)
+      if (allocated(err)) then
+         call test_failed(error, "water system unavailable: "//err%message)
+         return
+      end if
+
+      do i = 1, size(models)
+         call system%get_charges("gas", models(i), charges, err)
+         if (allocated(err)) then
+            call test_failed(error, "charge lookup failed: "//err%message)
+            return
+         end if
+         call check(error, size(charges), system%solv_mol%nat)
+         if (allocated(error)) return
+         call check(error, charges(1), water_gas_charge(i), thr=1.0e-10_wp)
+         if (allocated(error)) return
+      end do
+
+      call system%get_charges(" solvent ", "MBIS", charges, err)
+      if (allocated(err)) then
+         call test_failed(error, "case-insensitive charge lookup failed: "//err%message)
+         return
+      end if
+      call check(error, charges(1), -0.963980_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+
+      call system%get_multipoles("conductor", "MBIS", multipoles, err)
+      if (allocated(err)) then
+         call test_failed(error, "multipole lookup failed: "//err%message)
+         return
+      end if
+      call check(error, multipoles%monopole(1), -0.965559_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+      call check(error, multipoles%dipole(3, 1), 0.185511_wp, thr=1.0e-10_wp)
+      if (allocated(error)) return
+      call check(error, all(shape(multipoles%quadrupole) == [6, 3]), "quadrupole shape")
+      if (allocated(error)) return
+      call check(error, all(shape(multipoles%octupole) == [10, 3]), "octupole shape")
+      if (allocated(error)) return
+
+      call system%get_charges("gas", "unknown", charges, err)
+      call check(error, allocated(err), "unknown charge model should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(charges), "failed charge lookup should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call system%get_multipoles("gas", "unknown", multipoles, err)
+      call check(error, allocated(err), "unknown multipole model should return an error")
+      if (allocated(error)) return
+      call check(error, .not. allocated(multipoles%monopole), "failed multipole lookup should clear output")
+      if (allocated(error)) return
+      deallocate (err)
+      call system%get_multipoles("unknown", "mbis", multipoles, err)
+      call check(error, allocated(err), "unknown environment should return an error")
+   end subroutine test_solvent_system_charge_accessors
 
    !> Surface tensions are tabulated in mN/m. n-Hexane and methanol are checked
    !> against their 298.15 K literature values (17.89 and 22.07 mN/m), which the

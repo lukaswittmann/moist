@@ -1,6 +1,5 @@
 !> DROP setup and preprocessing routines
 submodule(moist_cavity_drop) moist_cavity_drop_setup
-   use mctc_io_constants, only: pi
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    implicit none(type, external)
@@ -163,8 +162,8 @@ contains
          do jj = 1, self%param%num_leb
             ii = ii + 1
 
-            ! Construct raw Lebedev weight from ang_weight(jj)
-            self%wleb(ii) = self%ang_weight(jj)*(4.0_wp*pi)
+            ! Solid-angle Lebedev weight
+            self%wleb(ii) = self%ang_weight(jj)
 
             ! Cartesian location of point on sphere i:
             self%xyz(1, ii) = self%mol%xyz(1, i) + self%radii(i)*self%ang_grid(1, jj)

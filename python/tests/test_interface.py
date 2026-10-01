@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Callable
 
 import numpy as np
@@ -11,12 +12,15 @@ from moist import (
     SvdW, SvdWParameters,
 )
 from moist.interface import (
+    AtomicChargeAdjointResponse,
+    AtomicMultipoleAdjointResponse,
     Cavity,
     CavityDROP,
     CavityISwiG,
     CavitySnapshot,
     CavitySnapshotDROP,
     Coupling,
+    GaussianAmplitudeResponse,
     GaussianMomentRequest,
     GaussianPotentialRequest,
     ModelComponentCOSMO,
@@ -26,6 +30,7 @@ from moist.interface import (
     DensityResponse,
     PCMSolver,
     PotentialAdjointResponse,
+    RadialPotentialAdjointResponse,
     Response,
     SolvationModel,
     Structure,
@@ -629,8 +634,15 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
     for request in coupling:
         visited.append(request.name)
         assert not hasattr(request, "width")
-        with raises(RuntimeError, match="gaussian_potential has no input 'width'"):
-            library.get_coupling_request_width(coupling._handle, np.empty(model.cavity.ngrid))
+        # A kind without inputs lists none, and refuses one by name.
+        assert library.get_coupling_request_field_count(coupling._handle) == 0
+        with raises(RuntimeError, match="Field index out of range"):
+            library.get_coupling_request_field_info(coupling._handle, 0)
+        with raises(RuntimeError, match="gaussian_potential has no field 'width'"):
+            library.get_coupling_request_field_real(
+                coupling._handle, "width", np.empty(model.cavity.ngrid))
+        with raises(RuntimeError, match="gaussian_potential has no field 'width'"):
+            library.get_coupling_request_field_about(coupling._handle, "width")
     assert visited == ["gaussian_potential"]
 
 
@@ -810,6 +822,10 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
         lambda: library.get_coupling_request_name(handle),
         lambda: library.get_coupling_request_missing(handle, "phi"),
         lambda: library.answer_coupling_request(handle, "phi", np.zeros(ngrid)),
+        lambda: library.get_coupling_request_field_count(handle),
+        lambda: library.get_coupling_request_field_info(handle, 0),
+        lambda: library.get_coupling_request_field_about(handle, "width"),
+        lambda: library.get_coupling_request_field_real(handle, "width", np.zeros(ngrid)),
     ):
         with raises(RuntimeError, match=no_current):
             query()
@@ -850,18 +866,23 @@ def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
     assert list(response) == []
     handle = model._response_handle()
     assert library.next_response_item(handle) is False
-    # Nothing is current, so there is nothing to name or to read.
-    with raises(RuntimeError, match="No current response item"):
-        library.get_response_item_name(handle)
-    with raises(RuntimeError, match="No current response item"):
-        library.get_response_array(handle, "w_phi", np.empty(ngrid))
+    # Nothing is current, so there is nothing to name, list or read.
+    for query in (
+        lambda: library.get_response_item_name(handle),
+        lambda: library.get_response_field_count(handle),
+        lambda: library.get_response_field_info(handle, 0),
+        lambda: library.get_response_field_about(handle, "w_phi"),
+        lambda: library.get_response_field_real(handle, "w_phi", np.empty(ngrid)),
+    ):
+        with raises(RuntimeError, match="No current response item"):
+            query()
     # A failure is raised, never read as the end of a pass.
     with raises(RuntimeError, match="next_response_item"):
         library.next_response_item(library.ResponseHandle.null())
 
 
 def test_response_arrays_are_read_by_name(gaussian_density) -> None:
-    """The cursor walks the items; each array of the current one is read by name, grid axis first."""
+    """The cursor walks the items; each lists its arrays, read by name in the listed shape."""
 
     model = SolvationModel(
         CavityDROP(lsf=Isodensity(), parameters=_DROP_NLEB26, source=gaussian_density),
@@ -891,33 +912,171 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
     for item in response:
         assert library.next_response_item(handle) is True
         assert library.get_response_item_name(handle) == item.name
-        for array, shape in expected[item.name].items():
-            value = getattr(item, array)
-            assert value.shape == shape, array
-            assert value.flags.c_contiguous, array
+        listed = [library.get_response_field_info(handle, index)
+                  for index in range(library.get_response_field_count(handle))]
+        # The item lists its arrays in declaration order, C shapes slowest first.
+        assert [field.name for field in listed] == list(expected[item.name])
+        for field in listed:
+            shape = expected[item.name][field.name]
+            assert field.shape == shape, field.name
+            assert field.dtype == np.float64, field.name
+            assert field.count == int(np.prod(shape)), field.name
+            assert library.get_response_field_about(handle, field.name), field.name
+            value = getattr(item, field.name)
+            assert value.shape == shape, field.name
+            assert value.flags.c_contiguous, field.name
             copy = np.empty_like(value)
-            library.get_response_array(handle, array, copy)
+            library.get_response_field_real(handle, field.name, copy)
             np.testing.assert_array_equal(value, copy)
+        with raises(RuntimeError, match="Field index out of range"):
+            library.get_response_field_info(handle, len(listed))
     assert library.next_response_item(handle) is False
     assert np.abs(_item(response, DensityResponse).w_hess_rho).max() > 0.0
 
     # An array the current item does not have is refused by name before
     # anything is written, whether or not another item has it.
     assert library.next_response_item(handle) is True
-    buffer = np.empty(ngrid)
-    with raises(RuntimeError, match="potential_adjoint has no array 'w_rho'"):
-        library.get_response_array(handle, "w_rho", buffer)
-    with raises(RuntimeError, match="potential_adjoint has no array 'q'"):
-        library.get_response_array(handle, "q", buffer)
+    buffer = np.full(ngrid, 7.0)
+    with raises(RuntimeError, match="potential_adjoint has no field 'w_rho'"):
+        library.get_response_field_real(handle, "w_rho", buffer)
+    with raises(RuntimeError, match="potential_adjoint has no field 'q'"):
+        library.get_response_field_real(handle, "q", buffer)
+    with raises(RuntimeError, match="potential_adjoint has no field 'w_rho'"):
+        library.get_response_field_about(handle, "w_rho")
     assert library.next_response_item(handle) is True
     assert library.get_response_item_name(handle) == "density"
-    with raises(RuntimeError, match="density has no array 'w_phi'"):
-        library.get_response_array(handle, "w_phi", buffer)
+    with raises(RuntimeError, match="density has no field 'w_phi'"):
+        library.get_response_field_real(handle, "w_phi", buffer)
+    np.testing.assert_array_equal(buffer, 7.0)
+    # Only the element type and the layout are checked on the Python side.
+    with raises(TypeError, match="float64"):
+        library.get_response_field_real(handle, "w_rho", np.empty(ngrid, dtype=np.float32))
+    with raises(ValueError, match="C-contiguous"):
+        library.get_response_field_real(handle, "w_grad_rho", np.empty((3, ngrid)).T)
 
     # Filling the response again starts a new walk, even in the middle of one.
     library.get_model_response(model._model, coupling._handle, handle)
     assert library.next_response_item(handle) is True
     assert library.get_response_item_name(handle) == "potential_adjoint"
+
+
+# -----------------------------------------------------------------------------
+# Response items follow the native declaration
+# -----------------------------------------------------------------------------
+#
+# ``Response`` reads each item's arrays as the native item lists them, so the
+# item types no model reachable from Python produces are pinned against a
+# stand-in for the native walk.
+
+
+def _fake_native_response(monkeypatch, name, arrays):
+    """Stand in for a native response holding one item ``name`` that lists ``arrays``."""
+    listed = [library.FieldInfo(key, np.dtype(np.float64), value.shape, value.size)
+              for key, value in arrays.items()]
+    current = [False]
+
+    def next_item(handle):
+        current[0] = not current[0]
+        return current[0]
+
+    def read(handle, key, values):
+        values[...] = arrays[key]
+
+    monkeypatch.setattr(library, "next_response_item", next_item)
+    monkeypatch.setattr(library, "get_response_item_name", lambda handle: name)
+    monkeypatch.setattr(library, "get_response_field_count", lambda handle: len(listed))
+    monkeypatch.setattr(library, "get_response_field_info", lambda handle, index: listed[index])
+    monkeypatch.setattr(library, "get_response_field_real", read)
+
+
+_NATOM, _NGRID = 2, 5
+_RNG = np.random.default_rng(11)
+
+
+@pytest.mark.parametrize("kind,arrays", [
+    (GaussianAmplitudeResponse, {"w_overlap": _RNG.standard_normal(_NGRID),
+                                 "w_normal_deriv": _RNG.standard_normal(_NGRID)}),
+    (AtomicMultipoleAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM),
+                                      "dg_dmu": _RNG.standard_normal((_NATOM, 3)),
+                                      "dg_dtheta": _RNG.standard_normal((_NATOM, 3, 3))}),
+    (AtomicChargeAdjointResponse, {"dg_dq": _RNG.standard_normal(_NATOM)}),
+    (RadialPotentialAdjointResponse, {"dg_dphi": _RNG.standard_normal((_NATOM, _NGRID))}),
+])
+def test_response_items_take_the_listed_shapes(monkeypatch, kind, arrays) -> None:
+    """Each item is typed by its native name and copies its arrays in the listed shapes."""
+    _fake_native_response(monkeypatch, kind.name, arrays)
+    (item,) = Response._from_handle(None)
+    assert type(item) is kind
+    for name, value in arrays.items():
+        copy = getattr(item, name)
+        assert copy.shape == value.shape, name
+        np.testing.assert_array_equal(copy, value)
+        assert not copy.flags.writeable, name
+
+
+def test_an_order_the_model_never_consumed_is_none(monkeypatch) -> None:
+    """Atomic multipole arrays are optional natively; an unlisted one is None, never zeros."""
+    dg_dq = np.arange(1.0, 1.0 + _NATOM)
+    _fake_native_response(monkeypatch, "atomic_multipole_adjoint", {"dg_dq": dg_dq})
+    (item,) = Response._from_handle(None)
+    assert isinstance(item, AtomicMultipoleAdjointResponse)
+    np.testing.assert_array_equal(item.dg_dq, dg_dq)
+    assert item.dg_dmu is None
+    assert item.dg_dtheta is None
+
+
+def test_response_bindings_refuse_to_drift_from_the_library(monkeypatch) -> None:
+    """A listed array without an attribute, or a required attribute not listed, is a binding bug."""
+    _fake_native_response(monkeypatch, "potential_adjoint",
+                          {"w_phi": np.zeros(_NGRID), "w_extra": np.zeros(_NGRID)})
+    with raises(RuntimeError, match="'potential_adjoint' declares array 'w_extra'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "density",
+                          {"w_rho": np.zeros(_NGRID), "w_grad_rho": np.zeros((_NGRID, 3))})
+    with raises(RuntimeError, match="'density' does not declare array 'w_hess_rho'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "atomic_charge_adjoint", {})
+    with raises(RuntimeError, match="'atomic_charge_adjoint' does not declare array 'dg_dq'"):
+        Response._from_handle(None)
+
+    _fake_native_response(monkeypatch, "bogus", {})
+    with raises(RuntimeError, match="Unknown response item 'bogus'"):
+        Response._from_handle(None)
+
+
+def test_gaussian_moment_width_is_the_listed_input(monkeypatch) -> None:
+    """The width is read as the request lists it; a request without it is a binding bug."""
+    width = np.linspace(0.5, 1.5, _NGRID)
+    listed = [library.FieldInfo("width", np.dtype(np.float64), width.shape, width.size)]
+
+    def read(handle, name, values):
+        values[...] = {"width": width}[name]
+
+    coupling = SimpleNamespace(_handle=None)
+    monkeypatch.setattr(library, "get_coupling_request_field_count", lambda handle: len(listed))
+    monkeypatch.setattr(library, "get_coupling_request_field_info", lambda handle, index: listed[index])
+    monkeypatch.setattr(library, "get_coupling_request_field_real", read)
+    np.testing.assert_array_equal(GaussianMomentRequest._inputs(coupling)["width"], width)
+
+    listed.clear()
+    with raises(RuntimeError, match="'gaussian_moments' does not declare input 'width'"):
+        GaussianMomentRequest._inputs(coupling)
+
+
+def test_every_response_item_is_public() -> None:
+    """The six item types are exported, so the API reference lists them."""
+    from moist.interface import _RESPONSE_ITEMS
+
+    assert set(_RESPONSE_ITEMS) == {
+        "potential_adjoint", "density", "gaussian_amplitude", "atomic_multipole_adjoint",
+        "atomic_charge_adjoint", "radial_potential_adjoint",
+    }
+    for name, kind in _RESPONSE_ITEMS.items():
+        assert kind.name == name
+        assert kind.__name__ in moist.__all__
+        assert getattr(moist, kind.__name__) is kind
 
 
 def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
@@ -1062,10 +1221,17 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         active = a > 0.0
         np.testing.assert_allclose(width[active], np.pi * np.log(2.0) / a[active], rtol=1e-12)
         np.testing.assert_array_equal(width[~active], 0.0)
-        # The snapshot is a copy of the request's own input.
+        # The snapshot is a copy of the request's own input, its only field.
+        assert library.get_coupling_request_field_count(coupling._handle) == 1
+        field = library.get_coupling_request_field_info(coupling._handle, 0)
+        assert (field.name, field.dtype, field.shape, field.count) == (
+            "width", np.float64, (ngrid,), ngrid)
+        assert library.get_coupling_request_field_about(coupling._handle, "width")
         copy = np.empty(ngrid)
-        library.get_coupling_request_width(coupling._handle, copy)
+        library.get_coupling_request_field_real(coupling._handle, "width", copy)
         np.testing.assert_array_equal(width, copy)
+        with raises(RuntimeError, match="gaussian_moments has no field 'omega'"):
+            library.get_coupling_request_field_real(coupling._handle, "omega", copy)
     assert walked == expected
 
 
@@ -1079,18 +1245,22 @@ def test_removed_protocol_names_stay_removed() -> None:
         assert not hasattr(moist.CouplingRequest, name)
     for name in ("potential_adjoint", "density", "gostshyp_amplitude", "items", "__len__"):
         assert not hasattr(Response, name)
+    for name in ("GostshypAmplitudeResponse", "CavityField"):
+        assert not hasattr(moist, name)
     for name in ("coupling_n_requests", "coupling_request_handle", "coupling_request_missing_count",
                  "response_has", "response_get_potential_adjoint", "response_get_density",
                  "response_get_gostshyp_amplitude",
                  "coupling_next", "coupling_request_name", "coupling_request_missing",
                  "coupling_get_moment_width", "coupling_answer", "response_next",
                  "response_item_name", "response_get", "general_model_get_energy",
-                 "general_model_prepare_energy"):
+                 "general_model_prepare_energy", "get_response_array",
+                 "get_coupling_request_width", "CavityField"):
         assert not hasattr(library, name)
     for name in ("get_coupling_request_count", "get_coupling_request_handle",
                  "get_coupling_request_missing_count", "has_response",
                  "get_response_potential_adjoint", "get_response_density",
-                 "get_response_gostshyp_amplitude"):
+                 "get_response_gostshyp_amplitude", "get_response_array",
+                 "get_coupling_request_width"):
         assert not hasattr(library.lib, "moist_" + name)
 
 

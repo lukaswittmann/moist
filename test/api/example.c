@@ -2664,15 +2664,15 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_get_coupling_request_missing");
     moist_answer_coupling_request(error, NULL, "phi", &value);
     REQUIRE_ORIGIN("moist_answer_coupling_request");
-    moist_get_coupling_request_width(error, NULL, &value);
-    REQUIRE_ORIGIN("moist_get_coupling_request_width");
+    moist_get_coupling_request_field_real(error, NULL, "width", &value);
+    REQUIRE_ORIGIN("moist_get_coupling_request_field_real");
     /* So does a failing response walk */
     if (moist_next_response_item(error, NULL)) goto cleanup;
     REQUIRE_ORIGIN("moist_next_response_item");
     moist_get_response_item_name(error, NULL, request_name);
     REQUIRE_ORIGIN("moist_get_response_item_name");
-    moist_get_response_array(error, NULL, "w_phi", &value);
-    REQUIRE_ORIGIN("moist_get_response_array");
+    moist_get_response_field_real(error, NULL, "w_phi", &value);
+    REQUIRE_ORIGIN("moist_get_response_field_real");
     moist_contract_surface_lsf_weights(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     REQUIRE_ORIGIN("moist_contract_surface_lsf_weights");
     moist_contract_surface_lsf_weights_extended(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
@@ -2893,9 +2893,10 @@ static int walk_to_item(moist_error error, moist_response response, const char* 
     return moist_check_error(error) ? -1 : 0;
 }
 
-/* Read one array of the current response item as a host should, checking the
- * size contract on the way: a NULL buffer is refused by name, and moist writes
- * exactly the documented ngrid * per_point values -- never past them into a
+/* Read one array of the current response item as a host should: find it with
+ * the field count and info readers and check its description against the
+ * documented shape, grid axis first; a NULL buffer is refused, and moist
+ * writes exactly `count` = ngrid * per_point values -- never past them into a
  * larger buffer. `per_point` counts the values per grid point (1, 3 or 9);
  * `values` receives ngrid * per_point of them */
 static int read_response_array(moist_error* error, moist_response response, const char* array,
@@ -2904,21 +2905,43 @@ static int read_response_array(moist_error* error, moist_response response, cons
     const int padding = 5;
     const size_t logical = (size_t)ngrid * (size_t)per_point * sizeof(double);
     const size_t allocated = (size_t)(ngrid + padding) * (size_t)per_point * sizeof(double);
-    char fragment[128], what[128];
-    int failed = 1;
-    double* buffer = (double*)malloc(allocated);
+    const int expect_rank = per_point == 1 ? 1 : per_point == 3 ? 2 : 3;
+    char what[128];
+    int failed = 1, nfield = 0, found = 0;
+    double* buffer = NULL;
+
+    moist_get_response_field_count(*error, response, &nfield);
+    if (moist_check_error(*error)) return 1;
+    for (int i = 0; i < nfield && !found; ++i) {
+        char name[MOIST_FIELD_NAME_MAX + 1];
+        int dtype = 0, rank = 0, count = 0, dims[MOIST_FIELD_MAX_RANK] = {0};
+        moist_get_response_field_info(*error, response, i, name, &dtype, &rank, dims, &count);
+        if (moist_check_error(*error)) return 1;
+        if (strcmp(name, array) != 0) continue;
+        found = 1;
+        if (dtype != MOIST_FIELD_REAL || rank != expect_rank || dims[0] != ngrid ||
+            count != ngrid * per_point || (rank > 1 && dims[1] != 3) || (rank > 2 && dims[2] != 3)) {
+            printf("  FAIL: %s described as dtype %d, rank %d, dims {%d, %d, %d}, count %d\n",
+                   array, dtype, rank, dims[0], dims[1], dims[2], count);
+            return 1;
+        }
+    }
+    if (!found) {
+        printf("  FAIL: the current item does not list %s\n", array);
+        return 1;
+    }
+
+    buffer = (double*)malloc(allocated);
     if (!buffer) {
         printf("  Error: memory allocation failed\n");
         return 1;
     }
-
     fill_sentinel(buffer, allocated);
-    moist_get_response_array(*error, response, array, NULL);
-    snprintf(fragment, sizeof fragment, "Null array pointer provided for '%s'", array);
+    moist_get_response_field_real(*error, response, array, NULL);
     snprintf(what, sizeof what, "NULL buffer for %s", array);
-    if (expect_failure(error, fragment, what)) goto done;
+    if (expect_failure(error, "Required pointer 'values' is missing", what)) goto done;
 
-    moist_get_response_array(*error, response, array, buffer);
+    moist_get_response_field_real(*error, response, array, buffer);
     if (moist_check_error(*error)) goto done;
     if (!sentinel_intact((const unsigned char*)buffer + logical, allocated - logical)) {
         printf("  FAIL: reading %s wrote past the logical grid\n", array);
@@ -2987,6 +3010,16 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     REQUIRE(!moist_check_error(error));
     moist_get_cavity_field_real(error, borrowed, "xi0", xi);
     REQUIRE(!moist_check_error(error));
+    /* The model field getters hand out the same grid, for any model family */
+    {
+        int nmodel = -1, ncavity = -2;
+        moist_get_model_field_count(error, model, &nmodel);
+        REQUIRE(!moist_check_error(error));
+        moist_get_cavity_field_count(error, borrowed, &ncavity);
+        REQUIRE(!moist_check_error(error) && nmodel == ncavity);
+        moist_get_model_field_real(error, model, "xi0", w_phi);
+        REQUIRE(!moist_check_error(error) && memcmp(w_phi, xi, ngrid * sizeof(double)) == 0);
+    }
     moist_delete_cavity(&borrowed);
     gaussian_nuclear_primitives(ngrid, xyz, xi, phi, dphi, dxi);
     const struct host_outputs host = {ngrid, phi, dphi, dxi, NULL, NULL, NULL, NULL};
@@ -3003,7 +3036,7 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     REQUIRE(missing);
     moist_answer_coupling_request(error, cpl, "phi", phi);
     if (expect_failure(&error, no_current_request, "answer without a walk")) goto cleanup;
-    moist_get_coupling_request_width(error, cpl, w_phi);
+    moist_get_coupling_request_field_real(error, cpl, "width", w_phi);
     if (expect_failure(&error, no_current_request, "width without a walk")) goto cleanup;
 
     /* Every prepare restarts the walk, even in the middle of a pass */
@@ -3022,8 +3055,8 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     REQUIRE(missing_is(error, cpl, "phi", true) && missing_is(error, cpl, "dphi_dr", false));
     /* A name the request does not declare is not missing; that is no error */
     REQUIRE(missing_is(error, cpl, "gt", false));
-    moist_get_coupling_request_width(error, cpl, w_phi);
-    if (expect_failure(&error, "gaussian_potential has no input 'width'",
+    moist_get_coupling_request_field_real(error, cpl, "width", w_phi);
+    if (expect_failure(&error, "gaussian_potential has no field 'width'",
                        "width of a potential request")) goto cleanup;
     /* Answers are checked by name and value; a refused answer drops the
      * previous one */
@@ -3089,23 +3122,23 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     fill_sentinel(w_phi, (size_t)ngrid * sizeof(double));
     moist_get_response_item_name(error, response, name);
     if (expect_failure(&error, no_current_item, "item name outside a pass")) goto cleanup;
-    moist_get_response_array(error, response, "w_phi", w_phi);
+    moist_get_response_field_real(error, response, "w_phi", w_phi);
     if (expect_failure(&error, no_current_item, "array outside a pass")) goto cleanup;
     /* Arrays are read by name from the current item: an array of another item
      * and an unknown one are refused, and nothing is written */
     REQUIRE(walk_to_item(error, response, "potential_adjoint") == 1);
-    moist_get_response_array(error, response, "w_rho", w_phi);
-    if (expect_failure(&error, "potential_adjoint has no array 'w_rho'",
+    moist_get_response_field_real(error, response, "w_rho", w_phi);
+    if (expect_failure(&error, "potential_adjoint has no field 'w_rho'",
                        "array of another item")) goto cleanup;
-    moist_get_response_array(error, response, "w_bogus", w_phi);
-    if (expect_failure(&error, "potential_adjoint has no array 'w_bogus'",
+    moist_get_response_field_real(error, response, "w_bogus", w_phi);
+    if (expect_failure(&error, "potential_adjoint has no field 'w_bogus'",
                        "unknown array")) goto cleanup;
     REQUIRE(sentinel_intact(w_phi, (size_t)ngrid * sizeof(double)));
     REQUIRE(!read_response_array(&error, response, "w_phi", ngrid, 1, w_phi));
     /* Past the only item the pass ends, and nothing is current any more */
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && !more);
-    moist_get_response_array(error, response, "w_phi", w_phi);
+    moist_get_response_field_real(error, response, "w_phi", w_phi);
     if (expect_failure(&error, no_current_item, "array after the pass")) goto cleanup;
     /* For CPCM E = q.phi / 2 with q = dE/dphi: the adjoint read back by name
      * has to reproduce the energy of the answer */
@@ -3342,8 +3375,8 @@ int test_coupling_protocol_density_cavity(void)
     REQUIRE(!read_response_array(&error, response, "w_rho", ngrid, 1, w_rho));
     REQUIRE(!read_response_array(&error, response, "w_grad_rho", ngrid, 3, w_grad_rho));
     REQUIRE(!read_response_array(&error, response, "w_hess_rho", ngrid, 9, w_hess_rho));
-    moist_get_response_array(error, response, "w_phi", w_phi);
-    if (expect_failure(&error, "density has no array 'w_phi'", "array of another item")) goto cleanup;
+    moist_get_response_field_real(error, response, "w_phi", w_phi);
+    if (expect_failure(&error, "density has no field 'w_phi'", "array of another item")) goto cleanup;
     more = moist_next_response_item(error, response);
     REQUIRE(!moist_check_error(error) && !more);
     /* The adjoint still reproduces the energy, and the density weights carry
@@ -3475,12 +3508,22 @@ int test_coupling_protocol_gostshyp(void)
     REQUIRE(missing_is(error, cpl, "gt", true) && missing_is(error, cpl, "pt", true));
     REQUIRE(missing_is(error, cpl, "mt", false) && missing_is(error, cpl, "rt", false));
     REQUIRE(missing_is(error, cpl, "phi", false));
-    /* The exponents are an input of this request: read them, never recompute */
+    /* The exponents are an input of this request: read them, never recompute.
+     * The request describes them like any field, one value per grid point */
+    {
+        char field[MOIST_FIELD_NAME_MAX + 1];
+        int nfield = 0, dtype = 0, rank = 0, count = 0, dims[MOIST_FIELD_MAX_RANK] = {0};
+        moist_get_coupling_request_field_count(error, cpl, &nfield);
+        REQUIRE(!moist_check_error(error) && nfield == 1);
+        moist_get_coupling_request_field_info(error, cpl, 0, field, &dtype, &rank, dims, &count);
+        REQUIRE(!moist_check_error(error) && strcmp(field, "width") == 0);
+        REQUIRE(dtype == MOIST_FIELD_REAL && rank == 1 && dims[0] == ngrid && count == ngrid);
+    }
     const size_t width_bytes = (size_t)(ngrid + padding) * sizeof(double);
     fill_sentinel(width, width_bytes);
-    moist_get_coupling_request_width(error, cpl, NULL);
-    if (expect_failure(&error, "Null array pointer provided for 'width'", "NULL width buffer")) goto cleanup;
-    moist_get_coupling_request_width(error, cpl, width);
+    moist_get_coupling_request_field_real(error, cpl, "width", NULL);
+    if (expect_failure(&error, "Required pointer 'values' is missing", "NULL width buffer")) goto cleanup;
+    moist_get_coupling_request_field_real(error, cpl, "width", width);
     REQUIRE(!moist_check_error(error));
     REQUIRE(sentinel_intact(width + ngrid, (size_t)padding * sizeof(double)));
     for (int i = 0; i < ngrid; ++i) REQUIRE(isfinite(width[i]) && width[i] > 0.0);
@@ -3521,8 +3564,8 @@ int test_coupling_protocol_gostshyp(void)
     moist_get_model_response(error, model, cpl, response);
     REQUIRE(!moist_check_error(error));
     REQUIRE(response_names(error, response, visited, sizeof visited) == 2 &&
-            strcmp(visited, "potential_adjoint,gostshyp_amplitude") == 0);
-    REQUIRE(walk_to_item(error, response, "gostshyp_amplitude") == 1);
+            strcmp(visited, "potential_adjoint,gaussian_amplitude") == 0);
+    REQUIRE(walk_to_item(error, response, "gaussian_amplitude") == 1);
     REQUIRE(!read_response_array(&error, response, "w_overlap", ngrid, 1, w_overlap));
     REQUIRE(!read_response_array(&error, response, "w_normal_deriv", ngrid, 1, w_normal_deriv));
     double amplitude_norm = 0.0;
@@ -3530,8 +3573,8 @@ int test_coupling_protocol_gostshyp(void)
         amplitude_norm += w_overlap[i] * w_overlap[i] + w_normal_deriv[i] * w_normal_deriv[i];
     printf("  |w_overlap, w_normal_deriv|^2 = %.6e\n", amplitude_norm);
     REQUIRE(amplitude_norm > 0.0);
-    moist_get_response_array(error, response, "w_phi", w_overlap);
-    if (expect_failure(&error, "gostshyp_amplitude has no array 'w_phi'",
+    moist_get_response_field_real(error, response, "w_phi", w_overlap);
+    if (expect_failure(&error, "gaussian_amplitude has no field 'w_phi'",
                        "array of another item")) goto cleanup;
 
     /* The gradient phase asks both requests for more. A refused output is
@@ -3571,7 +3614,7 @@ int test_coupling_protocol_gostshyp(void)
                gradient[3 * a + 1], gradient[3 * a + 2]);
     for (int k = 0; k < 3 * H2O_NATOMS; ++k) REQUIRE(isfinite(gradient[k]));
     REQUIRE(response_names(error, response, visited, sizeof visited) == 2 &&
-            strcmp(visited, "potential_adjoint,gostshyp_amplitude") == 0);
+            strcmp(visited, "potential_adjoint,gaussian_amplitude") == 0);
     result = 0;
 cleanup:
     if (moist_check_error(error)) show_error(error);

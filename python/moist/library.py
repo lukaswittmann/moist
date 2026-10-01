@@ -453,7 +453,7 @@ def new_gostshyp_component(pressure: float) -> ComponentHandle:
     ``pressure`` is in Hartree/bohr^3.  The component declares a Gaussian
     moment request on every coupling and cannot form the moments itself; the
     host answers it with :func:`answer_coupling_request` and reads the amplitudes back
-    with :func:`get_response_array`.
+    with :func:`get_response_field_real`.
     """
 
     return ComponentHandle.with_gc(
@@ -635,17 +635,6 @@ def get_coupling_request_missing(coupling: CouplingHandle, name: str) -> bool:
     return bool(value[0])
 
 
-def get_coupling_request_width(coupling: CouplingHandle, width: np.ndarray) -> None:
-    """Copy the Gaussian moment exponents of the current request into ``width``.
-
-    ``width`` is a float64 array of the cavity's grid size, filled in bohr**-2.
-    """
-
-    _native_array(width, "width", writable=True)
-    error_check(lib.moist_get_coupling_request_width)(
-        coupling.handle, _cast("double*", width))
-
-
 def answer_coupling_request(coupling: CouplingHandle, name: str, values: np.ndarray) -> None:
     """Submit one named output of the current request.
 
@@ -679,23 +668,6 @@ def get_response_item_name(response: ResponseHandle) -> str:
     buffer = ffi.new(f"char[{lib.MOIST_NAME_MAX + 1}]")
     error_check(lib.moist_get_response_item_name)(response.handle, buffer)
     return ffi.string(buffer).decode()
-
-
-def get_response_array(response: ResponseHandle, array: str, values: np.ndarray) -> None:
-    """Copy one named array of the current item into ``values``.
-
-    ``values`` is a C-contiguous float64 array ``(ngrid, ...)``: ``w_phi``,
-    ``w_rho``, ``w_overlap`` and ``w_normal_deriv`` are ``(ngrid,)``,
-    ``w_grad_rho`` is ``(ngrid, 3)`` and ``w_hess_rho`` is ``(ngrid, 3, 3)``
-    with indices ``[point, b, a]`` for native ``(a, b, point)``; moist writes
-    exactly that many values.  No current item and an array the current item
-    does not have are refused by name before anything is written.
-    """
-
-    _native_array(values, array, writable=True)
-    error_check(lib.moist_get_response_array)(
-        response.handle, array.encode(), _cast("double*", values)
-    )
 
 
 def update_cavity(cavity: CavityHandle, structure: StructureHandle) -> None:
@@ -781,11 +753,13 @@ _FIELD_NAME_CAP = lib.MOIST_FIELD_NAME_MAX + 1
 
 
 @dataclass(frozen=True)
-class CavityField:
-    """Shape and type of one readable cavity field.
+class FieldInfo:
+    """Shape and type of one named field.
 
-    ``shape`` is empty for a scalar and otherwise carries the extents in
-    C order, slowest-varying first. Grid vectors have shape ``(ngrid, 3)``.
+    Describes a field of a cavity, an array of the current response item or
+    an input of the current coupling request. ``shape`` is empty for a scalar
+    and otherwise carries the extents in C order, slowest-varying first. Grid
+    vectors have shape ``(ngrid, 3)``.
     """
 
     name: str
@@ -794,16 +768,16 @@ class CavityField:
     count: int
 
 
-def get_cavity_field_count(cavity: CavityHandle) -> int:
-    """Return how many named result fields the cavity currently holds."""
+def _field_count(entry, owner: Handle) -> int:
+    """Return the field count a ``moist_get_*_field_count`` entry reports."""
 
     nfield = ffi.new("int *")
-    error_check(lib.moist_get_cavity_field_count)(cavity.handle, nfield)
+    error_check(entry)(owner.handle, nfield)
     return int(nfield[0])
 
 
-def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
-    """Describe the field at ``index``, counting from zero."""
+def _field_info(entry, owner: Handle, index: int) -> FieldInfo:
+    """Return the descriptor a ``moist_get_*_field_info`` entry reports."""
 
     name = ffi.new(f"char[{_FIELD_NAME_CAP}]")
     dtype = ffi.new("int *")
@@ -811,8 +785,8 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     dims = ffi.new(f"int[{_FIELD_MAX_RANK}]")
     count = ffi.new("int *")
 
-    error_check(lib.moist_get_cavity_field_info)(
-        cavity.handle,
+    error_check(entry)(
+        owner.handle,
         int(index),
         name,
         dtype,
@@ -825,7 +799,7 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     if tag not in _FIELD_READER:
         raise ValueError(f"moist reported an unknown field type tag {tag}")
 
-    return CavityField(
+    return FieldInfo(
         name=ffi.string(name).decode(),
         dtype=np.dtype(_FIELD_READER[tag][1]),
         shape=tuple(int(dims[i]) for i in range(int(rank[0]))),
@@ -833,7 +807,19 @@ def get_cavity_field_info(cavity: CavityHandle, index: int) -> CavityField:
     )
 
 
-def list_cavity_fields(cavity: CavityHandle) -> tuple[CavityField, ...]:
+def get_cavity_field_count(cavity: CavityHandle) -> int:
+    """Return how many named result fields the cavity currently holds."""
+
+    return _field_count(lib.moist_get_cavity_field_count, cavity)
+
+
+def get_cavity_field_info(cavity: CavityHandle, index: int) -> FieldInfo:
+    """Describe the field at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_cavity_field_info, cavity, index)
+
+
+def list_cavity_fields(cavity: CavityHandle) -> tuple[FieldInfo, ...]:
     """Describe every result the cavity currently holds.
 
     The list is what the cavity itself declares, so it grows with the cavity
@@ -862,7 +848,7 @@ def get_cavity_field_about(cavity: CavityHandle, name: str) -> str:
 def get_cavity_field(
     cavity: CavityHandle,
     name: str,
-    info: Optional[CavityField] = None,
+    info: Optional[FieldInfo] = None,
 ) -> np.ndarray:
     """Return one named cavity result.
 
@@ -921,7 +907,7 @@ def get_cavity_fields(
     }
 
 
-def _find_cavity_field(cavity: CavityHandle, name: str) -> CavityField:
+def _find_cavity_field(cavity: CavityHandle, name: str) -> FieldInfo:
     for field in list_cavity_fields(cavity):
         if field.name == name:
             return field
@@ -933,6 +919,88 @@ def _tag_of(dtype: np.dtype) -> int:
         if dtype == np.dtype(candidate):
             return tag
     raise ValueError(f"no moist field accessor for dtype {dtype}")
+
+
+# -----------------------------------------------------------------------------
+# Named fields of the current response item and coupling request
+# -----------------------------------------------------------------------------
+#
+# The arrays of a response item and the inputs of a coupling request are named
+# fields like a cavity's, real only. They act on the item or request the
+# cursor stopped at and fail by name when none is current. A read fills a
+# caller buffer of the shape the matching info reports; only the element type
+# and the layout are checked here.
+
+
+def get_response_field_count(response: ResponseHandle) -> int:
+    """Return how many named arrays the current response item declares."""
+
+    return _field_count(lib.moist_get_response_field_count, response)
+
+
+def get_response_field_info(response: ResponseHandle, index: int) -> FieldInfo:
+    """Describe the array of the current response item at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_response_field_info, response, index)
+
+
+def get_response_field_about(response: ResponseHandle, name: str) -> str:
+    """Return the one-line description of a named array of the current response item."""
+
+    return _native_text(lib.moist_get_response_field_about, response.handle, _char(name))
+
+
+def get_response_field_real(response: ResponseHandle, name: str, values: np.ndarray) -> None:
+    """Copy one named array of the current response item into ``values``.
+
+    ``values`` is a C-contiguous float64 array of the shape
+    :func:`get_response_field_info` reports -- ``w_hess_rho`` is
+    ``(ngrid, 3, 3)`` with indices ``[point, b, a]`` for native
+    ``(a, b, point)``; moist writes exactly that many values.  No current item
+    and an array the current item does not declare are refused by name before
+    anything is written.
+    """
+
+    _native_array(values, name, writable=True)
+    error_check(lib.moist_get_response_field_real)(
+        response.handle, _char(name), _cast("double*", values)
+    )
+
+
+def get_coupling_request_field_count(coupling: CouplingHandle) -> int:
+    """Return how many named inputs the current request declares; a kind without inputs has none."""
+
+    return _field_count(lib.moist_get_coupling_request_field_count, coupling)
+
+
+def get_coupling_request_field_info(coupling: CouplingHandle, index: int) -> FieldInfo:
+    """Describe the input of the current request at ``index``, counting from zero."""
+
+    return _field_info(lib.moist_get_coupling_request_field_info, coupling, index)
+
+
+def get_coupling_request_field_about(coupling: CouplingHandle, name: str) -> str:
+    """Return the one-line description of a named input of the current request."""
+
+    return _native_text(lib.moist_get_coupling_request_field_about, coupling.handle, _char(name))
+
+
+def get_coupling_request_field_real(
+    coupling: CouplingHandle, name: str, values: np.ndarray
+) -> None:
+    """Copy one named input of the current request into ``values``.
+
+    ``values`` is a C-contiguous float64 array of the shape
+    :func:`get_coupling_request_field_info` reports -- the Gaussian moment
+    ``width`` is ``(ngrid,)``, in bohr**-2; moist writes exactly that many
+    values.  No current request and an input the current request does not
+    declare are refused by name before anything is written.
+    """
+
+    _native_array(values, name, writable=True)
+    error_check(lib.moist_get_coupling_request_field_real)(
+        coupling.handle, _char(name), _cast("double*", values)
+    )
 
 
 def assemble_drop_amat(cavity: CavityHandle) -> tuple[np.ndarray, np.ndarray]:

@@ -8,7 +8,7 @@
 module test_model_coupling
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io, only: structure_type, new
@@ -21,11 +21,11 @@ module test_model_coupling
       & response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_cavity_type, only: cavity_type
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv, &
-      & solvation_model_component_gostshyp, new_component_gostshyp
-   use moist_model_general, only: solvation_model_general, new_model_general
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv, &
+      & model_continuum_component_gostshyp, new_component_gostshyp
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
    use moist_cavity_iswig, only: cavity_type_iswig
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
@@ -56,7 +56,7 @@ module test_model_coupling
       &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, &
       &  0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp, 0.1_wp, -0.1_wp]
 
-   !> DROP (SvdW) parameters of the O-C-H fixture, as in the golden suite
+   !> DROP (SvdW) parameters of the O-C-H fixture, as in `cavity_drop_nuclear_adjoint`
    integer, parameter :: nleb_drop = 50
    real(wp), parameter :: drop_blend_k = 2.5_wp
    real(wp), parameter :: drop_blend_3b = 1.0_wp
@@ -82,25 +82,28 @@ contains
    end subroutine collect_model_coupling
 
    subroutine test_invalidation(error)
-      type(error_type), allocatable, intent(out) :: error
+            type(error_type), allocatable, intent(out) :: error
       type(moist_error_type), allocatable :: err
       type(moist_context_type), target :: ctx
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: first, second
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
       call cpcm_model(model, cavity, ctx, mol, .false., error)
       if (allocated(error)) return
+      cav => model%cavity
       call model%new_coupling(first, err)
       call model%new_coupling(second, err)
       call model%prepare_energy(first, err)
       call model%prepare_energy(second, err)
-      call fill_point_charge_potential(model%cavity, first, qat_vals, mol)
-      call fill_point_charge_potential(model%cavity, second, qat_vals, mol)
+      call fill_point_charge_potential(cav, first, qat_vals, mol)
+      call fill_point_charge_potential(cav, second, qat_vals, mol)
       energy = 0.0_wp
       call model%get_energy(first, energy, err)
       if (failed(error, err, "energy")) return
@@ -133,17 +136,20 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: original
-      type(solvation_model_general), allocatable, target :: copied
+      type(model_continuum_type), target :: original
+      type(model_continuum_type), allocatable, target :: copied
       type(coupling_type), pointer :: coupling
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
       call cpcm_model(original, cavity, ctx, mol, .false., error)
       if (allocated(error)) return
+      cav => original%cavity
       call original%new_coupling(coupling, err)
       call original%prepare_energy(coupling, err)
-      call fill_point_charge_potential(original%cavity, coupling, qat_vals, mol)
+      call fill_point_charge_potential(cav, coupling, qat_vals, mol)
       allocate(copied, source=original)
       energy = 0.0_wp
       call copied%get_energy(coupling, energy, err)
@@ -163,10 +169,12 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_cpcm) :: pcm1, pcm2
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_cpcm) :: pcm1, pcm2
       type(coupling_type), pointer :: coupling
       type(response_type) :: response
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       real(wp) :: energies(4)
       real(wp), allocatable :: gradients(:, :, :)
       integer :: k
@@ -177,21 +185,22 @@ contains
       allocate(gradients(3, mol%nat, 4), source=0.0_wp)
       energies = 0.0_wp
       do k = 1, 4
-         call new_model_general(model, cavity, ctx, err)
+         call new_continuum_model(model, cavity, ctx, err)
          if (k == 1 .or. k == 3) call model%add_component(pcm1, err)
          if (k /= 3) call model%add_component(pcm2, err)
          if (k == 2) call model%add_component(pcm1, err)
          call model%update(mol, err)
          if (failed(error, err, "two PCM update")) return
+         cav => model%cavity
          call model%new_coupling(coupling, err)
          call model%prepare_energy(coupling, err)
          call check(error, count_visits(coupling), 1, more="two PCMs must share one potential request")
          if (allocated(error)) return
-         call fill_point_charge_potential(model%cavity, coupling, qat_vals, mol)
+         call fill_point_charge_potential(cav, coupling, qat_vals, mol)
          call model%get_energy(coupling, energies(k), err)
          if (failed(error, err, "two PCM energy")) return
          call model%prepare_gradient(coupling, err)
-         call fill_point_charge_field(model%cavity, coupling, qat_vals, mol)
+         call fill_point_charge_field(cav, coupling, qat_vals, mol)
          call model%get_gradient(coupling, response, gradients(:,:,k), err)
          if (failed(error, err, "two PCM gradient")) return
       end do
@@ -211,16 +220,19 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_gostshyp) :: component
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_gostshyp) :: component
       type(coupling_type), pointer :: coupling
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_gostshyp(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
+      cav => model%cavity
       call model%new_coupling(coupling, err)
       call model%prepare_energy(coupling, err)
       if (failed(error, err, "moment staging")) return
@@ -233,7 +245,7 @@ contains
          call check(error, .not. item%is_missing("mt") .and. .not. item%is_missing("rt"), &
             & more="a fixed cavity needs no higher moments for the energy")
          if (allocated(error)) return
-         call check(error, size(item%width), model%cavity%ngrid)
+         call check(error, size(item%width), cav%ngrid)
          if (allocated(error)) return
          call check(error, all(item%width >= 0.0_wp))
       class default
@@ -242,7 +254,7 @@ contains
       if (allocated(error)) return
       call check(error, .not. coupling%next(), more="GOSTSHYP declares one request")
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_gostshyp(component, 0.0_wp)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -264,13 +276,13 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_pv) :: component
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_pv) :: component
       type(coupling_type), pointer :: coupling
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       call new_component_pv(component, test_pressure)
       call model%add_component(component, err)
       call model%update(mol, err)
@@ -302,7 +314,7 @@ contains
 
    end function failed
 
-   !> MB16-43 "01" on the iSwiG fixture cavity of `test_model_general`
+   !> MB16-43 "01" on the iSwiG fixture cavity of `test_model_continuum`
    !>
    !> @param[out] ctx          Run context owned by the caller
    !> @param[out] mol          Structure
@@ -366,7 +378,7 @@ contains
 
    end subroutine drop_fixture
 
-   !> Updated general model with a CPCM component and optionally a PV component
+   !> Updated continuum model with a CPCM component and optionally a PV component
    !>
    !> @param[out] model          Model to build
    !> @param[in]  cavity         Cavity template copied into the model
@@ -378,7 +390,7 @@ contains
    !>                            components can still be added
    subroutine cpcm_model(model, cavity, ctx, mol, with_pv, error, configure_only)
       !> Model to build
-      type(solvation_model_general), intent(out) :: model
+      type(model_continuum_type), intent(out) :: model
       !> Cavity template copied into the model
       class(cavity_type), intent(in) :: cavity
       !> Run context owned by the caller
@@ -393,10 +405,10 @@ contains
       logical, intent(in), optional :: configure_only
 
       type(moist_error_type), allocatable :: err
-      type(solvation_model_component_cpcm) :: cpcm
-      type(solvation_model_component_pv) :: pv
+      type(model_continuum_component_cpcm) :: cpcm
+      type(model_continuum_component_pv) :: pv
 
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       if (failed(error, err, "model setup")) return
       if (with_pv) then
          call new_component_pv(pv, test_pressure)
@@ -429,7 +441,7 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model, other
+      type(model_continuum_type), target :: model, other
       type(coupling_type), pointer :: coupling, foreign
       !> Previous response and sentinel charge
       type(response_type) :: response
@@ -532,8 +544,8 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
-      type(solvation_model_component_gostshyp) :: gostshyp
+      type(model_continuum_type), target :: model
+      type(model_continuum_component_gostshyp) :: gostshyp
       type(coupling_type), pointer :: coupling
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
@@ -587,8 +599,10 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: coupling
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       !> Potential answer on the current grid
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
@@ -596,6 +610,7 @@ contains
       if (allocated(error)) return
       call cpcm_model(model, cavity, ctx, mol, .false., error)
       if (allocated(error)) return
+      cav => model%cavity
       call model%new_coupling(coupling, err)
       call model%prepare_energy(coupling, err)
       if (failed(error, err, "energy staging")) return
@@ -605,7 +620,7 @@ contains
       if (failed(error, err, "model update")) return
       call check(error, current_name(coupling), "no_current_request", more="the update kept a current request")
       if (allocated(error)) return
-      allocate (phi(model%cavity%ngrid), source=0.0_wp)
+      allocate (phi(cav%ngrid), source=0.0_wp)
       call coupling%answer("phi", phi, err)
       call check(error, allocated(err))
       if (allocated(error)) return
@@ -639,15 +654,18 @@ contains
       type(structure_type) :: mol
       type(radius_type_static) :: radii
       type(cavity_type_iswig) :: cavity
-      type(solvation_model_general), target :: model
+      type(model_continuum_type), target :: model
       type(coupling_type), pointer :: coupling
       type(response_type) :: response
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: cav
       real(wp), allocatable :: gradient(:, :)
       real(wp) :: energy
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
       call cpcm_model(model, cavity, ctx, mol, .false., error)
       if (allocated(error)) return
+      cav => model%cavity
       call model%new_coupling(coupling, err)
       if (failed(error, err, "coupling setup")) return
       allocate (gradient(3, mol%nat), source=0.0_wp)
@@ -677,7 +695,7 @@ contains
       if (allocated(error)) return
       call check(error, err%message, "gaussian_potential: missing required outputs: phi")
       if (allocated(error)) return
-      call fill_point_charge_potential(model%cavity, coupling, qat_vals, mol)
+      call fill_point_charge_potential(cav, coupling, qat_vals, mol)
       call model%get_energy(coupling, energy, err)
       if (failed(error, err, "energy")) return
       call model%prepare_gradient(coupling, err)

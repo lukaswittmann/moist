@@ -58,7 +58,7 @@ except ImportError as exc:
 
 from moist.interface import (
     DensityResponse,
-    GostshypAmplitudeResponse,
+    GaussianAmplitudeResponse,
     ModelComponentCPCM,
     ModelComponentGOSTSHYP,
     Structure,
@@ -113,7 +113,7 @@ PARAM_ABS_THR = PARAM_REL_THR / 10.0
 QUAD_ATOL = 1e-10
 QUAD_RTOL = 1e-9
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``
+#: Mirrors ``overlap_floor`` in ``src/moist/model/continuum/component/gostshyp.f90``
 OVERLAP_FLOOR = 1.0e-9
 #: A negative control must miss by at least this many tolerances
 VACUITY_FACTOR = 100.0
@@ -569,7 +569,7 @@ def test_params_moments_reach_the_component_intact(system, basis):
     with np.errstate(divide="ignore", invalid="ignore"):
         terms = PRESSURE * wall.moments.areas * gt / ftilde
     # Grid points the component switched off carry a zero amplitude.
-    active = item_of(wall.response, GostshypAmplitudeResponse).w_overlap != 0.0
+    active = item_of(wall.response, GaussianAmplitudeResponse).w_overlap != 0.0
     expected = float(np.sum(np.where(active, terms, 0.0)))
 
     assert wall.energy == pytest.approx(expected, rel=1e-12)
@@ -1011,7 +1011,7 @@ def test_conventions_amplitudes_are_both_needed():
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     _host, wall = make_wall(mol, dm=dm)
-    amplitude = item_of(wall.response, GostshypAmplitudeResponse)
+    amplitude = item_of(wall.response, GaussianAmplitudeResponse)
 
     assert np.abs(amplitude.w_overlap).max() > MIN_SIGNAL
     assert np.abs(amplitude.w_normal_deriv).max() > MIN_SIGNAL
@@ -1129,7 +1129,7 @@ def test_conventions_failed_evaluation_leaves_no_stale_results(monkeypatch):
 
     # Vacuous unless there is a real result to go stale.
     assert wall.moments.effective_volume() > 0.0
-    assert item_of(wall.response, GostshypAmplitudeResponse) is not None
+    assert item_of(wall.response, GaussianAmplitudeResponse) is not None
 
     def boom(*_args, **_kwargs):
         raise RuntimeError("integral build failed")
@@ -1246,7 +1246,7 @@ def test_conventions_matches_the_frozen_reference(system, basis):
     # Reference values were captured at rho_iso=4e-4; do not regenerate them.
     _host, wall = make_wall(mol, dm=dm, rho_iso=4e-4)
 
-    amplitude = item_of(wall.response, GostshypAmplitudeResponse)
+    amplitude = item_of(wall.response, GaussianAmplitudeResponse)
     weights = item_of(wall.response, DensityResponse)
     actual = {"energy": float(wall.energy), "ngrid": int(wall.model.cavity.ngrid)}
     actual.update(_golden_summary("alpha", amplitude.w_overlap))

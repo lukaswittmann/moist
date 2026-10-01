@@ -21,7 +21,7 @@
 module test_cavity_drop_nuclear_adjoint
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
-   use moist_model_component_pcm_type, only: moist_pcm_parameters_type
+   use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -35,13 +35,14 @@ module test_cavity_drop_nuclear_adjoint
    use moist_context, only: moist_context_type, new_context
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
-   use moist_model_general, only: solvation_model_general, new_model_general
-   use moist_model_component_pcm_cpcm, only: solvation_model_component_cpcm, new_component_cpcm
-   use moist_model_component_pcm_type, only: solver_type
-   use moist_model_components, only: solvation_model_component_pv, new_component_pv
+   use moist_model_continuum, only: model_continuum_type, new_continuum_model
+   use moist_model_continuum_component_pcm_cpcm, only: model_continuum_component_cpcm, new_component_cpcm
+   use moist_model_continuum_component_pcm_type, only: solver_type
+   use moist_model_continuum_component, only: model_continuum_component_pv, new_component_pv
    use test_helpers, only: stage_model_point_charge_energy, fill_missing_with_zeros, &
       & fill_point_charge_field, &
       & fill_legacy_radii, copy_potential_adjoint
+   use moist_cavity_type, only: cavity_type
    implicit none(type, external)
    private
 
@@ -349,7 +350,7 @@ contains
 
    !> Model-level gradient: reverse path must equal the legacy forward path
    !>
-   !> This is the only test that drives `general_get_gradient` over a cavity
+   !> This is the only test that drives `continuum_get_gradient` over a cavity
    !> that supports the surface contraction -- the model suite uses an iSwiG
    !> cavity, which falls back to the forward path -- so it is what actually
    !> exercises the component hooks `get_gradient_surface_weights` and
@@ -375,9 +376,9 @@ contains
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(solvation_model_general), target :: model_rev, model_fwd
-      type(solvation_model_component_cpcm) :: pcm_component
-      type(solvation_model_component_pv) :: pv_component
+      type(model_continuum_type), target :: model_rev, model_fwd
+      type(model_continuum_component_cpcm) :: pcm_component
+      type(model_continuum_component_pv) :: pv_component
       type(coupling_type), pointer :: coupling
       !> Host part of the gradient phase from each path
       type(response_type) :: response_rev, response_fwd
@@ -385,6 +386,8 @@ contains
       type(potential_adjoint_response_type), allocatable :: charge_rev, charge_fwd
       type(structure_type) :: mol
       type(mctc_error), allocatable :: err
+      !> Borrowed model cavities
+      class(cavity_type), pointer :: cav_rev, cav_fwd
 
       real(wp), allocatable :: grad_rev(:, :), grad_fwd(:, :)
       real(wp) :: diff, scale
@@ -409,7 +412,9 @@ contains
       if (allocated(error)) return
       call build_model(model_fwd, cavity, ctx, pcm_component, pv_component, mol, error)
       if (allocated(error)) return
-      model_fwd%force_forward_gradient = .true.
+      call model_fwd%use_forward_gradient(.true.)
+      cav_rev => model_rev%cavity
+      cav_fwd => model_fwd%cavity
 
       ! Point-charge potential trace plus its total position weight
       call stage_model_point_charge_energy(error, model_rev, qat_vals, mol, coupling)
@@ -425,8 +430,8 @@ contains
          call test_failed(error, "gradient staging failed: "//err%message)
          return
       end if
-      call fill_missing_with_zeros(model_rev%cavity, coupling)
-      call fill_point_charge_field(model_rev%cavity, coupling, qat_vals, mol)
+      call fill_missing_with_zeros(cav_rev, coupling)
+      call fill_point_charge_field(cav_rev, coupling, qat_vals, mol)
 
       allocate (grad_rev(3, nat), source=0.0_wp)
       allocate (grad_fwd(3, nat), source=0.0_wp)
@@ -439,7 +444,7 @@ contains
       call stage_model_point_charge_energy(error, model_fwd, qat_vals, mol, coupling)
       if (allocated(error)) return
       call model_fwd%prepare_gradient(coupling, err)
-      call fill_point_charge_field(model_fwd%cavity, coupling, qat_vals, mol)
+      call fill_point_charge_field(cav_fwd, coupling, qat_vals, mol)
       call model_fwd%get_gradient(coupling, response_fwd, grad_fwd, err)
       if (allocated(err)) then
          call test_failed(error, "forward model gradient failed: "//err%message)
@@ -492,14 +497,14 @@ contains
    !> @param[out]   error  Error handle
    subroutine build_model(model, cavity, ctx, pcmc, pvc, mol, error)
       !> Model to build
-      type(solvation_model_general), intent(out) :: model
+      type(model_continuum_type), intent(out) :: model
       !> Cavity template copied into the model
       type(cavity_type_drop), intent(in) :: cavity
       !> Run context owned by the caller
       type(moist_context_type), intent(in), target :: ctx
       !> Component templates
-      type(solvation_model_component_cpcm), intent(in) :: pcmc
-      type(solvation_model_component_pv), intent(in) :: pvc
+      type(model_continuum_component_cpcm), intent(in) :: pcmc
+      type(model_continuum_component_pv), intent(in) :: pvc
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Error handle
@@ -507,7 +512,7 @@ contains
 
       type(mctc_error), allocatable :: err
 
-      call new_model_general(model, cavity, ctx, err)
+      call new_continuum_model(model, cavity, ctx, err)
       if (.not. allocated(err)) call model%add_component(pcmc, err)
       if (.not. allocated(err)) call model%add_component(pvc, err)
       if (.not. allocated(err)) call model%update(mol, err)

@@ -18,14 +18,14 @@
 !>                                         derivative outputs
 !>   * `submit(coupling, name, values)` - answer the current request or stop
 !>   * `copy_potential_adjoint(response, item)`, `copy_density(response, item)`,
-!>     `copy_gostshyp_amplitude(response, item)` - copy of one response item,
+!>     `copy_gaussian_amplitude(response, item)` - copy of one response item,
 !>                                         unallocated when absent; walks a
 !>                                         full pass, so the cursor is rewound
 !>   * `stage_point_charge_energy(error, component, cavity, qat, mol, coupling)`
 !>                                       - bare-component coupling, energy phase
 !>                                         answered with the point-charge trace
 !>   * `stage_model_point_charge_energy(error, model, qat, mol, coupling)`
-!>                                       - the same for a general model
+!>                                       - the same for a continuum model
 !>   * `get_test_cross(mol)` - five-carbon cross with concave seams
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h)` - 4-point central FD formula
@@ -34,6 +34,11 @@
 !>   * `fill_legacy_radii(mol, radii, error)` - legacy per-element radius table
 !>   * `build_numbering_map(numbering, map)` - persistent grid numbering ->
 !>                                             current array index
+!>   * `get_uniform_recipe(recipe, overrides, nrad, nang, error, ...)`,
+!>     `get_handymod_recipe(recipe, nrad, nang, rmin, rmax, m, error)`,
+!>     `get_qc_handymod_recipe(recipe, error, ...)` - atomic recipes of the
+!>                                         uniform, HandyMod, and midpoint
+!>                                         HandyMod molecular grids
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
@@ -43,7 +48,7 @@ module test_helpers
    use mctc_env, only: wp
    use mctc_io, only: structure_type, new
    use mctc_io_convert, only: aatoau
-   use mctc_env_error, only: moist_error_type => error_type
+   use mctc_env_error, only: moist_error_type => error_type, fatal_error
    use mstore, only: get_structure
    use mstore_data_record, only: record_type
    use mstore_mb16_43, only: get_mb16_43_records
@@ -52,24 +57,39 @@ module test_helpers
    use mstore_but14diol, only: get_but14diol_records
    use mstore_upu23, only: get_upu23_records
    use moist_cavity_type, only: cavity_type
-   use moist_model_type, only: solvation_model_component_type
-   use moist_model_general, only: solvation_model_general
+   use moist_channels_fields, only: field_query_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type
+   use moist_model_continuum, only: model_continuum_type
    use moist_cavity_iswig, only: cavity_type_iswig, new_cavity_iswig
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii, radius_type, new_radii_custom_atoms, &
                           radius_type_static, new_cosmo_radii
    use moist_channels_coupling, only: coupling_type, coupling_view_type, &
       & point_potential_request_type, gaussian_potential_request_type, moist_phase_energy, &
-      & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view
+      & moist_phase_gradient, coupling_arm, coupling_make_view, coupling_close_view, &
+      & coupling_check_mandatory
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
-      density_response_type, gostshyp_amplitude_response_type
+      density_response_type, gaussian_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
+   use moist_math_grid_angular_lebedev, only: lebedev_order_from_num, lebedev_degree_table
+   use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type, &
+      & moist_math_grid_radial_rule_chebyshev2_type, new_chebyshev2_rule, &
+      & moist_math_grid_radial_rule_midpoint_type, new_midpoint_rule
+   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type, &
+      & moist_math_grid_radial_mapping_becke_type, new_becke_mapping, &
+      & moist_math_grid_radial_mapping_handymod_type, new_handymod_mapping
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_generator_lebedev_type, &
+      & new_lebedev_generator
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_shell_type, &
+      & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
+      & moist_math_grid_atomic_shell_arc_type, new_arc_shell_policy, &
+      & moist_math_grid_atomic_recipe_type, moist_math_grid_atomic_recipe_override_type
    use testdrive, only: error_type, test_failed
    implicit none(type, external)
    private
 
    public :: component_view, submit, read_fixture_moments
-   public :: copy_potential_adjoint, copy_density, copy_gostshyp_amplitude
+   public :: copy_potential_adjoint, copy_density, copy_gaussian_amplitude
    public :: center_at_origin
    public :: get_test_structures
    public :: get_test_radii
@@ -89,6 +109,10 @@ module test_helpers
    public :: check_moist_error
    public :: fill_legacy_radii
    public :: build_numbering_map
+   public :: cavity_xi0
+   public :: get_uniform_recipe
+   public :: get_handymod_recipe
+   public :: get_qc_handymod_recipe
 
    !> Default n for get_test_structures (must be a multiple of 5)
    integer, parameter :: default_n_structures = 5
@@ -111,6 +135,8 @@ module test_helpers
    end interface submit
 
 contains
+
+   !* ------------------------ Structure and sampling fixtures ------------------------ *!
 
    !> Translate `mol` so its arithmetic centroid sits at the origin
    !> Pure positional shift; atomic identities and ordering preserved
@@ -254,6 +280,8 @@ contains
       error stop "get_test_points: not enough valid points"
    end subroutine get_test_points
 
+   !* -------------------------------- Cavity fixtures -------------------------------- *!
+
    !> Build an iSwiG surface for `mol`
    !>
    !> @param[in]  mol           Structure to wrap
@@ -363,6 +391,8 @@ contains
 
    end subroutine build_test_cavity
 
+   !* ----------------------------- Point-charge coupling ----------------------------- *!
+
    !> Point-charge potential trace on the cavity grid, answered on the
    !> coupling's potential requests
    !>
@@ -424,9 +454,12 @@ contains
       integer :: i, j
       !> Separation vector and its length
       real(wp) :: r_vec(3), r_dist
+      !> Gaussian widths of the cavity, read by name
+      real(wp), allocatable :: xi0(:)
       !> Separation below which the singular self-term is skipped
       real(wp), parameter :: min_dist = 1.0e-10_wp
 
+      if (gaussian) xi0 = cavity_xi0(cavity)
       allocate (phi(cavity%ngrid), source=0.0_wp)
       do i = 1, cavity%ngrid
          do j = 1, mol%nat
@@ -434,7 +467,7 @@ contains
             r_dist = sqrt(sum(r_vec**2))
             if (r_dist < min_dist) cycle
             if (gaussian) then
-               phi(i) = phi(i) + qat(j)*erf(cavity%xi0(i)*r_dist)/r_dist
+               phi(i) = phi(i) + qat(j)*erf(xi0(i)*r_dist)/r_dist
             else
                phi(i) = phi(i) + qat(j)/r_dist
             end if
@@ -516,9 +549,12 @@ contains
       integer :: i, j
       !> Separation vector, its length, and the potential gradient
       real(wp) :: r_vec(3), r_dist, grad_phi(3), x, screening
+      !> Gaussian widths of the cavity, read by name
+      real(wp), allocatable :: xi0(:)
       !> Separation below which the singular self-term is skipped
       real(wp), parameter :: min_dist = 1.0e-10_wp
 
+      if (gaussian) xi0 = cavity_xi0(cavity)
       allocate (w_xyz(3, cavity%ngrid), w_xi(cavity%ngrid), source=0.0_wp)
       do i = 1, cavity%ngrid
          grad_phi(:) = 0.0_wp
@@ -528,7 +564,7 @@ contains
             if (r_dist < min_dist) cycle
             screening = 1.0_wp
             if (gaussian) then
-               x = cavity%xi0(i)*r_dist
+               x = xi0(i)*r_dist
                screening = erf(x) - 2.0_wp*x*exp(-x*x)/sqrt(acos(-1.0_wp))
                w_xi(i) = w_xi(i) + qat(j)*2.0_wp*exp(-x*x)/sqrt(acos(-1.0_wp))
             end if
@@ -625,7 +661,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       !> Component whose requests the coupling declares
-      class(solvation_model_component_type), intent(inout) :: component
+      class(model_continuum_component_type), intent(inout) :: component
 
       !> Updated cavity
       class(cavity_type), intent(in) :: cavity
@@ -656,14 +692,14 @@ contains
 
    end subroutine stage_point_charge_energy
 
-   !> Build a general model's coupling and answer its energy phase with the
+   !> Build a continuum model's coupling and answer its energy phase with the
    !> point-charge potential of `qat`
    !>
    !> The model-level counterpart of `stage_point_charge_energy`; the model
    !> must have been updated
    !>
    !> @param[out]   error    testdrive failure
-   !> @param[inout] model    Updated general model
+   !> @param[inout] model    Updated continuum model
    !> @param[in]    qat      Atomic point charges (nat)
    !> @param[in]    mol      Structure supplying the atom positions
    !> @param[out]   coupling Coupling built and staged for the energy phase
@@ -672,8 +708,8 @@ contains
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
 
-      !> Updated general model
-      class(solvation_model_general), intent(inout) :: model
+      !> Updated continuum model
+      class(model_continuum_type), intent(inout), target :: model
 
       !> Atomic point charges
       real(wp), intent(in) :: qat(:)
@@ -687,6 +723,9 @@ contains
       !> moist error
       type(moist_error_type), allocatable :: err
 
+      !> Borrowed model cavity
+      class(cavity_type), pointer :: model_cavity
+
       call model%new_coupling(coupling, err)
       if (allocated(err)) then
          call test_failed(error, "coupling setup failed: "//err%message)
@@ -697,9 +736,32 @@ contains
          call test_failed(error, "energy-phase staging failed: "//err%message)
          return
       end if
-      call fill_point_charge_potential(model%cavity, coupling, qat, mol)
+      model_cavity => model%cavity
+      call fill_point_charge_potential(model_cavity, coupling, qat, mol)
 
    end subroutine stage_model_point_charge_energy
+
+   !> Gaussian widths `xi0` of a cavity, read through its field declaration
+   !>
+   !> A Gaussian potential request on a cavity without widths is an
+   !> error, so it stops rather than silently probing with zero widths
+   !>
+   !> @param[in] cavity Cavity the coupling was prepared with
+   function cavity_xi0(cavity) result(xi0)
+      !> Cavity the coupling was prepared with
+      class(cavity_type), intent(in) :: cavity
+      !> Gaussian widths (ngrid)
+      real(wp), allocatable :: xi0(:)
+      !> Field walker in fetch mode
+      type(field_query_type) :: query
+
+      call query%fetch("xi0")
+      call cavity%list_fields(query)
+      if (.not. query%found) error stop "test helper: the cavity publishes no xi0 field"
+      xi0 = query%rvals
+   end function cavity_xi0
+
+   !* ------------------------ Geometry and numeric utilities ------------------------- *!
 
    !> Five-carbon cross, converted to bohr
    !>
@@ -781,9 +843,7 @@ contains
       dev = abs(a - b)/(1.0_wp + abs(b))
    end function rel_deviation
 
-   !* ===================================================================
-   !*                          Private helpers
-   !* ===================================================================
+   !* ------------------------ Dataset and sampling internals ------------------------- *!
 
    !> Dispatch to the per-dataset records getter. Caller frees `records`
    subroutine load_dataset(name, records)
@@ -859,6 +919,8 @@ contains
       u = real(ishft(state, -33), wp)/real(2_int64**31, wp)
    end function lcg_uniform
 
+   !* -------------------------- Legacy radii and numbering --------------------------- *!
+
    !> Fill per-atom radii from the legacy per-element table
    !>
    !> The CPCM-flavoured cavity tests want the same radii the legacy code used,
@@ -921,18 +983,24 @@ contains
       end do
    end subroutine build_numbering_map
 
+   !* --------------------------- Coupling response helpers --------------------------- *!
+
    !> Borrow a component-local view for a single test invocation
    !>
-   !> A coupling nobody staged, e.g. the default one of a request-free
-   !> component, is armed for the energy phase first
+   !> - a coupling nobody staged, e.g. the default one of a request-free
+   !>   component, is armed for the energy phase first
+   !> - the staged phase then passes the model's completeness check; a failure
+   !>   is dropped, as the component's read names the same missing output
    function component_view(coupling) result(view)
       type(coupling_type), target, intent(inout) :: coupling
       type(coupling_view_type) :: view
       type(moist_error_type), allocatable :: err
       call coupling_make_view(coupling, 1, view)
-      if (view%phase /= 0) return
-      call coupling_arm(coupling, moist_phase_energy, err)
-      call coupling_make_view(coupling, 1, view)
+      if (view%phase == 0) then
+         call coupling_arm(coupling, moist_phase_energy, err)
+         call coupling_make_view(coupling, 1, view)
+      end if
+      call coupling_check_mandatory(coupling, view%phase, err)
    end function component_view
 
    !> Read the four moment outputs of a fixture with exactly one moment calculation
@@ -1007,17 +1075,246 @@ contains
       end do
    end subroutine copy_density
 
-   !> Copy of the GOSTSHYP amplitude item, unallocated when the response has none
+   !> Copy of the Gaussian amplitude item, unallocated when the response has none
    !>
    !> Walks the whole pass, so the response cursor is rewound on return
-   subroutine copy_gostshyp_amplitude(response, item)
+   subroutine copy_gaussian_amplitude(response, item)
       type(response_type), intent(inout) :: response
-      type(gostshyp_amplitude_response_type), allocatable, intent(out) :: item
+      type(gaussian_amplitude_response_type), allocatable, intent(out) :: item
       do while (response%next())
          select type (found => response%item())
-         type is (gostshyp_amplitude_response_type)
+         type is (gaussian_amplitude_response_type)
             item = found
          end select
       end do
-   end subroutine copy_gostshyp_amplitude
+   end subroutine copy_gaussian_amplitude
+
+   !* ------------------------ Lazy grid construction wrappers ------------------------ *!
+
+   !> Recipe of the uniform Chebyshev-II x Becke molecular grid
+   !>
+   !> - Becke mapping at 0.5 covalent radii, 1.0 for hydrogen (override)
+   !> - Lebedev generator admitting every rule, constant degree of the
+   !>   `nang`-point rule
+   !> - `rmin` and `rmax` become the radial cutoffs
+   !>
+   !> @param[out] recipe     Recipe of every element but hydrogen
+   !> @param[out] overrides  Hydrogen override, shape (1)
+   !> @param[in]  nrad       Radial node count
+   !> @param[in]  nang       Lebedev point count
+   !> @param[out] error      Unsupported point count or invalid mapping
+   !> @param[in]  rmin       Optional lower radial cutoff (bohr)
+   !> @param[in]  rmax       Optional upper radial cutoff (bohr)
+   subroutine get_uniform_recipe(recipe, overrides, nrad, nang, error, rmin, rmax)
+      !> Recipe of every element but hydrogen
+      type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
+      !> Hydrogen override
+      type(moist_math_grid_atomic_recipe_override_type), allocatable, intent(out) :: overrides(:)
+      !> Radial node count
+      integer, intent(in) :: nrad
+      !> Lebedev point count
+      integer, intent(in) :: nang
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+      !> Lower radial cutoff
+      real(wp), intent(in), optional :: rmin
+      !> Upper radial cutoff
+      real(wp), intent(in), optional :: rmax
+
+      type(moist_math_grid_radial_rule_chebyshev2_type) :: rule
+      type(moist_math_grid_radial_mapping_becke_type) :: becke
+      type(moist_math_grid_atomic_shell_constant_type) :: shells
+
+      call constant_policy_from_count(nang, shells, error)
+      if (allocated(error)) return
+      call new_chebyshev2_rule(rule)
+      call new_becke_mapping(becke, error, radius_factor=0.5_wp)
+      if (allocated(error)) return
+      call assemble_recipe(recipe, rule, nrad, becke, shells, .false., rmin, rmax)
+      call new_becke_mapping(becke, error, radius_factor=1.0_wp)
+      if (allocated(error)) return
+      allocate (overrides(1))
+      overrides(1)%elements = [1]
+      call assemble_recipe(overrides(1)%recipe, rule, nrad, becke, shells, .false., rmin, rmax)
+   end subroutine get_uniform_recipe
+
+   !> Recipe of the uniform Chebyshev-II x HandyMod molecular grid
+   !>
+   !> Lebedev generator admitting every rule, constant degree of the
+   !> `nang`-point rule
+   !>
+   !> @param[out] recipe  Recipe of every element
+   !> @param[in]  nrad    Radial node count
+   !> @param[in]  nang    Lebedev point count
+   !> @param[in]  rmin    HandyMod inner radius (bohr)
+   !> @param[in]  rmax    HandyMod outer radius (bohr)
+   !> @param[in]  m       HandyMod parameter (> 0)
+   !> @param[out] error   Unsupported point count or invalid mapping
+   subroutine get_handymod_recipe(recipe, nrad, nang, rmin, rmax, m, error)
+      !> Recipe of every element
+      type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
+      !> Radial node count
+      integer, intent(in) :: nrad
+      !> Lebedev point count
+      integer, intent(in) :: nang
+      !> HandyMod inner radius
+      real(wp), intent(in) :: rmin
+      !> HandyMod outer radius
+      real(wp), intent(in) :: rmax
+      !> HandyMod parameter
+      real(wp), intent(in) :: m
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_rule_chebyshev2_type) :: rule
+      type(moist_math_grid_radial_mapping_handymod_type) :: handymod
+      type(moist_math_grid_atomic_shell_constant_type) :: shells
+
+      call constant_policy_from_count(nang, shells, error)
+      if (allocated(error)) return
+      call new_handymod_mapping(handymod, rmin, rmax, m, error)
+      if (allocated(error)) return
+      call new_chebyshev2_rule(rule)
+      call assemble_recipe(recipe, rule, nrad, handymod, shells, .false.)
+   end subroutine get_handymod_recipe
+
+   !> Recipe of the midpoint x HandyMod molecular grid
+   !>
+   !> - Absent arguments take the defaults of `new_molecular_grid`: 50
+   !>   nodes, degree 17, HandyMod(0, 10, 2)
+   !> - Without arc bands: generator admitting every rule, constant degree
+   !> - With arc bands: positive-weight generator, arc policy with the
+   !>   point floor and cap (defaults of the arc policy when absent)
+   !>
+   !> @param[out] recipe    Recipe of every element
+   !> @param[out] error     Invalid mapping or shell policy
+   !> @param[in]  nrad      Optional radial node count
+   !> @param[in]  degree    Optional constant minimum Lebedev degree; unused with arc bands
+   !> @param[in]  rmin      Optional HandyMod inner radius (bohr)
+   !> @param[in]  rmax      Optional HandyMod outer radius (bohr)
+   !> @param[in]  m         Optional HandyMod parameter (> 0)
+   !> @param[in]  arc_r     Optional arc band edges (bohr), with `arc_a`
+   !> @param[in]  arc_a     Optional arc spacing per band (bohr), size(arc_r) + 1
+   !> @param[in]  nang_min  Optional per-shell point floor of the arc policy
+   !> @param[in]  nang_max  Optional per-shell point cap of the arc policy
+   subroutine get_qc_handymod_recipe(recipe, error, nrad, degree, rmin, rmax, m, arc_r, arc_a, &
+         & nang_min, nang_max)
+      !> Recipe of every element
+      type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+      !> Radial node count
+      integer, intent(in), optional :: nrad
+      !> Constant minimum Lebedev degree
+      integer, intent(in), optional :: degree
+      !> HandyMod inner radius
+      real(wp), intent(in), optional :: rmin
+      !> HandyMod outer radius
+      real(wp), intent(in), optional :: rmax
+      !> HandyMod parameter
+      real(wp), intent(in), optional :: m
+      !> Arc band edges
+      real(wp), intent(in), optional :: arc_r(:)
+      !> Arc spacing per band
+      real(wp), intent(in), optional :: arc_a(:)
+      !> Per-shell point floor of the arc policy
+      integer, intent(in), optional :: nang_min
+      !> Per-shell point cap of the arc policy
+      integer, intent(in), optional :: nang_max
+
+      type(moist_math_grid_radial_rule_midpoint_type) :: rule
+      type(moist_math_grid_radial_mapping_handymod_type) :: handymod
+      type(moist_math_grid_atomic_shell_constant_type) :: shells
+      type(moist_math_grid_atomic_shell_arc_type) :: arc
+      integer :: npts, lebedev_degree
+      real(wp) :: r_lo, r_hi, m_val
+
+      npts = 50
+      if (present(nrad)) npts = nrad
+      lebedev_degree = 17
+      if (present(degree)) lebedev_degree = degree
+      r_lo = 0.0_wp
+      if (present(rmin)) r_lo = rmin
+      r_hi = 10.0_wp
+      if (present(rmax)) r_hi = rmax
+      m_val = 2.0_wp
+      if (present(m)) m_val = m
+      if (present(arc_r) .neqv. present(arc_a)) then
+         call fatal_error(error, "qc-HandyMod recipe: arc_r and arc_a go together")
+         return
+      end if
+
+      call new_handymod_mapping(handymod, r_lo, r_hi, m_val, error)
+      if (allocated(error)) return
+      call new_midpoint_rule(rule)
+      if (present(arc_r)) then
+         call new_arc_shell_policy(arc, arc_r, arc_a, error, min_points=nang_min, max_points=nang_max)
+         if (allocated(error)) return
+         call assemble_recipe(recipe, rule, npts, handymod, arc, .true.)
+      else
+         call new_constant_shell_policy(shells, lebedev_degree, error)
+         if (allocated(error)) return
+         call assemble_recipe(recipe, rule, npts, handymod, shells, .false.)
+      end if
+   end subroutine get_qc_handymod_recipe
+
+   !> Constant-degree shell policy of the Lebedev rule with exactly `nang` points
+   !>
+   !> @param[in]  nang    Lebedev point count
+   !> @param[out] shells  Shell policy at that rule's degree
+   !> @param[out] error   Unsupported point count
+   subroutine constant_policy_from_count(nang, shells, error)
+      !> Lebedev point count
+      integer, intent(in) :: nang
+      !> Shell policy
+      type(moist_math_grid_atomic_shell_constant_type), intent(out) :: shells
+      !> Error handling
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      integer :: order
+
+      call lebedev_order_from_num(nang, order, error)
+      if (allocated(error)) return
+      call new_constant_shell_policy(shells, lebedev_degree_table(order), error)
+   end subroutine constant_policy_from_count
+
+   !> Assemble an atomic recipe from its parts
+   !>
+   !> @param[out] recipe      Assembled recipe
+   !> @param[in]  rule        Reference rule on [-1, 1]
+   !> @param[in]  npts        Radial node count
+   !> @param[in]  mapping     Radial mapping
+   !> @param[in]  shells      Shell policy
+   !> @param[in]  positive    Lebedev generator admits positive-weight rules only
+   !> @param[in]  rcut_lower  Optional lower radial cutoff (bohr)
+   !> @param[in]  rcut_upper  Optional upper radial cutoff (bohr)
+   subroutine assemble_recipe(recipe, rule, npts, mapping, shells, positive, rcut_lower, rcut_upper)
+      !> Assembled recipe
+      type(moist_math_grid_atomic_recipe_type), intent(out) :: recipe
+      !> Reference rule
+      class(moist_math_grid_radial_rule_type), intent(in) :: rule
+      !> Radial node count
+      integer, intent(in) :: npts
+      !> Radial mapping
+      class(moist_math_grid_radial_mapping_type), intent(in) :: mapping
+      !> Shell policy
+      class(moist_math_grid_atomic_shell_type), intent(in) :: shells
+      !> Positive-weight rules only
+      logical, intent(in) :: positive
+      !> Lower radial cutoff
+      real(wp), intent(in), optional :: rcut_lower
+      !> Upper radial cutoff
+      real(wp), intent(in), optional :: rcut_upper
+
+      type(moist_math_grid_angular_generator_lebedev_type) :: generator
+
+      allocate (recipe%radial%rule, source=rule)
+      recipe%radial%npts = npts
+      allocate (recipe%radial%mapping, source=mapping)
+      if (present(rcut_lower)) recipe%radial%rcut_lower = rcut_lower
+      if (present(rcut_upper)) recipe%radial%rcut_upper = rcut_upper
+      call new_lebedev_generator(generator, positive_weights_only=positive)
+      allocate (recipe%angular, source=generator)
+      allocate (recipe%shells, source=shells)
+   end subroutine assemble_recipe
 end module test_helpers

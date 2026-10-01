@@ -37,9 +37,9 @@ from .configuration import (
 from .interface import (
     Coupling,
     DensityResponse,
+    GaussianAmplitudeResponse,
     GaussianMomentRequest,
     GaussianPotentialRequest,
-    GostshypAmplitudeResponse,
     PointPotentialRequest,
     PotentialAdjointResponse,
     Response,
@@ -100,7 +100,7 @@ _D_CART_ORDER = ((0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2))
 #: xxx/xyy/xzz, y picks xxy/yyy/yzz and z picks xxz/yyz/zzz.
 _F_RHO2_FIRST_MOMENT = ((0, 3, 5), (1, 6, 8), (2, 7, 9))
 
-#: Mirrors ``overlap_floor`` in ``src/moist/model/component/gostshyp.f90``.
+#: Mirrors ``overlap_floor`` in ``src/moist/model/continuum/component/gostshyp.f90``.
 #: Only :class:`GaussianMoments` diagnostics read this copy; the energy, Fock
 #: and gradient paths do not.
 _OVERLAP_FLOOR = 1.0e-9
@@ -656,7 +656,7 @@ class GaussianMoments:
     # contractions of the amplitudes
     # ------------------------------------------------------------------
 
-    def fock(self, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
+    def fock(self, amplitude: GaussianAmplitudeResponse) -> np.ndarray:
         """Return ``sum_j [w_overlap_j g_j + w_normal_deriv_j f_j]`` at a frozen surface."""
         if self._G is None:
             self._build_integrals()
@@ -664,7 +664,7 @@ class GaussianMoments:
         fock += np.einsum("j,uvj->uv", amplitude.w_normal_deriv, self._F, optimize=True)
         return 0.5 * (fock + fock.T)
 
-    def nuclear_gradient(self, dm: np.ndarray, amplitude: GostshypAmplitudeResponse) -> np.ndarray:
+    def nuclear_gradient(self, dm: np.ndarray, amplitude: GaussianAmplitudeResponse) -> np.ndarray:
         """Return the gradient with AO centers moving, surface frozen (``int3c1e_ip1``), ``(natm, 3)``."""
         dm_cart = self._density_matrix_cart(dm)
         ncart = self._cart2sph.shape[0]
@@ -889,7 +889,7 @@ class PySCFSolvation:
         for item in response:
             if isinstance(item, PotentialAdjointResponse):
                 fock += self.host.fock_potential(coords, self._xi, item.w_phi)
-            elif isinstance(item, GostshypAmplitudeResponse):
+            elif isinstance(item, GaussianAmplitudeResponse):
                 fock += self._bound_moments().fock(item)
             elif isinstance(item, DensityResponse):
                 # Present exactly when the surface follows the density.
@@ -917,7 +917,7 @@ class PySCFSolvation:
             potential adjoint.
         ``moments``
             The basis-center derivative of the Gaussian moments, contracted
-            with the GOSTSHYP amplitudes (present only with a moment request).
+            with the Gaussian amplitudes (present only with a moment request).
         ``density``
             The basis-center derivative of the level set, contracted with the
             density weights (present only on a density-dependent cavity).
@@ -942,7 +942,7 @@ class PySCFSolvation:
             if isinstance(item, PotentialAdjointResponse):
                 channels["potential"] = self.host._gradient_phi(
                     coords, np.asarray(item.w_phi), xi=self._xi)
-            elif isinstance(item, GostshypAmplitudeResponse):
+            elif isinstance(item, GaussianAmplitudeResponse):
                 channels["moments"] = self._bound_moments().nuclear_gradient(self._dm, item)
             elif isinstance(item, DensityResponse):
                 channels["density"] = self.host._gradient_lsf(coords, item)

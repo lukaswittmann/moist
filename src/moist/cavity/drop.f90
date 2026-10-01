@@ -8,11 +8,12 @@ module moist_cavity_drop
    use moist_math_lapack_gesv, only: dgesv
    use moist_math_linalg, only: mat3x3_inv, setup_tangent_frame
    use moist_math_boys, only: dboysfun1
-   use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
+   use moist_math_grid_angular_lebedev, only: lebedev_order_from_num
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_channels_response, only: response_type, density_response_type, response_accumulate
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
@@ -159,7 +160,7 @@ module moist_cavity_drop
       integer, allocatable :: oleb
       !> Cached Lebedev angular grid (3, num_leb)
       real(wp), allocatable :: ang_grid(:, :)
-      !> Cached Lebedev weights (num_leb)
+      !> Cached Lebedev solid-angle weights (num_leb), summing to 4*pi
       real(wp), allocatable :: ang_weight(:)
 
       !* ----------------------------- Switching functions ---------------------------- *!
@@ -887,15 +888,26 @@ contains
    !* ================================================================================= *!
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
-   ! TODO: A simple wrapper for this into the lebedev grid module would be better
-   ! (code deduplication as its also used in iswig and numsa,..)
+   !>
+   !> - Unsupported sizes and rules with negative weights are errors of the
+   !>   Lebedev module
+   !> - Caches the nodes and solid-angle weights (summing to 4*pi) of the
+   !>   unit-sphere grid
+   !>
+   !> @param[in,out] self   Cavity whose angular cache is refreshed
+   !> @param[out]    error  Set for an unsupported or rejected Lebedev size
    subroutine ensure_lebedev_cache(self, error)
+      !> Cavity instance
       class(cavity_type_drop), intent(inout) :: self
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Lebedev order index of the requested size
       integer :: oleb
+      !> Unit-sphere grid whose nodes and weights are moved into the cache
+      type(moist_math_grid_angular_type) :: leb
 
       ! Map requested num_leb to Lebedev order index
-      call lebedev_order_from_num(self%param%num_leb, oleb, error)
+      call lebedev_order_from_num(self%param%num_leb, oleb, error, positive_weights_only=.true.)
       if (allocated(error)) return
 
       if (allocated(self%ang_grid) &
@@ -914,19 +926,14 @@ contains
       if (allocated(self%oleb)) deallocate (self%oleb)
       if (allocated(self%nmax)) deallocate (self%nmax)
 
-      allocate (self%oleb)
-      self%oleb = oleb
-
-      allocate (self%ang_grid(3, self%param%num_leb))
-      allocate (self%ang_weight(self%param%num_leb))
-      call get_angular_grid(self%oleb, self%ang_grid, self%ang_weight, error)
+      call new_lebedev_grid(leb, error, npts=self%param%num_leb, positive_weights_only=.true.)
       if (allocated(error)) return
 
-      !> Check for negative weights (?!)
-      if (any(self%ang_weight < 0.0_wp)) then
-         call fatal_error(error, "Grid contains negativ weights that do not work with DROP.")
-         return
-      end if
+      call move_alloc(leb%points, self%ang_grid)
+      call move_alloc(leb%weights, self%ang_weight)
+
+      allocate (self%oleb)
+      self%oleb = oleb
 
       allocate (self%nmax)
       self%nmax = self%param%num_leb*self%nsph
@@ -1021,7 +1028,7 @@ contains
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call list_cavity_fields_base(self, query)
 

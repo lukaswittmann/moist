@@ -33,7 +33,7 @@ module test_cavity_drop_isodensity
    use mstore, only: get_structure
    use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
-   use moist_model_gems_utils, only: BuildSuperStructure
+   use moist_model_continuum_gems_utils, only: BuildSuperStructure
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_ncart, &
                                                    moist_iso_gto_nslot
    use moist_cavity_drop_lsf_isodensity_internal, only: &
@@ -417,7 +417,7 @@ contains
 
       ! get_env always returns an allocated string, so an `allocated` guard would
       ! never fire; the default is what covers an unset variable. meson exports
-      ! the source root, fpm runs the tester from the project root
+      ! the source root, a tester started from the project root gets the default
       source_root = get_env("MOIST_SOURCE_ROOT", default=".")
       filename = source_root//"/test/unit/data/" &
                  //trim(mol_tag(test_molecule_index(test)))//"_" &

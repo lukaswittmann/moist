@@ -33,13 +33,13 @@
 /*
  * ARRAY SIZES -- who states how large a buffer is
  *
- * - No-size entries: moist_answer_coupling_request,
- *   moist_get_coupling_request_width, moist_get_response_array, the two name
- *   getters moist_get_coupling_request_name/moist_get_response_item_name,
- *   and the moist_get_cavity_field_* entries
- * - Each reads or writes exactly the grid size of the coupling, response or
- *   cavity and the extents of the named output, array or field: a row-major
- *   (ngrid, dims...) array, or the `count` moist_get_cavity_field_info reports
+ * - No-size entries: moist_answer_coupling_request, the two name getters
+ *   moist_get_coupling_request_name/moist_get_response_item_name, and the
+ *   moist_get_cavity_field_*, moist_get_model_field_*,
+ *   moist_get_coupling_request_field_* and moist_get_response_field_* entries
+ * - Each reads or writes exactly the grid size of the coupling or cavity and
+ *   the extents of the named output or field: a row-major (ngrid, dims...)
+ *   answer, or the `count` the matching *_field_info reports
  * - Not checked against the buffer size; host allocates the documented shape
  * - Names written with terminator into MOIST_NAME_MAX + 1 characters
  *   (field names: MOIST_FIELD_NAME_MAX + 1)
@@ -78,7 +78,7 @@ typedef struct moist_component_s* moist_component;
 
 /// PCM linear-solver selection, as accepted by the CPCM and COSMO constructors
 /// Mirrors the Fortran `solver_type` enumerator in
-/// src/moist/model/component/pcm/type.f90; numeric values are ABI
+/// src/moist/model/continuum/component/pcm/type.f90; numeric values are ABI
 typedef enum {
     /// Explicit matrix inversion
     moist_pcm_solver_inversion = 1,
@@ -96,7 +96,7 @@ typedef struct moist_cavity_s* moist_cavity;
 /// Radii model class
 typedef struct moist_radii_s* moist_radii;
 
-/// Host coupling class: the request list of one general model, minted by
+/// Host coupling class: the request list of one solvation model, minted by
 /// moist_new_coupling and staged per phase by the moist_prepare_model_*
 /// entry points (see HOST COUPLING PROTOCOL below)
 typedef struct moist_coupling_s* moist_coupling;
@@ -107,11 +107,15 @@ typedef struct moist_response_s* moist_response;
 
 /// Requests, response items, outputs and arrays are identified by canonical
 /// NAME, never by a numeric tag or handle. Request names: "point_potential",
-/// "gaussian_potential", "gaussian_moments"; their outputs: "phi", "dphi_dr",
-/// "dphi_dxi", "gt", "pt", "mt", "rt". Response items: "potential_adjoint"
+/// "gaussian_potential", "gaussian_moments", "atomic_multipoles",
+/// "atomic_charges", "radial_potential"; their outputs: "phi", "dphi_dr",
+/// "dphi_dxi", "gt", "pt", "mt", "rt", "q", "mu", "theta"; request inputs:
+/// "width" ("gaussian_moments"). Response items: "potential_adjoint"
 /// ("w_phi"), "density" ("w_rho", "w_grad_rho", "w_hess_rho"),
-/// "gostshyp_amplitude" ("w_overlap", "w_normal_deriv"). Names at most
-/// MOIST_NAME_MAX characters
+/// "gaussian_amplitude" ("w_overlap", "w_normal_deriv"),
+/// "atomic_multipole_adjoint" ("dg_dq", "dg_dmu", "dg_dtheta"),
+/// "atomic_charge_adjoint" ("dg_dq"), "radial_potential_adjoint" ("dg_dphi").
+/// Names at most MOIST_NAME_MAX characters
 #define MOIST_NAME_MAX 32
 
 
@@ -475,7 +479,7 @@ moist_new_pv_component(moist_error error,
 /// Hartree/bohr^3. Cannot form its own density traces: answer the
 /// Gaussian-moment request of the coupling ("gt", "pt", "mt", "rt") with
 /// moist_answer_coupling_request in every phase, and contract the
-/// "gostshyp_amplitude" item of the response walk
+/// "gaussian_amplitude" item of the response walk
 moist_API_ENTRY moist_component moist_API_CALL
 moist_new_gostshyp_component(moist_error error,
                              double pressure) moist_API_SUFFIX__V_1_0;
@@ -485,7 +489,7 @@ moist_API_ENTRY void moist_API_CALL
 moist_delete_component(moist_component* component) moist_API_SUFFIX__V_1_0;
 
 
-/// Append a copied component to a general model before its first update
+/// Append a copied component to a continuum model before its first update
 moist_API_ENTRY void moist_API_CALL
 moist_add_model_component(moist_error error, moist_model model, moist_component component) moist_API_SUFFIX__V_1_0;
 
@@ -503,18 +507,20 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  *    retries what is still missing; false also reports a failure, check err
  *    after the loop. Leaving the loop early resumes the pass at the next call
  * 4. For the current request, read its name, ask which outputs are missing,
- *    compute them on the cavity grid -- read the grid from the model's cavity
- *    via moist_get_model_cavity + moist_get_cavity_field_real ("xyz", "xi0",
- *    ...) -- and submit each with moist_answer_coupling_request. A rejected
- *    output stays missing until a valid retry; the others survive
+ *    read the inputs it lists (moist_get_coupling_request_field_real, e.g.
+ *    the "width" of "gaussian_moments"), compute the outputs on the model's
+ *    grid -- read it with moist_get_model_field_real ("xyz", "xi0", ...),
+ *    which works for every model family -- and submit each with
+ *    moist_answer_coupling_request. A rejected output stays missing until a
+ *    valid retry; the others survive
  * 5. Call the moist_get_model_* entry matching the staged phase; fails by
  *    name on a wrong staging or any missing output, evaluation does not
  *    consume answers
  * 6. Walk the response with `while (moist_next_response_item(err, resp))`:
  *    every item present is visited once per pass. Read the current item's
- *    name, copy its arrays with moist_get_response_array and contract them;
- *    stop on an item the host cannot contract. An absent item is physics,
- *    not an error
+ *    name, copy its arrays with moist_get_response_field_real (their shapes
+ *    from moist_get_response_field_info) and contract them; stop on an item
+ *    the host cannot contract. An absent item is physics, not an error
  *
  *     moist_prepare_model_energy(err, model, cpl);
  *     while (moist_next_coupling_request(err, cpl)) {
@@ -535,7 +541,7 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  *         char name[MOIST_NAME_MAX + 1];
  *         moist_get_response_item_name(err, resp, name);
  *         if (strcmp(name, "potential_adjoint") == 0) {
- *             moist_get_response_array(err, resp, "w_phi", w_phi);
+ *             moist_get_response_field_real(err, resp, "w_phi", w_phi);
  *             host_fock_potential(ngrid, w_phi, fock);
  *         } else {
  *             host_abort("unsupported response item", name);
@@ -619,7 +625,7 @@ moist_get_model_response(moist_error error,
 
 /// Nuclear gradient from a staged coupling, plus the host part of the gradient
 /// phase in `response` (cleared after input validation): the potential adjoint
-/// and the GOSTSHYP amplitudes. Not the "density" item -- see HOST COUPLING
+/// and the Gaussian amplitudes. Not the "density" item -- see HOST COUPLING
 /// PROTOCOL above for the weights a density-backed cavity carries over from
 /// the response phase. `gradient` is row-major (nat_cap, 3); capacity checked
 /// against the atom count before anything is written. Adds to gradient;
@@ -661,11 +667,55 @@ moist_get_coupling_request_missing(moist_error error, moist_coupling coupling, c
 moist_API_ENTRY void moist_API_CALL
 moist_answer_coupling_request(moist_error error, moist_coupling coupling, const char* output,
     const double* values) moist_API_SUFFIX__V_1_0;
-/// Copy the Gaussian moment exponents, width[ngrid] in bohr**-2, of the
-/// current "gaussian_moments" request. Component's choice, not a cavity
-/// field: read them, never recompute them
+
+/// Named inputs of the current request
+///
+/// A request kind may carry inputs its component chose, which the host reads
+/// and never recomputes: "gaussian_moments" lists "width" [ngrid], the
+/// Gaussian moment exponents in bohr**-2 -- not a cavity field. A kind
+/// without inputs lists none. Enumerate them with
+/// moist_get_coupling_request_field_count +
+/// moist_get_coupling_request_field_info, then read one by name; every input
+/// is MOIST_FIELD_REAL, and `dims` lists its extents slowest-varying first,
+/// as for the cavity fields. An error when no request is current
+
+/// Number of named inputs of the current request
 moist_API_ENTRY void moist_API_CALL
-moist_get_coupling_request_width(moist_error error, moist_coupling coupling, double* width) moist_API_SUFFIX__V_1_0;
+moist_get_coupling_request_field_count(moist_error error,
+                                       moist_coupling coupling,
+                                       int* nfield) moist_API_SUFFIX__V_1_0;
+
+/// Describe one input of the current request by position; outputs as
+/// moist_get_cavity_field_info: `dims` receives MOIST_FIELD_MAX_RANK extents
+/// with the slowest-varying one first (unused entries are 1), and `count` is
+/// the number of values a read writes
+moist_API_ENTRY void moist_API_CALL
+moist_get_coupling_request_field_info(moist_error error,
+                                      moist_coupling coupling,
+                                      int index /* : 0-based, below the count from
+                                                   moist_get_coupling_request_field_count */,
+                                      char* name /* [MOIST_FIELD_NAME_MAX + 1] */,
+                                      int* dtype /* : MOIST_FIELD_REAL */,
+                                      int* rank /* : 0 for a scalar */,
+                                      int* dims /* [MOIST_FIELD_MAX_RANK] */,
+                                      int* count /* : elements a read writes */) moist_API_SUFFIX__V_1_0;
+
+/// Copy an input description of the current request or query its length,
+/// following moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_coupling_request_field_about(moist_error error, moist_coupling coupling,
+                                       const char* name, char* about,
+                                       size_t capacity, size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Read one input of the current request by name: the `count` values
+/// moist_get_coupling_request_field_info reports, row-major with its `dims`.
+/// An error for a name the request does not list or a NULL buffer; nothing
+/// is written then
+moist_API_ENTRY void moist_API_CALL
+moist_get_coupling_request_field_real(moist_error error,
+                                      moist_coupling coupling,
+                                      const char* name,
+                                      double* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
 /// Advance to the next item of the response. Every item present is visited
 /// once per pass. Returns false after the last one, rewinding so that the next
@@ -678,8 +728,17 @@ moist_next_response_item(moist_error error, moist_response response) moist_API_S
 moist_API_ENTRY void moist_API_CALL
 moist_get_response_item_name(moist_error error, moist_response response,
     char* name) moist_API_SUFFIX__V_1_0;
-/// Copy one named array of the current item, row-major with the grid axis
-/// first; moist writes exactly the shape listed here
+
+/// Named arrays of the current response item
+///
+/// Every item describes its arrays like a cavity its fields: enumerate them
+/// with moist_get_response_field_count + moist_get_response_field_info, then
+/// read one by name with moist_get_response_field_real. An array the item was
+/// accumulated without is not listed. Every array is MOIST_FIELD_REAL, and
+/// `dims` lists its extents slowest-varying first, the reverse of the native
+/// Fortran shape: "w_grad_rho" (3, ngrid) reports {ngrid, 3}, "dg_dphi"
+/// (ngrid, natom) reports {natom, ngrid}. An error when no item is current.
+/// The items, their arrays and the host's contraction:
 ///   "potential_adjoint": "w_phi" [ngrid], w_phi_i = dE/dphi_i, contracted by
 ///     the host as `F_uv += sum_i w_phi_i V_uv(r_i)`; for a stationary PCM
 ///     this is the surface charge q_i
@@ -688,15 +747,60 @@ moist_get_response_item_name(moist_error error, moist_response response,
 ///     Hessian. Hessian weights use C indices [point][b][a] for native
 ///     weights(a,b,point); need not be symmetric, preserve this axis order
 ///     when contracting
-///   "gostshyp_amplitude": "w_overlap" [ngrid], "w_normal_deriv" [ngrid],
+///   "gaussian_amplitude": "w_overlap" [ngrid], "w_normal_deriv" [ngrid],
 ///     contracted as `F_uv += sum_i [w_overlap[i] g_uv,i + w_normal_deriv[i] f_uv,i]`
-/// An error when no item is current, for an array the current item does not
-/// have, or a NULL buffer
+///     with g_uv,i = <u|G_i|v> and f_uv,i = n_i . grad_r g_uv,i
+///   "atomic_multipole_adjoint": "dg_dq" [natom], "dg_dmu" [natom][3],
+///     "dg_dtheta" [natom][3][3], dE/dq_A, dE/dmu_A and dE/dtheta_A of the
+///     solute's atomic multipoles, contracted as
+///     `F_uv += sum_A [dg_dq[A] dq_A/dP_uv + dg_dmu[A] . dmu_A/dP_uv + dg_dtheta[A] : dtheta_A/dP_uv]`
+///     and with d/dR of the same multipoles for the gradient. Quadrupole
+///     weights use C indices [atom][b][a] for native weights(a,b,atom); an
+///     order the model never consumed is not listed
+///   "atomic_charge_adjoint": "dg_dq" [natom], dE/dq_A, contracted as
+///     `F_uv += sum_A dg_dq[A] dq_A/dP_uv` and with dq_A/dR for the gradient
+///   "radial_potential_adjoint": "dg_dphi" [natom][ngrid], dE/dphi_a(r_i) of
+///     the site-resolved radial potential, contracted as
+///     `F_uv += sum_a sum_i dg_dphi[a][i] dphi_a(r_i)/dP_uv` and with
+///     dphi_a(r_i)/dR for the gradient
+
+/// Number of named arrays of the current response item
 moist_API_ENTRY void moist_API_CALL
-moist_get_response_array(moist_error error,
-                         moist_response response,
-                         const char* array,
-                         double* values) moist_API_SUFFIX__V_1_0;
+moist_get_response_field_count(moist_error error,
+                               moist_response response,
+                               int* nfield) moist_API_SUFFIX__V_1_0;
+
+/// Describe one array of the current item by position; outputs as
+/// moist_get_cavity_field_info: `dims` receives MOIST_FIELD_MAX_RANK extents
+/// with the slowest-varying one first (unused entries are 1), and `count` is
+/// the number of values a read writes
+moist_API_ENTRY void moist_API_CALL
+moist_get_response_field_info(moist_error error,
+                              moist_response response,
+                              int index /* : 0-based, below the count from
+                                           moist_get_response_field_count */,
+                              char* name /* [MOIST_FIELD_NAME_MAX + 1] */,
+                              int* dtype /* : MOIST_FIELD_REAL */,
+                              int* rank /* : 0 for a scalar */,
+                              int* dims /* [MOIST_FIELD_MAX_RANK] */,
+                              int* count /* : elements a read writes */) moist_API_SUFFIX__V_1_0;
+
+/// Copy an array description of the current item or query its length,
+/// following moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_response_field_about(moist_error error, moist_response response,
+                               const char* name, char* about,
+                               size_t capacity, size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Read one array of the current item by name: the `count` values
+/// moist_get_response_field_info reports, row-major with its `dims`. An
+/// error for an array the current item does not list or a NULL buffer;
+/// nothing is written then
+moist_API_ENTRY void moist_API_CALL
+moist_get_response_field_real(moist_error error,
+                              moist_response response,
+                              const char* name,
+                              double* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
 /// Update a solvation model with a molecular structure
 moist_API_ENTRY void moist_API_CALL
@@ -823,32 +927,20 @@ moist_delete_cavity(moist_cavity* cavity) moist_API_SUFFIX__V_1_0;
 
 /// Named result fields (Tier 2 - everything a cavity holds, by name)
 ///
-/// A cavity declares the per-point and per-sphere arrays it currently holds,
-/// each under the name it uses internally. Enumerate them with
-/// moist_get_cavity_field_count + moist_get_cavity_field_info, then read one
-/// with the accessor matching its type tag. Extending a cavity with a new
-/// result needs no new entry point here
-///
-/// A field that was not computed is NOT declared: the optional DROP properties
-/// (curvature, grid-point density, ...) appear only once the matching property
-/// request was set; asking for one that is absent is an error, not a buffer
-/// of zeros. Nothing is written to a rejected buffer
-///
-/// Names are the cavity's own: `xyz`, `a`, `owner`, `radii` and `asph` carry
-/// exactly the values moist_get_cavity_results reports, `owner` 0-based
-/// included. DROP adds the projection results -- `numbering`, `anchor_id`,
-/// `branch`, `branch_count`, `wbranch`, `wleb`, `rho`, `r_iI0`, `normal0`,
-/// `converged` and the diagnostics -- and iSwiG adds its own `numbering`
+/// Enumerate with moist_get_cavity_field_count + moist_get_cavity_field_info,
+/// then read one with the accessor matching its type tag. A field that was not
+/// computed is not listed; nothing is written to a rejected buffer. Rules and
+/// conventions: docs/reference/fields.rst
 
-/// Element type tags reported by moist_get_cavity_field_info. Values are
-/// part of the contract; read a field with the accessor matching its tag
+/// Element type tags reported by the moist_get_*_field_info entries. Values
+/// are part of the contract; read a field with the accessor matching its tag
 #define MOIST_FIELD_REAL 1
 #define MOIST_FIELD_INT 2
 #define MOIST_FIELD_BOOL 3
 
 /// Highest rank a field can have, i.e. the length of the `dims` buffer
-/// moist_get_cavity_field_info writes
-#define MOIST_FIELD_MAX_RANK 2
+/// the *_field_info entries write
+#define MOIST_FIELD_MAX_RANK 3
 /// Maximum field-name length excluding the NUL terminator. Mirrored by
 /// `max_field_name_len` (api.f90)
 #define MOIST_FIELD_NAME_MAX 64
@@ -911,6 +1003,61 @@ moist_get_cavity_field_bool(moist_error error,
                             moist_cavity cavity,
                             const char* name,
                             bool* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Named fields of a model's evaluation domain (Tier 2)
+///
+/// The cavity field getters through a model handle, for every model family: a
+/// continuum model reports its cavity's fields, a volume model its grid. No
+/// update is required. See docs/reference/fields.rst
+
+/// Number of named fields of the model's evaluation domain
+/// Read it again after moist_update_model
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_count(moist_error error,
+                            moist_model model,
+                            int* nfield) moist_API_SUFFIX__V_1_0;
+
+/// Describe one model field by position; outputs as moist_get_cavity_field_info
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_info(moist_error error,
+                           moist_model model,
+                           int index /* : 0-based, below the count from
+                                        moist_get_model_field_count */,
+                           char* name /* [MOIST_FIELD_NAME_MAX + 1] */,
+                           int* dtype /* : one of MOIST_FIELD_* */,
+                           int* rank /* : 0 for a scalar */,
+                           int* dims /* [MOIST_FIELD_MAX_RANK] */,
+                           int* count /* : elements a read writes */) moist_API_SUFFIX__V_1_0;
+
+/// Copy a model field description or query its length, following
+/// moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_about(moist_error error, moist_model model,
+                            const char* name, char* about,
+                            size_t capacity, size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_REAL model field by name: the `count` elements
+/// moist_get_model_field_info reports, rank-2 fields flat in row-major order
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_real(moist_error error,
+                           moist_model model,
+                           const char* name,
+                           double* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_INT model field by name; indices as the owner declares
+/// them, e.g. a cavity's 0-based `owner`
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_int(moist_error error,
+                          moist_model model,
+                          const char* name,
+                          int* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_BOOL model field by name
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_field_bool(moist_error error,
+                           moist_model model,
+                           const char* name,
+                           bool* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
 /// Assemble A-matrix and compute xi values
 /// Must be called before accessing xi or using the A-matrix

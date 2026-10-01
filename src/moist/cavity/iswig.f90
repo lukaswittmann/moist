@@ -5,14 +5,14 @@ module moist_cavity_iswig
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
    use mctc_env, only: error_type, fatal_error, wp
-   use, intrinsic :: iso_fortran_env, only: error_unit, output_unit
+   use, intrinsic :: iso_fortran_env, only: output_unit
 
-   use moist_math_grid_lebedev, only: get_angular_grid, grid_size, lebedev_order_from_num
+   use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, new_lebedev_grid
    use moist_cavity_type, only: cavity_type, list_cavity_fields_base
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
 
    implicit none(type, external)
    private
@@ -56,10 +56,9 @@ module moist_cavity_iswig
 
       ! Cached Lebedev data (reused across updates)
       integer :: cached_num_leb = 0
-      integer :: cached_oleb = 0
       real(wp) :: cached_swx = 0.0_wp
       real(wp), allocatable :: ang_grid(:, :) ! (3, num_leb)
-      real(wp), allocatable :: ang_weight(:)  ! (num_leb)
+      real(wp), allocatable :: ang_weight(:)  ! (num_leb), solid-angle weights summing to 4*pi
 
    contains
       procedure :: update => update_cavity_iswig
@@ -104,7 +103,7 @@ contains
       !> iSwiG cavity instance
       class(cavity_type_iswig), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call list_cavity_fields_base(self, query)
 
@@ -221,7 +220,6 @@ contains
          radii=self%radii, &
          cut_a=self%cut_a, &
          cut_f=self%cut_f, &
-         oleb=self%cached_oleb, &
          zeta_born=self%cached_swx, &
          ang_grid=self%ang_grid, &
          ang_weight=self%ang_weight, &
@@ -454,14 +452,29 @@ contains
    end subroutine get_surface_gradient_iswig
 
    !> Ensure Lebedev grid cache is initialized and matches the requested size
+   !>
+   !> - Sizes without a fitted swig_xi value are errors here, checked first
+   !> - None of the fitted sizes has negative weights; the generator would
+   !>   refuse such a rule
+   !>
+   !> @param[in,out] self   Cavity whose angular cache is refreshed
+   !> @param[out]    error  Set for an unsupported or rejected Lebedev size
    subroutine ensure_lebedev_cache(self, error)
+      !> Cavity instance
       class(cavity_type_iswig), intent(inout) :: self
+      !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
-      integer :: isize, oleb
+      integer :: isize
 
       !> iSwiG-supported Lebedev orders (indexing into swig_xi_tab)
       integer :: iswig_order
+
+      !> Angular quadrature filling the cache, solid-angle weights summing to 4*pi
+      type(moist_math_grid_angular_type) :: leb
+
+      !> Error message buffer
+      character(len=256) :: msg
 
       ! Precompute constant swig_xi value for this Lebedev order
       real(wp), parameter :: swig_xi_tab(11) = [ &
@@ -470,9 +483,9 @@ contains
       integer, parameter :: iswig_grid_sizes(11) = [ &
                             14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202]
 
-      ! Map requested num_leb to Lebedev order index
-      call lebedev_order_from_num(self%num_leb, oleb, error)
-      if (allocated(error)) return
+      if (self%cached_num_leb == self%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
+         return
+      end if
 
       !> Check if the self%num_leb is available for iswig (xi)
       iswig_order = -1
@@ -480,29 +493,22 @@ contains
          if (self%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
       end do
       if (iswig_order < 0) then
-         write (error_unit, "(a,i0)") "[ERROR] Unsupported Lebedev size in iSwiG: ", self%num_leb
-         write (error_unit, "(a)") "Supported sizes:"
-         write (error_unit, "(8i10)") iswig_grid_sizes(1:8)
-         write (error_unit, "(8i10)") iswig_grid_sizes(9:)
-         call fatal_error(error, "Unsupported Lebedev size in iSwiG")
+         write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%num_leb, &
+            & "; supported sizes: ", iswig_grid_sizes
+         call fatal_error(error, trim(msg))
          return
       end if
 
-      if (self%cached_num_leb == self%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
-         return
-      end if
+      ! Negative weights would give negative areas and imaginary widths
+      call new_lebedev_grid(leb, error, npts=self%num_leb, positive_weights_only=.true.)
+      if (allocated(error)) return
 
       self%cached_num_leb = self%num_leb
-      self%cached_oleb = oleb
       self%cached_swx = swig_xi_tab(iswig_order)
 
-      if (allocated(self%ang_grid)) deallocate (self%ang_grid)
-      if (allocated(self%ang_weight)) deallocate (self%ang_weight)
-
-      allocate (self%ang_grid(3, self%num_leb))
-      allocate (self%ang_weight(self%num_leb))
-      call get_angular_grid(self%cached_oleb, self%ang_grid, self%ang_weight, error)
-      if (allocated(error)) return
+      ! Cache nodes and weights in the plain arrays the integrators consume
+      call move_alloc(leb%points, self%ang_grid)
+      call move_alloc(leb%weights, self%ang_weight)
 
    end subroutine ensure_lebedev_cache
 
@@ -510,7 +516,7 @@ contains
    subroutine setup_iswig_surface( &
       nsph, centers, radii, &
       cut_a, cut_f, &
-      oleb, zeta_born, ang_grid, ang_weight, &
+      zeta_born, ang_grid, ang_weight, &
       ngrid, owner, grid_xyz, xi, f, wleb, a, normal0, v, numbering, asph, &
       total_area, total_volume, error)
 
@@ -518,9 +524,9 @@ contains
       real(wp), intent(in) :: centers(3, nsph)
       real(wp), intent(in) :: radii(nsph)
       real(wp), intent(in) :: cut_a, cut_f
-      integer, intent(in) :: oleb
       real(wp), intent(in) :: zeta_born
       real(wp), intent(in) :: ang_grid(:, :)
+      !> Solid-angle weights summing to 4*pi (num_leb)
       real(wp), intent(in) :: ang_weight(:)
 
       integer, intent(out) :: ngrid
@@ -547,7 +553,7 @@ contains
       real(wp) :: rx, ry, rz
 
       ! Allocate raw (pre-filter) arrays of total size
-      num_leb = grid_size(oleb)
+      num_leb = size(ang_weight)
       nraw = nsph*num_leb
       allocate (xyz_raw(3, nraw), source=0.0_wp)
       allocate (area_raw(nraw), source=0.0_wp)
@@ -682,8 +688,8 @@ contains
          do ileb = 1, num_leb
             iraw = iraw + 1
 
-            ! Construct raw Lebedev weight from ang_weight(ileb)
-            weight_raw(iraw) = ang_weight(ileb)*(4.0_wp*pi)
+            ! Raw Lebedev weight, solid angle of the node
+            weight_raw(iraw) = ang_weight(ileb)
 
             ! Cartesian location of point on sphere iat:
             xyz_raw(1, iraw) = centers(1, iat) + radii(iat)*ang_grid(1, ileb)

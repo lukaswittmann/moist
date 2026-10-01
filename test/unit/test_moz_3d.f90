@@ -1,0 +1,433 @@
+!> 3D MOZ model and grid ownership tests
+module test_moz_3d
+   use mctc_env, only: wp, moist_error => error_type
+   use mctc_io, only: structure_type, new
+   use testdrive, only: unittest_type, new_unittest, error_type, check, test_failed
+   use moist_context, only: moist_context_type, new_context
+   use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
+   use moist_math_grid_3d_base, only: moist_math_grid_3d_type
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_grid_3d
+   use moist_math_grid_3d_molecular, only: moist_math_grid_3d_molecular_type, new_molecular_grid
+   use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_recipe_type
+   use test_helpers, only: get_qc_handymod_recipe
+   use moist_channels_fields, only: field_query_type
+   use moist_channels_coupling, only: coupling_type, coupling_request_type
+   use moist_channels_response, only: response_type
+   implicit none(type, external)
+   private
+   public :: collect_moz_3d
+contains
+   !> Register 3D MOZ tests
+   !>
+   !> @param[out] testsuite Collected tests
+   subroutine collect_moz_3d(testsuite)
+      !> Collected tests
+      type(unittest_type), allocatable, intent(out) :: testsuite(:)
+      testsuite = [new_unittest("contract", check_moz_3d), &
+         & new_unittest("owned_grid", test_grid_model), &
+         & new_unittest("ec_requests_by_grid", check_ec_requests), &
+         & new_unittest("qat_and_multipoles_requests", check_charge_sources), &
+         & new_unittest("unknown_coupling_mode", check_unknown_mode)]
+   end subroutine collect_moz_3d
+
+   !> Drive a 3D MOZ model through the coupling protocol
+   !>
+   !> The model owns a copy of the configured grid, drives the
+   !> gaussian_potential and atomic_charges requests of the default "ec"
+   !> source through the usual coupling protocol, then reports pending theory
+   !> once the mandatory outputs are answered; a wrong-shape answer is
+   !> rejected first
+   !>
+   !> @param[out] error Test error
+   subroutine check_moz_3d(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: template
+      class(moist_math_grid_3d_type), pointer :: grid
+      type(structure_type) :: mol
+      type(coupling_type), pointer :: coupling
+      type(response_type) :: response
+      real(wp), allocatable :: phi(:)
+      real(wp) :: energy
+      integer :: i
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      template%nx = 2
+      template%ny = 2
+      template%nz = 2
+      template%dr = 0.5_wp
+      call new_moz_3d_model(model, template, ctx, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call model%update(mol, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      grid => model%grid
+      call check(error, associated(grid) .and. model%is_updated())
+      if (allocated(error)) return
+      call check(error, grid%ngrid == 8 .and. model%atom_count() == 1)
+      if (allocated(error)) return
+      template%nx = 3
+      call check(error, grid%ngrid == 8, more="model must own an independent grid copy")
+      if (allocated(error)) return
+
+      call model%new_coupling(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call model%prepare_energy(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, coupling%next(), more="gaussian_potential must be pending")
+      if (allocated(error)) return
+
+      ! A wrong-shape answer is rejected and leaves the output missing
+      call coupling%answer("phi", [1.0_wp], err)
+      call check(error, allocated(err))
+      if (allocated(error)) return
+
+      ! The correctly shaped answer (one value per grid point) completes the walk
+      allocate (phi(grid%ngrid))
+      phi = [(0.1_wp*real(i, wp), i=1, grid%ngrid)]
+      call coupling%answer("phi", phi, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, coupling%next(), more="the tail charges must be pending")
+      if (allocated(error)) return
+      call coupling%answer("q", [0.0_wp], err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call check(error, .not. coupling%next(), more="gaussian_potential and atomic_charges are the only requests")
+      if (allocated(error)) return
+
+      energy = 9.0_wp
+      call model%get_energy(coupling, energy, err)
+      call check(error, allocated(err) .and. energy == 9.0_wp)
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D MOZ energy") > 0)
+      if (allocated(error)) return
+
+      call model%prepare_response(coupling, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call model%get_response(coupling, response, err)
+      call check(error, allocated(err))
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D MOZ response") > 0)
+      if (allocated(error)) return
+
+      call model%release_coupling(coupling)
+   end subroutine check_moz_3d
+
+   !> Concrete grids work through the 3D MOZ model and preserve copy ownership
+   !>
+   !> @param[out] error Test error
+   subroutine test_grid_model(error)
+      !> Borrowed typed model grid
+      class(moist_math_grid_3d_type), pointer :: model_grid
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(moist_math_grid_3d_molecular_type) :: molecular
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(model_moz_3d_type), target :: model
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      class(moist_math_grid_3d_type), allocatable :: grid
+      type(field_query_type) :: query
+      real(wp), allocatable :: original(:, :)
+      integer :: kind, template_ngrid
+
+      call new_context(ctx, verbosity=0)
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_cartesian_grid_3d(cart, 4, 6, 8, 0.5_wp, error=err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe)
+      call require_success(error, err)
+      if (allocated(error)) return
+      do kind = 1, 2
+         if (kind == 1) then
+            allocate (grid, source=cart)
+         else
+            allocate (grid, source=molecular)
+         end if
+         call new_moz_3d_model(model, grid, ctx, err)
+         call require_success(error, err)
+         if (allocated(error)) return
+         template_ngrid = grid%ngrid
+         call model%update(mol, err)
+         call require_success(error, err)
+         if (allocated(error)) return
+         call check(error, grid%ngrid, template_ngrid, "updating the model must leave the template untouched")
+         if (allocated(error)) return
+         model_grid => model%grid
+         call check(error, model_grid%natom, 1)
+         if (allocated(error)) return
+         call query%fetch("w")
+         call model%list_fields(query)
+         call check(error, query%found)
+         if (allocated(error)) return
+         model_grid => model%grid
+         call check(error, size(query%rvals), model_grid%ngrid)
+         if (allocated(error)) return
+         model_grid => model%grid
+         original = model_grid%xyz
+         mol%xyz(1, 1) = mol%xyz(1, 1) + 0.25_wp
+         call grid%update(mol, err)
+         call require_success(error, err)
+         if (allocated(error)) return
+         model_grid => model%grid
+         call check(error, all(model_grid%xyz == original), "model must own an independent grid copy")
+         if (allocated(error)) return
+         model_grid => model%grid
+         select type (g => model_grid)
+         type is (moist_math_grid_3d_cartesian_type)
+            call check(error, g%ngrid, 4*6*8)
+         type is (moist_math_grid_3d_molecular_type)
+            call check(error, g%has_kgrid)
+         class default
+            call test_failed(error, "model did not retain the concrete grid grid")
+         end select
+         if (allocated(error)) return
+         deallocate (grid)
+      end do
+   end subroutine test_grid_model
+
+   !> "ec", the 3D default, declares the grid potential next to the tail
+   !> charges; the grid picks the potential and whether its gradient needs
+   !> `dphi_dxi`
+   !>
+   !> - Cartesian: Gaussian widths fixed by the spacing, no `dphi_dxi`
+   !> - molecular with widths: they follow the weights, so `dphi_dxi` too
+   !> - molecular without widths: a bare point potential
+   !>
+   !> @param[out] error Test error
+   subroutine check_ec_requests(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      !> Molecular grids with and without Gaussian widths
+      type(moist_math_grid_3d_molecular_type) :: widths, points
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      !> Expected walks of the energy, response and gradient phases
+      character(len=96) :: walks(3)
+      integer :: kind
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
+      if (.not. allocated(err)) call new_molecular_grid(widths, err, recipe=recipe, gaussian=.true.)
+      if (.not. allocated(err)) call new_molecular_grid(points, err, recipe=recipe)
+      call require_success(error, err)
+      if (allocated(error)) return
+      do kind = 1, 3
+         select case (kind)
+         case (1)
+            call new_updated_model(ctx, cart, model, err)
+            walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
+            walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi);atomic_charges(q*);"
+         case (2)
+            call new_updated_model(ctx, widths, model, err)
+            walks(1) = "gaussian_potential(phi*,dphi_dr,dphi_dxi);atomic_charges(q*);"
+            walks(3) = "gaussian_potential(phi*,dphi_dr*,dphi_dxi*);atomic_charges(q*);"
+         case default
+            call new_updated_model(ctx, points, model, err)
+            walks(1) = "point_potential(phi*,dphi_dr);atomic_charges(q*);"
+            walks(3) = "point_potential(phi*,dphi_dr*);atomic_charges(q*);"
+         end select
+         walks(2) = walks(1)
+         call require_success(error, err)
+         if (allocated(error)) return
+         call check(error, model%coupling_mode == "ec", more="the 3D default source is not 'ec'")
+         if (allocated(error)) return
+         call check_phase_walks(error, model, walks)
+         if (allocated(error)) return
+      end do
+   end subroutine check_ec_requests
+
+   !> "qat" declares only the partial charges and "multipoles" only the
+   !> point multipoles, every output pending in every phase
+   !>
+   !> @param[out] error Test error
+   subroutine check_charge_sources(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      !> Expected walks of the energy, response and gradient phases
+      character(len=96) :: walks(3)
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      model%coupling_mode = "qat"
+      walks = "atomic_charges(q*);"
+      call check_phase_walks(error, model, walks)
+      if (allocated(error)) return
+      model%coupling_mode = "multipoles"
+      walks = "atomic_multipoles(q*,mu*,theta*);"
+      call check_phase_walks(error, model, walks)
+   end subroutine check_charge_sources
+
+   !> An unknown coupling source is refused by name and leaves no coupling behind
+   !>
+   !> @param[out] error Test error
+   subroutine check_unknown_mode(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(coupling_type), pointer :: coupling
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      model%coupling_mode = "bogus"
+      call model%new_coupling(coupling, err)
+      call check(error, allocated(err) .and. .not. associated(coupling), more="an unknown source was accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "3D MOZ coupling_mode 'bogus' is not supported") > 0, more=err%message)
+   end subroutine check_unknown_mode
+
+   !> Stage the energy, response and gradient phases of a fresh coupling and
+   !> compare each walk, answering nothing, to the expected one
+   !>
+   !> @param[out] error Test error
+   !> @param[in,out] model Updated model with its coupling source set
+   !> @param[in] walks Expected walk summaries of the three phases
+   subroutine check_phase_walks(error, model, walks)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Updated model with its coupling source set
+      type(model_moz_3d_type), intent(inout), target :: model
+      !> Expected walk summaries of the three phases
+      character(len=*), intent(in) :: walks(:)
+      type(moist_error), allocatable :: err
+      type(coupling_type), pointer :: coupling
+      !> Phase labels for diagnostics
+      character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
+      !> Walk of the current phase
+      character(len=:), allocatable :: summary
+      integer :: phase
+
+      call model%new_coupling(coupling, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      do phase = 1, size(phases)
+         select case (phase)
+         case (1)
+            call model%prepare_energy(coupling, err)
+         case (2)
+            call model%prepare_response(coupling, err)
+         case default
+            call model%prepare_gradient(coupling, err)
+         end select
+         call require_success(error, err)
+         if (allocated(error)) exit
+         call walk_summary(coupling, summary)
+         call check(error, summary, trim(walks(phase)), &
+            & more=trim(model%coupling_mode)//" source, "//trim(phases(phase))//" phase")
+         if (allocated(error)) exit
+      end do
+      call model%release_coupling(coupling)
+   end subroutine check_phase_walks
+
+   !> One pass of the walk, answering nothing: each visited request with its
+   !> declared outputs, a missing one marked `*`, e.g. "atomic_charges(q*);"
+   !>
+   !> A subroutine: gfortran returns a deferred-length function result through
+   !> a static (thread-shared) length temporary, which races between tests
+   !>
+   !> @param[in,out] coupling Staged coupling
+   !> @param[out] summary Visited requests and their outputs
+   subroutine walk_summary(coupling, summary)
+      !> Staged coupling
+      type(coupling_type), intent(inout) :: coupling
+      !> Visited requests and their outputs
+      character(len=:), allocatable, intent(out) :: summary
+      !> Outputs a MOZ source may declare, in listing order
+      character(len=8), parameter :: outputs(6) = [character(len=8) :: &
+         & "phi", "dphi_dr", "dphi_dxi", "q", "mu", "theta"]
+      class(coupling_request_type), allocatable :: item
+      character(len=:), allocatable :: listed
+      integer :: i
+      summary = ""
+      do while (coupling%next())
+         item = coupling%request()
+         listed = ""
+         do i = 1, size(outputs)
+            if (item%output_extent(trim(outputs(i))) == 0) cycle
+            if (len(listed) > 0) listed = listed//","
+            listed = listed//trim(outputs(i))
+            if (item%is_missing(trim(outputs(i)))) listed = listed//"*"
+         end do
+         summary = summary//trim(item%name())//"("//listed//");"
+      end do
+   end subroutine walk_summary
+
+   !> Construct a 3D MOZ model on a copy of `grid`, updated to one hydrogen atom
+   !>
+   !> @param[in] ctx Run context, outlives the model
+   !> @param[in] grid Spatial grid template
+   !> @param[out] model Updated model
+   !> @param[out] err Construction or update error
+   subroutine new_updated_model(ctx, grid, model, err)
+      !> Run context, outlives the model
+      type(moist_context_type), intent(in), target :: ctx
+      !> Spatial grid template
+      class(moist_math_grid_3d_type), intent(in) :: grid
+      !> Updated model
+      type(model_moz_3d_type), intent(out) :: model
+      !> Construction or update error
+      type(moist_error), allocatable, intent(out) :: err
+      type(structure_type) :: mol
+      call new_moz_3d_model(model, grid, ctx, err)
+      if (allocated(err)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call model%update(mol, err)
+   end subroutine new_updated_model
+
+   !> Forward a library error into the test framework
+   !>
+   !> @param[out] error Test error
+   !> @param[in] err Library error
+   subroutine require_success(error, err)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error), allocatable, intent(in) :: err
+      if (allocated(err)) call test_failed(error, err%message)
+   end subroutine require_success
+end module test_moz_3d

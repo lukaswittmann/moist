@@ -9,7 +9,7 @@ module moist_cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type
-   use moist_cavity_fields, only: cavity_field_query_type
+   use moist_channels_fields, only: field_query_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none(type, external)
@@ -151,7 +151,7 @@ contains
       !> Cavity instance
       class(cavity_type), intent(in) :: self
       !> Walker collecting or fetching the declarations
-      type(cavity_field_query_type), intent(inout) :: query
+      type(field_query_type), intent(inout) :: query
 
       call query%add_int_value("ngrid", "Number of surface grid points", self%ngrid)
       call query%add_int_value("nsph", "Number of atomic spheres", self%nsph)

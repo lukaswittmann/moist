@@ -1,9 +1,7 @@
 os = host_machine.system()
 fc = meson.get_compiler('fortran')
-cc = fc
-if has_cc
-  cc = meson.get_compiler('c')
-endif
+cc = meson.get_compiler('c')
+cxx = meson.get_compiler('cpp')
 fc_id = fc.get_id()
 
 # Treat Intel LLVM compiler as standard Intel compiler for compatibility
@@ -17,18 +15,10 @@ if fc_id == 'gcc'
     '-fbacktrace',
     language: 'fortran',
   )
-  # GCC 14+ emits heap-trampoline support calls (__gcc_nested_func_ptr_created/deleted)
-  # for internal procedures passed as callbacks. These symbols live in libgcc_eh
-  # (or libheapt_w), not the main libgcc. When the linker is clang (e.g. conda-forge
-  # toolchains on macOS), neither library is pulled in automatically.
-  libgcc_eh = fc.find_library('gcc_eh', required: false)
-  if libgcc_eh.found()
-    lib_deps += libgcc_eh
-  else
-    libgcc = fc.find_library('gcc', required: false)
-    if libgcc.found()
-      lib_deps += libgcc
-    endif
+
+  libheapt_w = fc.find_library('heapt_w', required: false)
+  if libheapt_w.found()
+    lib_deps += libheapt_w
   endif
 elif fc_id == 'intel'
   add_project_arguments(
@@ -44,15 +34,15 @@ elif fc_id == 'intel'
   else
     warning('libunwind not found; Intel traceback output may be unavailable at runtime')
   endif
-  # Use intel thread-safe Fortran runtime libifcoremt
+
   if get_option('openmp')
-    ifcoremt_dep = cc.find_library('ifcoremt', required: true)
+    cc.find_library('ifcoremt')
     add_project_link_arguments(
       '-Wl,--no-as-needed', '-lifcoremt', '-Wl,--as-needed',
-      language: has_cc ? ['fortran', 'c'] : ['fortran'],
+      language: ['fortran', 'c', 'cpp'],
     )
   endif
-elif fc_id == 'pgi' or fc_id == 'nvidia_hpc'
+elif fc_id in ['pgi', 'nvidia_hpc']
   add_project_arguments(
     '-Mbackslash',
     '-Mallocatable=03',
@@ -61,56 +51,48 @@ elif fc_id == 'pgi' or fc_id == 'nvidia_hpc'
   )
 endif
 
+foreach lang, comp : {'c': cc, 'cpp': cxx}
+  if comp.get_id() in ['intel', 'intel-llvm']
+    add_project_arguments('-fp-model=precise', language: lang)
+  endif
+endforeach
+
 if get_option('openmp')
-  omp_dep = dependency('openmp')
+  omp_dep = dependency('openmp', language: 'cpp')
   lib_deps += omp_dep
 endif
 
 lapack_vendor = get_option('lapack')
-if lapack_vendor == 'auto'
-  if fc_id == 'intel'
-    lapack_vendor = 'mkl'
-  endif
+if lapack_vendor == 'auto' and fc_id == 'intel'
+  lapack_vendor = 'mkl'
 endif
 
-if get_option('ilp64')
-  ilp64 = true
-  add_project_arguments('-DIK=i8', language:'fortran')
-  add_project_arguments('-DMOIST_ILP64=1', language:'fortran')
-else
-  add_project_arguments('-DIK=i4', language:'fortran')
-  add_project_arguments('-DMOIST_ILP64=0', language:'fortran')
-  ilp64 = false
-endif
+ilp64 = get_option('ilp64')
+sfx64 = ilp64 ? '64' : ''
+add_project_arguments(
+  ilp64 ? ['-DIK=i8', '-DMOIST_ILP64=1'] : ['-DIK=i4', '-DMOIST_ILP64=0'],
+  language: 'fortran',
+)
 
 if lapack_vendor == 'mkl'
-  mkl_dep = []
-  if fc_id == 'intel'
-    mkl_dep += cc.find_library(ilp64 ? 'mkl_intel_ilp64' : 'mkl_intel_lp64') 
-    if get_option('openmp')
-      mkl_dep += cc.find_library('mkl_intel_thread')
-    endif
-  elif fc_id == 'gcc'
-    mkl_dep += cc.find_library(ilp64 ? 'mkl_gf_ilp64' : 'mkl_gf_lp64')
-    if get_option('openmp')
-      mkl_dep += cc.find_library('mkl_gnu_thread')
-    endif
-  else
+  if fc_id not in ['intel', 'gcc']
     error('MKL not supported for this compiler')
   endif
-  if not get_option('openmp')
-    mkl_dep += cc.find_library('mkl_tbb_thread')
-  endif
-  mkl_dep += cc.find_library('mkl_core')
-  lib_deps += mkl_dep
+
+  mkl_interface = fc_id == 'intel' ? 'mkl_intel' : 'mkl_gf'
+  mkl_openmp = fc_id == 'intel' ? 'mkl_intel_thread' : 'mkl_gnu_thread'
+  foreach lib : [
+    mkl_interface + (ilp64 ? '_ilp64' : '_lp64'),
+    get_option('openmp') ? mkl_openmp : 'mkl_tbb_thread',
+    'mkl_core',
+  ]
+    lib_deps += cc.find_library(lib)
+  endforeach
 
 elif lapack_vendor == 'mkl-rt'
-  mkl_dep = cc.find_library('mkl_rt')
-  lib_deps += mkl_dep
+  lib_deps += cc.find_library('mkl_rt')
 
 elif lapack_vendor == 'accelerate'
-  # Apple's Accelerate framework ships BLAS/LAPACK with macOS, so nothing needs
-  # to be installed. It exposes the legacy LP64 (32-bit integer) interface.
   if os != 'darwin'
     error('The accelerate backend is only available on macOS')
   endif
@@ -120,54 +102,53 @@ elif lapack_vendor == 'accelerate'
   lib_deps += dependency('appleframeworks', modules: ['Accelerate'])
 
 elif lapack_vendor == 'openblas'
-  openblas_dep = dependency( ilp64 ? 'openblas64' : 'openblas', required: false)
+  openblas_dep = dependency('openblas' + sfx64, required: false)
   if not openblas_dep.found()
-    openblas_dep = cc.find_library( ilp64 ? 'openblas64' : 'openblas')
+    openblas_dep = cc.find_library('openblas' + sfx64)
   endif
   lib_deps += openblas_dep
   if not fc.links('external dsytrs; call dsytrs(); end', dependencies: openblas_dep)
-    lapack_dep = dependency(ilp64 ? 'lapack64' : 'lapack', required: false)
+    lapack_dep = dependency('lapack' + sfx64, required: false)
     if not lapack_dep.found()
-      lapack_dep = cc.find_library(ilp64 ? 'lapack64' : 'lapack')
+      lapack_dep = cc.find_library('lapack' + sfx64)
     endif
     lib_deps += lapack_dep
   endif
 
 elif lapack_vendor == 'custom'
-  custom_deps = []
+  # An optional leading -L<dir> is the search directory for the names after it
   libs = get_option('custom_libraries')
-  if libs[0].startswith('-L')
-    foreach lib: libs
-      if lib != libs[0]
-        custom_deps += cc.find_library(lib, dirs: libs[0].substring(2))
-      endif
-    endforeach
-  else
-    foreach lib: libs
-      custom_deps += cc.find_library(lib)
-    endforeach
-  endif
-  if (not fc.links('external dsytrs; call dsytrs(); end', dependencies: (get_option('openmp') ? [custom_deps, omp_dep] : [custom_deps])))
+  custom_dirs = libs[0].startswith('-L') ? [libs[0].substring(2)] : []
+  custom_deps = []
+  foreach lib : libs
+    if not lib.startswith('-L')
+      custom_deps += cc.find_library(lib, dirs: custom_dirs)
+    endif
+  endforeach
+  custom_check_deps = get_option('openmp') ? [custom_deps, omp_dep] : custom_deps
+  if not fc.links('external dsytrs; call dsytrs(); end', dependencies: custom_check_deps)
     error('Custom LAPACK libraries do not link')
-  elif (not fc.links('external dsytrs; call dgemm(); end', dependencies: (get_option('openmp') ? [custom_deps, omp_dep] : [custom_deps])))
+  elif not fc.links('external dgemm; call dgemm(); end', dependencies: custom_check_deps)
     error('Custom BLAS libraries do not link')
   endif
   lib_deps += custom_deps
 
 else
-  lapack_dep = dependency(ilp64 ? 'lapack64' : 'lapack', required: false)
+  lapack_dep = dependency('lapack' + sfx64, required: false)
   if not lapack_dep.found()
-    lapack_dep = cc.find_library(ilp64 ? 'lapack64' : 'lapack')
+    lapack_dep = cc.find_library('lapack' + sfx64)
   endif
-  lib_deps += lapack_dep
-  blas_dep = cc.find_library(ilp64 ? 'blas64' : 'blas', required: false)
-  if not blas_dep.found()
-    blas_dep = cc.find_library(ilp64 ? 'blas64' : 'blas')
-  endif
-  lib_deps += blas_dep
+  lib_deps += [lapack_dep, cc.find_library('blas' + sfx64)]
 endif
 
-# JSON parameter IO (used directly by moist_model_parameters)
+tomlf_dep = dependency(
+  'toml-f',
+  version: '>=0.4.0',
+  fallback: ['toml-f', 'tomlf_dep'],
+  default_options: ['default_library=static'],
+)
+lib_deps += tomlf_dep
+
 jonquil_dep = dependency(
   'jonquil',
   version: '>=0.3.0',
@@ -190,5 +171,4 @@ fclap_dep = dependency(
   'fclap',
   fallback: ['fclap', 'fclap_dep'],
   default_options: ['default_library=static'],
-  required: true,
 )

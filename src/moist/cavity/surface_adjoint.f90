@@ -1,4 +1,7 @@
 !> Generic accumulation of adjoints with respect to cavity-surface quantities
+!>
+!> Owns surface positions, widths, areas, switching factors, normals and
+!> curvatures for the cavity reverse pass
 module moist_cavity_surface_adjoint
    use mctc_env, only: wp, error_type, fatal_error
 
@@ -8,17 +11,19 @@ module moist_cavity_surface_adjoint
    public :: cavity_surface_adjoint_type
 
    !> Adjoint weights for the common quantities of a discretized cavity surface
+   !>
+   !> Owns every surface channel
    type :: cavity_surface_adjoint_type
+      !> Weights for point positions r_i (3, ngrid)
+      real(wp), allocatable :: w_xyz(:, :)
+      !> Weights for integration weights w_i (ngrid)
+      real(wp), allocatable :: w_w(:)
       !> Weights for Gaussian widths xi_i (ngrid)
       real(wp), allocatable :: w_xi(:)
       !> Weights for switching factors f_i (ngrid)
       real(wp), allocatable :: w_f(:)
       !> Weights for surface areas a_i (ngrid)
       real(wp), allocatable :: w_a(:)
-      !> Weights for integration weights w_i (ngrid)
-      real(wp), allocatable :: w_w(:)
-      !> Weights for surface positions r_i (3, ngrid)
-      real(wp), allocatable :: w_xyz(:, :)
       !> Weights for outward normals n_i (3, ngrid)
       real(wp), allocatable :: w_n(:, :)
       !> Weights for the first principal curvature k1_i (ngrid)
@@ -30,6 +35,7 @@ module moist_cavity_surface_adjoint
       procedure :: init => init_surface_adjoint
       !> Reset every allocated surface-adjoint channel to zero
       procedure :: zero => zero_surface_adjoint
+      procedure :: size => surface_adjoint_size
       !> Add any supplied surface-adjoint channels
       procedure :: add_surface_weights
       !> Report whether every channel is allocated with consistent shapes
@@ -48,20 +54,20 @@ contains
       !> Number of surface grid points
       integer, intent(in) :: ngrid
 
+      if (allocated(self%w_xyz)) deallocate (self%w_xyz)
+      if (allocated(self%w_w)) deallocate (self%w_w)
       if (allocated(self%w_xi)) deallocate (self%w_xi)
       if (allocated(self%w_f)) deallocate (self%w_f)
       if (allocated(self%w_a)) deallocate (self%w_a)
-      if (allocated(self%w_w)) deallocate (self%w_w)
-      if (allocated(self%w_xyz)) deallocate (self%w_xyz)
       if (allocated(self%w_n)) deallocate (self%w_n)
       if (allocated(self%w_k1)) deallocate (self%w_k1)
       if (allocated(self%w_k2)) deallocate (self%w_k2)
 
+      allocate (self%w_xyz(3, ngrid), source=0.0_wp)
+      allocate (self%w_w(ngrid), source=0.0_wp)
       allocate (self%w_xi(ngrid), source=0.0_wp)
       allocate (self%w_f(ngrid), source=0.0_wp)
       allocate (self%w_a(ngrid), source=0.0_wp)
-      allocate (self%w_w(ngrid), source=0.0_wp)
-      allocate (self%w_xyz(3, ngrid), source=0.0_wp)
       allocate (self%w_n(3, ngrid), source=0.0_wp)
       allocate (self%w_k1(ngrid), source=0.0_wp)
       allocate (self%w_k2(ngrid), source=0.0_wp)
@@ -75,11 +81,11 @@ contains
       !> Surface-adjoint accumulator
       class(cavity_surface_adjoint_type), intent(inout) :: self
 
+      if (allocated(self%w_xyz)) self%w_xyz = 0.0_wp
+      if (allocated(self%w_w)) self%w_w = 0.0_wp
       if (allocated(self%w_xi)) self%w_xi = 0.0_wp
       if (allocated(self%w_f)) self%w_f = 0.0_wp
       if (allocated(self%w_a)) self%w_a = 0.0_wp
-      if (allocated(self%w_w)) self%w_w = 0.0_wp
-      if (allocated(self%w_xyz)) self%w_xyz = 0.0_wp
       if (allocated(self%w_n)) self%w_n = 0.0_wp
       if (allocated(self%w_k1)) self%w_k1 = 0.0_wp
       if (allocated(self%w_k2)) self%w_k2 = 0.0_wp
@@ -201,5 +207,17 @@ contains
                     size(self%w_k1) == ngrid .and. size(self%w_k2) == ngrid
 
    end function surface_adjoint_is_initialized
+
+   !> Number of grid points the accumulator holds channels for, 0 before `init`
+   !>
+   !> @param[in] self  Accumulator
+   pure integer function surface_adjoint_size(self) result(ngrid)
+      !> Accumulator
+      class(cavity_surface_adjoint_type), intent(in) :: self
+
+      ngrid = 0
+      if (allocated(self%w_xi)) ngrid = size(self%w_xi)
+
+   end function surface_adjoint_size
 
 end module moist_cavity_surface_adjoint
