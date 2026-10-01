@@ -870,7 +870,18 @@ contains
          end do
       end do
 
-      !> Compare analytic vs numeric for valid gridpoints only
+      !> Compare analytic vs numeric for valid gridpoints only; every nuclear direction must
+      !  retain at least a single point each FD step. Without this, no points left would indicate
+      !  a pass!
+      do iat = 1, mol%nat
+         do idir = 1, ndim
+            call check(error, count(valid_gridpoint(idir, iat, :)) > 0, &
+                       "No valid FD comparisons for atom "//to_string(iat)// &
+                       " direction "//to_string(idir))
+            if (allocated(error)) return
+         end do
+      end do
+
 
       ! Test 1: Gridpoint positions
       max_diff = 0.0_wp
