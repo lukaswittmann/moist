@@ -1,3 +1,4 @@
-subdir('1d')
-subdir('s2')
+subdir('radial')
+subdir('angular')
+subdir('atomic')
 subdir('3d')
