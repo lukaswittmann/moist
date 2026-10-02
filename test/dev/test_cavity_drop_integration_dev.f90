@@ -42,8 +42,6 @@ contains
    subroutine collect_cavity_drop_integration(testsuite)
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
-      ! TODO: re-enable the per-dataset marching-cubes tests (upu23, amino20x4, mb16_43,
-      ! but14diol, il16, dimer_pes) once the comparison harness is finalized
       testsuite = [ &
                   new_unittest("mc_mixed", test_mc_mixed) &
                   ]
