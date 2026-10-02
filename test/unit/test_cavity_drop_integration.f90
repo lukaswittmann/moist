@@ -69,6 +69,9 @@ module test_cavity_drop_integration
    !> DROP/reference volume-ratio tolerance
    real(wp), parameter :: VOLUME_REL_THR = 1.0e-2_wp
 
+   !> Absolute tolerance for surface-element sum identities
+   real(wp), parameter :: SUM_IDENTITY_THR = 1.0e-12_wp
+
    !> Reference cases
    type(integration_case_type), parameter :: cases(61) = [ &
       integration_case_type("svdw", "MB16-43", "Ar", blend_k=1.0_wp, blend_2b=1.0_wp, blend_3b=0.0_wp, &
@@ -369,6 +372,8 @@ contains
       real(wp) :: area_ratio
       !> Computed volume ratio (cavity/reference)
       real(wp) :: volume_ratio
+      !> Owner atom of the accumulated surface elements
+      integer :: iatom
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -412,6 +417,22 @@ contains
                           ": "//trim(cavity_error%message))
          return
       end if
+
+      call check(error, cavity%total_area, sum(cavity%a), thr=SUM_IDENTITY_THR, &
+                 message="Total area sum mismatch for "//case_to_string(c))
+      if (allocated(error)) return
+      call check(error, cavity%total_volume, sum(cavity%v), thr=SUM_IDENTITY_THR, &
+                 message="Total volume sum mismatch for "//case_to_string(c))
+      if (allocated(error)) return
+
+      do iatom = 1, mol%nat
+         call check(error, cavity%asph(iatom), sum(cavity%a, mask=cavity%owner == iatom), &
+                    thr=SUM_IDENTITY_THR, message="Atomic area sum mismatch for "//case_to_string(c))
+         if (allocated(error)) return
+         call check(error, cavity%vsph(iatom), sum(cavity%v, mask=cavity%owner == iatom), &
+                    thr=SUM_IDENTITY_THR, message="Atomic volume sum mismatch for "//case_to_string(c))
+         if (allocated(error)) return
+      end do
 
       area_ratio = cavity%total_area/c%mc_area
       volume_ratio = cavity%total_volume/c%mc_volume

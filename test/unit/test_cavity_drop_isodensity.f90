@@ -48,6 +48,13 @@ module test_cavity_drop_isodensity
 
    integer, parameter :: ndim = 3
 
+   !> Finite-difference step
+   real(wp), parameter :: STEP_SIZE = 1.0e-3_wp
+   !> Absolute finite-difference comparison threshold
+   real(wp), parameter :: ABS_THR = 1.0e-10_wp
+   !> Relative finite-difference comparison threshold
+   real(wp), parameter :: REL_THR = 1.0e-9_wp
+
    !> Every test pairs one mstore record with one basis set
    integer, parameter :: nmolecules = 3
    integer, parameter :: nbases = 3
@@ -564,7 +571,6 @@ contains
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: dg(3), dd2(3, 3), dd3(3, 3, 3)
       real(wp) :: pp(3), rpp, rp, rm, rmm, fd
-      real(wp), parameter :: h = 1.0e-3_wp
       integer :: test, ip, ax
 
       do test = 1, ntests
@@ -574,16 +580,17 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 1, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 1, rpp, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 1, rp, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 1, rm, dg, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 1, rmm, dg, dd2, dd3)
-               fd = fd4_scalar(rpp, rp, rm, rmm, h)
-               call check(error, drho(ax), fd, thr=1.0e-8_wp)
+               call fd4_scalar(rpp, rp, rm, rmm, STEP_SIZE, fd, error)
+               if (allocated(error)) return
+               call check(error, drho(ax), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                if (allocated(error)) return
             end do
          end do
@@ -603,7 +610,6 @@ contains
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: drr, dd2(3, 3), dd3(3, 3, 3)
       real(wp) :: pp(3), gpp(3), gp(3), gm(3), gmm(3), fd
-      real(wp), parameter :: h = 1.0e-3_wp
       integer :: test, ip, ax, jx
 
       do test = 1, ntests
@@ -613,17 +619,18 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 2, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 1, drr, gpp, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 1, drr, gp, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 1, drr, gm, dd2, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 1, drr, gmm, dd2, dd3)
                do jx = 1, ndim
-                  fd = fd4_scalar(gpp(jx), gp(jx), gm(jx), gmm(jx), h)
-                  call check(error, d2(ax, jx), fd, thr=1.0e-7_wp)
+                  call fd4_scalar(gpp(jx), gp(jx), gm(jx), gmm(jx), STEP_SIZE, fd, error)
+                  if (allocated(error)) return
+                  call check(error, d2(ax, jx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                   if (allocated(error)) return
                end do
             end do
@@ -643,8 +650,8 @@ contains
       real(wp), allocatable :: pts(:, :)
       real(wp) :: rho, drho(3), d2(3, 3), d3(3, 3, 3)
       real(wp) :: drr, dg(3), dd3(3, 3, 3)
-      real(wp) :: pp(3), hpp(3, 3), hp(3, 3), hm(3, 3), hmm(3, 3), fd
-      real(wp), parameter :: h = 2.0e-3_wp
+      real(wp) :: pp(3), hpp(3, 3), hp(3, 3), hm(3, 3), hmm(3, 3)
+      real(wp) :: hph(3, 3), hmh(3, 3), fd, fd_full, fd_half
       integer :: test, ip, ax, jx, kx
 
       do test = 1, ntests
@@ -654,18 +661,27 @@ contains
          do ip = 1, size(pts, 2)
             call eval_at(gto, pts(:, ip), 3, rho, drho, d2, d3)
             do ax = 1, ndim
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hpp, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hp, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hm, dd3)
-               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
                call eval_at(gto, pp, 2, drr, dg, hmm, dd3)
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) + 0.5_wp*STEP_SIZE
+               call eval_at(gto, pp, 2, drr, dg, hph, dd3)
+               pp = pts(:, ip); pp(ax) = pts(ax, ip) - 0.5_wp*STEP_SIZE
+               call eval_at(gto, pp, 2, drr, dg, hmh, dd3)
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), h)
-                     call check(error, d3(ax, jx, kx), fd, thr=1.0e-6_wp)
+                     ! Richardson extrapolation cancels the leading fourth-order stencil error
+                     call fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), STEP_SIZE, fd_full, error)
+                     if (allocated(error)) return
+                     call fd4_scalar(hp(jx, kx), hph(jx, kx), hmh(jx, kx), hm(jx, kx), 0.5_wp*STEP_SIZE, fd_half, error)
+                     if (allocated(error)) return
+                     fd = (16.0_wp*fd_half - fd_full)/15.0_wp
+                     call check(error, d3(ax, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -688,7 +704,6 @@ contains
       real(wp) :: drr, dg(3), dh(3, 3)
       real(wp) :: pp(3), dpp(3, 3, 3), dp(3, 3, 3), dm(3, 3, 3), dmm(3, 3, 3), fd
       real(wp) :: dev
-      real(wp), parameter :: h = 2.0e-3_wp
       integer :: ip, ax, ix, jx, kx
 
       call build_test(gto, test_reference, error, mol)
@@ -713,20 +728,21 @@ contains
          if (allocated(error)) return
 
          do ax = 1, ndim
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dpp)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dp)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dm)
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
             call eval_at(gto, pp, 3, drr, dg, dh, dmm)
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), &
-                                     dm(ix, jx, kx), dmm(ix, jx, kx), h)
-                     call check(error, d4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     call fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), dm(ix, jx, kx), dmm(ix, jx, kx), STEP_SIZE, fd, &
+                                     error)
+                     if (allocated(error)) return
+                     call check(error, d4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do
@@ -1792,11 +1808,11 @@ contains
       real(wp) :: tpp(ndim, ndim, ndim), tp(ndim, ndim, ndim)
       real(wp) :: tm(ndim, ndim, ndim), tmm(ndim, ndim, ndim)
       real(wp) :: pp(ndim), fd, dev, scale_ref
-      real(wp), parameter :: h = 2.0e-3_wp
       integer :: ip, ax, ix, jx, kx
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
       if (allocated(error)) return
+      lsf%param%scale = 2.3_wp
       call get_test_points(mol, pts, 8)
 
       scale_ref = 0.0_wp
@@ -1832,25 +1848,26 @@ contains
          ! being refilled at a lower order between two order-4 evaluations
          call lsf%set_max_deriv(3)
          do ax = 1, ndim
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + 2*STEP_SIZE
             call third_at(lsf, pp, tpp, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) + h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) + STEP_SIZE
             call third_at(lsf, pp, tp, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - STEP_SIZE
             call third_at(lsf, pp, tm, error)
             if (allocated(error)) return
-            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*h
+            pp = pts(:, ip); pp(ax) = pts(ax, ip) - 2*STEP_SIZE
             call third_at(lsf, pp, tmm, error)
             if (allocated(error)) return
 
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     fd = fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), &
-                                     tm(ix, jx, kx), tmm(ix, jx, kx), h)
-                     call check(error, f4(ax, ix, jx, kx), fd, thr=1.0e-5_wp)
+                     call fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), tm(ix, jx, kx), tmm(ix, jx, kx), STEP_SIZE, fd, &
+                                     error)
+                     if (allocated(error)) return
+                     call check(error, f4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
                   end do
                end do

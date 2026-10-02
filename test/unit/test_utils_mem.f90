@@ -3,7 +3,7 @@ module test_utils_mem
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use testdrive, only: new_unittest, unittest_type, error_type, check
-   use moist_utils_mem, only: grow_array
+   use moist_utils_mem, only: grow_array, filter_array
    implicit none(type, external)
    private
 
@@ -24,7 +24,15 @@ contains
                   new_unittest("shrink_int_1d_reports", test_shrink_int_1d_reports), &
                   new_unittest("shrink_logical_1d_reports", test_shrink_logical_1d_reports), &
                   new_unittest("shrink_real_2d_reports", test_shrink_real_2d_reports), &
-                  new_unittest("dim1_change_reports", test_dim1_change_reports) &
+                  new_unittest("dim1_change_reports", test_dim1_change_reports), &
+                  new_unittest("grow_real_1d_contracts", test_grow_real_1d_contracts), &
+                  new_unittest("grow_real_2d_contracts", test_grow_real_2d_contracts), &
+                  new_unittest("grow_int_1d_contracts", test_grow_int_1d_contracts), &
+                  new_unittest("grow_logical_1d_contracts", test_grow_logical_1d_contracts), &
+                  new_unittest("filter_real_1d_contracts", test_filter_real_1d_contracts), &
+                  new_unittest("filter_real_2d_contracts", test_filter_real_2d_contracts), &
+                  new_unittest("filter_int_1d_contracts", test_filter_int_1d_contracts), &
+                  new_unittest("filter_logical_1d_contracts", test_filter_logical_1d_contracts) &
                   ]
 
    end subroutine collect_utils_mem
@@ -173,6 +181,8 @@ contains
                  "message identifies the integer specific")
       if (allocated(error)) return
       call check(error, size(n), 4, "array kept its size")
+      if (allocated(error)) return
+      call check(error, all(n == [1, 2, 3, 4]), "refusal preserves every element")
 
    end subroutine test_shrink_int_1d_reports
 
@@ -193,6 +203,8 @@ contains
                  "message identifies the logical specific")
       if (allocated(error)) return
       call check(error, size(l), 3, "array kept its size")
+      if (allocated(error)) return
+      call check(error, all(l .eqv. [.true., .false., .true.]), "refusal preserves every element")
 
    end subroutine test_shrink_logical_1d_reports
 
@@ -213,6 +225,8 @@ contains
                  "message names the refused operation")
       if (allocated(error)) return
       call check(error, size(m, 2), 5, "array kept its second extent")
+      if (allocated(error)) return
+      call check(error, all(abs(m - 1.0_wp) <= 1.0e-12_wp), "refusal preserves every element")
 
    end subroutine test_shrink_real_2d_reports
 
@@ -237,7 +251,322 @@ contains
       call check(error, size(m, 1), 3, "array kept its first extent")
       if (allocated(error)) return
       call check(error, size(m, 2), 2, "array kept its second extent")
+      if (allocated(error)) return
+      call check(error, all(abs(m - 1.0_wp) <= 1.0e-12_wp), "refusal preserves every element")
 
    end subroutine test_dim1_change_reports
+
+   !> Verify every element, default fill, no-op, and empty growth
+   subroutine test_grow_real_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: a(:), expected(:)
+      type(moist_error_type), allocatable :: refused
+
+      a = [2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp]
+      expected = a
+      call grow_array(a, 6, fill_value=-9.0_wp, error=refused)
+      call check(error,.not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a(1:4) - expected) <= 1.0e-12_wp), "all old values preserved")
+      if (allocated(error)) return
+      call check(error, all(abs(a(5:6) + 9.0_wp) <= 1.0e-12_wp), "all new values filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 6, error=refused)
+      call check(error,.not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "same size preserves all values")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 3, error=refused)
+      call check(error,.not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a - 0.0_wp) <= 1.0e-12_wp), "default fill covers every element")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 0, error=refused)
+      call check(error,.not. allocated(a), "zero request keeps unallocated state")
+      if (allocated(error)) return
+      allocate (a(0))
+      call grow_array(a, 2, error=refused)
+      call check(error,.not. allocated(refused), "allocated empty array grows")
+      if (allocated(error)) return
+      call check(error, all(abs(a - 0.0_wp) <= 1.0e-12_wp), "empty growth fills every element")
+      if (allocated(error)) return
+   end subroutine test_grow_real_1d_contracts
+
+   !> Verify selection, stable order, prefix extent, empty masks, and allocation
+   subroutine test_filter_real_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: a(:), expected(:)
+      logical :: keep(4)
+
+      keep = [.true., .false., .true., .true.]
+      call filter_array(a, 3, keep, 2)
+      call check(error,.not. allocated(a), "unallocated filter is skipped")
+      if (allocated(error)) return
+      a = [2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp]
+      expected = a([1, 3])
+      call filter_array(a, 3, keep, 2)
+      call check(error, size(a, 1) == 2, "filter uses nvalid extent")
+      if (allocated(error)) return
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "filter preserves selected values and order")
+      if (allocated(error)) return
+      a = [2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp]
+      expected = a
+      keep = .true.
+      call filter_array(a, 4, keep, 4)
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "all-true mask keeps every value")
+      if (allocated(error)) return
+      keep = .false.
+      call filter_array(a, 4, keep, 0)
+      call check(error, allocated(a), "all-false mask keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "all-false mask gives zero extent")
+      if (allocated(error)) return
+      call filter_array(a, 0, keep, 0)
+      call check(error, allocated(a), "empty filter keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "empty prefix remains empty")
+      if (allocated(error)) return
+   end subroutine test_filter_real_1d_contracts
+
+   !> Verify every element, default fill, no-op, and empty growth
+   subroutine test_grow_real_2d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: a(:, :), expected(:, :)
+      type(moist_error_type), allocatable :: refused
+
+      a = reshape([2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp], [2, 2])
+      expected = a
+      call grow_array(a, 2, 4, fill_value=-9.0_wp, error=refused)
+      call check(error,.not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a(:, 1:2) - expected) <= 1.0e-12_wp), "all old values preserved")
+      if (allocated(error)) return
+      call check(error, all(abs(a(:, 3:4) + 9.0_wp) <= 1.0e-12_wp), "all new values filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 2, 4, error=refused)
+      call check(error,.not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "same size preserves all values")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 2, 3, error=refused)
+      call check(error,.not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(abs(a - 0.0_wp) <= 1.0e-12_wp), "default fill covers every element")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 2, 0, error=refused)
+      call check(error,.not. allocated(a), "zero request keeps unallocated state")
+      if (allocated(error)) return
+      allocate (a(2, 0))
+      call grow_array(a, 2, 2, error=refused)
+      call check(error,.not. allocated(refused), "allocated empty array grows")
+      if (allocated(error)) return
+      call check(error, all(abs(a - 0.0_wp) <= 1.0e-12_wp), "empty growth fills every element")
+      if (allocated(error)) return
+   end subroutine test_grow_real_2d_contracts
+
+   !> Verify selection, stable order, prefix extent, empty masks, and allocation
+   subroutine test_filter_real_2d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), allocatable :: a(:, :), expected(:, :)
+      logical :: keep(4)
+
+      keep = [.true., .false., .true., .true.]
+      call filter_array(a, 3, keep, 2)
+      call check(error,.not. allocated(a), "unallocated filter is skipped")
+      if (allocated(error)) return
+      a = reshape([2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp, 10.0_wp, 12.0_wp, 14.0_wp, 16.0_wp], [2, 4])
+      expected = a(:, [1, 3])
+      call filter_array(a, 3, keep, 2)
+      call check(error, size(a, 2) == 2, "filter uses nvalid extent")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 2, "filter preserves row extent")
+      if (allocated(error)) return
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "filter preserves selected values and order")
+      if (allocated(error)) return
+      a = reshape([2.0_wp, 4.0_wp, 6.0_wp, 8.0_wp, 10.0_wp, 12.0_wp, 14.0_wp, 16.0_wp], [2, 4])
+      expected = a
+      keep = .true.
+      call filter_array(a, 4, keep, 4)
+      call check(error, all(abs(a - expected) <= 1.0e-12_wp), "all-true mask keeps every value")
+      if (allocated(error)) return
+      keep = .false.
+      call filter_array(a, 4, keep, 0)
+      call check(error, allocated(a), "all-false mask keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 2) == 0, "all-false mask gives zero extent")
+      if (allocated(error)) return
+      call filter_array(a, 0, keep, 0)
+      call check(error, allocated(a), "empty filter keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 2) == 0, "empty prefix remains empty")
+      if (allocated(error)) return
+   end subroutine test_filter_real_2d_contracts
+
+   !> Verify every element, default fill, no-op, and empty growth
+   subroutine test_grow_int_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      integer, allocatable :: a(:), expected(:)
+      type(moist_error_type), allocatable :: refused
+
+      a = [2, 4, 6, 8]
+      expected = a
+      call grow_array(a, 6, fill_value=-9, error=refused)
+      call check(error,.not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(a(1:4) == expected), "all old values preserved")
+      if (allocated(error)) return
+      call check(error, all(a(5:6) == -9), "all new values filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 6, error=refused)
+      call check(error,.not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(a == expected), "same size preserves all values")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 3, error=refused)
+      call check(error,.not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(a == 0), "default fill covers every element")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 0, error=refused)
+      call check(error,.not. allocated(a), "zero request keeps unallocated state")
+      if (allocated(error)) return
+      allocate (a(0))
+      call grow_array(a, 2, error=refused)
+      call check(error,.not. allocated(refused), "allocated empty array grows")
+      if (allocated(error)) return
+      call check(error, all(a == 0), "empty growth fills every element")
+      if (allocated(error)) return
+   end subroutine test_grow_int_1d_contracts
+
+   !> Verify selection, stable order, prefix extent, empty masks, and allocation
+   subroutine test_filter_int_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      integer, allocatable :: a(:), expected(:)
+      logical :: keep(4)
+
+      keep = [.true., .false., .true., .true.]
+      call filter_array(a, 3, keep, 2)
+      call check(error,.not. allocated(a), "unallocated filter is skipped")
+      if (allocated(error)) return
+      a = [2, 4, 6, 8]
+      expected = a([1, 3])
+      call filter_array(a, 3, keep, 2)
+      call check(error, size(a, 1) == 2, "filter uses nvalid extent")
+      if (allocated(error)) return
+      call check(error, all(a == expected), "filter preserves selected values and order")
+      if (allocated(error)) return
+      a = [2, 4, 6, 8]
+      expected = a
+      keep = .true.
+      call filter_array(a, 4, keep, 4)
+      call check(error, all(a == expected), "all-true mask keeps every value")
+      if (allocated(error)) return
+      keep = .false.
+      call filter_array(a, 4, keep, 0)
+      call check(error, allocated(a), "all-false mask keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "all-false mask gives zero extent")
+      if (allocated(error)) return
+      call filter_array(a, 0, keep, 0)
+      call check(error, allocated(a), "empty filter keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "empty prefix remains empty")
+      if (allocated(error)) return
+   end subroutine test_filter_int_1d_contracts
+
+   !> Verify every element, default fill, no-op, and empty growth
+   subroutine test_grow_logical_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      logical, allocatable :: a(:), expected(:)
+      type(moist_error_type), allocatable :: refused
+
+      a = [.true., .false., .true., .false.]
+      expected = a
+      call grow_array(a, 6, fill_value=.true., error=refused)
+      call check(error,.not. allocated(refused), "explicit growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(a(1:4) .eqv. expected), "all old values preserved")
+      if (allocated(error)) return
+      call check(error, all(a(5:6) .eqv. .true.), "all new values filled")
+      if (allocated(error)) return
+      expected = a
+      call grow_array(a, 6, error=refused)
+      call check(error,.not. allocated(refused), "same size succeeds")
+      if (allocated(error)) return
+      call check(error, all(a .eqv. expected), "same size preserves all values")
+      if (allocated(error)) return
+      call grow_array(a, 8, fill_value=.false., error=refused)
+      call check(error,.not. any(a(7:8)), "explicit false fill is honored")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 3, error=refused)
+      call check(error,.not. allocated(refused), "unallocated default growth succeeds")
+      if (allocated(error)) return
+      call check(error, all(a .eqv. .false.), "default fill covers every element")
+      if (allocated(error)) return
+      deallocate (a)
+      call grow_array(a, 0, error=refused)
+      call check(error,.not. allocated(a), "zero request keeps unallocated state")
+      if (allocated(error)) return
+      allocate (a(0))
+      call grow_array(a, 2, error=refused)
+      call check(error,.not. allocated(refused), "allocated empty array grows")
+      if (allocated(error)) return
+      call check(error, all(a .eqv. .false.), "empty growth fills every element")
+      if (allocated(error)) return
+   end subroutine test_grow_logical_1d_contracts
+
+   !> Verify selection, stable order, prefix extent, empty masks, and allocation
+   subroutine test_filter_logical_1d_contracts(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+      logical, allocatable :: a(:), expected(:)
+      logical :: keep(4)
+
+      keep = [.true., .false., .true., .true.]
+      call filter_array(a, 3, keep, 2)
+      call check(error,.not. allocated(a), "unallocated filter is skipped")
+      if (allocated(error)) return
+      a = [.true., .false., .false., .true.]
+      expected = a([1, 3])
+      call filter_array(a, 3, keep, 2)
+      call check(error, size(a, 1) == 2, "filter uses nvalid extent")
+      if (allocated(error)) return
+      call check(error, all(a .eqv. expected), "filter preserves selected values and order")
+      if (allocated(error)) return
+      a = [.true., .false., .false., .true.]
+      expected = a
+      keep = .true.
+      call filter_array(a, 4, keep, 4)
+      call check(error, all(a .eqv. expected), "all-true mask keeps every value")
+      if (allocated(error)) return
+      keep = .false.
+      call filter_array(a, 4, keep, 0)
+      call check(error, allocated(a), "all-false mask keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "all-false mask gives zero extent")
+      if (allocated(error)) return
+      call filter_array(a, 0, keep, 0)
+      call check(error, allocated(a), "empty filter keeps allocation")
+      if (allocated(error)) return
+      call check(error, size(a, 1) == 0, "empty prefix remains empty")
+      if (allocated(error)) return
+   end subroutine test_filter_logical_1d_contracts
 
 end module test_utils_mem

@@ -120,7 +120,8 @@ contains
                   work_point = point
                   work_point(axis) = point(axis) - 2.0_wp*h
                   f_mm = phi%f0(work_point, anchor, owner_dummy)
-                  numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
+                  call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis), error)
+                  if (allocated(error)) return
                end do
 
                do i = 1, ndim
@@ -177,7 +178,8 @@ contains
                   work_point(axis) = point(axis) - 2.0_wp*h
                   g_mm = phi%f1_r(work_point, anchor, owner_dummy)
                   do i = 1, ndim
-                     numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
+                     call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis), error)
+                     if (allocated(error)) return
                   end do
                end do
 
@@ -231,8 +233,8 @@ contains
          hess_mm = phi%f2_rr(work_point, anchor, owner_dummy)
          do i = 1, ndim
             do j = 1, ndim
-               numeric(i, j, axis) = fd4_scalar( &
-                                     hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h)
+               call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), h, numeric(i, j, axis), error)
+               if (allocated(error)) return
             end do
          end do
       end do
@@ -287,8 +289,9 @@ contains
          do i = 1, ndim
             do j = 1, ndim
                do k = 1, ndim
-                  numeric(i, j, k, axis) = fd4_scalar( &
-                                           third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h)
+                  call fd4_scalar(third_pp(i, j, k), third_p(i, j, k), third_m(i, j, k), third_mm(i, j, k), h, &
+                                  numeric(i, j, k, axis), error)
+                  if (allocated(error)) return
                end do
             end do
          end do
@@ -351,7 +354,8 @@ contains
                work_anchor = anchor
                work_anchor(axis) = anchor(axis) - 2.0_wp*h
                f_mm = phi%f0(point, work_anchor, owner)
-               numeric(axis, owner) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
+               call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric(axis, owner), error)
+               if (allocated(error)) return
             end do
 
             do i = 1, ndim
@@ -408,8 +412,9 @@ contains
                g_mm = phi%f1_rA(points(:, 1), work_anchor, owner)
                do i = 1, ndim
                   do atom_a = 1, mol%nat
-                     numeric(i, axis, atom_a, owner) = fd4_scalar( &
-                                                       g_pp(i, atom_a), g_p(i, atom_a), g_m(i, atom_a), g_mm(i, atom_a), h)
+                     call fd4_scalar(g_pp(i, atom_a), g_p(i, atom_a), g_m(i, atom_a), g_mm(i, atom_a), h, &
+                                     numeric(i, axis, atom_a, owner), error)
+                     if (allocated(error)) return
                   end do
                end do
             end do
@@ -472,7 +477,8 @@ contains
                work_anchor(axis) = points(axis, 2) - 2.0_wp*h
                g_mm = phi%f1_r(points(:, 1), work_anchor, owner)
                do i = 1, ndim
-                  numeric(i, axis, owner) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
+                  call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric(i, axis, owner), error)
+                  if (allocated(error)) return
                end do
             end do
 
@@ -543,9 +549,11 @@ contains
                   f_mm = phi%f0(work_point, anchor, owner_dummy)
                   g_mm = phi%f1_r(work_point, anchor, owner_dummy)
 
-                  numeric_grad(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, h)
+                  call fd4_scalar(f_pp, f_p, f_m, f_mm, h, numeric_grad(axis), error)
+                  if (allocated(error)) return
                   do i = 1, ndim
-                     numeric_hess(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h)
+                     call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), h, numeric_hess(i, axis), error)
+                     if (allocated(error)) return
                   end do
                end do
 
@@ -668,7 +676,8 @@ contains
                   call prim%f0(lsf0_tmp)
                   f_mm = sw%f0(lsf0_tmp)
 
-                  numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
+                  call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
+                  if (allocated(error)) return
 
                   call check(error, &
                              analytic(axis, atom), numeric, &

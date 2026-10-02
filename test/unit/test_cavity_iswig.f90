@@ -21,7 +21,10 @@ module test_cavity_iswig
    public :: collect_cavity_iswig
 
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
-   real(wp), parameter :: thr2 = sqrt(epsilon(1.0_wp))
+   !> Absolute allowance for equivalent area sums with different reduction orders
+   real(wp), parameter :: thr2 = 1.0e-11_wp
+   !> Absolute allowance for independently summed molecular references
+   real(wp), parameter :: REFERENCE_THR = 1.0e-10_wp
    real(wp), parameter :: STEP_SIZE = 1.0E-4_wp
    real(wp), parameter :: ABS_THR = 5.0E-9_wp
    real(wp), parameter :: REL_THR = 5.0E-8_wp
@@ -660,16 +663,18 @@ contains
       call check(error, cav%ngrid, ngrid_ref, &
          & more="Number of grid points does not match")
 
-      switch_ref = 1.240536285050911E3_wp
-      call check(error, sum(cav%f), switch_ref, thr_abs=ABS_THR, thr_rel=REL_THR, &
+      ! Scalar Gaussian and surface sums at the current geometry and angular grid
+      ! Inputs and formula: test/mutation/scripts/tolerance_iswig_identity_reference_probe.py
+      switch_ref = 1240.5362859882753_wp
+      call check(error, sum(cav%f), switch_ref, thr=REFERENCE_THR, &
          & more="Switching function does not match")
 
-      area_ref = 5.650168713524450e2_wp
-      call check(error, cav%total_area, area_ref, thr_abs=ABS_THR, thr_rel=REL_THR, &
+      area_ref = 565.0168717938371_wp
+      call check(error, cav%total_area, area_ref, thr=REFERENCE_THR, &
          & more="Cavity total area does not match")
 
-      volume_ref = 454.41275406590046_wp
-      call check(error, cav%total_volume, volume_ref, thr_abs=ABS_THR, thr_rel=REL_THR, &
+      volume_ref = 454.4127542443011_wp
+      call check(error, cav%total_volume, volume_ref, thr=REFERENCE_THR, &
          & more="Cavity total volume does not match")
 
    end subroutine test_molecular_cavity
@@ -721,7 +726,7 @@ contains
 
    end subroutine test_area_summation
 
-   !> Test of cavity creation routines
+   !> Test of repeated cavity construction
    subroutine test_area_variants(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
@@ -782,9 +787,9 @@ contains
       asph_eff = cav%asph
 
       call check(error, sum(asph_full), sum(asph_eff), thr=thr2, &
-         & more="Cavity total areas of regular and efficient routine do not match")
+         & more="Cavity total areas of repeated construction do not match")
       call check(error, maxval(abs(asph_full - asph_eff)), 0.0_wp, thr=thr2, &
-         & more="Cavity atomic areas of regular and efficient routine do not match")
+         & more="Cavity atomic areas of repeated construction do not match")
 
    end subroutine test_area_variants
 
@@ -797,7 +802,10 @@ contains
       real(wp), allocatable :: radii(:)
       real(wp), allocatable :: num2d(:, :), ana2d(:, :)
       real(wp) :: fwd, bwd
-      integer :: i, j
+      ! Shorter step resolves the selected point with a two-point stencil
+      real(wp), parameter :: h = 1.0E-5_wp
+      integer :: i, j, ip
+      integer, allocatable :: numbering_ref(:)
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -812,10 +820,25 @@ contains
          return
       end if
       allocate (num2d(3, mol%nat))
-      allocate (ana2d(3, mol%nat), source=0.0_wp)
+      allocate (cav)
+      call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error)
+      if (.not. allocated(cavity_error)) call cav%update(mol, error=cavity_error)
+      if (.not. allocated(cavity_error)) call cav%get_gradient(cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      ! Choose a point with a nonzero nuclear switching derivative
+      ip = maxloc(sum(sum(abs(cav%f1_rA), dim=1), dim=1), dim=1)
+      ana2d = cav%f1_rA(:, :, ip)
+      numbering_ref = cav%numbering
+      call check(error, maxval(abs(ana2d)) > 1.0E-3_wp, &
+         & more="Switching derivative fixture has no useful signal")
+      if (allocated(error)) return
       do i = 1, mol%nat
          do j = 1, 3
-            mol%xyz(j, i) = mol%xyz(j, i) + STEP_SIZE
+            mol%xyz(j, i) = mol%xyz(j, i) + h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
             call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error)
@@ -828,8 +851,14 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            fwd = cav%f(1)
-            mol%xyz(j, i) = mol%xyz(j, i) - 2*STEP_SIZE
+            call check(error, size(cav%numbering), size(numbering_ref), &
+               & more="Switching FD changed the surviving grid size")
+            if (allocated(error)) return
+            call check(error, all(cav%numbering == numbering_ref), &
+               & more="Switching FD changed the surviving grid identities")
+            if (allocated(error)) return
+            fwd = cav%f(ip)
+            mol%xyz(j, i) = mol%xyz(j, i) - 2*h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
             call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error)
@@ -842,17 +871,24 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            bwd = cav%f(1)
-            mol%xyz(j, i) = mol%xyz(j, i) + STEP_SIZE
-            num2d(j, i) = (fwd - bwd)/(2*STEP_SIZE)
+            call check(error, size(cav%numbering), size(numbering_ref), &
+               & more="Switching FD changed the surviving grid size")
+            if (allocated(error)) return
+            call check(error, all(cav%numbering == numbering_ref), &
+               & more="Switching FD changed the surviving grid identities")
+            if (allocated(error)) return
+            bwd = cav%f(ip)
+            mol%xyz(j, i) = mol%xyz(j, i) + h
+            num2d(j, i) = (fwd - bwd)/(2*h)
          end do
       end do
 
-      ! simple structural check to avoid unused warnings
+      ! Compare the forward Jacobian with nuclear finite differences
       do i = 1, mol%nat
          do j = 1, 3
             call check(error, ana2d(j, i), num2d(j, i), thr_abs=ABS_THR, thr_rel=REL_THR, &
                        more="Analytical and numerical gradients do not match for switching function")
+            if (allocated(error)) return
          end do
       end do
 

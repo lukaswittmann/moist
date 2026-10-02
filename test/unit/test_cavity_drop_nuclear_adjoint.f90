@@ -22,6 +22,7 @@ module test_cavity_drop_nuclear_adjoint
    use moist_cavity_drop_lsf_svdw_param, only: moist_cavity_drop_lsf_svdw_param_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
    use moist_model_continuum_component_pcm_type, only: moist_pcm_parameters_type
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
@@ -59,15 +60,28 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: PROJ_MAXITER = 1000
    integer, parameter :: PROJ_LEVEL = 2
 
-   !> Forward-versus-reverse thresholds
-   real(wp), parameter :: EQ_ABS = 1.0E-9_wp
-   real(wp), parameter :: EQ_REL = 1.0E-9_wp
+   !> Absolute forward-versus-reverse bound across all channels
+   real(wp), parameter :: EQ_ABS = 1.0E-10_wp
+   !> Relative bound on each forward reference entry
+   real(wp), parameter :: EQ_REL = 1.0E-12_wp
+
+   !> Model paths sum the same analytic terms with round-off differences
+   real(wp), parameter :: AB_ABS = 1.0E-12_wp
+   !> Relative model bound on each forward reference entry
+   real(wp), parameter :: AB_REL = 1.0E-12_wp
 
    !> Below this the reference gradient is too small to carry a relative test
    real(wp), parameter :: VACUITY_THR = 1.0E-6_wp
 
    !> Softmax scale for the branching test
    real(wp), parameter :: BRANCH_SOFTMAX_S = 0.5_wp
+
+   !> Branching-width finite-difference step
+   real(wp), parameter :: XI_FD_STEP = 1.0E-4_wp
+   !> Absolute branching-width derivative bound
+   real(wp), parameter :: XI_FD_ABS = 1.0E-10_wp
+   !> Relative branching-width derivative bound
+   real(wp), parameter :: XI_FD_REL = 1.0E-9_wp
 
    !> Symmetry-breaking displacement for branching fixture
    real(wp), parameter :: FIXTURE_NUDGE = 1.0E-4_wp
@@ -183,13 +197,8 @@ contains
 
       !> Central-difference stencil
       integer, parameter :: NSTEP = 4
-      real(wp), parameter :: FD_STEP = 1.0E-4_wp
-      !> Displaced atom and axis. One coordinate is enough: the branch
-      !> correction is the same code path for every atom and axis
+      !> Coordinate with a nonzero branching-width response
       integer, parameter :: FD_ATOM = 5, FD_AXIS = 3
-      !> FD-versus-analytic bounds, limited by the stencil round-off floor
-      real(wp), parameter :: FD_ABS = 5.0E-8_wp
-      real(wp), parameter :: FD_REL = 5.0E-6_wp
 
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
@@ -198,16 +207,15 @@ contains
       type(mctc_error), allocatable :: cav_error
       type(structure_type) :: mol, mol_fd
 
-      real(wp) :: fd_coeff(NSTEP), fd_delta(NSTEP)
+      real(wp) :: fd_delta(NSTEP)
       real(wp), allocatable :: grad_ana(:, :), wmap(:), xi_store(:, :), w_xi(:)
       logical, allocatable :: have(:, :), usable(:), in_ref(:)
       !> Branch count per persistent numbering at each stencil geometry
       integer, allocatable :: bc_store(:, :)
-      real(wp) :: lvals(NSTEP), num_deriv, ana_deriv, diff
+      real(wp) :: num_deriv, ana_deriv, diff
       integer :: max_num, istep, igrid, inum, ngrid, ncommon, nphantom
 
-      fd_coeff = [1.0_wp, -8.0_wp, 8.0_wp, -1.0_wp]/(12.0_wp*FD_STEP)
-      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*FD_STEP
+      fd_delta = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]*XI_FD_STEP
 
       call fixture_geometry(.true., mol)
       call build_cavity(cavity, ctx, mol, .true., error)
@@ -284,10 +292,18 @@ contains
          return
       end if
 
-      do istep = 1, NSTEP
-         lvals(istep) = sum(wmap*xi_store(:, istep), mask=usable)
+      ! Pair nearby widths before summing to avoid subtracting large functionals
+      num_deriv = 0.0_wp
+      do inum = 1, max_num
+         if (.not. usable(inum)) cycle
+         num_deriv = num_deriv + wmap(inum)* &
+            (8.0_wp*(xi_store(inum, 3) - xi_store(inum, 2)) - &
+             (xi_store(inum, 4) - xi_store(inum, 1)))/(12.0_wp*XI_FD_STEP)
       end do
-      num_deriv = sum(fd_coeff*lvals)
+      if (.not. ieee_is_finite(num_deriv)) then
+         call test_failed(error, "branching xi FD reference is not finite")
+         return
+      end if
 
       ! Analytic side: same restricted weights through the reverse path
       allocate (w_xi(ngrid), source=0.0_wp)
@@ -317,8 +333,12 @@ contains
          return
       end if
 
+      if (.not. ieee_is_finite(ana_deriv)) then
+         call test_failed(error, "branching xi analytic derivative is not finite")
+         return
+      end if
       diff = abs(ana_deriv - num_deriv)
-      if (diff > FD_ABS .and. diff > FD_REL*abs(num_deriv)) then
+      if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
          call test_failed(error, "branching xi gradient disagrees with finite differences: "// &
                           "analytic "//to_string(ana_deriv)//" numeric "//to_string(num_deriv)// &
                           " (common points "//to_string(ncommon)//")")
@@ -338,8 +358,12 @@ contains
          ana_deriv = ana_deriv + w_xi(igrid)*cavity%xi1_rA(FD_AXIS, FD_ATOM, igrid)
       end do
 
+      if (.not. ieee_is_finite(ana_deriv)) then
+         call test_failed(error, "branching xi analytic derivative is not finite")
+         return
+      end if
       diff = abs(ana_deriv - num_deriv)
-      if (diff > FD_ABS .and. diff > FD_REL*abs(num_deriv)) then
+      if (diff > XI_FD_ABS .and. diff > XI_FD_REL*abs(num_deriv)) then
          call test_failed(error, "forward xi1_rA disagrees with finite differences under "// &
                           "branching: analytic "//to_string(ana_deriv)// &
                           " numeric "//to_string(num_deriv))
@@ -368,9 +392,6 @@ contains
       !> Dielectric constant and pressure of the probe model
       real(wp), parameter :: epsilon_r = 32.0_wp
       real(wp), parameter :: pressure = 0.75_wp
-      !> Both paths sum the same analytic terms, so only round-off separates them
-      real(wp), parameter :: AB_ABS = 1.0E-9_wp
-      real(wp), parameter :: AB_REL = 1.0E-9_wp
       !> Atomic charges driving the electrostatics
       real(wp), parameter :: qat_vals(*) = [0.20_wp, -0.15_wp, -0.05_wp]
 

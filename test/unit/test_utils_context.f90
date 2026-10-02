@@ -2,6 +2,7 @@
 module test_utils_context
    use mctc_env, only: wp
    use testdrive, only: new_unittest, unittest_type, error_type, check
+!$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
    use moist_context, only: moist_context_type, new_context
    implicit none(type, external)
    private
@@ -28,7 +29,10 @@ contains
                   new_unittest("owned_logfile", test_owned_logfile), &
                   new_unittest("print_settings_runs", test_print_settings_runs), &
                   new_unittest("debug_message_gated", test_debug_message_gated), &
-                  new_unittest("delete_is_safe", test_delete_is_safe) &
+                  new_unittest("delete_is_safe", test_delete_is_safe), &
+                  new_unittest("output_contracts", test_output_contracts), &
+                  new_unittest("failed_files", test_failed_files), &
+                  new_unittest("thread_runtime", test_thread_runtime) &
                   ]
 
    end subroutine collect_utils_context
@@ -101,10 +105,12 @@ contains
       call new_context(ctx, verbosity=0, debug=.true.)
       call check(error, ctx%writes(3), "debug unlocks level 3")
       if (allocated(error)) return
+      call check(error,.not. ctx%writes(4), "debug does not unlock profiling band")
+      if (allocated(error)) return
       call ctx%delete()
    end subroutine test_writes_guard
 
-   !> do_profile follows verbosity >= 3 by default and honours an explicit override
+   !> do_profile follows verbosity >= 4 by default and honours an explicit override
    subroutine test_profile_flag(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
@@ -137,6 +143,11 @@ contains
    subroutine test_report_depth(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
+
+      call new_context(ctx, verbosity=0)
+      call check(error, ctx%report_depth() == 0, "silent verbosity clamps depth to zero")
+      if (allocated(error)) return
+      call ctx%delete()
 
       call new_context(ctx, verbosity=1)
       call check(error, ctx%report_depth() == 0, "verbosity 1 -> depth 0")
@@ -286,24 +297,59 @@ contains
       character(*), parameter :: path = "test_context_print_settings.tmp"
       integer :: iu, stat
       character(256) :: line
-      logical :: saw_verbosity
+      logical :: saw_verbosity, saw_threads, saw_log, main_empty, saw_debug, saw_profile, saw_time
+      integer :: override
+      character(16) :: expected_threads
 
       call new_context(ctx, verbosity=2, logfile=path)
-      call ctx%print_settings()
+      open (newunit=override, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      write (expected_threads, "(i0)") ctx%get_num_threads()
+      call ctx%print_settings(unit=override)
+      flush (ctx%unit, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      rewind (override, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
       call ctx%delete()
 
       open (newunit=iu, file=path, status="old", action="read", iostat=stat)
       call check(error, stat == 0, "settings file exists")
       if (allocated(error)) return
 
+      read (iu, "(a)", iostat=stat) line
+      main_empty = stat < 0
       saw_verbosity = .false.
+      saw_threads = .false.
+      saw_log = .false.
+      saw_debug = .false.
+      saw_profile = .false.
+      saw_time = .false.
       do
-         read (iu, "(a)", iostat=stat) line
+         read (override, "(a)", iostat=stat) line
          if (stat /= 0) exit
-         if (index(line, "Verbosity") > 0) saw_verbosity = .true.
+         if (index(line, "Verbosity") > 0) saw_verbosity = index(line, "2") > 0
+         if (index(line, "OMP threads") > 0) then
+            saw_threads = line(scan(trim(line), " ", back=.true.) + 1:len_trim(line)) == trim(expected_threads)
+         end if
+         if (index(line, "Log file") > 0) saw_log = index(line, path) > 0
+         if (index(line, "Debug ") > 0 .and. index(line, "Debug file") == 0) then
+            saw_debug = line(len_trim(line):len_trim(line)) == "F"
+         end if
+         if (index(line, "Detailed profiling") > 0) saw_profile = line(len_trim(line):len_trim(line)) == "F"
+         if (index(line, "Start time") > 0) saw_time = index(line, ctx%start_time) > 0
       end do
-      close (iu, status="delete")
-      call check(error, saw_verbosity, "settings block mentions Verbosity")
+      close (iu, status="delete", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      close (override, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, main_empty .and. saw_verbosity .and. saw_threads .and. saw_log .and. &
+                 saw_debug .and. saw_profile .and. saw_time, &
+                 "settings honors override and renders verbosity, threads and log path")
    end subroutine test_print_settings_runs
 
    !> debug_message is silent unless debug is enabled
@@ -354,5 +400,168 @@ contains
       if (allocated(error)) return
       call ctx%delete()
    end subroutine test_delete_is_safe
+
+   !> Messages honor levels and route debug output to the selected stream
+   subroutine test_output_contracts(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      integer :: iu, du, stat
+      logical :: opened, ok
+      character(256) :: line
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call new_context(ctx, verbosity=1, unit=iu, debug=.true.)
+      ok = ctx%unit == iu .and. ctx%debug_unit == iu
+      call ctx%debug_message("fallback debug")
+      call ctx%print_settings()
+      call ctx%delete()
+      inquire (unit=iu, opened=opened)
+      rewind (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      ok = ok .and. opened .and. stat == 0 .and. trim(line) == "fallback debug"
+      opened = .false.
+      do
+         read (iu, "(a)", iostat=stat) line
+         if (stat /= 0) exit
+         if (index(line, "Log file") > 0) opened = index(line, "(stdout)") > 0
+      end do
+      ok = ok .and. opened
+      close (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, ok, "borrowed unit stays open and receives fallback debug")
+      if (allocated(error)) return
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call new_context(ctx, verbosity=0, unit=iu)
+      call ctx%message("silent default")
+      call ctx%debug_message("silent debug")
+      rewind (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      ok = stat < 0
+      call ctx%delete()
+      close (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, ok, "verbosity zero and disabled debug produce no output")
+      if (allocated(error)) return
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call new_context(ctx, verbosity=1, unit=iu)
+      call ctx%message("default visible")
+      call ctx%message("level suppressed", level=2)
+      rewind (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      ok = stat == 0 .and. trim(line) == "default visible"
+      read (iu, "(a)", iostat=stat) line
+      ok = ok .and. stat < 0
+      call ctx%delete()
+      close (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, ok, "message default and explicit levels are honored")
+      if (allocated(error)) return
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call new_context(ctx, unit=iu, debug=.true., debugfile="context_split_debug.tmp")
+      ok = ctx%owns_debug_unit .and. ctx%debugfile == "context_split_debug.tmp"
+      call ctx%message("main only")
+      call ctx%debug_message("debug only")
+      call ctx%delete()
+      inquire (file="context_split_debug.tmp", opened=opened)
+      ok = ok .and. .not. opened .and. .not. ctx%owns_debug_unit
+      rewind (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      read (iu, "(a)", iostat=stat) line
+      ok = ok .and. stat == 0 .and. trim(line) == "main only"
+      read (iu, "(a)", iostat=stat) line
+      ok = ok .and. stat < 0
+      close (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      open (newunit=du, file="context_split_debug.tmp", status="old", action="read", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      read (du, "(a)", iostat=stat) line
+      ok = ok .and. stat == 0 .and. trim(line) == "debug only"
+      close (du, status="delete", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, ok, "debug stream is separate and owned file closes")
+   end subroutine test_output_contracts
+
+   !> Failed owned-file opens retain a usable borrowed stream and expose status
+   subroutine test_failed_files(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      integer :: iu, stat
+      logical :: ok
+
+      open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call new_context(ctx, unit=iu, logfile="missing_context_directory/log")
+      ok = ctx%io_stat /= 0 .and. .not. ctx%owns_unit .and. ctx%unit == iu
+      call ctx%delete()
+      call new_context(ctx, unit=iu, debug=.true., debugfile="missing_context_directory/debug")
+      ok = ok .and. ctx%io_stat /= 0 .and. .not. ctx%owns_debug_unit .and. ctx%debug_unit == iu
+      call ctx%delete()
+      close (iu, iostat=stat)
+      call check(error, stat == 0, "test stream I/O succeeds")
+      if (allocated(error)) return
+      call check(error, ok, "failed file opens report error and preserve fallback")
+   end subroutine test_failed_files
+
+   !> Retuning restores the first host budget and follows later host changes
+   subroutine test_thread_runtime(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_context_type) :: ctx
+      integer :: baseline, runtime
+      logical :: ok
+
+      call new_context(ctx)
+      baseline = ctx%get_num_threads()
+      call ctx%set_num_threads(3)
+      runtime = 3
+!$    runtime = omp_get_max_threads()
+      ok = ctx%get_num_threads() == 3 .and. runtime == 3
+      call ctx%set_num_threads(4)
+      call ctx%set_num_threads(-1)
+      runtime = baseline
+!$    runtime = omp_get_max_threads()
+      ok = ok .and. runtime == baseline .and. ctx%get_num_threads() == baseline
+      ok = ok .and. ctx%nthreads_env == 0 .and. ctx%nthreads_pin == 0
+!$    call omp_set_num_threads(5)
+!$    ok = ok .and. ctx%get_num_threads() == 5
+      call ctx%set_num_threads(0)
+!$    ok = ok .and. omp_get_max_threads() == 5
+!$    call omp_set_num_threads(baseline)
+      call ctx%delete()
+      call new_context(ctx, nthreads=3)
+      ok = ok .and. ctx%get_num_threads() == 3
+      call ctx%delete()
+      ok = ok .and. ctx%nthreads_pin == 0
+!$    ok = ok .and. omp_get_max_threads() == baseline
+!$    call omp_set_num_threads(baseline)
+      call check(error, ok, "pin applies, retune preserves baseline, release follows host")
+   end subroutine test_thread_runtime
 
 end module test_utils_context

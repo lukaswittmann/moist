@@ -552,7 +552,8 @@ contains
                      call lsf%prepare(shifted, lsf_err); call lsf%f0(f_m)
                      shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted, lsf_err); call lsf%f0(f_mm)
-                     numeric(axis) = fd4_scalar(f_pp, f_p, f_m, f_mm, STEP_SIZE)
+                     call fd4_scalar(f_pp, f_p, f_m, f_mm, STEP_SIZE, numeric(axis), error)
+                     if (allocated(error)) return
                   end do
                   do i = 1, ndim
                      call check(error, analytic(i), numeric(i), &
@@ -622,7 +623,8 @@ contains
                      shifted = point; shifted(axis) = point(axis) - 2.0_wp*STEP_SIZE
                      call lsf%prepare(shifted, lsf_err); call lsf%f012_r(lsf1_r=g_mm)
                      do i = 1, ndim
-                        numeric(i, axis) = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), STEP_SIZE)
+                        call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), STEP_SIZE, numeric(i, axis), error)
+                        if (allocated(error)) return
                      end do
                   end do
                   do j = 1, ndim
@@ -705,8 +707,9 @@ contains
                      call lsf%f3_rrr(lsf2_rr=hess_mm, lsf3_rrr=dummy_third)
                      do j = 1, ndim
                         do i = 1, ndim
-                           numeric(i, j, axis) = fd4_scalar( &
-                                                 hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
+                           call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps, &
+                                           numeric(i, j, axis), error)
+                           if (allocated(error)) return
                         end do
                      end do
                   end do
@@ -806,7 +809,8 @@ contains
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                         call refresh_ssd(lsf, centers_local, radii)
                         call lsf%prepare(point, lsf_err); call lsf%f0(f_mm)
-                        numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
+                        call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
+                        if (allocated(error)) return
                         call check(error, analytic(axis, atom), numeric, &
                                    thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
@@ -897,7 +901,8 @@ contains
                         call refresh_ssd(lsf, centers_local, radii)
                         call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf1_r=g_mm)
                         do i = 1, ndim
-                           numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
+                           call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps, numeric, error)
+                           if (allocated(error)) return
                            call check(error, analytic(i, axis, atom), numeric, &
                                       thr_abs=ABS_THR, thr_rel=REL_THR)
                            if (allocated(error)) return
@@ -989,7 +994,9 @@ contains
                         call lsf%prepare(point, lsf_err); call lsf%f012_r(lsf2_rr=hess_mm)
                         do j = 1, ndim
                            do i = 1, ndim
-                              numeric = fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps)
+                              call fd4_scalar(hess_pp(i, j), hess_p(i, j), hess_m(i, j), hess_mm(i, j), eps, numeric, &
+                                              error)
+                              if (allocated(error)) return
                               call check(error, analytic(i, j, axis, atom), numeric, &
                                          thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
@@ -1093,7 +1100,8 @@ contains
                      call refresh_radii(lsf, mol, radii_local)
                      if (prepare_failed(lsf, point, error)) return
                      call lsf%f0(f_mm)
-                     numeric = fd4_scalar(f_pp, f_p, f_m, f_mm, eps)
+                     call fd4_scalar(f_pp, f_p, f_m, f_mm, eps, numeric, error)
+                     if (allocated(error)) return
                      call check(error, analytic(atom), numeric, &
                                 thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
@@ -1184,7 +1192,8 @@ contains
                      if (prepare_failed(lsf, point, error)) return
                      call lsf%f012_r(lsf1_r=g_mm)
                      do i = 1, ndim
-                        numeric = fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps)
+                        call fd4_scalar(g_pp(i), g_p(i), g_m(i), g_mm(i), eps, numeric, error)
+                        if (allocated(error)) return
                         call check(error, analytic(i, atom), numeric, &
                                    thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
@@ -1307,8 +1316,8 @@ contains
                      call lsf%f012_r(lsf2_rr=h_mm)
                      do i = 1, ndim
                         do j = 1, ndim
-                           numeric = fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), &
-                                                h_mm(i, j), eps)
+                           call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), eps, numeric, error)
+                           if (allocated(error)) return
                            call check(error, analytic(i, j, atom), numeric, &
                                       thr_abs=thr_abs, thr_rel=thr_rel)
                            if (allocated(error)) return
@@ -1407,20 +1416,22 @@ contains
                                            lsf3_rr_rad=l3(:, :, :, istep))
                      end do
                      do other = 1, mol%nat
-                        numeric = fd4_scalar(l1(other, 1), l1(other, 2), &
-                                             l1(other, 3), l1(other, 4), eps)
+                        call fd4_scalar(l1(other, 1), l1(other, 2), l1(other, 3), l1(other, 4), eps, numeric, error)
+                        if (allocated(error)) return
                         call check(error, rr2(other, atom), numeric, &
                                    thr_abs=thr_abs, thr_rel=thr_rel)
                         if (allocated(error)) return
                         do i = 1, ndim
-                           numeric = fd4_scalar(l2(i, other, 1), l2(i, other, 2), &
-                                                l2(i, other, 3), l2(i, other, 4), eps)
+                           call fd4_scalar(l2(i, other, 1), l2(i, other, 2), l2(i, other, 3), l2(i, other, 4), eps, &
+                                           numeric, error)
+                           if (allocated(error)) return
                            call check(error, rr3(i, other, atom), numeric, &
                                       thr_abs=thr_abs, thr_rel=thr_rel)
                            if (allocated(error)) return
                            do j = 1, ndim
-                              numeric = fd4_scalar(l3(i, j, other, 1), l3(i, j, other, 2), &
-                                                   l3(i, j, other, 3), l3(i, j, other, 4), eps)
+                              call fd4_scalar(l3(i, j, other, 1), l3(i, j, other, 2), l3(i, j, other, 3), &
+                                              l3(i, j, other, 4), eps, numeric, error)
+                              if (allocated(error)) return
                               call check(error, rr4(i, j, other, atom), numeric, &
                                          thr_abs=thr_abs, thr_rel=thr_rel)
                               if (allocated(error)) return
@@ -1509,24 +1520,24 @@ contains
                      end do
                      do other = 1, mol%nat
                         do s_ax = 1, ndim
-                           numeric = fd4_scalar(n1(s_ax, other, 1), n1(s_ax, other, 2), &
-                                                n1(s_ax, other, 3), n1(s_ax, other, 4), eps)
+                           call fd4_scalar(n1(s_ax, other, 1), n1(s_ax, other, 2), n1(s_ax, other, 3), &
+                                           n1(s_ax, other, 4), eps, numeric, error)
+                           if (allocated(error)) return
                            call check(error, mx2(s_ax, other, atom), numeric, &
                                       thr_abs=thr_abs, thr_rel=thr_rel)
                            if (allocated(error)) return
                            do i = 1, ndim
-                              numeric = fd4_scalar(n2(i, s_ax, other, 1), &
-                                                   n2(i, s_ax, other, 2), &
-                                                   n2(i, s_ax, other, 3), &
-                                                   n2(i, s_ax, other, 4), eps)
+                              call fd4_scalar(n2(i, s_ax, other, 1), n2(i, s_ax, other, 2), n2(i, s_ax, other, 3), &
+                                              n2(i, s_ax, other, 4), eps, numeric, error)
+                              if (allocated(error)) return
                               call check(error, mx3(i, s_ax, other, atom), numeric, &
                                          thr_abs=thr_abs, thr_rel=thr_rel)
                               if (allocated(error)) return
                               do j = 1, ndim
-                                 numeric = fd4_scalar(n3(i, j, s_ax, other, 1), &
-                                                      n3(i, j, s_ax, other, 2), &
-                                                      n3(i, j, s_ax, other, 3), &
-                                                      n3(i, j, s_ax, other, 4), eps)
+                                 call fd4_scalar(n3(i, j, s_ax, other, 1), n3(i, j, s_ax, other, 2), &
+                                                 n3(i, j, s_ax, other, 3), n3(i, j, s_ax, other, 4), eps, numeric, &
+                                                 error)
+                                 if (allocated(error)) return
                                  call check(error, mx4(i, j, s_ax, other, atom), numeric, &
                                             thr_abs=thr_abs, thr_rel=thr_rel)
                                  if (allocated(error)) return
@@ -1840,20 +1851,22 @@ contains
                                         lsf3_rr_rad=l3(:, :, :, istep))
                   end do
                   do atom = 1, mol%nat
-                     numeric = fd4_scalar(l1(atom, 1), l1(atom, 2), l1(atom, 3), &
-                                          l1(atom, 4), eps)
+                     call fd4_scalar(l1(atom, 1), l1(atom, 2), l1(atom, 3), l1(atom, 4), eps, numeric, error)
+                     if (allocated(error)) return
                      call check(error, a1(atom), numeric, &
                                 thr_abs=thr_abs, thr_rel=thr_rel)
                      if (allocated(error)) return
                      do i = 1, ndim
-                        numeric = fd4_scalar(l2(i, atom, 1), l2(i, atom, 2), &
-                                             l2(i, atom, 3), l2(i, atom, 4), eps)
+                        call fd4_scalar(l2(i, atom, 1), l2(i, atom, 2), l2(i, atom, 3), l2(i, atom, 4), eps, numeric, &
+                                        error)
+                        if (allocated(error)) return
                         call check(error, a2(i, atom), numeric, &
                                    thr_abs=thr_abs, thr_rel=thr_rel)
                         if (allocated(error)) return
                         do j = 1, ndim
-                           numeric = fd4_scalar(l3(i, j, atom, 1), l3(i, j, atom, 2), &
-                                                l3(i, j, atom, 3), l3(i, j, atom, 4), eps)
+                           call fd4_scalar(l3(i, j, atom, 1), l3(i, j, atom, 2), l3(i, j, atom, 3), l3(i, j, atom, 4), &
+                                           eps, numeric, error)
+                           if (allocated(error)) return
                            call check(error, a3(i, j, atom), numeric, &
                                       thr_abs=thr_abs, thr_rel=thr_rel)
                            if (allocated(error)) return
@@ -1945,22 +1958,23 @@ contains
                   end do
                   do atom = 1, mol%nat
                      do s_ax = 1, ndim
-                        numeric = fd4_scalar(n1(s_ax, atom, 1), n1(s_ax, atom, 2), &
-                                             n1(s_ax, atom, 3), n1(s_ax, atom, 4), eps)
+                        call fd4_scalar(n1(s_ax, atom, 1), n1(s_ax, atom, 2), n1(s_ax, atom, 3), n1(s_ax, atom, 4), &
+                                        eps, numeric, error)
+                        if (allocated(error)) return
                         call check(error, h1(s_ax, atom), numeric, &
                                    thr_abs=thr_abs, thr_rel=thr_rel)
                         if (allocated(error)) return
                         do i = 1, ndim
-                           numeric = fd4_scalar(n2(i, s_ax, atom, 1), n2(i, s_ax, atom, 2), &
-                                                n2(i, s_ax, atom, 3), n2(i, s_ax, atom, 4), eps)
+                           call fd4_scalar(n2(i, s_ax, atom, 1), n2(i, s_ax, atom, 2), n2(i, s_ax, atom, 3), &
+                                           n2(i, s_ax, atom, 4), eps, numeric, error)
+                           if (allocated(error)) return
                            call check(error, h2(i, s_ax, atom), numeric, &
                                       thr_abs=thr_abs, thr_rel=thr_rel)
                            if (allocated(error)) return
                            do j = 1, ndim
-                              numeric = fd4_scalar(n3(i, j, s_ax, atom, 1), &
-                                                   n3(i, j, s_ax, atom, 2), &
-                                                   n3(i, j, s_ax, atom, 3), &
-                                                   n3(i, j, s_ax, atom, 4), eps)
+                              call fd4_scalar(n3(i, j, s_ax, atom, 1), n3(i, j, s_ax, atom, 2), &
+                                              n3(i, j, s_ax, atom, 3), n3(i, j, s_ax, atom, 4), eps, numeric, error)
+                              if (allocated(error)) return
                               call check(error, h3(i, j, s_ax, atom), numeric, &
                                          thr_abs=thr_abs, thr_rel=thr_rel)
                               if (allocated(error)) return
@@ -2390,8 +2404,9 @@ contains
                         call prim%f3_rr_rA(lsf1_rA=rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
                         do atomA = 1, mol%nat
                            do axisA = 1, ndim
-                              numeric = fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), &
-                                                   rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), STEP_SIZE)
+                              call fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), rA_bwd(axisA, atomA), &
+                                              rA_bwd2(axisA, atomA), STEP_SIZE, numeric, error)
+                              if (allocated(error)) return
                               call check(error, analytic(axisA, atomA, axisB, atomB), numeric, &
                                          thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
@@ -2487,9 +2502,10 @@ contains
                         do iA = 1, mol%nat
                            do axisA = 1, ndim
                               do jdir = 1, ndim
-                                 numeric = fd4_scalar(r_rA_fwd2(jdir, axisA, iA), &
-                                                      r_rA_fwd(jdir, axisA, iA), r_rA_bwd(jdir, axisA, iA), &
-                                                      r_rA_bwd2(jdir, axisA, iA), STEP_SIZE)
+                                 call fd4_scalar(r_rA_fwd2(jdir, axisA, iA), r_rA_fwd(jdir, axisA, iA), &
+                                                 r_rA_bwd(jdir, axisA, iA), r_rA_bwd2(jdir, axisA, iA), STEP_SIZE, &
+                                                 numeric, error)
+                                 if (allocated(error)) return
                                  call check(error, analytic(jdir, axisA, iA, axisB, iB), numeric, &
                                             thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
@@ -2560,8 +2576,9 @@ contains
                      do i = 1, ndim
                         do j = 1, ndim
                            do kk = 1, ndim
-                              numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                                   t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                              call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), &
+                                              t3_bwd2(i, j, kk), STEP_SIZE, numeric, error)
+                              if (allocated(error)) return
                               call check(error, analytic(i, j, kk, axis), numeric, &
                                          thr_abs=ABS_THR, thr_rel=REL_THR)
                               if (allocated(error)) return
@@ -2658,8 +2675,9 @@ contains
                         do i = 1, ndim
                            do j = 1, ndim
                               do kk = 1, ndim
-                                 numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                                      t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                                 call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), &
+                                                 t3_bwd2(i, j, kk), STEP_SIZE, numeric, error)
+                                 if (allocated(error)) return
                                  call check(error, analytic(i, j, kk, axis, atom), numeric, &
                                             thr_abs=ABS_THR, thr_rel=REL_THR)
                                  if (allocated(error)) return
@@ -2770,9 +2788,10 @@ contains
                            do axisA = 1, ndim
                               do j = 1, ndim
                                  do kk = 1, ndim
-                                    numeric = fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), &
-                                                         rr_rA_fwd(j, kk, axisA, iA), rr_rA_bwd(j, kk, axisA, iA), &
-                                                         rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE)
+                                    call fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), rr_rA_fwd(j, kk, axisA, iA), &
+                                                    rr_rA_bwd(j, kk, axisA, iA), rr_rA_bwd2(j, kk, axisA, iA), &
+                                                    STEP_SIZE, numeric, error)
+                                    if (allocated(error)) return
                                     call check(error, analytic(j, kk, axisA, iA, axisB, iB), &
                                                numeric, thr_abs=ABS_THR, thr_rel=REL_THR)
                                     if (allocated(error)) return
@@ -2868,7 +2887,8 @@ contains
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA(f_backward2)
-                        numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE)
+                        call fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE, numeric, error)
+                        if (allocated(error)) return
                         call check(error, deriv_rA(axis, atom), numeric, &
                                    thr_abs=ABS_THR, thr_rel=REL_THR)
                         if (allocated(error)) return
@@ -3184,8 +3204,9 @@ contains
                   call prim%f3_rr_rA(lsf1_rA=rA_bwd2, lsf3_rr_rA=dummy_rr_rA)
                   do atomA = 1, mol%nat
                      do axisA = 1, ndim
-                        numeric = fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), &
-                                             rA_bwd(axisA, atomA), rA_bwd2(axisA, atomA), STEP_SIZE)
+                        call fd4_scalar(rA_fwd2(axisA, atomA), rA_fwd(axisA, atomA), rA_bwd(axisA, atomA), &
+                                        rA_bwd2(axisA, atomA), STEP_SIZE, numeric, error)
+                        if (allocated(error)) return
                         call check(error, analytic(axisA, atomA, axisB, atomB), numeric, &
                                    thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                         if (allocated(error)) return
@@ -3268,9 +3289,10 @@ contains
                   do iA = 1, mol%nat
                      do axisA = 1, ndim
                         do jdir = 1, ndim
-                           numeric = fd4_scalar(r_rA_fwd2(jdir, axisA, iA), &
-                                                r_rA_fwd(jdir, axisA, iA), r_rA_bwd(jdir, axisA, iA), &
-                                                r_rA_bwd2(jdir, axisA, iA), STEP_SIZE)
+                           call fd4_scalar(r_rA_fwd2(jdir, axisA, iA), r_rA_fwd(jdir, axisA, iA), &
+                                           r_rA_bwd(jdir, axisA, iA), r_rA_bwd2(jdir, axisA, iA), STEP_SIZE, numeric, &
+                                           error)
+                           if (allocated(error)) return
                            call check(error, analytic(jdir, axisA, iA, axisB, iB), numeric, &
                                       thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                            if (allocated(error)) return
@@ -3336,8 +3358,9 @@ contains
                do i = 1, ndim
                   do j = 1, ndim
                      do kk = 1, ndim
-                        numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                             t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                        call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), t3_bwd2(i, j, kk), &
+                                        STEP_SIZE, numeric, error)
+                        if (allocated(error)) return
                         call check(error, analytic(i, j, kk, axis), numeric, &
                                    thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                         if (allocated(error)) return
@@ -3413,8 +3436,9 @@ contains
                   do i = 1, ndim
                      do j = 1, ndim
                         do kk = 1, ndim
-                           numeric = fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), &
-                                                t3_bwd(i, j, kk), t3_bwd2(i, j, kk), STEP_SIZE)
+                           call fd4_scalar(t3_fwd2(i, j, kk), t3_fwd(i, j, kk), t3_bwd(i, j, kk), t3_bwd2(i, j, kk), &
+                                           STEP_SIZE, numeric, error)
+                           if (allocated(error)) return
                            call check(error, analytic(i, j, kk, axis, atom), numeric, &
                                       thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                            if (allocated(error)) return
@@ -3496,9 +3520,10 @@ contains
                      do axisA = 1, ndim
                         do j = 1, ndim
                            do kk = 1, ndim
-                              numeric = fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), &
-                                                   rr_rA_fwd(j, kk, axisA, iA), rr_rA_bwd(j, kk, axisA, iA), &
-                                                   rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE)
+                              call fd4_scalar(rr_rA_fwd2(j, kk, axisA, iA), rr_rA_fwd(j, kk, axisA, iA), &
+                                              rr_rA_bwd(j, kk, axisA, iA), rr_rA_bwd2(j, kk, axisA, iA), STEP_SIZE, &
+                                              numeric, error)
+                              if (allocated(error)) return
                               call check(error, analytic(j, kk, axisA, iA, axisB, iB), &
                                          numeric, thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                               if (allocated(error)) return
@@ -3573,7 +3598,8 @@ contains
                   call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
                   call prim%normalized_f01_rA(f_backward2)
-                  numeric = fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE)
+                  call fd4_scalar(f_forward2, f_forward, f_backward, f_backward2, STEP_SIZE, numeric, error)
+                  if (allocated(error)) return
                   call check(error, deriv_rA(axis, atom), numeric, &
                              thr_abs=CFC_ABS_THR, thr_rel=CFC_REL_THR)
                   if (allocated(error)) return

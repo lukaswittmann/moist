@@ -454,6 +454,11 @@ contains
 
       call lsf%prepare(point, err)
       call check_moist_error(error, err, "LSF prepare failed")
+      if (allocated(error)) return
+
+      ! Repeated preparation must reset the cached derivative accumulators
+      call lsf%prepare(point, err)
+      call check_moist_error(error, err, "Repeated LSF prepare failed")
    end subroutine prepare_lsf
 
    !* ================================================================================= *!
