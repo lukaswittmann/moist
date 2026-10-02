@@ -1,235 +1,59 @@
 !> Adjoint-response half of the DROP surface Hessian
 !>
-!> [[get_surface_hessian_response_drop]] is the `J^T (d omega/dv)` term: the
-!> primal map is held fixed and the *folded* surface adjoints move, because
-!> [[prepare_surface_weights]] builds them out of `a`, `wleb`, `xi0` and the
-!> branch softmax. Driving `acc%w_a` and `acc%w_w` is what makes them move; an
-!> accumulator without those two channels has a geometry-independent `eff` and
-!> this half is then identically zero.
+!> - Response term: J^T times the derivative of folded surface adjoints
+!> - Moving channels: w_a, w_w, a, wleb, xi0, and branch softmax
+!> - Zero on an unbranched grid without moving w_a or w_w channels
 !>
-!> ## Ground truth
+!> ## Difference reference
 !>
-!> Write the shipped gradient as `G(R; acc) = Phi(R) . eff(R, acc)`, linear in
-!> `eff`. Central-differencing `G` along a nuclear direction gives
-!> `Phi' . eff + Phi . d(eff)`, the sum of *both* halves, so a reference for
-!> this half alone needs the first term removed. It is removed by subtraction,
-!> against a second accumulator whose folded weights are frozen:
+!> - Shipped gradient: G(R; acc) = Phi(R) . eff(R, acc)
+!> - Frozen accumulator: base-geometry w_xi and w_f, zero w_a and w_w,
+!>   other channels copied unchanged
+!> - Branched identity: response(acc) - response(acc_frozen)
+!>   = d/dv [G(R; acc) - G(R; acc_frozen)]
+!> - Subtraction at each stencil geometry before division by h
+!> - Unbranched frozen response: zero, asserted separately
+!> - Subtraction cases drive w_xi, w_f, w_a, and w_w
+!> - Frozen w_xyz, w_n, w_k1, w_k2: no contribution to this half
+!> - Combined case probes extra numerical cancellation
 !>
-!>     acc_frozen:  w_xi := eff(acc)%w_xi |_base,  w_f := eff(acc)%w_f |_base,
-!>                  w_a  := 0,                     w_w := 0
+!> | channels             | SvdW/plain, h = 2e-4 |
+!> |----------------------|-----------------------|
+!> | w_xi, w_f, w_a, w_w | 4.0e-11 absolute      |
+!> | + w_xyz, w_n        | 3.1e-10 absolute      |
+!> | + w_k1, w_k2        | 1.0e-8 absolute       |
 !>
-!> and the remaining channels copied unchanged. [[prepare_surface_weights]]
-!> then folds nothing, so `eff(R, acc_frozen)` reproduces `eff(acc)|_base`
-!> exactly at every geometry -- except through `branch_phi_adj`, which it
-!> re-derives from the moving grid. Hence the identity this suite asserts,
-!> which holds on a branched grid as well as on an unbranched one:
+!> - Curvature row: historical pre-2026-09-07 discriminant noise
+!> - Composite reference: dG/dv = H_fixed . v + response(acc, v)
+!> - Both rank-4 and per-direction fixed halves compared with one reference
+!> - Cross fixture: branch objective Hessian plus moving weight chain
+!>   reached through separate group and directional paths
 !>
-!>     response(acc) - response(acc_frozen)
-!>         ==  d/dv [ G(R; acc) - G(R; acc_frozen) ]
+!> ## Fixtures and branch scale
 !>
-!> Both `Phi'` terms cancel exactly, because the two accumulators share their
-!> base-geometry `eff`. On an unbranched grid `response(acc_frozen)` is
-!> identically zero and the left-hand side collapses to this half on its own;
-!> `frozen_response_is_zero` asserts that separately, so the subtraction cannot
-!> be hiding a term.
+!> - FIX_PLAIN: unbranched OCH triple; branch adjoint and tangent zero
+!> - FIX_CROSS: five-carbon cross, proj_level = 7, SvdW,
+!>   twelve live branch points at softened scale s = 2
+!> - Earlier scale s = 0.5: reference floor 1.5e-8
+!> - Difference floor: about 4 eps max|G| / h
+!> - Near-dead branch at s = 0.5: wbranch = 1.5e-4,
+!>   wleb = 8.6e-6, xi0 = 425; max|G| = 4721
+!> - Group adjoint: branch_phi_adj proportional to w_xi xi0 / (2 s)
+!> - Scale s = 2: larger branch weight, smaller xi0,
+!>   max|G| = 95.3 and reference floor near 8e-11
+!> - Production-sharp softmax: far branch pruned
 !>
-!> The subtraction is taken *inside* the stencil, one geometry at a time:
-!> `G(R; acc) - G(R; acc_frozen)` vanishes at the base geometry and grows
-!> linearly with the displacement, so everything the two gradients share is
-!> gone before the division by `h` rather than after it.
+!> ## Mutation sensitivity, measured 2026-10-01
 !>
-!> ## Which channels the subtraction tests drive, and why not all of them
-!>
-!> `w_xyz`, `w_n`, `w_k1` and `w_k2` are `source=`-copies of the raw adjoints
-!> (`weights.f90`), so their tangent is identically zero and they **cannot
-!> contribute to this half at all**. In the subtraction reference they are
-!> therefore pure ballast: an identical term in both gradients, cancelling
-!> analytically and costing precision numerically. The three subtraction cases
-!> drive `w_xi`, `w_f`, `w_a` and `w_w` -- every channel that can move -- and
-!> `svdw_plain_all_channels_fd` exists to *measure* what the four frozen ones
-!> cost when they are added back. They cost three orders:
-!>
-!> | channels driven                | svdw/plain, h = 2.0e-4    |
-!> |--------------------------------|---------------------------|
-!> | w_xi, w_f, w_a, w_w            | 4.0e-11 abs / 0    rel    |
-!> | + w_xyz, w_n                   | 3.1e-10 abs / 7.5e-11 rel |
-!> | + w_k1, w_k2                   | 1.0e-08 abs / 8.3e-09 rel |
-!>
-!> The curvature row is the near-umbilic amplification of the `kernel.f90`
-!> discriminant: the principal-curvature gap used to be formed as
-!> `sqrt(max(KM^2 - KG, 0))`, a difference of two `KM^2`-sized quantities that
-!> `apply_seed` then divides by (fixed 2026-09-07, so this table is the pre-fix
-!> measurement). It arrives here by a different route than in
-!> `test_cavity_drop_hessian_fixed`: `res%dk1` is not merely noisy on this
-!> fixture, it is *large*, so `w_k1 res%dk1` dominates both gradients and the
-!> live-frozen difference loses the digits it dominates. Nothing in this half
-!> reads a curvature response -- `deff%have_wk` is `.false.` by construction --
-!> so that row is a statement about the reference, not about the code under
-!> test. It is left in the suite as a failing case with a measured number
-!> rather than removed or given a tolerance of its own.
-!>
-!> ## The composite
-!>
-!> `both_halves_svdw` / `both_halves_cfc` are the first assertions in the
-!> project that run the two halves of the Hessian together:
-!>
-!>     d/dv [ G(R; acc) ]  ==  H_fixed . v  +  response(acc, v)
-!>
-!> Both halves are driven off one accumulator and one fold of it, the way
-!> `surface_hessian_halves` drives them: `prepare_surface_weights` is called
-!> once on the live `acc`, the fixed half is handed the resulting `eff`, and
-!> this half is handed `acc` and `eff` together. A live `w_a` or `w_w` is no
-!> obstacle to either -- the fixed half never sees the raw channels, and their
-!> motion is exactly what this half contributes. There is no subtraction in the
-!> composite's reference, so `w_xyz` and `w_n` are driven here as well; the
-!> curvature channels are not, because the fixed half is itself noise limited
-!> on them (see its own suite's header).
-!>
-!> The fixed half is asked for in both of its forms, the rank-4 block
-!> contracted with the directions and the per-direction columns, against the
-!> one differenced reference.
-!>
-!> `both_halves_svdw_cross` is the same assertion on the branching fixture, and
-!> the only differenced reference of the fixed half's branch terms: the second
-!> derivative of the branch objective ([[seed_contribution_tangent]]) and the
-!> weight chain of every seed with the branch weight moving. The fixed suite
-!> cannot difference them, because its reference needs a fold that does not
-!> move and `branch_phi_adj` does. The two forms of the fixed half reach the
-!> branch-weight motion by different routes -- the per-direction form takes it
-!> from the forward tangent, the rank-4 form closes it over each anchor group
-!> after the grid loop -- so the case is two independent checks of it. See
-!> "The mutations that shaped the branched composite" below.
-!>
-!> The *frozen* accumulator still exists in this suite, but only as a test
-!> device: `fd_surface_gradient` differences `G(acc) - G(acc_frozen)` at each
-!> stencil geometry so the halves' common content never reaches the difference
-!> quotient, and `frozen_response_is_zero` pins the other end of that device.
-!> It is no longer anything production code builds.
-!>
-!> ## Fixtures
-!>
-!>   * `FIX_PLAIN`, the asymmetric OCH triple, never branches. `wbranch` is
-!>     exactly one everywhere, `branch_phi_adj` and its tangent are identically
-!>     zero, and the composite above is available. SvdW and CFC.
-!>   * `FIX_CROSS`, the five-carbon cross at `proj_level = 7` with a softened
-!>     softmax (`s = 2.0`), does branch. That is the only fixture on which
-!>     `dbranch_phi_adj` is nonzero, and therefore the only one that can catch a
-!>     driver which drops the branch channel of pass 2 -- or, in the composite,
-!>     a fixed half which drops its branch terms. SvdW only.
-!>
-!> ## What the softmax temperature of the branched fixture buys
-!>
-!> `CROSS_BRANCH_S` was `0.5` until 2026-09-07, and at that value
-!> `svdw_cross_branching_fd` could not be made to pass at any step: it bottomed
-!> out at `1.5e-8`, a factor of 150 over the bound. The cause was not the
-!> derivative and not the stencil. It was `max|G|`.
-!>
-!> **The floor of a differenced reference is `~4 eps max|G| / h`**, where `max|G|`
-!> is the largest component of the gradient being differenced -- not of the
-!> derivative being checked. Measured on this fixture across six softmax
-!> temperatures, `floor * h / (eps max|G|)` stays in `3.5 .. 7.0` while `max|G|`
-!> itself moves by a factor of 134, so the law fixes the whole design:
-!>
-!> | `s`  | branched pts | `max|branch_phi_adj|` | `max|G|` | `floor * h` |
-!> |------|--------------|-----------------------|----------|-------------|
-!> | 0.25 |      0       |  0                    |   35.2   |   4e-14     |
-!> | 0.5  |     12       |  4.4e2                | **4721** |   5e-12     |
-!> | 1.0  |     12       |  2.4e1                |    338   |   2.9e-13   |
-!> | 2.0  |     12       |  4.0                  |   95.3   |   7.3e-14   |
-!> | 4.0  |     12       |  1.1                  |   57.3   |   6.0e-14   |
-!> | 8.0  |     12       |  3.8e-1               |   47.4   |   7.3e-14   |
-!>
-!> At `s = 0.5` a floor under `1e-10` needs `h > 4 eps * 4721 / 1e-10`, about
-!> `5e-2` Bohr. No stencil reaches that -- the grid guard would fire first and
-!> the truncation term of any order would be enormous there -- which is why two
-!> rounds of step tuning on this case failed and had to.
-!>
-!> **What made `max|G|` 4721 rather than 35.** The gradient carries
-!> `branch_phi_adj` and nothing else on this fixture is remotely that large; the
-!> table's first and last rows bracket it, a grid with no branches at all and a
-!> grid with the same twelve branch points but a negligible branch adjoint both
-!> sitting near 40. The twelve points are six anchor groups of two, each a live
-!> branch and one that is all but dead, and the dead one is the problem. At
-!> `s = 0.5` it carried `wbranch = 1.5e-4` and `wleb = 8.6e-6` against the live
-!> branch's `0.9998` and `0.268`. Since the Gaussian width goes as
-!> `xi0 ~ wleb^(-1/2)`, that put `xi0 = 425` next to a live `2.50` -- a factor
-!> of 170, which is `sqrt(3.1e4)` exactly. [[branch_point_adjoint]] forms
-!> `-0.5 w_xi xi0 / wbranch` and the group reduction multiplies `wbranch` back
-!> in, so what survives is `branch_phi_adj ~ w_xi xi0 / (2 s)`: the `wbranch`
-!> cancels and the width does not. **A dying branch does not stop contributing
-!> as its weight goes to zero -- its adjoint grows, because its Lebedev weight
-!> is what is going to zero and `xi0` is that weight to the `-1/2`.**
-!>
-!> Raising `s` to `2.0` shares the group weight more evenly, which lifts the
-!> dead branch's `wleb` and collapses its `xi0`. `max|G|` falls 50-fold, the
-!> floor falls with it, and the case passes -- see `FD_STEPS` for the step this
-!> then requires, which is larger, not smaller.
-!>
-!> Two things this is *not*. It is not a cancellation: `adj_m - mean_adj_branch`
-!> inside [[compute_branch_phi_adj]] was checked at every branched point and the
-!> two differ by four orders, never by less. And it is not a production concern:
-!> at the production temperature the same branch is not kept alive at all -- the
-!> `s = 0.25` row above already has no branches -- so a branch that survives a
-!> sharp softmax is genuinely near-degenerate and has neither a tiny `wleb` nor
-!> a huge `xi0`. The pathology belongs to a far solution held open by a softened
-!> softmax, which is what this fixture is made of.
-!>
-!> ## The mutation that shaped the branched case
-!>
-!> `deff%branch_phi_adj` was zeroed after pass 2 in
-!> `derivatives/hessian_traverse.f90` and the suite re-run:
-!>
-!>   * `svdw_cross_branching_fd` fails at `4.3069029e-1` absolute and `3.24e-2`
-!>     relative -- worst component atom 2 axis 3, direction 1, analytic
-!>     `12.8716481` against a reference of `13.3023384`. That is nine and a half
-!>     orders above the fixture's floor of `~8e-11`;
-!>   * the number is *identical in every printed digit at both steps*,
-!>     `4.306903e-1` at `h = 1.1e-3` and at `h = 8.0e-4`. A step-independent
-!>     deviation is a missing term, not a stencil artefact, and that is the
-!>     cleanest part of the signature;
-!>   * every `FIX_PLAIN` case is unchanged, bit for bit, including the two
-!>     composites and the all-channel case. `branch_phi_adj` is structurally
-!>     zero there, so a driver that drops it is invisible to an unbranched
-!>     fixture -- which is why one branched fixture is worth its cost.
-!>
-!> ## The mutations that shaped the branched composite
-!>
-!> Four, in `derivatives/hessian_traverse.f90` and `derivatives/seeds.f90`,
-!> measured 2026-10-01 on `both_halves_svdw_cross` as the worst absolute
-!> deviation against a floor of `~1.5e-10` and a `max |Hv|` of `167`. Every one
-!> is step independent to the printed digits, the signature of a missing term:
-!>
-!> | mutation                                            | rank-4    | per direction |
-!> |-----------------------------------------------------|-----------|---------------|
-!> | branch term of `seed_contribution_tangent` dropped  | `7.73`    | `7.73`        |
-!> | anchor seeds' shift tangent dropped                 | `4.10`    | `4.10`        |
-!> | rank-4 group pass skipped                           | `13.62`   | unchanged     |
-!> | per-direction `d(wbranch)` zeroed                   | unchanged | `13.62`       |
-!>
-!> The last two rows are why the composite asks for both forms: each carries
-!> the branch-weight motion in code the other never runs. Dropping only the
-!> `d(xi0)` part of that motion reproduces the `13.62` exactly, and that is
-!> not a coincidence: a seed's width response is `-0.5 xi0 dwleb/wleb`, the
-!> ratio `dwleb/wleb` does not see the branch weight at all, and so the whole
-!> motion reaches the chain through `xi0` -- the `d(wleb)` and `d(wbranch)`
-!> inputs cancel each other identically, and dropping one of them alone
-!> doubles the miss to `27.23`. Every `FIX_PLAIN` case is unchanged by all of
-!> them, bit for bit.
-!>
-!> ## Step and grid guard
-!>
-!> `FD_STEPS`, `COMPOSITE_STEPS` and `CROSS_COMPOSITE_STEPS` are measured; the
-!> sweeps are in the comments on those parameters. The grid is guarded at every stencil geometry
-!> ([[assert_grid_match]]) on `numbering`, `owner`, `branch_count` and
-!> `anchor_id`, so a step large enough to re-enumerate the grid fails loudly
-!> instead of putting a step into the reference.
-!>
-!> The guard matters more than it did: the shipped steps are four times the
-!> fourth-order ones they replaced, and a seven-point stencil reaches `3h`
-!> rather than `2h`. It was swept and does not fire anywhere the sweeps above
-!> go -- the largest displacement any of them applies is `3 * 3.0e-3`, nine
-!> times the `1e-3` reach of the shipped `FD_STEPS(1)`, on both fixtures and
-!> both level-set models.
+!> - Zeroed branch_phi_adj tangent: 0.43069029 absolute error at both steps
+!> - Cross composite reference floor: about 1.5e-10
+!> - Dropped branch seed term: 7.73 error in both fixed forms
+!> - Dropped anchor shift tangent: 4.10 error in both forms
+!> - Skipped rank-4 group pass: 13.62 error in rank-4 form
+!> - Zeroed directional branch tangent: 13.62 error in per-direction form
+!> - Dropped width response: 13.62 error; dropped one input: 27.23
+!> - Grid guard: numbering, owner, branch_count, and anchor_id
+!> - Seven-point stencil reach: 3h; swept through 3 * 3e-3
 module test_cavity_drop_hessian_response
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -267,14 +91,14 @@ module test_cavity_drop_hessian_response
    !> Pinned rather than merely asserted nonzero, because `CROSS_BRANCH_S` also
    !> sets the admissible branch radius --
    !> `branch_rho_cut = log(1/wleb_cut) sqrt(branch_weight_s)` -- so raising it
-   !> from `0.5` to `2.0` on 2026-09-07 doubled that radius. Branch *discovery*
+   !> from `0.5` to `2.0` on 2026-09-07 doubled that radius; branch *discovery*
    !> on this geometry is known to be platform dependent (the 4.4 Bohr secondary
    !> minimum sits at the edge of the multistart seed rings), and a platform that
    !> admitted a different set would change `max|G|` and with it the round-off
-   !> floor the steps are chosen against. This count was stable at
+   !> floor the steps are chosen against; this count was stable at
    !> `s = 0.5, 1, 2, 4, 8` here, a sixteen-fold range; if it ever fires
    !> elsewhere, re-measure `max|G|` and the sweep in the comment on `FD_STEPS`
-   !> rather than adjusting the number.
+   !> rather than adjusting the number
    integer, parameter :: CROSS_BRANCHED_PTS = 12
    integer, parameter :: CROSS_MAX_BRANCH = 2
 
@@ -304,28 +128,28 @@ module test_cavity_drop_hessian_response
    !> | 3.0e-4 | 2.40e-10   | 1.31e-10   | 1.06e-10   | 2.49e-10 * |
    !>
    !> **Read the table by columns, not by rows.** The two walls move
-   !> independently. Truncation is `O(h^6)` and is set by the level-set model:
+   !> independently; truncation is `O(h^6)` and is set by the level-set model:
    !> `cfc/plain` is twelve times `svdw/plain` at `3e-3` and is what closes the
    !> window from above, at about `1.2e-3`. Round-off is `~4 eps max|G| / h` and
    !> is set by the fixture: `svdw/cross` carries the largest `max|G|` of the
    !> four and is what closes it from below, at about `7e-4`. Everything in
    !> between is one flat, jittery bottom near `5e-11`; the ordering inside it is
-   !> noise and must not be read as a trend.
+   !> noise and must not be read as a trend
    !>
-   !> The pair below sits in that window, a factor of 1.375 apart. Both are
+   !> The pair below sits in that window, a factor of 1.375 apart; both are
    !> required, so a value that agrees at one step only -- the signature of a
-   !> step sitting on a wall -- fails. Worst excess over the whole suite,
+   !> step sitting on a wall -- fails; worst excess over the whole suite,
    !> `max(|d|/FD_ABS, |d|/(FD_REL |ref|))` minimised per component as the test
    !> does, is `0.57`, so both bounds can be tightened by `1.75` before anything
-   !> breaks; it is bit-identical across repeated runs and thread counts.
+   !> breaks; it is bit-identical across repeated runs and thread counts
    !>
    !> **Before moving these, read the module header's floor law.** The window is
-   !> a property of `max|G|`, and `max|G|` is a property of the fixtures. If a
+   !> a property of `max|G|`, and `max|G|` is a property of the fixtures; if a
    !> fixture changes, `4 eps max|G| / 1e-10` is the smallest step that can still
    !> work, and no stencil order will rescue a step below it -- raising the order
-   !> only moves the *upper* wall. That is the whole reason this reference is
+   !> only moves the *upper* wall; that is the whole reason this reference is
    !> `O(h^6)`: the steps it needs are ten times larger than the fourth-order
-   !> ones it replaced, which is the opposite of the usual instinct.
+   !> ones it replaced, which is the opposite of the usual instinct
    !>
    !> The subtraction is why these columns bottom out two orders below what the
    !> sibling suites reach: `G(acc) - G(acc_frozen)` is formed at each stencil
@@ -333,7 +157,7 @@ module test_cavity_drop_hessian_response
    !> term, most of the projection's own round-off -- never reaches the
    !> difference quotient. `svdw/cross` benefits like the rest but is still the
    !> column that closes the window from below, for the plain reason that its
-   !> `max|G|` is the largest of the four: `95` against `40` on `FIX_PLAIN`.
+   !> `max|G|` is the largest of the four: `95` against `40` on `FIX_PLAIN`
    !>
    !> **Historical.** At fourth order and `CROSS_BRANCH_S = 0.5` the shipped pair
    !> was `[3.0e-4, 2.5e-4]` and no pair passed the suite; the failure counts of
@@ -341,7 +165,7 @@ module test_cavity_drop_hessian_response
    !> `[1.5e-4, 1.0e-4] 4`, `[2.0e-4, 1.5e-4] 4`, `[2.5e-4, 2.0e-4] 3`,
    !> `[3.0e-4, 2.5e-4] 1`, `[4.0e-4, 3.0e-4] 2`, `[6.0e-4, 4.0e-4] 4`,
    !> `[1.0e-3, 6.0e-4] 4`. The one survivor was `svdw_cross_branching_fd`, and
-   !> the header explains why it could not have been tuned away.
+   !> the header explains why it could not have been tuned away
    real(wp), parameter :: FD_STEPS(2) = [1.1E-3_wp, 8.0E-4_wp]
 
    !> Central-difference steps of the composite assertion
@@ -368,10 +192,10 @@ module test_cavity_drop_hessian_response
    !>
    !> The two models track each other here, unlike in the subtraction sweep:
    !> both walls are properties of the shipped gradient, which is the same
-   !> object in both. Truncation closes the window at about `1.1e-3` and the
+   !> object in both; truncation closes the window at about `1.1e-3` and the
    !> bottom is flat from there down past `4e-4` -- the round-off wall of
-   !> `FIX_PLAIN` is far enough below that this sweep never reaches it. The pair
-   !> below sits mid-window, a factor of 1.5 apart, worst excess `0.51`.
+   !> `FIX_PLAIN` is far enough below that this sweep never reaches it; the pair
+   !> below sits mid-window, a factor of 1.5 apart, worst excess `0.51`
    !>
    !> **This sweep is the before-and-after of the stencil change.** At `O(h^4)`
    !> the bowl bottomed at `1.4e-4` and the absolute column never went under
@@ -381,14 +205,14 @@ module test_cavity_drop_hessian_response
    !> `1.29e-10` to `2.50e-11`, and the shipped pair from `5.06e-10`/`2.60e-10`
    !> to `5.18e-11`/`5.12e-11` -- five-fold at the bottom, five to ten at the
    !> pair -- and widens the window by an order, at four extra cavity builds per
-   !> step.
+   !> step
    real(wp), parameter :: COMPOSITE_STEPS(2) = [9.0E-4_wp, 6.0E-4_wp]
 
    !> Central-difference steps of the composite assertion on the branching fixture
    !>
    !> The same reference on `FIX_CROSS`, whose shipped gradient is larger --
    !> `max |Hv| = 167` against `49` on `FIX_PLAIN` -- so the round-off wall
-   !> `~4 eps max|G| / h` sits higher and the window further up. Worst absolute
+   !> `~4 eps max|G| / h` sits higher and the window further up; worst absolute
    !> deviation over both directions, and the worst excess
    !> `max(min(|d|/FD_ABS, |d|/(FD_REL |ref|)))` the comparison actually takes;
    !> the two forms of the fixed half agree to three digits in every cell:
@@ -413,8 +237,8 @@ module test_cavity_drop_hessian_response
    !> gets under `FD_ABS` on its largest components and passes on the relative
    !> bound, at `1e-12` of `max |Hv|`. The plain fixture's pair would pass too
    !> (`0.72`, `0.42`) but sits on the round-off side, one step from the
-   !> `5e-4` that fails. The pair below is where truncation and round-off meet,
-   !> worst excess `0.29`.
+   !> `5e-4` that fails; the pair below is where truncation and round-off meet,
+   !> worst excess `0.29`
    real(wp), parameter :: CROSS_COMPOSITE_STEPS(2) = [1.2E-3_wp, 1.0E-3_wp]
 
    !> Finite-difference agreement bounds
@@ -423,20 +247,20 @@ module test_cavity_drop_hessian_response
    !> fails only when it misses *both*. **Every case in this suite meets it**,
    !> with `1.75` in hand -- the worst excess over all nine tests, both steps
    !> and both directions is `0.57`, measured by the same `min` of the two
-   !> ratios the comparison takes.
+   !> ratios the comparison takes
    !>
-   !> The suite carried two documented exceptions and has neither any more.
+   !> The suite carried two documented exceptions and has neither any more
    !> `svdw_plain_all_channels_fd` was a deliberate miss at `1.0e-8`, charged to
    !> "the curvature channels' known amplification"; that amplification was the
-   !> `sqrt(KM^2 - KG)` cancellation in `kernel.f90`, fixed 2026-09-07.
+   !> `sqrt(KM^2 - KG)` cancellation in `kernel.f90`, fixed 2026-09-07
    !> `svdw_cross_branching_fd` was a deliberate miss at `1.5e-8`, charged to
    !> the branched fixture's own round-off floor; that floor was `max|G|`, and
-   !> the module header has what it was made of and what moved it.
+   !> the module header has what it was made of and what moved it
    !>
-   !> Neither was given a tolerance of its own, and neither should be. A
+   !> Neither was given a tolerance of its own, and neither should be; A
    !> per-case bound here would have hidden both diagnoses: the curvature one
    !> was a real defect in shipped code, and the branch one was a fixture
-   !> parameter that also cost the case nine orders of discriminating power.
+   !> parameter that also cost the case nine orders of discriminating power
    real(wp), parameter :: FD_ABS = 1.0E-10_wp
    real(wp), parameter :: FD_REL = 1.0E-10_wp
 
@@ -493,12 +317,12 @@ contains
    !> Every channel at once, the four with a zero tangent included
    !>
    !> **Expected to fail at the project bound, at `1.0e-8`.** The four channels
-   !> it adds cannot contribute to this half -- their tangent is identically
-   !> zero -- so they only add a common term to both gradients of the reference,
+   !> Frozen-channel tangents vanish in this response half
+   !> - Common terms in both reference gradients,
    !> and the curvature pair's near-umbilic magnitude is what the subtraction
-   !> then loses its digits to. Kept because the number is worth recording and
+   !> then loses its digits to; kept because the number is worth recording and
    !> would otherwise be invisible; see the module header for the
-   !> channel-by-channel table.
+   !> channel-by-channel table
    !>
    !> @param[out] error Error handle
    subroutine test_svdw_plain_all(error)
@@ -511,13 +335,13 @@ contains
    !> SvdW on the branching fixture
    !>
    !> The only case in which `dbranch_phi_adj` is nonzero, and the only reason
-   !> `FIX_CROSS` is built at all. It failed at `1.5e-8` until 2026-09-07, when
+   !> `FIX_CROSS` is built at all; it failed at `1.5e-8` until 2026-09-07, when
    !> `CROSS_BRANCH_S` went from `0.5` to `2.0`; the module header has why that
    !> is a fifty-fold cut in the reference's round-off floor rather than a
-   !> loosened fixture. It is now the *most* discriminating case in the suite as
+   !> loosened fixture; it is now the *most* discriminating case in the suite as
    !> well as a passing one: zeroing the branch channel of pass 2 moves it by
    !> `0.43`, nine and a half orders over its floor and step-independent to
-   !> every printed digit.
+   !> every printed digit
    !>
    !> @param[out] error Error handle
    subroutine test_svdw_cross(error)
@@ -624,8 +448,8 @@ contains
    !> SvdW on the branching fixture: both halves reproduce the differenced gradient
    !>
    !> The differenced reference of the fixed half's branch terms, in both forms
-   !> of that half; the module header has what it is the only check of, and the
-   !> mutations it was measured against.
+   !> - Cross-fixture reference isolates fixed-half branch terms
+   !> - Mutation sensitivity measured in the module header
    !>
    !> @param[out] error Error handle
    subroutine test_both_halves_cross(error)
@@ -637,9 +461,9 @@ contains
 
    !> Central-difference the shipped gradient against the sum of both halves
    !>
-   !> The fixed half is taken in both of its forms, against one reference. The
+   !> The fixed half is taken in both of its forms, against one reference; the
    !> steps are the fixture's: the branching one has the higher round-off wall,
-   !> see `CROSS_COMPOSITE_STEPS`.
+   !> see `CROSS_COMPOSITE_STEPS`
    !>
    !> @param[in]  fix_kind Geometry of the fixture
    !> @param[in]  lsf_kind Level-set model
@@ -699,7 +523,7 @@ contains
       !* ------------------------------- The fixed half -------------------------------- *!
       ! Asked for with the live accumulator's own fold, exactly as
       ! `surface_hessian_halves` asks for it: the half takes the folded weights
-      ! and the composite folds once for both halves.
+      ! and the composite folds once for both halves
       call seed_adjoint(cavity, channels, .false., eff_xi, eff_f, acc, error)
       if (allocated(error)) return
       call prepare_surface_weights(cavity, acc, .true., eff)
@@ -757,11 +581,11 @@ contains
       if (allocated(error)) return
 
       !* ----------------------- The fixed half, per direction ------------------------ *!
-      ! The other form of the fixed half against the same reference. On the
+      ! The other form of the fixed half against the same reference; on the
       ! plain fixture the fixed suite already differences it; on the branching
       ! one this is where its branch terms are differenced, and it takes the
       ! branch-weight tangent from the forward tangent where the rank-4 form
-      ! above closes it over the anchor groups.
+      ! above closes it over the anchor groups
       allocate (cols(ndim, nsph, NDIR), source=0.0_wp)
       call cavity%get_surface_hessian_fixed_dirs(eff, dirs, cols, cav_error)
       if (allocated(cav_error)) then
@@ -785,9 +609,9 @@ contains
    !>
    !> With `w_a` and `w_w` zero the folds do nothing, and without a branched
    !> anchor `branch_phi_adj` is identically zero, so every channel pass 2 emits
-   !> is exactly zero and so is the contraction. This is an identity rather than
+   !> is exactly zero and so is the contraction; this is an identity rather than
    !> a tolerance, and it is what licenses reading the subtraction identity of
-   !> `svdw_plain_fd` as a statement about this half alone.
+   !> `svdw_plain_fd` as a statement about this half alone
    !>
    !> @param[out] error Error handle
    subroutine test_frozen_response_is_zero(error)
@@ -902,10 +726,10 @@ contains
    !>
    !> `O(h^4)`. A three-point stencil leaves a truncation error that, at a step
    !> small enough to keep the grid stable, still sits orders above the
-   !> round-off floor of the subtraction. The subtraction itself is done at each
+   !> round-off floor of the subtraction; the subtraction itself is done at each
    !> stencil geometry rather than between two finished derivatives, so the two
    !> gradients' common content -- including the whole fixed half -- never
-   !> reaches the difference quotient.
+   !> reaches the difference quotient
    !>
    !> @param[in]  mol      Base structure
    !> @param[in]  ref_cav  Base cavity, for the grid comparison
@@ -949,8 +773,8 @@ contains
       !> Sixth order rather than fourth because the round-off floor of this
       !> reference is set by `max|G|` and cannot be lowered by taking a smaller
       !> step; the only way under the project bound is to take a *larger* one,
-      !> and that needs the truncation term of a higher-order stencil. See the
-      !> comment on `FD_STEPS`.
+      !> and that needs the truncation term of a higher-order stencil; see the
+      !> comment on `FD_STEPS`
       integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
       real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
                                          45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
@@ -1036,8 +860,8 @@ contains
       !> The same order the subtraction reference uses, for the same reason and
       !> with a smaller payoff: this one differences the shipped gradient rather
       !> than a difference of two, so its floor was always `eps max|G| / h` and
-      !> was already the binding wall at fourth order. The sweep in the comment
-      !> on `COMPOSITE_STEPS` has the before and after.
+      !> was already the binding wall at fourth order; the sweep in the comment
+      !> on `COMPOSITE_STEPS` has the before and after
       integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
       real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
                                          45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
@@ -1078,7 +902,7 @@ contains
    !>
    !> The whole block is scanned before anything is reported: the deviation this
    !> suite exists to expose is the worst one, and failing on the first
-   !> component over the bound would name an arbitrary early one instead.
+   !> component over the bound would name an arbitrary early one instead
    !>
    !> @param[in]  analytic Analytic block `(3, nsph, NDIR)`
    !> @param[in]  fd       Differenced reference `(3, nsph, NDIR, nstep)`
@@ -1325,7 +1149,7 @@ contains
    !> would silently put a step into the reference. `branch_count` and
    !> `anchor_id` are compared as well as `numbering` and `owner`, because a
    !> group that re-enumerates without changing the point set would corrupt the
-   !> branch stage alone. This assertion is what bounds the step from above.
+   !> branch stage alone; this assertion is what bounds the step from above
    !>
    !> @param[in]  ref   Reference cavity
    !> @param[in]  cav   Displaced cavity
@@ -1391,7 +1215,7 @@ contains
    !> `w_f` are what they fold into. `w_xyz` and `w_n` have an identically zero
    !> tangent and ride along for realism: they cost the subtraction an order of
    !> precision and are still inside the bound, while the curvature pair costs
-   !> two more and is not -- see the channel table in the module header.
+   !> two more and is not -- see the channel table in the module header
    !>
    !> @return Channel identifiers
    pure function moving_channels() result(channels)
@@ -1416,13 +1240,13 @@ contains
    !> Mirrors [[prepare_surface_weights]] with `fold_switching = .true.`; the
    !> two folds are the only geometry-dependent part of it, and the guards it
    !> takes are unconditional here because [[point_weight]] is bounded well away
-   !> from `seed_weight_tol = 1e-30`.
+   !> from `seed_weight_tol = 1e-30`
    !>
-   !> This is a deliberate duplication of three lines of production code. The
+   !> is a deliberate duplication of three lines of production code; the
    !> frozen accumulator needs the folded weights *as raw channels*, which is
    !> not what [[prepare_surface_weights]] returns, so the fold is transcribed
-   !> rather than called. It does not have to be bit-for-bit -- a one-ulp drift
-   !> enters the identity as `Phi' . (E' - E)`, some `1e-14` of the reference.
+   !> rather than called; it does not have to be bit-for-bit -- a one-ulp drift
+   !> enters the identity as `Phi' . (E' - E)`, some `1e-14` of the reference
    !>
    !> @param[in]  cavity   Cavity supplying the grid
    !> @param[in]  channels Adjoint channels the accumulator carries
@@ -1462,10 +1286,10 @@ contains
    !>
    !> The live accumulator is a pure function of the persistent point id
    !> `cavity%numbering`, so the same weights are reproduced on a displaced grid
-   !> without an explicit mapping. The frozen one replaces the width and
+   !> without an explicit mapping; the frozen one replaces the width and
    !> switching channels by the base-geometry *folded* weights and zeroes `w_a`
    !> and `w_w`, so [[prepare_surface_weights]] folds nothing and returns those
-   !> same weights at every geometry.
+   !> same weights at every geometry
    !>
    !> @param[in]  cavity   Cavity supplying the grid
    !> @param[in]  channels Channel identifiers to populate
@@ -1569,7 +1393,7 @@ contains
    !>
    !> Varies across the grid so that a term which happens to cancel for uniform
    !> weights still shows up, and is bounded well away from zero so that no
-   !> channel is accidentally switched off.
+   !> channel is accidentally switched off
    !>
    !> @param[in] id      Persistent point id, `cavity%numbering`
    !> @param[in] channel Channel selector
@@ -1593,10 +1417,10 @@ contains
    !> The two nuclear directions pushed through in one call
    !>
    !> Direction 1 moves a single atom along a single axis -- the sparsest
-   !> column, and the one a wrong influence set would zero out. Direction 2
+   !> column, and the one a wrong influence set would zero out; direction 2
    !> moves every atom along its own vector and is not a rigid translation, so
-   !> nothing about it cancels. Both go through in one call, so the per-point
-   !> direction loop is exercised rather than a degenerate `ndir = 1` path.
+   !> nothing about it cancels; both go through in one call, so the per-point
+   !> direction loop is exercised rather than a degenerate `ndir = 1` path
    !>
    !> @param[in]  nsph Number of spheres
    !> @param[out] dirs Nuclear directions `(3, nsph, NDIR)`

@@ -1,39 +1,20 @@
-!> The nuclear Hessian of the general solvation model
+!> Nuclear Hessian of the general solvation model
 !>
-!> `solvation_model_general%get_hessian` is, by definition, the derivative of
-!> `get_gradient` at fixed host coupling data. The reference here is exactly
-!> that: the shipped model gradient, central-differenced over rebuilt models,
-!> so every moving part -- the cavity's second derivatives, the geometry
-!> dependence of the weight fold, and the components' own adjoint response
-!> through [[surface_adjoint_response_type]] -- is differentiated together.
-!>
-!> Two components on a DROP cavity carry a complete second-order surface
-!> channel and are driven here: PV, whose adjoints move with every observable
-!> they read, and CPCM on the point-charge potential source, whose adjoints
-!> move with the surface, the nuclei and the re-solved surface charges. The
-!> assertions, each for both components:
-!>
-!>   * `*_hessian_fd`: the analytic model Hessian against the differenced
-!>     model gradient, at two steps, absolute *or* relative;
-!>   * `*_cross_hessian_fd`: the same on the branching fixture `FIX_CROSS`,
-!>     whose Lebedev weights carry a softmax branch factor. The only
-!>     model-level check of the cavity Hessian's branch terms, and of the
-!>     components' adjoint response on a grid that has them: the response is
-!>     driven by a surface tangent whose weight, width and area channels all
-!>     move with the branch weight;
-!>   * `*_frozen_misses_response`: the cavity's frozen-adjoint block, built
-!>     from the same surface weights without the model's response, must miss
-!>     that reference by a wide margin. Both blocks are symmetric and both
-!>     pass every structural check, so only this separates a working response
-!>     channel from an absent one;
-!>   * `*_hvp_matches_dense`: the per-direction entry reproduces the dense
-!>     block, to the bit on unit directions;
-!>   * `pv_linearity`: two PV components at `p1` and `p2` give the Hessian of
-!>     one at `p1 + p2`, so the response of a second component is added and
-!>     not overwritten;
-!>   * `hessian_guards`: an un-updated model and a component without a
-!>     second-order channel (CPCM on an external potential, whose host data
-!>     carry no response) are refused by name.
+!> - Reference: central difference of the shipped model gradient over rebuilt
+!>   models, with host coupling data fixed
+!> - Moving terms: cavity geometry, weight fold, and component adjoint response
+!>   through [[surface_adjoint_response_type]]
+!> - PV: adjoints of every sampled observable
+!> - Point-charge CPCM: surface, nuclear, and re-solved charge response
+!> - `*_hessian_fd`: dense Hessian against the gradient reference at two steps
+!> - `*_cross_hessian_fd`: same comparison on branched `FIX_CROSS`, including
+!>   branch motion in weight, width, area, and component response
+!> - `*_frozen_misses_response`: required gap between the fixed-adjoint block
+!>   and the full reference despite symmetry of both blocks
+!> - `*_hvp_matches_dense`: unit-direction products against dense columns
+!> - `pv_linearity`: sum of two PV components against one at `p1 + p2`
+!> - `hessian_guards`: named rejection of an un-updated model and CPCM with
+!>   an external potential lacking second-order host response
 module test_model_general_hessian
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -82,13 +63,13 @@ module test_model_general_hessian
    !> agrees at one step only still fails
    real(wp), parameter :: FD_STEPS(*) = [3.0E-4_wp, 2.5E-4_wp]
 
-   !> Agreement bound, absolute *and* relative: a component fails only when
-   !> it misses both
+   !> Agreement bound, absolute *and* relative
+   !> - Failure only when both bounds are missed
    !>
    !> Measured, worst over the block and both steps: `2.1e-10` at `3e-4` and
    !> `3.3e-10` at `2.5e-4` on a block whose largest entry is `87`, the
    !> reference's round-off floor at this pressure (the volume Hessian of the
-   !> cavity suite measures `9.4e-11` at unit pressure).
+   !> cavity suite measures `9.4e-11` at unit pressure)
    real(wp), parameter :: HESS_TOL = 8.0E-10_wp
 
    !> The same bound for the CPCM block, measured separately: worst `2.2e-13`
@@ -107,10 +88,10 @@ module test_model_general_hessian
    !> (`2.7e-9`, `5.4e-9`, `1.2e-8`) while the analytic block is symmetric to
    !> `3.0e-12`. The floor is the fixture's, see the response suite's header:
    !> a softened softmax keeps near-dead branches alive, and their gradient
-   !> noise is what a difference quotient amplifies. Truncation takes over
+   !> noise is what a difference quotient amplifies; truncation takes over
    !> above `4e-4` (`5.0e-9` at `5e-4`, `3.3e-8` at `8e-4`), so no step does
-   !> better. The CPCM block on the same fixture needs no bound of its own:
-   !> `1.7e-13` at both steps on a block of `8.6e-3`.
+   !> better; the CPCM block on the same fixture needs no bound of its own:
+   !> `1.7e-13` at both steps on a block of `8.6e-3`
    real(wp), parameter :: HESS_TOL_PV_CROSS = 8.0E-9_wp
 
    !> Symmetry bound of the analytic block, relative to its largest entry
@@ -122,7 +103,7 @@ module test_model_general_hessian
    !> How far the frozen block must miss the reference, in units of `HESS_TOL`
    !>
    !> Measured: `28.3` absolute on a block whose largest entry is `92`, nine
-   !> decades over the bound.
+   !> decades over the bound
    real(wp), parameter :: TEETH_FACTOR = 1.0E2_wp
 
    !> Agreement of the per-direction entry with the dense block
@@ -318,7 +299,7 @@ contains
    !> Assert that the model's DROP cavity carries a multi-branch anchor group
    !>
    !> The precondition of the branching cases: on a cross that quietly stopped
-   !> branching they would pass for the reasons the plain ones do.
+   !> branching they would pass for the reasons the plain ones do
    !>
    !> @param[in]  model Updated model
    !> @param[out] error Error handle

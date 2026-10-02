@@ -31,6 +31,7 @@ tests = [
   'cavity_drop_hessian_e2e',
   'cavity_drop_hessian_omega',
   'cavity_drop_weights_tangent',
+  'cavity_drop_branching',
   'cavity_drop_cfc',
   'cavity_drop_lsf',
   'cavity_drop_lsf_golden',

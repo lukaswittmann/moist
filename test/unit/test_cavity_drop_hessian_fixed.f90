@@ -1,140 +1,33 @@
 !> Fixed-adjoint half of the DROP surface Hessian
 !>
-!> [[get_surface_hessian_fixed_drop]] is the first piece of the Hessian scheme
-!> that can be checked against production code end to end. Everything below it
-!> is verified by finite-differencing a neighbouring primitive; this suite
-!> central-differences the *shipped* [[get_surface_gradient_drop]] along a
-!> nuclear direction with the surface adjoints held fixed, and compares that
-!> against the rank-4 result contracted with the same direction:
+!> - Reference: central difference of shipped get_surface_gradient_drop
+!>   along nuclear directions, with surface adjoints fixed
+!> - Comparison: rank-4 Hessian contraction against directional differences
+!> - Fixture restriction: geometry-independent effective weight fold
+!> - No w_a or w_w; assert_frozen_eff pins branch_count and wbranch
+!> - Folded weights prepared at every stencil geometry
+!> - Frozen adjoints indexed by persistent cavity%numbering
+!> - Grid guard: identical point ids and owners after displacement
+!> - Moving-fold cases covered by response and end-to-end suites
 !>
-!>     sum_{gamma, B} H(:, A, gamma, B) v(gamma, B)
-!>         ==  [ g(R + h v) - g(R - h v) ] / (2 h)
+!> ## Numerical floor and stencil
 !>
-!> **The identity holds only where the effective weights are geometry
-!> independent.** [[prepare_surface_weights]] folds `w_a` and `w_w` into `w_xi`
-!> and `w_f` through geometry-dependent grid data, and derives `branch_phi_adj`
-!> from the branch softmax. This fixture therefore never populates `w_a` or
-!> `w_w`, and [[assert_frozen_eff]] pins the primal quantities the remaining
-!> fold reads -- `branch_count` and `wbranch` -- at every geometry of every
-!> stencil, so the suite fails loudly rather than silently if a future fixture
-!> starts branching.
-!>
-!> That restriction is the *suite's*, not the routine's. The half under test no
-!> longer folds anything: it takes a `drop_surface_weights_type` that
-!> [[prepare_surface_weights]] has already produced, exactly as `hessian.f90`
-!> hands it one. Each stencil geometry here therefore folds its own accumulator
-!> and passes the result, and the differenced reference stays a statement about
-!> this half alone only because the fold is geometry independent on this
-!> fixture. What the composite does with a moving fold is the response suite's
-!> and the end-to-end suite's business.
-!>
-!> The frozen adjoints are a pure function of the persistent point id
-!> `cavity%numbering`, not of the grid slot, because the grid is filtered and
-!> reordered on every rebuild. [[assert_grid_match]] additionally requires the
-!> displaced grids to carry exactly the same points with the same owners: a
-!> point appearing or vanishing under displacement would put a step
-!> discontinuity into the differenced gradient, so that assertion is also the
-!> upper bound on the finite-difference step.
-!>
-!> ## Where the numerical floor comes from
-!>
-!> `FD_ABS` and `FD_REL` are set to the `1e-10` the project asked for and four
-!> of the cases below do not reach it. The reason was measured, not guessed:
-!>
-!> * It is **not** the projection tolerance. Rebuilding the whole fixture at
-!>   `tolerance` = 1e-10, 1e-12 and 1e-14 reproduces the differenced gradient to
-!>   three or four significant figures at every step from `3e-3` to `1e-6`
-!>   (e.g. 7.93e-8 / 7.81e-8 / 7.82e-8 at `h = 3e-4`). The projection stops
-!>   binding somewhere around `1e-10`; at this fixture's `1e-14` it is four
-!>   orders past the point where it matters. Loosening it *does* bite -- at
-!>   `tolerance = 1e-8` the floor is `5e-7`, and at `1e-6` the identity breaks
-!>   outright at `1.7e-3` -- so `PROJ_TOL` earns its value, it just cannot buy
-!>   anything more.
-!>
-!> * It is the **curvature channel**. Driven one at a time, `w_xi`, `w_f`,
-!>   `w_xyz` and `w_n` all bottom out at `5e-11 .. 1e-10` absolute near
-!>   `h = 1e-4` -- clean `O(h^4)` truncation, `1e-10` is in reach for them.
-!>   `w_k1` and `w_k2` never descend at all: `7.4e-8` at `h = 1e-3` rising to
-!>   `3.9e-6` at `h = 1e-5`, which is `1/h`, the signature of a fixed noise
-!>   floor. Second-differencing the surface gradient at displacements down to
-!>   `1e-12` puts that floor at `2e-15` relative for the four clean channels
-!>   (a handful of ulp) and `2.5e-11` relative for `w_k1` -- five orders worse.
-!>
-!> * The amplifier was the near-umbilic point. `compute_curvature` forms the
-!>   principal curvatures stably, `disc = hypot(half_diff, S12)`, but the
-!>   derivative path used to re-derive the same discriminant by cancellation,
-!>   `disc_curv = sqrt(KM^2 - D)`, and then divide by it:
-!>   `d_disc = (KM dT - dD) / (2 disc_curv)`. On this fixture the smallest
-!>   `|k1 - k2| / |KM|` is `1.3e-6` (SvdW, 10 of 126 points below `1e-4`) and
-!>   `9.4e-11` (CFC, one point below the `curv_disc_guard = 1e-10` cutoff
-!>   entirely). `eps KM^2 / (2 disc |k1|)` predicted `4e-11` relative for SvdW
-!>   and `5e-10` for CFC against `2.5e-11` and `1.9e-9` measured.
-!>
-!> **Fixed 2026-09-07.** The two paragraphs above are the diagnosis, kept as the
-!> record; `build_seed_state` now forms the shape operator in the surface
-!> tangent frame and takes `disc = sqrt(half_diff^2 + S12^2)` -- the form
-!> `compute_curvature` and `drop_seed_state`'s own `sqrt_disc_B` already used --
-!> with `apply_seed` and `apply_seed_tangent` differentiating that form. It was
-!> a source change, as this header said, and not a tolerance the test could
-!> pick. `svdw_hvp_single_atom` and `cfc_hvp_single_atom` went green on it; the
-!> failures it left behind named `w_xi` and the multi-atom blocks, not a
-!> curvature channel, and those turned out not to be defects at all.
-!>
-!> ## Why the stencil is six-point
-!>
-!> The three cases that survived the discriminant fix -- `svdw/multi`,
-!> `cfc/multi` and the `w_xi` channel -- were the stencil, not the Hessian.
-!> Differencing all 140 (level set, channel, direction) combinations of this
-!> fixture over `3e-3 .. 3e-6` with the old four-point stencil shows every one
-!> of them falling as `h^4` across two full decades and then rising as `1/h`.
-!> For `svdw/multi` at atom 1 axis 1 the residual `hv - fd` ran
-!>
-!>     h         3e-3       1e-3       3e-4       1e-4       3e-5      1e-5
-!>     dev   -1.66e-5   -2.05e-7   -1.67e-9  -4.36e-11  -3.15e-10  -1.77e-9
-!>     ratio        .       81.0      122.9       38.4          .         .
-!>
-!> against the `81.0` and `123.4` that exact `O(h^4)` predicts. The analytic
-!> value is the limit those differences converge to; the `2.1e-7` this suite
-!> used to report was the four-point stencil's own truncation at `h = 1e-3` and
-!> nothing else. The multi-atom cases were the worst of them only because the
-!> truncation coefficient of `DIR_MULTI` is about 24 times the worst single
-!> column's: the fifth directional derivative of a nine-component direction
-!> picks up every cross term, a unit column picks up one.
-!>
-!> **No step could have fixed it.** Truncation `2.0e5 h^4` under `1e-10` wants
-!> `h < 1.5e-4`; the round-off floor `1.8e-14 / h` under `1e-10` wants
-!> `h > 1.8e-4`. The two walls cross *above* the target and the window is
-!> empty by 20%, which is why two rounds of step tuning kept landing on
-!> `1.7x .. 2x` over the bound, best case `2.0e-10` at `h = 1.5e-4`, and never
-!> closer. Raising the order moves only the first wall, and moves it a long
-!> way: `6.3e7 h^6 < 1e-10` wants `h < 1.4e-3`, so the window opens to
-!> `3e-4 .. 1e-3` and the suite has a factor of three to place two steps in.
-!> One extra pair of geometries buys that; nothing else needed to change.
-!>
-!> Sensitivity was checked by injection rather than argued. Scaling the
-!> analytic contraction by `1 + 1e-9` fails all five finite-difference cases,
-!> every one of the ten labels reading back a worst deviation of `0.99e-9` to
-!> `1.01e-9` relative, and the two-step ratio printed with the failure landing
-!> in `0.988 .. 1.006` across all ten -- the "constant error" signature the
-!> message documents, against `5.6` for truncation. It reads that cleanly here
-!> only because truncation at the shipped steps is `4e-11`, four orders under
-!> the injected fault; a fault comparable to the truncation would put the ratio
-!> between the two, which is what the message says to expect.
-!>
-!> What is left is an arithmetic floor that is not reducible. The difference
-!> sits `1.2e-11 .. 4.8e-11` from the analytic value at the shipped steps, and
-!> that band is *flat*: the block maximum over the 140 combinations spans
-!> `0.2 .. 38` while the deviation does not move with it. The noise is
-!> absolute, not proportional to anything, so a block-scaled bound would be
-!> modelling a structure that is not there. Its origin is the reproducibility
-!> of [[get_surface_gradient_drop]] between two independently rebuilt cavities
-!> -- `1.8e-14` absolute, one or two ulp of a gradient of order ten --
-!> amplified by `1/h`. Tightening the projection does not touch it, measured
-!> directly rather than inferred: `PROJ_TOL = 1e-15` reproduces the whole
-!> step sweep to within its own noise, and `1e-16` stops the projection
-!> converging at all, at which point the grid moves under displacement and
-!> [[assert_grid_match]] refuses the step.
-!>
+!> - Projection tolerance sweep: 1e-10 to 1e-14, similar differences
+!> - Loose projection tolerance of 1e-8: floor near 5e-7
+!> - Historical curvature noise: 7.4e-8 at h = 1e-3,
+!>   rising to 3.9e-6 at h = 1e-5
+!> - Near-umbilic gap |k1-k2|/|KM|: 1.3e-6 for SvdW,
+!>   9.4e-11 for CFC
+!> - 2026-09-07 fix: sqrt(half_diff^2 + S12^2) from the tangent-frame
+!>   shape operator, differentiated by apply_seed and apply_seed_tangent
+!> - Remaining four-point error: O(h^4) truncation followed by 1/h noise
+!> - Multi-atom truncation coefficient: about 24 times a unit column
+!> - Four-point target conflict: h < 1.5e-4 for truncation,
+!>   h > 1.8e-4 for round-off; best deviation 2.0e-10
+!> - Six-point O(h^6) stencil: usable window from 3e-4 to 1e-3
+!> - Injected 1e-9 relative fault: all five difference cases fail
+!> - Shipped-step arithmetic floor: 1.2e-11 to 4.8e-11 absolute
+!> - Gradient rebuild noise: about 1.8e-14 absolute, amplified by 1/h
 module test_cavity_drop_hessian_fixed
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -169,53 +62,51 @@ module test_cavity_drop_hessian_fixed
    !>
    !> Both are required, so a value that agrees at one step only -- the
    !> signature of a step on the round-off wall or above the truncation wall --
-   !> fails. That was always the intent of this parameter; with the four-point
+   !> fails; that was always the intent of this parameter; with the four-point
    !> stencil there was no pair that could deliver it, and with the six-point
-   !> stencil there is a factor of three to choose from. Deviation over the ten
+   !> stencil there is a factor of three to choose from; deviation over the ten
    !> cases this suite runs, as a fraction of the bound (`> 1` fails):
    !>
    !>     h        2.0e-3  1.5e-3  1.2e-3  1.0e-3  8.0e-4  6.0e-4  4.0e-4  3.0e-4  2.0e-4
    !>     of bound   26.2    4.79    1.32    0.49    0.24    0.32    0.49    0.82    0.87
    !>
-   !> Those come from a scan harness driving one step at a time, so they are not
-   !> reproducible from the absolute deviations tabulated at `FD_ABS`, which are
-   !> a different maximum over a different set of components. The headroom of
-   !> the shipped pair was measured directly instead, by tightening both bounds
-   !> until the suite breaks -- see `FD_ABS`.
+   !> - Separate step scans with different worst components
+   !> - Absolute deviations under `FD_ABS`: different component maxima
+   !> - Shipped-pair headroom measured by tightening both bounds until failure
    !>
    !> The two walls are visible on either side and the pair above brackets the
-   !> bottom. Note how much steeper the upper wall is than it was: truncation is
+   !> bottom; note how much steeper the upper wall is than it was: truncation is
    !> `h^6` now, so a step 50% too coarse fails outright where the four-point
-   !> stencil would have degraded gently. That asymmetry is the reason the
+   !> stencil would have degraded gently; that asymmetry is the reason the
    !> coarse step is `8e-4` and not `1e-3`, which passes at 0.49 with the wall
-   !> immediately behind it.
+   !> immediately behind it
    !>
    !> The lower wall is round-off and re-rolls with the arithmetic: rebuilding
    !> the whole sweep at `PROJ_TOL = 1e-15` reproduces the truncation side
    !> exactly (26.2, 4.80, 1.31, 0.48) and moves the round-off side by up to
-   !> 50% (0.30, 0.47, 0.46, 0.95). The pair above is chosen far enough from it
-   !> that this does not matter; a pair at `3e-4` would not survive it.
+   !> 50% (0.30, 0.47, 0.46, 0.95); the pair above is chosen far enough from it
+   !> that this does not matter; a pair at `3e-4` would not survive it
    !>
    !> There is also a ceiling, and it is enforced rather than assumed:
    !> [[assert_grid_match]] rejects a step large enough to change the grid, and
    !> the stencil now reaches out to `3h`. Measured on this fixture, the grid
    !> first moves at a displacement of `2e-2` under `DIR_MULTI`, against the
-   !> `2.4e-3` the coarse step above reaches -- a factor of eight in hand.
+   !> `2.4e-3` the coarse step above reaches -- a factor of eight in hand
    !>
    !> **Historical.** Two step sweeps were run against the four-point stencil,
-   !> on 2026-09-03 and 2026-09-07, and neither could close this suite. Best
+   !> on 2026-09-03 and 2026-09-07, and neither could close this suite; best
    !> pair `[1.0e-3, 3.0e-4]` at three failures; every pair in a decade either
-   !> side did worse. The conclusion recorded at the time -- that the remaining
+   !> side did worse; the conclusion recorded at the time -- that the remaining
    !> failures were not step-tunable -- was correct and for the reason the
-   !> module header now gives: the window was empty, so no pair existed. A step
+   !> module header now gives: the window was empty, so no pair existed; A step
    !> sweep cannot distinguish "wrong derivative" from "stencil of insufficient
-   !> order", and both sweeps were spent finding that out.
+   !> order", and both sweeps were spent finding that out
    real(wp), parameter :: FD_STEPS(2) = [8.0E-4_wp, 6.0E-4_wp]
 
    !> Finite-difference agreement bounds
    !>
    !> The `1e-10` the project asked for, and since the six-point stencil of
-   !> 2026-09-07 every case in this suite meets it with room. Worst absolute
+   !> 2026-09-07 every case in this suite meets it with room; worst absolute
    !> deviation of the differenced gradient from the analytic contraction, over
    !> both steps:
    !>
@@ -234,25 +125,25 @@ module test_cavity_drop_hessian_fixed
    !>
    !> The bound is `max(FD_ABS, FD_REL |ref|)` per component, so the worst
    !> *absolute* deviation and the worst *fraction of the bound* are usually
-   !> different components. The binding fraction is 0.32, on `svdw/multi`.
+   !> different components; the binding fraction is 0.32, on `svdw/multi`
    !> Measured the direct way rather than inferred from it: the suite still
    !> passes with both bounds divided by three, and fails at four, so the
-   !> headroom is between 3x and 4x.
+   !> headroom is between 3x and 4x
    !>
    !> Every number above is bit-for-bit identical at `OMP_NUM_THREADS` 1, 2, 4
    !> and 8, so the margin is a property of the arithmetic and not of a
-   !> summation order. It is *not* independent of the arithmetic itself: at
+   !> summation order; it is *not* independent of the arithmetic itself: at
    !> `PROJ_TOL = 1e-15` the same sweep re-rolls the round-off side by up to
    !> 50%, which is why `FD_STEPS` sits where it does rather than one notch
-   !> finer.
+   !> finer
    !>
    !> The floor these numbers sit on is absolute and flat -- see the module
    !> header -- so a **block- or norm-scaled bound would be modelling a
    !> structure the noise does not have**. It has been measured and rejected
-   !> once; do not reintroduce it.
+   !> once; do not reintroduce it
    !>
       !> **Historical.** Measured 2026-09-03 on this fixture with the four-point
-   !> stencil, when three of the eight cases failed. Worst deviation over both
+   !> stencil, when three of the eight cases failed; worst deviation over both
    !> steps; the first four rows are absolute and relative on the *same*
    !> component, the six channel rows take each maximum independently:
    !>
@@ -273,9 +164,9 @@ module test_cavity_drop_hessian_fixed
    !> wing at these two steps and reaches `5e-11 .. 1e-10` absolute at
    !> `h = 1e-4`. `w_k1` and `w_k2` grew as `1/h` all the way from `1e-3` to
    !> `1e-5` (7.4e-8 -> 3.9e-6): they were noise limited by the cancellation in
-   !> the curvature discriminant, and the `kernel.f90` fix is what removed that.
+   !> the curvature discriminant, and the `kernel.f90` fix is what removed that
    !> The rest of the table is four-point truncation, which the six-point
-   !> stencil pushed two orders below the bound. See the module header.
+   !> stencil pushed two orders below the bound; see the module header
    real(wp), parameter :: FD_ABS = 1.0E-10_wp
    real(wp), parameter :: FD_REL = 1.0E-10_wp
 
@@ -283,13 +174,13 @@ module test_cavity_drop_hessian_fixed
    !> comparison against it would pass for the wrong reason
    real(wp), parameter :: VACUITY_THR = 1.0E-4_wp
 
-   !> Hessian symmetry bound. Both triangles are assembled by different code
-   !> paths, so this is round-off of the assembly, not of a difference.
+   !> Hessian symmetry bound; both triangles are assembled by different code
+   !> paths, so this is round-off of the assembly, not of a difference
    !>
-   !> Not a finite-difference tolerance and therefore left where it is. Measured
+   !> Not a finite-difference tolerance and therefore left where it is; measured
    !> worst asymmetry on this fixture: `9.0e-12` absolute (SvdW, `max |H| = 12.0`)
    !> and `3.5e-11` absolute / `2.3e-11` scaled (CFC, `max |H| = 17.4`), so it
-   !> already carries two to three orders of headroom and would survive `1e-10`.
+   !> already carries two to three orders of headroom and would survive `1e-10`
    real(wp), parameter :: SYM_TOL = 1.0E-8_wp
 
    !> Bound of the per-direction half against the contracted rank-4 half
@@ -297,35 +188,35 @@ module test_cavity_drop_hessian_fixed
    !> Two code paths for one quantity: the second-order chain run once along
    !> the supplied direction, against the same chain run along every point's
    !> `3 n_local` Cartesian unit directions and contracted afterwards -- the two
-   !> modes `hessian.f90` chooses between. Equal by linearity of the chain,
+   !> modes `hessian.f90` chooses between; equal by linearity of the chain,
    !> numerically two summation orders, so this is a round-off bound and not a
    !> finite-difference one; the switching block is contracted by yet another
    !> routine on the per-direction side, so the live `w_f` of `all_channels()`
-   !> covers its index orientation. The rank-4 side takes its explicit nuclear
+   !> covers its index orientation; the rank-4 side takes its explicit nuclear
    !> motion from the level set's `vjp_f2_rArB` block, the per-direction side
    !> from `hvp_jet_rA`, so for SvdW the two are also two different kernel
    !> paths; and the rank-4 side runs the chain on the 23-element symmetrised
    !> basis and reconstructs every column from packed jet coordinates, where
-   !> the per-direction side runs it on the direction itself. Measured
+   !> the per-direction side runs it on the direction itself; measured
    !> `1.3e-13 / 24.5` (SvdW) and `2.3e-12 / 38.1` (CFC) absolute against
-   !> `max |Hv|`, i.e. `5.1e-15` and `5.9e-14` relative. The CFC figure is the
+   !> `max |Hv|`, i.e. `5.1e-15` and `5.9e-14` relative; the CFC figure is the
    !> larger because its jet tensors are symmetric in their spatial indices only
    !> to round-off and the packed coordinates read one representative entry per
-   !> class; both sit more than a decade under the bound.
+   !> class; both sit more than a decade under the bound
    real(wp), parameter :: PER_DIR_TOL = 1.0E-12_wp
 
    !> Softmax scale of the branching fixture, the response suite's value
    !>
-   !> Only the two-mode comparison runs on `FIX_CROSS` here. The differenced
+   !> Only the two-mode comparison runs on `FIX_CROSS` here; the differenced
    !> reference of this suite needs a geometry-independent fold and a branched
-   !> grid does not have one -- `branch_phi_adj` moves -- so the branch terms of
-   !> this half are differenced where the fold may move: `both_halves_svdw_cross`
-   !> in the response suite. What this suite can still pin on a branched grid is
+   !> grid does not have one because `branch_phi_adj` moves
+   !> - Cross-fixture differences handled by `both_halves_svdw_cross`
+   !> - Branched-grid check here:
    !> that the two forms of the half agree, and they reach the branch-weight
    !> motion by entirely different routes: the per-direction form takes
    !> `d(wbranch)` along the direction from the forward tangent, the rank-4 form
    !> closes one unit-tangent chain per branched point over its anchor group
-   !> after the grid loop.
+   !> after the grid loop
    real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
 
 contains
@@ -443,7 +334,7 @@ contains
    !>
    !> The only case of this suite with a live `branch_phi_adj` and a moving
    !> branch weight; see `CROSS_BRANCH_S` for why it is a comparison of the two
-   !> forms and not a differenced one.
+   !> forms and not a differenced one
    !>
    !> @param[out] error Error handle
    subroutine test_cross_per_dir_vs_rank4(error)
@@ -457,8 +348,8 @@ contains
    !>
    !> A channel the Hessian dropped entirely would still pass the combined
    !> tests above if a larger channel dominated the sum, and the channels of
-   !> this fixture do not have comparable magnitudes. Each one therefore gets
-   !> its own case with its own anti-vacuity floor.
+   !> fixture do not have comparable magnitudes; each one therefore gets
+   !> its own case with its own anti-vacuity floor
    !>
    !> @param[out] error Error handle
    subroutine test_single_channels(error)
@@ -476,7 +367,7 @@ contains
 
       label = [character(len=12) :: "w_xi", "w_f", "w_xyz", "w_n", "w_k1", "w_k2"]
 
-      ! Every channel is driven even after one has failed. Returning on the first
+      ! Every channel is driven even after one has failed; returning on the first
       ! failure names `w_xi` and hides the other five, and the channels do not
       ! fail together: which of them is over the bound is the whole diagnosis
       report = ""
@@ -501,7 +392,7 @@ contains
    !>
    !> The analytic side is the rank-4 half contracted with the direction, or,
    !> with `per_dir`, the per-direction half run along it -- the two modes of
-   !> the same channel, both of which must reproduce the differenced gradient.
+   !> the same channel, both of which must reproduce the differenced gradient
    !>
    !> @param[in]  lsf_kind Level-set model of the fixture
    !> @param[in]  dir_kind Nuclear direction to contract with
@@ -630,7 +521,7 @@ contains
          ! only the one that failed: a constant discrepancy -- what a wrong
          ! Hessian gives -- reads the same at both, while truncation from a
          ! step above the window scales as `(h1/h2)^6`, 5.6 for the shipped
-         ! pair. Nothing else can move a deviation with the step here, because
+         ! pair; nothing else can move a deviation with the step here, because
          ! [[assert_grid_match]] has already ruled out a change of grid
          res_coarse = hv(bad_axis, bad_atom) - fd(bad_axis, bad_atom, 1)
          res_fine = hv(bad_axis, bad_atom) - fd(bad_axis, bad_atom, 2)
@@ -655,7 +546,7 @@ contains
    !>
    !> All four displaced geometries carry the *same* frozen adjoint: the weights are
    !> a pure function of `cavity%numbering`, so no explicit mapping is needed
-   !> once [[assert_grid_match]] has established that the point set is the same.
+   !> once [[assert_grid_match]] has established that the point set is the same
    !>
    !> @param[in]  mol      Base structure
    !> @param[in]  ref_cav  Base cavity, used for the grid and weight comparison
@@ -696,13 +587,13 @@ contains
       !> Six-point central stencil of the first derivative, `O(h^6)`
       !>
       !> The order is not a refinement, it is what makes the assertion below
-      !> possible at all. Every stencil here competes with the same round-off
+      !> possible at all; every stencil here competes with the same round-off
       !> floor: the gradient reproduces to `1.8e-14` between two independently
       !> rebuilt cavities, so a difference carries `1.8e-14 / h` of noise
       !> whatever its order, and it has to land under `FD_ABS` at a step whose
       !> truncation is also under `FD_ABS`. Those two demands define a window
       !> in `h`, and the order of the stencil decides whether the window is
-      !> empty. Measured on this fixture, where the truncation coefficients are
+      !> empty; measured on this fixture, where the truncation coefficients are
       !> `f5/30 = 2.0e5` and `f7/140 = 6.3e7`:
       !>
       !>     stencil    truncation < 1e-10   round-off < 1e-10   window
@@ -710,12 +601,10 @@ contains
       !>     6 point    h < 1.4e-3           h > 1.8e-4          3e-4 .. 1e-3
       !>
       !> The four-point stencil misses by 20%, which is why two rounds of step
-      !> tuning on this suite never found a step that worked and could not have.
+      !> tuning on this suite never found a step that worked and could not have
       !> Six points cost one more pair of geometries and open a window a factor
-      !> of three wide; the sweep across it is tabulated at `FD_STEPS`. A
-      !> three-point stencil is out by orders on the same arithmetic and was
-      !> never a candidate here, so its coefficient has not been measured on
-      !> this fixture and is deliberately not tabulated above.
+      !> of three wide; sweep tabulated at `FD_STEPS`
+      !> - Three-point stencil several orders worse; coefficient not measured
       integer, parameter :: OFFSET(6) = [-3, -2, -1, 1, 2, 3]
       real(wp), parameter :: COEFF(6) = [-1.0_wp, 9.0_wp, -45.0_wp, &
                                          45.0_wp, -9.0_wp, 1.0_wp]/60.0_wp
@@ -768,11 +657,11 @@ contains
    !>
    !> Three directions: the sparsest column, the every-atom direction, and a
    !> third that is neither, so a column-indexing error in either mode shows up
-   !> against the other. Every channel is live, the switching one included.
+   !> against the other; every channel is live, the switching one included
    !>
    !> On `FIX_CROSS` the fixture is asserted to branch, and to carry a live
    !> branch adjoint, before anything is compared: both forms would agree
-   !> trivially on a cross that quietly stopped branching.
+   !> trivially on a cross that quietly stopped branching
    !>
    !> @param[in]  fix_kind Geometry of the fixture
    !> @param[in]  lsf_kind Level-set model of the fixture
@@ -884,7 +773,7 @@ contains
    !> exchanging `(A, alpha)` with `(B, beta)`. Nothing symmetrises it: the two
    !> triangles are produced by different code -- the field row of one atom
    !> against the direction of another -- so this is an independent check on the
-   !> assembly rather than a restatement of it.
+   !> assembly rather than a restatement of it
    !>
    !> @param[out] error Error handle
    subroutine test_symmetry(error)
@@ -952,12 +841,12 @@ contains
 
    !> A mis-shaped accumulator must be refused
    !>
-   !> The only guard this half still carries. It used to refuse a live `w_a` or
+   !> The only guard this half still carries; it used to refuse a live `w_a` or
    !> `w_w` as well, because it folded the raw accumulator itself and then held
    !> the result fixed; it now takes the fold as an argument and the term those
-   !> guards stood for belongs to the response half. The one refusal that
+   !> guards stood for belongs to the response half; the one refusal that
    !> outlived the re-fold -- a multi-branch grid -- is asserted against the
-   !> public entry points, in the end-to-end suite.
+   !> public entry points, in the end-to-end suite
    !>
    !> @param[out] error Error handle
    subroutine test_shape_guard(error)
@@ -1000,8 +889,8 @@ contains
    !> geometry-dependent output of [[prepare_surface_weights]] is
    !> `branch_phi_adj`. [[compute_branch_phi_adj]] returns identically zero
    !> unless some anchor group carries more than one branch, and `wbranch` is
-   !> exactly one for every point outside such a group. Both are asserted, on
-   !> the primal data, because `eff` itself is not reachable from a test.
+   !> exactly one for every point outside such a group; both are asserted, on
+   !> the primal data, because `eff` itself is not reachable from a test
    !>
    !> @param[in]  cavity Cavity to inspect
    !> @param[in]  label  Human-readable geometry description
@@ -1043,9 +932,9 @@ contains
    !>
    !> The frozen adjoint is keyed on `numbering`, so a point that appears or
    !> vanishes between the two displaced geometries would silently add a step
-   !> to the differenced gradient. Owners are compared as well, because the
-   !> switching channel and the anchor channel both key on them. This assertion
-   !> is what bounds the finite-difference step from above.
+   !> to the differenced gradient; owners are compared as well, because the
+   !> switching channel and the anchor channel both key on them; this assertion
+   !> is what bounds the finite-difference step from above
    !>
    !> @param[in]  ref   Reference cavity
    !> @param[in]  cav   Displaced cavity
@@ -1104,9 +993,9 @@ contains
    !> Populate the requested adjoint channels
    !>
    !> `w_a` and `w_w` are never reachable from here: they are the two channels
-   !> whose fold is geometry dependent. Each weight is a pure function of the
+   !> whose fold is geometry dependent; each weight is a pure function of the
    !> *persistent* point id, so the same adjoint is reproduced on a displaced
-   !> grid without an explicit mapping.
+   !> grid without an explicit mapping
    !>
    !> @param[in]  cavity   Cavity supplying the grid
    !> @param[in]  channels Channel identifiers to populate
@@ -1165,7 +1054,7 @@ contains
    !>
    !> Varies across the grid so that a term which happens to cancel for uniform
    !> weights still shows up, and is bounded well away from zero so that no
-   !> channel is accidentally switched off.
+   !> channel is accidentally switched off
    !>
    !> @param[in] id      Persistent point id, `cavity%numbering`
    !> @param[in] channel Channel selector

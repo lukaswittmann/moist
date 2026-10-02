@@ -1,191 +1,47 @@
-!> Numerical reference for the DROP surface Hessian, and its accuracy
+!> Numerical reference for the DROP surface Hessian
 !>
-!> The end-to-end deliverable of the Hessian work is the analytic nuclear
-!> Hessian checked against a numerical one built by differentiating the
-!> **shipped** [[get_surface_gradient_drop]]. This module owns the numerical
-!> side and, above all, the measurement of how accurate that side can possibly
-!> be: the tolerance of the eventual comparison is bounded from below by the
-!> reference, not by the code under test.
+!> - Five-point central difference of get_surface_gradient_drop
+!> - Rebuilt cavity per displacement; surface adjoints fixed by point id
+!> - One Hessian column per displaced Cartesian coordinate
+!> - Grid guard: identical point ids and owners at every stencil geometry
+!> - Reference symmetry: direct measure of numerical error and gradient curl
+!> - Translational column sum: check of column indexing
 !>
-!> [[numerical_surface_hessian]] builds
+!> ## Reference accuracy, measured 2026-09-03
 !>
-!>     H_num(:, A, beta, B)  =  d/dR_(beta,B) [ g(:, A) ]
+!> - Stable grid through h = 1e-2; identity changes at h = 3e-2
+!> - Five-point smooth-channel bowl near h = 3e-4
+!> - Smooth asymmetry: 3.8e-11 to 1.0e-10 at h = 3e-4
+!> - Three-point minimum: 1.3e-9; five-point minimum: 3.8e-11
+!> - Rebuild noise: about eps * max|g| / h
+!> - Historical curvature floors: 7.7e-11 to 1.6e-9 relative
+!> - Cause: discriminant cancellation near equal principal curvatures
+!> - 2026-09-07 fix: tangent-frame shape-operator discriminant
+!>   sqrt(half_diff^2 + S12^2) and its derivatives
+!> - Post-fix curvature asymmetry at h = 3e-4:
+!>   2.6e-11 for SvdW, 7.1e-11 for CFC
 !>
-!> one **column** at a time. Atom `B` is displaced along axis `beta` only, the
-!> cavity is rebuilt from scratch at each displaced geometry, and the shipped
-!> surface gradient is evaluated there with the surface adjoints held fixed --
-!> frozen as a pure function of the persistent point id `cavity%numbering`,
-!> because the grid is filtered and reordered on every rebuild.
+!> ## Analytic comparison, measured 2026-09-04
 !>
-!> `get_surface_gradient` is the routine differentiated, not `get_gradient`.
-!> `get_gradient` runs `compute_gradient_drop`, the forward-mode pass that
-!> stores the full `*_rA` Jacobians; it is not the gradient of a scalar and
-!> would have to be contracted by hand first. The analytic Hessian under
-!> construction is by definition the derivative of `get_surface_gradient` at
-!> fixed `acc`, so that is what the reference differentiates.
+!> | class     | steps        | worst measured | asserted |
+!> |-----------|--------------|----------------|----------|
+!> | smooth    | 3e-4, 2.5e-4 | 1.3e-10        | 3e-10    |
+!> | curvature | 3e-4, 2.5e-4 | 3.4e-11 SvdW   | 3e-10    |
+!> |           |              | 8.2e-11 CFC    | 3e-10    |
 !>
-!> ## What the two assertions below actually test
+!> - Smooth bound set by reference floor of w_xyz and combined set
+!> - Cartesian-basis HVP: bitwise agreement with dense Hessian
+!> - General-direction HVP: dense contraction within one ulp
 !>
-!> Nothing symmetrises `H_num`, and no two entries across the diagonal share an
-!> evaluation: `H(alpha, A, beta, B)` comes from displacing `B`, its transpose
-!> from displacing `A`. The asymmetry is therefore a direct, assumption-free
-!> measure of the reference's own error -- and, read the other way, a **curl
-!> test on the shipped gradient**: a `get_surface_gradient` carrying a term that
-!> is not the gradient of any scalar would show up here and nowhere else in the
-!> suite.
+!> ## Mutation sensitivity, measured 2026-10-01
 !>
-!> The translational null sum is the second property. `E(R + t) = E(R) + t . c`
-!> for a constant `c` in every channel (the position channel is the only one
-!> that moves at all, and it moves linearly), so `g` itself is translation
-!> invariant and every column sum `sum_B H(alpha, A, beta, B)` vanishes. That
-!> assertion is what pins the column *indexing* of the construction, which the
-!> symmetry check cannot see.
-!>
-!> ## Measured accuracy of the reference (2026-09-03, this fixture)
-!>
-!> Ladder `h = 3e-2 .. 1e-6`, five-point `O(h^4)` and three-point `O(h^2)`
-!> stencils, all eight adjoint channels driven in isolation on both level sets.
-!>
-!> **Ceiling.** The grid is stable up to and including `h = 1e-2` (the stencil
-!> reaches `2h`); at `h = 3e-2` points change identity on both level sets and
-!> [[same_grid]] rejects the step. The bowl sits 30x inside that ceiling.
-!>
-!> **Bowl, five-point, smooth channels.** Worst asymmetry, absolute:
-!>
-!> | h    | w_xi    | w_f     | w_xyz   | w_n     | w_a     | w_w     |
-!> |------|---------|---------|---------|---------|---------|---------|
-!> | 1e-2 | 1.5e-05 | 9.5e-06 | 2.8e-08 | 5.7e-08 | 7.3e-06 | 1.4e-05 |
-!> | 3e-3 | 1.3e-07 | 7.7e-08 | 2.3e-10 | 4.6e-10 | 5.9e-08 | 1.2e-07 |
-!> | 1e-3 | 1.7e-09 | 9.5e-10 | 2.6e-11 | 6.0e-12 | 7.2e-10 | 1.5e-09 |
-!> | 3e-4 | 3.8e-11 | 1.8e-11 | 1.0e-10 | 9.6e-12 | 3.8e-11 | 2.8e-11 |
-!> | 1e-4 | 1.1e-10 | 4.0e-11 | 3.3e-10 | 3.3e-11 | 1.2e-10 | 5.7e-11 |
-!> | 1e-5 | 1.1e-09 | 2.2e-10 | 3.9e-09 | 3.2e-10 | 9.2e-10 | 7.1e-10 |
-!>
-!> The descent is `h^4` to three digits (1e-2 -> 3e-3 is a factor 114 for a
-!> 3.33x step, 3e-3 -> 1e-3 a factor 81 for 3x), the rise below the bowl is
-!> `1/h`, and the bowl is at `h = 3e-4` -- one decade wide, everything inside
-!> `1e-3 .. 1e-4` staying under `3.3e-10` absolute. CFC behaves identically
-!> (bowl values 1.8e-11 .. 8.5e-11).
-!>
-!> **Stencil order.** The three-point asymmetry falls as `h^2` and bottoms out
-!> at `1.3e-9` (`w_xi`, `h = 1e-5`); the five-point one bottoms at `3.8e-11` at
-!> `h = 3e-4`. Across the six smooth channels the `O(h^4)` reference is **30 to
-!> 100 times more accurate**, and it reaches that accuracy at a **30x larger
-!> step**, far from the grid ceiling. At the five-point bowl the two stencils
-!> differ by `2.6e-6` -- i.e. an `O(h^2)` reference used there would set the
-!> comparison tolerance five orders above the code's actual agreement. For the
-!> curvature channels the stencil hardly matters: both are noise limited.
-!>
-!> **Per-channel floors.** `|g(+h) + g(-h) - 2 g(0)| / 2` at `h = 1e-7, 1e-8,
-!> 1e-9` is `1e-16 |H|` of smooth signal, so it reads out the noise of one
-!> gradient evaluation, cavity rebuild included. Flat across all three probes.
-!> Relative to `max |g|` of the same channel:
-!>
-!> | channel | SvdW    | CFC     |
-!> |---------|---------|---------|
-!> | w_xi    | 1.8e-15 | 4.7e-15 |
-!> | w_f     | 7.5e-16 | 7.5e-16 |
-!> | w_xyz   | 1.2e-15 | 1.4e-15 |
-!> | w_n     | 1.3e-15 | 1.3e-15 |
-!> | w_a     | 1.5e-15 | 1.3e-15 |
-!> | w_w     | 6.5e-15 | 1.8e-14 |
-!> | **w_k1**| **7.7e-11** | **1.6e-09** |
-!> | **w_k2**| **2.6e-11** | **2.0e-10** |
-!>
-!> **The two bold rows are pre-fix and are kept as the record of how the defect
-!> was found.** They were four to six orders above the other six -- the
-!> signature of the discriminant cancellation in `build_seed_state`, which used
-!> to form the principal-curvature gap as `sqrt(max(KM^2 - KG, 0))`: a
-!> difference of two quantities of size `KM^2`, so it loses all relative
-!> accuracy exactly where the two curvatures are close, and `apply_seed` then
-!> divides by it. This suite differences `get_surface_gradient`, which runs
-!> `build_seed_state`, so the seed path is the one it saw. Three things made it
-!> an independent confirmation rather than a restatement: the curvature
-!> asymmetry was `1/h` across **six decades** with no descending branch
-!> anywhere, which no step choice can be; all eight channels are differentiated
-!> across *identical* rebuilds of the *same* grid, so a projection- or
-!> rebuild-borne floor would have to appear in all of them and appeared in
-!> exactly two; and the floor tracked the fixture's curvature degeneracy across
-!> level sets -- CFC, whose smallest `|k1 - k2| / |KM|` is four orders below
-!> SvdW's, was 15-20x noisier in `w_k1`/`w_k2` while being *identical* to SvdW
-!> in every smooth channel.
-!>
-!> **Fixed 2026-09-07** by giving `build_seed_state`, `apply_seed` and
-!> `apply_seed_tangent` the shape operator in the surface tangent frame and the
-!> sum-of-squares discriminant `sqrt(half_diff^2 + S12^2)`. Every claim below
-!> about a curvature *floor* is therefore historical. What replaced it:
-!>
-!> **Curvature bowl -- gone.** The curvature channels used to optimise at a ten
-!> times larger step than the smooth ones (`3.5e-8` SvdW / `4.4e-7` CFC at
-!> `h = 3e-3`, monotonically worse below, `3.2e-7` / `9.4e-6` at `h = 3e-4`),
-!> because their floor was fixed and the truncation was not. They now descend
-!> with the smooth ones and are measured at the *same* two steps: the
-!> reference's own asymmetry at `h = 3e-4` is `2.6e-11` (SvdW) and `7.1e-11`
-!> (CFC), against `3.5e-8` / `5.3e-7` at the old `h = 3e-3`.
-!>
-!> **A single bound now covers all eight channels.** `CURV_STEP`,
-!> `CURV_STEPS`, `CURV_SYM_TOL_*` and `CURV_TOL_*` are each set to their smooth
-!> counterpart's value. They are kept as separate names, not merged, so that a
-!> future class-specific regression is still reported as one.
-!>
-!> ## What the comparison achieved (2026-09-04)
-!>
-!> `get_hessian` -- one fold of the surface adjoints driving
-!> `get_surface_hessian_fixed` and `get_surface_hessian_response`, see
-!> `derivatives/hessian.f90` -- against
-!> `H_num`, per adjoint set, on both level sets. The tables of measured
-!> agreement live on `SMOOTH_TOL` and on `CURV_TOL_SVDW`/`CURV_TOL_CFC`; the
-!> summary is:
-!>
-!> | class     | steps          | worst measured | asserted        |
-!> |-----------|----------------|----------------|-----------------|
-!> | smooth    | 3e-4, 2.5e-4   | 1.3e-10        | 3e-10           |
-!> | curvature | 3e-4, 2.5e-4   | 3.4e-11 SvdW   | 3e-10           |
-!> |           |                | 8.2e-11 CFC    | 3e-10           |
-!>
-!> The curvature row is the state after the 2026-09-07 discriminant fix; before
-!> it, that class ran at `4e-3, 3e-3` against `2e-07` / `2e-06` and could not
-!> reach `1e-10` at any step. It is now the *tighter* of the two classes -- the
-!> smooth six are reference-round-off limited at `1.3e-10` while the curvature
-!> pair sits at `8.2e-11`.
-!>
-!> **`1e-10` on the smooth six was the target and is not reachable, by a
-!> factor of 1.3, and the reason is the reference.** Five of the seven smooth
-!> sets go well under it; `w_xyz` and the combined six-channel set do not
-!> descend anywhere in `6e-4 .. 2e-4`, because they are round-off limited
-!> across that whole window while the other five are still truncation limited.
-!> Their minima (`5.7e-11` and `7.0e-11`) fall at *different* steps from the
-!> other five, so no single step -- and a fortiori no pair -- puts all seven
-!> under `1e-10`; the best any step achieves is `1.3e-10`. See `SMOOTH_TOL`
-!> for the mechanism and the numbers.
-!>
-!> The `3 nsph` Cartesian-unit-direction HVP path reproduces `get_hessian`
-!> **bit for bit** on both level sets, and a general-direction product matches
-!> the contracted dense block to one ulp; see `HVP_UNIT_TOL`.
-!>
-!> ## Mutations that shaped the assertions
-!>
-!> The first and the last in `derivatives/hessian.f90`, the branch ones in
-!> `derivatives/hessian_traverse.f90` and `derivatives/seeds.f90`, all caught:
-!>
-!>   * **the response half dropped** from the composition: both smooth cases
-!>     and both HVP cases fail by `1.5e+1` to `2.4e+1` absolute -- nine orders
-!>     over the bound, and the curvature cases keep passing, which is correct
-!>     and is the check that the two halves are being told apart. `d(eff)` has
-!>     no curvature channel, so a curvature-only accumulator has no response
-!>     half to drop;
-!>   * **a branch term of the fixed half dropped**: `branched_grid` fails on
-!>     the symmetry of the dense block, at `5.1e+0` without the second
-!>     derivative of the branch objective, `4.1e+0` without the anchor seeds'
-!>     shift tangent and `1.1e+1` without the rank-4 form's group pass, against
-!>     `2.1e-13` intact; with the per-direction form's branch-weight tangent
-!>     zeroed the block stays symmetric and the general-direction product
-!>     misses its contraction by `2.0e+0` instead. Measured 2026-10-01, when
-!>     these terms went in and the refusal of a branched grid, which this
-!>     suite used to assert, came out;
-!>   * **the dense wrapper's column index transposed** (`nsph (alpha-1) + A`
-!>     for `3 (A-1) + alpha`): caught by the analytic symmetry check at
-!>     `9.9e+0` and by the unit-direction HVP check at `1.5e+1`.
+!> - Dropped response half: smooth and HVP failures of 15 to 24
+!> - Dropped branch objective Hessian: dense asymmetry of 5.1
+!> - Dropped anchor shift tangent: dense asymmetry of 4.1
+!> - Skipped rank-4 group pass: dense asymmetry of 11
+!> - Zeroed directional branch tangent: HVP contraction error of 2.0
+!> - Transposed dense column index: asymmetry of 9.9 and HVP error of 15
+!> - Intact branched block asymmetry: 2.1e-13
 module test_cavity_drop_hessian_e2e
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
@@ -207,7 +63,7 @@ module test_cavity_drop_hessian_e2e
    !> Cartesian dimension
    integer, parameter :: ndim = 3
 
-   !> Surface-adjoint channels. Unlike the fixed-adjoint half, the numerical
+   !> Surface-adjoint channels; unlike the fixed-adjoint half, the numerical
    !> reference drives `w_a` and `w_w` too: it differentiates whatever the
    !> shipped gradient does, the geometry-dependent fold in
    !> [[prepare_surface_weights]] included
@@ -220,10 +76,10 @@ module test_cavity_drop_hessian_e2e
 
    !> Central-difference step of the reference assertions
    !>
-   !> Measured, see the module header. Both classes bottom out at `3e-4`. The
+   !> Measured, see the module header; both classes bottom out at `3e-4`; the
    !> curvature step used to be ten times higher, because that class's floor was
    !> a fixed arithmetic noise rather than truncation; the sum-of-squares
-   !> discriminant removed it, and the two names now carry the same value.
+   !> discriminant removed it, and the two names now carry the same value
    real(wp), parameter :: SMOOTH_STEP = 3.0E-4_wp
    real(wp), parameter :: CURV_STEP = 3.0E-4_wp
 
@@ -231,11 +87,11 @@ module test_cavity_drop_hessian_e2e
    !> measurement
    !>
    !> Worst asymmetry measured at the step above: `1.5e-10` / `1.5e-10` for the
-   !> smooth set (SvdW / CFC) and `2.6e-11` / `7.1e-11` for the curvature set.
+   !> smooth set (SvdW / CFC) and `2.6e-11` / `7.1e-11` for the curvature set
    !> The three names are kept apart so a class- or level-set-specific
    !> regression is still reported as one, but they no longer need to differ:
    !> before the discriminant fix the curvature pair measured `3.5e-8` / `5.3e-7`
-   !> at `h = 3e-3` and was asserted at `5e-7` / `5e-6`.
+   !> at `h = 3e-3` and was asserted at `5e-7` / `5e-6`
    real(wp), parameter :: SMOOTH_SYM_TOL = 5.0E-09_wp
    real(wp), parameter :: CURV_SYM_TOL_SVDW = 5.0E-09_wp
    real(wp), parameter :: CURV_SYM_TOL_CFC = 5.0E-09_wp
@@ -250,8 +106,8 @@ module test_cavity_drop_hessian_e2e
    !> and therefore different bowls: the smooth six are truncation limited and
    !> optimise around `3e-4`, while the curvature pair was limited by a fixed
    !> arithmetic noise -- the discriminant cancellation -- and optimised ten
-   !> times higher. With that fixed both classes are truncation limited at the
-   !> same step and carry the same bounds. The split is kept because it still
+   !> times higher; with that fixed both classes are truncation limited at the
+   !> same step and carry the same bounds; the split is kept because it still
    !> reports which class moved, and because the two classes reach the analytic
    !> side through different code: only the curvature pair drives
    !> `apply_seed_tangent`'s curvature block
@@ -262,20 +118,19 @@ module test_cavity_drop_hessian_e2e
 
    !> Print every measured deviation, and the tolerance each block would need
    !>
-   !> Off in the suite; the tables below were read off a run with it on, and it
-   !> is the way to re-measure them after a change to either half
+   !> Disabled by default; enable to remeasure the tables after a change
    logical, parameter :: E2E_VERBOSE = .false.
 
    !> Central-difference steps of the smooth comparison
    !>
    !> Two are required, so that a value agreeing at one step only -- the
-   !> signature of a step sitting on the round-off wall -- still fails.
+   !> signature of a step sitting on the round-off wall -- still fails
    real(wp), parameter :: SMOOTH_STEPS(*) = [3.0E-4_wp, 2.5E-4_wp]
 
    !> Central-difference steps of the curvature comparison
    !>
    !> The same pair as `SMOOTH_STEPS` since the 2026-09-07 discriminant fix;
-   !> they were `4e-3, 3e-3` while this class had a `1/h` floor to sit above.
+   !> they were `4e-3, 3e-3` while this class had a `1/h` floor to sit above
    real(wp), parameter :: CURV_STEPS(*) = [3.0E-4_wp, 2.5E-4_wp]
 
    !> Agreement bound of the smooth class, absolute *and* relative
@@ -296,7 +151,7 @@ module test_cavity_drop_hessian_e2e
    !> | combined | 2.6e-10 | 8.8e-11 | 1.4e-10 | 1.3e-10 | 1.3e-10 | 1.5e-10 |
    !> | **max**  | 1.6e-09 | 3.2e-10 | 2.0e-10 | 1.3e-10 | 1.3e-10 | 1.5e-10 |
    !>
-   !> worse of SvdW and CFC in every cell. Two things follow, and the second is
+   !> worse of SvdW and CFC in every cell; two things follow, and the second is
    !> why this bound is `3e-10` rather than the `1e-10` the four well-behaved
    !> channels reach on their own:
    !>
@@ -305,25 +160,25 @@ module test_cavity_drop_hessian_e2e
    !>   * `w_xyz` and `combined` do not descend at all across this window -- they
    !>     rise as `1/h` from `3.5e-4` down -- and their minimum over *every*
    !>     step is `5.7e-11` and `7.0e-11`, at **different** steps (`4e-4` and
-   !>     `3.5e-4`) from the other five. There is no single step, and a fortiori
+   !>     `3.5e-4`) from the other five; there is no single step, and a fortiori
    !>     no pair, at which all seven sets are under `1e-10`: the best any step
-   !>     achieves is `1.3e-10`.
+   !>     achieves is `1.3e-10`
    !>
    !> Both are the reference's floor, not the code's, and the mechanism is the
-   !> same one the module header measures per channel. The differenced gradient
+   !> same one the module header measures per channel; the differenced gradient
    !> carries `~eps max|g|` of noise, amplified by `1/h`: at `h = 2.5e-4` that
    !> is `4e-13 max|g|`, and the combined set -- six channels driven at once,
    !> `max|g| ~ 3e2` -- therefore cannot resolve *any* of its components,
    !> however small, below `~1.2e-10`. Its worst offender is indeed a small
    !> component (`0.20` against a block maximum of `30`) whose *relative* miss
-   !> is `6e-10` while its absolute miss is `1.3e-10`.
+   !> is `6e-10` while its absolute miss is `1.3e-10`
    !>
    !> `3e-10` leaves a factor of `2.4` over the worst measured value at the two
-   !> steps used. Since the 2026-09-07 discriminant fix the curvature class is
+   !> steps used; since the 2026-09-07 discriminant fix the curvature class is
    !> asserted at the same number rather than three orders above it, and is the
    !> *tighter* of the two in practice (`8.2e-11` worst against this class's
    !> `1.3e-10`), so a smooth-channel regression can no longer hide behind a
-   !> curvature limitation -- there is none left to hide behind.
+   !> curvature limitation -- there is none left to hide behind
    real(wp), parameter :: SMOOTH_TOL = 3.0E-10_wp
 
    !> Agreement bounds of the curvature class, absolute *and* relative
@@ -339,27 +194,27 @@ module test_cavity_drop_hessian_e2e
    !> Descending on both level sets, which is the whole point: before the
    !> 2026-09-07 discriminant fix this class had no descending branch anywhere
    !> and was asserted at `2e-07` (SvdW) / `2e-06` (CFC) at ten times the step,
-   !> because `disc = |k1 - k2| / 2` was formed as `sqrt(KM^2 - D)` -- a
-   !> difference of two quantities of size `KM^2` -- and then divided by.
+   !> Historical form: `disc = sqrt(KM^2 - D)`, with cancellation between
+   !> quantities of size `KM^2` before division by the small gap
    !> `build_seed_state` now takes it as `sqrt(half_diff^2 + S12^2)` from the
    !> shape operator in the surface tangent frame, and `apply_seed` /
-   !> `apply_seed_tangent` differentiate that form.
+   !> `apply_seed_tangent` differentiate that form
    !>
    !> The bound is `SMOOTH_TOL`'s value, and is now the *reference's* limit
    !> rather than the code's: the curvature pair measures below the smooth six
-   !> (`1.3e-10`), so this class is the tighter of the two. It leaves a factor
-   !> of `8.8` (SvdW) and `3.6` (CFC) over the worst measured value.
+   !> (`1.3e-10`), so this class is the tighter of the two; it leaves a factor
+   !> of `8.8` (SvdW) and `3.6` (CFC) over the worst measured value
    real(wp), parameter :: CURV_TOL_SVDW = 3.0E-10_wp
    real(wp), parameter :: CURV_TOL_CFC = 3.0E-10_wp
 
    !> Bounds on the *analytic* Hessian's own structure
    !>
    !> Two properties, both asserted at this bound: symmetry across the diagonal
-   !> and a vanishing column sum. Nothing enforces either -- the fixed half
+   !> and a vanishing column sum; nothing enforces either -- the fixed half
    !> accumulates a rank-4 block and the response half fills one column per
    !> direction, from two different traversals of the grid -- and the column
    !> sum is moreover the only assertion in the suite that reaches the fixed
-   !> half's *row* atom index without going through the numerical reference.
+   !> half's *row* atom index without going through the numerical reference
    !>
    !> Measured worst over both level sets and all sets of the class:
    !>
@@ -368,71 +223,71 @@ module test_cavity_drop_hessian_e2e
    !> | smooth    | 4.6e-14   | 7.9e-14    |
    !> | curvature | 1.3e-13   | 4.0e-13    |
    !>
-   !> Both rows are round-off and nothing else. The curvature row was `1.1e-10`
+   !> Both rows are round-off and nothing else; the curvature row was `1.1e-10`
    !> / `4.5e-11` before the 2026-09-07 discriminant fix -- the cancellation
    !> reaching the analytic side as well, through `apply_seed_tangent`'s own
    !> `dd_disc`. Three orders of that came back; what remains is CFC's deeper
-   !> third-derivative chain, still within an order of the smooth class.
+   !> third-derivative chain, still within an order of the smooth class
    !>
    !> Deliberately *not* the reference's own `SMOOTH_SYM_TOL`: the analytic
    !> block is four orders more symmetric than `H_num`, so a bound set by the
-   !> reference would be vacuous. This one leaves a factor of 13 (smooth) and
+   !> reference would be vacuous; this one leaves a factor of 13 (smooth) and
    !> 25 (curvature) -- the wider margin because CFC's is the only row that
-   !> moves appreciably with the BLAS backend.
+   !> moves appreciably with the BLAS backend
    real(wp), parameter :: ANALYTIC_SYM_TOL_SMOOTH = 1.0E-12_wp
    real(wp), parameter :: ANALYTIC_SYM_TOL_CURV = 1.0E-11_wp
 
    !> Bound on the analytic Hessian's structure on the branching fixture
    !>
    !> The same two properties as above, on `FIX_CROSS` with the smooth six
-   !> channels driven together. Measured `2.1e-13` asymmetry and `4.8e-13`
+   !> channels driven together; measured `2.1e-13` asymmetry and `4.8e-13`
    !> worst column sum against `max |H| = 174`, so round-off as on the plain
    !> fixture -- `1.2e-15` relative -- and larger in absolute terms only
-   !> because the block is. The bound leaves a factor of 20.
+   !> because the block is; the bound leaves a factor of 20
    !>
-   !> Symmetry is the assertion that matters here. On a branched grid neither
+   !> Symmetry is the assertion that matters here; on a branched grid neither
    !> half of the Hessian is symmetric on its own: the branch terms are split
    !> between them, and the fixed half's share couples the points of an anchor
-   !> group. A dropped branch term therefore breaks the symmetry of the sum at
-   !> the size of the term, `4 .. 11` on this fixture; see the module header.
+   !> group; A dropped branch term therefore breaks the symmetry of the sum at
+   !> the size of the term, `4 .. 11` on this fixture; see the module header
    real(wp), parameter :: BRANCHED_SYM_TOL = 1.0E-11_wp
 
    !> Bound on `get_surface_hessian` against `get_hessian` on the unit directions
    !>
-   !> Exact, and measured exact on both level sets. Any set of at least `3 nsph`
+   !> Exact, and measured exact on both level sets; any set of at least `3 nsph`
    !> directions -- the full Cartesian basis here -- or of more than
    !> `drop_hvp_per_dir_max` is run by `get_surface_hessian` in the rank-4 mode
    !> of the fixed channel, the mode `get_hessian` uses, so both form the same
-   !> block and the same response columns. The dense path
+   !> block and the same response columns; the dense path
    !> adds the fixed half's column directly, `h + r`; the HVP path forms
    !> `r + sum_c h_c v_c` with `v` a Cartesian unit vector, so every term but
-   !> one is an exact `0 * h_c` and the surviving one an exact `1 * h_c`. The
+   !> one is an exact `0 * h_c`; the survivor is `1 * h_c`
    !> two sums are therefore the same two operands in the opposite order, which
    !> IEEE addition makes bit for bit identical -- and remain so under FMA
-   !> contraction, since `fma(h, 1, r)` and `fma(h, 0, r)` are both exact.
+   !> contraction, since `fma(h, 1, r)` and `fma(h, 0, r)` are both exact
    !> Should a future toolchain break this, `1e-13 * max |H|` is the level to
-   !> relax it to; it would still be three orders inside any indexing error.
-   !> The per-direction mode is exercised by `HVP_GEN_TOL` below.
+   !> relax it to; it would still be three orders inside any indexing error
+   !> The per-direction mode is exercised by `HVP_GEN_TOL` below
    real(wp), parameter :: HVP_UNIT_TOL = 0.0_wp
 
    !> Bound on a direction set that crosses a `drop_hvp_chunk_dirs` boundary,
    !> against the same directions run one block at a time
    !>
    !> Exact, and measured exact on the fixture this suite drives, for both
-   !> fixed-channel modes. The response half and the per-direction fixed half
+   !> fixed-channel modes; the response half and the per-direction fixed half
    !> compute every column from its own direction alone, and the rank-4 fixed
    !> half is direction free and reduced in the first block only, so a block
    !> boundary falling somewhere in the middle of the set changes neither the
-   !> operands nor their order in any column. That holds only while every block
+   !> operands nor their order in any column; that holds only while every block
    !> prepares its level sets at the *same* derivative order: preparing the
    !> later, response-only blocks at order 3 moves their columns by one ulp
    !> (`1.8e-15` against `max |Hv| = 15.7`, measured here), because the
-   !> generated atom kernels schedule their lower orders differently per level.
+   !> generated atom kernels schedule their lower orders differently per level
    !>
    !> The number this assertion exists for is the other one: with the
    !> single-block gate on the fixed accumulation removed, the same comparison
    !> measures `1.6e+01` -- the whole fixed half counted a second time in every
-   !> column of the second block -- against a `max |Hv|` of `3.1e+01`.
+   !> column of the second block -- against a `max |Hv|` of `3.1e+01`
    real(wp), parameter :: HVP_CHUNK_TOL = 0.0_wp
 
    !> Bound on `get_surface_hessian` against the dense block contracted with a
@@ -445,12 +300,12 @@ module test_cavity_drop_hessian_e2e
    !> the explicit motion from the level set's `vjp_f2_rArB` block -- for SvdW
    !> a factorised product of per-atom quantities -- and is contracted
    !> afterwards, with its chain run on the 23-element symmetrised basis and
-   !> every column reconstructed from packed jet coordinates. Mathematically
-   !> the same by linearity; numerically two different evaluations. Measured
+   !> every column reconstructed from packed jet coordinates; mathematically
+   !> the same by linearity; numerically two different evaluations; measured
    !> `1.7e-15` (SvdW) and `1.3e-15` (CFC) relative against the `1e-13`
-   !> asserted. The same bound serves the mode boundary case of `run_hvp`,
+   !> asserted; the same bound serves the mode boundary case of `run_hvp`,
    !> where both sides are rank-4 and only the contraction differs: `3.1e-16` /
-   !> `5.4e-16` relative.
+   !> `5.4e-16` relative
    real(wp), parameter :: HVP_GEN_TOL = 1.0E-13_wp
 
 contains
@@ -567,7 +422,7 @@ contains
 
       call asymmetry(hess5, worst, worst_rel, scale)
 
-      ! Translation leaves `g` invariant, so every column sum vanishes. This is
+      ! Translation leaves `g` invariant, so every column sum vanishes; this is
       ! the metric that pins the column indexing of the construction, which the
       ! symmetry check cannot see
       drift = 0.0_wp
@@ -609,10 +464,10 @@ contains
 
    !> Numerical Hessian of the DROP surface contribution
    !>
-   !> This is the entry point the analytic comparison plugs into: it returns a
-   !> plain `(3, nsph, 3, nsph)` block in the same layout as
+   !> - Plain `(3, nsph, 3, nsph)` block for the analytic comparison
+   !> - Same layout as
    !> `get_surface_hessian_fixed`, for the adjoint that [[frozen_adjoint]]
-   !> builds from the same channel list.
+   !> builds from the same channel list
    !>
    !> @param[in]  mol      Base structure
    !> @param[in]  lsf_kind Level-set model
@@ -665,9 +520,9 @@ contains
    !> Numerical Hessian for several adjoint sets at once
    !>
    !> Every displaced geometry costs a full cavity rebuild, and the rebuild does
-   !> not depend on the adjoint. Driving all the sets off the same rebuild is
+   !> not depend on the adjoint; driving all the sets off the same rebuild is
    !> therefore free apart from one extra gradient contraction each, which is
-   !> what made the per-channel sweep in the module header affordable.
+   !> what made the per-channel sweep in the module header affordable
    !>
    !> @param[in]  mol       Base structure
    !> @param[in]  lsf_kind  Level-set model
@@ -734,7 +589,7 @@ contains
 
                ! A point that appears, vanishes, is reordered, changes owner or
                ! changes branch multiplicity puts a step into the differenced
-               ! gradient. That is the ceiling on `step`, and it is reported
+               ! gradient; that is the ceiling on `step`, and it is reported
                ! rather than absorbed
                if (.not. same_grid(ref_cav, cavity)) then
                   status = E2E_GRID_CHANGED
@@ -884,10 +739,10 @@ contains
    !> Compare the analytic Hessian against the numerical one, set by set
    !>
    !> One adjoint set per channel of the class plus the whole class together,
-   !> all driven off the same rebuilds by [[numerical_surface_hessian_multi]].
+   !> all driven off the same rebuilds by [[numerical_surface_hessian_multi]]
    !> Every set is compared against its own reference at its own step, so a
    !> regression in one channel cannot be absorbed by another -- and the two
-   !> classes never share a bound, which is the whole point of splitting them.
+   !> classes never share a bound, which is the whole point of splitting them
    !>
    !> @param[in]  lsf_kind   Level-set model
    !> @param[in]  chan_class Channel class, `CLASS_SMOOTH` or `CLASS_CURV`
@@ -961,7 +816,7 @@ contains
             return
          end if
 
-         ! `g` is translation invariant, so every column sum vanishes. Unlike
+         ! `g` is translation invariant, so every column sum vanishes; unlike
          ! the symmetry above this sees the *row* atom index, and it is the
          ! only assertion in the suite that reaches the fixed half's rank-4
          ! layout without going through the numerical reference
@@ -1056,17 +911,17 @@ contains
    !> Three assertions, in increasing distance from the code:
    !>
    !>  1. `get_surface_hessian` driven with the `3 nsph` Cartesian unit
-   !>     directions reproduces `get_hessian` column for column. The dense path
+   !>     directions reproduces `get_hessian` column for column; the dense path
    !>     adds the fixed half's rank-4 block directly while the HVP path
    !>     contracts it against unit vectors, so the two are the same sum in a
    !>     different order and agree bit for bit; the assertion is on the
    !>     wrapper's *indexing*, which nothing else in this suite can see;
    !>  2. `get_surface_hessian` driven with two general directions reproduces
-   !>     the dense block contracted with the same directions. Here the sums do
+   !>     the dense block contracted with the same directions; here the sums do
    !>     differ in order and in operand magnitude, so this is a round-off level
    !>     agreement rather than an exact one -- and it is also the only check
    !>     that the response half really is linear in the direction, which the
-   !>     unit-direction case cannot see. Two directions run the fixed channel
+   !>     unit-direction case cannot see; two directions run the fixed channel
    !>     per direction, so this is the cross-check of that mode against the
    !>     rank-4 block;
    !>  2b. the same with one direction more than `drop_hvp_per_dir_max`, a
@@ -1076,7 +931,7 @@ contains
    !>     the composition neither the unit case nor the two-direction case
    !>     reaches;
    !>  3. the same general-direction products against the numerical reference
-   !>     contracted with the same directions, at the smooth class's own bound.
+   !>     contracted with the same directions, at the smooth class's own bound
    !>
    !> @param[in]  lsf_kind Level-set model
    !> @param[in]  label    Human-readable case description
@@ -1290,7 +1145,7 @@ contains
    !>
    !> One level set is enough: what is asserted is a property of the traversal's
    !> bookkeeping and not of the mathematics, and it is the same bookkeeping on
-   !> both models.
+   !> both models
    !>
    !> @param[out] error Error handle
    subroutine test_hvp_chunking(error)
@@ -1317,9 +1172,9 @@ contains
 
       !* ---------------------------- A set of two blocks ----------------------------- *!
       ! Sized from the bound rather than from a literal, and split so that each
-      ! half is one block on its own. Both properties are asserted, because a
+      ! half is one block on its own; both properties are asserted, because a
       ! raised bound would otherwise leave this test crossing nothing and still
-      ! passing.
+      ! passing
       ndir = drop_hvp_chunk_dirs + 2
       nlo = (ndir + 1)/2
       if (ndir <= drop_hvp_chunk_dirs .or. nlo > drop_hvp_chunk_dirs) then
@@ -1365,9 +1220,9 @@ contains
    !> The per-direction fixed half alone, across a block boundary
    !>
    !> [[test_hvp_chunking]] reaches the rank-4 mode: its direction set is larger
-   !> than the fixture's `3 nsph`, so the public accessor forms the block. The
+   !> than the fixture's `3 nsph`, so the public accessor forms the block; the
    !> per-direction mode runs in every block and is reached here through the
-   !> half-accessor, on the same direction set, with the same exact bound.
+   !> half-accessor, on the same direction set, with the same exact bound
    !>
    !> @param[out] error Error handle
    subroutine test_hvp_chunking_per_dir(error)
@@ -1481,7 +1336,7 @@ contains
    !> must refuse, and the accumulator it was handed is checked afterwards: a
    !> guard that fires after a partial accumulation is worse than no guard, and
    !> the composition makes that a live possibility -- the fixed half runs
-   !> before the response half and both add to what they are given.
+   !> before the response half and both add to what they are given
    !>
    !> @param[out] error Error handle
    subroutine test_shape_guards(error)
@@ -1565,7 +1420,7 @@ contains
       end if
 
       !* ------------------------------- The accepting call ------------------------------ *!
-      ! A guard that rejected everything would satisfy all of the above.
+      ! A guard that rejected everything would satisfy all of the above
       !
       ! The directions are [[build_directions]]'s rather than the uniform ones
       ! used above: a uniform direction is a rigid translation, the Hessian
@@ -1594,14 +1449,14 @@ contains
    !> terms no unbranched fixture reaches: the response half's moving
    !> `branch_phi_adj`, the fixed half's second derivative of the branch
    !> objective, and the fixed half's weight chain with the branch weight
-   !> moving. The last couples the points of a group, and the two forms of the
+   !> moving; the last couples the points of a group, and the two forms of the
    !> fixed channel get it by different routes -- the per-direction form from
    !> the forward tangent, the rank-4 form from a group pass after the grid
-   !> loop. The differenced reference of these terms is the response suite's
+   !> loop; the differenced reference of these terms is the response suite's
    !> `both_halves_svdw_cross`; what is asserted here is what only the public
    !> entry points can show:
    !>
-   !>  1. the dense block is symmetric and has no translational mode. Neither
+   !>  1. the dense block is symmetric and has no translational mode; neither
    !>     half is symmetric on its own on a branched grid -- the branch terms
    !>     are split across the two -- so this is a property of the composition,
    !>     and it is independent of every finite difference;
@@ -1609,11 +1464,11 @@ contains
    !>     `get_hessian` column for column, as on the plain fixture;
    !>  3. `get_surface_hessian` on two general directions, which runs the fixed
    !>     channel per direction, reproduces the dense block contracted with
-   !>     them: the two routes to the branch-weight motion against each other.
+   !>     them: the two routes to the branch-weight motion against each other
    !>
    !> The fixture is asserted to branch before anything else is checked: on a
    !> cross that quietly stopped branching all three would hold for the reasons
-   !> they hold on the plain fixture.
+   !> they hold on the plain fixture
    !>
    !> @param[out] error Error handle
    subroutine test_branched_grid(error)
@@ -1846,10 +1701,10 @@ contains
 
    !> Adjoint sets of one channel class
    !>
-   !> Every channel of the class on its own, and then the whole class together.
+   !> Every channel of the class on its own, and then the whole class together
    !> The isolated sets are what makes the comparison per channel; the combined
    !> one is the realistic accumulator, and catches a cross-channel error that
-   !> no isolated set can see.
+   !> no isolated set can see
    !>
    !> @param[in]  chan_class Channel class
    !> @param[out] mask       Channels of each set, `(NCHAN, nset)`
@@ -1957,10 +1812,10 @@ contains
    !>
    !> Neither a Cartesian axis nor a translation, so a product that dropped one
    !> atom or one axis is visible, and dense enough that every column of the
-   !> block contributes to every component of the product. The first two are
+   !> block contributes to every component of the product; the first two are
    !> the pair every caller used before a count could be asked for; the rest
    !> follow a third formula that keeps one direction from being a multiple of
-   !> another.
+   !> another
    !>
    !> @param[in]  nsph  Number of spheres
    !> @param[out] dirs  Directions `(3, nsph, count)`
@@ -2001,7 +1856,7 @@ contains
    !> Every column is a different smooth function of the direction index, so no
    !> two are parallel, none is a Cartesian axis and none is a translation -- a
    !> product that lost a direction, an atom or an axis is visible in the
-   !> comparison this feeds.
+   !> comparison this feeds
    !>
    !> @param[in]  nsph Number of spheres
    !> @param[in]  ndir Number of directions
@@ -2038,7 +1893,7 @@ contains
    !>
    !> A component fails only when it misses the absolute *and* the relative
    !> bound: the absolute one alone would condemn a large component, the
-   !> relative one alone a component that is numerically zero.
+   !> relative one alone a component that is numerically zero
    !>
    !> @param[in]    analytic Analytic block
    !> @param[in]    ref      Numerical reference
@@ -2144,7 +1999,7 @@ contains
    !> Print the worst absolute and relative deviation of one block
    !>
    !> Only reached under [[E2E_VERBOSE]]; the tolerances above were measured
-   !> with it.
+   !> with it
    !>
    !> @param[in] label    Case description
    !> @param[in] name     Set name
@@ -2234,7 +2089,7 @@ contains
    !> Every weight is a pure function of the *persistent* point id
    !> `cavity%numbering`, so the same adjoint is reproduced on a displaced grid
    !> with no explicit mapping -- which is what "the adjoints are held fixed"
-   !> has to mean once the grid is filtered and reordered on every rebuild.
+   !> has to mean once the grid is filtered and reordered on every rebuild
    !>
    !> @param[in]  cavity Cavity supplying the grid
    !> @param[in]  mask   Channels to populate
@@ -2298,9 +2153,9 @@ contains
    !> Reproducible adjoint weight of one persistent point and channel
    !>
    !> Identical to the fixed-adjoint suite's, so the two sets of numbers
-   !> describe the same functional. Varies across the grid so a term that
+   !> describe the same functional; varies across the grid so a term that
    !> cancels for uniform weights still shows, and is bounded away from zero so
-   !> no channel is accidentally switched off.
+   !> no channel is accidentally switched off
    !>
    !> @param[in] id      Persistent point id, `cavity%numbering`
    !> @param[in] channel Channel selector

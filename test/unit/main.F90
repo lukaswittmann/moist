@@ -30,6 +30,7 @@ program tester
    use test_cavity_drop_hessian_e2e, only: collect_cavity_drop_hessian_e2e
    use test_cavity_drop_hessian_omega, only: collect_cavity_drop_hessian_omega
    use test_cavity_drop_weights_tangent, only: collect_cavity_drop_weights_tangent
+   use test_cavity_drop_branching, only: collect_cavity_drop_branching
    use test_cavity_drop_cfc, only: collect_cavity_drop_cfc
    use test_cavity_drop_lsf, only: collect_cavity_drop_lsf
    use test_cavity_drop_lsf_golden, only: collect_cavity_drop_lsf_golden
@@ -95,6 +96,7 @@ program tester
       & new_testsuite("cavity_drop_hessian_e2e", collect_cavity_drop_hessian_e2e), &
       & new_testsuite("cavity_drop_hessian_omega", collect_cavity_drop_hessian_omega), &
       & new_testsuite("cavity_drop_weights_tangent", collect_cavity_drop_weights_tangent), &
+      & new_testsuite("cavity_drop_branching", collect_cavity_drop_branching), &
       & new_testsuite("cavity_drop_cfc", collect_cavity_drop_cfc), &
       & new_testsuite("cavity_drop_lsf", collect_cavity_drop_lsf), &
       & new_testsuite("cavity_drop_lsf_golden", collect_cavity_drop_lsf_golden), &
