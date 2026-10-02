@@ -28,7 +28,7 @@ module test_cavity_drop_isodensity
                                           c_associated, c_f_pointer, c_null_funptr
    use mctc_env_accuracy, only: wp
    use mctc_env_error, only: mctc_error => error_type
-   use mctc_io, only: structure_type
+   use mctc_io, only: structure_type, new
    use mstore, only: get_structure
    use test_helpers, only: fd4_scalar, get_test_points, center_at_origin, rel_deviation
    use moist_utils_env, only: get_env
@@ -148,7 +148,8 @@ contains
                   new_unittest("internal_screening_equivalence", test_internal_screening_equivalence), &
                   new_unittest("exclusion_radius_never_overclaims", test_exclusion_radius), &
                   new_unittest("exclusion_radius_gated_off", test_exclusion_radius_gate), &
-                  new_unittest("internal_hessian_needs_host", test_internal_hessian_needs_host) &
+                  new_unittest("internal_hessian_needs_host", test_internal_hessian_needs_host), &
+                  new_unittest("internal_update_needs_basis_atoms", test_internal_update_atoms) &
                   ]
    end subroutine collect_cavity_drop_isodensity
 
@@ -1209,6 +1210,7 @@ contains
       type(structure_type) :: mol
       real(wp), allocatable :: radii(:)
       real(wp) :: r_out, r_in, unit_s
+      type(mctc_error), allocatable :: update_err
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
       if (allocated(error)) return
@@ -1244,7 +1246,11 @@ contains
       ! No `prepare` here, so the shared reference density is not touched and
       ! this stays independent of the `cb_gto` lock.
       call lsf_cb%new(c_null_funptr, c_null_ptr, lsf%param%rho_iso, lsf%param%scale)
-      call lsf_cb%update(mol, radii)
+      call lsf_cb%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       call check(error, lsf_cb%exclusion_radius(unit_s*(1.0_wp - exp(-1.0_wp))), &
                  r_out, thr=0.0_wp, &
                  more="both isodensity variants must certify the same radius")
@@ -1294,7 +1300,11 @@ contains
          return
       end if
       lsf%screening_threshold = threshold
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, merr)
+      if (allocated(merr)) then
+         call test_failed(error, "LSF update failed: "//merr%message)
+         return
+      end if
    end subroutine build_internal_lsf
 
    !> Build an internal LSF from one of the realistic molecular basis tests
@@ -1327,7 +1337,11 @@ contains
          return
       end if
       lsf%screening_threshold = threshold
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, merr)
+      if (allocated(merr)) then
+         call test_failed(error, "LSF update failed: "//merr%message)
+         return
+      end if
    end subroutine build_molecular_internal_lsf
 
    !> A density-defined level set must refuse a nuclear Hessian without the exchange
@@ -1410,6 +1424,46 @@ contains
       end if
    end subroutine test_internal_hessian_needs_host
 
+   !> Binding a structure with fewer atoms than the basis has owners is refused
+   !>
+   !> Shell centers are read from the structure by owner atom, so without the
+   !> check `update` would read past the end of the coordinates.
+   !>
+   !> @param[out] error Set on contract violation
+   subroutine test_internal_update_atoms(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_cavity_drop_lsf_isodensity_internal_type) :: lsf
+      type(moist_iso_gto_type) :: gto
+      type(structure_type) :: mol, small
+      type(mctc_error), allocatable :: merr
+      integer, allocatable :: sh_nprim(:)
+      real(wp), allocatable :: radii(:)
+
+      call build_test(gto, 1, error, mol)
+      if (allocated(error)) return
+      sh_nprim = gto%sh_poff(2:) - gto%sh_poff(:gto%nshell)
+      call lsf%new(gto%sh_atom, gto%sh_l, sh_nprim, gto%exps, gto%coeffs, &
+                   rho_iso_ref, lsf_scale, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, maxval(gto%sh_atom) == mol%nat, "every atom of the test molecule must own a shell")
+      if (allocated(error)) return
+
+      call new(small, mol%num(mol%id(:mol%nat - 1)), mol%xyz(:, :mol%nat - 1))
+      allocate (radii(small%nat), source=2.0_wp)
+      call lsf%update(small, radii, merr)
+      if (.not. allocated(merr)) then
+         call test_failed(error, "update accepted a structure missing a basis atom")
+         return
+      end if
+      call check(error, index(merr%message, "has only "//to_string(small%nat)) > 0, &
+                 "refused for the wrong reason: "//merr%message)
+   end subroutine test_internal_update_atoms
+
    !> Build the callback isodensity LSF over the module reference density
    !>
    !> @param[inout] lsf LSF instance
@@ -1421,10 +1475,12 @@ contains
       type(structure_type), intent(in) :: mol
 
       real(wp), allocatable :: radii(:)
+      type(mctc_error), allocatable :: update_err
 
       allocate (radii(mol%nat), source=2.0_wp)
       call lsf%new(c_funloc(iso_reference_callback), c_null_ptr, rho_iso_ref, lsf_scale)
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, update_err)
+      if (allocated(update_err)) error stop "build_callback_lsf: "//update_err%message
    end subroutine build_callback_lsf
 
    !> Both isodensity backends must describe the same level set

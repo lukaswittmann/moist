@@ -290,6 +290,7 @@ contains
       type(moist_cavity_drop_lsf_svdw_type) :: tmp_svdw
       type(moist_cavity_drop_lsf_cfc_type)  :: tmp_cfc
       real(wp) :: thr
+      type(mctc_error), allocatable :: update_err
 
       thr = 0.0_wp
       if (present(screening_threshold)) thr = screening_threshold
@@ -298,13 +299,15 @@ contains
       case (kind_svdw)
          tmp_svdw%screening_threshold = thr
          call tmp_svdw%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
-         call tmp_svdw%update(mol, radii)
+         call tmp_svdw%update(mol, radii, update_err)
+         if (allocated(update_err)) error stop "init_lsf: "//update_err%message
          call tmp_svdw%set_max_deriv(max_deriv)
          allocate (lsf, source=tmp_svdw)
       case (kind_cfc)
          tmp_cfc%screening_threshold = thr
          call tmp_cfc%new()
-         call tmp_cfc%update(mol, radii)
+         call tmp_cfc%update(mol, radii, update_err)
+         if (allocated(update_err)) error stop "init_lsf: "//update_err%message
          call tmp_cfc%set_max_deriv(max_deriv)
          allocate (lsf, source=tmp_cfc)
       case default
@@ -2781,13 +2784,15 @@ contains
       real(wp), intent(in) :: radii(:)
 
       type(structure_type) :: mol_local
+      type(mctc_error), allocatable :: update_err
 
       if (size(radii) /= mol%nat .or. size(centers, 2) /= mol%nat) then
          error stop "refresh_joint: radii/centers/structure size mismatch"
       end if
       mol_local = mol
       mol_local%xyz = centers
-      call lsf%update(mol_local, radii)
+      call lsf%update(mol_local, radii, update_err)
+      if (allocated(update_err)) error stop "refresh_joint: "//update_err%message
       call lsf%set_max_deriv(3)
    end subroutine refresh_joint
 
@@ -2810,11 +2815,13 @@ contains
       type(structure_type), intent(in) :: mol
       !> Perturbed per-atom radii
       real(wp), intent(in) :: radii(:)
+      type(mctc_error), allocatable :: update_err
 
       if (size(radii) /= mol%nat) then
          error stop "refresh_radii: radii/structure size mismatch"
       end if
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, update_err)
+      if (allocated(update_err)) error stop "refresh_radii: "//update_err%message
       call lsf%set_max_deriv(3)
    end subroutine refresh_radii
 
@@ -3009,7 +3016,11 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(3)
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -3114,7 +3125,11 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(3)
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -3193,7 +3208,11 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(4)
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
@@ -3274,13 +3293,21 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(4)
                if (allocated(analytic)) deallocate (analytic)
                allocate (analytic(ndim, ndim, ndim, ndim, mol%nat))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call prim%update(mol, radii)
+                  call prim%update(mol, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_base)
                   call prim%prepare(point, lsf_err)
                   if (allocated(lsf_err)) then
@@ -3293,28 +3320,44 @@ contains
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rrr(lsf3_rrr=t3_fwd)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rrr(lsf3_rrr=t3_fwd2)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rrr(lsf3_rrr=t3_bwd)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rrr(lsf3_rrr=t3_bwd2)
@@ -3389,11 +3432,19 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(4)
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call prim%update(mol, radii)
+                  call prim%update(mol, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_base)
                   call prim%prepare(point, lsf_err)
                   if (allocated(lsf_err)) then
@@ -3406,28 +3457,44 @@ contains
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA(lsf3_rr_rA=rr_rA_fwd)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA(lsf3_rr_rA=rr_rA_fwd2)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA(lsf3_rr_rA=rr_rA_bwd)
                         centers_local = centers_base
                         centers_local(axisB, iB) = centers_local(axisB, iB) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%f3_rr_rA(lsf3_rr_rA=rr_rA_bwd2)
@@ -3489,13 +3556,21 @@ contains
                prim%screening_threshold = 0.0_wp
                call prim%new(blend_k=svdw_blend_k_values(iblend), &
                              blend_3b=svdw_gamma_values(igamma))
-               call prim%update(mol, radii)
+               call prim%update(mol, radii, lsf_err)
+               if (allocated(lsf_err)) then
+                  call test_failed(error, "LSF update failed: "//lsf_err%message)
+                  return
+               end if
                call prim%set_max_deriv(2)
                if (allocated(deriv_rA)) deallocate (deriv_rA)
                allocate (deriv_rA(ndim, mol%nat))
                do ipt = 1, size(points, 2)
                   point = points(:, ipt)
-                  call prim%update(mol, radii)
+                  call prim%update(mol, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_base)
                   call prim%prepare(point, lsf_err)
                   if (allocated(lsf_err)) then
@@ -3508,28 +3583,44 @@ contains
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA(f_forward)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA(f_forward2)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA(f_backward)
                         centers_local = centers_base
                         centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*STEP_SIZE
                         call new(mol_shift, atomic_numbers, centers_local)
-                        call prim%update(mol_shift, radii)
+                        call prim%update(mol_shift, radii, lsf_err)
+                        if (allocated(lsf_err)) then
+                           call test_failed(error, "LSF update failed: "//lsf_err%message)
+                           return
+                        end if
                         call prim%set_centers(centers_local)
                         call prim%prepare(point, lsf_err)
                         call prim%normalized_f01_rA(f_backward2)
@@ -3614,7 +3705,11 @@ contains
          prim%screening_threshold = 0.0_wp
          call prim%new(blend_k=svdw_legacy_blend_k, blend_2b=svdw_legacy_blend_2b, &
                        blend_3b=svdw_legacy_blend_3b)
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(4)
 
          do ipt = 1, size(points, 2)
@@ -3814,7 +3909,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(3)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -3909,7 +4008,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(3)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -3983,7 +4086,11 @@ contains
          call get_test_points(mol, points, n_points_cfc)
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(4)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -4054,7 +4161,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(4)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -4136,7 +4247,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(4)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -4217,7 +4332,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(2)
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
@@ -4322,7 +4441,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol, radii)
+         call prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(4)
 
          do ipt = 1, size(points, 2)
@@ -4536,7 +4659,11 @@ contains
       prim%screening_threshold = 0.0_wp
       call prim%new(blend_k=svdw_legacy_blend_k, blend_2b=svdw_legacy_blend_2b, &
                     blend_3b=svdw_legacy_blend_3b)
-      call prim%update(mol, radii)
+      call prim%update(mol, radii, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
       call prim%set_max_deriv(4)
 
       !* Exactly on nucleus 2
@@ -4719,7 +4846,11 @@ contains
       call new(mol, atomic_numbers(:n2), centers2)
       prim%screening_threshold = 0.0_wp
       call prim%new(blend_k=2.4_wp, blend_1b=0.0_wp, blend_2b=1.0_wp, blend_3b=0.0_wp)
-      call prim%update(mol, radii2)
+      call prim%update(mol, radii2, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
       call prim%set_max_deriv(0)
       call prim%set_centers(centers2)
       call prim%prepare(point2, lsf_err)
@@ -4744,7 +4875,11 @@ contains
       call new(mol, atomic_numbers(:n3), centers3)
       prim%screening_threshold = 0.0_wp
       call prim%new(blend_k=1.7_wp, blend_1b=0.0_wp, blend_2b=0.0_wp, blend_3b=1.0_wp)
-      call prim%update(mol, radii3)
+      call prim%update(mol, radii3, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
       call prim%set_max_deriv(0)
       call prim%set_centers(centers3)
       call prim%prepare(point3, lsf_err)
@@ -4959,6 +5094,7 @@ contains
       real(wp), allocatable :: radii(:)
       type(moist_cavity_drop_lsf_cfc_type) :: cfc
       real(wp) :: r
+      type(mctc_error), allocatable :: update_err
 
       call get_structure(mol, "MB16-43", "LiH")
       call get_test_radii(mol, radii)
@@ -4968,7 +5104,11 @@ contains
       ! of |S|. The band only has to catch a formula that lost a radius, an
       ! exponent or a unit.
       call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=4)
-      call cfc%update(mol, radii)
+      call cfc%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       r = cfc%exclusion_radius(-1.0_wp)
       if (r < 0.05_wp .or. r > 0.2_wp) then
          call test_failed(error, "default CFC parameters must certify a radius "// &
@@ -4983,7 +5123,11 @@ contains
 
       ! 2|a2| < |a1|: the pair term outlives the atomic terms that pay for it.
       call cfc%new(a1=-15.0_wp, a2=-7.0_wp, c=5.0_wp, m=4)
-      call cfc%update(mol, radii)
+      call cfc%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="a pair term decaying slower than the atomic one "// &
                  "must certify nothing")
@@ -4991,21 +5135,33 @@ contains
 
       ! Odd pair power: `u**m` is not `|u|**m` and `PD` can go negative.
       call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=5.0_wp, m=3)
-      call cfc%update(mol, radii)
+      call cfc%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="an odd pair power must certify nothing")
       if (allocated(error)) return
 
       ! Negative coupling: same loss of positivity from the other direction.
       call cfc%new(a1=-15.0_wp, a2=-9.0_wp, c=-5.0_wp, m=4)
-      call cfc%update(mol, radii)
+      call cfc%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="a negative pair coupling must certify nothing")
       if (allocated(error)) return
 
       ! A growing atomic term is not a level set this bound covers either.
       call cfc%new(a1=1.0_wp, a2=-9.0_wp, c=5.0_wp, m=4)
-      call cfc%update(mol, radii)
+      call cfc%update(mol, radii, update_err)
+      if (allocated(update_err)) then
+         call test_failed(error, "LSF update failed: "//update_err%message)
+         return
+      end if
       call check(error, cfc%exclusion_radius(-1.0_wp), 0.0_wp, thr=0.0_wp, &
                  message="a non-decaying atomic term must certify nothing")
    end subroutine test_cfc_exclusion_radius_gate

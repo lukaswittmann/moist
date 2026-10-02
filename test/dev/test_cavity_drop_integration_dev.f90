@@ -618,7 +618,11 @@ contains
       call lsf%new(blend_k=k, blend_2b=beta, blend_3b=gamma)
       !> Direct LSF use (no cavity to set screening); we own this.
       lsf%screening_threshold = PROJ_TOL * 0.1_wp
-      call lsf%update(mol, radii_local)
+      call lsf%update(mol, radii_local, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "LSF update failed: "//cavity_error%message)
+         return
+      end if
 
       ! Integrate using marching cubes
       call integrate_surface_marching_cubes(lsf, mol%xyz, &

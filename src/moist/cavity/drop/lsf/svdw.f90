@@ -296,18 +296,22 @@ contains
    !> @param[inout] self   LSF instance
    !> @param[in]    mol    Molecular structure
    !> @param[in]    radii  Per-atom radii (size mol%nat)
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error  Error handling
+   subroutine lsf_update(self, mol, radii, error)
       !> LSF instance
       class(moist_cavity_drop_lsf_svdw_type), intent(inout) :: self
       !> Molecular structure
       type(structure_type), intent(in) :: mol
       !> Per-atom radii
       real(wp), intent(in) :: radii(:)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
 
       !> Atom capacity of the per-point buffers
       integer :: n_alloc
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (allocated(error)) return
 
       n_alloc = mol%nat
       if (allocated(self%active_cand)) deallocate (self%active_cand)

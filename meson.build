@@ -42,6 +42,9 @@ moist_dep = declare_dependency(
   variables: {
     'includedir': meson.current_source_dir() / 'include',
     'libdir': get_option('prefix') / get_option('libdir'),
+    # Whether link_with above links the shared library, which the installed
+    # Python extension then has to find at run time
+    'shared': (get_option('default_library') != 'static').to_string(),
   },
 )
 

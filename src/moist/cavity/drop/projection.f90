@@ -167,6 +167,8 @@ contains
       real(wp) :: progress_last_time, now_time, progress_elapsed, progress_rate, progress_eta
       real(wp) :: wall_start, wall_end
       logical :: append_ok
+      !> Whether this thread's setup or bind failed, so it idles through the loop
+      logical :: setup_failed
       logical :: trigger_time, trigger_pct
       logical :: abort_requested
       type(error_slot), allocatable :: thread_error(:)
@@ -217,7 +219,7 @@ contains
 
       wall_start = drop_wall_time()
 
-      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, i, n_branch, append_ok, &
+      !$omp parallel num_threads(nthreads) default(shared) private(thread_slot, i, n_branch, append_ok, setup_failed, &
       !$omp& local_branched_anchor, local_branched_points, local_nbranch_min, local_nbranch_max, &
       !$omp& local_done, est_done, next_progress_pct, progress_last_time, now_time, progress_elapsed, &
       !$omp& progress_rate, progress_eta, trigger_time, trigger_pct)
@@ -239,9 +241,12 @@ contains
 
       ! A thread that failed setup must not touch its buffers below, and it cannot
       ! leave the region either, so it raises the flag and idles through the loop.
-      if (.not. abort_on_error(thread_error(thread_slot), 0, abort_requested)) then
+      setup_failed = abort_on_error(thread_error(thread_slot), 0, abort_requested)
+      if (.not. setup_failed) then
          !init_primitives() binds the objective/LSF to this molecule, radii and screening grid
-         call projectors(thread_slot)%init_primitives(self%mol, self%radii, self%mol_cell_grid)
+         call projectors(thread_slot)%init_primitives(self%mol, self%radii, self%mol_cell_grid, &
+                                                      thread_error(thread_slot)%e)
+         setup_failed = abort_on_error(thread_error(thread_slot), 0, abort_requested)
       end if
 
       local_branched_anchor = 0

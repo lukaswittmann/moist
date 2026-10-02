@@ -440,6 +440,7 @@ contains
       real(wp), intent(in) :: thr
 
       integer :: max_deriv
+      type(mctc_error), allocatable :: update_err
 
       select case (kind)
       case (kind_svdw)
@@ -463,7 +464,8 @@ contains
          error stop "new_lsf: unknown kind '"//kind//"'"
       end select
 
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, update_err)
+      if (allocated(update_err)) error stop "new_lsf: "//update_err%message
       call lsf%set_max_deriv(max_deriv)
    end subroutine new_lsf
 

@@ -192,6 +192,24 @@ For a self-consistent calculation, :func:`~moist.pyscf.solvated_rhf` wraps the w
    mf = solvated_rhf(mol, epsilon=80.0, nleb=194)
    print(mf.e_tot)
 
+``CavityDROPIsodensity`` asks the host for the density point by point.
+:meth:`~moist.pyscf.PySCFHost.internal_cavity` builds a :class:`~moist.interface.CavityDROPIsodensityInternal` instead, which takes the molecule's basis once and evaluates the density inside moist, in parallel over the grid points.
+The host transforms every density matrix it is given into the cavity's cartesian layout and installs it, so a coupling keeps the surface current exactly as with the callback, and the two give the same results to rounding:
+
+.. code-block:: python
+
+   model = SolvationModel(
+      cavity=host.internal_cavity(nleb=194),
+      components=[ModelComponentCPCM(80.0)]
+      )
+   result = model.evaluate(coupling=host.coupling(dm))
+
+   mf = solvated_rhf(mol, epsilon=80.0, nleb=194, isodensity="internal")
+
+An internal cavity built by hand is refused by the coupling and by
+:func:`~moist.hessian.rhf_hessian`, since its density would not follow the
+host's.
+
 Analytic SCF Hessians
 ---------------------
 
@@ -273,12 +291,16 @@ Use a model factory to select components consistently for SCF and Hessians:
    hessian = mf.Hessian("directional").kernel()
 
 The dense backend in :mod:`moist.second_order` stores dense surface second
-partials for single-branch isodensity DROP. Its storage grows quadratically with
+partials for isodensity DROP. Its storage grows quadratically with
 the number of independent AO density-matrix elements, so it is intended for small
 systems; the directional backend has no such term. The charge-response part is
 applied in factored form without assembling its PP block. Both backends support
-conventional real, closed-shell, all-electron RHF and single-branch DROP
-projections. PV has a second-order channel on the directional path only.
+conventional real, closed-shell, all-electron RHF, and both carry the branch
+weights of a multi-branch DROP projection: the directional backend through
+moist's surface Hessian, the dense backend through a pass over the whole grid
+that completes its per-point surface partials, since the weights couple the
+points of an anchor group.
+PV has a second-order channel on the directional path only.
 The native ``model.hessian()`` remains a fixed-host model derivative; the total
 relaxed SCF Hessian is obtained from ``mf.Hessian()``.
 

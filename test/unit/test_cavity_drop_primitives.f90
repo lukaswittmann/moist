@@ -832,7 +832,11 @@ contains
 
          prim%screening_threshold = 0.0_wp
          call prim%new()
-         call prim%update(mol_base, radii)
+         call prim%update(mol_base, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          call prim%set_max_deriv(3)
 
          if (allocated(lsf1)) deallocate (lsf1)
@@ -842,7 +846,11 @@ contains
 
          do ipt = 1, size(points, 2)
             point = points(:, ipt)
-            call prim%update(mol_base, radii)
+            call prim%update(mol_base, radii, lsf_err)
+            if (allocated(lsf_err)) then
+               call test_failed(error, "LSF update failed: "//lsf_err%message)
+               return
+            end if
             call prim%set_centers(centers_base)
             call prim%prepare(point, lsf_err)
             if (allocated(lsf_err)) then
@@ -860,7 +868,11 @@ contains
                   centers_local = centers_base
                   centers_local(axis, atom) = centers_local(axis, atom) + 2.0_wp*eps
                   mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
+                  call prim%update(mol_shift, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
                   call prim%f0(lsf0_tmp)
@@ -870,7 +882,11 @@ contains
                   centers_local = centers_base
                   centers_local(axis, atom) = centers_local(axis, atom) + eps
                   mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
+                  call prim%update(mol_shift, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
                   call prim%f0(lsf0_tmp)
@@ -880,7 +896,11 @@ contains
                   centers_local = centers_base
                   centers_local(axis, atom) = centers_local(axis, atom) - eps
                   mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
+                  call prim%update(mol_shift, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
                   call prim%f0(lsf0_tmp)
@@ -890,7 +910,11 @@ contains
                   centers_local = centers_base
                   centers_local(axis, atom) = centers_local(axis, atom) - 2.0_wp*eps
                   mol_shift%xyz = centers_local
-                  call prim%update(mol_shift, radii)
+                  call prim%update(mol_shift, radii, lsf_err)
+                  if (allocated(lsf_err)) then
+                     call test_failed(error, "LSF update failed: "//lsf_err%message)
+                     return
+                  end if
                   call prim%set_centers(centers_local)
                   call prim%prepare(point, lsf_err)
                   call prim%f0(lsf0_tmp)

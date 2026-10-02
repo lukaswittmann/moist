@@ -361,15 +361,17 @@ contains
    end subroutine projector_init
    !> Initialize the primitives
 
-   subroutine projector_init_primitives(self, mol, radii, mol_cell_grid)
+   subroutine projector_init_primitives(self, mol, radii, mol_cell_grid, error)
       class(drop_projector_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
       type(moist_cell_grid_type), intent(in), optional :: mol_cell_grid
+      type(error_type), allocatable, intent(out) :: error
 
       ! Initialize primitives
       call self%phi%set_input(mol, radii)
-      call self%lsf%update(mol, radii)
+      call self%lsf%update(mol, radii, error)
+      if (allocated(error)) return
 
       ! The gate the cell grid was built for; the seed stage may loosen it
       ! temporarily, and this is what it gets restored to.

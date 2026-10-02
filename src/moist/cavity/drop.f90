@@ -1069,7 +1069,8 @@ contains
       allocate (self%sphxyz(3, self%nsph), source=mol%xyz)
 
       !> Refresh LSF geometry caches
-      call self%lsf_model%update(self%mol, self%radii)
+      call self%lsf_model%update(self%mol, self%radii, error)
+      if (allocated(error)) return
 
       !* --------------------------------- Setup phase -------------------------------- *!
       d0 = self%ctx%timer%current_depth()

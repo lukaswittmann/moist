@@ -21,6 +21,7 @@ module moist_cavity_drop_lsf_isodensity_internal
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
+   use moist_output_format, only: format_string
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
                                          lsf_base_update, lsf_candidate_space_user
    use moist_cavity_drop_lsf_isodensity_gto, only: moist_iso_gto_type, moist_iso_gto_nslot
@@ -154,12 +155,25 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error Set when the basis has shells on atoms the structure lacks
+   subroutine lsf_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out) :: error
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (allocated(error)) return
+      !> Shell centers are read from the structure by owner atom
+      if (self%gto%nshell > 0) then
+         if (maxval(self%gto%sh_atom) > mol%nat) then
+            call fatal_error(error, "Isodensity basis needs "// &
+                             format_string(maxval(self%gto%sh_atom), "(i0)")// &
+                             " atoms, but the structure has only "// &
+                             format_string(mol%nat, "(i0)"))
+            return
+         end if
+      end if
       call self%gto%refresh_centers(mol)
       !> Size the per-shell radial screening cutoffs to the cavity's screening threshold (inherited from the base)
       call self%gto%build_screening(self%screening_threshold)

@@ -142,12 +142,15 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii
-   subroutine lsf_update(self, mol, radii)
+   !> @param[out]   error Error handling
+   subroutine lsf_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_isodensity_callback_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out) :: error
 
-      call lsf_base_update(self, mol, radii)
+      call lsf_base_update(self, mol, radii, error)
+      if (allocated(error)) return
       self%zmax = 0.0_wp
       if (allocated(mol%num)) then
          if (size(mol%num) > 0) self%zmax = real(maxval(mol%num), wp)

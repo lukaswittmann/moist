@@ -174,7 +174,11 @@ contains
          !> Without a cavity to set this, the direct user owns the
          !> screening threshold; lsf_update reads it when sizing SSD.
          lsf%screening_threshold = proj_tol * 0.1_wp
-         call lsf%update(mol, radii)
+         call lsf%update(mol, radii, mc_error)
+         if (allocated(mc_error)) then
+            call test_failed(error, "LSF update failed: "//mc_error%message)
+            return
+         end if
 
          do igrid = 1, n_spacings
             call integrate_surface_marching_cubes(lsf, mol%xyz, areas(igrid), volumes(igrid), &

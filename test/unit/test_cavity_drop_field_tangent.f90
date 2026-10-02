@@ -260,6 +260,7 @@ contains
       character(len=192) :: msg
       !> Magnitude of the half a case exists to exercise
       real(wp) :: probe
+      type(mctc_error), allocatable :: update_err
 
       call get_test_structures(mols)
       do icase = 1, size(mols)
@@ -313,7 +314,11 @@ contains
             end do
          end do
 
-         call lsf%update(mol, radii)
+         call lsf%update(mol, radii, update_err)
+         if (allocated(update_err)) then
+            call test_failed(error, "LSF update failed: "//update_err%message)
+            return
+         end if
 
          do ipt = 1, size(points, 2)
             point0 = points(:, ipt)
@@ -486,7 +491,11 @@ contains
       type(mctc_error), allocatable :: lsf_err
 
       call new(mol_shift, atomic_numbers, centers)
-      call lsf%update(mol_shift, radii)
+      call lsf%update(mol_shift, radii, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
       call lsf%set_centers(centers)
       !* `f4_rrr_rA` is the highest rung reached here: order 3 for SvdW, 4 for
       !* CFC. Ask for 4 unconditionally and let each concrete clamp it.

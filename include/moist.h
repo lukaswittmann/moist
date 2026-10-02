@@ -1107,11 +1107,14 @@ moist_contract_amat1_q1q2_surface_weights(moist_error /* error */,
                                           double* /* w_f[ngrid] */,
                                           double* /* w_xyz: Fortran (3,ngrid) */) moist_API_SUFFIX__V_0_5;
 
-/// Analytic host-parameter derivatives of one single-branch DROP surface point.
+/// Analytic host-parameter derivatives of one DROP surface point.
 /// igrid is zero-based. Jets are derivatives of the scaled level set S at the
 /// fixed projected point, packed by spatial order with full Cartesian tensors
 /// in Fortran order. Nuclear directions may be zero for electronic parameters.
 /// Output components are (x,y,z,xi,f). All capacities must match the cavity.
+/// The branch weight of the point is held fixed: on a multi-branch grid the xi
+/// component is completed by moist_drop_host_branch_derivatives once every
+/// point has been differentiated.
 moist_API_ENTRY void moist_API_CALL
 moist_drop_host_point_derivatives(moist_error, moist_cavity,
     int /* igrid */, int /* nat */, int /* ndir */,
@@ -1120,6 +1123,21 @@ moist_drop_host_point_derivatives(moist_error, moist_cavity,
     const double* /* jet1: (40,ndir), spatial orders 0..3 */,
     const double* /* jet2: (13,ndir,ndir), spatial orders 0..2 */,
     double* /* d1: (5,ndir) */, double* /* d2: (5,ndir,ndir) */) moist_API_SUFFIX__V_0_7;
+
+/// Branch-weight motion of the host-parameter derivatives of every DROP point.
+/// Takes the per-point results of moist_drop_host_point_derivatives collected
+/// over the whole grid and adds, in place, the motion of the softmax branch
+/// weights, which couple the points of a multi-branch anchor group and so
+/// cannot be formed point by point. Only the xi component changes; a
+/// single-branch grid is left untouched. dirs must be the directions the
+/// per-point calls were given.
+/// V_0_8 CONTRACT: new in this release.
+moist_API_ENTRY void moist_API_CALL
+moist_drop_host_branch_derivatives(moist_error, moist_cavity,
+    int /* ngrid */, int /* nat */, int /* ndir */,
+    const double* /* dirs: (3,nat,ndir) */,
+    double* /* d1: (5,ngrid,ndir), in/out */,
+    double* /* d2: (5,ngrid,ndir,ndir), in/out */) moist_API_SUFFIX__V_0_8;
 
 /// Gaussian PCM derivatives along the supplied surface path (x,y,z,xi,f).
 /// Returns A_p q and q^T A_pq q, with q held fixed in both contractions.

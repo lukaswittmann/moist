@@ -205,7 +205,7 @@ module moist_cavity_drop_lsf_base
    contains
       !> Bind molecular geometry and rebuild the screening caches. Concrete LSFs
       !> may override to refresh additional caches; the override *must* call the
-      !> base implementation first via `call lsf_base_update(self, mol, radii)`
+      !> base implementation first via `call lsf_base_update(self, mol, radii, error)`
       procedure :: update => lsf_base_update
       !> Move the atom centers without touching radii, parameters or derivative
       !> storage (used by nuclear finite-difference drivers)
@@ -467,7 +467,7 @@ contains
    !> the screening bounds
    !>
    !> Concrete LSFs that need extra work (e.g. resize their own per-atom caches)
-   !> override this and call back to it via `call lsf_base_update(self, mol, radii)`
+   !> override this and call back to it via `call lsf_base_update(self, mol, radii, error)`
    !> *first*, since the override typically sizes itself from the state this
    !> routine establishes. (The `self%parent_type%update` form is not available:
    !> the base is abstract.)
@@ -475,10 +475,12 @@ contains
    !> @param[inout] self  LSF instance
    !> @param[in]    mol   Molecular structure
    !> @param[in]    radii Per-atom radii (size mol%nat)
-   subroutine lsf_base_update(self, mol, radii)
+   !> @param[out]   error Set when the LSF cannot be bound to this structure
+   subroutine lsf_base_update(self, mol, radii, error)
       class(moist_cavity_drop_lsf_type), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       real(wp), intent(in) :: radii(:)
+      type(error_type), allocatable, intent(out) :: error
 
       self%mol = mol
       self%ncenters = mol%nat

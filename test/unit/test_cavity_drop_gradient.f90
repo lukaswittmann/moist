@@ -1723,7 +1723,11 @@ contains
       !> shorter than the atom count. Without them the test is vacuous, because
       !> the buggy and the correct index map coincide.
       nscreened = 0
-      call cavity%lsf_model%update(cavity%mol, cavity%radii)
+      call cavity%lsf_model%update(cavity%mol, cavity%radii, cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, "LSF update failed: "//cavity_error%message)
+         return
+      end if
       do igrid = 1, ngrid_set
          call cavity%lsf_model%prepare(cavity%xyz(:, igrid), cavity_error)
          if (allocated(cavity_error)) then

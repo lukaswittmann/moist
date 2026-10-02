@@ -191,7 +191,11 @@ contains
 
          call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
          lsf%screening_threshold = screen_thr
-         call lsf%update(mol, radii)
+         call lsf%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
 
          ! Same construction as setup_mol_cell_grid, then relabel the candidate
          ! ids into the LSF's internal (sorted) atom ordering
@@ -342,7 +346,11 @@ contains
       !> Reference S at a threshold far below any of the sweep values
       call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
       lsf%screening_threshold = thr_ref
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
       call lsf%set_max_deriv(0)
       do ipt = 1, npts
          call lsf%prepare(points(:, ipt), lsf_err)
@@ -358,7 +366,11 @@ contains
       do ithr = 1, n_thr
          call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
          lsf%screening_threshold = thr_list(ithr)
-         call lsf%update(mol, radii)
+         call lsf%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
          offset = lsf%screening_offset(radii(1))
 
          do ipt = 1, nat
@@ -678,7 +690,11 @@ contains
                            blend_3b=blend_3b)
          lsf_prim%screening_threshold = threshold
          call lsf_prim%set_max_deriv(2)
-         call lsf_prim%update(mol, radii)
+         call lsf_prim%update(mol, radii, lsf_err)
+         if (allocated(lsf_err)) then
+            call test_failed(error, "LSF update failed: "//lsf_err%message)
+            return
+         end if
 
          ! Generate test points
          call generate_categorized_points(mol, radii, all_points, n_surface, n_interior, 0)
@@ -1105,7 +1121,11 @@ contains
          call lsf%new(blend_k=blend_k, blend_1b=1.0_wp, blend_2b=1.0_wp, &
                       blend_3b=blend_3b)
          lsf%screening_threshold = 0.0_wp
-         call lsf%update(mol, radius_model%f0)
+         call lsf%update(mol, radius_model%f0, radii_error)
+         if (allocated(radii_error)) then
+            call test_failed(error, "LSF update failed: "//radii_error%message)
+            return
+         end if
 
          mc_times(istruct) = 0.0_wp
          do iter = 1, n_iter
@@ -1572,7 +1592,11 @@ contains
 
       call lsf%new(blend_k=blend_k, blend_2b=blend_2b, blend_3b=blend_3b)
       lsf%screening_threshold = thr
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
 
 
       !> ================= prepare, one pass per derivative level =================
@@ -1847,7 +1871,11 @@ contains
 
       call lsf%new()
       lsf%screening_threshold = thr
-      call lsf%update(mol, radii)
+      call lsf%update(mol, radii, lsf_err)
+      if (allocated(lsf_err)) then
+         call test_failed(error, "LSF update failed: "//lsf_err%message)
+         return
+      end if
 
       !> ================= prepare, one pass per derivative level =================
       do ilvl = 0, ubound(prep_time, 1)

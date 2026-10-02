@@ -476,7 +476,8 @@ contains
 
       !> Refresh LSF geometry caches; the integrator reads lsf%radii for its
       !> bounding box and never calls update itself
-      call self%lsf_model%update(mol, self%radii)
+      call self%lsf_model%update(mol, self%radii, error)
+      if (allocated(error)) return
 
       if (allocated(self%total_area)) deallocate (self%total_area)
       if (allocated(self%total_volume)) deallocate (self%total_volume)
