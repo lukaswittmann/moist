@@ -1,75 +1,29 @@
 !> Tangent of the DROP surface-weight folding
 !>
-!> Pass 2 of the DROP Hessian. [[prepare_surface_weights]]
-!> (`derivatives/weights.f90`) folds the raw host adjoints of a
-!> `cavity_surface_adjoint_type` into the effective weights of a
-!> [[drop_surface_weights_type]]; this module differentiates that folding along
-!> one direction, **with the raw adjoints held fixed**.
+!> - Pass 2 of the DROP Hessian: directional tangent of
+!>   [[prepare_surface_weights]] with the raw adjoints held fixed
+!> - Supplies the `sum_c d(eff_c) dGamma_c/dx` term of the fixed-adjoint half
+!> - Nonzero tangents: `w_xi`, `w_f` (only with `fold_switching`) and
+!>   `branch_phi_adj`
+!> - `w_xyz`, `w_n`, `w_k1`, `w_k2` copy the raw adjoints: zero tangent, not
+!>   emitted, consumers must not contract them
+!> - `have_wn`, `have_wk` do not move; reuse the primal `eff` flags
+!> - Producer supplies the tangents of `a`, `wleb`, `xi0`, `wbranch` per grid
+!>   point and direction
+!> - `radii` fixed for both shipped radius models (`f1_rA` zero); `owner`,
+!>   `branch_count`, `anchor_id`, `sigma_phi` discrete or parametric
+!> - Tangents taken as independent arguments, so any linear path is testable
+!> - Caller's contract: `dwleb = -2 wleb dxi0/xi0`,
+!>   `da = R^2 (wleb df + f dwleb)`
+!> - [[branch_phi_adj_tangent]] reduces over contiguous anchor groups, the only
+!>   cross-point coupling: parallelise over groups or directions, never over
+!>   grid points; a split group corrupts the result without an error
+!> - Group contiguity from the stable `counting_argsort` in `projection.f90`,
+!>   unchecked here; shared walk is [[next_branch_group]]
+!> - Primitive serial over the grid, so one call per direction is safe
 !>
-!> That is the fixed-adjoint half of the composition: the folded weights are
-!> geometry dependent even when the host adjoints are not, so
-!> `d(sum_c eff_c dGamma_c/dx)` carries a `sum_c d(eff_c) dGamma_c/dx` term and
-!> `d(eff)` is what produces it.
-!>
-!> ## What moves and what does not
-!>
-!> Only three of the eight fields of [[drop_surface_weights_type]] have a
-!> nonzero tangent, and the other five are frozen for a reason worth stating
-!> once rather than rediscovering:
-!>
-!>   * `w_xyz`, `w_n`, `w_k1` and `w_k2` are `source=`-copies of the raw
-!>     adjoints (`weights.f90`, the `allocate` block). With the raw adjoints
-!>     fixed their tangent is identically zero, so this module does not emit
-!>     them at all -- a consumer must not contract them, and gains the right to
-!>     skip the normal and curvature channels of the tangent contraction
-!>     outright.
-!>   * `have_wn` and `have_wk` are `any(abs(...) > seed_weight_tol)` over those
-!>     same copies. They are functions of the fixed raw adjoints only, so they
-!>     do not move with the geometry either; the caller reuses the primal
-!>     `eff%have_wn` / `eff%have_wk` unchanged.
-!>
-!> What is left is `w_xi` (both derived-channel folds), `w_f` (the area fold,
-!> only when `fold_switching`), and `branch_phi_adj`.
-!>
-!> ## What the producer must supply
-!>
-!> The folding reads `a`, `wleb`, `xi0` and `wbranch` from the cavity, so its
-!> tangent needs those four per grid point per direction, and nothing else that
-!> moves: `radii` is geometry independent for both shipped radius models
-!> (`radii/type.f90`, `f1_rA` zeroed), and `owner`, `branch_count`, `anchor_id`
-!> and `sigma_phi` are discrete or parametric.
-!>
-!> The four are *not* independent -- `a = R^2 f wleb` and
-!> `xi0 = swx/(R sqrt(wleb))`, so `dwleb = -2 wleb dxi0/xi0` exactly (the same
-!> identity [[apply_seed]] uses at `res%dxi`) -- but they are taken as four
-!> independent arguments here on purpose, for the reason
-!> [[drop_seed_input_tangent_type]] gives: baking the identities into the
-!> primitive would make it untestable along an arbitrary linear path and would
-!> put the physics in the driver's place. The identities are the *caller's*
-!> contract, restated on the routine.
-!>
-!> ## Parallelisation -- read this before writing the driver
-!>
-!> [[branch_phi_adj_tangent]] reduces one scalar over each contiguous anchor
-!> group, exactly as [[compute_branch_phi_adj]] does. It is the only
-!> cross-point coupling in the whole scheme. **A driver may parallelise it over
-!> anchor groups or over directions, never over grid points**: a group split
-!> across two threads silently corrupts `mean_adj_branch` and its tangent, with
-!> no error and no obviously wrong answer. Directions are the easy axis --
-!> every direction is independent of every other. Contiguity of a group is
-!> guaranteed by the stable `counting_argsort` at `projection.f90:542-583`, not
-!> by anything this module checks; the shared walk is [[next_branch_group]].
-!>
-!> The primitive itself is serial over the whole grid, so a driver that calls
-!> it once per direction is already safe.
-!>
-!> TODO: a radius model whose `R` follows the nuclear coordinates -- a nonzero
-!>       `f1_rA`, which neither shipped model has -- makes the area
-!>       `a = R^2 f wleb` carry an explicit `2R dR` factor. The `w_f` fold then
-!>       gains a `2 w_a R dR wleb` term and this primitive needs a `dradii`
-!>       argument for it. Nothing else here changes: the `w_xi` fold reaches
-!>       the radii only through `a`, `wleb` and `xi0`, whose `dR` content
-!>       arrives with the tangents the caller already supplies.
+!> TODO: radius model with nonzero `f1_rA` adds `2 w_a R dR wleb` to the `w_f`
+!>       fold and needs a `dradii` argument; the `w_xi` fold stays as it is
 module moist_cavity_drop_derivatives_weights_tangent
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
@@ -86,62 +40,38 @@ contains
 
    !> Tangent of [[prepare_surface_weights]] along one direction
    !>
-   !> Mirrors the primal statement for statement: the two derived-channel folds
-   !> into `w_xi`, the conditional area fold into `w_f`, then the branch reverse
-   !> pass, which reads the *folded* width channel and therefore has to run
-   !> last, on `dw_xi` rather than on zero.
+   !> - Order of the primal: two folds into `w_xi`, area fold into `w_f`, branch
+   !>   reverse pass last on the folded `dw_xi`
+   !> - Fold guards compare the fixed raw `w_a`, `w_w` with `seed_weight_tol`:
+   !>   constant along the direction, so a skipped fold is an exact zero
+   !> - Exact zero holds only while the raw adjoints are fixed
+   !> - Guards of [[branch_phi_adj_tangent]] read moving quantities, see there
+   !> - `acc`, `eff` and the cavity state must be those of the primal call
+   !> - Only `eff%w_xi` is read
+   !> - Identities between `da`, `dwleb`, `dxi0` (module header) are not
+   !>   imposed: inconsistent tangents give the exact tangent along that path,
+   !>   a silent physics error in a driver
    !>
-   !> ## Guards
-   !>
-   !> The primal folds behind `abs(acc%w_a(i)) > seed_weight_tol` and
-   !> `abs(acc%w_w(i)) > seed_weight_tol`. Those conditions read the raw
-   !> adjoints, which this pass holds fixed, so they are *exactly* constant
-   !> along the direction: taking the primal's branch is not the usual
-   !> piecewise-tangent convention here, it is an identity, and a point that
-   !> skips a fold skips its tangent for every displacement. That is what makes
-   !> the else-branch a hard zero rather than an approximation. It would not
-   !> hold if the adjoints moved -- with a moving `w_a` the guard would be a
-   !> genuine kink and the tangent only correct strictly inside a piece.
-   !>
-   !> The guards inside [[branch_phi_adj_tangent]] are the opposite case and are
-   !> documented there.
-   !>
-   !> ## Argument contract
-   !>
-   !> `acc` must be the accumulator [[prepare_surface_weights]] was called with,
-   !> `eff` the weights it returned for that `acc`, and `a`, `wleb`, `xi0`,
-   !> `wbranch`, `radii`, `owner`, `branch_count`, `anchor_id` and `sigma_phi`
-   !> the cavity state it read. Only `eff%w_xi` is read, but the whole object is
-   !> taken so that the pairing is visible at the call site.
-   !>
-   !> For a physical direction the tangents are related by the identities in
-   !> the module header -- `dwleb = -2 wleb dxi0/xi0` and
-   !> `da = R^2 (wleb df + f dwleb)`. This routine does not impose them; a
-   !> caller that supplies an inconsistent triple gets the exact tangent of the
-   !> folding along that inconsistent path, which is what makes an arbitrary
-   !> finite-difference path a valid test and an inconsistent driver a silent
-   !> physics error.
-   !>
-   !> @param[in]  acc             Raw surface adjoints, held fixed
-   !> @param[in]  eff             Folded weights, as [[prepare_surface_weights]] returned them
-   !> @param[in]  fold_switching  Whether the primal folded the area channel into `w_f`
-   !> @param[in]  a               Surface area per grid point (ngrid)
-   !> @param[in]  wleb            Final Lebedev weight per grid point (ngrid)
-   !> @param[in]  xi0             Gaussian width per grid point (ngrid)
-   !> @param[in]  wbranch         Softmax branch weight per grid point (ngrid)
-   !> @param[in]  radii           Sphere radii (nsph)
-   !> @param[in]  owner           Owner sphere per grid point (ngrid)
-   !> @param[in]  branch_count    Branches in the point's anchor group (ngrid)
-   !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
-   !> @param[in]  sigma_phi       Softmax temperature, `branch_weight%s`
-   !> @param[in]  da              Directional tangent of `a` (ngrid)
-   !> @param[in]  dwleb           Directional tangent of `wleb` (ngrid)
-   !> @param[in]  dxi0            Directional tangent of `xi0` (ngrid)
-   !> @param[in]  dwbranch        Directional tangent of `wbranch` (ngrid)
-   !> @param[out] dw_xi           Tangent of the folded width channel (ngrid)
-   !> @param[out] dw_f            Tangent of the folded switching channel (ngrid)
-   !> @param[out] dbranch_phi_adj Tangent of the branch-objective adjoint (ngrid)
-   !> @param[out] error           Error object, allocated on inconsistent shapes
+   !> @param[in]  acc              raw surface adjoints, held fixed
+   !> @param[in]  eff              folded weights from [[prepare_surface_weights]]
+   !> @param[in]  fold_switching   whether the primal folded the area channel into `w_f`
+   !> @param[in]  a                surface area per grid point `(ngrid)`
+   !> @param[in]  wleb             final Lebedev weight per grid point `(ngrid)`
+   !> @param[in]  xi0              Gaussian width per grid point `(ngrid)`
+   !> @param[in]  wbranch          softmax branch weight per grid point `(ngrid)`
+   !> @param[in]  radii            sphere radii `(nsph)`
+   !> @param[in]  owner            owner sphere per grid point `(ngrid)`
+   !> @param[in]  branch_count     branches in the point's anchor group `(ngrid)`
+   !> @param[in]  anchor_id        anchor group id per grid point `(ngrid)`
+   !> @param[in]  sigma_phi        softmax temperature, `branch_weight%s`
+   !> @param[in]  da               directional tangent of `a` `(ngrid)`
+   !> @param[in]  dwleb            directional tangent of `wleb` `(ngrid)`
+   !> @param[in]  dxi0             directional tangent of `xi0` `(ngrid)`
+   !> @param[in]  dwbranch         directional tangent of `wbranch` `(ngrid)`
+   !> @param[out] dw_xi            tangent of the folded width channel `(ngrid)`
+   !> @param[out] dw_f             tangent of the folded switching channel `(ngrid)`
+   !> @param[out] dbranch_phi_adj  tangent of the branch-objective adjoint `(ngrid)`
+   !> @param[out] error            error object, allocated on inconsistent shapes
    subroutine prepare_surface_weights_tangent(acc, eff, fold_switching, &
                                               a, wleb, xi0, wbranch, radii, owner, &
                                               branch_count, anchor_id, sigma_phi, &
@@ -149,7 +79,7 @@ contains
                                               dw_xi, dw_f, dbranch_phi_adj, error)
       !> Raw surface adjoints, held fixed
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Folded weights, as returned by [[prepare_surface_weights]] for `acc`
+      !> Folded weights of [[prepare_surface_weights]] for `acc`
       type(drop_surface_weights_type), intent(in) :: eff
       !> Whether the area channel also folded into `w_f`
       logical, intent(in) :: fold_switching
@@ -170,7 +100,7 @@ contains
       integer :: ngrid, igrid
       !> Owner radius of the current grid point
       real(wp) :: r_own
-      !> Rendered shapes; fixed length, so the message build is thread safe
+      !> Rendered shapes, fixed length for a thread-safe message build
       character(len=64) :: shapes
 
       if (.not. acc%is_initialized() .or. .not. allocated(eff%w_xi)) then
@@ -200,10 +130,9 @@ contains
       dw_xi = 0.0_wp
       dw_f = 0.0_wp
 
-      ! d(-2 a w_a/xi) and d(-2 wleb w_w/xi) with w_a, w_w fixed. Written as
-      ! (dX - X dxi/xi)/xi rather than dX/xi - X dxi/xi^2 so the second term
-      ! never forms 1/xi^2 explicitly; check_surface_adjoint has already
-      ! rejected a vanishing xi under a live area or weight adjoint.
+      ! d(-2 a w_a/xi) and d(-2 wleb w_w/xi) at fixed w_a, w_w, written as
+      ! (dX - X dxi/xi)/xi to avoid 1/xi^2; check_surface_adjoint rejects a
+      ! vanishing xi under a live area or weight adjoint
       do igrid = 1, ngrid
          if (abs(acc%w_a(igrid)) > seed_weight_tol) then
             dw_xi(igrid) = dw_xi(igrid) - 2.0_wp*acc%w_a(igrid) &
@@ -215,8 +144,7 @@ contains
          end if
       end do
 
-      ! d(w_a R^2 wleb). The radius is the only factor of the primal's area
-      ! fold that this pass treats as frozen; see the module TODO.
+      ! d(w_a R^2 wleb) with the radius frozen, see the module TODO
       if (fold_switching) then
          do igrid = 1, ngrid
             if (abs(acc%w_a(igrid)) > seed_weight_tol) then
@@ -227,8 +155,7 @@ contains
          end do
       end if
 
-      ! Runs last and on the folded `dw_xi`, because the primal branch pass runs
-      ! last and on the folded `w_xi`.
+      ! Last and on the folded `dw_xi`, as the primal pass on the folded `w_xi`
       call branch_phi_adj_tangent(branch_count, anchor_id, wbranch, wleb, xi0, &
                                   sigma_phi, eff%w_xi, dwbranch, dwleb, dxi0, dw_xi, &
                                   dbranch_phi_adj)
@@ -237,46 +164,31 @@ contains
 
    !> Tangent of the branch-weight reverse pass, [[compute_branch_phi_adj]]
    !>
-   !> Same group walk, same early exits, same guard conditions; the only
-   !> difference is that every quantity carries its directional derivative
-   !> alongside it. Per contiguous anchor group the primal forms
+   !> - Same group walk, early exits and guard conditions as the primal
+   !> - Per contiguous anchor group: `adj_m = adj_wleb_m factor_m`,
+   !>   `mean = sum_m wbranch_m adj_m`,
+   !>   `Phi_m = -wbranch_m (adj_m - mean)/sigma_phi`
+   !> - `dmean` couples every point of a group, gated-off points included:
+   !>   two passes per group
+   !> - Serial over a group, never split one across threads, see module header
+   !> - Per-point gate reads the moving `w_xi`, `wleb`, `wbranch`: primal's
+   !>   branch on the primal's condition, zero on the else, no separate
+   !>   second-order threshold
+   !> - Early exits `sigma_phi <= seed_weight_tol` and no `branch_count > 1`
+   !>   are frozen discrete choices
    !>
-   !> ```
-   !>   adj_m  = adj_wleb_m * factor_m,  mean = sum_m wbranch_m adj_m
-   !>   Phi_m  = -wbranch_m (adj_m - mean)/sigma_phi
-   !> ```
-   !>
-   !> so the tangent needs `dmean` before it can write any point of the group.
-   !> That is the coupling: a point's `dbranch_phi_adj` depends on every other
-   !> point of its group, through `dmean`, even when its own `adj_m` is gated
-   !> off. Hence the two passes, and hence the parallelisation constraint in the
-   !> module header.
-   !>
-   !> ## Guards
-   !>
-   !> Unlike the folds in [[prepare_surface_weights_tangent]], the per-point
-   !> gate here reads `w_xi`, `wleb` and `wbranch`, all of which *do* move with
-   !> the geometry. So this is the ordinary piecewise case and it follows the
-   !> project convention: take the primal's branch on the primal's condition,
-   !> zero on the else, never a separate second-order threshold. The tangent is
-   !> then exactly the tangent of the value it differentiates everywhere except
-   !> on the measure-zero switching surface itself.
-   !>
-   !> The early exits (`sigma_phi <= seed_weight_tol`, no group with
-   !> `branch_count > 1`) are frozen discrete choices in the same sense.
-   !>
-   !> @param[in]  branch_count    Branches per grid point (ngrid)
-   !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
-   !> @param[in]  wbranch         Softmax branch weight per grid point (ngrid)
-   !> @param[in]  wleb            Lebedev weight per grid point (ngrid)
-   !> @param[in]  xi0             Gaussian width per grid point (ngrid)
-   !> @param[in]  sigma_phi       Softmax temperature
-   !> @param[in]  w_xi            Folded width adjoint, `eff%w_xi` (ngrid)
-   !> @param[in]  dwbranch        Directional tangent of `wbranch` (ngrid)
-   !> @param[in]  dwleb           Directional tangent of `wleb` (ngrid)
-   !> @param[in]  dxi0            Directional tangent of `xi0` (ngrid)
-   !> @param[in]  dw_xi           Directional tangent of the folded `w_xi` (ngrid)
-   !> @param[out] dbranch_phi_adj Tangent of the branch-objective adjoint (ngrid)
+   !> @param[in]  branch_count     branches per grid point `(ngrid)`
+   !> @param[in]  anchor_id        anchor group id per grid point `(ngrid)`
+   !> @param[in]  wbranch          softmax branch weight per grid point `(ngrid)`
+   !> @param[in]  wleb             Lebedev weight per grid point `(ngrid)`
+   !> @param[in]  xi0              Gaussian width per grid point `(ngrid)`
+   !> @param[in]  sigma_phi        softmax temperature
+   !> @param[in]  w_xi             folded width adjoint, `eff%w_xi` `(ngrid)`
+   !> @param[in]  dwbranch         directional tangent of `wbranch` `(ngrid)`
+   !> @param[in]  dwleb            directional tangent of `wleb` `(ngrid)`
+   !> @param[in]  dxi0             directional tangent of `xi0` `(ngrid)`
+   !> @param[in]  dw_xi            directional tangent of the folded `w_xi` `(ngrid)`
+   !> @param[out] dbranch_phi_adj  tangent of the branch-objective adjoint `(ngrid)`
    pure subroutine branch_phi_adj_tangent(branch_count, anchor_id, wbranch, wleb, xi0, &
                                           sigma_phi, w_xi, dwbranch, dwleb, dxi0, dw_xi, &
                                           dbranch_phi_adj)
@@ -329,10 +241,7 @@ contains
                                + wbranch(im_grid)*dadj_branch
          end do
 
-         ! The per-point pair is recomputed rather than parked in a scratch
-         ! array: the group is 2-4 points wide, so a buffer would cost an
-         ! allocation or an automatic array bounded only by ngrid, to save four
-         ! flops and two divisions.
+         ! Per-point pair recomputed, no scratch array: groups are 2-4 points
          do m_branch = 1, group_size
             im_grid = igroup_start + m_branch - 1
             call branch_point_adjoint(w_xi(im_grid), wleb(im_grid), xi0(im_grid), &

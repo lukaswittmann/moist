@@ -18,7 +18,7 @@
 !> *explicit* nuclear-position dependence for the cavity chain rule
 !> -> The mixed spatial/nuclear derivatives therefore vanish here
 module moist_cavity_drop_lsf_isodensity_internal
-   use mctc_env, only: error_type
+   use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
    use mctc_io, only: structure_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type, &
@@ -175,12 +175,34 @@ contains
    !>
    !> @param[inout] self  LSF instance
    !> @param[in]    point Evaluation point in Bohr
+   !> @param[out]   error Set when no density matrix has been installed
    subroutine lsf_prepare(self, point, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       type(error_type), allocatable, intent(out) :: error
+
+      call require_density(self, error)
+      if (allocated(error)) return
       call lsf_prepare_impl(self, point)
    end subroutine lsf_prepare
+
+   !> Refuse to evaluate before the host has installed a density matrix
+   !>
+   !> The evaluator contracts against ``gto%dcart`` unconditionally, so without
+   !> this check a build started before ``set_density`` reads an unallocated
+   !> array instead of failing.
+   !>
+   !> @param[in]  self  LSF instance
+   !> @param[out] error Set when no density matrix has been installed
+   subroutine require_density(self, error)
+      class(moist_cavity_drop_lsf_isodensity_internal_type), intent(in) :: self
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. self%gto%has_density()) then
+         call fatal_error(error, "Isodensity density matrix has not been installed; "// &
+                          "set the density before building the cavity")
+      end if
+   end subroutine require_density
 
    !> Shared prepare body: evaluate the level set at ``point`` and cache it
    !>
@@ -256,11 +278,15 @@ contains
    !> @param[inout] self              LSF instance
    !> @param[in]    point             Evaluation point in Bohr
    !> @param[in]    candidate_indices Ignored atom candidates
+   !> @param[out]   error             Set when no density matrix has been installed
    subroutine lsf_prepare_subset(self, point, candidate_indices, error)
       class(moist_cavity_drop_lsf_isodensity_internal_type), intent(inout) :: self
       real(wp), intent(in) :: point(3)
       integer, intent(in) :: candidate_indices(:)
       type(error_type), allocatable, intent(out) :: error
+
+      call require_density(self, error)
+      if (allocated(error)) return
       !> The candidate atoms come from the cavity's molecular cell grid, whose
       !> per-atom reach is sized by lsf_neighbor_cutoff to the shell reach, so no
       !> contributing shell is missed.  Forward them straight to the evaluator.

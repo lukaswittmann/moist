@@ -1,98 +1,33 @@
 !> Pass 1 of the DROP Hessian: forward tangent of the surface map
 !>
-!> Propagates a set of nuclear directions `v` through the same per-point map
-!> the reverse path differentiates, and returns the directional derivatives of
-!> the four grid scalars pass 2 consumes:
-!>
-!>     d_a, d_wleb, d_xi0, d_wbranch    (ngrid, ndir)
-!>
-!> This is the forward-mode dual of [[get_surface_gradient_drop]]: same thread
-!> setup, same per-point `prepare` / jet / [[build_seed_state]] / KKT
-!> factorization, same abort latch. What differs is the seeding. The reverse
-!> path pushes 13 jet basis directions plus 3 anchor directions through
-!> [[apply_seed]] and contracts the answers with a surface adjoint; this one
-!> pushes exactly one seed per nuclear direction -- the direction's own image
-!> in the level-set jet -- and keeps the response.
-!>
-!> Unlike the reverse path there is no cross-point reduction to make
-!> deterministic: point `i` writes rows `(i, :)` of four arrays it shares with
-!> nobody, so the grid loop needs neither per-thread buffers nor a fixed-order
-!> sum. The one cross-point coupling in the scheme is the branch softmax, and
-!> it runs outside the parallel region; see below.
-!>
-!> ## The three stages
-!>
-!>  1. **Grid loop (parallel).** Per point: the level-set jet, its directional
-!>     nuclear tangents along every direction -- from the mixed nuclear tensors
-!>     materialised once ([[drop_field_jet_point]]) and contracted per direction
-!>     ([[drop_field_jet_tangent]]), or, when the caller asks for it because it
-!>     has a few directions, from the level set's contracted accessor
-!>     `tangent_jet` per direction -- the bordered KKT solve for `(dr, dlambda)`
-!>     batched over all
-!>     directions, [[apply_seed]] for the base Lebedev-weight motion, the
-!>     sparse iSwiG rows for `d(f)`, and the branch objective's tangent
-!>     `d(Phi)`. The tensors are active-slot indexed, so each direction is
-!>     gathered onto the point's active atoms first; that gather is the only
-!>     place the two index spaces meet in this routine.
-!>  2. **Branch softmax (serial).** One [[branch_weight_type:weights_grad]]
-!>     call per contiguous anchor group, with `nparam = ndir`, giving
-!>     `d_wbranch` for every direction of every branch at once.
-!>  3. **Assembly.** The branch motion is added to `d_wleb`, and `d_xi0` and
-!>     `d_a` follow from it by the two identities below.
-!>
-!> ## The `wbranch` trap
-!>
-!> [[apply_seed]] does **not** return a complete `d(wleb)`. Its last line is
-!>
-!>     res%dwleb = state%wbranch * state%wleb_prune_factor * dw_pre
-!>
-!> with `wbranch` held fixed: in first-order reverse mode the branch weight's
-!> own motion is not a term of this product, it is handled separately through
-!> `branch_phi_adj` (see [[compute_branch_phi_adj]]). A forward tangent has no
-!> such second channel and must put the term back,
-!>
-!>     d_wleb = res%dwleb + d_wbranch * wleb / wbranch
-!>
-!> and carry it on into `d_xi0` and `d_a`. Dropping it leaves every downstream
-!> tangent wrong on multi-branch anchors only -- invisible to any test of
-!> [[apply_seed]] itself, and invisible to a fixture that never branches. The
-!> second-order kernel path anticipates the same correction: its
-!> [[apply_seed_tangent]] takes `dinp_v%dwbranch` as an explicit input.
-!>
-!> ## Parallelisation of the branch stage
-!>
-!> The softmax couples every branch of one anchor group through its
-!> normalisation, so a group split across two threads would silently corrupt
-!> its reduction. Groups are runs of equal `anchor_id` -- contiguity is
-!> guaranteed by the stable `counting_argsort` in `projection.f90` -- but the
-!> grid loop above is chunked by grid point and knows nothing about them.
-!> Stage 2 therefore runs **serially over groups**, outside the parallel
-!> region, with all `ndir` directions batched into the one `weights_grad` call
-!> the group needs. That is the cheapest of the three admissible choices here:
-!> the walk touches only multi-branch groups, which are a small minority of the
-!> grid, and it needs no group index to have been built.
-!>
-!> ## Two identities
-!>
-!> Both are exact, and both are used rather than recomputed:
-!>
-!>   * `xi0 = swx/(R sqrt(wleb))` with the *final* `wleb`
-!>     (`projection.f90`, `compute_gaussians`), so
-!>     `d_xi0 = -0.5 * xi0 * d_wleb / wleb`. [[apply_seed]] applies the same
-!>     identity to its own partial `dwleb`; `res%dxi` is therefore the
-!>     branch-frozen width tangent and is deliberately discarded here in favour
-!>     of one application to the completed `d_wleb`.
-!>   * `a = R^2 f wleb` (`properties.f90`, `compute_area_volume`), so
-!>     `d_a = R^2 (wleb d_f + f d_wleb)`, where `f` is the **iSwiG** switching
-!>     factor `self%f` -- not [[apply_seed]]'s `res%dw_f`, which is the
-!>     `w_f = f_crit * f_foc` product that rides inside `wleb`.
-!>
-!> ## Redundancy of the outputs
-!>
-!> `d_wbranch` is reported separately *and* is already folded into `d_wleb`.
-!> That is not a duplication to be optimized away: pass 2's
-!> [[branch_point_adjoint]] differentiates `wleb/wbranch` and needs both halves
-!> independently, and it is only consistent if `d_wleb` is the complete tangent.
+!> - Forward-mode dual of [[get_surface_gradient_drop]]: same thread setup,
+!>   point prologue, KKT factorization and abort latch
+!> - One seed per nuclear direction, its image in the level-set jet
+!> - Outputs `d_a, d_wleb, d_xi0, d_wbranch`, each `(ngrid, ndir)`
+!> - Point `i` writes only rows `(i, :)`: no thread buffers, no ordered sum
+!> - Stage 1, grid loop (parallel): jet tangents, batched KKT solve for
+!>   `(dr, dlambda)`, [[apply_seed]], iSwiG rows for `d(f)`, `d(Phi)`
+!> - Jet tangents from [[drop_field_jet_point]] and
+!>   [[drop_field_jet_tangent]], or from `tangent_jet` per direction
+!> - Jet tensors are active-slot indexed; directions are gathered per point
+!> - Stage 2, branch softmax (serial): one
+!>   [[branch_weight_type:weights_grad]] call per anchor group, `nparam = ndir`
+!> - Stage 2 stays serial: a softmax group is never split across threads
+!> - Groups are runs of equal `anchor_id`, contiguous by the stable
+!>   `counting_argsort` in `projection.f90`
+!> - Stage 3, assembly: `d_wleb = res%dwleb + d_wbranch * wleb / wbranch`,
+!>   then `d_xi0` and `d_a` from the completed `d_wleb`
+!> - wbranch trap: [[apply_seed]] freezes `wbranch`; reverse mode carries its
+!>   motion via [[compute_branch_phi_adj]], forward mode adds it in stage 3
+!> - Trap shows on multi-branch anchors only; [[apply_seed_tangent]] takes
+!>   the same term as `dinp_v%dwbranch`
+!> - `xi0 = swx/(R sqrt(wleb))` (`compute_gaussians`) with the final `wleb`, so
+!>   `d_xi0 = -0.5 * xi0 * d_wleb / wleb`; branch-frozen `res%dxi` is discarded
+!> - `a = R^2 f wleb` (`compute_area_volume`), so
+!>   `d_a = R^2 (wleb d_f + f d_wleb)`
+!> - `f` is the iSwiG `self%f`, not `res%dw_f` (`w_f = f_crit * f_foc`, in `wleb`)
+!> - `d_wbranch` is reported and also folded into `d_wleb`:
+!>   [[branch_point_adjoint]] needs both, with `d_wleb` complete
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_tangent_forward
 !$ use omp_lib, only: omp_get_thread_num
    use moist_cavity_drop_threads, only: drop_worker_slots_type, drop_abort_latch_type, &
@@ -111,23 +46,21 @@ contains
 
    !> Forward tangent of the four grid scalars the weight fold reads
    !>
-   !> The DROP-internal form of pass 1. Every output is `(ngrid, ndir)` and is
-   !> written in full: column `idir` holds the directional derivative along
-   !> `dirs(:, :, idir)`. A thin wrapper over [[drop_surface_tangent_core]]
-   !> that keeps the branch-weight tangent, which the generic
-   !> [[cavity_surface_tangent_type]] has no channel for.
+   !> - DROP-internal form of pass 1, wrapper over [[drop_surface_tangent_core]]
+   !> - Keeps the branch-weight tangent, which [[cavity_surface_tangent_type]]
+   !>   has no channel for
+   !> - Outputs fully written; column `idir` is the tangent along
+   !>   `dirs(:, :, idir)`
    !>
-   !> @param[in]  self      DROP cavity instance (must hold a projected grid)
-   !> @param[in]  dirs      Nuclear directions `(3, nsph, ndir)`
-   !> @param[out] d_a       Tangent of the area element `(ngrid, ndir)`
-   !> @param[out] d_wleb    Tangent of the Lebedev weight `(ngrid, ndir)`
-   !> @param[out] d_xi0     Tangent of the Gaussian width `(ngrid, ndir)`
-   !> @param[out] d_wbranch Tangent of the branch weight `(ngrid, ndir)`
-   !> @param[out] error     Error object, allocated on failure
-   !> @param[in]  contracted Take the jet tangents through the level set's
-   !>                        contracted accessor per direction rather than off
-   !>                        tensors materialised once per point; the caller's
-   !>                        choice, see the core. Default `.false.`
+   !> @param[in]  self       DROP cavity holding a projected grid
+   !> @param[in]  dirs       nuclear directions `(3, nsph, ndir)`
+   !> @param[out] d_a        area element tangent `(ngrid, ndir)`
+   !> @param[out] d_wleb     Lebedev weight tangent `(ngrid, ndir)`
+   !> @param[out] d_xi0      Gaussian width tangent `(ngrid, ndir)`
+   !> @param[out] d_wbranch  branch weight tangent `(ngrid, ndir)`
+   !> @param[out] error      allocated on failure
+   !> @param[in]  contracted jet tangents from the contracted accessor per
+   !>                        direction, default `.false.`; see the core
    module subroutine get_surface_tangent_drop(self, dirs, d_a, d_wleb, d_xi0, &
                                               d_wbranch, error, contracted)
       !> DROP cavity instance
@@ -138,10 +71,10 @@ contains
       real(wp), intent(out) :: d_a(:, :), d_wleb(:, :), d_xi0(:, :), d_wbranch(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Whether the jet tangents come from the contracted accessor
+      !> Jet tangents from the contracted accessor
       logical, intent(in), optional :: contracted
 
-      !> Every channel of the tangent; only three are copied out
+      !> Full tangent, three channels copied out
       type(cavity_surface_tangent_type) :: tangent
       !> Direction count
       integer :: ndir
@@ -174,12 +107,12 @@ contains
 
    end subroutine get_surface_tangent_drop
 
-   !> Forward tangent of every surface observable along a set of nuclear directions
+   !> Forward tangent of every surface observable along nuclear directions
    !>
-   !> @param[in]    self    DROP cavity instance (must hold a projected grid)
-   !> @param[in]    dirs    Nuclear directions `(3, nsph, ndir)`
-   !> @param[inout] tangent Surface tangent, initialised for `(ngrid, ndir)`
-   !> @param[out]   error   Error object, allocated on failure
+   !> @param[in]     self    DROP cavity holding a projected grid
+   !> @param[in]     dirs    nuclear directions `(3, nsph, ndir)`
+   !> @param[in,out] tangent surface tangent, initialised for `(ngrid, ndir)`
+   !> @param[out]    error   allocated on failure
    module subroutine get_surface_tangent_full_drop(self, dirs, tangent, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
@@ -194,38 +127,39 @@ contains
 
    end subroutine get_surface_tangent_full_drop
 
-   !> Forward tangent of the DROP surface map along a set of nuclear directions
+   !> Forward tangent of the DROP surface map along nuclear directions
    !>
-   !> Every channel of `tangent` is written in full: column `idir` holds the
-   !> directional derivative along `dirs(:, :, idir)`. The curvature channels
-   !> are filled only when `want_curvature` is set, which puts the curvature
-   !> invariants into the seed state of every point; without it they are left
-   !> zero and `tangent%have_curvature` says so. `d_wbranch`, when present,
-   !> receives the softmax branch-weight tangent, which the generic tangent
-   !> has no channel for and which pass 2 of the Hessian reads on its own.
+   !> - Every channel of `tangent` fully written; column `idir` is the tangent
+   !>   along `dirs(:, :, idir)`
+   !> - Curvature channels filled only with `want_curvature`, else zero;
+   !>   `tangent%have_curvature` records which
+   !> - `d_wbranch`: softmax branch-weight tangent, read by pass 2; the generic
+   !>   tangent has no channel for it
+   !> - `contracted` is the caller's choice and never a function of `ndir`: the
+   !>   Hessian traversal passes blocks of directions, and a tangent must not
+   !>   depend on the blocking
+   !> - Contracted path suits few directions; only the traversal's
+   !>   per-direction mode requests it
    !>
-   !> @param[in]    self           DROP cavity instance (must hold a projected grid)
-   !> @param[in]    dirs           Nuclear directions `(3, nsph, ndir)`
-   !> @param[in]    want_curvature Fill the curvature channels
-   !> @param[inout] tangent        Surface tangent, initialised for `(ngrid, ndir)`
-   !> @param[out]   error          Error object, allocated on failure
-   !> @param[out]   d_wbranch      Tangent of the branch weight `(ngrid, ndir)`
-   !> @param[in]    contracted     Take the jet tangents through the level set's
-   !>                              contracted accessor per direction rather than
-   !>                              off tensors materialised once per point; the
-   !>                              caller's choice, see below. Default `.false.`
-   !> @param[in]    host_jets      Partial tangents of the level-set jet along
-   !>                              every direction at the fixed points, from the
-   !>                              second-order host exchange, `(40, ngrid, ndir)`
-   !>                              packed by spatial order; added to the level
-   !>                              set's own nuclear tangents. Optional
+   !> @param[in]     self           DROP cavity holding a projected grid
+   !> @param[in]     dirs           nuclear directions `(3, nsph, ndir)`
+   !> @param[in]     want_curvature fill the curvature channels
+   !> @param[in,out] tangent        surface tangent, initialised for `(ngrid, ndir)`
+   !> @param[out]    error          allocated on failure
+   !> @param[out]    d_wbranch      branch weight tangent `(ngrid, ndir)`, optional
+   !> @param[in]     contracted     jet tangents from the contracted accessor per
+   !>                               direction instead of per-point tensors,
+   !>                               default `.false.`
+   !> @param[in]     host_jets      host partial jet tangents at the fixed points,
+   !>                               `(40, ngrid, ndir)` packed by spatial order,
+   !>                               added to the level set's own; optional
    module subroutine drop_surface_tangent_core(self, dirs, want_curvature, tangent, &
                                                error, d_wbranch, contracted, host_jets)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Nuclear directions
       real(wp), intent(in) :: dirs(:, :, :)
-      !> Whether the curvature channels are filled
+      !> Fill the curvature channels
       logical, intent(in) :: want_curvature
       !> Surface tangent
       type(cavity_surface_tangent_type), intent(inout) :: tangent
@@ -233,38 +167,36 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Tangent of the softmax branch weight
       real(wp), intent(out), optional :: d_wbranch(:, :)
-      !> Whether the jet tangents come from the contracted accessor
+      !> Jet tangents from the contracted accessor
       logical, intent(in), optional :: contracted
-      !> Partial jet tangents of the host along every direction
+      !> Host partial jet tangents along every direction
       real(wp), intent(in), optional :: host_jets(:, :, :)
 
-      !> Whether the host's jet tangents are folded in
+      !> Host jet tangents folded in
       logical :: have_jets
 
-      !> Branch-weight tangent, kept whether or not the caller asked for it:
-      !> the assembly below reads it for every point
+      !> Branch-weight tangent, always kept: the assembly reads it at every point
       real(wp), allocatable :: dwb(:, :)
 
       !> Per-thread level-set clones and objectives
       type(drop_worker_slots_type) :: slots
       !> Thread bookkeeping
       integer :: thread_slot
-      !> First failure seen anywhere in the parallel region
+      !> First failure in the parallel region
       type(drop_abort_latch_type) :: abort
-      !> Per-thread failure on its way to the latch
+      !> Per-thread failure, handed to the latch
       type(error_type), allocatable :: worker_error
 
-      !> Per-thread state of the grid point being opened: the jets, the seed
-      !> state, the bordered factorization and the buffers they are read into
+      !> Per-thread point state: jets, seed state, bordered factorization, buffers
       type(drop_point_scratch_type) :: pt
       !> Linear response of one seed
       type(drop_seed_result_type) :: res
-      !> Whether the shared prologue cleared the point for this traversal
+      !> Point cleared by the shared prologue
       logical :: point_ok
 
       !> Grid, direction, sphere, active-slot and Cartesian indices
       integer :: igrid, idir, ndir, jj, knb, i
-      !> Whether the jet tensors are materialised per point
+      !> Jet tensors materialised per point
       logical :: materialise
 
       !> Mixed nuclear tensors of the level set at the point
@@ -272,11 +204,10 @@ contains
       !> One direction gathered onto the point's active slots
       real(wp), allocatable :: v_act(:, :)
 
-      !> Directional nuclear tangents of the level-set jet at the *fixed* point
+      !> Directional nuclear tangents of the level-set jet at the fixed point
       real(wp) :: dlsf0
       real(wp), allocatable :: dlsf1_r(:, :), dlsf2_rr(:, :, :)
-      !> Bordered KKT right-hand sides, one column per direction; this pass
-      !> builds its own batch rather than the shared 16-seed one
+      !> Bordered KKT right-hand sides, one column per direction
       real(wp), allocatable :: dir_rhs(:, :)
       !> Induced motion of the projected point and of the multiplier
       real(wp) :: dr(3), dlambda
@@ -284,7 +215,7 @@ contains
       !> Sparse switching rows of the owner sphere
       real(wp) :: swi_owner_row(3), swi_f0, swi_dxi, df_dir
 
-      !> Tangent of the branch objective, `d(Phi)` per point and direction
+      !> Branch objective tangent `d(Phi)` `(ngrid, ndir)`
       real(wp), allocatable :: dphi(:, :)
       !> Softmax scratch of the branch stage
       real(wp), allocatable :: branch_phi(:), branch_dphi(:, :)
@@ -292,7 +223,7 @@ contains
       !> Branch group bookkeeping
       integer :: igroup_cursor, igroup_start, igroup_end, group_size
       integer :: m_branch, im_grid, nbranch_max
-      !> Whether a further anchor group exists
+      !> Further anchor group exists
       logical :: have_group
 
       !> Assembly scalars
@@ -340,16 +271,8 @@ contains
       !* -------------------------------- Thread setup -------------------------------- *!
       call slots%init(self%ctx, self%lsf_model, 3, self%param, self%mol, self%radii)
       allocate (dphi(self%ngrid, ndir), source=0.0_wp)
-      ! The jet tensors are materialised once per point and contracted with every
-      ! direction, or the level set's own contracted accessor runs per direction;
-      ! for a few directions the latter costs less than one fill, for many the
-      ! former. The choice is the caller's and deliberately not a function of
-      ! `ndir`: the Hessian traversal hands this routine one *block* of its
-      ! directions at a time, and a choice keyed on the block size would let a
-      ! direction's tangent depend on how the set happened to be blocked, by an
-      ! ulp, which the exact chunking guarantee of that traversal forbids. Its
-      ! per-direction mode asks for the contracted path; everything else, this
-      ! routine's direct callers included, materialises.
+      ! Per-point tensors by default, contracted accessor on request
+      ! Never keyed on `ndir`; see the procedure doc
       materialise = .true.
       if (present(contracted)) materialise = .not. contracted
       have_jets = .false.
@@ -382,22 +305,16 @@ contains
       !$omp do schedule(static, 8)
       do igrid = 1, self%ngrid
          !* -------------------------- Shared point prologue -------------------------- *!
-         ! Point, jets, seed state and the bordered factorization. Every failure
-         ! path -- a latch already set, a refusing level set, a degenerate
-         ! state, a singular bordered system -- has recorded itself. The
-         ! standard 16-seed batch is *not* requested: this pass has one
-         ! right-hand side per nuclear direction, and it cannot be built before
-         ! the level set's directional tangents below are known.
+         ! Point, jets, seed state, bordered factorization; failures latch themselves
+         ! No 16-seed batch: one right-hand side per direction, built below
          call drop_point_prologue(self, slots, thread_slot, igrid, want_curvature, &
                                   "get_surface_tangent_drop", abort, pt, point_ok)
          if (.not. point_ok) cycle
 
          !* ----------------- Directional nuclear tangents of the jet ----------------- *!
-         ! `sum_B v_B . d(jet)/dR_B` at the fixed point, for every direction, as
-         ! contractions of the point's mixed nuclear tensors. The tensors are
-         ! formed once per point and unconditionally -- the buffer outlives the
-         ! point -- and each direction is gathered onto the active slots the
-         ! prologue established.
+         ! `sum_B v_B . d(jet)/dR_B` at the fixed point, per direction
+         ! Tensor fill is unconditional: the buffer outlives the point
+         ! Directions are gathered onto the prologue's active slots
          if (materialise) call drop_field_jet_point(slots%lsf(thread_slot)%lsf, ft_work)
          do idir = 1, ndir
             if (materialise) then
@@ -410,30 +327,28 @@ contains
                call slots%lsf(thread_slot)%lsf%tangent_jet(dirs(:, :, idir), dlsf0, &
                                                             dlsf1_r(:, idir), dlsf2_rr(:, :, idir))
             else
-               ! A level set without active atoms has no nuclear partials of
-               ! its own, and its contracted accessor is the erroring default
+               ! No active atoms: no nuclear partials, and the contracted
+               ! accessor is the erroring default
                dlsf0 = 0.0_wp
                dlsf1_r(:, idir) = 0.0_wp
                dlsf2_rr(:, :, idir) = 0.0_wp
             end if
-            ! The host's partial tangents ride on top of the level set's own:
-            ! for a host-defined level set they are the whole tangent
+            ! Host partial tangents add to the level set's own; the whole
+            ! tangent for a host-defined level set
             if (have_jets) then
                call add_host_jet(host_jets(:, igrid, idir), dlsf0, dlsf1_r(:, idir), &
                                  dlsf2_rr(:, :, idir))
             end if
 
-            ! Bordered right-hand side of the direction, with
-            ! `d^2 phi/(dr dR_owner) = -alpha*I` (`objective_phi.f90`, `f2_r_rA`)
-            ! and the anchor riding its owner rigidly.
+            ! Bordered right-hand side, with `d^2 phi/(dr dR_owner) = -alpha*I`
+            ! (`objective_phi.f90`, `f2_r_rA`); anchor rigid with its owner
             dir_rhs(1:3, idir) = self%param%phi_alpha*dirs(:, pt%owner_idx, idir) &
                                  + pt%state%lambda_val*dlsf1_r(:, idir)
             dir_rhs(4, idir) = -dlsf0
          end do
 
          !* ------------------------ Bordered KKT sensitivities ----------------------- *!
-         ! One batched solve on the factorization the prologue already built:
-         ! every direction shares the 4x4 matrix of this grid point.
+         ! Batched solve on the prologue's factorization; one 4x4 matrix per point
          call pt%kkt_fac%solve(dir_rhs, "get_surface_tangent_drop", worker_error, igrid)
          if (allocated(worker_error)) then
             call abort%latch_error(worker_error, igrid)
@@ -445,34 +360,32 @@ contains
             dr = dir_rhs(1:3, idir)
             dlambda = dir_rhs(4, idir)
 
-            ! The projected point moves with the bordered solve
+            ! Projected point moves with the bordered solve
             tangent%d_xyz(:, igrid, idir) = dr
 
             call apply_seed(pt%state, dlsf1_r(:, idir), dlsf2_rr(:, :, idir), dr, dlambda, res)
 
-            ! Branch-frozen half of `d(wleb)`; stage 3 completes it. `res%dxi`
-            ! is the width tangent of exactly this incomplete weight and is not
-            ! read at all.
+            ! Branch-frozen half of `d(wleb)`, completed in stage 3
+            ! `res%dxi` belongs to this incomplete weight and is not read
             tangent%d_w(igrid, idir) = res%dwleb
 
-            ! The outward normal `grad S/|grad S|` at the moving point, and the
-            ! principal curvatures when the seed state carries them
+            ! Outward normal `grad S/|grad S|` at the moving point; principal
+            ! curvatures when the seed state carries them
             tangent%d_n(:, igrid, idir) = res%dn_surf
             if (want_curvature) then
                tangent%d_k1(igrid, idir) = res%dk1
                tangent%d_k2(igrid, idir) = res%dk2
             end if
 
-            ! Tangent of the branch objective `Phi = 0.5 alpha |r* - anchor|^2`
-            ! along the direction: the projected point moves by `dr`, the anchor
-            ! rigidly with its owner.
+            ! Tangent of `Phi = 0.5 alpha |r* - anchor|^2`: point moves by `dr`,
+            ! anchor rigidly with its owner
             dphi(igrid, idir) = dot_product(pt%phi1_r, dr - dirs(:, pt%owner_idx, idir))
          end do
 
          !* ------------------------- iSwiG switching channel ------------------------- *!
-         ! `f` is evaluated at the anchor with the anchor width, and
-         ! `anchor_xi0` depends on the owner radius and the raw Lebedev weight
-         ! alone, so it carries no nuclear tangent and `swi_dxi` is unused.
+         ! `f` at the anchor with the anchor width
+         ! `anchor_xi0` depends on owner radius and raw Lebedev weight only:
+         ! no nuclear tangent, `swi_dxi` unused
          call self%iswig%swi_collect(pt%state%anchor, pt%owner_idx, self%anchor_xi0(igrid), &
                                      swi_f0, pt%iswig_work)
          call self%iswig%swi1_rA_sparse(pt%iswig_work, pt%swi_rows, swi_owner_row, swi_dxi)
@@ -499,10 +412,8 @@ contains
       end if
 
       !* ------------------------- Branch softmax (serial) ---------------------------- *!
-      ! Serial over contiguous anchor groups, with every direction batched into
-      ! the one `weights_grad` call per group; see the module header for why a
-      ! group must never be split. Points outside a multi-branch group keep
-      ! `d_wbranch = 0`, which is exact: their `wbranch` is the constant one.
+      ! Points outside a multi-branch group keep `d_wbranch = 0`, exact since
+      ! their `wbranch` is the constant one
       call branch_stage()
 
       !* -------------------------------- Assembly ------------------------------------ *!
@@ -512,10 +423,9 @@ contains
             wbranch_i = self%wbranch(igrid)
             r_own = self%radii(self%owner(igrid))
 
-            ! The wbranch trap: `apply_seed` froze the branch weight, so its
-            ! motion is added back here. `wleb/wbranch` is the pre-branch weight
-            ! the softmax multiplies, formed the way `forward.f90`'s branch
-            ! post-pass and `compute_branch_phi_adj` both form it.
+            ! wbranch trap: `apply_seed` froze the branch weight, add its motion
+            ! `wleb/wbranch` is the pre-branch weight the softmax multiplies,
+            ! formed as in `forward.f90` and `compute_branch_phi_adj`
             dwleb_i = tangent%d_w(igrid, idir)
             if (wbranch_i > tiny(1.0_wp)) then
                dwleb_i = dwleb_i + (wleb_i/wbranch_i)*dwb(igrid, idir)
@@ -542,16 +452,14 @@ contains
 
       !> Differentiate the branch softmax over every contiguous anchor group
       !>
-      !> Walks the groups with the shared [[next_branch_group]], exactly as
-      !> [[compute_branch_phi_adj]] and `forward.f90`'s branch post-pass do:
-      !> runs of equal `anchor_id` starting at a point with `branch_count > 1`.
-      !> The softmax primitive takes its derivatives in `(nparam, nbranch)`
-      !> layout, so passing `nparam = ndir` yields every direction of the group
-      !> from one call.
-      !>
-      !> The scratch is sized by [[max_branch_group_size]] and not by
-      !> `maxval(branch_count)`: it is indexed by the group's run length, which
-      !> is what that function returns and what the walk below produces.
+      !> - Serial only; see the module header
+      !> - Group walk by [[next_branch_group]], as in [[compute_branch_phi_adj]]
+      !>   and the branch post-pass of `forward.f90`
+      !> - Groups are runs of equal `anchor_id` starting at `branch_count > 1`
+      !> - Softmax derivatives in `(nparam, nbranch)` layout; `nparam = ndir`
+      !>   gives every direction of a group in one call
+      !> - Scratch sized by [[max_branch_group_size]], not
+      !>   `maxval(branch_count)`: it is indexed by the group run length
       subroutine branch_stage()
 
          if (.not. allocated(self%branch_count) .or. .not. allocated(self%anchor_id)) return

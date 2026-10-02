@@ -1,41 +1,19 @@
-!> Provides the seeds for the DROP derivatives
+!> Seed layout and seed pushes of the DROP derivatives
 !>
-!> * A seed is one unit perturbation direction pushed through the linear
-!>   per-point map of [[moist_cavity_drop_derivatives_kernel]]
-!> * The kernel yields the surface quantity for a given seed
-!> * This module sends needed seeds through the kernel and collects
-!>   their responses
-!>
-!> Two bases are seeded:
-!> * the 13 level-set jet directions spanning `(S, grad S, grad^2 S)`
-!> * the 3 anchor directions spanning the rigid motion of the owner sphere
-!>
-!> Because the projected point is an implicit minimizer, a seed of the field
-!> also affects the point position; the bordered KKT solve acconts for that
-!>
-!> The outward-normal adjoint is folded into the position and gradient
-!> channels (since all bases consume it)
-!>
-!> Both bases are offered twice over: as one routine that seeds and contracts
-!> in a single sweep, and as an `_apply`/`_contract` pair. The split is not
-!> cosmetic -- the expensive half, [[apply_seed]], reads the grid point alone,
-!> while the surface adjoints reach only the cheap contraction. A caller that
-!> contracts one point against many weight sets (the response half of the
-!> Hessian does, once per nuclear direction) therefore pays the eigen
-!> decomposition, tangent frame, Jacobian and curvature once instead of once
-!> per set. The single-sweep routines are thin compositions of the two halves,
-!> so there is exactly one copy of every floating-point chain
-!>
-!> The seed *layout* lives here too, and only here: [[jet_seed_index]] says
-!> which jet direction a slot carries, [[seed_rhs_column]] which column of the
-!> solved batch it occupies, and [[seed_standard_rhs]] emits that batch's
-!> right-hand sides. The grid driver, the two `_apply` halves and
-!> [[fill_seed_basis]] are all consumers, so no producer and no reader of a
-!> column can drift away from the others
-!>
-!> Everything here is `self`-free and takes plain arguments, so it can be
-!> called from a submodule of `moist_cavity_drop` and unit-tested without a
-!> cavity
+!> - Seed: unit perturbation direction pushed through the linear per-point
+!>   map of [[moist_cavity_drop_derivatives_kernel]]
+!> - Two bases: 13 level-set jet directions spanning `(S, grad S, grad^2 S)`,
+!>   3 anchor directions for the rigid motion of the owner sphere
+!> - Projected point is an implicit minimizer; the bordered KKT solve gives
+!>   the point motion of each seed
+!> - Outward-normal adjoint folded into the position and gradient channels
+!> - Each basis as one sweep and as `_apply`/`_contract` pair: apply reads
+!>   the grid point only, contract takes the surface adjoints; the sweep
+!>   composes both, one copy of every floating-point chain
+!> - Seed layout owned here: [[jet_seed_index]], [[seed_rhs_column]],
+!>   [[seed_standard_rhs]]
+!> - No `self`, plain arguments: callable from a submodule of
+!>   `moist_cavity_drop`, testable without a cavity
 module moist_cavity_drop_derivatives_seeds
    use mctc_env, only: error_type, fatal_error
    use mctc_env_accuracy, only: wp
@@ -45,7 +23,7 @@ module moist_cavity_drop_derivatives_seeds
    use moist_cavity_drop_derivatives_kernel, only: drop_seed_state_type, drop_seed_result_type, &
       & drop_seed_state_tangent_type, &
       & drop_surface_weights_type, apply_seed, &
-      & seed_contribution
+      & seed_contribution, seed_weight_tol
 
    implicit none(type, external)
    private
@@ -56,88 +34,60 @@ module moist_cavity_drop_derivatives_seeds
    public :: jet_seed_index, seed_rhs_column, seed_standard_rhs
    public :: fill_seed_basis, scatter_jet_weight, seed_contribution_tangent
 
-   !> Number of level-set jet directions: one value, three gradient, nine Hessian
+   !> Number of level-set jet directions: 1 value, 3 gradient, 9 Hessian
    integer, parameter, public :: drop_n_jet_seeds = 13
 
-   !> Number of anchor directions: the rigid motion of the owner sphere
+   !> Number of anchor directions, rigid motion of the owner sphere
    integer, parameter, public :: drop_n_anchor_seeds = 3
 
-   !> Seeds one grid point pushes through the kernel: the `drop_n_jet_seeds`
-   !> level-set jet directions of [[seed_jet_basis]] followed by the
-   !> `drop_n_anchor_seeds` anchor directions of [[seed_anchor]], in that order
+   !> Seeds per grid point: jet directions first, then anchor directions
    !>
-   !> [[fill_seed_basis]] lays that order out and the second-order chain of
-   !> `hessian_traverse.f90` walks the seeds by this index, so the two agree by
-   !> construction rather than by two matching literals
+   !> - Order laid out by [[fill_seed_basis]], walked by `hessian_traverse.f90`
    integer, parameter, public :: drop_n_point_seeds = drop_n_jet_seeds + drop_n_anchor_seeds
 
-   !> Jet directions that move the projected point: the value direction and the
-   !> three gradient directions
+   !> Jet directions moving the projected point: value and three gradient
    !>
-   !> The nine Hessian directions leave the stationarity conditions alone --
-   !> those see only `S` and `grad S` -- so their right-hand side vanishes
-   !> identically and they occupy no column of the seed batch
+   !> - Hessian directions have a zero right-hand side and no batch column
    integer, parameter, public :: drop_n_moving_jet_seeds = 1 + 3
 
-   !> Columns of the standard seed batch [[seed_standard_rhs]] emits: the moving
-   !> jet directions followed by the three anchor directions
+   !> Columns of the [[seed_standard_rhs]] batch: moving jet, then anchor
    integer, parameter, public :: drop_n_seed_columns = drop_n_moving_jet_seeds &
                                                        + drop_n_anchor_seeds
 
-   !> Vanishing tangent of a basis seed
+   !> Zero gradient tangent of a basis seed, for [[apply_seed_tangent]]
    !>
-   !> Every seed [[fill_seed_basis]] emits is a constant matrix, so its own
-   !> derivative along a nuclear direction is zero and only the point motion it
-   !> induces survives; these are the arguments that carries into
-   !> [[apply_seed_tangent]]
+   !> - Basis seeds are constant; only their induced point motion has a tangent
    real(wp), parameter, public :: seed_dzero1(3) = 0.0_wp
+   !> Zero Hessian tangent of a basis seed, for [[apply_seed_tangent]]
    real(wp), parameter, public :: seed_dzero2(3, 3) = 0.0_wp
 
-   !> Slot kinds of the jet-seed layout, as classified by [[jet_seed_index]]
+   !> Slot kind beyond `drop_n_jet_seeds`, e.g. an anchor seed
    !>
-   !> The layout of the `drop_n_jet_seeds` directions is owned here and nowhere
-   !> else: every producer and every consumer of a jet slot goes through
-   !> [[jet_seed_index]], so symmetrising the nine Hessian seeds is a change to
-   !> one routine rather than to three re-derivations of `(ibasis - 5)/3 + 1`.
-   !>
-   !> Slot outside `1 .. drop_n_jet_seeds` -- an anchor seed, for instance
+   !> - Slot kinds assigned by [[jet_seed_index]], sole owner of the jet layout
    integer, parameter, public :: drop_jet_seed_none = 0
-   !> Slot 1: the level-set value direction
+   !> Slot 1: level-set value direction
    integer, parameter, public :: drop_jet_seed_value = 1
-   !> Slots 2-4: the three level-set gradient directions
+   !> Slots 2-4: level-set gradient directions
    integer, parameter, public :: drop_jet_seed_grad = 2
-   !> Slots 5-13: the nine level-set Hessian directions, in row-major order
+   !> Slots 5-13: level-set Hessian directions, row-major
    integer, parameter, public :: drop_jet_seed_hess = 3
 
    !> LU factorization of the bordered KKT sensitivity matrix
-   !>
-   !> With the Lagrangian Hessian `H_L = phi_rr - lambda S_rr` and the level-set
-   !> gradient `g = S_r`,
    !>
    !> ```
    !>   [ H_L  -g ] [ dr/dp      ]   [ b_1:3 ]
    !>   [ g^T   0 ] [ dlambda/dp ] = [ b_4   ]
    !> ```
    !>
-   !> The full bordered system is factored rather than eliminating `dlambda`,
-   !> so `H_L` itself need not be invertible.
-   !>
-   !> Factorization is split from the solve because the Hessian passes need the
-   !> factors to across solve calls at one grid point:
-   !> the primal right-hand sides are known up front, the per-direction tangent
-   !> ones (`K dx = db - dK x`) only once the primal solution exists; `solve`
-   !> takes the first, `solve_tangent` the second. Components are
-   !> fixed size, so an instance is stack-local inside the OpenMP grid loops and
-   !> the path stays allocation-free -- the tangent batch buffer belongs to the
-   !> caller for that same reason; only a failure allocates, and that through
-   !> the error object all three routines report with.
-   !>
-   !> All three take a `context` -- the API entry point the user called -- and
-   !> an optional `igrid`, and prefix their diagnostic with `context//": "`,
-   !> matching [[check_surface_adjoint]]. A singular projection is a property of
-   !> the geometry a user has to be able to trace back to a call and a grid
-   !> point, and by the time the bordered matrix is assembled neither is
-   !> recoverable from the arguments.
+   !> - `H_L = phi_rr - lambda S_rr`, `g = S_r`
+   !> - Full bordered system factored, `H_L` need not be invertible
+   !> - Factored once per grid point: `solve` for the primal right-hand sides,
+   !>   `solve_tangent` for `K dx = db - dK x` once the primal solution exists
+   !> - Fixed size: stack-local in the OpenMP grid loops, allocation only for
+   !>   the error object
+   !> - Tangent batch buffer owned by the caller
+   !> - Diagnostics prefixed with `context//": "` plus optional `igrid`, as in
+   !>   [[check_surface_adjoint]]
    type :: drop_kkt_factor_type
       !> LU factors of the bordered matrix, as returned by `getrf`
       real(wp) :: lu(4, 4)
@@ -156,17 +106,14 @@ contains
 
    !> Assemble and factor the bordered KKT sensitivity matrix
    !>
-   !> A singular bordered matrix means a degenerate projected point, which is a
-   !> condition of the geometry rather than a programming error. The LAPACK
-   !> status is therefore turned into an error object here, so no caller has to
-   !> know that a status code is what LAPACK returns.
+   !> - Singular matrix: degenerate projected point, reported through `error`
    !>
-   !> @param[out] self         Factorization
-   !> @param[in]  H_lagrangian Lagrangian Hessian at the projected point
-   !> @param[in]  lsf1_r       Level-set gradient at the projected point
-   !> @param[in]  context      Calling routine, used to prefix the diagnostic
-   !> @param[out] error        Error object, allocated when the system is singular
-   !> @param[in]  igrid        Grid point being factored, when the caller has one
+   !> @param[out] self          factorization
+   !> @param[in]  H_lagrangian  Lagrangian Hessian at the projected point
+   !> @param[in]  lsf1_r        level-set gradient at the projected point
+   !> @param[in]  context       API entry point, prefixes the diagnostic
+   !> @param[out] error         allocated when the system is singular
+   !> @param[in]  igrid         grid point for the diagnostic, optional
    subroutine drop_kkt_factor(self, H_lagrangian, lsf1_r, context, error, igrid)
       !> Factorization
       class(drop_kkt_factor_type), intent(out) :: self
@@ -174,11 +121,11 @@ contains
       real(wp), intent(in) :: H_lagrangian(3, 3)
       !> Level-set gradient
       real(wp), intent(in) :: lsf1_r(3)
-      !> Calling routine
+      !> Calling API entry point
       character(len=*), intent(in) :: context
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Failing grid point, when the caller has one
+      !> Failing grid point
       integer, intent(in), optional :: igrid
 
       !> LAPACK status
@@ -198,30 +145,29 @@ contains
 
    !> Turn a LAPACK status of the bordered system into an error object
    !>
-   !> The message is built from fixed-length renderings so that it is thread
-   !> safe inside the traversals' parallel regions.
+   !> - Fixed-length renderings, thread safe inside parallel regions
    !>
-   !> @param[in]  context Calling routine, used to prefix the diagnostic
-   !> @param[in]  what    What failed, in words
-   !> @param[in]  routine LAPACK routine that reported the status
-   !> @param[in]  info    LAPACK status
-   !> @param[out] error   Error object
-   !> @param[in]  igrid   Grid point being processed, when the caller has one
+   !> @param[in]  context  API entry point, prefixes the diagnostic
+   !> @param[in]  what     failure description
+   !> @param[in]  routine  LAPACK routine reporting the status
+   !> @param[in]  info     LAPACK status
+   !> @param[out] error    error object, always allocated
+   !> @param[in]  igrid    grid point for the diagnostic, optional
    subroutine kkt_report(context, what, routine, info, error, igrid)
-      !> Calling routine
+      !> Calling API entry point
       character(len=*), intent(in) :: context
-      !> What failed, and which LAPACK routine said so
+      !> Failure description and reporting LAPACK routine
       character(len=*), intent(in) :: what, routine
       !> LAPACK status
       integer(lapack_ik), intent(in) :: info
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Failing grid point, when the caller has one
+      !> Failing grid point
       integer, intent(in), optional :: igrid
 
-      !> Rendered status; fixed length, so the message build is thread safe
+      !> Rendered status, fixed length for thread safety
       character(len=32) :: status
-      !> Rendered grid index and its message suffix; fixed length, for the same reason
+      !> Rendered grid index and its message suffix, fixed length
       character(len=32) :: idx
       character(len=48) :: at_point
 
@@ -237,28 +183,25 @@ contains
 
    !> Solve a right-hand side batch with the stored factors
    !>
-   !> Requires a successful [[drop_kkt_factor]]. Once the factors exist `getrs`
-   !> has no failure mode of its own: only an illegal argument sets its status,
-   !> and that is a programming error rather than a degenerate point. So this
-   !> path cannot be reached from a correct caller and cannot be exercised by a
-   !> test; it reports for consistency with the factorization, not because a
-   !> caller is expected to meet it.
+   !> - Requires a successful [[drop_kkt_factor]]
+   !> - `getrs` status flags an illegal argument only: unreachable from a
+   !>   correct caller, not covered by a test
    !>
-   !> @param[in]    self    Factorization
-   !> @param[inout] rhs     `(4, nrhs)`; right-hand sides in, solutions out
-   !> @param[in]    context Calling routine, used to prefix the diagnostic
-   !> @param[out]   error   Error object, allocated when LAPACK rejects the call
-   !> @param[in]    igrid   Grid point being solved, when the caller has one
+   !> @param[in]     self     factorization
+   !> @param[in,out] rhs      `(4, nrhs)`; right-hand sides in, solutions out
+   !> @param[in]     context  API entry point, prefixes the diagnostic
+   !> @param[out]    error    allocated when LAPACK rejects the call
+   !> @param[in]     igrid    grid point for the diagnostic, optional
    subroutine drop_kkt_apply(self, rhs, context, error, igrid)
       !> Factorization
       class(drop_kkt_factor_type), intent(in) :: self
       !> Right-hand sides in, solutions out
       real(wp), contiguous, intent(inout) :: rhs(:, :)
-      !> Calling routine
+      !> Calling API entry point
       character(len=*), intent(in) :: context
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Failing grid point, when the caller has one
+      !> Failing grid point
       integer, intent(in), optional :: igrid
 
       !> LAPACK status
@@ -274,78 +217,59 @@ contains
 
    !> Solve the tangent of a right-hand side batch with the same factors
    !>
-   !> Differentiating `K x = b` along a perturbation gives `K dx = db - dK x`,
-   !> where `dK` carries the same bordered layout [[drop_kkt_factor]] assembles:
-   !>
    !> ```
-   !>   dK = [ dH_L  -dg ]
-   !>        [ dg^T    0 ]
+   !>   K dx = db - dK x,   dK = [ dH_L  -dg ]
+   !>                            [ dg^T    0 ]
    !> ```
    !>
-   !> so the two `dlsf1_r` terms enter with *opposite* signs -- the multiplier
-   !> term on rows 1-3 adds, the position term on row 4 subtracts.
+   !> - `dlsf1_r` terms enter with opposite signs: rows 1-3 add the
+   !>   multiplier term, row 4 subtracts the position term
+   !> - `phi_rr = alpha*I` is constant: caller passes
+   !>   `dH_lagrangian = -dlambda S_rr - lambda d(S_rr)`
+   !> - One `getrs` for all `nseed*ndir` right-hand sides of a grid point
+   !> - Column `(idir-1)*nseed + iseed`, seeds of one direction contiguous;
+   !>   the driver depends on that
+   !> - `rhs` allocated by the caller, once per thread outside the grid loop
+   !> - Requires a successful [[drop_kkt_factor]]
+   !> - Shape mismatch: reported before `rhs` is touched, reachable and tested
+   !> - `getrs` status unreachable from a correct caller, see [[drop_kkt_apply]]
    !>
-   !> `H_L = phi_rr - lambda S_rr` and the objective Hessian `phi_rr = alpha*I`
-   !> is constant in both the point and the anchor, so `d(phi_rr)` vanishes
-   !> identically and the caller passes `dH_lagrangian = -dlambda S_rr -
-   !> lambda d(S_rr)`, with nothing from the objective.
-   !>
-   !> Batched over directions deliberately: `dK` varies with the direction while
-   !> `x` varies with the seed, so one grid point carries `nseed*ndir` tangent
-   !> right-hand sides that all share the single 4x4 factorization. Forming them
-   !> all and issuing one `getrs` costs a grid point one LAPACK call instead of
-   !> `ndir` of them, on a matrix small enough that per-call overhead would
-   !> otherwise dominate the solve. Column `(idir-1)*nseed + iseed`, so the
-   !> seeds of one direction are contiguous; the driver depends on that.
-   !>
-   !> The batch is an argument rather than a local because `(4, nseed*ndir)` is
-   !> not a fixed size: allocating it here would allocate once per grid point
-   !> and lose the allocation-free path this type advertises. The caller
-   !> allocates it once per thread outside the grid loop and reuses it for every
-   !> point; this routine only checks that its shape is consistent.
-   !>
-   !> Requires a successful [[drop_kkt_factor]]. As in [[drop_kkt_apply]], once
-   !> the factors exist `getrs` has no failure mode a correct caller can reach,
-   !> so that status is reported for consistency rather than because it is
-   !> expected. The shape mismatch above it is a programming error in the
-   !> caller, and unlike the `getrs` status it is reachable and tested.
-   !>
-   !> @param[in]    self          Factorization, from a prior `factor` call
-   !> @param[in]    dH_lagrangian Tangent of the Lagrangian Hessian, `(3, 3, ndir)`
-   !> @param[in]    dlsf1_r       Tangent of the level-set gradient, `(3, ndir)`
-   !> @param[in]    x             Primal solutions `(4, nseed)`, as `solve` returns them
-   !> @param[inout] rhs           `db` in, `dx` out; `(4, nseed*ndir)`
-   !> @param[in]    context       Calling routine, used to prefix the diagnostic
-   !> @param[out]   error         Error object, allocated on inconsistent shapes
-   !> @param[in]    igrid         Grid point being solved, when the caller has one
+   !> @param[in]     self           factorization from a prior `factor` call
+   !> @param[in]     dH_lagrangian  tangent of the Lagrangian Hessian, `(3, 3, ndir)`
+   !> @param[in]     dlsf1_r        tangent of the level-set gradient, `(3, ndir)`
+   !> @param[in]     x              primal solutions from `solve`, `(4, nseed)`
+   !> @param[in,out] rhs            `db` in, `dx` out; `(4, nseed*ndir)`
+   !> @param[in]     context        API entry point, prefixes the diagnostic
+   !> @param[out]    error          allocated on inconsistent shapes or LAPACK status
+   !> @param[in]     igrid          grid point for the diagnostic, optional
    subroutine drop_kkt_solve_tangent(self, dH_lagrangian, dlsf1_r, x, rhs, context, &
                                      error, igrid)
-      !> Factorization, from a prior `factor` call
+      !> Factorization from a prior `factor` call
       class(drop_kkt_factor_type), intent(in) :: self
       !> Tangent of the Lagrangian Hessian block, `(3, 3, ndir)`
       real(wp), contiguous, intent(in) :: dH_lagrangian(:, :, :)
       !> Tangent of the level-set gradient, `(3, ndir)`
       real(wp), contiguous, intent(in) :: dlsf1_r(:, :)
-      !> Primal solutions `x`, `(4, nseed)`, as returned by `solve`; never modified
+      !> Primal solutions from `solve`, `(4, nseed)`
       real(wp), contiguous, intent(in) :: x(:, :)
       !> `db` in, `dx` out; `(4, nseed*ndir)`, column `(idir-1)*nseed + iseed`
       real(wp), contiguous, intent(inout) :: rhs(:, :)
-      !> Calling routine
+      !> Calling API entry point
       character(len=*), intent(in) :: context
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      !> Failing grid point, when the caller has one
+      !> Failing grid point
       integer, intent(in), optional :: igrid
 
-      !> Batch extents, taken from the tangent and primal arguments
+      !> Batch extents, from the tangent and primal arguments
       integer :: ndir, nseed
       !> Direction, seed, column and Cartesian indices
       integer :: idir, iseed, icol, iaxis
       !> LAPACK status
       integer(lapack_ik) :: info
-      !> Rendered shapes; fixed length, so the message build is thread safe
+      !> Rendered shapes, fixed length for thread safety
       character(len=64) :: shapes
-      !> Rendered grid index and its message suffix; fixed length, for the same reason
+      !> Rendered grid index and its message suffix, fixed length
       character(len=32) :: idx
       character(len=48) :: at_point
 
@@ -372,15 +296,14 @@ contains
          do iseed = 1, nseed
             icol = (idir - 1)*nseed + iseed
             do iaxis = 1, 3
-               ! Rows 1-3: the -dg block sits in column 4, so the multiplier
-               ! term comes back into the right-hand side with a plus sign.
+               ! Rows 1-3: -dg block in column 4, multiplier term adds
                rhs(iaxis, icol) = rhs(iaxis, icol) &
                                   - dH_lagrangian(iaxis, 1, idir)*x(1, iseed) &
                                   - dH_lagrangian(iaxis, 2, idir)*x(2, iseed) &
                                   - dH_lagrangian(iaxis, 3, idir)*x(3, iseed) &
                                   + dlsf1_r(iaxis, idir)*x(4, iseed)
             end do
-            ! Row 4 carries +dg^T, so its term subtracts.
+            ! Row 4: +dg^T, position term subtracts
             rhs(4, icol) = rhs(4, icol) &
                            - dlsf1_r(1, idir)*x(1, iseed) &
                            - dlsf1_r(2, idir)*x(2, iseed) &
@@ -398,25 +321,20 @@ contains
 
    !> Fold an outward-normal adjoint into the level-set gradient and position channels
    !>
-   !> The normal `n = grad S / |grad S|` depends on the level set twice over: at
-   !> a fixed point through `grad S`, which lands on the gradient channel, and
-   !> through the point's own motion, which lands on the position channel as
-   !> `H @ normal_grad`.
+   !> - `n = grad S / |grad S|`: gradient channel gets `normal_grad`, position
+   !>   channel gets `lsf2_rr @ normal_grad` from the point motion
+   !> - Sole author of `normal_grad` and `nwn`: second-order callers request
+   !>   them here and never rebuild them, one floating-point chain
+   !> - Both zero when the outward-normal channel is inactive
    !>
-   !> The two intermediates are handed back on request, because a second-order
-   !> caller needs their own tangents and must not rebuild them: a duplicated
-   !> floating-point chain contracts differently under `-ffp-contract=fast`, so
-   !> this routine is the single author of both. They are zero whenever the
-   !> outward-normal channel is inactive, matching the fold itself.
-   !>
-   !> @param[in]    state          Per-grid point forward state
-   !> @param[in]    eff            Folded surface adjoints
-   !> @param[in]    igrid          Grid point
-   !> @param[in]    lsf2_rr        Level-set Hessian at the projected point
-   !> @param[inout] w_lsf1_pt      Point-local level-set gradient adjoint
-   !> @param[out]   w_xyz_pt       Effective position adjoint for every seed
-   !> @param[out]   normal_grad_pt Tangential normal adjoint over |grad S|, optional
-   !> @param[out]   nwn_pt         Normal component of the normal adjoint, optional
+   !> @param[in]     state           per-grid point forward state
+   !> @param[in]     eff             folded surface adjoints
+   !> @param[in]     igrid           grid point
+   !> @param[in]     lsf2_rr         level-set Hessian at the projected point
+   !> @param[in,out] w_lsf1_pt       point-local level-set gradient adjoint
+   !> @param[out]    w_xyz_pt        effective position adjoint for every seed
+   !> @param[out]    normal_grad_pt  tangential normal adjoint over |grad S|, optional
+   !> @param[out]    nwn_pt          normal component of the normal adjoint, optional
    pure subroutine seed_normal_channel(state, eff, igrid, lsf2_rr, w_lsf1_pt, w_xyz_pt, &
                                        normal_grad_pt, nwn_pt)
       !> Per-grid point forward state
@@ -458,21 +376,16 @@ contains
 
    !> Classify one seed slot of the level-set jet layout
    !>
-   !> The `drop_n_jet_seeds` directions spanning `(S, grad S, grad^2 S)` are laid
-   !> out as slot 1 for the value, slots 2-4 for the gradient components and
-   !> slots 5-13 for the Hessian components in row-major order. This routine is
-   !> the single author of that layout; [[seed_jet_basis]], [[fill_seed_basis]]
-   !> and [[scatter_jet_weight]] are all consumers of it, so the emitting and
-   !> the reading side of a slot cannot drift apart.
+   !> - Slot 1 value, slots 2-4 gradient, slots 5-13 Hessian in row-major order
+   !> - Sole owner of the layout; [[seed_jet_basis]], [[fill_seed_basis]] and
+   !>   [[scatter_jet_weight]] consume it
+   !> - `iaxis`, `jaxis` always defined: both zero for the value slot and slots
+   !>   beyond the layout, `jaxis` zero for a gradient slot
    !>
-   !> `iaxis` and `jaxis` are always defined: the value slot and any slot
-   !> outside the layout report zero for both, and a gradient slot reports its
-   !> component in `iaxis` and zero in `jaxis`.
-   !>
-   !> @param[in]  ibasis    Seed slot
-   !> @param[out] slot_kind One of the `drop_jet_seed_*` kinds
-   !> @param[out] iaxis     First Cartesian index of the slot, or zero
-   !> @param[out] jaxis     Second Cartesian index of the slot, or zero
+   !> @param[in]  ibasis     seed slot, positive
+   !> @param[out] slot_kind  one of the `drop_jet_seed_*` kinds
+   !> @param[out] iaxis      first Cartesian index of the slot, or zero
+   !> @param[out] jaxis      second Cartesian index of the slot, or zero
    pure subroutine jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
       !> Seed slot
       integer, intent(in) :: ibasis
@@ -497,24 +410,18 @@ contains
       end if
    end subroutine jet_seed_index
 
-   !> Column of the standard seed batch one point seed's solution occupies
+   !> Column of the standard seed batch holding one point seed's solution
    !>
-   !> [[seed_standard_rhs]] emits the batch and every consumer reads it back
-   !> through this map, so the emitting and the reading side of a column cannot
-   !> drift apart -- the same contract [[jet_seed_index]] enforces on the jet
-   !> slots themselves, and what this routine is built on.
+   !> - Sole map between seed slots and [[seed_standard_rhs]] columns, built
+   !>   on [[jet_seed_index]]
+   !> - Zero for the nine Hessian slots and slots beyond the layout: no
+   !>   column, seed moves neither the point nor the multiplier
    !>
-   !> The nine level-set Hessian directions have a vanishing right-hand side and
-   !> therefore no column at all: they report zero, which a caller reading a seed
-   !> by column has to take as "this seed moves neither the point nor the
-   !> multiplier". A slot outside the layout reports zero for the same reason.
-   !>
-   !> @param[in] ibasis Point-seed slot, `1 .. drop_n_point_seeds`
-   !> @return    icol   Batch column of the slot, or zero when it has none
+   !> @param[in] ibasis  point-seed slot, `1 .. drop_n_point_seeds`
    pure function seed_rhs_column(ibasis) result(icol)
       !> Point-seed slot
       integer, intent(in) :: ibasis
-      !> Batch column of the slot
+      !> Batch column of the slot, zero when it has none
       integer :: icol
 
       !> Kind of the slot and its Cartesian indices
@@ -542,26 +449,16 @@ contains
 
    !> Build the right-hand sides of the standard jet and anchor seed batch
    !>
-   !> The batch every reverse traversal solves once per grid point, on the
-   !> factorization [[drop_kkt_factor]] built there. It is written here rather
-   !> than at the grid driver because the columns *are* the seed layout: which
-   !> column carries which direction is [[seed_rhs_column]]'s to say, and
-   !> [[fill_seed_basis]], [[seed_jet_basis_apply]] and [[seed_anchor_apply]]
-   !> read the solutions back through that same map.
+   !> - Solved once per grid point on the [[drop_kkt_factor]] factors
+   !> - Columns follow [[seed_rhs_column]]
+   !> - Value seed: unit change of `S` drives `S = 0`, row 4 is -1
+   !> - Gradient seed: multiplier term of the Lagrangian, row `iaxis` is `lambda`
+   !> - Anchor seed: field untouched, enters through
+   !>   `-d^2 phi/(dr dR_owner) = +alpha I`, row `iaxis` is `phi_alpha`
    !>
-   !> The two live channels are the level-set jet and the anchor:
-   !>
-   !>   * perturbing `S` by one unit drives the stationarity condition `S = 0`
-   !>     and lands on the bordered row alone;
-   !>   * perturbing a component of `grad S` drives the multiplier term of the
-   !>     Lagrangian and carries `lambda`;
-   !>   * moving the owner sphere rigidly leaves the level-set field untouched
-   !>     and reaches the system only through the objective's mixed derivative
-   !>     `-d^2 phi/(dr dR_owner) = +alpha I`.
-   !>
-   !> @param[in]  lambda_val Lagrange multiplier of the projection
-   !> @param[in]  phi_alpha  Quadratic coefficient of the projection objective
-   !> @param[out] kkt_rhs    Right-hand sides, `(4, drop_n_seed_columns)`
+   !> @param[in]  lambda_val  Lagrange multiplier of the projection
+   !> @param[in]  phi_alpha   quadratic coefficient of the projection objective
+   !> @param[out] kkt_rhs     right-hand sides, `(4, drop_n_seed_columns)`
    pure subroutine seed_standard_rhs(lambda_val, phi_alpha, kkt_rhs)
       !> Lagrange multiplier of the projection
       real(wp), intent(in) :: lambda_val
@@ -594,29 +491,23 @@ contains
 
    !> Lay out the 16 basis seeds in the order the second-order chain reads them
    !>
-   !> Slots 1-13 are the level-set jet directions of [[seed_jet_basis]] -- the
-   !> value, the three gradient components and the nine Hessian components, the
-   !> last of which are single-entry matrices and therefore asymmetric -- and
-   !> slots 14-16 the three anchor directions of [[seed_anchor]]. `x` collects
-   !> the induced point motion and multiplier change of every seed in the
-   !> `(4, nseed)` layout [[drop_kkt_solve_tangent]] expects; the nine Hessian
-   !> seeds move neither, because the stationarity conditions see only `S` and
-   !> `grad S`.
+   !> - Slots 1-13: jet directions of [[seed_jet_basis]]; slots 14-16: anchor
+   !>   directions of [[seed_anchor]]
+   !> - Hessian seeds are single-entry matrices, hence asymmetric; their `x`
+   !>   is zero
+   !> - `x` in the `(4, nseed)` layout [[drop_kkt_solve_tangent]] expects
+   !> - Slot layout from [[jet_seed_index]], batch columns from [[seed_rhs_column]]
    !>
-   !> Which jet slot carries which direction is not decided here:
-   !> [[jet_seed_index]] owns that layout and [[seed_rhs_column]] owns the map
-   !> onto the solved batch, so a change to the jet basis -- symmetrising the
-   !> Hessian seeds, say -- does not have to be repeated in any consumer.
-   !>
-   !> @param[in]  kkt      Solved KKT sensitivities, as [[seed_standard_rhs]] laid them out
-   !> @param[out] dlsf1_r  Gradient perturbation of each seed
-   !> @param[out] dlsf2_rr Hessian perturbation of each seed
-   !> @param[out] x        Induced point motion and multiplier change of each seed
+   !> @param[in]  kkt       solved KKT sensitivities, [[seed_standard_rhs]] layout
+   !> @param[out] dlsf1_r   gradient perturbation of each seed
+   !> @param[out] dlsf2_rr  Hessian perturbation of each seed
+   !> @param[out] x         induced point motion and multiplier change of each seed
    pure subroutine fill_seed_basis(kkt, dlsf1_r, dlsf2_rr, x)
       !> Solved KKT sensitivities
       real(wp), intent(in) :: kkt(:, :)
-      !> Seed perturbations of the level-set jet
+      !> Gradient perturbation of each seed
       real(wp), intent(out) :: dlsf1_r(3, drop_n_point_seeds)
+      !> Hessian perturbation of each seed
       real(wp), intent(out) :: dlsf2_rr(3, 3, drop_n_point_seeds)
       !> Induced point motion and multiplier change
       real(wp), intent(out) :: x(4, drop_n_point_seeds)
@@ -632,9 +523,7 @@ contains
          icol = seed_rhs_column(ibasis)
          if (icol > 0) x(:, ibasis) = kkt(1:4, icol)
 
-         ! An anchor seed perturbs no level-set jet component at all: it reaches
-         ! the system through the objective and is already fully described by
-         ! the point motion its column carries.
+         ! Anchor seed: no jet perturbation, described by its point motion alone
          if (ibasis > drop_n_jet_seeds) cycle
 
          call jet_seed_index(ibasis, slot_kind, iaxis, jaxis)
@@ -646,20 +535,17 @@ contains
       end do
    end subroutine fill_seed_basis
 
-   !> Place one jet seed's contribution in the level-set adjoint weights
+   !> Add one jet seed's contribution to the level-set adjoint weights
    !>
-   !> The same layout [[fill_seed_basis]] writes, read back through the same
-   !> classifier: [[jet_seed_index]] says which of the value, gradient and
-   !> Hessian channels a slot belongs to, and this routine only places the
-   !> number. Anchor slots are not accepted -- they classify as
-   !> `drop_jet_seed_none` and land nowhere -- because their contribution
-   !> belongs to the owner's gradient row, not to a weight.
+   !> - Slot classified by [[jet_seed_index]], same layout as [[fill_seed_basis]]
+   !> - Anchor slots classify as `drop_jet_seed_none` and land nowhere; their
+   !>   contribution belongs to the owner's gradient row
    !>
-   !> @param[in]    ibasis Seed slot, `1 .. drop_n_jet_seeds`
-   !> @param[in]    contrib Contribution of that seed
-   !> @param[inout] w0     Level-set value adjoint
-   !> @param[inout] w1     Level-set gradient adjoint
-   !> @param[inout] w2     Level-set Hessian adjoint
+   !> @param[in]     ibasis   seed slot, `1 .. drop_n_jet_seeds`
+   !> @param[in]     contrib  contribution of that seed
+   !> @param[in,out] w0       level-set value adjoint
+   !> @param[in,out] w1       level-set gradient adjoint
+   !> @param[in,out] w2       level-set Hessian adjoint
    pure subroutine scatter_jet_weight(ibasis, contrib, w0, w1, w2)
       !> Seed slot
       integer, intent(in) :: ibasis
@@ -684,31 +570,25 @@ contains
 
    !> Push the 13 level-set jet directions through the kernel
    !>
-   !> The per-point map is linear in its seed, so seeding each basis direction
-   !> of the jet `(S, grad S, grad^2 S)` once and collecting the responses gives
-   !> the adjoint of the whole jet. Only the value and gradient directions move
-   !> the point; the nine Hessian directions have `dr/dp = 0`.
+   !> - Per-point map is linear in its seed: the responses of all basis
+   !>   directions give the adjoint of the whole jet
+   !> - Only value and gradient directions move the point; Hessian directions
+   !>   have `dr/dp = 0`
+   !> - Results are point-local: `potential.f90` scatters them into
+   !>   `w_lsf*(..., igrid)`, `nuclear.f90` contracts them with `lsf*_rA`
+   !> - Composes [[seed_jet_basis_apply]] and [[seed_jet_basis_contract]]; with
+   !>   several weight sets per point call the halves directly, as
+   !>   [[drop_hessian_traverse]] does
    !>
-   !> The results are point-local. `potential.f90` scatters them into
-   !> `w_lsf*(..., igrid)`; `nuclear.f90` contracts them with `lsf*_rA`.
-   !>
-   !> A thin composition of [[seed_jet_basis_apply]] and
-   !> [[seed_jet_basis_contract]], for the single-weight callers that have no
-   !> reason to hold the responses. A caller that contracts the same point
-   !> against several weight sets calls the two halves itself and pays the
-   !> expensive one once; see [[drop_hessian_traverse]], which applies the basis
-   !> once per grid point and contracts it once per nuclear direction *and* once
-   !> for its own second-order chain.
-   !>
-   !> @param[in]    state     Per-grid point forward state
-   !> @param[in]    eff       Folded surface adjoints
-   !> @param[in]    igrid     Grid point
-   !> @param[in]    phi1_r    Objective gradient at the projected point
-   !> @param[in]    kkt       Solved KKT sensitivities, read through [[seed_rhs_column]]
-   !> @param[in]    w_xyz_pt  Effective position adjoint from [[seed_normal_channel]]
-   !> @param[inout] w_lsf0_pt Point-local level-set value adjoint
-   !> @param[inout] w_lsf1_pt Point-local level-set gradient adjoint
-   !> @param[inout] w_lsf2_pt Point-local level-set Hessian adjoint
+   !> @param[in]     state      per-grid point forward state
+   !> @param[in]     eff        folded surface adjoints
+   !> @param[in]     igrid      grid point
+   !> @param[in]     phi1_r     objective gradient at the projected point
+   !> @param[in]     kkt        solved KKT sensitivities, read through [[seed_rhs_column]]
+   !> @param[in]     w_xyz_pt   effective position adjoint from [[seed_normal_channel]]
+   !> @param[in,out] w_lsf0_pt  point-local level-set value adjoint
+   !> @param[in,out] w_lsf1_pt  point-local level-set gradient adjoint
+   !> @param[in,out] w_lsf2_pt  point-local level-set Hessian adjoint
    subroutine seed_jet_basis(state, eff, igrid, phi1_r, kkt, w_xyz_pt, &
                              w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
       !> Per-grid point forward state
@@ -726,7 +606,7 @@ contains
       !> Point-local level-set adjoints
       real(wp), intent(inout) :: w_lsf0_pt, w_lsf1_pt(3), w_lsf2_pt(3, 3)
 
-      !> Linear response of each seed, and its induced point motion
+      !> Linear response and induced point motion of each seed
       type(drop_seed_result_type) :: res_seed(drop_n_jet_seeds)
       real(wp) :: seed_x(4, drop_n_jet_seeds)
 
@@ -735,34 +615,20 @@ contains
                                    w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
    end subroutine seed_jet_basis
 
-   !> Apply half of [[seed_jet_basis]]: the 13 responses of one grid point
+   !> Apply the 13 jet seeds at one grid point, first half of [[seed_jet_basis]]
    !>
-   !> Everything here is a function of the point alone -- the seed directions
-   !> are constant matrices, the induced motion comes from the point's own
-   !> bordered solve, and [[apply_seed]] reads only `state`. No surface adjoint
-   !> enters, which is exactly what lets a caller with several weight sets at
-   !> one point run this once and the contraction many times.
+   !> - Reads `state` and the bordered solve only, no surface adjoint: run
+   !>   once per point, contract once per weight set
+   !> - `seed_x` in the `(4, nseed)` layout of the second-order chain, zero
+   !>   for Hessian seeds
+   !> - Slots classified by [[jet_seed_index]], as in [[seed_jet_basis_contract]]
+   !> - `dstate` chain of [[apply_seed]] computed only when requested
    !>
-   !> `seed_x` carries the induced point motion and multiplier change in the
-   !> `(4, nseed)` layout the second-order chain uses, so the two halves of the
-   !> DROP Hessian hold their seed batches the same way round.
-   !>
-   !> Which slot carries which direction is [[jet_seed_index]]'s to say, so this
-   !> routine and [[seed_jet_basis_contract]] classify the slot the same way and
-   !> agree by construction.
-   !>
-   !> `dstate` is the derived-state tangent [[apply_seed]] forms on its way to
-   !> the response and otherwise discards. A second-order caller needs it for
-   !> every seed and a first-order one for none, so it is optional here exactly
-   !> as it is there, and the whole chain behind it is computed only when it is
-   !> asked for. That is what lets the two channels of the surface Hessian share
-   !> one application of the basis rather than making the same 16 calls twice.
-   !>
-   !> @param[in]  state    Per-grid point forward state
-   !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
-   !> @param[out] res_seed Linear response of each seed, `(drop_n_jet_seeds)`
-   !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
-   !> @param[out] dstate   Tangent of the derived seed state, when the caller needs it
+   !> @param[in]  state     per-grid point forward state
+   !> @param[in]  kkt       solved KKT sensitivities, read through [[seed_rhs_column]]
+   !> @param[out] res_seed  linear response of each seed, `(drop_n_jet_seeds)`
+   !> @param[out] seed_x    induced point motion and multiplier change, `(4, nseed)`
+   !> @param[out] dstate    tangent of the derived seed state, optional
    subroutine seed_jet_basis_apply(state, kkt, res_seed, seed_x, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
@@ -792,8 +658,7 @@ contains
             seed_x(:, ibasis) = kkt(1:4, seed_rhs_column(ibasis))
          end if
 
-         ! An element of an absent optional array cannot be forwarded, so the
-         ! presence is resolved here rather than inside [[apply_seed]]
+         ! Element of an absent optional array cannot be forwarded
          if (present(dstate)) then
             call apply_seed(state, dlsf1_r, dlsf2_rr, seed_x(1:3, ibasis), &
                             seed_x(4, ibasis), res_seed(ibasis), dstate(ibasis))
@@ -804,22 +669,21 @@ contains
       end do
    end subroutine seed_jet_basis_apply
 
-   !> Contract half of [[seed_jet_basis]]: the 13 responses against one weight set
+   !> Contract the 13 jet responses with one weight set
    !>
-   !> The cheap half, and the only one a surface adjoint reaches. Every seed
-   !> lands in its own slot of the level-set adjoints, so the loop carries no
-   !> accumulation of its own and may be run once per weight set at a point
-   !> whose [[seed_jet_basis_apply]] ran once.
+   !> - Second half of [[seed_jet_basis]], the only one taking surface adjoints
+   !> - Each seed lands in its own adjoint slot, no cross-seed accumulation:
+   !>   repeatable per weight set after one [[seed_jet_basis_apply]]
    !>
-   !> @param[in]    eff       Folded surface adjoints
-   !> @param[in]    igrid     Grid point
-   !> @param[in]    phi1_r    Objective gradient at the projected point
-   !> @param[in]    w_xyz_pt  Effective position adjoint from [[seed_normal_channel]]
-   !> @param[in]    res_seed  Linear response of each seed
-   !> @param[in]    seed_x    Induced point motion and multiplier change of each seed
-   !> @param[inout] w_lsf0_pt Point-local level-set value adjoint
-   !> @param[inout] w_lsf1_pt Point-local level-set gradient adjoint
-   !> @param[inout] w_lsf2_pt Point-local level-set Hessian adjoint
+   !> @param[in]     eff        folded surface adjoints
+   !> @param[in]     igrid      grid point
+   !> @param[in]     phi1_r     objective gradient at the projected point
+   !> @param[in]     w_xyz_pt   effective position adjoint from [[seed_normal_channel]]
+   !> @param[in]     res_seed   linear response of each seed
+   !> @param[in]     seed_x     induced point motion and multiplier change of each seed
+   !> @param[in,out] w_lsf0_pt  point-local level-set value adjoint
+   !> @param[in,out] w_lsf1_pt  point-local level-set gradient adjoint
+   !> @param[in,out] w_lsf2_pt  point-local level-set Hessian adjoint
    pure subroutine seed_jet_basis_contract(eff, igrid, phi1_r, w_xyz_pt, res_seed, seed_x, &
                                            w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
       !> Folded surface adjoints
@@ -843,9 +707,8 @@ contains
       integer :: ibasis
 
       do ibasis = 1, drop_n_jet_seeds
-         ! A field seed leaves the anchor alone, so no rigid-motion shift; the
-         ! switching factor is an anchor-only iSwiG overlap and is absent for
-         ! the same reason. See [[seed_contribution]].
+         ! Field seed leaves the anchor alone: no rigid-motion shift, no
+         ! switching term, see [[seed_contribution]]
          contribution = seed_contribution(eff, igrid, w_xyz_pt, seed_x(1:3, ibasis), &
                                           res_seed(ibasis), phi1_r)
          call scatter_jet_weight(ibasis, contribution, w_lsf0_pt, w_lsf1_pt, w_lsf2_pt)
@@ -854,21 +717,21 @@ contains
 
    !> Push the three anchor directions through the kernel
    !>
-   !> The anchor moves rigidly with its owner sphere, so `da_i/dR_I = delta`.
-   !> The level-set field is untouched; the whole channel enters through the
-   !> objective, whose mixed derivative `-d^2 phi / dr dR_I` is `+alpha * I`.
-   !> That makes it three extra right-hand sides on the same factorization,
-   !> independent of the number of spheres.
+   !> - Anchor moves rigidly with its owner sphere, `da_i/dR_I = delta`
+   !> - Level-set field untouched; the channel enters through the objective,
+   !>   `-d^2 phi / dr dR_I = +alpha * I`
+   !> - Three extra right-hand sides on the same factorization, independent
+   !>   of the number of spheres
+   !> - Composes [[seed_anchor_apply]] and [[seed_anchor_contract]], split as
+   !>   in [[seed_jet_basis]]
    !>
-   !> Split the same way as [[seed_jet_basis]], and for the same reason.
-   !>
-   !> @param[in]    state      Per-grid point forward state
-   !> @param[in]    eff        Folded surface adjoints
-   !> @param[in]    igrid      Grid point
-   !> @param[in]    phi1_r     Objective gradient at the projected point
-   !> @param[in]    kkt        Solved KKT sensitivities, read through [[seed_rhs_column]]
-   !> @param[in]    w_xyz_pt   Effective position adjoint from [[seed_normal_channel]]
-   !> @param[inout] grad_owner Nuclear-gradient accumulator of the owner sphere
+   !> @param[in]     state       per-grid point forward state
+   !> @param[in]     eff         folded surface adjoints
+   !> @param[in]     igrid       grid point
+   !> @param[in]     phi1_r      objective gradient at the projected point
+   !> @param[in]     kkt         solved KKT sensitivities, read through [[seed_rhs_column]]
+   !> @param[in]     w_xyz_pt    effective position adjoint from [[seed_normal_channel]]
+   !> @param[in,out] grad_owner  nuclear-gradient accumulator of the owner sphere
    subroutine seed_anchor(state, eff, igrid, phi1_r, kkt, w_xyz_pt, grad_owner)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
@@ -885,7 +748,7 @@ contains
       !> Owner-sphere gradient accumulator
       real(wp), intent(inout) :: grad_owner(3)
 
-      !> Linear response of each seed, and its induced point motion
+      !> Linear response and induced point motion of each seed
       type(drop_seed_result_type) :: res_seed(drop_n_anchor_seeds)
       real(wp) :: seed_x(4, drop_n_anchor_seeds)
 
@@ -894,17 +757,16 @@ contains
                                 grad_owner)
    end subroutine seed_anchor
 
-   !> Apply half of [[seed_anchor]]: the three responses of one grid point
+   !> Apply the three anchor seeds at one grid point, first half of [[seed_anchor]]
    !>
-   !> `dstate` is optional for the reason [[seed_jet_basis_apply]] gives, and
-   !> the two halves carry it the same way so that one caller can collect the
-   !> whole `drop_n_point_seeds` basis in one pass.
+   !> - `dstate` optional as in [[seed_jet_basis_apply]]: one caller collects
+   !>   the whole `drop_n_point_seeds` basis in one pass
    !>
-   !> @param[in]  state    Per-grid point forward state
-   !> @param[in]  kkt      Solved KKT sensitivities, read through [[seed_rhs_column]]
-   !> @param[out] res_seed Linear response of each seed, `(drop_n_anchor_seeds)`
-   !> @param[out] seed_x   Induced point motion and multiplier change, `(4, nseed)`
-   !> @param[out] dstate   Tangent of the derived seed state, when the caller needs it
+   !> @param[in]  state     per-grid point forward state
+   !> @param[in]  kkt       solved KKT sensitivities, read through [[seed_rhs_column]]
+   !> @param[out] res_seed  linear response of each seed, `(drop_n_anchor_seeds)`
+   !> @param[out] seed_x    induced point motion and multiplier change, `(4, nseed)`
+   !> @param[out] dstate    tangent of the derived seed state, optional
    subroutine seed_anchor_apply(state, kkt, res_seed, seed_x, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
@@ -938,15 +800,17 @@ contains
       end do
    end subroutine seed_anchor_apply
 
-   !> Contract half of [[seed_anchor]]: the three responses against one weight set
+   !> Contract the three anchor responses with one weight set
    !>
-   !> @param[in]    eff        Folded surface adjoints
-   !> @param[in]    igrid      Grid point
-   !> @param[in]    phi1_r     Objective gradient at the projected point
-   !> @param[in]    w_xyz_pt   Effective position adjoint from [[seed_normal_channel]]
-   !> @param[in]    res_seed   Linear response of each seed
-   !> @param[in]    seed_x     Induced point motion and multiplier change of each seed
-   !> @param[inout] grad_owner Nuclear-gradient accumulator of the owner sphere
+   !> - Second half of [[seed_anchor]]
+   !>
+   !> @param[in]     eff         folded surface adjoints
+   !> @param[in]     igrid       grid point
+   !> @param[in]     phi1_r      objective gradient at the projected point
+   !> @param[in]     w_xyz_pt    effective position adjoint from [[seed_normal_channel]]
+   !> @param[in]     res_seed    linear response of each seed
+   !> @param[in]     seed_x      induced point motion and multiplier change of each seed
+   !> @param[in,out] grad_owner  nuclear-gradient accumulator of the owner sphere
    subroutine seed_anchor_contract(eff, igrid, phi1_r, w_xyz_pt, res_seed, seed_x, &
                                    grad_owner)
       !> Folded surface adjoints
@@ -970,9 +834,8 @@ contains
       integer :: iaxis
 
       do iaxis = 1, drop_n_anchor_seeds
-         ! phi = 0.5*alpha*|r - anchor|^2, so at fixed r the owner's rigid
-         ! motion contributes -phi1_r on top of the point-motion term; that is
-         ! the shift [[seed_contribution]] takes.
+         ! phi = 0.5*alpha*|r - anchor|^2: rigid owner motion at fixed r adds
+         ! -phi1_r, the shift [[seed_contribution]] takes
          contribution = seed_contribution(eff, igrid, w_xyz_pt, seed_x(1:3, iaxis), &
                                           res_seed(iaxis), phi1_r, phi1_r(iaxis))
 
@@ -980,30 +843,30 @@ contains
       end do
    end subroutine seed_anchor_contract
 
-   !> Directional derivative of [[seed_contribution]]
+   !> Directional derivative of [[seed_contribution]] at fixed surface adjoints
    !>
-   !> Term by term the product rule applied to that contraction, with the
-   !> surface adjoints themselves held fixed -- which is the whole premise of
-   !> the fixed-adjoint half of the Hessian, this routine's one caller. The
-   !> position adjoint still moves, because the normal fold inside it is built
-   !> from the level-set gradient at the projected point.
+   !> - Product rule on the primal contraction; sole caller is the
+   !>   fixed-adjoint half of the Hessian
+   !> - Position adjoint still moves through its normal fold, hence `dw_xyz_pt`
+   !> - No switching term, as in [[seed_contribution]]
+   !> - Branch term: tangent of `branch_phi_adj * (phi1_r . dr - branch_shift)`
+   !>   with `dphi1_r = alpha (dr_v - v_owner)`
+   !> - Anchor seed: `dbranch_shift` is the matching component of `dphi1_r`
+   !> - Branch term gated on the primal's condition and threshold
+   !> - Accumulation order as in the primal: position, width, branch, curvature
    !>
-   !> It lives beside its primal rather than in that caller so that the seed
-   !> layout, its contraction and the contraction's tangent stay in one file.
-   !> The branch term is absent because a grid carrying a multi-branch anchor
-   !> group is refused at the public entry points in `hessian.f90` -- the only
-   !> route to this routine's caller -- and the switching term for the reason
-   !> [[seed_contribution]] gives.
-   !>
-   !> @param[in] eff       Folded surface adjoints
-   !> @param[in] igrid     Grid point
-   !> @param[in] w_xyz_pt  Effective position adjoint
-   !> @param[in] dw_xyz_pt Tangent of the effective position adjoint
-   !> @param[in] dr        Induced point motion of the seed
-   !> @param[in] ddr       Tangent of that point motion
-   !> @param[in] dres      Second-order response of the seed
-   !> @return              Tangent of the adjoint contribution
-   pure function seed_contribution_tangent(eff, igrid, w_xyz_pt, dw_xyz_pt, dr, ddr, dres) &
+   !> @param[in] eff            folded surface adjoints
+   !> @param[in] igrid          grid point
+   !> @param[in] w_xyz_pt       effective position adjoint
+   !> @param[in] dw_xyz_pt      tangent of the effective position adjoint
+   !> @param[in] dr             induced point motion of the seed
+   !> @param[in] ddr            tangent of that point motion
+   !> @param[in] dres           second-order response of the seed
+   !> @param[in] phi1_r         objective gradient at the projected point
+   !> @param[in] dphi1_r        tangent of the objective gradient
+   !> @param[in] dbranch_shift  tangent of the rigid-motion shift, anchor seeds only
+   pure function seed_contribution_tangent(eff, igrid, w_xyz_pt, dw_xyz_pt, dr, ddr, dres, &
+                                           phi1_r, dphi1_r, dbranch_shift) &
       result(contribution)
       !> Folded surface adjoints
       type(drop_surface_weights_type), intent(in) :: eff
@@ -1015,11 +878,23 @@ contains
       real(wp), intent(in) :: dr(3), ddr(3)
       !> Second-order response
       type(drop_seed_result_type), intent(in) :: dres
+      !> Objective gradient at the projected point and its tangent
+      real(wp), intent(in) :: phi1_r(3), dphi1_r(3)
+      !> Tangent of the rigid-motion shift, present for an anchor seed only
+      real(wp), intent(in), optional :: dbranch_shift
       !> Tangent of the adjoint contribution
       real(wp) :: contribution
 
+      !> Tangent of the objective motion the branch adjoint contracts against
+      real(wp) :: branch_ddphi
+
       contribution = dot_product(dw_xyz_pt, dr) + dot_product(w_xyz_pt, ddr) &
                      + eff%w_xi(igrid)*dres%dxi
+      if (abs(eff%branch_phi_adj(igrid)) > seed_weight_tol) then
+         branch_ddphi = dot_product(dphi1_r, dr) + dot_product(phi1_r, ddr)
+         if (present(dbranch_shift)) branch_ddphi = branch_ddphi - dbranch_shift
+         contribution = contribution + eff%branch_phi_adj(igrid)*branch_ddphi
+      end if
       if (eff%have_wk) then
          contribution = contribution + eff%w_k1(igrid)*dres%dk1 + eff%w_k2(igrid)*dres%dk2
       end if

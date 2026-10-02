@@ -1,22 +1,14 @@
 !> Per-grid point sensitivity kernel shared by the DROP adjoint paths
 !>
-!> Both DROP reverse-mode paths (electronic and nuclear) differentiate the same
-!> per-point map: from a perturbation of the projected point `r`, the multiplier
-!> `lambda` and the level-set jet `(S, grad S, grad^2 S)`, through the tangent
-!> frame, the closest-point Jacobian `J`, the switching function(s), the Lebedev
-!> weight and the Gaussian width, to the surface observables
-!>
-!> That map is linear in the perturbation, so a caller obtains the derivative
-!> along any parameter by seeding it once per basis direction and summing
-!> The two stages are:
-!>
-!>   1. [[build_seed_state]]: everything that depends only on the grid point
-!>      evaluated once
-!>   2. [[apply_seed]]: the linear response to one seed, evaluated once per
-!>      basis direction
-!>
-!> Degeneracy is reported: [[build_seed_state]] returns a status code and
-!> leaves the fatal-versus-skip decision to the caller
+!> - Per-point map shared by the electronic and nuclear reverse-mode paths
+!> - Input: perturbation of the projected point `r`, the multiplier `lambda` and
+!>   the level-set jet `(S, grad S, grad^2 S)`
+!> - Chain: tangent frame, closest-point Jacobian `J`, switching functions,
+!>   Lebedev weight, Gaussian width, surface observables
+!> - Linear in the perturbation: seed once per basis direction and sum
+!> - [[build_seed_state]]: seed-independent state, once per grid point
+!> - [[apply_seed]]: linear response to one seed, once per basis direction
+!> - Degeneracy returned as a status code; fatal or skip is the caller's decision
 module moist_cavity_drop_derivatives_kernel
    use mctc_env_accuracy, only: wp
    use moist_math_linalg, only: setup_tangent_frame, eig_2x2_symmetric, &
@@ -41,36 +33,39 @@ module moist_cavity_drop_derivatives_kernel
 
    !> Grid point is usable
    integer, parameter :: seed_state_ok = 0
-   !> `|grad S|` vanished; the surface normal is undefined
+   !> `|grad S|` vanished, surface normal undefined
    integer, parameter :: seed_state_singular_gradient = 1
    !> Tangent-restricted KKT matrix `B` is singular
    integer, parameter :: seed_state_singular_bmat = 2
    !> Closest-point Jacobian `J` vanished
    integer, parameter :: seed_state_singular_jacobian = 3
 
-   !> Length of one host jet tangent: the level set and its spatial
-   !> derivatives to third order as full Cartesian tensors, `1 + 3 + 9 + 27`,
-   !> packed by order in Fortran order; the packing of the second-order host
-   !> exchange, see `coupling_tangent_type`
+   !> Length of one host jet tangent
+   !>
+   !> - Level set and spatial derivatives to third order, `1 + 3 + 9 + 27`
+   !> - Full Cartesian tensors, packed by order in Fortran order
+   !> - Packing of the second-order host exchange, see `coupling_tangent_type`
    integer, parameter :: drop_n_host_jet = 40
 
    !> Magnitude below which a weight or a norm counts as zero
    real(wp), parameter :: seed_weight_tol = 1.0e-30_wp
-   !> Guard on `det(B)` before the tangent-restricted inverse is formed
+   !> Guard on `det(B)` before the tangent-restricted inverse
    real(wp), parameter :: seed_det_b_guard = 1.0e-30_wp
-   !> Below this discriminant the `k1`/`k2` split is treated as umbilic; the
-   !> individual principal-curvature derivatives are ill-defined at `k1 = k2`,
-   !> while the mean and Gaussian curvatures stay smooth
+   !> Discriminant below which the `k1`/`k2` split counts as umbilic
+   !>
+   !> - `dk1`, `dk2` ill-defined at `k1 = k2`
+   !> - Mean and Gaussian curvature stay smooth
    real(wp), parameter :: seed_curv_disc_guard = 1.0e-10_wp
-   !> Below this eigenvalue gap of `B` the switched eigenvector is treated as
-   !> degenerate. `d(u_switch)` scales as `1/gap`, and at `gap = 0` the
-   !> eigenvector itself is arbitrary, so no derivative exists to compute
+   !> Eigenvalue gap of `B` below which the switched eigenvector counts as degenerate
+   !>
+   !> - `d(u_switch)` scales as `1/gap`
+   !> - Eigenvector arbitrary at `gap = 0`, no derivative exists
    real(wp), parameter :: seed_eig_gap_guard = 1.0e-10_wp
 
    !> Per-grid point forward state consumed by [[apply_seed]]
    !>
-   !> Fields are filled in two stages. The `Inputs` block is written by the
-   !> caller before [[build_seed_state]] runs; everything below it is derived.
+   !> - `Inputs` block: written by the caller before [[build_seed_state]]
+   !> - `Derived` block: written by [[build_seed_state]]
    type :: drop_seed_state_type
 
       !* ----------------------------------- Inputs ----------------------------------- *!
@@ -87,6 +82,7 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: anchor(3) = 0.0_wp, owner_xyz(3) = 0.0_wp
       !> Grid-level weights entering the `wleb` / `xi` chain
       real(wp) :: anchor_wleb0 = 0.0_wp, cpjac_scal0 = 0.0_wp, w_f0 = 0.0_wp
+      !> Softmax branch weight, Lebedev weight and Gaussian width
       real(wp) :: wbranch = 0.0_wp, wleb = 0.0_wp, xi0 = 0.0_wp
       !> Whether the caller needs the principal-curvature response
       logical :: want_curvature = .false.
@@ -101,55 +97,65 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: n_surf(3) = 0.0_wp, q1(3) = 0.0_wp, q2(3) = 0.0_wp
       !> `A` applied to the tangent frame
       real(wp) :: Aq1(3) = 0.0_wp, Aq2(3) = 0.0_wp
-      !> `B = Q^T A Q` and its inverse
+      !> `B = Q^T A Q` and its determinant
       real(wp) :: B11 = 0.0_wp, B12 = 0.0_wp, B22 = 0.0_wp, det_B = 0.0_wp
+      !> Inverse of `B`
       real(wp) :: Binv11 = 0.0_wp, Binv12 = 0.0_wp, Binv22 = 0.0_wp
       !> Eigenvector of `B` for the switched eigenvalue, lifted to 3D
       real(wp) :: u_switch(3) = 0.0_wp
-      !> Whether `eig_2x2_symmetric` built `vmin_B` from `[B12, lambda - B11]`
-      !> rather than falling back to a canonical basis vector; `vmin_norm` is
-      !> meaningful only in the first case
+      !> Whether `vmin_B` is `[B12, lambda - B11]`, not a canonical basis vector
+      !>
+      !> - `vmin_norm` meaningful only when true
       logical :: vmin_offdiag = .false.
-      !> Switched (smaller) eigenvalue of `B` and the eigenvalue gap
-      !> `lambda_max - lambda_min = sqrt(disc)`
+      !> Switched (smaller) eigenvalue of `B` and the gap `sqrt(disc)` to the larger one
       real(wp) :: lambda_switch = 0.0_wp, sqrt_disc_B = 0.0_wp
       !> Normalised 2D eigenvector of `B` and the norm it was divided by
       real(wp) :: vmin_B(2) = 0.0_wp, vmin_norm = 0.0_wp
-      !> Sphere tangent frame and its projection into the surface tangent plane
+      !> Sphere tangent frame
       real(wp) :: t1_vec(3) = 0.0_wp, t2_vec(3) = 0.0_wp
+      !> Sphere frame projected onto the surface tangent frame
       real(wp) :: tau1(2) = 0.0_wp, tau2(2) = 0.0_wp
+      !> `B^-1` images of `tau1`, `tau2`
       real(wp) :: w1(2) = 0.0_wp, w2(2) = 0.0_wp
-      !> Lifted tangent vectors, their cross product and `1/J`
+      !> Lifted tangent vectors
       real(wp) :: y1(3) = 0.0_wp, y2(3) = 0.0_wp
+      !> Cross product of `y1`, `y2` and `1/J`
       real(wp) :: cross_vec(3) = 0.0_wp, inv_J = 0.0_wp
-      !> Gram-Schmidt data for the tangent-frame derivative
+      !> Gram-Schmidt axis of the tangent-frame derivative
       integer :: min_axis = 1
+      !> Gram-Schmidt data behind `q1`
       real(wp) :: n_dot_q1 = 0.0_wp, proj_surf = 0.0_wp, v_norm_surf = 0.0_wp
-      !> Switching-function values and slopes
+      !> Critical-gradient switch value and slope
       real(wp) :: f_crit0 = 0.0_wp, f_crit_dS = 0.0_wp
+      !> Focusing switch value and slope
       real(wp) :: f_foc_f0 = 0.0_wp, f_foc_dS = 0.0_wp
-      !> Switching-function curvatures, consumed by the second-order chain
+      !> Switching-function curvatures for the second-order chain
       real(wp) :: f_crit_d2S = 0.0_wp, f_foc_d2S = 0.0_wp
       !> Lebedev-weight pruning chain factor
       real(wp) :: wleb_prune_factor = 1.0_wp
-      !> Whether Lebedev-weight pruning was active when the state was built
+      !> Whether Lebedev-weight pruning was active at build time
       logical :: use_wleb_prune = .false.
-      !> Pre-pruning weight product, and the pruning-switch slope and curvature
-      !> at `|w_pre_i|`; all zero when pruning is off
+      !> Pre-pruning weight product, pruning-switch slope and curvature at `|w_pre_i|`
+      !>
+      !> - All zero when pruning is off
       real(wp) :: w_pre_i = 0.0_wp, f_wleb_ds = 0.0_wp, f_wleb_d2S = 0.0_wp
-      !> Level-set Hessian applied to the surface tangent frame, and the shape
-      !> operator it induces there (only when `want_curvature`)
+      !> Level-set Hessian on the surface tangent frame, only when `want_curvature`
       real(wp) :: Hq1(3) = 0.0_wp, Hq2(3) = 0.0_wp
+      !> Shape operator in that frame, only when `want_curvature`
       real(wp) :: S11 = 0.0_wp, S12 = 0.0_wp, S22 = 0.0_wp
-      !> Shape-operator invariants: trace, half-difference and the eigenvalue
-      !> gap `|k1 - k2|/2`, the last as a sum of squares (only when
-      !> `want_curvature`)
+      !> Shape-operator trace and mean curvature, only when `want_curvature`
       real(wp) :: T_curv = 0.0_wp, KM_curv = 0.0_wp
+      !> Half-difference and gap `|k1 - k2|/2`, a sum of squares; only when `want_curvature`
       real(wp) :: half_diff = 0.0_wp, disc_curv = 0.0_wp
 
    end type drop_seed_state_type
 
    !> Linear response of the per-point map to one seed
+   !>
+   !> - Also the second-order response of [[apply_seed_tangent]]: its `dg` is the
+   !>   derivative of `res%dg` along the second direction
+   !> - Default initialisation is load bearing: the `want_curvature` early return
+   !>   of [[apply_seed_tangent]] leaves `dk1`, `dk2` untouched
    type :: drop_seed_result_type
       !> Total sensitivity of the level-set gradient and Hessian
       real(wp) :: dg(3) = 0.0_wp, dH(3, 3) = 0.0_wp
@@ -162,38 +168,20 @@ module moist_cavity_drop_derivatives_kernel
       !> Sensitivity of the principal curvatures (zero unless `want_curvature`)
       real(wp) :: dk1 = 0.0_wp, dk2 = 0.0_wp
    end type drop_seed_result_type
-   ! The second-order response of [[apply_seed_tangent]] is the same type: its
-   ! `dg` is the directional derivative of `res%dg` along the second direction,
-   ! not a new quantity. Every component is default initialised, for the same
-   ! reason as in [[drop_seed_state_tangent_type]]: the `want_curvature` early
-   ! return in [[apply_seed_tangent]] leaves the curvature pair untouched.
 
    !> Tangent of the derived block of [[drop_seed_state_type]] along one seed
    !>
-   !> [[apply_seed]] forms this entire chain as local scratch on its way to
-   !> [[drop_seed_result_type]] and then discards it. The second-order path
-   !> needs it, so [[apply_seed]] hands it back through an optional argument
-   !> rather than through a second routine: two copies of the same expression
-   !> are free to contract differently under `-ffp-contract=fast`, and the
-   !> shipped first-order path must stay bit-for-bit unchanged.
-   !>
-   !> One seed direction per instance. Only the derived fields that
-   !> [[apply_seed]] reads and that are not frozen appear here:
-   !>
-   !>   * `dn_surf`, `d_gnorm` and `dH` live on [[drop_seed_result_type]] and
-   !>     are not duplicated
-   !>   * `dt1_vec` and `dt2_vec` are absent because they vanish identically.
-   !>     The sphere tangent frame is rigid (see the comment on `dtau1` in
-   !>     [[apply_seed]]): the anchor rides its owner sphere, so
-   !>     `anchor - owner_xyz = R_own * u_leb` is invariant under every nuclear
-   !>     direction, at every order. They become nonzero only once the radii
-   !>     themselves are geometry dependent, which is not implemented
-   !>   * `min_axis` and `want_curvature` are frozen discrete choices
-   !>
-   !> Every component is default initialised, which is load bearing rather than
-   !> stylistic: the `want_curvature` early return in [[apply_seed]] leaves the
-   !> curvature block untouched and relies on `intent(out)` default
-   !> initialisation to zero it.
+   !> - Returned by [[apply_seed]] through its optional `dstate`, no second routine:
+   !>   one copy of the chain keeps the first-order path bit-for-bit unchanged
+   !> - One seed direction per instance
+   !> - Only derived fields [[apply_seed]] reads that are not frozen
+   !> - `dn_surf`, `d_gnorm`, `dH` live on [[drop_seed_result_type]]
+   !> - No `dt1_vec`, `dt2_vec`: the sphere tangent frame is rigid at every order,
+   !>   `anchor - owner_xyz = R_own * u_leb`
+   !> - They turn nonzero only for geometry-dependent radii, not implemented
+   !> - `min_axis`, `want_curvature` are frozen discrete choices
+   !> - Default initialisation is load bearing: the `want_curvature` early return
+   !>   of [[apply_seed]] leaves the curvature block untouched
    type :: drop_seed_state_tangent_type
 
       !* ---------------------------- KKT matrix and frame ---------------------------- *!
@@ -210,13 +198,11 @@ module moist_cavity_drop_derivatives_kernel
       real(wp) :: dBinv11 = 0.0_wp, dBinv12 = 0.0_wp, dBinv22 = 0.0_wp
       !> Sensitivity of the switched eigenvalue, from the basis-invariant route
       real(wp) :: dlambda_switch = 0.0_wp
-      !> The vector `dM u` of the basis-invariant tangent operator `M = P A P`,
-      !> taken at the *base* eigenvector: this is `(dM) u`, not `d(M u)`.
-      !> Stored as the contracted vector rather than as the matrix because that
-      !> is the only thing any consumer wants -- [[apply_seed_tangent]] pairs it
-      !> with `du_switch` and nothing reads `dM` itself. It depends on the seed
-      !> alone, so storing it also keeps the `b` chain out of the direction loop,
-      !> which runs once per direction *pair*
+      !> `(dM) u` of `M = P A P` at the base eigenvector, not `d(M u)`
+      !>
+      !> - Depends on the seed alone; stored to keep the `b` chain out of the
+      !>   direction-pair loop
+      !> - Paired with `du_switch` in [[apply_seed_tangent]]; `dM` itself is never read
       real(wp) :: dM_u(3) = 0.0_wp
       !> Sensitivity of the switched eigenvector, in the `B` basis and lifted
       real(wp) :: dvmin_B(2) = 0.0_wp, du_switch(3) = 0.0_wp
@@ -239,75 +225,65 @@ module moist_cavity_drop_derivatives_kernel
 
       !* ---------------------------- Switching and weights --------------------------- *!
 
-      !> Sensitivity of the switching values and of their slopes
+      !> Sensitivity of the critical-gradient switch value and slope
       real(wp) :: df_crit0 = 0.0_wp, df_crit_dS = 0.0_wp
+      !> Sensitivity of the focusing switch value and slope
       real(wp) :: df_foc_f0 = 0.0_wp, df_foc_dS = 0.0_wp
-      !> Sensitivity of the Lebedev-weight pruning factor; identically zero when
-      !> pruning is off
+      !> Sensitivity of the Lebedev-weight pruning factor, zero when pruning is off
       real(wp) :: dwleb_prune_factor = 0.0_wp
       !> Sensitivity of `|grad S|^2`
       real(wp) :: dg_norm_sq = 0.0_wp
 
       !* ---------------------------- Curvature invariants ---------------------------- *!
 
-      !> Sensitivity of the Hessian applied to the tangent frame, as the
-      !> **total** `d(H q_a) = dH q_a + H dq_a`, matching what the old `dHn`
-      !> carried. Stored rather than rebuilt for the same reason as `dM_u`: it
-      !> depends on the seed alone, while [[apply_seed_tangent]] wants it once
-      !> per direction *pair*
+      !> Total `d(H q_a) = dH q_a + H dq_a`
+      !>
+      !> - Depends on the seed alone; stored for the direction-pair loop of
+      !>   [[apply_seed_tangent]]
       real(wp) :: dHq1(3) = 0.0_wp, dHq2(3) = 0.0_wp
       !> Sensitivity of the shape-operator entries
       real(wp) :: dS11 = 0.0_wp, dS12 = 0.0_wp, dS22 = 0.0_wp
-      !> Sensitivity of the shape-operator invariants
+      !> Sensitivity of the shape-operator trace and mean curvature
       real(wp) :: dT_curv = 0.0_wp, dKM_curv = 0.0_wp
+      !> Sensitivity of the half-difference and the eigenvalue gap
       real(wp) :: dhalf_diff = 0.0_wp, ddisc_curv = 0.0_wp
 
    end type drop_seed_state_tangent_type
 
    !> v-direction tangent of the `Inputs` block of [[drop_seed_state_type]]
    !>
-   !> Passed explicitly rather than reconstructed inside
-   !> [[apply_seed_tangent]]. The driver knows that, for a physical direction,
-   !> `dlsf1_r` is `res_v%dg`, `dcpjac_scal0` is `res_v%dJ` and so on -- but
-   !> encoding those identities in the kernel would make it untestable along an
-   !> arbitrary path, and would put the physics in the wrong place. Only the
-   !> fields [[apply_seed]] actually reads appear
-   !>
-   !> `alpha_coeff` is the one real-valued input [[apply_seed]] reads that has no
-   !> entry here, and that omission is a decision rather than an oversight. It is
-   !> `param%phi_alpha`, a fixed parameter, and [[apply_seed]] carries no seed
-   !> channel for it, so no consistent `(dstate_v, res_v)` pair can ever give it
-   !> a nonzero tangent. Re-adding the field alone would not make a
-   !> geometry-dependent `alpha` work either: `ddA` in [[apply_seed_tangent]]
-   !> carries no `dalpha I` term, so the `y` chain would be right while the `A`
-   !> tangent stayed wrong. Both have to move together
+   !> - Passed explicitly, not rebuilt in [[apply_seed_tangent]]: identities such as
+   !>   `dlsf1_r = res_v%dg`, `dcpjac_scal0 = res_v%dJ` belong to the driver
+   !> - Keeps the kernel testable along an arbitrary path
+   !> - Only fields [[apply_seed]] reads
+   !> - No tangent of `alpha_coeff` on purpose: `param%phi_alpha` is fixed and
+   !>   [[apply_seed]] has no seed channel for it
+   !> - Geometry-dependent `alpha` needs this field and a `dalpha I` term in `ddA`
+   !>   of [[apply_seed_tangent]], both together
    type :: drop_seed_input_tangent_type
-      !> Tangent of the level-set jet at the projected point
+      !> Tangent of the level-set gradient and Hessian at the projected point
       real(wp) :: dlsf1_r(3) = 0.0_wp, dlsf2_rr(3, 3) = 0.0_wp
+      !> Tangent of the level-set third derivative at the projected point
       real(wp) :: dlsf3_rrr(3, 3, 3) = 0.0_wp
       !> Tangent of the multiplier
       real(wp) :: dlambda_val = 0.0_wp
       !> Tangent of the grid-level weight scalars
       real(wp) :: danchor_wleb0 = 0.0_wp, dcpjac_scal0 = 0.0_wp, dw_f0 = 0.0_wp
+      !> Tangent of the branch weight, Lebedev weight and Gaussian width
       real(wp) :: dwbranch = 0.0_wp, dwleb = 0.0_wp, dxi0 = 0.0_wp
    end type drop_seed_input_tangent_type
 
-   !> Surface adjoints reduced to the channels the seed loop actually reads
+   !> Surface adjoints reduced to the channels the seed loop reads
    !>
-   !> The area and integration-weight channels of a
-   !> `cavity_surface_adjoint_type` are *derived*: with
-   !> `a_i = R_I^2 f_i wleb_i`, `w_i = wleb_i` and
-   !> `xi_i = swx/(R_I sqrt(wleb_i))` we have `a = c f/xi^2` and `w = c/xi^2`,
-   !> so both fold into the width channel through `d/dxi`. The area channel
-   !> folds into the switching channel as well, through
-   !> `da/df = R_I^2 wleb_i` -- but only for a parameter that moves `f`.
-   !>
-   !> This type holds the result of that folding, so the seed loops read one
-   !> flat set of weights and never have to know which channel they came from.
+   !> - Area and integration-weight channels are derived: `a_i = R_I^2 f_i wleb_i`,
+   !>   `w_i = wleb_i`, `xi_i = swx/(R_I sqrt(wleb_i))`
+   !> - Hence `a = c f/xi^2`, `w = c/xi^2`: both fold into the width channel
+   !> - Area also folds into the switching channel through `da/df = R_I^2 wleb_i`,
+   !>   only for a parameter that moves `f`
    type :: drop_surface_weights_type
       !> Gaussian-width adjoint, with the area and weight channels folded in
       real(wp), allocatable :: w_xi(:)
-      !> Switching adjoint; carries the area fold only when it was requested
+      !> Switching adjoint, with the area fold only when requested
       real(wp), allocatable :: w_f(:)
       !> Projected-position adjoint
       real(wp), allocatable :: w_xyz(:, :)
@@ -327,15 +303,15 @@ contains
 
    !> Evaluate every per-grid point quantity the seed loop reuses
    !>
-   !> The caller fills the `Inputs` block of `state` first. On a degenerate
-   !> point `status` is set and the derived fields are left incomplete.
+   !> - `Inputs` block of `state` filled by the caller first
+   !> - Degenerate point: `status` set, derived fields left incomplete
    !>
-   !> @param[inout] state             Seed state; inputs read, derived fields written
-   !> @param[in]    f_crit            Critical-gradient switching function
-   !> @param[in]    f_foc             Focusing switching function
-   !> @param[in]    f_wleb            Lebedev-weight pruning switching function
-   !> @param[in]    use_wleb_prune    Whether Lebedev-weight pruning is active
-   !> @param[out]   status            One of the `seed_state_*` codes
+   !> @param[in,out] state           inputs read, derived fields written
+   !> @param[in]     f_crit          critical-gradient switching function
+   !> @param[in]     f_foc           focusing switching function
+   !> @param[in]     f_wleb          Lebedev-weight pruning switching function
+   !> @param[in]     use_wleb_prune  whether Lebedev-weight pruning is active
+   !> @param[out]    status          one of the `seed_state_*` codes
    subroutine build_seed_state(state, f_crit, f_foc, f_wleb, use_wleb_prune, status)
       !> Seed state
       type(drop_seed_state_type), intent(inout) :: state
@@ -386,16 +362,11 @@ contains
       call eig_2x2_symmetric(state%B11, state%B12, state%B22, lambda_switch, beta_max, &
                              vmin_B, vmax_B)
       state%u_switch = vmin_B(1)*state%q1 + vmin_B(2)*state%q2
-      ! Keep the eigen data the tangent needs; `vmin_norm` is the normalisation
-      ! `eig_2x2_symmetric` divided by, recomputed here rather than returned
+      ! Eigen data for the tangent; `vmin_norm` recomputed, not returned by the solver
       state%lambda_switch = lambda_switch
-      ! The eigenvalue gap as `hypot(B11 - B22, 2 B12)`, not the algebraically
-      ! equal `beta_max - lambda_switch`. That form inherits
-      ! `eig_2x2_symmetric`'s `disc = trace^2 - 4 det`, a cancellation that
-      ! loses the entire gap once it drops below `sqrt(eps)*|trace|`: at
-      ! `B = [[1.3, 1e-8], [1e-8, 1.3]]` it returns exactly zero while `|B12|`
-      ! is six orders above that routine's own diagonal-branch threshold, so
-      ! the branch test below is no protection for the division on it
+      ! Gap as `hypot(B11 - B22, 2 B12)`, not `beta_max - lambda_switch`
+      ! - `trace^2 - 4 det` cancels to zero for gaps below `sqrt(eps)*|trace|`
+      ! - The branch test below does not protect the division by the gap
       state%sqrt_disc_B = hypot(state%B11 - state%B22, 2.0_wp*state%B12)
       state%vmin_B = vmin_B
       state%vmin_offdiag = abs(state%B12) > eig_2x2_offdiag_tol
@@ -457,25 +428,14 @@ contains
          state%f_wleb_d2S = 0.0_wp
       end if
 
-      ! Shape operator of the level set in the surface tangent frame Q = [q1, q2]
-      ! already built above for the closest-point Jacobian:
+      ! Shape operator in the surface tangent frame Q = [q1, q2]
       !   S_ab = q_a^T H q_b / |g|,   a, b in {1, 2}
-      ! whose eigenvalues are the principal curvatures k1 >= k2,
-      !   k1,k2 = KM +/- sqrt(half_diff^2 + S12^2),
-      ! with KM = (S11 + S22)/2 and half_diff = (S11 - S22)/2.
-      !
-      ! The discriminant is deliberately a sum of squares and not the
-      ! algebraically equal invariant form `sqrt(KM^2 - KG)` with
-      ! `KG = n^T adj(H) n / |g|^2`. `KM^2 - KG` is `((k1 - k2)/2)^2` written as
-      ! a difference of two quantities of size `KM^2`, so it loses the gap
-      ! exactly where the gap is small -- and [[apply_seed]] then divides by it.
-      ! Same reason `sqrt_disc_B` above is a `hypot` and not `trace^2 - 4 det`,
-      ! and same form `properties.f90` uses for the primal.
-      !
-      ! Both `KM` and `disc` are invariant under a rotation of Q, so any smooth
-      ! orthonormal tangent frame gives the right derivative downstream; it need
-      ! not be the one `compute_curvature` picks, only differentiated
-      ! consistently, which `dq1`/`dq2` are.
+      !   k1,k2 = KM +/- sqrt(half_diff^2 + S12^2),   k1 >= k2
+      !   KM = (S11 + S22)/2,   half_diff = (S11 - S22)/2
+      ! - Discriminant as a sum of squares, not `sqrt(KM^2 - KG)`: keeps small gaps,
+      !   [[apply_seed]] divides by it; same form as `properties.f90`
+      ! - `KM`, `disc` invariant under a rotation of Q: any smooth orthonormal frame
+      !   works when differentiated consistently, as `dq1`/`dq2` are
       if (state%want_curvature) then
          associate (H => state%lsf2_rr)
             state%Hq1 = matmul(H, state%q1)
@@ -496,66 +456,47 @@ contains
 
    !> Response of the switched eigenvalue to one seed, contracted
    !>
-   !> With `P = I - n n^T` the basis-invariant tangent operator is `M = P A P`,
-   !> and the switched eigenvalue responds as `dlambda = u . (dM u)` with `u`
-   !> the base eigenvector. Assembling `dM` to reach that one scalar costs four
-   !> `spread`s and five matrix-matrix products, and gfortran never inlines
-   !> `spread`, so every one of those allocates a heap temporary. Contracting
-   !> the quadratic form first leaves two matrix-vector products and four dot
-   !> products, and no temporaries at all.
+   !> - `dlambda = u . (dM u)`, `u` the base eigenvector
+   !> - `M = P A P`, `P = I - n n^T`
+   !> - Contracted form avoids the `dM` assembly and its `spread` heap temporaries
+   !> - Precondition 1: `n . u = 0`, by construction in [[setup_tangent_frame]]
+   !> - Precondition 2: `P u = u`, follows from 1
+   !> - Precondition 3: `A` symmetric; the factor of two rests on
+   !>   `u . (A n) = n . (A u)`
+   !> - `dA` need not be symmetric: both outputs are exact for arbitrary `dA`
+   !> - `dM u` feeds the caller's collapse `2 du_v . (dM_b u)`, which needs `dM_b`
+   !>   and hence `dA_b` symmetric; see [[apply_seed_tangent]]
    !>
-   !> Three preconditions, all structural rather than incidental:
-   !>
-   !>   1. `n . u = 0`. `u_switch` is `vmin_B(1) q1 + vmin_B(2) q2` and
-   !>      [[setup_tangent_frame]] builds `q1`, `q2` orthogonal to `n`, so this
-   !>      holds to roundoff -- which is all a derivative needs
-   !>   2. `P u = u`, which follows from 1
-   !>   3. `A` is symmetric. `A = alpha I - lambda H` with `H` the level-set
-   !>      Hessian, so this one is structural too. It is what the factor of two
-   !>      in `dlambda` rests on, through `u . (A n) = n . (A u)`. `dA` is
-   !>      *not* required to be symmetric anywhere in this routine: both
-   !>      outputs are exact for an arbitrary `dA`
-   !>
-   !> From 1 and 2, `dP u = -(dn . u) n`, a scalar times the normal. Writing
-   !> `a = dn . u`, the identity that replaces the assembly is
+   !> With `a = dn . u`, so `dP u = -a n`
    !>
    !>     dlambda = u . (dA u) - 2 a (n . A u)
    !>     dM u    = -(dn (n . Au) + n (dn . Au))
    !>               + (dA u - n (n . dA u))
    !>               - a (An - n (n . An))
    !>
-   !> `dM u` is handed back as one vector because the second-order chain
-   !> contracts it once: the two eigenvector cross terms of `d_v(u . dM_b u)`
-   !> collapse to `2 du_v . (dM_b u)`. That collapse needs `dM_b` symmetric --
-   !> not merely `M` -- and `dM = dP A P + P dA P + P A dP` is symmetric only
-   !> when `dA` is, which the nine Hessian basis seeds of [[seed_jet_basis]] are
-   !> not. The collapse is the caller's, and so is the condition under which it
-   !> holds; see the precondition block on [[apply_seed_tangent]].
-   !>
-   !> @param[in]  n_surf          Outward unit normal
-   !> @param[in]  u_switch        Switched eigenvector, tangent to the surface
-   !> @param[in]  A_mat           Tangent-restricted KKT matrix, symmetric
-   !> @param[in]  dA              Sensitivity of `A`; need not be symmetric
-   !> @param[in]  dn              Sensitivity of the normal
-   !> @param[out] dlambda_switch  Response of the switched eigenvalue
-   !> @param[out] dM_u            The vector `dM u`, for the second-order chain
+   !> @param[in]  n_surf          unit length
+   !> @param[in]  u_switch        tangent to the surface
+   !> @param[in]  A_mat           symmetric
+   !> @param[in]  dA              need not be symmetric
+   !> @param[in]  dn              sensitivity of the normal
+   !> @param[out] dlambda_switch  `u . (dM u)`
+   !> @param[out] dM_u            optional, for the second-order chain
    pure subroutine switched_eigenvalue_response(n_surf, u_switch, A_mat, dA, dn, &
                                                 dlambda_switch, dM_u)
       !> Outward unit normal and the switched eigenvector
       real(wp), intent(in) :: n_surf(3), u_switch(3)
-      !> Tangent-restricted KKT matrix, symmetric, and its sensitivity, which
-      !> need not be
+      !> Symmetric KKT matrix and its sensitivity, which need not be symmetric
       real(wp), intent(in) :: A_mat(3, 3), dA(3, 3)
       !> Sensitivity of the normal
       real(wp), intent(in) :: dn(3)
       !> Response of the switched eigenvalue
       real(wp), intent(out) :: dlambda_switch
-      !> The vector `dM u`; formed only when the caller asks for it
+      !> `dM u`, formed only when present
       real(wp), intent(out), optional :: dM_u(3)
 
       !> Matrix-vector products the identity is built from
       real(wp) :: Au(3), An(3), dA_u(3)
-      !> `dn . u` and `n . Au`, each read more than once
+      !> `dn . u` and `n . Au`
       real(wp) :: a_dn, n_dot_Au
 
       Au = matmul(A_mat, u_switch)
@@ -576,51 +517,35 @@ contains
 
    !> Curvature of the switched eigenvalue in two directions, contracted
    !>
-   !> Returns the scalar `u . (ddM u)` of `M = P A P`, where `ddX` means
-   !> `d_v(d_b X)`. Assembled the obvious way that scalar costs eight `spread`s
-   !> and fourteen matrix-matrix products, and the assembly sits in the
-   !> innermost `(b, v)` loop of the whole Hessian, where each un-inlined
-   !> `spread` is one more heap allocation. Contracted it is five matrix-vector
-   !> products and ten dot products.
+   !> - Returns `u . (ddM u)` of `M = P A P`
+   !> - `ddX` means `d_v(d_b X)`
+   !> - Innermost `(b, v)` loop: contracted form avoids the `ddM` assembly and its
+   !>   `spread` heap temporaries
+   !> - Preconditions 1 to 3 of [[switched_eigenvalue_response]] carry over
+   !> - Additionally `dA_b`, `dA_v` symmetric: the second bracket is four terms
+   !>   collapsed through `u . (dA n) = n . (dA u)`
+   !> - Symmetric `dA` is a condition on the seed's `dlsf2_rr`, broken by the
+   !>   single-entry Hessian seeds of [[seed_jet_basis]]; see [[apply_seed_tangent]]
+   !> - Only the symmetric part of `ddA` is read
+   !> - Eigenvector cross terms `2 du_v . (dM_b u)` are added by the caller
    !>
-   !> Preconditions 1 to 3 of [[switched_eigenvalue_response]] carry over
-   !> unchanged: `n . u = 0`, hence `P u = u`, and `A` symmetric. Unlike that
-   !> routine, this one needs `dA_b` and `dA_v` symmetric as well. The
-   !> `-2 [ a_b (n . dA_v u) + a_v (n . dA_b u) ]` bracket below is four terms
-   !> collapsed into two, and the collapse is `u . (dA n) = n . (dA u)`. `ddA`
-   !> enters only as `u . (ddA u)`, so of it just the symmetric part is read.
-   !>
-   !> That is a real precondition, not a formality. `apply_seed` builds
-   !> `dA = -dlambda lsf2_rr - lambda dH` with `dH = dlsf2_rr + lsf3_rrr . dr`;
-   !> `lsf2_rr` and the `lsf3_rrr` contraction are symmetric, so the entire
-   !> antisymmetric part of `dA` is `-lambda` times that of the seed's
-   !> `dlsf2_rr`. Symmetric for a physical nuclear direction -- and false for
-   !> the nine single-entry Hessian basis seeds of [[seed_jet_basis]]. See the
-   !> precondition block on [[apply_seed_tangent]] for what a driver must do.
-   !>
-   !> The two eigenvector cross terms of `d_v(u . dM_b u)` coincide under the
-   !> same condition and collapse into a factor of two. Those belong to the
-   !> caller, as `2 du_v . (dM_b u)`; what this routine returns is the remaining
-   !> term.
-   !>
-   !> With `a_b = dn_b . u`, `a_v = dn_v . u` and `c = ddn . u`,
+   !> With `a_b = dn_b . u`, `a_v = dn_v . u` and `c = ddn . u`
    !>
    !>     u . (ddM u) = -2 [ a_v (dn_b . Au) + a_b (dn_v . Au) + c (n . Au) ]
    !>                   -2 [ a_b (n . dA_v u) + a_v (n . dA_b u) ]
    !>                   +2 a_b a_v (n . An)
    !>                   + u . (ddA u)
    !>
-   !> @param[in]  n_surf           Outward unit normal
-   !> @param[in]  u_switch         Switched eigenvector, tangent to the surface
-   !> @param[in]  A_mat            Tangent-restricted KKT matrix, symmetric
-   !> @param[in]  dA_b             Sensitivity of `A` along `b`, required symmetric
-   !> @param[in]  dA_v             Sensitivity of `A` along `v`, required symmetric
-   !> @param[in]  ddA              Second-order sensitivity of `A`; only its
-   !>                              symmetric part is read
-   !> @param[in]  dn_b             Sensitivity of the normal along `b`
-   !> @param[in]  dn_v             Sensitivity of the normal along `v`
-   !> @param[in]  ddn              Second-order sensitivity of the normal
-   !> @param[out] ddlambda_switch  The scalar `u . (ddM u)`
+   !> @param[in]  n_surf           unit length
+   !> @param[in]  u_switch         tangent to the surface
+   !> @param[in]  A_mat            symmetric
+   !> @param[in]  dA_b             along `b`, required symmetric
+   !> @param[in]  dA_v             along `v`, required symmetric
+   !> @param[in]  ddA              only its symmetric part is read
+   !> @param[in]  dn_b             sensitivity of the normal along `b`
+   !> @param[in]  dn_v             sensitivity of the normal along `v`
+   !> @param[in]  ddn              second-order sensitivity of the normal
+   !> @param[out] ddlambda_switch  `u . (ddM u)`
    pure subroutine switched_eigenvalue_curvature(n_surf, u_switch, A_mat, &
                                                  dA_b, dA_v, ddA, &
                                                  dn_b, dn_v, ddn, ddlambda_switch)
@@ -628,17 +553,16 @@ contains
       real(wp), intent(in) :: n_surf(3), u_switch(3)
       !> Tangent-restricted KKT matrix, symmetric
       real(wp), intent(in) :: A_mat(3, 3)
-      !> First-order sensitivities of `A`, both required symmetric, and the
-      !> second-order one, of which only the symmetric part is read
+      !> Symmetric first-order sensitivities of `A` and the second-order one
       real(wp), intent(in) :: dA_b(3, 3), dA_v(3, 3), ddA(3, 3)
       !> First- and second-order sensitivities of the normal
       real(wp), intent(in) :: dn_b(3), dn_v(3), ddn(3)
-      !> The scalar `u . (ddM u)`
+      !> `u . (ddM u)`
       real(wp), intent(out) :: ddlambda_switch
 
       !> Matrix-vector products the identity is built from
       real(wp) :: Au(3), An(3), dA_b_u(3), dA_v_u(3)
-      !> `dn_b . u`, `dn_v . u`, `ddn . u` and `n . Au`, each read more than once
+      !> `dn_b . u`, `dn_v . u`, `ddn . u` and `n . Au`
       real(wp) :: a_b, a_v, c_ddn, n_dot_Au
 
       Au = matmul(A_mat, u_switch)
@@ -663,19 +587,18 @@ contains
 
    !> Propagate one seed through the per-grid point map
    !>
-   !> The seed is the perturbation of the level-set jet at the *fixed* point
-   !> (`dlsf1_r`, `dlsf2_rr`) together with the induced motion of the projected
-   !> point and its multiplier (`dr`, `dlambda`), which the caller obtains from
-   !> the bordered KKT system. A perturbation of the level-set *value* enters
-   !> only through that system, so it has no argument here.
+   !> - Seed: jet perturbation at the fixed point (`dlsf1_r`, `dlsf2_rr`) plus the
+   !>   induced `dr`, `dlambda` from the bordered KKT system
+   !> - Level-set value perturbation enters only through that system, no argument
+   !> - `dstate` fields computed only when it is present
    !>
-   !> @param[in]  state    Per-grid point forward state from [[build_seed_state]]
-   !> @param[in]  dlsf1_r  Seed perturbation of `grad S` at fixed `r`
-   !> @param[in]  dlsf2_rr Seed perturbation of `grad^2 S` at fixed `r`
-   !> @param[in]  dr       Induced motion of the projected point
-   !> @param[in]  dlambda  Induced change of the Lagrange multiplier
-   !> @param[out] res      Linear response of the per-point map
-   !> @param[out] dstate   Tangent of the derived seed state along this seed
+   !> @param[in]  state     forward state from [[build_seed_state]]
+   !> @param[in]  dlsf1_r   seed perturbation of `grad S` at fixed `r`
+   !> @param[in]  dlsf2_rr  seed perturbation of `grad^2 S` at fixed `r`
+   !> @param[in]  dr        induced motion of the projected point
+   !> @param[in]  dlambda   induced change of the Lagrange multiplier
+   !> @param[out] res       linear response of the per-point map
+   !> @param[out] dstate    optional, tangent of the derived state along this seed
    pure subroutine apply_seed(state, dlsf1_r, dlsf2_rr, dr, dlambda, res, dstate)
       !> Per-grid point forward state
       type(drop_seed_state_type), intent(in) :: state
@@ -685,8 +608,7 @@ contains
       real(wp), intent(in) :: dr(3), dlambda
       !> Linear response
       type(drop_seed_result_type), intent(out) :: res
-      !> Tangent of the derived block of `state`; every field behind this
-      !> argument is computed only when it is present
+      !> Tangent of the derived block of `state`, computed only when present
       type(drop_seed_state_tangent_type), intent(out), optional :: dstate
 
       !> Sensitivity of the tangent-restricted KKT matrix
@@ -703,13 +625,11 @@ contains
       real(wp) :: dy1(3), dy2(3), dcross(3)
       !> Lebedev-weight chain scratch
       real(wp) :: dw_pre
-      !> Curvature sensitivities. `dHq1_p`/`dHq2_p` are the *partial* `dH q_a`;
-      !> the total `d(H q_a)` that `dstate` carries adds `H dq_a`
+      !> Curvature sensitivities; `dHq1_p`/`dHq2_p` are partial, `dH q_a` without `H dq_a`
       real(wp) :: dHq1_p(3), dHq2_p(3)
       real(wp) :: dN11, dN12, dN22, dS11, dS12, dS22
       real(wp) :: dT, dhalf_diff, d_disc
-      !> Line-by-line derivative of the `eig_2x2_symmetric` construction,
-      !> needed only for `dstate`
+      !> Derivative of the `eig_2x2_symmetric` construction, only for `dstate`
       real(wp) :: dtrace_B, ddisc_B, dsqrt_disc_B, dlambda_switch_eig
       real(wp) :: dvmin_raw(2)
       !> Cartesian index
@@ -724,7 +644,7 @@ contains
 
       res%dn_surf = (res%dg - state%n_surf*dot_product(state%n_surf, res%dg))/state%g_norm
 
-      ! dQ/dp: q1 comes from Gram-Schmidt of e_k against n, q2 = n x q1
+      ! dQ/dp: q1 from Gram-Schmidt of e_k against n, q2 = n x q1
       v_tmp = -res%dn_surf(state%min_axis)*state%n_surf &
               - state%n_dot_q1*res%dn_surf
       if (state%proj_surf > 1.0e-30_wp) then
@@ -739,7 +659,7 @@ contains
       dq2(3) = res%dn_surf(1)*state%q1(2) - res%dn_surf(2)*state%q1(1) &
                + state%n_surf(1)*dq1(2) - state%n_surf(2)*dq1(1)
 
-      ! dB/dp with B = Q^T A Q, using A-symmetry for the mixed term
+      ! dB/dp with B = Q^T A Q, A-symmetry used for the mixed term
       dAq1 = matmul(dA, state%q1)
       dAq2 = matmul(dA, state%q2)
       dB11 = 2.0_wp*dot_product(dq1, state%Aq1) + dot_product(state%q1, dAq1)
@@ -752,13 +672,8 @@ contains
       dBinv12 = (-dB12*state%det_B + state%B12*ddet_B)/(state%det_B*state%det_B)
       dBinv22 = (dB11*state%det_B - state%B11*ddet_B)/(state%det_B*state%det_B)
 
-      ! `u . (dM u)` in contracted form, with `M = P A P` the basis-invariant
-      ! tangent operator; see [[switched_eigenvalue_response]] for the identity
-      ! and its three preconditions. The assembly it replaces built `dP` out of
-      ! four `spread`s and `dM` out of five matrix-matrix products, none of them
-      ! inlined, all of it to reach this one scalar. `dM_u` is the only piece of
-      ! `dM` the second-order path reads, so it is formed only when the caller
-      ! asks for the state tangent
+      ! `u . (dM u)` contracted, see [[switched_eigenvalue_response]]
+      ! - `dM_u` formed only for the state tangent
       if (present(dstate)) then
          call switched_eigenvalue_response(state%n_surf, state%u_switch, state%A_mat, &
                                            dA, res%dn_surf, dlambda_switch, dstate%dM_u)
@@ -771,9 +686,7 @@ contains
          dstate%dA_mat = dA
          dstate%dq1 = dq1
          dstate%dq2 = dq2
-         ! The scratch `dAq1`/`dAq2` above carry the `dA . q` term only, because
-         ! the `dq` half rides separately in `dB11`/`dB12`/`dB22`. The state
-         ! tangent needs the full product rule
+         ! Scratch `dAq1`/`dAq2` hold `dA q` only; the state tangent adds `A dq`
          dstate%dAq1 = dAq1 + matmul(state%A_mat, dq1)
          dstate%dAq2 = dAq2 + matmul(state%A_mat, dq2)
          dstate%dB11 = dB11
@@ -785,23 +698,15 @@ contains
          dstate%dBinv22 = dBinv22
          dstate%dlambda_switch = dlambda_switch
 
-         ! d(v_min) by differentiating the shipped `eig_2x2_symmetric`
-         ! construction line by line, which reproduces its sign convention
-         ! `v_min = [B12, lambda_min - B11]/norm` automatically.
-         !
-         ! The two guards are independent, and each covers a case the other
-         ! does not. Off the off-diagonal branch the primal returns a canonical
-         ! basis vector, which is piecewise constant, so the derivative is zero
-         ! rather than this formula -- and there `vmin_norm` is not even the
-         ! norm of a vector the primal used. A vanishing gap is the separate
-         ! degeneracy: the eigenvector is arbitrary at `k1 = k2`, so zero is the
-         ! guard's answer, the same one `seed_curv_disc_guard` gives, not a
-         ! claim that the derivative is zero
+         ! d(v_min): `eig_2x2_symmetric` differentiated line by line, keeps its sign
+         ! convention `v_min = [B12, lambda_min - B11]/norm`
+         ! - Off the off-diagonal branch the primal is a canonical basis vector:
+         !   derivative zero, `vmin_norm` not a norm the primal used
+         ! - Vanishing gap: eigenvector arbitrary, zero is the guard's answer and not
+         !   the derivative, as for `seed_curv_disc_guard`
          if (state%vmin_offdiag .and. state%sqrt_disc_B > seed_eig_gap_guard) then
             dtrace_B = dB11 + dB22
-            ! `d(disc)` as `d((B11 - B22)^2 + 4 B12^2)`. Algebraically identical
-            ! to the `trace^2 - 4 det` form, but that one loses relative
-            ! accuracy exactly where the gap is small and this quantity matters
+            ! d(disc) = d((B11 - B22)^2 + 4 B12^2), accurate at small gaps
             ddisc_B = 2.0_wp*(state%B11 - state%B22)*(dB11 - dB22) &
                       + 8.0_wp*state%B12*dB12
             dsqrt_disc_B = ddisc_B/(2.0_wp*state%sqrt_disc_B)
@@ -819,8 +724,7 @@ contains
 
          dstate%dn_dot_q1 = res%dn_surf(state%min_axis)
          dstate%dproj_surf = -2.0_wp*state%n_dot_q1*dstate%dn_dot_q1
-         ! Mirror the primal `max(proj_surf, 1e-30)` clamp: once it bites the
-         ! norm is constant, exactly as the `dq1` branch above assumes
+         ! Mirror of the primal `max(proj_surf, 1e-30)` clamp: norm constant once it bites
          if (state%proj_surf > 1.0e-30_wp) then
             dstate%dv_norm_surf = dstate%dproj_surf/(2.0_wp*state%v_norm_surf)
          else
@@ -828,7 +732,7 @@ contains
          end if
       end if
 
-      ! The sphere tangent frame is rigid, so dt1 = dt2 = 0
+      ! Sphere tangent frame is rigid, dt1 = dt2 = 0
       dtau1(1) = dot_product(dq1, state%t1_vec)
       dtau1(2) = dot_product(dq2, state%t1_vec)
       dtau2(1) = dot_product(dq1, state%t2_vec)
@@ -884,8 +788,7 @@ contains
          dstate%df_crit_dS = state%f_crit_d2S*res%d_gnorm
          dstate%df_foc_f0 = state%f_foc_dS*dlambda_switch
          dstate%df_foc_dS = state%f_foc_d2S*dlambda_switch
-         ! wleb_prune_factor = S(|w|) + |w| S'(|w|), so with
-         ! d|w| = sign(w_pre_i) * dw_pre the chain collapses to one factor
+         ! wleb_prune_factor = S(|w|) + |w| S'(|w|) with d|w| = sign(w_pre_i) * dw_pre
          if (state%use_wleb_prune) then
             dstate%dwleb_prune_factor = sign(1.0_wp, state%w_pre_i)*dw_pre &
                                         *(2.0_wp*state%f_wleb_ds &
@@ -898,8 +801,8 @@ contains
       if (.not. state%want_curvature) return
 
       associate (H => state%lsf2_rr, dH => res%dH)
-         ! d(q_a^T H q_b) = dq_a . H q_b + dq_b . H q_a + q_a^T dH q_b, using the
-         ! symmetry of H for the mixed term exactly as `dB12` above does
+         ! d(q_a^T H q_b) = dq_a . H q_b + dq_b . H q_a + q_a^T dH q_b
+         ! - H-symmetry used for the mixed term, as in `dB12`
          dHq1_p = matmul(dH, state%q1)
          dHq2_p = matmul(dH, state%q2)
          dN11 = 2.0_wp*dot_product(dq1, state%Hq1) + dot_product(state%q1, dHq1_p)
@@ -915,10 +818,8 @@ contains
          dT = dS11 + dS22
          dhalf_diff = 0.5_wp*(dS11 - dS22)
 
-         ! disc^2 = half_diff^2 + S12^2, so
-         ! disc d(disc) = half_diff d(half_diff) + S12 dS12 -- both products of
-         ! quantities that are themselves O(disc), so the quotient keeps the
-         ! relative accuracy `disc` was built with
+         ! disc d(disc) = half_diff d(half_diff) + S12 dS12
+         ! - Both products are O(disc); the quotient keeps the relative accuracy of `disc`
          if (state%disc_curv > seed_curv_disc_guard) then
             d_disc = (state%half_diff*dhalf_diff + state%S12*dS12)/state%disc_curv
          else
@@ -928,7 +829,7 @@ contains
          res%dk2 = 0.5_wp*dT - d_disc
 
          if (present(dstate)) then
-            ! The *total* d(H q_a), the form [[apply_seed_tangent]] contracts
+            ! Total d(H q_a), the form [[apply_seed_tangent]] contracts
             dstate%dHq1 = dHq1_p + matmul(H, dq1)
             dstate%dHq2 = dHq2_p + matmul(H, dq2)
             dstate%dS11 = dS11
@@ -945,103 +846,49 @@ contains
 
    !> Directional derivative of [[apply_seed]] along a second direction `v`
    !>
-   !> [[apply_seed]] maps a seed `b = (dlsf1_r, dlsf2_rr, dr, dlambda)` to a
-   !> linear response `res_b` that also depends on the per-point state. This
-   !> routine returns `d/dv [ res_b ]`. It is the derivative *of that code*,
-   !> obtained by applying the product rule to [[apply_seed]] line by line, and
-   !> not a second derivation of the geometry: every `state%X` is replaced by the
-   !> v-tangent of `X`, every first-order local by its own v-tangent, and every
-   !> `res%dZ` by `dres%dZ`.
+   !> - Returns `d/dv [ res_b ]` for the seed `b = (dlsf1_r, dlsf2_rr, dr, dlambda)`
+   !> - Product rule on the code of [[apply_seed]], line by line; not a second
+   !>   derivation of the geometry
+   !> - PRECONDITION: the seed's `dlsf2_rr` is symmetric, or the caller sums the
+   !>   transpose pair `E_ij + E_ji` before reading `dres`
+   !> - Reason: three factor-of-two collapses need symmetric `dA_b`, namely
+   !>   `2 du_v . (dM_b u)`, the second bracket of [[switched_eigenvalue_curvature]]
+   !>   and `dBij = dqi . Aqj + qi . dAqj`
+   !> - Broken by the off-diagonal Hessian seeds of [[seed_jet_basis]]: per-seed
+   !>   `dres` is wrong at order 100 %, signs included
+   !> - Equivalent to the pair sum: contract all nine seeds against a weight
+   !>   symmetric in `(i, j)`; same rescue as the `dB12` shortcut of [[apply_seed]]
+   !> - Not caught by the tests: every fixture seeds a symmetric Hessian
+   !> - `res_b`, `dstate_b` come from one hoisted [[apply_seed]] call per seed and
+   !>   are never recomputed here
+   !> - `dstate_v`, `res_v` must be the true v-tangents of the derived state for the
+   !>   input displacement `dinp_v`
+   !> - [[apply_seed]] pairs are consistent only for `dinp_v%danchor_wleb0 = 0` and,
+   !>   with pruning, `dinp_v%dcpjac_scal0 = res_v%dJ`, `dinp_v%dw_f0 = res_v%dw_f`;
+   !>   the driver makes these identifications, other input tangents are free
+   !> - `d_v(lsf3_rrr)` enters only through `dres%dH`; `lsf4_rrrr` is the driver's
+   !> - No `dlsf1_r`, `dlsf2_rr` arguments: their coefficient is the identity, only
+   !>   `ddlsf1_r`, `ddlsf2_rr` appear
+   !> - TODO: retire the precondition by symmetrising the seed in
+   !>   [[seed_jet_basis]] or on entry to [[apply_seed]]; too late here, since
+   !>   `dstate_b%dM_u` is already built
+   !> - Safe on the nuclear path (`f3_rr_rA` symmetric, only summation order
+   !>   moves); undone since the LSF interface documents `w2` as a general `3x3`
+   !>   and `w_lsf2` is caller-supplied through `api.f90`
    !>
-   !> --------------------------------------------------------------------------
-   !>
-   !> **PRECONDITION -- the seed's `dlsf2_rr` must be symmetric, or the caller
-   !> must add the transpose seed before reading anything.**
-   !>
-   !> Three steps on the way to `dres` collapse a symmetric pair of terms into a
-   !> factor of two: the `2 du_v . (dM_b u)` eigenvector term below, the
-   !> `-2 [ a_b (n . dA_v u) + a_v (n . dA_b u) ]` bracket inside
-   !> [[switched_eigenvalue_curvature]], and the `dBij = dqi . Aqj + qi . dAqj`
-   !> restatement that the `ddB` lines differentiate. Each holds only for a
-   !> symmetric `dA_b`, and [[apply_seed]] carries the seed's `dlsf2_rr` into
-   !> `dA` scaled by `-lambda` and nothing else, so this is a condition on the
-   !> *seed*, not on the geometry.
-   !>
-   !> [[seed_jet_basis]] is the producer that breaks it. Its nine Hessian basis
-   !> seeds are single-entry matrices, `dlsf2_rr(iaxis, jaxis) = 1`, so the six
-   !> off-diagonal ones are maximally asymmetric. Fed such a seed, this routine
-   !> does **not** return the derivative of that seed's response, and not by a
-   !> little: the per-seed error is of order 100 % and flips signs. Measured on
-   !> `dres%dw_f`, analytic `-2.81e-3` against a finite difference of `+1.50e-3`.
-   !>
-   !> What a driver must do: never read a single off-diagonal Hessian seed's
-   !> `dres`. Read only the sum over the transpose pair `E_ij + E_ji`, or --
-   !> equivalently -- contract all nine seeds against a weight that is symmetric
-   !> in `(i, j)`. This routine is linear in the seed, so `f(E_ij) + f(E_ji)` is
-   !> `f(E_ij + E_ji)` and the error cancels to machine zero. It is the same
-   !> rescue that [[apply_seed]]'s shipped `dB12` shortcut has always relied on,
-   !> and it is why the shipped first-order adjoint is correct.
-   !>
-   !> The suite cannot catch a driver that gets this wrong. Every fixture seeds
-   !> a symmetric Hessian by design, so the tests sit entirely inside the region
-   !> where the collapse is valid; a per-seed driver will pass all of them.
-   !>
-   !> TODO: this precondition could be retired rather than documented, by
-   !>       symmetrising the seed -- either where [[seed_jet_basis]] emits it or
-   !>       on entry to [[apply_seed]]. Not on entry *here*: `dstate_b%dM_u` is
-   !>       already built by then. It is known safe: the nuclear path contracts
-   !>       these seeds against `f3_rr_rA`, which is symmetric in its two spatial
-   !>       indices by equality of mixed partials and measures bit-for-bit
-   !>       symmetric on SvdW and CFC, so `0.5*(w_ij + w_ji) == w_ij` and only the
-   !>       per-seed summation order moves. It was left undone because the LSF
-   !>       interface deliberately documents `w2` as a *general* `3x3` with no
-   !>       symmetry assumption, and on the host path `w_lsf2` comes from the
-   !>       caller through `api.f90`; symmetrising would quietly narrow that
-   !>       contract to buy something this comment already provides
-   !>
-   !> --------------------------------------------------------------------------
-   !>
-   !> `res_b` and `dstate_b` are consumed, never recomputed. One
-   !> `apply_seed(state, dlsf1_r, ..., res_b, dstate_b)` call is hoisted out of
-   !> the direction loop: `b` ranges over the basis seeds while `v` ranges over
-   !> `3N` nuclear directions, so rebuilding the `b` chain per direction is the
-   !> dominant avoidable cost. It is also the anti-drift rule, since a second
-   !> copy of a floating-point chain is free to contract differently under
-   !> `-ffp-contract=fast`.
-   !>
-   !> Contract on the arguments: `dstate_v` and `res_v` must be the *true*
-   !> v-tangents of the derived state for the same input displacement `dinp_v`.
-   !> [[apply_seed]] is the only producer of such a pair today and it carries no
-   !> seed channel for `anchor_wleb0`, and it builds `dwleb_prune_factor` out of
-   !> `res%dJ` and `res%dw_f`. A pair it produces is therefore consistent only
-   !> when `dinp_v%danchor_wleb0` vanishes and, with pruning active, when
-   !> `dinp_v%dcpjac_scal0` and `dinp_v%dw_f0` are `res_v%dJ` and `res_v%dw_f`.
-   !> The remaining input tangents are unconstrained. The routine itself makes
-   !> none of these identifications; they belong to the driver.
-   !>
-   !> `d_v(lsf3_rrr)` enters only through `dres%dH`. `lsf4_rrrr` is the driver's
-   !> concern and does not appear here.
-   !>
-   !> The seed's own `dlsf1_r` and `dlsf2_rr` are not arguments, and nothing
-   !> is missing: [[apply_seed]] is *linear* in the seed, so differentiating a
-   !> term `c(p) * b` gives `dc * b + c * db`, and a seed component survives
-   !> here only if its coefficient is state dependent. Those two enter with the
-   !> identity as coefficient, so only their own tangents `ddlsf1_r`/`ddlsf2_rr`
-   !> appear, while `dr` and `dlambda` survive through `lsf2_rr` and `lsf3_rrr`.
-   !>
-   !> @param[in]  state      Per-grid point forward state from [[build_seed_state]]
-   !> @param[in]  dstate_v   Tangent of the derived state along the second direction
-   !> @param[in]  dinp_v     Tangent of the state inputs along the second direction
-   !> @param[in]  res_v      Response of the second direction
-   !> @param[in]  dr         Induced motion of the projected point
-   !> @param[in]  dlambda    Induced change of the Lagrange multiplier
-   !> @param[in]  ddlsf1_r   Second-direction tangent of the seed's `grad S` perturbation
-   !> @param[in]  ddlsf2_rr  Second-direction tangent of the seed's `grad^2 S` perturbation
-   !> @param[in]  ddr        Second-direction tangent of `dr`
-   !> @param[in]  ddlambda   Second-direction tangent of `dlambda`
-   !> @param[in]  res_b      Response of seed `b`, from [[apply_seed]]
-   !> @param[in]  dstate_b   State tangent of seed `b`, from [[apply_seed]]
-   !> @param[out] dres       Second-order response
+   !> @param[in]  state      forward state from [[build_seed_state]]
+   !> @param[in]  dstate_v   true v-tangent of the derived state
+   !> @param[in]  dinp_v     input displacement along `v`
+   !> @param[in]  res_v      response of direction `v`, consistent with `dstate_v`
+   !> @param[in]  dr         induced point motion of seed `b`
+   !> @param[in]  dlambda    induced multiplier change of seed `b`
+   !> @param[in]  ddlsf1_r   v-tangent of the seed's `grad S` perturbation
+   !> @param[in]  ddlsf2_rr  v-tangent of the seed's `grad^2 S` perturbation
+   !> @param[in]  ddr        v-tangent of `dr`
+   !> @param[in]  ddlambda   v-tangent of `dlambda`
+   !> @param[in]  res_b      response of seed `b`, from [[apply_seed]]
+   !> @param[in]  dstate_b   state tangent of seed `b`, from [[apply_seed]]
+   !> @param[out] dres       second-order response
    pure subroutine apply_seed_tangent(state, dstate_v, dinp_v, res_v, dr, dlambda, &
                                       ddlsf1_r, ddlsf2_rr, ddr, ddlambda, &
                                       res_b, dstate_b, dres)
@@ -1053,19 +900,20 @@ contains
       type(drop_seed_input_tangent_type), intent(in) :: dinp_v
       !> Response of the `v` direction, carrying `dn_surf`, `d_gnorm` and `dH`
       type(drop_seed_result_type), intent(in) :: res_v
-      !> The seed `b` being differentiated: its induced point motion and multiplier change
+      !> Induced point motion and multiplier change of seed `b`
       real(wp), intent(in) :: dr(3), dlambda
       !> Tangent of that seed along `v`
       real(wp), intent(in) :: ddlsf1_r(3), ddlsf2_rr(3, 3), ddr(3), ddlambda
-      !> Response and state tangent of seed `b`, from [[apply_seed]]
+      !> Response of seed `b`, from [[apply_seed]]
       type(drop_seed_result_type), intent(in) :: res_b
+      !> State tangent of seed `b`, from [[apply_seed]]
       type(drop_seed_state_tangent_type), intent(in) :: dstate_b
       !> Second-order response
       type(drop_seed_result_type), intent(out) :: dres
 
       !> Second-order sensitivity of the tangent-restricted KKT matrix
       real(wp) :: ddA(3, 3)
-      !> [[apply_seed]]'s Gram-Schmidt scratch for seed `b`, and its own tangent
+      !> Gram-Schmidt scratch of [[apply_seed]] for seed `b`, and its tangent
       real(wp) :: v_tmp_b(3), dv_tmp(3), ddq1(3), ddq2(3)
       !> Second-order `B` and `B^-1` sensitivities
       real(wp) :: ddAq1(3), ddAq2(3), ddB11, ddB12, ddB22, dddet_B
@@ -1077,8 +925,7 @@ contains
       real(wp) :: ddy1(3), ddy2(3), ddcross(3)
       !> Lebedev-weight and Jacobian chain scratch
       real(wp) :: dw_pre_b, ddw_pre, cross_dot_b
-      !> Curvature scratch, first order in `b` and second order. `dH_b q_a` is
-      !> the one partial the total `dstate%dHq_a` does not already carry
+      !> Curvature scratch; `dH_b q_a` is the one partial `dstate%dHq_a` does not carry
       real(wp) :: dHq1_b(3), dHq2_b(3)
       real(wp) :: dN11_b, dN12_b, dN22_b, ddN11, ddN12, ddN22
       real(wp) :: ddS11, ddS12, ddS22, ddT, ddhalf_diff, dd_disc
@@ -1098,9 +945,7 @@ contains
       ddA = -ddlambda*state%lsf2_rr - dlambda*dinp_v%dlsf2_rr &
             - dinp_v%dlambda_val*res_b%dH - state%lambda_val*dres%dH
 
-      ! `res%d_gnorm` is the same contraction `n . res%dg` that the `res%dn_surf`
-      ! line subtracts, so it is hoisted above its position in [[apply_seed]]
-      ! rather than formed twice
+      ! `d_gnorm` hoisted above its [[apply_seed]] position: `dn_surf` reuses `n . dg`
       dres%d_gnorm = dot_product(res_v%dn_surf, res_b%dg) &
                      + dot_product(state%n_surf, dres%dg)
       dres%dn_surf = (dres%dg - res_v%dn_surf*res_b%d_gnorm &
@@ -1109,7 +954,7 @@ contains
 
       !* ================================ Tangent frame =============================== *!
 
-      ! `min_axis` is a frozen discrete choice, so the Gram-Schmidt axis is fixed
+      ! `min_axis` is frozen, Gram-Schmidt axis fixed
       v_tmp_b = -res_b%dn_surf(state%min_axis)*state%n_surf &
                 - state%n_dot_q1*res_b%dn_surf
       dv_tmp = -dres%dn_surf(state%min_axis)*state%n_surf &
@@ -1117,18 +962,12 @@ contains
                - dstate_v%dn_dot_q1*res_b%dn_surf &
                - state%n_dot_q1*dres%dn_surf
 
-      ! Guard consistency. Every branch in this routine tests exactly the
-      ! primal's condition on exactly the primal's threshold and puts zero on the
-      ! else, because there the primal set the quantity itself to zero. A tangent
-      ! gated on a larger threshold than the value it differentiates would be
-      ! wrong on the strip between the two, so if any of these gates has to be
-      ! raised, [[apply_seed]] and [[apply_seed_tangent]] must be raised together.
-      ! Two of [[apply_seed]]'s five gates do not appear here: the eigenvector
-      ! chain (`vmin_offdiag .and. sqrt_disc_B > seed_eig_gap_guard`) guards only
-      ! `dstate%dvmin_B`, and `use_wleb_prune` guards only
-      ! `dstate%dwleb_prune_factor`. Neither lies on the path to
-      ! [[drop_seed_result_type]]; both reach this routine already guarded, as
-      ! components of `dstate_v`
+      ! Guard rule: every branch tests the primal's condition on the primal's
+      ! threshold, zero on the else
+      ! - Raise a gate only in [[apply_seed]] and here together
+      ! - Eigenvector and `use_wleb_prune` gates of [[apply_seed]] are absent: they
+      !   guard only `dstate%dvmin_B` and `dstate%dwleb_prune_factor`, which arrive
+      !   already guarded in `dstate_v`
       if (state%proj_surf > 1.0e-30_wp) then
          ddq1 = (dv_tmp - dstate_v%dq1*dot_product(state%q1, v_tmp_b) &
                  - state%q1*(dot_product(dstate_v%dq1, v_tmp_b) &
@@ -1153,14 +992,9 @@ contains
 
       !* ================================= KKT matrix ================================= *!
 
-      ! `dstate%dAq1`/`dAq2` carry the FULL product rule `dA q + A dq`, unlike the
-      ! partial scratch [[apply_seed]] feeds into its own `dB` lines, where the
-      ! `dq` half rides separately. Restated in stored-field form, and using the
-      ! symmetry of `A` together with the seed precondition on `dA`, all three
-      ! entries share one shape,
+      ! Stored `dAq1`/`dAq2` are the full `dA q + A dq`, unlike the [[apply_seed]] scratch
+      ! Form differentiated below, valid for symmetric `A` and the seed precondition
       !    dBij = dqi . Aqj + qi . dAqj
-      ! which is algebraically identical to the shipped lines and is what is
-      ! differentiated below
       ddAq1 = matmul(ddA, state%q1) + matmul(dstate_b%dA_mat, dstate_v%dq1) &
               + matmul(dstate_v%dA_mat, dstate_b%dq1) + matmul(state%A_mat, ddq1)
       ddAq2 = matmul(ddA, state%q2) + matmul(dstate_b%dA_mat, dstate_v%dq2) &
@@ -1183,8 +1017,7 @@ contains
                 + dstate_v%dB11*dstate_b%dB22 + state%B11*ddB22 &
                 - 2.0_wp*(dstate_v%dB12*dstate_b%dB12 + state%B12*ddB12)
 
-      ! `dBinvXY` is `N/det^2`, so the outer quotient rule reuses the stored
-      ! first-order value rather than rebuilding `N`
+      ! `dBinvXY = N/det^2`: outer quotient rule reuses the stored first-order value
       ddBinv11 = (ddB22*state%det_B + dstate_b%dB22*dstate_v%ddet_B &
                   - dstate_v%dB22*dstate_b%ddet_B - state%B22*dddet_B) &
                  /(state%det_B*state%det_B) &
@@ -1200,29 +1033,22 @@ contains
 
       !* ========================= Basis-invariant eigenvalue ========================= *!
 
-      ! `u . (ddM u)` in contracted form. The assembly it replaces built `ddP`
-      ! out of eight `spread`s and `ddM` out of fourteen matrix-matrix products,
-      ! all of it to reach this one scalar, in the innermost `(b, v)` loop; see
-      ! [[switched_eigenvalue_curvature]] for the identity and its three
-      ! preconditions. Both cross terms `dn_b dn_v^T` and `dn_v dn_b^T` of
-      ! `d_v(dP_b)` are still in there, as the `a_v (dn_b . Au)` and
-      ! `a_b (dn_v . Au)` pair; dropping either one remains the easiest error
-      ! available here
+      ! `u . (ddM u)` contracted, see [[switched_eigenvalue_curvature]]
+      ! - Both cross terms `dn_b dn_v^T`, `dn_v dn_b^T` of `d_v(dP_b)` are needed,
+      !   as the `a_v (dn_b . Au)`, `a_b (dn_v . Au)` pair
       call switched_eigenvalue_curvature(state%n_surf, state%u_switch, state%A_mat, &
                                          dstate_b%dA_mat, dstate_v%dA_mat, ddA, &
                                          res_b%dn_surf, res_v%dn_surf, dres%dn_surf, &
                                          ddlambda_curv)
 
-      ! The two eigenvector terms of `d_v(u . dM_b u)` coincide when `dM_b` is
-      ! symmetric, which is what the seed precondition above buys. It is `dM_b`
-      ! and not `M` that has to be symmetric here. `dstate_b%dM_u` is read
-      ! rather than rebuilt because it depends on `b` alone; see its declaration
+      ! Eigenvector terms of `d_v(u . dM_b u)` coincide for symmetric `dM_b`, not
+      ! merely `M`: the seed precondition
       ddlambda_switch = 2.0_wp*dot_product(dstate_v%du_switch, dstate_b%dM_u) &
                         + ddlambda_curv
 
       !* ====================== Lifted tangents and the Jacobian ====================== *!
 
-      ! The sphere tangent frame is rigid at every order, so `dt1 = dt2 = 0`
+      ! Sphere tangent frame is rigid at every order, dt1 = dt2 = 0
       ddtau1(1) = dot_product(ddq1, state%t1_vec)
       ddtau1(2) = dot_product(ddq2, state%t1_vec)
       ddtau2(1) = dot_product(ddq1, state%t2_vec)
@@ -1245,9 +1071,7 @@ contains
                 + ddBinv22*state%tau2(2) + dstate_b%dBinv22*dstate_v%dtau2(2) &
                 + dstate_v%dBinv22*dstate_b%dtau2(2) + state%Binv22*ddtau2(2)
 
-      ! `alpha_coeff` is a fixed parameter with no seed channel, so it
-      ! contributes no `dalpha` term of its own here; see
-      ! [[drop_seed_input_tangent_type]] for why that omission is deliberate
+      ! No `dalpha` term, see [[drop_seed_input_tangent_type]]
       ddy1 = state%alpha_coeff*(ddw1(1)*state%q1 + dstate_b%dw1(1)*dstate_v%dq1 &
                                 + dstate_v%dw1(1)*dstate_b%dq1 + state%w1(1)*ddq1 &
                                 + ddw1(2)*state%q2 + dstate_b%dw1(2)*dstate_v%dq2 &
@@ -1284,8 +1108,7 @@ contains
                   + state%f_crit0*dstate_v%df_foc_dS*dstate_b%dlambda_switch &
                   + state%f_crit0*state%f_foc_dS*ddlambda_switch
 
-      ! `dw_pre` is a local of [[apply_seed]] and is not stored. Rebuilding it
-      ! here is two products off `res_b`, not a re-run of the `b` chain
+      ! `dw_pre` of [[apply_seed]] is not stored; rebuilt from `res_b`
       dw_pre_b = state%anchor_wleb0*state%w_f0*res_b%dJ &
                  + state%anchor_wleb0*state%cpjac_scal0*res_b%dw_f
       ddw_pre = dinp_v%danchor_wleb0*state%w_f0*res_b%dJ &
@@ -1305,18 +1128,16 @@ contains
          dres%dxi = 0.0_wp
       end if
 
-      ! `want_curvature` is a frozen discrete choice, so the early return mirrors
-      ! the primal's and `intent(out)` default initialisation zeroes `dk1`/`dk2`
+      ! `want_curvature` is frozen; default initialisation of `dres` zeroes `dk1`/`dk2`
       if (.not. state%want_curvature) return
 
       !* ============================ Curvature invariants ============================ *!
 
       associate (H => state%lsf2_rr, dH_b => res_b%dH, ddH => dres%dH)
-         ! `d(q_a . H q_b) = dq_a . H q_b + q_a . d(H q_b)`, and `d(H q_b)` is
-         ! `dstate_b%dHq_b` already, so the `q_a^T dH_b q_b` matvec of
-         ! [[apply_seed]]'s three-term form is not rebuilt here. `ddN_ab` below
-         ! still leans on the symmetry of `H` and `dH_b`, exactly as
-         ! [[apply_seed]]'s own `dN12` line and its `dB12` shortcut do
+         ! d(q_a . H q_b) = dq_a . H q_b + q_a . d(H q_b)
+         ! - `d(H q_b)` is the stored `dstate_b%dHq_b`, no `q_a^T dH_b q_b` matvec
+         ! - `ddN_ab` relies on symmetric `H`, `dH_b`, as `dN12` and `dB12` of
+         !   [[apply_seed]] do
          dHq1_b = matmul(dH_b, state%q1)
          dHq2_b = matmul(dH_b, state%q2)
 
@@ -1327,8 +1148,7 @@ contains
          dN22_b = dot_product(dstate_b%dq2, state%Hq2) &
                   + dot_product(state%q2, dstate_b%dHq2)
 
-         ! d_v of [[apply_seed]]'s three-term form, with the two terms that
-         ! differ only by which frame vector moves folded into the total `dHq`:
+         ! d_v of the three-term form of [[apply_seed]], frame terms folded into `dHq`
          !   ddN_ab = ddq_a . Hq_b + ddq_b . Hq_a
          !          + dq_a^b . dHq_b^v + dq_b^b . dHq_a^v
          !          + dq_a^v . (dH_b q_b) + dq_b^v . (dH_b q_a)
@@ -1368,9 +1188,8 @@ contains
          ddT = ddS11 + ddS22
          ddhalf_diff = 0.5_wp*(ddS11 - ddS22)
 
-         ! d_v of `disc d(disc) = half_diff d(half_diff) + S12 dS12`, solved for
-         ! `dd_disc`; the `- d_disc^v d_disc^b` term is the one that comes off
-         ! the left-hand side
+         ! d_v of `disc d(disc) = half_diff d(half_diff) + S12 dS12`, solved for `dd_disc`
+         ! - `- d_disc^v d_disc^b` comes off the left-hand side
          if (state%disc_curv > seed_curv_disc_guard) then
             dd_disc = (dstate_v%dhalf_diff*dstate_b%dhalf_diff &
                        + state%half_diff*ddhalf_diff &
@@ -1390,44 +1209,27 @@ contains
 
    !> Advance to the next contiguous anchor group of the branch grid
    !>
-   !> The single home of the group walk every branch pass runs: skip forward one
-   !> point at a time while `branch_count <= 1`, then extend the group while
-   !> `anchor_id` stays equal to the group's first point. Note that the two
-   !> conditions are *not* symmetric -- only the group's first point is gated on
-   !> `branch_count`, and a later point of the same `anchor_id` run joins the
-   !> group whatever its own `branch_count` is. Both halves are load-bearing and
-   !> are reproduced here exactly as the four call sites had them.
+   !> - Skip points while `branch_count <= 1`, then extend while `anchor_id` equals
+   !>   that of the group's first point
+   !> - Only the first point is gated on `branch_count`; later points of the same
+   !>   `anchor_id` run join whatever their count
+   !> - Both halves of that rule are load bearing
+   !> - Contiguity comes from the stable `counting_argsort` of `projection.f90`,
+   !>   not checked here; a split run is seen as two groups
+   !> - Grid exhausted: `found` false, `first`/`last` an empty range
+   !> - Caller starts `cursor` at 1 and never touches it inside its loop
+   !> - Subroutine, not function: pure callers need the non-`intent(in)` `cursor`
    !>
-   !> Contiguity of a group is guaranteed by the stable `counting_argsort` at
-   !> `projection.f90:542-583`, not by anything this iterator checks: it only
-   !> ever groups points that are already adjacent, so a hypothetical split run
-   !> would be seen as two groups rather than silently merged.
-   !>
-   !> `found` is `.false.` once the grid is exhausted; `first`/`last` are then
-   !> set to an empty range (`last - first + 1 == 0`) rather than left undefined.
-   !>
-   !> Usage, with `cursor` initialised to 1 and never touched inside the body:
-   !>
-   !>     do
-   !>        call next_branch_group(branch_count, anchor_id, cursor, ifirst, ilast, found)
-   !>        if (.not. found) exit
-   !>        ...
-   !>     end do
-   !>
-   !> This is a subroutine and not the more natural `logical` function because
-   !> two of its callers are `pure` and a pure function may not take a
-   !> non-`intent(in)` dummy argument.
-   !>
-   !> @param[in]    branch_count Branches per grid point (ngrid); sets the extent
-   !> @param[in]    anchor_id    Anchor group id per grid point (ngrid)
-   !> @param[inout] cursor       Search position; advanced past the returned group
-   !> @param[out]   first        First grid point of the group
-   !> @param[out]   last         Last grid point of the group
-   !> @param[out]   found        `.false.` when no further group exists
+   !> @param[in]     branch_count  branches per grid point (ngrid), sets the extent
+   !> @param[in]     anchor_id     anchor group id per grid point (ngrid)
+   !> @param[in,out] cursor        search position, advanced past the returned group
+   !> @param[out]    first         first grid point of the group
+   !> @param[out]    last          last grid point of the group
+   !> @param[out]    found         `.false.` when no further group exists
    pure subroutine next_branch_group(branch_count, anchor_id, cursor, first, last, found)
       !> Branch bookkeeping per grid point
       integer, intent(in) :: branch_count(:), anchor_id(:)
-      !> Search position, advanced past the group that is returned
+      !> Search position, advanced past the returned group
       integer, intent(inout) :: cursor
       !> Bounds of the group
       integer, intent(out) :: first, last
@@ -1442,7 +1244,7 @@ contains
       last = 0
       ngrid = size(branch_count)
 
-      ! Skip singletons one point at a time; only the group's head is gated
+      ! Skip singletons; only the group's head is gated
       do while (cursor <= ngrid)
          if (branch_count(cursor) > 1) exit
          cursor = cursor + 1
@@ -1462,26 +1264,17 @@ contains
 
    end subroutine next_branch_group
 
-   !> Largest number of grid points any one contiguous anchor group holds
+   !> Largest number of grid points in one contiguous anchor group
    !>
-   !> The scratch bound for the two passes that gather a group into a
-   !> `(:, nbranch)` buffer -- `forward.f90`'s branch post-pass and
-   !> `tangent_forward.f90`'s `branch_stage`. Both index that buffer by the
-   !> group's *run length*, so `maxval(branch_count)` is the wrong bound: it is
-   !> a per-point branch counter, a different quantity that merely happens to
-   !> agree with the run length on a well-formed grid. Rather than assert the
-   !> agreement -- this module has no error channel, and a correct bound beats a
-   !> late abort -- the bound is taken from the same walk that consumes it, by
-   !> the same [[next_branch_group]] the caller loops over. The invariant is
-   !> then structural: no group the caller can see is wider than the maximum
-   !> group this returns.
+   !> - Scratch bound for the `(:, nbranch)` group buffers of the branch post-pass
+   !>   in `forward.f90` and `branch_stage` in `tangent_forward.f90`
+   !> - Buffers are indexed by run length: `maxval(branch_count)` is the wrong bound
+   !> - Taken from the [[next_branch_group]] walk the callers loop over: no group
+   !>   they see is wider
+   !> - Zero when no multi-branch group exists
    !>
-   !> Returns zero when no multi-branch group exists, so a caller may also use
-   !> it as the "is there anything to do" test.
-   !>
-   !> @param[in] branch_count Branches per grid point (ngrid); sets the extent
-   !> @param[in] anchor_id    Anchor group id per grid point (ngrid)
-   !> @returns                Maximum group extent, zero when there is no group
+   !> @param[in] branch_count  branches per grid point (ngrid), sets the extent
+   !> @param[in] anchor_id     anchor group id per grid point (ngrid)
    pure function max_branch_group_size(branch_count, anchor_id) result(nmax)
       !> Branch bookkeeping per grid point
       integer, intent(in) :: branch_count(:), anchor_id(:)
@@ -1505,23 +1298,20 @@ contains
 
    !> Reverse pass over the branch-weight softmax
    !>
-   !> Within an anchor group the Lebedev weight carries a softmax factor,
-   !> `wleb_m = base_m * p_m`. The per-point seed loop handles `d(base_m)`;
-   !> this pass converts the remaining width-induced adjoint `dL/dp_m` into
-   !> `dL/dPhi_m`, which the seed loop then couples to the point motion.
+   !> - Within an anchor group `wleb_m = base_m * p_m`; seed loop handles `d(base_m)`
+   !> - Converts the width-induced adjoint `dL/dp_m` into `dL/dPhi_m`, which the
+   !>   seed loop couples to the point motion
+   !> - Groups from [[next_branch_group]]; points with `branch_count <= 1` stay zero
+   !> - TODO: serial, should/could be parallelized
    !>
-   !> Groups are walked with [[next_branch_group]]: runs of equal `anchor_id`;
-   !> points with `branch_count <= 1` carry no softmax factor and stay at zero.
-   !>
-   !> @param[in]  branch_count    Number of branches per grid point (ngrid)
-   !> @param[in]  anchor_id       Anchor group id per grid point (ngrid)
-   !> @param[in]  wbranch         Softmax branch weight per grid point (ngrid)
+   !> @param[in]  branch_count    number of branches per grid point (ngrid)
+   !> @param[in]  anchor_id       anchor group id per grid point (ngrid)
+   !> @param[in]  wbranch         softmax branch weight per grid point (ngrid)
    !> @param[in]  wleb            Lebedev weight per grid point (ngrid)
    !> @param[in]  xi0             Gaussian width per grid point (ngrid)
-   !> @param[in]  sigma_phi       Softmax temperature
-   !> @param[in]  w_xi            Effective Gaussian-width adjoint (ngrid)
-   !> @param[out] branch_phi_adj  Adjoint of the branch objective Phi (ngrid)
-   ! TODO: This is serial; it sh/could be parallelized
+   !> @param[in]  sigma_phi       softmax temperature
+   !> @param[in]  w_xi            effective Gaussian-width adjoint (ngrid)
+   !> @param[out] branch_phi_adj  adjoint of the branch objective Phi (ngrid)
    pure subroutine compute_branch_phi_adj(branch_count, anchor_id, wbranch, wleb, xi0, &
                                           sigma_phi, w_xi, branch_phi_adj)
       !> Branch bookkeeping per grid point
@@ -1574,41 +1364,29 @@ contains
 
    end subroutine compute_branch_phi_adj
 
-   !> One point's branch adjoint, optionally with its directional tangent
+   !> Branch adjoint of one point, optionally with its directional tangent
    !>
-   !> The single home of the raw per-point block: `[[compute_branch_phi_adj]]`
-   !> calls it primal-only inside its group loop and
-   !> `[[branch_phi_adj_tangent]]` calls it with the tangent arguments, so both
-   !> passes execute the *same* compiled statements. That is deliberate -- a
-   !> verbatim second copy of the chain in another routine is free to contract
-   !> its multiplies and adds differently and would drift by an ulp.
+   !> - Shared by [[compute_branch_phi_adj]] (primal only) and
+   !>   [[branch_phi_adj_tangent]]: one copy, same compiled statements, no ulp drift
+   !> - Raw per-point adjoint, before the group reduction
+   !>   `-wbranch*(adj - mean_adj)/sigma_phi` of [[compute_branch_phi_adj]]; not the
+   !>   stored `branch_phi_adj`
+   !> - `adj_wleb * factor` stays factored, not collapsed to
+   !>   `-0.5 w_xi xi0/wbranch`, to match the derivation of the reverse pass
+   !> - Tangent arguments all-or-none: `dw_xi`, `dwleb`, `dxi0`, `dwbranch`, `dadj_branch`
+   !> - Tangent takes the primal's branch on the primal's condition, hard zero on
+   !>   the else, no threshold of its own
    !>
-   !> What comes back here is the **raw** per-point adjoint, *before* the group
-   !> reduction `[[compute_branch_phi_adj]]` applies on top of it. It is
-   !> therefore not the same quantity as the stored `branch_phi_adj`, which
-   !> already carries `-wbranch*(adj - mean_adj)/sigma_phi`; the tangent pass
-   !> needs the raw value and cannot read the stored one back.
-   !>
-   !> `adj_wleb * factor` is kept factored rather than collapsed to
-   !> `-0.5 w_xi xi0/wbranch` -- the `wleb` cancels algebraically -- because the
-   !> factored form is the one the reverse pass was derived in and the one a
-   !> reviewer can diff against the primal.
-   !>
-   !> The five tangent arguments are all-or-none: supply `dw_xi`, `dwleb`,
-   !> `dxi0`, `dwbranch` and `dadj_branch` together, or none of them. The
-   !> tangent takes the *primal's* branch on the *primal's* condition and is a
-   !> hard zero on the else -- it never carries a threshold of its own.
-   !>
-   !> @param[in]  w_xi        Folded width adjoint at the point
-   !> @param[in]  wleb        Lebedev weight at the point
-   !> @param[in]  xi0         Gaussian width at the point
-   !> @param[in]  wbranch     Softmax branch weight at the point
-   !> @param[out] adj_branch  Branch adjoint, zero when the gate is shut
-   !> @param[in]  dw_xi       Tangent of the folded width adjoint
-   !> @param[in]  dwleb       Tangent of the Lebedev weight
-   !> @param[in]  dxi0        Tangent of the Gaussian width
-   !> @param[in]  dwbranch    Tangent of the branch weight
-   !> @param[out] dadj_branch Tangent of the branch adjoint, zero on the same gate
+   !> @param[in]  w_xi         folded width adjoint at the point
+   !> @param[in]  wleb         Lebedev weight at the point
+   !> @param[in]  xi0          Gaussian width at the point
+   !> @param[in]  wbranch      softmax branch weight at the point
+   !> @param[out] adj_branch   raw branch adjoint, zero when the gate is shut
+   !> @param[in]  dw_xi        tangent of the folded width adjoint
+   !> @param[in]  dwleb        tangent of the Lebedev weight
+   !> @param[in]  dxi0         tangent of the Gaussian width
+   !> @param[in]  dwbranch     tangent of the branch weight
+   !> @param[out] dadj_branch  tangent of the branch adjoint, zero on the same gate
    pure subroutine branch_point_adjoint(w_xi, wleb, xi0, wbranch, adj_branch, &
                                         dw_xi, dwleb, dxi0, dwbranch, dadj_branch)
       !> Point values
@@ -1643,41 +1421,25 @@ contains
 
    !> Adjoint contribution of one seed
    !>
-   !> The contraction every seed basis performs: `[[seed_jet_basis]]`,
-   !> `[[seed_anchor]]` and the fixed-adjoint Hessian's own primal seed loop all
-   !> reduce one seed's response against the folded surface adjoints, and they
-   !> do it here rather than each in their own copy. A verbatim second copy of
-   !> the chain in another routine is free to contract its multiplies and adds
-   !> differently, so the three would drift by an ulp against each other; one
-   !> shared routine makes them execute the same compiled statements.
+   !> - Shared contraction of [[seed_jet_basis]], [[seed_anchor]] and the primal
+   !>   seed loop of the fixed-adjoint Hessian: one copy, same compiled statements,
+   !>   no ulp drift
+   !> - Accumulation order is load bearing: position, width, branch, curvature
+   !> - No switching term: `f_i` is an anchor-only iSwiG overlap, unchanged by a
+   !>   level-set perturbation at fixed nuclei; anchor motion goes through the
+   !>   caller's switching channel
+   !> - Branch term gated on the stored `eff%branch_phi_adj`, allocated to zero by
+   !>   [[prepare_surface_weights]]; [[seed_contribution_tangent]] uses the same gate
+   !> - `branch_shift`: rigid-motion piece of an anchor seed, `-phi1_r(iaxis)` from
+   !>   `phi = 0.5*alpha*|r - anchor|^2` at fixed `r`; omitted for a field seed
    !>
-   !> The accumulation order is load bearing and must stay as written:
-   !> position, width, branch, curvature. Reordering the terms changes the bits
-   !> independently of any contraction.
-   !>
-   !> No switching term appears: `f_i` is an anchor-only iSwiG overlap, so a
-   !> level-set perturbation at fixed nuclei leaves it alone, and the anchor's
-   !> own motion is carried by the switching channel of the caller instead.
-   !>
-   !> The branch term is gated on the *stored* `eff%branch_phi_adj`, so a
-   !> caller whose grid carries no multi-branch anchor group -- the
-   !> fixed-adjoint Hessian, which is only reachable through entry points that
-   !> refuse a branched grid -- pays one comparison against an array that
-   !> `[[prepare_surface_weights]]` allocated to zero, and skips the term.
-   !>
-   !> `branch_shift` is the rigid-motion piece of an anchor seed: the objective
-   !> is `phi = 0.5*alpha*|r - anchor|^2`, so at fixed `r` the owner's rigid
-   !> motion along one axis contributes `-phi1_r(iaxis)` on top of the
-   !> point-motion term. A field seed leaves the anchor alone and omits it.
-   !>
-   !> @param[in] eff          Folded surface adjoints
-   !> @param[in] igrid        Grid point
-   !> @param[in] w_xyz_pt     Effective position adjoint
-   !> @param[in] dr           Induced point motion of the seed
-   !> @param[in] res          Linear response of the seed
-   !> @param[in] phi1_r       Objective gradient at the projected point
-   !> @param[in] branch_shift Rigid-motion shift of an anchor seed, omitted otherwise
-   !> @return                 Adjoint contribution
+   !> @param[in] eff           folded surface adjoints
+   !> @param[in] igrid         grid point
+   !> @param[in] w_xyz_pt      effective position adjoint
+   !> @param[in] dr            induced point motion of the seed
+   !> @param[in] res           linear response of the seed
+   !> @param[in] phi1_r        objective gradient at the projected point
+   !> @param[in] branch_shift  rigid-motion shift of an anchor seed, omitted otherwise
    pure function seed_contribution(eff, igrid, w_xyz_pt, dr, res, phi1_r, branch_shift) &
       result(contribution)
       !> Folded surface adjoints
@@ -1714,20 +1476,21 @@ contains
 
    !> Add one host jet tangent onto a directional tangent of the jet
    !>
-   !> The host's partial tangent along a direction at the fixed point rides on
-   !> top of the level set's own nuclear tangent; the third order is read only
-   !> where the second-order chain asks for it.
+   !> - Host partial tangent at the fixed point, on top of the level set's own
+   !>   nuclear tangent
+   !> - Third order only where the second-order chain asks for it
    !>
-   !> @param[in]    jet Host jet tangent, `drop_n_host_jet` entries
-   !> @param[inout] dv0 Tangent of the value
-   !> @param[inout] dv1 Tangent of the gradient
-   !> @param[inout] dv2 Tangent of the Hessian
-   !> @param[inout] dv3 Tangent of the third derivative, optional
+   !> @param[in]     jet  host jet tangent, `drop_n_host_jet` entries
+   !> @param[in,out] dv0  tangent of the value
+   !> @param[in,out] dv1  tangent of the gradient
+   !> @param[in,out] dv2  tangent of the Hessian
+   !> @param[in,out] dv3  tangent of the third derivative, optional
    pure subroutine add_host_jet(jet, dv0, dv1, dv2, dv3)
       !> Host jet tangent
       real(wp), intent(in) :: jet(:)
       !> Tangents of the jet along the direction
       real(wp), intent(inout) :: dv0, dv1(3), dv2(3, 3)
+      !> Tangent of the third derivative along the direction
       real(wp), intent(inout), optional :: dv3(3, 3, 3)
 
       dv0 = dv0 + jet(1)
@@ -1736,12 +1499,11 @@ contains
       if (present(dv3)) dv3 = dv3 + reshape(jet(14:40), [3, 3, 3])
    end subroutine add_host_jet
 
-   !> Render a degeneracy status as a diagnostic message
+   !> Diagnostic message for a degeneracy status
    !>
-   !> Callers prepend their own context and append the offending grid point.
+   !> - Callers prepend their own context and append the offending grid point
    !>
-   !> @param[in] status  One of the `seed_state_*` codes
-   !> @returns           Human-readable description of the degeneracy
+   !> @param[in] status  one of the `seed_state_*` codes
    pure function seed_status_message(status) result(msg)
       !> Degeneracy status
       integer, intent(in) :: status
