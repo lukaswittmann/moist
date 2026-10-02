@@ -852,7 +852,7 @@ contains
          loc_buf%n = 0
       end if
 
-      !$omp do collapse(3) schedule(dynamic)
+      !$omp do collapse(2) schedule(dynamic)
       do iz = 1, nz
          do iy = 1, ny
             do ix = 1, nx
