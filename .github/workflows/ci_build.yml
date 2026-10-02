@@ -36,7 +36,7 @@ jobs:
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: cmake, name: intel25, compiler: intel, version: '2025.1', lapack: mkl, timeout: 30}
           - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu15-ilp64, compiler: gcc, version: '15', lapack: openblas, meson_args: '-Dilp64=true', timeout: 30}
-          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
+          - {platform: linux-x86_64, os: ubuntu-24.04, build: meson, name: gnu14-debug, compiler: gcc, version: '14', lapack: auto, meson_args: '-Dbuildtype=debug', test_args: '--timeout-multiplier 4', fflags: '-fcheck=bounds,do,mem,pointer -Wtrampolines', cxxflags: '-D_GLIBCXX_ASSERTIONS', timeout: 60}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: linux-arm64, os: ubuntu-24.04-arm, build: cmake, name: gnu15, compiler: gcc, version: '15', lapack: auto, timeout: 30}
           - {platform: macos-arm64, os: macos-15, build: meson, name: gnu15, compiler: gcc, version: '15', lapack: accelerate, timeout: 45}
@@ -94,6 +94,13 @@ jobs:
           meson setup build -Dlapack=${{ matrix.lapack }} ${{ matrix.meson_args }}
           meson compile -C build
           meson test -C build --suite moist --print-errorlogs ${{ matrix.test_args }}
+
+      # Host codes must not need an executable stack; -Wtrampolines in the log names the source
+      - name: Check libmoist stack is not executable
+        if: matrix.name == 'gnu14-debug'
+        run: |
+          readelf -lW build/libmoist.so | grep GNU_STACK
+          readelf -lW build/libmoist.so | grep GNU_STACK | grep -qv RWE
 
       - name: Build and test (cmake)
         if: matrix.build == 'cmake'
