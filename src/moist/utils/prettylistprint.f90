@@ -89,8 +89,8 @@ contains
    !> @param[in] fmt_exp  Optional exponential real format override
    !> @param[in] fmt_logical Optional logical format override
    !> @param[in] column_gap Optional spaces inserted between columns
-   function new_prettylistprinter(widths, headers, &
-                                  unit, offset, fmt_len, fmt_int, fmt_real, fmt_exp, fmt_logical, column_gap) result(plp)
+   function new_prettylistprinter(widths, headers, unit, offset, fmt_len, fmt_int, fmt_real, & 
+                                  fmt_exp, fmt_logical, column_gap) result(plp)
       !> Column widths
       integer, intent(in) :: widths(:)
       !> Column headers
@@ -382,7 +382,7 @@ contains
       if (is_real_overflow(s, wcol)) then
          s = overflow_marker(wcol, val < 0.0_real32)
       end if
-      self%row(icol) = trim(s)
+      self%row(icol) = format_cell(s, wcol)
       self%next_col = icol + 1
    end subroutine add_r32
 
@@ -416,7 +416,7 @@ contains
       if (is_real_overflow(s, wcol)) then
          s = overflow_marker(wcol, val < 0.0_real64)
       end if
-      self%row(icol) = trim(s)
+      self%row(icol) = format_cell(s, wcol)
       self%next_col = icol + 1
    end subroutine add_r64
 
@@ -470,7 +470,7 @@ contains
       character(*), intent(in) :: s
 
       call ensure_can_add(self)
-      self%row(self%next_col) = trim(s)
+      self%row(self%next_col) = format_cell(s, self%widths(self%next_col))
       self%next_col = self%next_col + 1
    end subroutine add_from_string
 
