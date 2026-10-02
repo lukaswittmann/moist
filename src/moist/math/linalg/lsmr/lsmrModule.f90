@@ -48,6 +48,73 @@ module moist_math_linalg_lsmr
       end subroutine Aprod2_f
    end interface
 
+   type, abstract, public :: lsmr_operator
+      !! The matrix `A` as a linear operator for [[lsmr]].
+      !!
+      !! Extend this type with whatever data defines `A` and pass an instance
+      !! to [[lsmr]]. This is the preferred way to supply an operator that
+      !! depends on local data: passing internal procedures that use variables
+      !! of their host as `Aprod1`, `Aprod2` instead makes gfortran build
+      !! trampolines on the stack, which in turn requires an executable stack
+      !! in every program that links the library.
+   contains
+      procedure(lsmr_aprod1), deferred :: aprod1 !! `y := y + A*x`
+      procedure(lsmr_aprod2), deferred :: aprod2 !! `x := x + A'*y`
+   end type lsmr_operator
+
+   abstract interface
+      subroutine lsmr_aprod1(self, m, n, x, y)
+      !! y := y + A*x
+         import :: wp, ip, lsmr_operator
+         implicit none
+         class(lsmr_operator), intent(inout) :: self
+         integer(ip), intent(in)    :: m, n
+         real(wp), intent(in)    :: x(n)
+         real(wp), intent(inout) :: y(m)
+      end subroutine lsmr_aprod1
+
+      subroutine lsmr_aprod2(self, m, n, x, y)
+      !! x := x + A'*y
+         import :: wp, ip, lsmr_operator
+         implicit none
+         class(lsmr_operator), intent(inout) :: self
+         integer(ip), intent(in)    :: m, n
+         real(wp), intent(inout) :: x(n)
+         real(wp), intent(in)    :: y(m)
+      end subroutine lsmr_aprod2
+   end interface
+
+   type, extends(lsmr_operator) :: lsmr_procedure_operator
+      !! Adapts the procedures `Aprod1`, `Aprod2` to [[lsmr_operator]],
+      !! so that both forms of [[lsmr]] share one implementation.
+      private
+      procedure(Aprod1_f), pointer, nopass :: Aprod1_ptr => null()
+      procedure(Aprod2_f), pointer, nopass :: Aprod2_ptr => null()
+   contains
+      procedure :: aprod1 => procedure_aprod1
+      procedure :: aprod2 => procedure_aprod2
+   end type lsmr_procedure_operator
+
+   type, extends(lsmr_operator) :: lsmr_sparse_operator
+      !! The sparse matrix of [[lsmr_ez]], in coordinate format.
+      private
+      integer, dimension(:), pointer :: irow => null() !! row indices of nonzero elements of `A`
+      integer, dimension(:), pointer :: icol => null() !! column indices of nonzero elements of `A`
+      real(wp), dimension(:), pointer :: a => null()   !! nonzero elements of `A`
+      integer(ip) :: num_nonzero_elements = 0 !! number of nonzero elements in the matrix
+      real(wp), dimension(:), allocatable :: Ax, Aty !! temp arrays
+   contains
+      procedure :: aprod1 => sparse_aprod1
+      procedure :: aprod2 => sparse_aprod2
+   end type lsmr_sparse_operator
+
+   interface lsmr
+      !! LSMR, for `A` given as a pair of procedures
+      !! or as a [[lsmr_operator]] object.
+      module procedure :: lsmr_procedures
+      module procedure :: lsmr_functor
+   end interface lsmr
+
 contains
 
    !*****************************************************************************
@@ -65,11 +132,14 @@ contains
    !
    ! where A is a matrix with m rows and n columns, b is an m-vector,
    ! and damp is a scalar.  (All quantities are real.)
-   ! The matrix A is treated as a linear operator.  It is accessed
-   ! by means of subroutine calls with the following purpose:
+   ! The matrix A is treated as a linear operator `op` (a [[lsmr_operator]]).
+   ! It is accessed by means of subroutine calls with the following purpose:
    !
-   ! * `call Aprod1(m,n,x,y)`  must compute `y = y + A*x ` without altering `x`.
-   ! * `call Aprod2(m,n,x,y)`  must compute `x = x + A'*y` without altering `y`.
+   ! * `call op%aprod1(m,n,x,y)` must compute `y = y + A*x ` without altering `x`.
+   ! * `call op%aprod2(m,n,x,y)` must compute `x = x + A'*y` without altering `y`.
+   !
+   ! [[lsmr_procedures]] takes these as two procedures `Aprod1`, `Aprod2`
+   ! instead.
    !
    ! LSMR uses an iterative method to approximate the solution.
    ! The number of iterations required to reach a certain accuracy
@@ -172,9 +242,9 @@ contains
    !@note Any or all of `atol`, `btol`, `conlim` may be set to zero.
    !      The effect will be the same as the values `eps`, `eps`, `1/eps`.
 
-   subroutine lsmr(m, n, Aprod1, Aprod2, b, damp, &
-                   atol, btol, conlim, itnlim, localSize, nout, &
-                   x, istop, itn, normA, condA, normr, normAr, normx)
+   subroutine lsmr_functor(m, n, op, b, damp, &
+                           atol, btol, conlim, itnlim, localSize, nout, &
+                           x, istop, itn, normA, condA, normr, normAr, normx)
 
       integer(ip), intent(in)  :: m !! the number of rows in A.
       integer(ip), intent(in)  :: n !! the number of columns in A.
@@ -272,8 +342,7 @@ contains
                                        !! will often be smaller than the true value
                                        !! computed from the output vector x.)
       real(wp), intent(out) :: normx !! An estimate of norm(x) for the final solution x.
-      procedure(Aprod1_f) :: Aprod1 !! See above.
-      procedure(Aprod2_f) :: Aprod2 !! See above.
+      class(lsmr_operator), intent(inout) :: op !! The operator `A`. See above.
 
       ! Local arrays and variables
       real(wp)    :: h(n), hbar(n), u(m), v(n), w(n), localV(n, min(localSize, m, n))
@@ -330,7 +399,7 @@ contains
 
       if (beta > zero) then
          u = (one/beta)*u             ! call dscal (m, (one/beta), u, 1)
-         call Aprod2(m, n, v, u)          ! v = A'*u
+         call op%aprod2(m, n, v, u)       ! v = A'*u
          alpha = sqrt(dot_product(v, v)) ! dnrm2 (n, v, 1)
       end if
 
@@ -425,7 +494,7 @@ contains
          !    alpha*v = A'*u -  beta*v.
          !----------------------------------------------------------------
          u = (-alpha)*u                ! call dscal (m,(- alpha), u, 1)
-         call Aprod1(m, n, v, u)             ! u = u + A*v
+         call op%aprod1(m, n, v, u)          ! u = u + A*v
          beta = sqrt(dot_product(u, u))   ! dnrm2 (m, u, 1)
 
          if (beta > zero) then
@@ -435,7 +504,7 @@ contains
             end if
             v = (-beta)*v          ! call dscal (n, (- beta), v, 1)
 
-            call Aprod2(m, n, v, u)          ! v = v + A'*u
+            call op%aprod2(m, n, v, u)       ! v = v + A'*u
             if (localOrtho) then    ! Perform local reorthogonalization of V.
                call localVOrtho     ! Local-reorthogonalization of new v.
             end if
@@ -687,7 +756,64 @@ contains
 
       end subroutine localVOrtho
 
-   end subroutine lsmr
+   end subroutine lsmr_functor
+
+!*****************************************************************************
+!>
+!  [[lsmr]] for `A` given by the procedures `Aprod1` and `Aprod2`:
+!
+!  * `call Aprod1(m,n,x,y)`  must compute `y = y + A*x ` without altering `x`.
+!  * `call Aprod2(m,n,x,y)`  must compute `x = x + A'*y` without altering `y`.
+!
+!  The procedures are wrapped in a [[lsmr_procedure_operator]] and passed to
+!  [[lsmr_functor]], which documents the other arguments; the result is
+!  identical.
+
+   subroutine lsmr_procedures(m, n, Aprod1, Aprod2, b, damp, &
+                              atol, btol, conlim, itnlim, localSize, nout, &
+                              x, istop, itn, normA, condA, normr, normAr, normx)
+
+      integer(ip), intent(in)  :: m, n, itnlim, localSize, nout
+      integer(ip), intent(out) :: istop, itn
+      real(wp), intent(in)  :: b(m)
+      real(wp), intent(out) :: x(n)
+      real(wp), intent(in)  :: atol, btol, conlim, damp
+      real(wp), intent(out) :: normA, condA, normr, normAr, normx
+      procedure(Aprod1_f) :: Aprod1 !! computes `y := y + A*x`
+      procedure(Aprod2_f) :: Aprod2 !! computes `x := x + A'*y`
+
+      type(lsmr_procedure_operator) :: op
+
+      op%Aprod1_ptr => Aprod1
+      op%Aprod2_ptr => Aprod2
+
+      call lsmr_functor(m, n, op, b, damp, &
+                        atol, btol, conlim, itnlim, localSize, nout, &
+                        x, istop, itn, normA, condA, normr, normAr, normx)
+
+   end subroutine lsmr_procedures
+
+   subroutine procedure_aprod1(self, m, n, x, y)
+      !! y := y + A*x
+      class(lsmr_procedure_operator), intent(inout) :: self
+      integer(ip), intent(in)    :: m, n
+      real(wp), intent(in)    :: x(n)
+      real(wp), intent(inout) :: y(m)
+
+      call self%Aprod1_ptr(m, n, x, y)
+
+   end subroutine procedure_aprod1
+
+   subroutine procedure_aprod2(self, m, n, x, y)
+      !! x := x + A'*y
+      class(lsmr_procedure_operator), intent(inout) :: self
+      integer(ip), intent(in)    :: m, n
+      real(wp), intent(inout) :: x(n)
+      real(wp), intent(in)    :: y(m)
+
+      call self%Aprod2_ptr(m, n, x, y)
+
+   end subroutine procedure_aprod2
 
 !*****************************************************************************
 !>
@@ -697,6 +823,10 @@ contains
 !  the sparsity pattern (`irow`, `icol`) and nonzero elemenets
 !  of `a` are input.
 !
+!  The matrix is passed to [[lsmr]] as a [[lsmr_sparse_operator]] that points
+!  to `irow`, `icol` and `a` (hence their `target` attribute) rather than via
+!  internal procedures, which would need stack trampolines.
+!
 !### History
 !  * JW : 1/24/2024 : created.
 
@@ -704,9 +834,9 @@ contains
                       atol, btol, conlim, itnlim, localSize, nout, &
                       x, istop, itn, normA, condA, normr, normAr, normx)
 
-      integer, dimension(:), intent(in)   :: irow    !! row indices of nonzero elements of `A`
-      integer, dimension(:), intent(in)   :: icol    !! column indices of nonzero elements of `A`
-      real(wp), dimension(:), intent(in)  :: a       !! nonzero elements of `A`
+      integer, dimension(:), intent(in), target   :: irow    !! row indices of nonzero elements of `A`
+      integer, dimension(:), intent(in), target   :: icol    !! column indices of nonzero elements of `A`
+      real(wp), dimension(:), intent(in), target  :: a       !! nonzero elements of `A`
       integer(ip), intent(in)  :: m, n, itnlim, localSize, nout
       integer(ip), intent(out) :: istop, itn
       real(wp), intent(in)  :: b(m)
@@ -714,71 +844,73 @@ contains
       real(wp), intent(in)  :: atol, btol, conlim, damp
       real(wp), intent(out) :: normA, condA, normr, normAr, normx
 
-      integer(ip) :: num_nonzero_elements !! number of nonzero elements in the matrix
-      real(wp), dimension(:), allocatable :: Ax, Aty !! temp arrays
+      type(lsmr_sparse_operator) :: op !! the matrix `A`
 
       if (size(irow) == size(icol) .and. size(irow) == size(a)) then
 
-         num_nonzero_elements = size(irow)
-         allocate (Ax(m))
-         allocate (Aty(n))
+         op%irow => irow
+         op%icol => icol
+         op%a => a
+         op%num_nonzero_elements = size(irow)
+         allocate (op%Ax(m))
+         allocate (op%Aty(n))
 
-         call lsmr(m, n, Aprod1_ez, Aprod2_ez, b, damp, &
-                   atol, btol, conlim, itnlim, localSize, nout, &
-                   x, istop, itn, normA, condA, normr, normAr, normx)
+         call lsmr_functor(m, n, op, b, damp, &
+                           atol, btol, conlim, itnlim, localSize, nout, &
+                           x, istop, itn, normA, condA, normr, normAr, normx)
 
       else
          error stop "inconsistent sizes of input arrays irow, icol, a"
       end if
 
-   contains
-
-      ! see code from LSQR
-
-      subroutine Aprod1_ez(m, n, x, y)
-            !! y := y + A*x
-         integer(ip), intent(in)    :: m, n
-         real(wp), intent(in)    :: x(n)
-         real(wp), intent(inout) :: y(m)
-
-         integer(ip) :: i !! counter
-         integer(ip) :: r !! row index
-         integer(ip) :: c !! column index
-
-         ! A*x:
-         Ax = 0.0_wp
-         do i = 1, num_nonzero_elements
-            r = irow(i)
-            c = icol(i)
-            Ax(r) = Ax(r) + a(i)*x(c)
-         end do
-
-         y = y + Ax
-
-      end subroutine Aprod1_ez
-
-      subroutine Aprod2_ez(m, n, x, y)
-            !! x := x + A'*y
-         integer(ip), intent(in)    :: m, n
-         real(wp), intent(inout) :: x(n)
-         real(wp), intent(in)    :: y(m)
-
-         integer(ip) :: i !! counter
-         integer(ip) :: r !! row index
-         integer(ip) :: c !! column index
-
-         Aty = 0.0_wp
-         do i = 1, num_nonzero_elements
-            r = irow(i)
-            c = icol(i)
-            Aty(c) = Aty(c) + a(i)*y(r)
-         end do
-
-         x = x + Aty
-
-      end subroutine Aprod2_ez
-
    end subroutine lsmr_ez
+
+   ! see code from LSQR
+
+   subroutine sparse_aprod1(self, m, n, x, y)
+      !! y := y + A*x
+      class(lsmr_sparse_operator), intent(inout) :: self
+      integer(ip), intent(in)    :: m, n
+      real(wp), intent(in)    :: x(n)
+      real(wp), intent(inout) :: y(m)
+
+      integer(ip) :: i !! counter
+      integer(ip) :: r !! row index
+      integer(ip) :: c !! column index
+
+      ! A*x:
+      self%Ax = 0.0_wp
+      do i = 1, self%num_nonzero_elements
+         r = self%irow(i)
+         c = self%icol(i)
+         self%Ax(r) = self%Ax(r) + self%a(i)*x(c)
+      end do
+
+      y = y + self%Ax
+
+   end subroutine sparse_aprod1
+
+   subroutine sparse_aprod2(self, m, n, x, y)
+      !! x := x + A'*y
+      class(lsmr_sparse_operator), intent(inout) :: self
+      integer(ip), intent(in)    :: m, n
+      real(wp), intent(inout) :: x(n)
+      real(wp), intent(in)    :: y(m)
+
+      integer(ip) :: i !! counter
+      integer(ip) :: r !! row index
+      integer(ip) :: c !! column index
+
+      self%Aty = 0.0_wp
+      do i = 1, self%num_nonzero_elements
+         r = self%irow(i)
+         c = self%icol(i)
+         self%Aty(c) = self%Aty(c) + self%a(i)*y(r)
+      end do
+
+      x = x + self%Aty
+
+   end subroutine sparse_aprod2
 !*****************************************************************************
 
 end module moist_math_linalg_lsmr

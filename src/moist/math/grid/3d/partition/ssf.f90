@@ -1,7 +1,7 @@
 !> Stratmann-Scuseria-Frisch molecular partition with exact zero regions
 module moist_math_grid_3d_partition_ssf
    use mctc_env, only: wp
-   use moist_math_grid_3d_partition_common, only: pair_partition_weights
+   use moist_math_grid_3d_partition_common, only: pair_partition_weights, partition_cell
    implicit none(type, external)
    private
 
@@ -9,6 +9,15 @@ module moist_math_grid_3d_partition_ssf
 
    !> Recommended SSF half-width in elliptic coordinates
    real(wp), parameter :: default_ssf_a = 0.64_wp
+
+   !> SSF cell with a fixed switching width
+   type, extends(partition_cell) :: ssf_partition_cell
+      !> Switching half-width
+      real(wp) :: width = default_ssf_a
+   contains
+      !> Pair-cell weight
+      procedure :: eval => ssf_partition_cell_eval
+   end type ssf_partition_cell
 
 contains
 
@@ -36,26 +45,25 @@ contains
       !> Switching half-width
       real(wp), intent(in), optional :: a
 
-      real(wp) :: width
+      type(ssf_partition_cell) :: cell
 
-      width = default_ssf_a
-      if (present(a)) width = a
+      if (present(a)) cell%width = a
       call pair_partition_weights(owner, points, xyz, numbers, w, cell)
-
-   contains
-
-      !> SSF cell with the configured switching width
-      !>
-      !> @param[in] x Size-adjusted elliptic coordinate
-      pure function cell(x) result(s)
-         !> Pair coordinate
-         real(wp), intent(in) :: x
-         !> Cell weight
-         real(wp) :: s
-         s = ssf_cell(x/width)
-      end function cell
-
    end subroutine ssf_partition_weights
+
+   !> SSF cell with the configured switching width
+   !>
+   !> @param[in] self SSF cell
+   !> @param[in] x    Size-adjusted elliptic coordinate
+   pure function ssf_partition_cell_eval(self, x) result(s)
+      !> SSF cell
+      class(ssf_partition_cell), intent(in) :: self
+      !> Pair coordinate
+      real(wp), intent(in) :: x
+      !> Cell weight
+      real(wp) :: s
+      s = ssf_cell(x/self%width)
+   end function ssf_partition_cell_eval
 
    !> C^3 SSF switch, evaluated without subtractive cancellation at the zero end
    !>

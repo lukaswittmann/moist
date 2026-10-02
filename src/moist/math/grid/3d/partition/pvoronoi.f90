@@ -1,7 +1,7 @@
 !> Custom C-infinity fuzzy power-Voronoi molecular partition
 module moist_math_grid_3d_partition_pvoronoi
    use mctc_env, only: wp
-   use moist_math_grid_3d_partition_common, only: pair_partition_weights
+   use moist_math_grid_3d_partition_common, only: pair_partition_weights, partition_cell
    implicit none(type, external)
    private
 
@@ -9,6 +9,13 @@ module moist_math_grid_3d_partition_pvoronoi
 
    !> Default power-gap switching half-width in bohr**2
    real(wp), parameter :: default_power_width = 1.0_wp
+
+   !> Bump-function cell
+   type, extends(partition_cell) :: bump_partition_cell
+   contains
+      !> Pair-cell weight
+      procedure :: eval => bump_partition_cell_eval
+   end type bump_partition_cell
 
 contains
 
@@ -47,12 +54,27 @@ contains
       real(wp), intent(in), optional :: radii(:)
 
       real(wp) :: half_width
+      type(bump_partition_cell) :: cell
 
       half_width = default_power_width
       if (present(width)) half_width = width
-      call pair_partition_weights(owner, points, xyz, numbers, w, bump_cell, &
+      call pair_partition_weights(owner, points, xyz, numbers, w, cell, &
          & power_width=half_width, radii=radii)
    end subroutine pvoronoi_partition_weights
+
+   !> Bump-function cell
+   !>
+   !> @param[in] self Bump cell
+   !> @param[in] x    Power gap divided by its switching half-width
+   pure function bump_partition_cell_eval(self, x) result(s)
+      !> Bump cell
+      class(bump_partition_cell), intent(in) :: self
+      !> Scaled power gap
+      real(wp), intent(in) :: x
+      !> Pair-cell weight
+      real(wp) :: s
+      s = bump_cell(x)
+   end function bump_partition_cell_eval
 
    !> C-infinity switch b(1-x)/(b(1-x)+b(1+x)), b(t)=exp(-1/t) for t>0, else 0
    !>

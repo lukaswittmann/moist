@@ -6,21 +6,33 @@ module moist_math_grid_3d_partition_common
    implicit none(type, external)
    private
 
-   public :: pair_partition_weights
+   public :: pair_partition_weights, partition_cell
 
-   !> Callback contract for pair-cell switches
+   !> Pair-cell switch with its parameters
+   !>
+   !> Object instead of a procedure argument: host-associated internal
+   !> procedures need trampolines and hence an executable stack
+   type, abstract :: partition_cell
+   contains
+      !> Pair-cell weight
+      procedure(partition_cell_eval), deferred :: eval
+   end type partition_cell
+
    abstract interface
       !> Pair-cell weight, decreasing from one to zero
       !>
-      !> @param[in] x Pair coordinate
-      pure function partition_cell(x) result(s)
-         import :: wp
+      !> @param[in] self Pair-cell switch
+      !> @param[in] x    Pair coordinate
+      pure function partition_cell_eval(self, x) result(s)
+         import :: wp, partition_cell
          implicit none(type, external)
+         !> Pair-cell switch
+         class(partition_cell), intent(in) :: self
          !> Pair coordinate
          real(wp), intent(in) :: x
          !> Weight in [0, 1]
          real(wp) :: s
-      end function partition_cell
+      end function partition_cell_eval
    end interface
 
 contains
@@ -39,7 +51,7 @@ contains
    !> @param[in]  xyz         Atomic positions in bohr
    !> @param[in]  numbers     Atomic numbers
    !> @param[out] w           Normalized owner weights
-   !> @param[in]  cell        Pure pair-cell function
+   !> @param[in]  cell        Pair-cell switch
    !> @param[in]  power_width Optional power-coordinate half-width in bohr**2
    !> @param[in]  radii       Optional power radii in bohr, shape (nat); default covalent radii
    subroutine pair_partition_weights(owner, points, xyz, numbers, w, cell, power_width, radii)
@@ -53,8 +65,8 @@ contains
       integer, intent(in) :: numbers(:)
       !> Owner weights
       real(wp), intent(out) :: w(:)
-      !> Pair-cell evaluator
-      procedure(partition_cell) :: cell
+      !> Pair-cell switch
+      class(partition_cell), intent(in) :: cell
       !> Power-coordinate half-width
       real(wp), intent(in), optional :: power_width
       !> Power radii
@@ -98,7 +110,7 @@ contains
       nthreads = 1
 !$    if (.not. omp_in_parallel()) nthreads = min(omp_get_max_threads(), npts)
       !$omp parallel num_threads(nthreads) default(none) &
-      !$omp shared(owner, points, xyz, pair_r, pair_a, width, power, w, nat, npts) &
+      !$omp shared(owner, points, xyz, pair_r, pair_a, cell, width, power, w, nat, npts) &
       !$omp private(ip, i, dist, logs, peak)
       allocate (dist(nat), logs(nat))
       !$omp do schedule(dynamic, 64)
@@ -136,7 +148,7 @@ contains
    !> @param[in] dist    Point-to-atom distances in bohr, shape (nat)
    !> @param[in] pair_r  Pair distances in bohr, shape (nat,nat)
    !> @param[in] pair_a  Pair size adjustments or power offsets, shape (nat,nat)
-   !> @param[in] cell    Pair-cell evaluator
+   !> @param[in] cell    Pair-cell switch
    !> @param[in] width   Power-coordinate half-width in bohr**2
    !> @param[in] power   Use power coordinates
    pure function cell_log(ia, point, xyz, dist, pair_r, pair_a, cell, width, power) result(value)
@@ -152,8 +164,8 @@ contains
       real(wp), intent(in) :: pair_r(:, :)
       !> Pair size adjustments or power offsets
       real(wp), intent(in) :: pair_a(:, :)
-      !> Pair-cell evaluator
-      procedure(partition_cell) :: cell
+      !> Pair-cell switch
+      class(partition_cell), intent(in) :: cell
       !> Power-coordinate half-width
       real(wp), intent(in) :: width
       !> Power-coordinate selection
@@ -176,7 +188,7 @@ contains
             mu = max(-1.0_wp, min(1.0_wp, (dist(ia) - dist(ja))/pair_r(ja, ia)))
             nu = mu + pair_a(ja, ia)*(1.0_wp - mu*mu)
          end if
-         s = cell(nu)
+         s = cell%eval(nu)
          if (s <= 0.0_wp) then
             value = -huge(1.0_wp)
             return

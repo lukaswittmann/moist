@@ -42,7 +42,7 @@ module nlesolver_module
    use iso_fortran_env, only: output_unit
    use mctc_env_accuracy, only: wp
    use moist_math_lapack_kinds, only: lapack_ik
-   use moist_math_solver_fmin, only: fmin
+   use moist_math_solver_fmin, only: fmin, fmin_function
    use moist_math_linalg_lsqr, only: lsqr_solver_ez
    use moist_math_linalg_lusol_ez, only: solve, lusol_settings
    use moist_math_linalg_lsmr, only: lsmr_ez
@@ -299,6 +299,35 @@ module nlesolver_module
       end function norm_func
 
    end interface
+
+   !*********************************************************
+   type, extends(fmin_function) :: exact_linesearch_function
+
+        !! The function minimized by [[exact_linesearch]]: the norm of the
+        !! function vector at the step length `alpha` along the search direction.
+        !!
+        !! This is a function object rather than an internal procedure of the
+        !! line search: passing an internal procedure that uses variables of its
+        !! host to [[fmin]] makes gfortran build a trampoline on the stack, which
+        !! requires an executable stack in every program that links the library.
+        !! The components point to the data of the running line search.
+
+      private
+
+      class(nlesolver_type), pointer :: me => null() !! the solver
+      real(wp), dimension(:), pointer, contiguous :: xold => null() !! previous value of `x`
+      real(wp), dimension(:), pointer, contiguous :: search_direction => null() !! search direction to use
+      logical, dimension(:), pointer, contiguous :: modified => null() !! the elements of the search direction that were modified
+      real(wp), dimension(:), pointer, contiguous :: xnew => null() !! set to the `x` of every evaluation
+      real(wp), dimension(:), pointer, contiguous :: fvec => null() !! set to the function vector of every evaluation
+      real(wp), pointer :: f => null() !! set to the norm of `fvec` on every evaluation
+
+   contains
+
+      procedure :: eval => exact_linesearch_eval
+
+   end type exact_linesearch_function
+   !*********************************************************
 
 contains
 !*******************************************************************************************************
@@ -1389,9 +1418,7 @@ contains
       ! set the search direction:
       call me%adjust_search_direction(xold, p, search_direction, modified)
 
-      ! TODO: Print header here ("slope", "t", "alpha", "f", "f - ftmp", "alpha*t") with (1X,A16) formatting
       if (me%verbose) then
-         ! write(me%iunit,'(5X,A)') 'Backtracking line search:'
          write (me%iunit, "(7X,6(A14,1X), A)") "slope", "t", "alpha", "f", "f - ftmp", "alpha*t", &
             "[BACKTRACKING]"
          write (me%iunit, "(7X,6(A14,1X))") "--------------", "--------------", "--------------", &
@@ -1432,20 +1459,12 @@ contains
          ftmp = me%norm(fvectmp)
 
          if (me%verbose) then
-            ! TODO: adhere to header format (1X,E16.6)
             if (f - ftmp >= alpha*t) then
                write (me%iunit, "(7X,6(E14.6,1X),A)") slope, t, alpha, ftmp, f - ftmp, alpha*t, &
                   "[ACCEPTED]"
             else
                write (me%iunit, "(7X,6(E14.6,1X))") slope, t, alpha, ftmp, f - ftmp, alpha*t
             end if
-
-            ! write(me%iunit,'(1P,*(A,1X,E16.6))')          '        alpha    = ', alpha,    ' f       = ', ftmp
-            ! if (f - ftmp >= alpha*t) then
-            !     write(me%iunit,'(1P,2(A,1X,E16.6),1X,A)') '        f - ftmp = ', f - ftmp, ' alpha*t = ', alpha*t, ' [ACCEPTED]'
-            ! else
-            !     write(me%iunit,'(1P,*(A,1X,E16.6))')      '        f - ftmp = ', f - ftmp, ' alpha*t = ', alpha*t
-            ! end if
          end if
 
          if (((f - ftmp)/2.0_wp >= alpha*t) .or. min_alpha_reached) then
@@ -1497,10 +1516,34 @@ contains
       real(wp), dimension(:, :), intent(in), optional :: fjac !! jacobian matrix [dense]
       real(wp), dimension(:), intent(in), optional :: fjac_sparse !! jacobian matrix [sparse]
 
-      real(wp), dimension(:), allocatable :: xnew !! used in [[func_for_fmin]]
+      ! The work is done in a separate routine whose arguments have the `target`
+      ! attribute that the function object for [[fmin]] needs; this one has to
+      ! keep the [[linesearch_func]] interface.
+      call exact_linesearch_impl(me, xold, p, x, f, fvec)
+
+   end subroutine exact_linesearch
+!*****************************************************************************************
+
+!*****************************************************************************************
+!>
+!  The implementation of [[exact_linesearch]].
+
+   subroutine exact_linesearch_impl(me, xold, p, x, f, fvec)
+
+      implicit none
+
+      class(nlesolver_type), intent(inout), target :: me
+      real(wp), dimension(me%n), intent(in), target :: xold      !! previous value of `x`
+      real(wp), dimension(me%n), intent(in) :: p         !! search direction
+      real(wp), dimension(me%n), intent(out) :: x        !! new `x`
+      real(wp), intent(inout), target :: f              !! magnitude of `fvec`
+      real(wp), dimension(me%m), intent(inout), target :: fvec   !! function vector
+
+      real(wp), dimension(:), allocatable, target :: xnew !! used in [[exact_linesearch_function]]
       real(wp) :: alpha_min
-      real(wp), dimension(:), allocatable :: search_direction !! search direction to use (may be modified from `p` if bounds are violated)
-      logical, dimension(:), allocatable :: modified  !! indicates the elements of p that were modified
+      real(wp), dimension(:), allocatable, target :: search_direction !! search direction to use (may be modified from `p` if bounds are violated)
+      logical, dimension(:), allocatable, target :: modified  !! indicates the elements of p that were modified
+      type(exact_linesearch_function) :: func_for_fmin !! function for [[fmin]]
 
       allocate (xnew(me%n))
       allocate (search_direction(me%n))
@@ -1513,6 +1556,14 @@ contains
       ! benign on gfortran (zeroed pages) but garbage/NaN under ifx, which left
       ! step_mode=3 unable to converge.
       call me%adjust_search_direction(xold, p, search_direction, modified)
+
+      func_for_fmin%me => me
+      func_for_fmin%xold => xold
+      func_for_fmin%search_direction => search_direction
+      func_for_fmin%modified => modified
+      func_for_fmin%xnew => xnew
+      func_for_fmin%fvec => fvec
+      func_for_fmin%f => f
 
       ! find the minimum value of f in the range of alphas:
       alpha_min = fmin(func_for_fmin, me%alpha_min, me%alpha_max, me%fmin_tol)
@@ -1527,22 +1578,28 @@ contains
          f = me%norm(fvec)
       end if
 
-   contains
+   end subroutine exact_linesearch_impl
+!*****************************************************************************************
 
-      real(wp) function func_for_fmin(alpha)
-    !! function for [[fmin]]
-         implicit none
-         real(wp), intent(in) :: alpha !! indep variable
+!*****************************************************************************************
+!>
+!  The function minimized by [[exact_linesearch]], see [[exact_linesearch_function]].
 
-         call me%compute_next_step(xold, search_direction, alpha, modified, xnew)
-         call me%func(xnew, fvec)
-         func_for_fmin = me%norm(fvec) ! return result
+   function exact_linesearch_eval(self, x) result(f)
 
-         f = func_for_fmin ! just in case this is the solution
+      implicit none
 
-      end function func_for_fmin
+      class(exact_linesearch_function), intent(inout) :: self
+      real(wp), intent(in) :: x !! indep variable: the step length `alpha`
+      real(wp)            :: f !! norm of the function vector at `alpha`
 
-   end subroutine exact_linesearch
+      call self%me%compute_next_step(self%xold, self%search_direction, x, self%modified, self%xnew)
+      call self%me%func(self%xnew, self%fvec)
+      f = self%me%norm(self%fvec) ! return result
+
+      self%f = f ! just in case this is the solution
+
+   end function exact_linesearch_eval
 !*****************************************************************************************
 
 !*****************************************************************************************

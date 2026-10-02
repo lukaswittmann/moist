@@ -1,7 +1,7 @@
 !> Size-adjusted Becke partitioning
 module moist_math_grid_3d_partition_becke
    use mctc_env, only: wp
-   use moist_math_grid_3d_partition_common, only: pair_partition_weights
+   use moist_math_grid_3d_partition_common, only: pair_partition_weights, partition_cell
    implicit none(type, external)
    private
 
@@ -9,6 +9,15 @@ module moist_math_grid_3d_partition_becke
 
    !> Recommended number of Becke polynomial iterations
    integer, parameter :: default_stiffness = 3
+
+   !> Becke cell with a fixed iteration count
+   type, extends(partition_cell) :: becke_partition_cell
+      !> Polynomial iterations
+      integer :: k = default_stiffness
+   contains
+      !> Pair-cell weight
+      procedure :: eval => becke_partition_cell_eval
+   end type becke_partition_cell
 
 contains
 
@@ -36,26 +45,25 @@ contains
       !> Polynomial iterations
       integer, intent(in), optional :: stiffness
 
-      integer :: k
+      type(becke_partition_cell) :: cell
 
-      k = default_stiffness
-      if (present(stiffness)) k = stiffness
+      if (present(stiffness)) cell%k = stiffness
       call pair_partition_weights(owner, points, xyz, numbers, w, cell)
-
-   contains
-
-      !> Becke cell with the configured iteration count
-      !>
-      !> @param[in] x Size-adjusted elliptic coordinate
-      pure function cell(x) result(s)
-         !> Pair coordinate
-         real(wp), intent(in) :: x
-         !> Cell weight
-         real(wp) :: s
-         s = becke_cell(x, k)
-      end function cell
-
    end subroutine becke_partition_weights
+
+   !> Becke cell with the configured iteration count
+   !>
+   !> @param[in] self Becke cell
+   !> @param[in] x    Size-adjusted elliptic coordinate
+   pure function becke_partition_cell_eval(self, x) result(s)
+      !> Becke cell
+      class(becke_partition_cell), intent(in) :: self
+      !> Pair coordinate
+      real(wp), intent(in) :: x
+      !> Cell weight
+      real(wp) :: s
+      s = becke_cell(x, self%k)
+   end function becke_partition_cell_eval
 
    !> Iterated Becke cell, with a stable positive tail near x = 1
    !>
