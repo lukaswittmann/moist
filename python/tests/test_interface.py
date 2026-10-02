@@ -1453,6 +1453,45 @@ def test_answer_rejects_a_wrong_shape(two_requests):
     assert visited == BOTH
 
 
+def test_answer_forwards_each_declared_output_in_order(two_requests, monkeypatch):
+    """Every raw channel reaches the native answer unchanged in declaration order."""
+    model = two_requests
+    coupling = model.new_coupling()
+    model.prepare_gradient(coupling)
+    ngrid = model.cavity.ngrid
+    shapes = {
+        "gaussian_potential": {"phi": (ngrid,), "dphi_dr": (ngrid, 3),
+                               "dphi_dxi": (ngrid,)},
+        "gaussian_moments": {"gt": (ngrid,), "pt": (ngrid, 3),
+                             "mt": (ngrid, 3, 3), "rt": (ngrid, 3)},
+    }
+    submitted = []
+
+    def capture(handle, name, values):
+        assert handle is coupling._handle
+        assert values.dtype == np.float64
+        assert values.flags.c_contiguous
+        submitted.append((name, values.copy()))
+
+    monkeypatch.setattr(library, "answer_coupling_request", capture)
+    visited = []
+    for request in coupling:
+        visited.append(request.name)
+        declared = shapes[request.name]
+        assert request._outputs == {name: shape[1:] for name, shape in declared.items()}
+        answers = {
+            name: (np.arange(np.prod(shape), dtype=np.float64).reshape(shape) + index + 0.25)
+            for index, (name, shape) in enumerate(declared.items())
+        }
+        submitted.clear()
+        # Caller keyword order must not override the request declaration.
+        coupling.answer(**dict(reversed(tuple(answers.items()))))
+        assert [name for name, _ in submitted] == list(declared)
+        for name, values in submitted:
+            np.testing.assert_array_equal(values, answers[name])
+    assert visited == BOTH
+
+
 def test_request_snapshots_are_values(two_requests, diatomic):
     """A snapshot keeps what the cursor saw: answers and updates leave it alone."""
     model = two_requests
@@ -1468,6 +1507,8 @@ def test_request_snapshots_are_values(two_requests, diatomic):
         # was missing when the cursor got here.
         assert _still_missing(coupling, request) == set()
     potential, moments = snapshots
+    assert isinstance(potential.missing, frozenset)
+    assert isinstance(moments.missing, frozenset)
     assert potential.missing == {"phi"}
     assert moments.missing == {"gt", "pt"}
     with raises(AttributeError):

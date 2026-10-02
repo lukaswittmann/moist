@@ -99,6 +99,8 @@ STEP_DM = 1e-4
 STEP_R = 2.5e-4
 #: FD step on a grid point center, in bohr
 STEP_C = 1e-4
+#: Grid-center displacement for the eighth-order second difference (Bohr).
+STEP_SECOND_MOMENT = 2e-2
 
 #: Tolerances
 REL_THR = 1e-9
@@ -698,22 +700,42 @@ def test_params_second_moment_matches_a_second_difference():
     _gt, _pt, moment, _rt = wall.moments._surface_moments(dm_cart)
     gtilde = wall.moments.traces(dm)[0]
     omega = wall.moments.omega
-    step = 2.0e-3
+    step = STEP_SECOND_MOMENT
 
     def gt_at(shift):
         return wall.moments.traces(dm, centers=wall.moments.centers + shift)[0]
 
+    def directional_second(direction):
+        # Eighth-order second difference of values, at +/-1..4 steps.
+        # Subtract the center before summing to limit cancellation.
+        center = gtilde
+        second = np.zeros_like(center)
+        for offset, weight in enumerate((8 / 5, -1 / 5, 8 / 315, -1 / 560), 1):
+            plus = gt_at(offset * step * direction)
+            minus = gt_at(-offset * step * direction)
+            second += weight * ((plus - center) + (minus - center))
+        return second / step**2
+
+    # h/2 and 2h also pass; diagonal cancellation near zero is covered by
+    # the absolute floor without discarding any component or grid point.
+    references = {}
     for a in range(3):
         for b in range(3):
-            ea = np.zeros(3)
-            ea[a] = step
-            eb = np.zeros(3)
-            eb[b] = step
-            second = (gt_at(ea + eb) - gt_at(ea - eb) - gt_at(-ea + eb) + gt_at(-ea - eb)) / (
-                4.0 * step * step
-            )
+            key = tuple(sorted((a, b)))
+            if key not in references:
+                ea, eb = np.eye(3)[a], np.eye(3)[b]
+                if a == b:
+                    references[key] = directional_second(ea)
+                else:
+                    references[key] = (
+                        directional_second(ea + eb) - directional_second(ea - eb)
+                    ) / 4.0
+            second = references[key]
             expected = 4.0 * omega**2 * moment[:, a, b] - 2.0 * omega * gtilde * (a == b)
-            assert array_deviation(expected, second, thr_rel=1e-4) <= 1.0, (a, b)
+            assert np.all(np.isfinite(expected)), (a, b, "analytic")
+            assert np.all(np.isfinite(second)), (a, b, "finite difference")
+            threshold = np.maximum(PARAM_ABS_THR, PARAM_REL_THR * np.abs(second))
+            assert np.all(np.abs(expected - second) <= threshold), (a, b)
 
 
 # ----------------------------------------------------------------------

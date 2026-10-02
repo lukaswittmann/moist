@@ -198,3 +198,125 @@ def test_structure_owns_input_buffers_on_construction_and_update():
     np.testing.assert_allclose(cavity.xyz.mean(axis=0), structure.positions[0], atol=1e-14)
     np.testing.assert_array_equal(structure.positions, [[2., 0., 0.]])
     np.testing.assert_array_equal(structure.lattice, np.eye(3) * 30)
+
+
+@pytest.mark.parametrize("factory,parameters", [
+    (moist.SvdW, moist.SvdWParameters(blend_k=7.0)),
+    (moist.CFC, moist.CFCParameters(a1=0.7)),
+    (moist.Isodensity, moist.IsodensityParameters(rho_iso=0.003)),
+    (moist.ISwiG, moist.ISwiGParameters(nleb=26)),
+])
+def test_surface_configuration_preserves_explicit_parameters(factory, parameters):
+    config = factory(parameters=parameters)
+    assert config.parameters == parameters
+    assert pickle.loads(pickle.dumps(config)) == config
+    with pytest.raises(TypeError, match="parameters must"):
+        factory(parameters=moist.ModelParameters())
+
+
+@pytest.mark.parametrize("surface", [moist.SvdW(), moist.CFC()])
+@pytest.mark.parametrize("kwargs", [{"source": object()}, {"pass_order": True}])
+def test_geometric_configuration_rejects_density_inputs(surface, kwargs):
+    with pytest.raises(TypeError, match="geometric LSF"):
+        moist.DROP(lsf=surface).build(**kwargs)
+
+
+def test_configuration_rejects_wrong_lsf_and_radius_models():
+    with pytest.raises(TypeError, match="LSF"):
+        moist.DROP(lsf=object())
+    for factory in (moist.ISwiG, lambda **kw: moist.DROP(lsf=moist.SvdW(), **kw)):
+        with pytest.raises(TypeError, match="radius model"):
+            factory(radii=object())
+        with pytest.raises(TypeError, match="radius model"):
+            factory(radii=moist.Radii())
+    with pytest.raises(TypeError, match="does not accept"):
+        moist.ISwiG().build(source=object())
+
+
+@pytest.mark.parametrize("factory,parameters", [
+    (moist.ISwiG, moist.ISwiGParameters(nleb=26)),
+    (lambda **kw: moist.DROP(lsf=moist.SvdW(), **kw), moist.DROPParameters(nleb=26)),
+])
+def test_configuration_build_preserves_radii_and_parameters(factory, parameters):
+    radii = moist.CustomRadii([2.5])
+    config = factory(parameters=parameters, radii=radii)
+    cavity = config.build()
+    assert cavity.parameters == parameters
+    assert cavity.radius_model is radii
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    np.testing.assert_array_equal(cavity.radii, [2.5])
+
+
+def test_isodensity_configuration_callback_object_and_order(monkeypatch, gaussian_density):
+    class Source:
+        density = staticmethod(gaussian_density)
+
+    source = Source()
+    parameters = moist.DROPParameters(nleb=26)
+    config = moist.DROP(lsf=moist.Isodensity(), parameters=parameters)
+    observed = {}
+    original = library.new_drop_cavity_isodensity_callback
+
+    def capture(callback, drop, lsf, radii, *, pass_order):
+        observed.update(callback=callback, pass_order=pass_order)
+        return original(callback, drop, lsf, radii, pass_order=pass_order)
+
+    monkeypatch.setattr(library, "new_drop_cavity_isodensity_callback", capture)
+    cavity = config.build(source=source, pass_order=True)
+    assert observed == {"callback": gaussian_density, "pass_order": True}
+    cavity.update(moist.Structure([1], [[0., 0., 0.]]))
+    assert cavity.snapshot().ngrid > 0
+    with pytest.raises(TypeError, match="requires a callable"):
+        config.build(source=object())
+
+
+def test_internal_isodensity_rejects_callback_order():
+    basis = moist.GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
+                                exponents=[1.], coefficients=[1.])
+    source = moist.InternalDensity(basis, [[1.]])
+    with pytest.raises(TypeError, match="only to callbacks"):
+        moist.DROP(lsf=moist.Isodensity()).build(source=source, pass_order=True)
+
+
+@pytest.mark.parametrize("values,kwargs", [
+    ([], {}), ([[2.5]], {}), ([float("nan")], {}), ([0.], {}), ([-1.], {}),
+    ([2.5], {"numbers": [1, 8]}), ([2.5], {"numbers": [1.5]}),
+    ([2.5], {"numbers": [0]}), ([2.5], {"numbers": [119]}),
+    ([2.5, 3.], {"numbers": [1, 1]}),
+])
+def test_custom_radii_reject_invalid_data(values, kwargs):
+    with pytest.raises(ValueError):
+        moist.CustomRadii(values, **kwargs)
+
+
+def test_custom_radii_element_mapping_handles_reordered_atoms():
+    radii = moist.CustomRadii([2.5, 3.], numbers=[1, 8])
+    assert radii.numbers == (1, 8)
+    cavity = moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii).build()
+    cavity.update(moist.Structure([8, 1], [[0., 0., 0.], [7., 0., 0.]]))
+    np.testing.assert_array_equal(cavity.radii, [3., 2.5])
+
+
+@pytest.mark.parametrize("radii,kind", [
+    (moist.CPCMRadii(), "cpcm"), (moist.SMDRadii(), "smd"),
+    (moist.D3Radii(), "d3"), (moist.COSMORadii(), "cosmo"),
+    (moist.BondiRadii(), "bondi"),
+])
+def test_builtin_radii_select_their_native_radius_set(radii, kind):
+    parameters = moist.ISwiGParameters(nleb=26)
+    structure = moist.Structure([1, 3, 8], [[0., 0., 0.], [7., 0., 0.], [14., 0., 0.]])
+    actual = moist.CavityISwiG(parameters=parameters, radii=radii)
+    actual.update(structure)
+    expected = library.new_iswig_cavity(parameters, library.new_radii(kind))
+    library.update_cavity(expected, structure._as_handle())
+    snapshot = library.get_cavity_results(expected)
+    np.testing.assert_array_equal(actual.radii, snapshot["radii"])
+
+
+@pytest.mark.parametrize("config", [
+    moist.SvdW(), moist.CFC(), moist.Isodensity(),
+    moist.DROP(lsf=moist.SvdW()), moist.ISwiG(),
+])
+def test_surface_configuration_is_immutable(config):
+    with pytest.raises(FrozenInstanceError):
+        config.parameters = config.parameters
