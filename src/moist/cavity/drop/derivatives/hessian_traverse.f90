@@ -1,207 +1,66 @@
 !> Single grid traversal of the DROP surface Hessian
 !>
-!> The nuclear gradient of `nuclear.f90` is `J^T omega` with `omega` the
-!> accumulated surface adjoint. Its directional derivative splits into
+!> Directional derivative of the nuclear gradient `J^T omega`
 !>
 !>     d/dv [ J^T omega ]  =  (dJ^T/dv) omega  +  J^T (d omega/dv)
 !>                            ^ fixed channel     ^ response channel
 !>
-!> Both terms are built here, in **one** walk of the projected grid, because
-!> everything before their contractions is the same computation: one
-!> [[drop_point_prologue]] per point (level-set `prepare`, jets, seed state,
-!> bordered KKT factorization), one application of the **same 16 basis seeds**
-!> ([[point_seed_basis]]), one materialisation of the point's jet tensors
-!> ([[drop_field_jet_point]]) and one collection of the anchor's iSwiG
-!> neighbourhood. A weight set, or a direction, enters only at a contraction.
+!> ## Shared per point
+!> - One [[drop_point_prologue]], one application of the 16 basis seeds
+!>   ([[point_seed_basis]]), one jet-tensor fill, one iSwiG collection
+!> - Weight sets and directions enter only at the contractions
+!> - Entry points in `hessian.f90`; half-accessors here enable one channel alone
 !>
-!> The two public entry points and the multi-branch refusal live in
-!> `hessian.f90`; the half-accessors [[get_surface_hessian_fixed_drop]],
-!> [[get_surface_hessian_fixed_dirs_drop]] and
-!> [[get_surface_hessian_response_drop]] are thin wrappers that enable one
-!> channel alone, kept because their unit suites verify the halves in isolation.
+!> ## Fixed channel, adjoints held fixed
+!> - One [[fixed_direction_chain]] per direction, linear in the direction
+!> - Column: field row over the active atoms, three owner anchor entries,
+!>   switching block added outside the chain
+!> - `drop_fixed_rank4`: direction-free `(3, nsph, 3, nsph)` block; chain on
+!>   the 23 elements of [[chain_basis_element]], columns of a point are
+!>   `L C` plus the level set's `vjp_f2_rArB` block
+!> - `drop_fixed_per_dir`: one chain per supplied direction into the
+!>   `(3, nsph, ndir)` columns; explicit nuclear motion from `hvp_jet_rA`,
+!>   or `vjp_f2_rArB_apply` from `drop_hvp_apply_min` directions on
+!> - Few directions: per-direction mode; a basis: rank-4; chosen in `hessian.f90`
+!> - Never read a single entry of `dw_lsf2`: Hessian jet seeds are
+!>   asymmetric, exact only contracted against the symmetric `lsf3_rr_rA`
 !>
+!> ## Branch weight in the fixed channel
+!> - `d(wbranch)` couples all points of a multi-branch anchor group, the one
+!>   chain input that is not point local
+!> - Per direction: from the forward tangent, [[weight_tangents]] or
+!>   [[branch_weight_tangents]]
+!> - Rank-4: grid loop keeps [[drop_branch_point_type]] elements,
+!>   [[branch_weight_block]] closes the term after the thread reduction
+!> - Unbranched grid: one scan of `branch_count`, columns unchanged to the bit
 !>
-!> ## Why sharing the seed applications is legitimate
-!>
-!> [[apply_seed]] reads the per-point forward state and the point's own
-!> bordered solve, and nothing else: the seed directions are constant matrices,
-!> the induced point motion comes out of the KKT batch, and no surface adjoint
-!> reaches it. So one application of the basis serves any number of weight sets
-!> at that point, which is why [[seed_jet_basis]] and [[seed_anchor]] are
-!> offered split into an `_apply` and a `_contract` half. The fixed channel
-!> needs one thing more, the derived-state tangent `dstate` of every seed, and
-!> asks for it through the optional argument the `_apply` halves carry.
-!>
-!>
-!> ## The fixed-adjoint channel, and its two modes
-!>
-!> The second derivative of the surface map contracted against adjoints held
-!> *fixed*. Per grid point, the term along one nuclear direction `v` is one
-!> pass of the second-order chain, [[fixed_direction_chain]]: the jet tangent
-!> along `v` at the frozen point, the projection riding on it through the same
-!> bordered system the seeds use, the tangent of the normal fold, the tangent
-!> of the 16 seed right-hand sides, 16 [[apply_seed_tangent]] calls, and the
-!> field-row tangent [[drop_field_tangent_dir]]. Its output is one gradient
-!> column: a field row over the active atoms, three anchor entries on the
-!> owner, and -- outside the chain, because it needs no seed at all -- the
-!> switching block contracted with `v`. The chain is linear in `v`, and the
-!> channel is offered in two modes that differ only in which `v` they run it
-!> for:
-!>
-!>  * **`drop_fixed_rank4`** (the dense Hessian). The projected point depends
-!>    on the nuclei only through the level set's active atoms and through the
-!>    owner, so the columns of the `3 * |active union owner|` Cartesian unit
-!>    directions of that local set are formed and accumulated into the
-!>    direction-free rank-4 block `(3, nsph, 3, nsph)`. One traversal serves
-!>    every direction; the price is a per-thread accumulator, which is sparse
-!>    for the reason [[drop_hess_sparse_type]] gives. The chain is not run per
-!>    unit direction. Everything it reads of a direction is the jet tangent
-!>    `(dv0, dv1, dv2, dv3)` and the owner's displacement, it is linear in
-!>    that tuple, and `dv2` and `dv3` are symmetric in their spatial indices,
-!>    so the tuple lives in a 23-dimensional space: `1 + 3 + 6 + 10` jet
-!>    coordinates plus the three owner components. The chain is run once per
-!>    element of the symmetrised basis of that space ([[chain_basis_element]]),
-!>    giving `L (3 n_active + 3, 23)`; the coordinates of every unit direction
-!>    are a packed column of the point's tensors
-!>    ([[drop_field_jet_column_packed]]) plus a unit owner entry, `C (23,
-!>    3 n_local)`; and all columns of the point are `L C`, one `gemm`. The
-!>    explicit nuclear motion of every column is one block of the level set,
-!>    `vjp_f2_rArB`, also formed once per point and added to `L C` before the
-!>    scatter. For SvdW that block is a rank-52 product of per-atom quantities,
-!>    `O(n_active)` kernel work and one `gemm`; a level set without a
-!>    factorised form inherits the column-by-column default and pays
-!>    `3 n_local` passes of `hvp_jet_rA` per point. Per point the mode thus
-!>    costs 23 chains, a block, two small matrix products and the scatter,
-!>    whatever the size of the local set.
-!>
-!>  * **`drop_fixed_per_dir`** (Hessian-vector products). The chain is run once
-!>    per *supplied* direction, with the jet tangent formed by contracting the
-!>    same tensors with the direction ([[drop_field_jet_tangent]]), and the
-!>    column lands straight in the response channel's `(3, nsph, ndir)`
-!>    per-thread buffer. The explicit nuclear motion of the field row comes
-!>    from `hvp_jet_rA` per direction for one or two directions, and from the
-!>    weighted block applied to the whole set, `vjp_f2_rArB_apply`, once per
-!>    point from `drop_hvp_apply_min` directions on -- two direction-free
-!>    kernels per atom against one forward kernel per atom per direction. The
-!>    tensors are materialised here as well: measured against the level set's
-!>    contracted accessors per direction, they win even for a single direction,
-!>    because the reverse-mode row kernels cost about what the tensors do while
-!>    every further direction is a contraction. Cost one `O(n_active)` accessor
-!>    pass per direction and point plus the fills, against the rank-4 mode's
-!>    per-point block and 23 chains, so it is the right mode for a few
-!>    directions and the wrong one for a basis; `hessian.f90` makes that choice.
-!>
-!> Both modes read the same weights of the point, [[drop_point_weights_type]]:
-!> the normal fold and the 13 jet-seed contractions of the *fixed* adjoints.
-!>
-!> The nine single-entry Hessian jet seeds are asymmetric, and
-!> [[apply_seed_tangent]] is exact only on a symmetric seed: its per-seed error
-!> is antisymmetric in `(i, j)`. The chain therefore never reads one entry of
-!> `dw_lsf2` on its own; that tangent reaches the field row only through the
-!> contraction against `lsf3_rr_rA`, which is symmetric in its two spatial
-!> indices, and an antisymmetric error contracted with a symmetric weight
-!> cancels to machine zero.
-!>
-!>
-!> ## The adjoint-response channel
-!>
-!> Here the **primal map is held fixed and the adjoints move**. The raw host
-!> adjoints of a `cavity_surface_adjoint_type` never move; what moves is
-!> [[prepare_surface_weights]]'s *folding* of them, `eff(R)`. Writing the
-!> gradient as `G(R) = Phi(R) . eff(R)`, `G` is linear in `eff`, so the
-!> response term is [[get_surface_gradient_drop]] run with `d(eff)/dv` in place
-!> of `eff`, seed for seed. Its passes are:
-!>
-!>  1. **Forward tangent** -- [[get_surface_tangent_drop]] returns `d_a`,
-!>     `d_wleb`, `d_xi0` and `d_wbranch`, one column per direction.
-!>  2. **Weight tangent** -- [[prepare_surface_weights_tangent]] turns those
-!>     into `d(eff)`, which carries `w_xi`, `w_f` and `branch_phi_adj` and
-!>     nothing else: `w_xyz`, `w_n`, `w_k1` and `w_k2` are copies of the raw
-!>     adjoints, so their tangents vanish identically. Consequently the normal
-!>     channel of the contraction sees the hard zero `w_xyz_zero`, and the
-!>     curvature channel is off (`deff%have_wk = .false.`). This pass runs
-!>     **serially, one call per direction**, because
-!>     [[branch_phi_adj_tangent]] reduces over contiguous anchor groups and a
-!>     group split across threads would corrupt that reduction silently.
-!>  2b. **Model adjoint response** -- only with an `omega_v` object. The raw
-!>     adjoints are then *not* fixed: the model differentiates them along the
-!>     block's directions from the full surface tangent of pass 1 (every
-!>     channel, [[drop_surface_tangent_core]]) and returns one raw adjoint set
-!>     per direction. [[prepare_surface_weights]] is linear in the raw
-!>     adjoints, so folding each set at the base geometry and adding it to
-!>     `d(eff)` is exact by the product rule. From here on `d(eff)` may carry
-!>     every channel, and the contraction below runs the normal fold
-!>     ([[seed_normal_channel]]) on it exactly as the gradient does; the
-!>     curvature channel needs the prologue's curvature invariants, which are
-!>     configured from the *primal* `eff` before any block, so a response that
-!>     carries curvature weights the primal does not is refused. The callback
-!>     runs serially between the passes, outside the parallel region, and any
-!>     non-surface Hessian columns it adds are staged in a block-local buffer
-!>     and reduced with the block, so a failing block still leaves `hvp`
-!>     untouched.
-!>  3. **Contraction** -- the grid loop below: the 13 jet contractions of
-!>     `deff(jdir)` give a weight set, [[drop_field_jet_contract]] turns it into
-!>     the field row off the point's jet tensors, and the anchor and switching
-!>     rows follow the gradient path. No LSF call is made per direction.
-!>
-!> This channel is first order in the seed chain -- it reads `res` and never
-!> `dres` -- so the asymmetric-seed caveat above does not touch it; the seeds
-!> still leave only through the symmetric `lsf3_rr_rA` contraction.
-!>
+!> ## Response channel, primal map held fixed
+!> - Gradient contraction with `d(eff)/dv` in place of the fold `eff`
+!> - Pass 1: forward tangent, [[get_surface_tangent_drop]]
+!> - Pass 2: [[prepare_surface_weights_tangent]], serial, one call per
+!>   direction; [[branch_phi_adj_tangent]] must see each anchor group whole
+!> - Without a model response `d(eff)` carries `w_xi`, `w_f` and
+!>   `branch_phi_adj` only: normal channel sees a hard zero, curvature off
+!> - Pass 2b, with `omega_v`: raw adjoint response of the model, folded at the
+!>   base geometry and added to `d(eff)`; serial, outside the parallel region
+!> - Curvature weights the primal `eff` lacks are refused
+!> - Pass 3: contraction in the grid loop, no LSF call per direction
 !>
 !> ## Direction blocks
+!> - Blocked over directions, `drop_hvp_chunk_dirs` and `block_bytes`; the
+!>   whole grid is re-traversed per block
+!> - One pass-1 walk and one contraction walk per block, not fusable
+!> - Rank-4 channel accumulates in the first block only, `ilo == 1`
+!> - Per-direction channel runs in every block
+!> - Blocked equals unblocked to the bit: same additions in the same order
+!>   per column, held by `hvp_direction_chunking`
+!> - Prologue configuration identical in every block; an order-3 later
+!>   block shifts columns by one ulp
 !>
-!> Passes 1 and 2 materialise the full surface tangent (12 doubles per point
-!> and direction), the branch-weight tangent and the three moving channels of
-!> the fold, 16 in all, and a model response adds its raw per-direction
-!> adjoints and the five copied channels of their fold, 36 in all; the column
-!> accumulator is `(3, nsph, ndir, nthreads)`; nothing above this submodule
-!> bounds `ndir`. The traversal is therefore blocked over directions -- see
-!> `drop_hvp_chunk_dirs` and the `block_bytes` cap below -- and **the whole
-!> grid is re-traversed per block**.
-!> Two invariants follow:
-!>
-!>  * the rank-4 fixed channel is direction free and accumulates **in the first
-!>    block only**, `fixed_rank4_here = ilo == 1`; every fixed-only step reads
-!>    that flag. Later blocks neither accumulate it twice nor pay for the
-!>    fourth-order jet buffer, the state tangents or the switching block;
-!>  * the per-direction fixed channel is per direction and runs **in every
-!>    block**.
-!>
-!> A direction's column receives the same additions in the same order whatever
-!> the blocking, so a blocked run reproduces an unblocked one to the bit;
-!> `hvp_direction_chunking` in the end-to-end suite holds that down. That
-!> guarantee is why the prologue *configuration* -- the level set's derivative
-!> order and the curvature request -- is the same in every block of a
-!> traversal, although a block without a fixed channel reads nothing above
-!> order 3 and would be cheaper to prepare at that order. Measured: cloning
-!> the later blocks' level sets at order 3 moves their response columns by one
-!> ulp against a single-block run, because the generated atom kernels
-!> (`svdw_atom_eval` and its CFC counterpart) branch on the requested level and
-!> the branches schedule the lower orders differently. The saving is only
-!> available once those kernels round their lower orders level-independently;
-!> until then reproducibility across blocking wins.
-!>
-!> Passes 1 and 2 cannot be fused into the contraction walk: pass 2's group
-!> reduction needs the whole grid's pass-1 output before any point is
-!> contracted, so each block is one pass-1 walk and one contraction walk.
-!>
-!>
-!> ## Configuration and failure contract
-!>
-!> `eff` is a [[drop_surface_weights_type]] that [[prepare_surface_weights]] has
-!> already produced; `hessian.f90` folds once and drives both channels off the
-!> same object. The response channel needs the raw `acc` as well, because
-!> pass 2 differentiates the fold out of the raw channels and the primal `eff`
-!> together. What neither channel offers -- the multi-branch second-order term
-!> -- is refused at the public entry points, not here: the response channel is
-!> correct on a branched grid on its own, and its suite finite-differences one.
-!>
-!> Both accumulators are *added* to and left untouched on failure, except for
-!> the one case the blocking makes unavoidable: a multi-block run failing in a
-!> later block has already reduced the earlier blocks. The column accumulator
-!> is restored from a copy taken up front, and the rank-4 block is only ever
-!> reached through `hessian.f90`, which stages it in a local buffer.
+!> ## Failure contract
+!> - Accumulators are added to and left untouched on failure
+!> - Multi-block run: `hvp` restored from a copy taken up front
+!> - Rank-4 block staged by `hessian.f90`, not here
 submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
 !$ use omp_lib, only: omp_get_thread_num
    use, intrinsic :: iso_fortran_env, only: int64
@@ -212,8 +71,8 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       & drop_seed_state_type, drop_seed_result_type, drop_seed_state_tangent_type, &
       & drop_seed_input_tangent_type, drop_n_host_jet, add_host_jet, &
       & drop_surface_weights_type, apply_seed, apply_seed_tangent, &
-      & seed_weight_tol
-   use moist_cavity_drop_derivatives_seeds, only: drop_n_jet_seeds, &
+      & seed_weight_tol, next_branch_group, max_branch_group_size
+   use moist_cavity_drop_derivatives_seeds, only: drop_n_jet_seeds, drop_n_anchor_seeds, &
       & drop_n_point_seeds, seed_normal_channel, fill_seed_basis, scatter_jet_weight, &
       & seed_contribution_tangent, seed_dzero1, seed_dzero2, &
       & seed_jet_basis_apply, seed_jet_basis_contract, &
@@ -232,81 +91,73 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
    !> Cartesian dimension
    integer, parameter :: ndim = 3
 
-   !> Memory bound of one direction block of the response channel, and the
-   !> working set it is measured against, per grid point and direction: the
-   !> full surface tangent (12 doubles), the branch-weight tangent (1) and the
-   !> three moving channels of the fold (3); a model adjoint response adds its
-   !> raw per-direction adjoints (12) and the copied channels of their fold
-   !> (8). `drop_hvp_chunk_dirs` stays the upper bound; this cap only shortens
-   !> a block on a large grid, and blocked and unblocked runs agree to the bit
+   !> Memory cap of one direction block of the response channel, bytes
+   !>
+   !> - Only shortens a block on a large grid; `drop_hvp_chunk_dirs` stays the
+   !>   upper bound
+   !> - Blocked and unblocked runs agree to the bit
    integer(int64), parameter :: block_bytes = 512_int64*1024_int64*1024_int64
+   !> Doubles per grid point and direction of a block
+   !>
+   !> - Surface tangent (12), branch-weight tangent (1), moving fold channels (3)
    integer(int64), parameter :: block_doubles_plain = 16_int64
+   !> Same with a model adjoint response
+   !>
+   !> - Adds the raw adjoints (12) and the copied fold channels (8)
    integer(int64), parameter :: block_doubles_omega = 36_int64
-   !> What the second-order host exchange adds per grid point and direction:
-   !> the host's jet tangents (40 doubles) and the response tangent's
-   !> per-direction channels (16: the position, the surface charge and the
-   !> level-set weight tangents)
+   !> Doubles added by the host's jet tangents
    integer(int64), parameter :: block_doubles_jets = 40_int64
+   !> Doubles added by the response tangent
+   !>
+   !> - Position, surface charge and level-set weight tangents
    integer(int64), parameter :: block_doubles_rt = 16_int64
 
-   !> Dimension of the space the fixed channel's chain is linear on: the
-   !> packed jet tangent of a direction and the owner's displacement; see
-   !> [[chain_basis_element]]
+   !> Dimension of the chain's linear input space
+   !>
+   !> - Packed jet tangent of a direction plus the owner displacement, see
+   !>   [[chain_basis_element]]
    integer, parameter :: drop_n_chain_basis = drop_n_jet_coef + ndim
 
-   !> Initial entry capacity and bucket count of a per-thread accumulator
+   !> Initial entry capacity of a per-thread accumulator
    !>
-   !> Neither is a bound: both grow on demand, and both are trimmed at birth to
-   !> a molecule that cannot fill them. The bucket count stays a power of two --
-   !> which is what makes the mask in [[hess_sparse_entry]] a legal index.
+   !> - Not a bound: grows on demand, trimmed at birth for a small molecule
    integer, parameter :: hess_init_ent = 256
+   !> Initial bucket count of a per-thread accumulator
+   !>
+   !> - Not a bound: grows on demand, trimmed at birth for a small molecule
+   !> - Must stay a power of two, masked as an index in [[hess_probe]]
    integer, parameter :: hess_init_tab = 1024
 
    !> Load factor above which the bucket table doubles, as `num/den`
    integer, parameter :: hess_load_num = 7, hess_load_den = 10
 
-   !> FNV-1a (32-bit) constants of [[hess_pair_hash]]; every product is masked
-   !> back to 32 bits, so no intermediate leaves the signed 64-bit range
+   !> FNV-1a 32-bit offset basis of [[hess_pair_hash]]
    integer(int64), parameter :: fnv_offset = 2166136261_int64
+   !> FNV-1a 32-bit prime
    integer(int64), parameter :: fnv_prime = 16777619_int64
+   !> 32-bit mask
+   !>
+   !> - Applied after every product, intermediates stay in the signed 64-bit range
    integer(int64), parameter :: mask32 = int(z'FFFFFFFF', int64)
 
    !> Sparse per-thread accumulator of the rank-4 fixed-adjoint Hessian
    !>
-   !> One thread's share of `(3, nsph, 3, nsph)`, held as the `(3, 3)` blocks of
-   !> the atom pairs it actually reaches. A grid point reaches the level set's
-   !> active atoms, its anchor's owner and the switching influence set of that
-   !> anchor -- all of them local neighbourhoods -- so the pair count grows like
-   !> `nsph * k` and not like `nsph^2`, where a dense per-thread slab would be
-   !> `9 nsph^2` doubles: 1.15 GB at a thousand atoms on sixteen threads.
-   !>
-   !> **This container reproduces a dense one to the bit, and that is a
-   !> property of how it is used, not of the arithmetic.** Two orders carry it:
-   !>
-   !>  1. *Accumulation order.* Every contribution is added in place, in grid
-   !>     order, exactly where a dense slab's `+=` would stand. One pair has one
-   !>     entry -- the hash guarantees that -- so an element receives its
-   !>     contributions in sequence. Growth preserves it: the entry arrays are
-   !>     copied by `move_alloc` so indices never move, and the bucket table is
-   !>     rebuilt from the entries rather than the reverse.
-   !>
-   !>  2. *Merge order.* [[hess_sparse_reduce]] is called in the fixed
-   !>     `1 .. nthreads` sequence and adds each thread's block to the
-   !>     destination in one add per element. A pair no thread touched is
-   !>     skipped, where a dense reduction would add an exact zero to it.
-   !>
-   !> The bucket table is open addressing with linear probing, the idiom
-   !> [[timer_type]] already uses in this codebase, with entry indices as values
-   !> and `0` for an empty slot.
+   !> - One thread's share of `(3, nsph, 3, nsph)` as the `(3, 3)` blocks of
+   !>   the atom pairs it reaches; pair count grows like `nsph * k`
+   !> - Reproduces a dense slab to the bit; accumulation and merge order are
+   !>   load bearing
+   !> - Accumulation: added in place in grid order, one entry per pair; entry
+   !>   indices never move on growth, bucket table rebuilt from the entries
+   !> - Merge: [[hess_sparse_reduce]] in fixed `1 .. nthreads` order, one add
+   !>   per element, untouched pairs skipped
+   !> - Open addressing with linear probing, entry indices as values
    type :: drop_hess_sparse_type
       !> Entries in use
       integer :: nent = 0
       !> Pairs that exist at all, `nsph^2` clamped to the integer range
       !>
-      !> The entry arrays double, so a container that ends up holding every
-      !> pair would otherwise carry up to twice the dense slab. Capping the
-      !> capacity here bounds the overshoot at the point where the two meet,
-      !> and is exact: a distinct pair beyond this one cannot be asked for
+      !> - Caps the doubling entry arrays at the dense size
+      !> - Exact: no distinct pair beyond it can be requested
       integer :: maxent = 0
       !> Row and column atom of each entry
       integer, allocatable :: pair_i(:), pair_j(:)
@@ -316,30 +167,29 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       integer, allocatable :: htab(:)
    end type drop_hess_sparse_type
 
-   !> The 16 basis seeds of one grid point and their responses
+   !> Basis seeds of one grid point and their responses, 16 per point
    !>
-   !> Filled once per point by [[fill_seed_basis]] and [[point_seed_basis]] and
-   !> read by both channels; `dstate` is filled for the fixed channel only. A
-   !> per-thread object, so that the parallel region names it once.
+   !> - Filled once per point by [[fill_seed_basis]] and [[point_seed_basis]]
+   !> - Read by both channels
+   !> - One object per thread
    type :: drop_point_seeds_type
-      !> Seed perturbations of the level-set gradient and Hessian
+      !> Seed perturbations of the level-set gradient
       real(wp) :: dlsf1(3, drop_n_point_seeds) = 0.0_wp
+      !> Seed perturbations of the level-set Hessian
       real(wp) :: dlsf2(3, 3, drop_n_point_seeds) = 0.0_wp
       !> Induced point motion and multiplier change of each seed
       real(wp) :: x(4, drop_n_point_seeds) = 0.0_wp
       !> Linear response of each seed
       type(drop_seed_result_type) :: res(drop_n_point_seeds)
-      !> Tangent of the derived state along each seed (fixed channel only)
+      !> Derived-state tangent along each seed, fixed channel only
       type(drop_seed_state_tangent_type) :: dstate(drop_n_point_seeds)
    end type drop_point_seeds_type
 
    !> One weight set contracted at a grid point
    !>
-   !> The point-local level-set adjoints built from the 13 jet seeds, the
-   !> effective position adjoint every seed sees, and the normal fold it was
-   !> built from. The fixed channel fills all of it from `eff`; the response
-   !> channel fills the three level-set adjoints from `deff(jdir)` and leaves
-   !> the rest at zero, which is exact for it.
+   !> - Fixed channel: everything, from `eff`
+   !> - Response channel: level-set adjoints from `deff(jdir)`, `w_xyz` only
+   !>   with a model response; the rest stays zero, exact for that channel
    type :: drop_point_weights_type
       !> Point-local level-set adjoint weights
       real(wp) :: w_lsf0 = 0.0_wp, w_lsf1(3) = 0.0_wp, w_lsf2(3, 3) = 0.0_wp
@@ -349,54 +199,61 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
 
    !> Per-direction temporaries of [[fixed_direction_chain]]
    !>
-   !> Held in one per-thread object rather than as locals of the chain so that
-   !> the derived-type temporaries are not default-initialised on every call.
+   !> - One object per thread, not default-initialised on every call
    type :: drop_fixed_dir_scratch_type
       !> Right-hand side and solution of the directional projection response
       real(wp) :: rhs_v(4, 1) = 0.0_wp, dr_v(3) = 0.0_wp, dl_v = 0.0_wp
-      !> Response, derived-state tangent and input tangent of the direction
+      !> Response of the direction
       type(drop_seed_result_type) :: res_v
+      !> Derived-state tangent of the direction
       type(drop_seed_state_tangent_type) :: dstate_v
+      !> Input tangent of the direction
       type(drop_seed_input_tangent_type) :: dinp_v
       !> Second-order response of one seed along the direction
       type(drop_seed_result_type) :: dres
-      !> Tangent of the bordered KKT system and of its 16 right-hand sides
+      !> Tangent of the bordered KKT system
       real(wp) :: dH_lag(3, 3, 1) = 0.0_wp, dg_tot(3, 1) = 0.0_wp
+      !> Tangent of the 16 seed right-hand sides
       real(wp) :: dseed_x(4, drop_n_point_seeds) = 0.0_wp
-      !> Tangents of the normal fold and of the level-set adjoint weights
+      !> Tangents of the normal fold and of the effective position adjoint
       real(wp) :: dnormal_grad(3) = 0.0_wp, dw_xyz(3) = 0.0_wp
+      !> Tangents of the level-set adjoint weights
       real(wp) :: dw_lsf0 = 0.0_wp, dw_lsf1(3) = 0.0_wp, dw_lsf2(3, 3) = 0.0_wp
+      !> Tangent of the objective gradient, `alpha (dr_v - v_owner)`
+      real(wp) :: dphi1_v(3) = 0.0_wp
    end type drop_fixed_dir_scratch_type
 
-   !> The rank-4 mode's local direction set and pair table of one point
+   !> Local direction set and pair table of one point, rank-4 mode
    !>
-   !> `pair_ent` and `vdir` are grown from what a point actually needs, never
-   !> sized to `nsph^2`: a molecule-sized pair map is the quadratic the sparse
-   !> accumulator exists to avoid.
+   !> - `pair_ent` grown from what a point needs, never sized to `nsph^2`
    type :: drop_rank4_scratch_type
-      !> Atoms of the local direction set, and the owner's position in it
+      !> Atom count of the local direction set, and the owner's position in it
       integer :: ndir_atom = 0, owner_loc = 0
+      !> Atoms of the local direction set, active atoms first in slot order
       integer, allocatable :: dir_atoms(:)
       !> Accumulator entry of every `(row, column)` pair the point reaches
       integer, allocatable :: pair_ent(:, :)
-      !> The current Cartesian unit direction, molecule sized and otherwise zero
+      !> Current Cartesian unit direction, `(3, nsph)`, otherwise zero
       real(wp), allocatable :: vdir(:, :)
-      !> Weighted mixed nuclear Hessian block of the point over its active
-      !> slots, `(3 n_active, 3 n_active)` with the Cartesian component fastest.
-      !> Sized to the point, so the level set writes it in place
+      !> Weighted mixed nuclear Hessian block of the point over its active slots
+      !>
+      !> - `(3 n_active, 3 n_active)`, Cartesian component fastest
+      !> - Sized exactly to the point, written in place by the level set
       real(wp), allocatable :: mblk(:, :)
-      !> The chain on the symmetrised basis, `(3 n_active + 3, 23)`: the field
-      !> rows of the active slots, Cartesian component fastest, then the three
-      !> anchor entries of the owner
+      !> Chain on the symmetrised basis, `(3 n_active + 3, 23)`
+      !>
+      !> - Field rows of the active slots, Cartesian component fastest, then the
+      !>   three anchor entries of the owner
       real(wp), allocatable :: lmat(:, :)
       !> Basis coordinates of every unit direction of the local set, `(23, 3 n_local)`
       real(wp), allocatable :: cmat(:, :)
-      !> All columns of the point, `lmat * cmat` plus the explicit block, sized
-      !> exactly so the product lands in place
+      !> All columns of the point, `lmat * cmat` plus the explicit block
+      !>
+      !> - Sized exactly, product lands in place
       real(wp), allocatable :: oblk(:, :)
    end type drop_rank4_scratch_type
 
-   !> The anchor's iSwiG neighbourhood as one point sees it
+   !> Anchor's iSwiG neighbourhood as one point sees it
    type :: drop_swi_scratch_type
       !> Whether the fixed and the response channel want the neighbourhood
       logical :: fixed = .false., resp = .false.
@@ -404,14 +261,32 @@ submodule(moist_cavity_drop) moist_cavity_drop_derivatives_hessian_traverse
       real(wp) :: f0 = 0.0_wp, owner_row(3) = 0.0_wp, dxi = 0.0_wp
       !> Influence-set size of the second-derivative block
       integer :: n = 0
-      !> Influence set, its second-derivative block, and its pair entries
+      !> Influence set and its pair entries
       !>
-      !> Grown on demand from `n_nb + 1`: the block is quadratic in the
-      !> influence set, and a molecule-sized one would put back per thread the
-      !> quadratic the sparse accumulator avoids
+      !> - Grown on demand from `n_nb + 1`, never molecule sized
       integer, allocatable :: idx(:), ent(:, :)
+      !> Second-derivative block of the influence set, grown with `idx`
       real(wp), allocatable :: blk(:, :, :, :)
    end type drop_swi_scratch_type
+
+   !> Branch element of one grid point of a multi-branch anchor group
+   !>
+   !> - Point-local factors of the branch-weight motion, rank-4 mode
+   !> - Combined per group by [[branch_weight_block]] after the grid loop
+   !> - One element per branched point, written by the one thread walking it
+   type :: drop_branch_point_type
+      !> Atoms the rows refer to
+      !>
+      !> - Active atoms in slot order, then the owner
+      !> - Owner listed again when it is active as well
+      integer, allocatable :: atoms(:)
+      !> Chain on a unit branch-weight tangent, `(3, size(atoms))`
+      !>
+      !> - Jet and owner at rest
+      real(wp), allocatable :: lrow(:, :)
+      !> Nuclear gradient of the branch objective `Phi`, `(3, size(atoms))`
+      real(wp), allocatable :: prow(:, :)
+   end type drop_branch_point_type
 
 contains
 
@@ -419,27 +294,22 @@ contains
    !*                            The half-accessor wrappers                             *!
    !* ================================================================================= *!
 
-   !> The rank-4 fixed-adjoint half of the surface Hessian
+   !> Accumulate the rank-4 fixed-adjoint half of the surface Hessian
    !>
-   !> Accumulates `(dJ^T/dv) omega` for the energy whose folded surface adjoints
-   !> `eff` are, as the direction-free block, and nothing else. The result is
-   !> *added* to `hessian`, and left untouched when anything fails.
+   !> - `(dJ^T/dv) omega` as the direction-free block, added to `hessian`
+   !> - `hessian` untouched on failure
+   !> - No weight guard: `eff` arrives folded, a live `w_a` or `w_w` belongs to
+   !>   the response channel
+   !> - Entry point of `test_cavity_drop_hessian_fixed`
    !>
-   !> Kept as an entry point because `test_cavity_drop_hessian_fixed`
-   !> finite-differences this half on its own; the composition in `hessian.f90`
-   !> asks for both channels in one traversal instead. It carries no weight
-   !> guard: `eff` arrives folded, and the term a live `w_a` or `w_w` adds is
-   !> exactly what the response channel computes.
-   !>
-   !> @param[in]    self    DROP cavity instance (must hold a projected grid)
-   !> @param[in]    eff     Folded surface adjoints, held fixed
-   !> @param[inout] hessian Nuclear-Hessian accumulator (3, nsph, 3, nsph)
-   !> @param[out]   error   Error object, allocated on failure
+   !> @param[in]     self     DROP cavity instance, must hold a projected grid
+   !> @param[in]     eff      folded surface adjoints, held fixed
+   !> @param[in,out] hessian  nuclear-Hessian accumulator `(3, nsph, 3, nsph)`
+   !> @param[out]    error    allocated on failure
    module subroutine get_surface_hessian_fixed_drop(self, eff, hessian, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
-      !> Effective primitive surface adjoints, as [[prepare_surface_weights]]
-      !> returned them
+      !> Folded surface adjoints from [[prepare_surface_weights]]
       type(drop_surface_weights_type), intent(in) :: eff
       !> Nuclear-Hessian accumulator
       real(wp), intent(inout) :: hessian(:, :, :, :)
@@ -458,23 +328,24 @@ contains
 
    end subroutine get_surface_hessian_fixed_drop
 
-   !> The per-direction fixed-adjoint half of the surface Hessian
+   !> Accumulate the per-direction fixed-adjoint half of the surface Hessian
    !>
-   !> Accumulates `(dJ^T/dv) omega` along each supplied direction, one gradient
-   !> column per direction, and nothing else. The result is *added* to `hvp`
-   !> and left untouched when anything fails. Mathematically the rank-4 half
-   !> contracted with `dirs`; computationally the second-order chain run once
-   !> per direction. The fixed suite cross-checks the two.
+   !> - `(dJ^T/dv) omega`, one gradient column per direction, added to `hvp`
+   !> - `hvp` untouched on failure
+   !> - Equals the rank-4 half contracted with `dirs`, cross-checked by the
+   !>   fixed suite
+   !> - Multi-branch grid: every block also runs the forward tangent for
+   !>   `d(wbranch)`
    !>
-   !> @param[in]    self  DROP cavity instance (must hold a projected grid)
-   !> @param[in]    eff   Folded surface adjoints, held fixed
-   !> @param[in]    dirs  Nuclear directions `(3, nsph, ndir)`
-   !> @param[inout] hvp   Hessian-vector accumulator `(3, nsph, ndir)`
-   !> @param[out]   error Error object, allocated on failure
+   !> @param[in]     self   DROP cavity instance, must hold a projected grid
+   !> @param[in]     eff    folded surface adjoints, held fixed
+   !> @param[in]     dirs   nuclear directions `(3, nsph, ndir)`
+   !> @param[in,out] hvp    Hessian-vector accumulator `(3, nsph, ndir)`
+   !> @param[out]    error  allocated on failure
    module subroutine get_surface_hessian_fixed_dirs_drop(self, eff, dirs, hvp, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
-      !> Folded surface adjoints, as [[prepare_surface_weights]] returned them
+      !> Folded surface adjoints from [[prepare_surface_weights]]
       type(drop_surface_weights_type), intent(in) :: eff
       !> Nuclear directions
       real(wp), intent(in) :: dirs(:, :, :)
@@ -493,32 +364,24 @@ contains
 
    end subroutine get_surface_hessian_fixed_dirs_drop
 
-   !> The adjoint-response half of the surface Hessian
+   !> Accumulate the adjoint-response half of the surface Hessian
    !>
-   !> Accumulates `J^T (d omega/dv)` for the energy whose raw surface adjoints
-   !> `acc` holds, one gradient column per nuclear direction, and nothing else.
-   !> The result is *added* to `hvp` and left untouched when anything fails.
+   !> - `J^T (d omega/dv)`, one gradient column per direction, added to `hvp`
+   !> - `hvp` untouched on failure
+   !> - Needs both forms of the adjoints: raw `acc` and its primal fold `eff`
    !>
-   !> This half needs **both** forms of the adjoints: `eff` is the primal fold,
-   !> `acc` is what that fold was built from, and pass 2 differentiates the one
-   !> out of the other.
-   !>
-   !> No branch guard, deliberately: the public accessors refuse a multi-branch
-   !> grid because the *composite* is short a second-order branch term; this
-   !> half on its own is not, and its suite finite-differences a branched grid.
-   !>
-   !> @param[in]    self  DROP cavity instance (must hold a projected grid)
-   !> @param[in]    acc   Raw surface-observable adjoints, held fixed
-   !> @param[in]    eff   Folded surface adjoints of the base geometry
-   !> @param[in]    dirs  Nuclear directions `(3, nsph, ndir)`
-   !> @param[inout] hvp   Hessian-vector accumulator `(3, nsph, ndir)`
-   !> @param[out]   error Error object, allocated on failure
+   !> @param[in]     self   DROP cavity instance, must hold a projected grid
+   !> @param[in]     acc    raw surface-observable adjoints, held fixed
+   !> @param[in]     eff    folded surface adjoints of the base geometry
+   !> @param[in]     dirs   nuclear directions `(3, nsph, ndir)`
+   !> @param[in,out] hvp    Hessian-vector accumulator `(3, nsph, ndir)`
+   !> @param[out]    error  allocated on failure
    module subroutine get_surface_hessian_response_drop(self, acc, eff, dirs, hvp, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Raw surface-observable adjoints
       type(cavity_surface_adjoint_type), intent(in) :: acc
-      !> Folded surface adjoints, as [[prepare_surface_weights]] returned them
+      !> Folded surface adjoints from [[prepare_surface_weights]]
       type(drop_surface_weights_type), intent(in) :: eff
       !> Nuclear directions
       real(wp), intent(in) :: dirs(:, :, :)
@@ -541,15 +404,13 @@ contains
 
    !> Refuse a direction set or a column accumulator of the wrong shape
    !>
-   !> Every message is prefixed with the caller's name, as
-   !> [[check_surface_adjoint]] does, so a failure names the entry point the
-   !> user actually called.
+   !> - Messages prefixed with `context`, as in [[check_surface_adjoint]]
    !>
-   !> @param[in]  self    DROP cavity instance
-   !> @param[in]  dirs    Nuclear directions, expected `(3, nsph, ndir)`
-   !> @param[in]  hvp     Column accumulator, expected `(3, nsph, ndir)`
-   !> @param[in]  context Calling routine, used to prefix the diagnostics
-   !> @param[out] error   Error object, allocated on a shape mismatch
+   !> @param[in]  self     DROP cavity instance
+   !> @param[in]  dirs     nuclear directions, expected `(3, nsph, ndir)`, `ndir > 0`
+   !> @param[in]  hvp      column accumulator, expected `(3, nsph, ndir)`
+   !> @param[in]  context  calling routine, prefixes the diagnostics
+   !> @param[out] error    allocated on a shape mismatch
    module subroutine check_direction_set(self, dirs, hvp, context, error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
@@ -584,43 +445,38 @@ contains
    !*                             The merged grid traversal                             *!
    !* ================================================================================= *!
 
-   !> Walk the projected grid once, accumulating into the enabled channels
+   !> Walk the projected grid once and accumulate into the enabled channels
    !>
-   !> Mirrors [[get_surface_gradient_drop]] throughout: same thread setup, same
-   !> grid loop, same error latching and the same deterministic reduction. What
-   !> differs is the derivative order, the contractions the point feeds, and
-   !> the direction blocking.
+   !> - Thread setup, grid loop, error latching and deterministic reduction as
+   !>   in [[get_surface_gradient_drop]]
+   !> - `host`, and `rt` with level-set weights, need the per-direction fixed mode
+   !> - Host-defined level set without `host` is refused
+   !> - `hvp` untouched on failure; `hess_fixed` is staged by the caller
    !>
-   !> `fixed_mode` is one of `drop_fixed_none`, `drop_fixed_rank4` and
-   !> `drop_fixed_per_dir` (see the module header). The optional arguments are
-   !> the channels' own: `hess_fixed` belongs to the rank-4 fixed channel,
-   !> `dirs` and `hvp` to the per-direction fixed channel and to the response
-   !> channel, `acc` to the response channel alone. Each must be present when
-   !> its channel is enabled, which is checked.
-   !>
-   !> @param[in]    self           DROP cavity instance (must hold a projected grid)
-   !> @param[in]    eff            Folded surface adjoints of the base geometry
-   !> @param[in]    fixed_mode     Which form of `(dJ^T/dv) omega` to accumulate, if any
-   !> @param[in]    want_response  Accumulate `J^T (d omega/dv)`
-   !> @param[in]    context        Calling routine, used to prefix the diagnostics
-   !> @param[in]    acc            Raw surface adjoints; required by the response channel
-   !> @param[in]    dirs           Nuclear directions; required by every per-direction channel
-   !> @param[inout] hess_fixed     Rank-4 fixed-adjoint accumulator `(3, nsph, 3, nsph)`
-   !> @param[inout] hvp            Column accumulator `(3, nsph, ndir)`
-   !> @param[out]   error          Error object, allocated on failure
-   !> @param[inout] omega_v        Surface-adjoint response of the model; needs the
-   !>                              response channel
+   !> @param[in]     self           DROP cavity instance, must hold a projected grid
+   !> @param[in]     eff            folded surface adjoints of the base geometry
+   !> @param[in]     fixed_mode     fixed-channel mode, one of the `drop_fixed_*` constants
+   !> @param[in]     want_response  accumulate `J^T (d omega/dv)`
+   !> @param[in]     context        calling routine, prefixes the diagnostics
+   !> @param[in]     acc            raw surface adjoints; required by the response channel
+   !> @param[in]     dirs           `(3, nsph, ndir)`; required by every per-direction channel
+   !> @param[in,out] hess_fixed     `(3, nsph, 3, nsph)`; required by the rank-4 mode
+   !> @param[in,out] hvp            `(3, nsph, ndir)`; required with `dirs`
+   !> @param[out]    error          allocated on failure
+   !> @param[in,out] omega_v        model adjoint response; needs the response channel
+   !> @param[in,out] host           host tangents along `dirs`; needs the response channel
+   !> @param[in,out] rt             initialised for `(ngrid, ndir)`; needs the response channel
    module subroutine drop_hessian_traverse(self, eff, fixed_mode, want_response, context, &
                                            acc, dirs, hess_fixed, hvp, error, omega_v, host, rt)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
-      !> Folded surface adjoints, as [[prepare_surface_weights]] returned them
+      !> Folded surface adjoints from [[prepare_surface_weights]]
       type(drop_surface_weights_type), intent(in) :: eff
       !> Mode of the fixed channel
       integer, intent(in) :: fixed_mode
       !> Whether the response channel is accumulated
       logical, intent(in) :: want_response
-      !> Calling routine, so a failure names the entry point the user called
+      !> Calling routine, named in the diagnostics
       character(len=*), intent(in) :: context
       !> Raw surface-observable adjoints, held fixed
       type(cavity_surface_adjoint_type), intent(in), optional :: acc
@@ -634,7 +490,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
       class(surface_adjoint_response_type), intent(inout), optional :: omega_v
-      !> Second-order host exchange: the host's tangents along the directions
+      !> Second-order host exchange, host tangents along the directions
       class(coupling_tangent_type), intent(inout), optional :: host
       !> Response tangent of the whole direction set, filled per block
       type(response_tangent_type), intent(inout), optional :: rt
@@ -643,27 +499,23 @@ contains
       type(drop_worker_slots_type) :: slots
       !> Whether the raw adjoints move through a model response
       logical :: have_omega
-      !> Whether a host supplies tangents, whether the level set is the host's
-      !> so that its jet tangents are asked for, whether a response tangent is
-      !> filled, and whether its level-set weight channels are among them
+      !> Host tangents supplied, host-defined level set, `rt` filled, with level-set weights
       logical :: have_host, have_jets, want_rt, want_rt_lsf
-      !> The host's jet tangents of one block, `(40, ngrid, nblk)`
+      !> Host's jet tangents of one block, `(40, ngrid, nblk)`
       real(wp), allocatable :: host_jets(:, :, :)
-      !> Non-surface columns of the model response for one block, staged
-      !> outside `hvp` so that a failing block leaves the accumulator untouched
+      !> Non-surface columns of the model response of one block, staged outside `hvp`
       real(wp), allocatable :: hvp_direct(:, :, :)
-      !> Per-thread rank-4 buffers, summed deterministically after the region
+      !> Per-thread rank-4 buffers, reduced in fixed thread order
       type(drop_hess_sparse_type), allocatable :: hess_threads(:)
-      !> Per-thread column buffers, summed deterministically after the region
+      !> Per-thread column buffers, reduced in fixed thread order
       real(wp), allocatable :: hvp_threads(:, :, :, :)
-      !> Column accumulator as it was handed in, kept only while a block can
-      !> still fail after an earlier one has already been reduced into it
+      !> Entry copy of `hvp`, restores it when a later block fails
       real(wp), allocatable :: hvp_entry(:, :, :)
-      !> Tangent of the folded surface adjoints along each direction of the block
+      !> Tangent of the folded surface adjoints per direction of the block
       type(drop_surface_weights_type), allocatable :: deff(:)
       !> Thread bookkeeping
       integer :: thread_slot, ithread
-      !> First failure seen anywhere in the parallel region
+      !> First failure seen in the parallel region
       type(drop_abort_latch_type) :: abort
       !> Per-thread failure on its way to the latch
       type(error_type), allocatable :: worker_error
@@ -673,20 +525,20 @@ contains
       !> Prologue configuration: jet order and curvature request
       integer :: max_deriv
       logical :: want_curvature
-      !> Direction block: its size, its bounds in `dirs` and its own extent
+      !> Direction count, block size, block bounds in `dirs`, block extent
       integer :: ndir, nchunk, ilo, ihi, nblk
-      !> Per-direction working set of a block, in doubles per grid point
+      !> Per-direction working set of a block, doubles per grid point
       integer(int64) :: block_doubles
-      !> Which fixed channel this block runs, if any; see the module header
+      !> Fixed channel this block runs, if any
       logical :: fixed_rank4_here, fixed_per_dir_here, fixed_here
 
-      !> Per-thread state of the grid point being opened
+      !> Per-thread state of the grid point
       type(drop_point_scratch_type) :: pt
-      !> Whether the shared prologue cleared the point for this traversal
+      !> Whether the shared prologue cleared the point
       logical :: point_ok
-      !> The 16 basis seeds of the point and their responses
+      !> Basis seeds of the point and their responses
       type(drop_point_seeds_type) :: seeds
-      !> The fixed adjoints contracted at the point, and one response weight set
+      !> Fixed adjoints contracted at the point, and one response weight set
       type(drop_point_weights_type) :: pw, rw
       !> Per-direction temporaries of the second-order chain
       type(drop_fixed_dir_scratch_type) :: sc
@@ -694,28 +546,38 @@ contains
       type(drop_field_tangent_work_type) :: ft_work
       !> Rank-4 direction set and pair table
       type(drop_rank4_scratch_type) :: r4
-      !> The anchor's iSwiG neighbourhood
+      !> Anchor's iSwiG neighbourhood
       type(drop_swi_scratch_type) :: swi
+
+      !> Whether the grid carries a multi-branch anchor group
+      logical :: branched
+      !> Per-direction mode: branch-weight tangent of the block, `(ngrid, nblk)`
+      real(wp), allocatable :: dwb_blk(:, :)
+      !> Its value at the point being walked
+      real(wp) :: dwb_dir
+      !> Rank-4 mode: element of each multi-branch point in `br_pts`, zero elsewhere
+      integer, allocatable :: br_slot(:)
+      !> Branch elements left for [[branch_weight_block]]
+      type(drop_branch_point_type), allocatable :: br_pts(:)
+      !> Element of the point being walked
+      integer :: islot
 
       !> Jet tangent along the current direction at the frozen point
       real(wp) :: dv0, dv1(3), dv2(3, 3), dv3(3, 3, 3)
-      !> Displacement of the owner in a basis element, and the row count of the
-      !> point's column block
+      !> Owner displacement of a basis element
       real(wp) :: vown(3)
+      !> Row count of the point's column block, basis element
       integer :: nrow, ibasis
       !> Gradient column of the current direction: field row and owner entries
       real(wp), allocatable :: field_row(:, :)
       real(wp) :: anchor_row(3)
-      !> A direction restricted to the point's active slots
+      !> Direction restricted to the point's active slots
       real(wp), allocatable :: v_act(:, :)
-      !> Explicit nuclear motion of the field row for every direction of the
-      !> block, per-direction mode with a batch: the weighted block applied to
-      !> the directions
+      !> Explicit nuclear motion of the field row per block direction, applied block
       real(wp), allocatable :: xrow(:, :, :)
-      !> Whether the per-direction mode takes the explicit nuclear motion from
-      !> the applied block rather than from one `hvp_jet_rA` per direction
+      !> Whether the explicit nuclear motion comes from the applied block
       logical :: use_apply
-      !> Effective position adjoint of the response channel; identically zero
+      !> Effective position adjoint of the response channel, identically zero
       real(wp) :: w_xyz_zero(3)
 
       !> Grid, atom, axis, seed, slot and direction indices
@@ -755,17 +617,11 @@ contains
                           " Hessian channel")
          return
       end if
-      ! The second-order host exchange rides on the composite: the host's jet
-      ! tangents enter both channels, and the response tangent's level-set
-      ! weights are the per-direction chain's `dw_lsf` plus the response
-      ! channel's `rw`, which only the per-direction fixed mode forms
+      ! Host jet tangents enter both channels
+      ! Level-set weights of `rt` need the per-direction chain's `dw_lsf`
       have_host = present(host)
       have_jets = have_host .and. self%lsf_model%host_defined
-      ! A host-defined level set reports no nuclear partials of its own -- the
-      ! host owns that chain -- so without the second-order exchange every
-      ! level-set tangent of this traversal would be an exact zero that is not
-      ! a physical zero. Refuse rather than return a Hessian short the whole
-      ! surface-motion term.
+      ! Host-defined level set without host exchange: surface-motion term silently zero
       if (self%lsf_model%host_defined .and. .not. have_host) then
          call fatal_error(error, context//": this cavity's level set is the host's, so its"// &
                           " tangents along the directions are host data; the nuclear Hessian"// &
@@ -796,6 +652,13 @@ contains
 
       want_cols = want_response .or. fixed_mode == drop_fixed_per_dir
 
+      ! Multi-branch anchor group: fixed channel carries a branch-weight motion
+      branched = .false.
+      if (fixed_mode /= drop_fixed_none .and. allocated(self%branch_count) &
+          .and. allocated(self%anchor_id)) then
+         branched = any(self%branch_count(1:self%ngrid) > 1)
+      end if
+
       if (fixed_mode == drop_fixed_per_dir) then
          if (want_response) then
             h_hess = self%ctx%timer%resolve("Surface Hessian (per direction)", &
@@ -819,12 +682,10 @@ contains
       call self%ctx%timer%start(h_hess)
 
       !* -------------------------------- Thread setup -------------------------------- *!
-      ! Order 4 rather than the gradient path's 3 whenever a fixed channel is
-      ! on: its field tangent reads `f4_rrrr` and `f4_rrr_rA`, and CFC asks for
-      ! the highest *total* order. The response channel reads nothing above the
-      ! third derivative, so a response-only traversal keeps order 3 and asks
-      ! for no curvature. Both settings hold for every block of the traversal;
-      ! see the module header for why a later block is not prepared cheaper.
+      ! Fixed channel: order 4 for `f4_rrrr` and `f4_rrr_rA`, CFC takes the
+      ! highest total order
+      ! Response only: order 3, no curvature
+      ! Same configuration in every block, see the module header
       if (fixed_mode /= drop_fixed_none) then
          max_deriv = 4
          want_curvature = eff%have_wk
@@ -835,31 +696,29 @@ contains
       call slots%init(self%ctx, self%lsf_model, max_deriv, self%param, self%mol, self%radii)
 
       if (fixed_mode == drop_fixed_rank4) allocate (hess_threads(slots%nthreads))
+      if (fixed_mode == drop_fixed_rank4 .and. branched) then
+         call branch_point_slots(self, br_slot, br_pts)
+      end if
 
       !* ------------------------------ Direction blocks ------------------------------ *!
-      ! See `drop_hvp_chunk_dirs` for the memory bound and the recompute factor.
-      ! A direction set no larger than one block -- the common case -- takes a
-      ! single iteration and is exactly the unblocked traversal. A rank-4-only
-      ! traversal is a single block with no directions in it at all.
-      !
-      ! `hvp` is `intent(inout)` and this routine owes the caller an untouched
-      ! accumulator when anything fails, which a multi-block run can no longer
-      ! promise by construction: the reduction lands in `hvp` block by block, so
-      ! that a direction's column sees the same additions in the same order
-      ! whatever the blocking. A copy taken up front is what restores the
-      ! promise, and it is taken only when a second block can actually fail.
+      ! Single block when the direction set fits; rank-4 only: one block, no
+      ! directions
+      ! Entry copy of `hvp` restores it on failure, taken only for a multi-block run
       if (want_cols) then
          ndir = size(dirs, 3)
          nchunk = min(ndir, drop_hvp_chunk_dirs)
-         ! Shorten the block on a large grid so that its per-direction working
-         ! set stays under `block_bytes`; see the module constants. A
-         ! memory-only choice: blocked and unblocked runs agree to the bit.
+         ! Working set kept under `block_bytes`; memory only, results unchanged
+         ! to the bit
          if (want_response) then
             block_doubles = merge(block_doubles_omega, block_doubles_plain, have_omega)
             if (have_jets) block_doubles = block_doubles + block_doubles_jets
             if (want_rt) block_doubles = block_doubles + block_doubles_rt
             nchunk = min(nchunk, max(1, int(block_bytes/ &
                                             (8_int64*block_doubles*int(self%ngrid, int64)))))
+         else if (branched) then
+            ! Fixed-only branched traversal holds the forward tangent's plain working set
+            nchunk = min(nchunk, max(1, int(block_bytes/ &
+                                            (8_int64*block_doubles_plain*int(self%ngrid, int64)))))
          end if
          allocate (hvp_threads(ndim, self%nsph, nchunk, slots%nthreads))
          if (nchunk < ndir) allocate (hvp_entry, source=hvp)
@@ -868,12 +727,9 @@ contains
          ndir = 1
          nchunk = 1
       end if
-      ! The explicit nuclear motion of the per-direction mode: the applied block
-      ! pays two direction-free kernels per atom and then a cheap contraction per
-      ! direction, one `hvp_jet_rA` per direction pays one forward kernel per
-      ! atom per direction, so the block wins from three directions on. Keyed on
-      ! the whole set and never on a block, so a direction's column does not
-      ! depend on how the set was blocked.
+      ! Applied block from `drop_hvp_apply_min` directions on, else `hvp_jet_rA`
+      ! per direction
+      ! Keyed on the whole set, never on a block: columns independent of blocking
       use_apply = fixed_mode == drop_fixed_per_dir .and. ndir >= drop_hvp_apply_min
       if (have_jets) allocate (host_jets(drop_n_host_jet, self%ngrid, nchunk))
 
@@ -882,8 +738,7 @@ contains
          nblk = ihi - ilo + 1
 
          !* -------------------- The host's jet tangents of the block -------------------- *!
-         ! Asked for once per block, before the tangent pass that reads them
-         ! and the contraction walk that reads them again
+         ! Once per block, read by the tangent pass and the contraction walk
          if (have_jets) then
             call host%level_set_tangent(ilo, dirs(:, :, ilo:ihi), self%xyz(:, 1:self%ngrid), &
                                         host_jets(:, :, 1:nblk), error)
@@ -894,29 +749,38 @@ contains
             end if
          end if
 
-         ! The rank-4 channel is direction free and belongs to exactly one
-         ! block; the per-direction channel belongs to every block. Every
-         ! fixed-only step of the grid loop reads these rather than the mode.
+         ! Grid loop reads these flags, never the mode
          fixed_rank4_here = fixed_mode == drop_fixed_rank4 .and. ilo == 1
          fixed_per_dir_here = fixed_mode == drop_fixed_per_dir
          fixed_here = fixed_rank4_here .or. fixed_per_dir_here
 
          if (want_response) then
             !* ------------------ Passes 1 and 2: the moving weights ------------------ *!
-            ! Serial over this block's directions, for the group-reduction
-            ! reason the module header documents; `deff` is indexed `1 .. nblk`.
+            ! Serial over the block's directions; `deff` indexed `1 .. nblk`
             if (have_omega) hvp_direct = 0.0_wp
             if (have_jets) then
                call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), &
                                     fixed_mode == drop_fixed_per_dir, want_curvature, context, &
-                                    deff, error, omega_v=omega_v, hvp_direct=hvp_direct, &
-                                    rt=rt, first=ilo, host_jets=host_jets(:, :, 1:nblk))
+                                    deff, dwb_blk, error, omega_v=omega_v, &
+                                    hvp_direct=hvp_direct, rt=rt, first=ilo, &
+                                    host_jets=host_jets(:, :, 1:nblk))
             else
                call weight_tangents(self, acc, eff, dirs(:, :, ilo:ihi), &
                                     fixed_mode == drop_fixed_per_dir, want_curvature, context, &
-                                    deff, error, omega_v=omega_v, hvp_direct=hvp_direct, &
-                                    rt=rt, first=ilo)
+                                    deff, dwb_blk, error, omega_v=omega_v, &
+                                    hvp_direct=hvp_direct, rt=rt, first=ilo)
             end if
+            if (allocated(error)) then
+               if (allocated(hvp_entry)) hvp = hvp_entry
+               call self%ctx%timer%stop(h_hess)
+               return
+            end if
+         else if (fixed_per_dir_here .and. branched) then
+            !* -------------- Branch-weight tangents of a fixed-only block -------------- *!
+            ! No response channel to supply `d(wbranch)`, forward tangent run for it
+            ! Contracted, so the fixed half is the same column with or without the
+            ! response half
+            call branch_weight_tangents(self, dirs(:, :, ilo:ihi), dwb_blk, error)
             if (allocated(error)) then
                if (allocated(hvp_entry)) hvp = hvp_entry
                call self%ctx%timer%stop(h_hess)
@@ -931,32 +795,26 @@ contains
          !$omp& igrid, pt, point_ok, seeds, pw, rw, sc, ft_work, r4, swi, &
          !$omp& dv0, dv1, dv2, dv3, vown, nrow, ibasis, field_row, anchor_row, v_act, xrow, &
          !$omp& w_xyz_zero, ient, i, iaxis, idir, dir_axis, dir_loc, ia, ib, &
-         !$omp& jdir, idir_g, iatom, jj, knb, worker_error)
+         !$omp& jdir, idir_g, iatom, jj, knb, dwb_dir, islot, worker_error)
          thread_slot = 1
 !$       thread_slot = omp_get_thread_num() + 1
 
-         ! `want_lsf4` asks the prologue for the fourth-derivative buffer, read
-         ! by the fixed channel alone: a later block that allocated it would
-         ! have the prologue evaluate a fourth-order kernel per point for
-         ! nothing, and `lsf4_rrrr` is a pure output, so leaving it out changes
-         ! no other value. `want_vjp` is the response channel's row buffer.
+         ! `want_lsf4`: fourth-derivative buffer, fixed channel only, pure output
+         ! `want_vjp`: row buffer of the response channel
          call pt%init(self%nsph, self%iswig, want_seed_batch=.true., &
                       want_lsf4=fixed_here, want_vjp=want_response)
-         ! The response channel's contractions see a hard zero here; see the
-         ! module header for why its normal fold is not merely small
+         ! Hard zero for the response channel's contractions
          w_xyz_zero = 0.0_wp
 
          if (fixed_here) then
             allocate (field_row(3, self%nsph), source=0.0_wp)
-            ! Grown on demand from `n_nb + 1` rather than sized to `nsph`; the
-            ! block is quadratic in the influence set
+            ! Grown on demand from `n_nb + 1`, quadratic in the influence set
             allocate (swi%blk(3, 1, 3, 1), swi%idx(1))
          end if
          if (fixed_rank4_here) then
             call hess_sparse_new(hess_threads(thread_slot), self%nsph)
             allocate (r4%dir_atoms(self%nsph))
-            ! Grown from the direction set it indexes; both start at one slot
-            ! and are grown by the first point
+            ! One slot each, grown by the first point
             allocate (r4%pair_ent(1, 1), swi%ent(1, 1))
             allocate (r4%vdir(3, self%nsph), source=0.0_wp)
          end if
@@ -968,22 +826,16 @@ contains
          !$omp do schedule(static, 8)
          do igrid = 1, self%ngrid
             !* ------------------------ Shared point prologue ------------------------- *!
-            ! Point, jets, seed state and the solved jet and anchor seeds. Every
-            ! failure path -- a latch already set, a refusing level set, a
-            ! degenerate state, a singular bordered system -- has recorded
-            ! itself. `pt%lsf4_rrrr` comes back filled when a fixed channel
-            ! asked for it.
+            ! Every failure path has latched itself
+            ! `pt%lsf4_rrrr` filled when a fixed channel asked for it
             call drop_point_prologue(self, slots, thread_slot, igrid, want_curvature, &
                                      context, abort, pt, point_ok)
             if (.not. point_ok) cycle
 
             !* ------------------- Basis seeds and their responses -------------------- *!
-            ! The 16 seeds of [[seed_jet_basis]] and [[seed_anchor]], applied
-            ! once for both channels. `fill_seed_basis` reads the same solved
-            ! batch through the same [[seed_rhs_column]] map, so it writes
-            ! `seeds%x` with the values the applies below write again; what
-            ! only it provides are the seed directions the second-order chain
-            ! needs.
+            ! Applied once for both channels
+            ! `fill_seed_basis` adds the seed directions of the second-order chain;
+            ! `seeds%x` is rewritten below with the same values
             if (fixed_here) then
                call fill_seed_basis(pt%kkt_rhs, seeds%dlsf1, seeds%dlsf2, seeds%x)
             end if
@@ -991,17 +843,8 @@ contains
                                   seeds%dstate)
 
             !* ----------------------- Jet tensors of the point ----------------------- *!
-            ! Direction free, so formed once per point and read by every
-            ! contraction below. The fills are unconditional on purpose: the
-            ! buffers outlive the point, and a skipped fill would serve the
-            ! previous point's tensors at the next; every reader checks the slot
-            ! markers and aborts on a buffer whose fill did not run at this
-            ! active count. The fixed channel also needs the mixed fourth
-            ! derivative; the response channel does not. Measured against the
-            ! alternative -- the level set's contracted accessors per direction
-            ! -- the materialised tensors win even for a single direction: the
-            ! reverse-mode kernels of the row cost about what the tensors do,
-            ! and every further direction is then a contraction.
+            ! Direction free, formed once per point
+            ! Fills are unconditional: readers abort on a stale slot marker
             if (fixed_here) then
                call drop_field_tangent_point(slots%lsf(thread_slot)%lsf, ft_work)
             else
@@ -1009,14 +852,10 @@ contains
             end if
 
             !* --------------- Shared iSwiG neighbourhood of the anchor --------------- *!
-            ! The switching factor's neighbour set depends on the geometry
-            ! alone, so one `swi_collect` serves both channels; only what is
-            ! read out of it differs. The fixed channel wants the whole
-            ! second-derivative block when its own weight is live, the response
-            ! channel the first-derivative rows when any direction of the block
-            ! carries a live switching tangent. The width outputs of the block
-            ! are not asked for: the switching factor is evaluated at the
-            ! *anchor* width, which is nuclear-geometry independent.
+            ! One `swi_collect` for both channels
+            ! Fixed channel: second-derivative block, only with a live weight
+            ! Response channel: first-derivative rows, only with a live tangent
+            ! Width outputs unused: switching factor taken at the anchor width
             swi%fixed = .false.
             if (fixed_here) swi%fixed = abs(eff%w_f(igrid)) > seed_weight_tol
             swi%resp = .false.
@@ -1052,16 +891,11 @@ contains
             !* ======================== Fixed-adjoint channel ========================= *!
             if (fixed_here) then
                call point_weights(pt, eff, igrid, seeds, pw)
-               ! The Hessian weights fold into the mixed fourth derivative once
-               ! per point; every direction then reads three numbers per slot
+               ! Hessian weights folded into the mixed fourth derivative once per point
                call drop_field_f4_fold(ft_work, pt%n_active, pw%w_lsf2)
-               ! The base level-set weights of the response tangent: the ones
-               ! the gradient contracts, direction free, so the first block
-               ! writes them and every later block finds them in place. The
-               ! Hessian weight is handed out symmetrised: the nine
-               ! single-entry Hessian seeds are asymmetric and only the sum
-               ! over a transpose pair is meaningful (see the module header),
-               ! and every consumer contracts it with a symmetric tensor
+               ! Base level-set weights of `rt`, direction free, first block only
+               ! Hessian weight symmetrised: only the transpose-pair sum of the
+               ! single-entry seeds is meaningful
                if (want_rt_lsf .and. ilo == 1) then
                   rt%w_value(igrid) = pw%w_lsf0
                   rt%w_gradient(:, igrid) = pw%w_lsf1
@@ -1071,11 +905,8 @@ contains
 
             if (fixed_rank4_here) then
                !* ------------------------ Local direction set ------------------------ *!
-               ! The projected point, the jet and the anchor depend on the
-               ! nuclei only through the level set's active atoms and through
-               ! the owner, so every other column of this point's block is
-               ! exactly zero. The active atoms come first, in slot order, so
-               ! that a direction's local index below `n_active` *is* its slot.
+               ! Active atoms plus owner, every other column of the point is zero
+               ! Active atoms first: a local index up to `n_active` is the slot
                r4%ndir_atom = pt%n_active
                r4%dir_atoms(1:pt%n_active) = pt%active_idx(1:pt%n_active)
                if (.not. any(r4%dir_atoms(1:r4%ndir_atom) == pt%owner_idx)) then
@@ -1090,10 +921,7 @@ contains
                   end if
                end do
 
-               ! Rows are the active atoms and the owner, columns the same set,
-               ! so the whole square is resolved here -- once per point rather
-               ! than once per direction. Creating an entry commits nothing: an
-               ! untouched one holds an exact zero.
+               ! Pair square resolved once per point; an untouched entry holds an exact zero
                if (size(r4%pair_ent, 1) < r4%ndir_atom) then
                   deallocate (r4%pair_ent)
                   allocate (r4%pair_ent(r4%ndir_atom, r4%ndir_atom))
@@ -1106,11 +934,8 @@ contains
                end do
 
                !* --------------- Explicit nuclear motion of every column -------------- *!
-               ! The weighted mixed nuclear Hessian block of the level set over
-               ! the active slots: the explicit half of every column of this
-               ! point in one accessor call, where the chain would call
-               ! `hvp_jet_rA` once per column. Sized to the point rather than
-               ! grown, so the level set's product lands in it without a copy.
+               ! Explicit half of every column in one accessor call
+               ! Sized exactly to the point, written in place
                if (pt%n_active > 0) then
                   if (allocated(r4%mblk)) then
                      if (size(r4%mblk, 1) /= 3*pt%n_active) deallocate (r4%mblk)
@@ -1123,11 +948,9 @@ contains
                end if
 
                !* ------------------ The chain on the symmetrised basis ------------------ *!
-               ! Once per basis element rather than once per unit direction;
-               ! the module header gives the linearity argument. Elements
-               ! `1 .. 20` are the packed jet classes with the owner at rest,
-               ! `21 .. 23` move the owner alone. An element's field row and
-               ! anchor entries form one column of `L`.
+               ! Elements `1 .. 20`: packed jet classes, owner at rest
+               ! Elements `21 .. 23`: owner alone
+               ! Field row and anchor entries of an element form one column of `L`
                nrow = 3*pt%n_active + 3
                if (allocated(r4%lmat)) then
                   if (size(r4%lmat, 1) /= nrow .or. size(r4%oblk, 2) /= 3*r4%ndir_atom) then
@@ -1145,7 +968,7 @@ contains
                   r4%vdir(:, pt%owner_idx) = vown
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, r4%vdir, dv0, dv1, dv2, dv3, &
-                                             .false., context, sc, ft_work, field_row, &
+                                             0.0_wp, .false., context, sc, ft_work, field_row, &
                                              anchor_row, worker_error)
                   r4%vdir(:, pt%owner_idx) = 0.0_wp
                   if (allocated(worker_error)) then
@@ -1157,18 +980,35 @@ contains
                   end do
                   r4%lmat(nrow - 2:nrow, ibasis) = anchor_row
                end do
-               ! A latched element abandons the whole point, the response
-               ! channel below included: the run is failing and nothing will be
-               ! reduced out of it.
+               ! Latched element abandons the whole point, response channel included
                if (abort%requested) cycle
 
+               !* --------------- Branch element of a multi-branch point --------------- *!
+               ! Unit branch-weight tangent, jet and owner at rest: coefficient of
+               ! `d(wbranch)` in every column of the point
+               ! Closed per group after the loop by [[branch_weight_block]]
+               islot = 0
+               if (allocated(br_slot)) islot = br_slot(igrid)
+               if (islot > 0) then
+                  dv0 = 0.0_wp
+                  dv1 = 0.0_wp
+                  dv2 = 0.0_wp
+                  dv3 = 0.0_wp
+                  call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
+                                             igrid, seeds, pw, r4%vdir, dv0, dv1, dv2, dv3, &
+                                             1.0_wp, .false., context, sc, ft_work, field_row, &
+                                             anchor_row, worker_error)
+                  if (allocated(worker_error)) then
+                     call abort%latch_error(worker_error, igrid)
+                     cycle
+                  end if
+                  call fill_branch_point(pt, seeds, ft_work, field_row, anchor_row, &
+                                         br_pts(islot))
+               end if
+
                !* ----------------- Coordinates of every unit direction ------------------ *!
-               ! A unit direction of an active atom has the packed column of the
-               ! point's tensors as its jet coordinates; an owner outside the
-               ! active set does not enter the level set, so its column carries
-               ! its displacement alone. The active atoms come first in the
-               ! local set, so a direction's local index below `n_active` is
-               ! its slot.
+               ! Active atom: packed column of the point's tensors
+               ! Owner outside the active set: its displacement alone
                do idir = 1, 3*r4%ndir_atom
                   dir_loc = (idir - 1)/3 + 1
                   dir_axis = mod(idir - 1, 3) + 1
@@ -1185,18 +1025,15 @@ contains
                end do
 
                !* ----------------------- All columns of the point ----------------------- *!
-               ! `L C`, then the explicit nuclear motion of the active columns
-               ! read off the point's block; an owner outside the active set
-               ! has none
+               ! `L C` plus the explicit block on the active columns
                call gemm(r4%lmat, r4%cmat, r4%oblk)
                if (pt%n_active > 0) then
                   r4%oblk(1:3*pt%n_active, 1:3*pt%n_active) = &
                      r4%oblk(1:3*pt%n_active, 1:3*pt%n_active) + r4%mblk
                end if
 
-               ! The anchor entries belong to the owner's row; the field rows to
-               ! the active atoms' rows. Both land in column `(dir_axis,
-               ! dir_atom)` of the block.
+               ! Anchor entries to the owner's row, field rows to the active atoms'
+               ! rows, both in column `(dir_axis, dir_atom)`
                do idir = 1, 3*r4%ndir_atom
                   dir_loc = (idir - 1)/3 + 1
                   dir_axis = mod(idir - 1, 3) + 1
@@ -1215,12 +1052,8 @@ contains
                end do
 
                !* ---------------------- iSwiG switching channel ---------------------- *!
-               ! `f_i` depends on the nuclear geometry alone and its adjoint is
-               ! fixed, so the whole channel is one block over the influence
-               ! set, with no loop over directions at all. The influence set is
-               ! not the direction set, so its pairs are resolved on their own;
-               ! any pair the two share resolves to the one entry the field
-               ! channel already wrote, and lands after it.
+               ! One block over the influence set, no loop over directions
+               ! Pair shared with the field channel: same entry, lands after it
                if (swi%fixed) then
                   do ib = 1, swi%n
                      do ia = 1, swi%n
@@ -1235,11 +1068,7 @@ contains
 
             if (fixed_per_dir_here) then
                !* ---------- Explicit nuclear motion of the block's directions ---------- *!
-               ! With a batch, the weighted block applied to every direction of
-               ! the block in one accessor call: direction-free per-atom work,
-               ! then one contraction per direction that does not depend on
-               ! which other directions share the block. With one or two
-               ! directions the chain takes it from `hvp_jet_rA` instead.
+               ! Weighted block applied to every direction of the block in one call
                if (use_apply .and. pt%n_active > 0) then
                   call slots%lsf(thread_slot)%lsf%vjp_f2_rArB_apply(pw%w_lsf0, pw%w_lsf1, &
                                                                        pw%w_lsf2, dirs(:, :, ilo:ihi), &
@@ -1250,22 +1079,25 @@ contains
                do jdir = 1, nblk
                   idir_g = ilo + jdir - 1
 
-                  ! The jet tangent along the direction: the point's tensors
-                  ! contracted with the direction gathered onto the active
-                  ! slots. Components on atoms outside the active set do not
-                  ! enter the level set; the owner's enters through the chain.
+                  ! Direction gathered onto the active slots; the owner's component
+                  ! enters through the chain
                   do i = 1, pt%n_active
                      v_act(:, i) = dirs(:, pt%active_idx(i), idir_g)
                   end do
                   call drop_field_jet_tangent(ft_work, pt%n_active, v_act, dv0, dv1, dv2, dv3)
-                  ! The host's partial tangents on top, third order included:
-                  ! for a host-defined level set they are the whole tangent
+                  ! Host's partial tangents on top, third order included; the whole
+                  ! tangent for a host-defined level set
                   if (have_jets) call add_host_jet(host_jets(:, igrid, jdir), dv0, dv1, dv2, dv3)
+
+                  ! Branch-weight tangent of the direction, zero off a multi-branch group
+                  dwb_dir = 0.0_wp
+                  if (branched) dwb_dir = dwb_blk(igrid, jdir)
 
                   call fixed_direction_chain(self, slots%lsf(thread_slot)%lsf, pt, eff, &
                                              igrid, seeds, pw, dirs(:, :, idir_g), &
-                                             dv0, dv1, dv2, dv3, .not. use_apply, context, sc, &
-                                             ft_work, field_row, anchor_row, worker_error)
+                                             dv0, dv1, dv2, dv3, dwb_dir, .not. use_apply, &
+                                             context, sc, ft_work, field_row, anchor_row, &
+                                             worker_error)
                   if (allocated(worker_error)) then
                      call abort%latch_error(worker_error, igrid)
                      exit
@@ -1275,9 +1107,7 @@ contains
                         field_row(:, i) = field_row(:, i) + xrow(:, i, jdir)
                      end do
                   end if
-                  ! The fixed half of the level-set weight tangent: the chain's
-                  ! `dw_lsf`, the weights of the point moving at fixed adjoints;
-                  ! the Hessian entry symmetrised, as the base weight above
+                  ! Fixed half of the level-set weight tangent, Hessian entry symmetrised
                   if (want_rt_lsf) then
                      rt%dw_value(igrid, idir_g) = rt%dw_value(igrid, idir_g) + sc%dw_lsf0
                      rt%dw_gradient(:, igrid, idir_g) = rt%dw_gradient(:, igrid, idir_g) &
@@ -1294,8 +1124,7 @@ contains
                   hvp_threads(:, pt%owner_idx, jdir, thread_slot) = &
                      hvp_threads(:, pt%owner_idx, jdir, thread_slot) + anchor_row
 
-                  ! The switching block of the point contracted with the
-                  ! direction over the influence set
+                  ! Switching block contracted with the direction over the influence set
                   if (swi%fixed) then
                      call contract_iswig_block(swi%n, swi%idx, swi%blk, eff%w_f(igrid), &
                                                dirs(:, :, idir_g), &
@@ -1313,10 +1142,7 @@ contains
                   rw%w_lsf0 = 0.0_wp
                   rw%w_lsf1 = 0.0_wp
                   rw%w_lsf2 = 0.0_wp
-                  ! With a model response the moving adjoints carry a position
-                  ! and a normal channel, and the normal fold runs on them as
-                  ! it does on the gradient path; without one both are the
-                  ! identically zero copies the header describes.
+                  ! Normal fold only with a model response, else hard zeros
                   if (have_omega) then
                      call seed_normal_channel(pt%state, deff(jdir), igrid, pt%state%lsf2_rr, &
                                               rw%w_lsf1, rw%w_xyz)
@@ -1327,8 +1153,7 @@ contains
                                                seeds%res(1:drop_n_jet_seeds), &
                                                seeds%x(:, 1:drop_n_jet_seeds), &
                                                rw%w_lsf0, rw%w_lsf1, rw%w_lsf2)
-                  ! The response half of the level-set weight tangent: the
-                  ! moving adjoints contracted at the fixed point
+                  ! Response half of the level-set weight tangent
                   if (want_rt_lsf) then
                      idir_g = ilo + jdir - 1
                      rt%dw_value(igrid, idir_g) = rt%dw_value(igrid, idir_g) + rw%w_lsf0
@@ -1338,8 +1163,8 @@ contains
                                                           + 0.5_wp*(rw%w_lsf2 + transpose(rw%w_lsf2))
                   end if
 
-                  !* ------------- Field channel: the weighted row, read off ---------- *!
-                  ! the jet tensors formed once above; no LSF call per direction
+                  !* ------------------------- Field channel -------------------------- *!
+                  ! Row off the point's jet tensors, no LSF call per direction
                   call drop_field_jet_contract(ft_work, pt%n_active, rw%w_lsf0, rw%w_lsf1, &
                                                rw%w_lsf2, pt%vjp_pt)
                   do i = 1, pt%n_active
@@ -1393,16 +1218,15 @@ contains
             return
          end if
 
-         ! Deterministic reductions: fixed thread order, independent of
-         ! scheduling. The column channels take one block's columns at a time,
-         ! and blocks are disjoint in the direction index, so a direction sees
-         ! exactly the same additions in the same order however the blocking
-         ! falls.
+         ! Deterministic reductions in fixed thread order
+         ! Blocks are disjoint in the direction index: columns independent of blocking
          if (fixed_rank4_here) then
             do ithread = 1, slots%nthreads
                call hess_sparse_reduce(hess_threads(ithread), hess_fixed)
                call hess_sparse_destroy(hess_threads(ithread))
             end do
+            ! Branch-weight motion of the multi-branch groups, serial, in grid order
+            if (branched) call branch_weight_block(self, br_slot, br_pts, hess_fixed)
          end if
          if (want_cols) then
             do ithread = 1, slots%nthreads
@@ -1421,25 +1245,20 @@ contains
    !*                     Per-point pieces of the fixed channel                         *!
    !* ================================================================================= *!
 
-   !> Apply the 16 basis seeds of one grid point, with or without their tangents
+   !> Apply the 16 basis seeds of one grid point
    !>
-   !> The single seed-application site of the traversal. The jet and anchor
-   !> halves are the shipped ones, written into one `drop_n_point_seeds` array
-   !> in the order [[fill_seed_basis]] lays out, so the second-order chain and
-   !> the response contractions index the same object.
+   !> - Single seed-application site of the traversal
+   !> - Jet seeds, then anchor seeds, in the order of [[fill_seed_basis]]
+   !> - `dstate_seed` written only with `want_dstate`, fixed channel only
    !>
-   !> `want_dstate` rather than an optional argument on the caller's side: the
-   !> derived-state tangents are the fixed channel's alone, and a
-   !> response-only traversal must not pay for them.
-   !>
-   !> @param[in]    state       Per-grid point forward state
-   !> @param[in]    kkt         Solved KKT sensitivities of the point
-   !> @param[in]    want_dstate Whether the derived-state tangents are needed
-   !> @param[out]   res_seed    Linear response of each seed
-   !> @param[out]   seed_x      Induced point motion and multiplier change of each seed
-   !> @param[inout] dstate_seed Tangent of the derived state, when asked for
+   !> @param[in]     state        forward state of the point
+   !> @param[in]     kkt          solved KKT sensitivities of the point
+   !> @param[in]     want_dstate  request the derived-state tangents
+   !> @param[out]    res_seed     linear response per seed
+   !> @param[out]    seed_x       point motion and multiplier change per seed
+   !> @param[in,out] dstate_seed  derived-state tangent per seed, untouched unless requested
    subroutine point_seed_basis(state, kkt, want_dstate, res_seed, seed_x, dstate_seed)
-      !> Per-grid point forward state
+      !> Forward state of the grid point
       type(drop_seed_state_type), intent(in) :: state
       !> Solved KKT sensitivities
       real(wp), intent(in) :: kkt(:, :)
@@ -1470,24 +1289,17 @@ contains
 
    !> Contract the fixed adjoints of one grid point into its weight set
    !>
-   !> The outward-normal channel, as on the gradient path, and the 13 jet-seed
-   !> contributions scattered into the level-set adjoint weights. The chain
-   !> below needs `normal_grad` and `nwn` again to build their tangents, so they
-   !> are asked of the fold rather than recomputed: a second copy of one
-   !> floating-point chain is free to contract differently, and
-   !> [[seed_normal_channel]] owns this one. Both come back zero when the
-   !> channel is inactive.
+   !> - Normal fold as on the gradient path, then the 13 jet-seed contributions
+   !> - `normal_grad` and `nwn` come from [[seed_normal_channel]], never
+   !>   recomputed here; zero when the channel is inactive
+   !> - Jet seeds only: anchor seeds feed the owner's row in the chain,
+   !>   [[scatter_jet_weight]] has no anchor case
    !>
-   !> The bound of the seed loop is a *jet* one: only the 13 jet slots have a
-   !> weight to land in. An anchor seed's contraction belongs to the owner's
-   !> gradient row instead, which the chain handles -- and is why
-   !> [[scatter_jet_weight]] deliberately has no anchor case.
-   !>
-   !> @param[in]  pt    Point scratch, prologue run
-   !> @param[in]  eff   Folded surface adjoints, held fixed
-   !> @param[in]  igrid Grid point
-   !> @param[in]  seeds Applied basis seeds of the point
-   !> @param[out] pw    Weight set of the point
+   !> @param[in]  pt     point scratch, prologue run
+   !> @param[in]  eff    folded surface adjoints, held fixed
+   !> @param[in]  igrid  grid point
+   !> @param[in]  seeds  applied basis seeds of the point
+   !> @param[out] pw     weight set of the point
    pure subroutine point_weights(pt, eff, igrid, seeds, pw)
       !> Point scratch
       type(drop_point_scratch_type), intent(in) :: pt
@@ -1511,33 +1323,28 @@ contains
                                    pw%w_lsf0, pw%w_lsf1, pw%w_lsf2)
    end subroutine point_weights
 
-   !> One element of the symmetrised basis of the chain's direction inputs
-   !>
-   !> [[fixed_direction_chain]] reads a direction through five quantities, the
-   !> jet tangent `(dv0, dv1, dv2, dv3)` at the frozen point and the owner's
-   !> displacement, and is linear in the five together. `dv2` and `dv3` are
-   !> symmetric in their spatial indices, so that space has dimension
-   !> `1 + 3 + 6 + 10 + 3 = 23`, and its basis is enumerated here in the order
-   !> of [[drop_field_jet_column_packed]] followed by the three owner axes:
+   !> Build one element of the symmetrised basis of the chain's direction inputs
    !>
    !>     1        dv0 = 1
    !>     2 .. 4   dv1 = e_a
-   !>     5 .. 10  dv2 = one at (a, b) and at (b, a),   a <= b
-   !>     11 .. 20 dv3 = one at every permutation of (a, b, c),   a <= b <= c
+   !>     5 .. 10  dv2 = 1 at (a, b) and (b, a)
+   !>     11 .. 20 dv3 = 1 at every permutation of (a, b, c)
    !>     21 .. 23 owner displacement e_a
    !>
-   !> An element of a symmetric class holds a one at *every* index of the
-   !> class, which is what makes the packed coordinate of that class -- its
-   !> representative entry, read once -- the right coefficient: contracting the
-   !> chain's images of these elements with the packed coordinates of a
-   !> direction returns the chain of the direction's full, symmetric tangent.
+   !> - Jet tangent `(dv0, dv1, dv2, dv3)` plus owner displacement, dimension
+   !>   `1 + 3 + 6 + 10 + 3 = 23`
+   !> - Order of [[drop_field_jet_column_packed]], `a <= b` and `a <= b <= c`,
+   !>   then the three owner axes
+   !> - Symmetric class holds a one at every index of the class, so its packed
+   !>   coordinate is the coefficient
+   !> - No element for the branch-weight tangent, closed per group instead
    !>
-   !> @param[in]  ibasis Basis element, `1 .. drop_n_chain_basis`
-   !> @param[out] dv0    Jet-value component
-   !> @param[out] dv1    Jet-gradient component [3]
-   !> @param[out] dv2    Jet-Hessian component [3, 3]
-   !> @param[out] dv3    Jet third-derivative component [3, 3, 3]
-   !> @param[out] vown   Owner displacement [3]
+   !> @param[in]  ibasis  basis element, `1 .. drop_n_chain_basis`
+   !> @param[out] dv0     jet-value component
+   !> @param[out] dv1     jet-gradient component `(3)`
+   !> @param[out] dv2     jet-Hessian component `(3, 3)`
+   !> @param[out] dv3     jet third-derivative component `(3, 3, 3)`
+   !> @param[out] vown    owner displacement `(3)`
    pure subroutine chain_basis_element(ibasis, dv0, dv1, dv2, dv3, vown)
       !> Basis element
       integer, intent(in) :: ibasis
@@ -1582,62 +1389,43 @@ contains
       end if
    end subroutine chain_basis_element
 
-   !> The second-order chain of the fixed channel along one nuclear direction
+   !> Run the second-order chain of the fixed channel along one nuclear direction
    !>
-   !> Given the jet tangent `(dv0, dv1, dv2, dv3)` of the level set along `v` at
-   !> the *frozen* projected point, returns the gradient column of
-   !> `(dJ^T/dv) omega` at this point: the field row over the active slots
-   !> (`field_row(:, 1:n_active)`, overwritten) and the three anchor-seed
-   !> entries of the owner (`anchor_row`). The switching channel is not part
-   !> of the chain, because it needs no seed; the caller contracts it.
+   !> - Gradient column of `(dJ^T/dv) omega` at the point: field row over the
+   !>   active slots and the three anchor entries of the owner
+   !> - Switching channel not included, contracted by the caller
+   !> - Called inside an OpenMP region: all state through arguments, no host
+   !>   association
+   !> - Input tangents are total, point motion included
+   !> - `dw_lsf2` only against the symmetric `lsf3_rr_rA`, see the module header
+   !> - Linear in `dwb` jointly with the jet tangent and the owner displacement
    !>
-   !> Everything the chain reads comes in through its arguments, and that is a
-   !> constraint rather than a style: it is called from inside an OpenMP
-   !> region, and a procedure that reached the traversal's variables by host
-   !> association would read the shared originals of what the threads hold
-   !> privately.
-   !>
-   !> A nuclear direction is just another seed of the same linear map, so
-   !> [[apply_seed]] produces the whole forward tangent of the point; the
-   !> input tangents are *total* (`state%lsf1_r` is grad S at the projected
-   !> point, whose `v`-tangent carries the point motion), which is what
-   !> `res_v%dg` and `res_v%dH` already are, and the third spatial derivative
-   !> is folded by hand. The seed right-hand sides move as `K dx = db - dK x`
-   !> on the same factors, where only the three gradient seeds carry a `db`.
-   !> Every basis seed is a constant matrix, so its own tangent vanishes and
-   !> only the induced point motion moves.
-   !>
-   !> `dw_lsf2` is read only inside [[drop_field_tangent_dir]], against
-   !> `lsf3_rr_rA`; see the module header for why that is what makes the nine
-   !> asymmetric Hessian seeds legitimate. Never read a single off-diagonal
-   !> entry of it on its own.
-   !>
-   !> @param[in]    self         DROP cavity instance, for the objective parameter
-   !> @param[in]    lsf          This thread's level set, prepared at the point
-   !> @param[in]    pt           Point scratch, prologue run
-   !> @param[in]    eff          Folded surface adjoints, held fixed
-   !> @param[in]    igrid        Grid point
-   !> @param[in]    seeds        Applied basis seeds of the point, with tangents
-   !> @param[in]    pw           Weight set of the point
-   !> @param[in]    v            Nuclear direction `(3, nsph)`
-   !> @param[in]    dv0          Jet tangent of the value along `v` at the frozen point
-   !> @param[in]    dv1          Jet tangent of the gradient
-   !> @param[in]    dv2          Jet tangent of the Hessian
-   !> @param[in]    dv3          Jet tangent of the third derivative
-   !> @param[in]    explicit     Include the explicit nuclear motion of the field row through
-   !>                            `hvp_jet_rA`; `.false.` when the caller adds it from a block
-   !> @param[in]    context      Calling routine, used to prefix the diagnostics
-   !> @param[inout] sc           Per-direction temporaries
-   !> @param[inout] ft_work      Jet tensors of the point, fills and fold run
-   !> @param[inout] field_row    Field row of the column `(3, >= n_active)`
-   !> @param[out]   anchor_row   Owner entries of the column
-   !> @param[out]   worker_error Failure of the bordered solves, if any
+   !> @param[in]     self          DROP cavity instance, for the objective parameter
+   !> @param[in]     lsf           level set of this thread, prepared at the point
+   !> @param[in]     pt            point scratch, prologue run
+   !> @param[in]     eff           folded surface adjoints, held fixed
+   !> @param[in]     igrid         grid point
+   !> @param[in]     seeds         applied basis seeds of the point, with tangents
+   !> @param[in]     pw            weight set of the point
+   !> @param[in]     v             nuclear direction `(3, nsph)`
+   !> @param[in]     dv0           jet tangent of the value along `v` at the frozen point
+   !> @param[in]     dv1           jet tangent of the gradient
+   !> @param[in]     dv2           jet tangent of the Hessian
+   !> @param[in]     dv3           jet tangent of the third derivative
+   !> @param[in]     dwb           branch-weight tangent of the point along `v`
+   !> @param[in]     explicit      include the `hvp_jet_rA` motion, else the caller adds it
+   !> @param[in]     context       calling routine, prefixes the diagnostics
+   !> @param[in,out] sc            per-direction temporaries
+   !> @param[in,out] ft_work       jet tensors of the point, fills and fold run
+   !> @param[in,out] field_row     field row `(3, >= n_active)`, active slots overwritten
+   !> @param[out]    anchor_row    owner entries of the column
+   !> @param[out]    worker_error  failure of the bordered solves, if any
    subroutine fixed_direction_chain(self, lsf, pt, eff, igrid, seeds, pw, v, &
-                                    dv0, dv1, dv2, dv3, explicit, context, sc, ft_work, &
+                                    dv0, dv1, dv2, dv3, dwb, explicit, context, sc, ft_work, &
                                     field_row, anchor_row, worker_error)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
-      !> This thread's level set, prepared at the point
+      !> Level set of this thread, prepared at the point
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       !> Point scratch
       type(drop_point_scratch_type), intent(in) :: pt
@@ -1653,6 +1441,8 @@ contains
       real(wp), intent(in) :: v(:, :)
       !> Jet tangent along `v` at the frozen point
       real(wp), intent(in) :: dv0, dv1(3), dv2(3, 3), dv3(3, 3, 3)
+      !> Tangent of the point's branch weight along `v`
+      real(wp), intent(in) :: dwb
       !> Whether the field row includes the explicit nuclear motion
       logical, intent(in) :: explicit
       !> Calling routine
@@ -1670,15 +1460,16 @@ contains
 
       !> One seed's contribution
       real(wp) :: contribution
+      !> Branch motion of the Lebedev weight
+      real(wp) :: dwleb_branch
       !> Cartesian and seed indices
       integer :: iaxis, ibasis, k
 
       anchor_row = 0.0_wp
 
       !* ------------- Directional response of the projected point -------------- *!
-      ! The projection rides on the jet tangent through the same bordered
-      ! system the seeds use, with the anchor moving rigidly with its owner:
-      ! `d^2 phi/(dr dR_owner) = -alpha I`.
+      ! Same bordered system as the seeds, anchor rigid with its owner:
+      ! `d^2 phi/(dr dR_owner) = -alpha I`
       sc%rhs_v = 0.0_wp
       sc%rhs_v(1:3, 1) = pt%state%lambda_val*dv1 + self%param%phi_alpha*v(:, pt%owner_idx)
       sc%rhs_v(4, 1) = -dv0
@@ -1702,11 +1493,24 @@ contains
       sc%dinp_v%dw_f0 = sc%res_v%dw_f
       sc%dinp_v%dwleb = sc%res_v%dwleb
       sc%dinp_v%dxi0 = sc%res_v%dxi
-      ! The anchor's Lebedev weight is a property of the rigid sphere and the
-      ! branch weight is one for every group this channel admits, so both
-      ! tangents vanish; see the scope limit in `hessian.f90`.
+      ! Anchor Lebedev weight belongs to the rigid sphere, zero tangent
       sc%dinp_v%danchor_wleb0 = 0.0_wp
-      sc%dinp_v%dwbranch = 0.0_wp
+      ! `apply_seed` froze the branch weight: its motion is added back to
+      ! `d(wleb)` and `d(xi0)`, guards as in `drop_surface_tangent_core`
+      ! Zero off a multi-branch anchor group
+      sc%dinp_v%dwbranch = dwb
+      if (dwb /= 0.0_wp .and. pt%state%wbranch > tiny(1.0_wp)) then
+         dwleb_branch = (pt%state%wleb/pt%state%wbranch)*dwb
+         sc%dinp_v%dwleb = sc%dinp_v%dwleb + dwleb_branch
+         if (pt%state%wleb > seed_weight_tol) then
+            sc%dinp_v%dxi0 = sc%dinp_v%dxi0 &
+                             - 0.5_wp*pt%state%xi0*dwleb_branch/pt%state%wleb
+         end if
+      end if
+
+      ! Tangent of `phi1_r = alpha (r* - anchor)`, anchor rigid with its owner;
+      ! read by the branch term alone
+      sc%dphi1_v = self%param%phi_alpha*(sc%dr_v - v(:, pt%owner_idx))
 
       !* --------------------- Tangent of the normal fold ----------------------- *!
       sc%dnormal_grad = 0.0_wp
@@ -1741,13 +1545,20 @@ contains
                                  seed_dzero1, seed_dzero2, &
                                  sc%dseed_x(1:3, ibasis), sc%dseed_x(4, ibasis), &
                                  seeds%res(ibasis), seeds%dstate(ibasis), sc%dres)
-         contribution = seed_contribution_tangent(eff, igrid, pw%w_xyz, sc%dw_xyz, &
-                                                  seeds%x(1:3, ibasis), &
-                                                  sc%dseed_x(1:3, ibasis), sc%dres)
          if (ibasis > drop_n_jet_seeds) then
-            ! Anchor seed: the gradient row it feeds belongs to the owner
-            anchor_row(ibasis - drop_n_jet_seeds) = contribution
+            ! Anchor seed: feeds the owner's row, rigid-motion shift
+            ! `phi1_r(iaxis)` moves with `phi1_r`
+            iaxis = ibasis - drop_n_jet_seeds
+            contribution = seed_contribution_tangent(eff, igrid, pw%w_xyz, sc%dw_xyz, &
+                                                     seeds%x(1:3, ibasis), &
+                                                     sc%dseed_x(1:3, ibasis), sc%dres, &
+                                                     pt%phi1_r, sc%dphi1_v, sc%dphi1_v(iaxis))
+            anchor_row(iaxis) = contribution
          else
+            contribution = seed_contribution_tangent(eff, igrid, pw%w_xyz, sc%dw_xyz, &
+                                                     seeds%x(1:3, ibasis), &
+                                                     sc%dseed_x(1:3, ibasis), sc%dres, &
+                                                     pt%phi1_r, sc%dphi1_v)
             call scatter_jet_weight(ibasis, contribution, sc%dw_lsf0, sc%dw_lsf1, sc%dw_lsf2)
          end if
       end do
@@ -1767,47 +1578,33 @@ contains
 
    !> Build the directional tangent of the folded surface weights
    !>
-   !> Runs the forward tangent once for the whole batch and the weight tangent
-   !> once per direction. The second loop is **serial on purpose**: it is the
-   !> stage that carries [[branch_phi_adj_tangent]]'s group reduction, the only
-   !> cross-point coupling in the scheme, and the primitive is serial over the
-   !> whole grid, so every contiguous anchor group is seen whole by exactly one
-   !> call. Directions are the admissible parallel axis if this ever needs one;
-   !> grid points are not, and never will be.
+   !> - Pass 1: forward tangent, once for the whole block
+   !> - Pass 2: weight tangent, once per direction, serial
+   !> - Grid points are never a parallel axis: [[branch_phi_adj_tangent]]
+   !>   reduces over whole anchor groups; directions may be
+   !> - Pass 2b, with `omega_v`: model response folded at the base geometry and
+   !>   added; curvature weights without `want_curvature` are refused
+   !> - Without `omega_v`, `deff(idir)` carries `w_xi`, `w_f` and
+   !>   `branch_phi_adj` only
+   !> - `dirs` is one block; `deff` and the `(ngrid, ndir)` arrays are block sized
    !>
-   !> `deff(idir)` carries the three channels pass 2 emits and nothing else --
-   !> see the module header for why the other five are absent rather than zero.
-   !>
-   !> `dirs` is one *block* of the caller's direction set and both extents are
-   !> taken from it, so `deff` is indexed within the block and the seven
-   !> `(ngrid, ndir)` arrays this routine holds are block sized. That is where
-   !> the working set of the whole traversal is bounded; see
-   !> `drop_hvp_chunk_dirs`.
-   !>
-   !> @param[in]  self  DROP cavity instance
-   !> @param[in]  acc   Raw surface adjoints, held fixed
-   !> @param[in]  eff   Folded weights, as [[prepare_surface_weights]] returned them
-   !> @param[in]  dirs       Nuclear directions of one block, `(3, nsph, ndir)`
-   !> @param[in]  contracted Pass 1 takes its jet tangents through the level set's
-   !>                        contracted accessor (the per-direction mode) rather
-   !>                        than off materialised tensors; keyed on the mode and
-   !>                        not on the block, so that blocking stays exact
-   !> @param[in]  want_curvature Whether the traversal's prologue carries the
-   !>                            curvature invariants; a model response with
-   !>                            curvature weights needs them
-   !> @param[in]  context    Calling routine, used to prefix the diagnostics
-   !> @param[out] deff       Tangent of the folded weights, one element per direction
-   !> @param[out] error      Error object, allocated on failure
-   !> @param[inout] omega_v  Surface-adjoint response of the model, optional
-   !> @param[inout] hvp_direct Non-surface columns of the model response, added to;
-   !>                          required with `omega_v`
-   !> @param[inout] rt       Response tangent of the whole direction set, optional
-   !> @param[in]    first    Global index of the block's first direction; required
-   !>                        with `rt`
-   !> @param[in]    host_jets The host's jet tangents of the block `(40, ngrid, ndir)`,
-   !>                         handed to the forward tangent; optional
+   !> @param[in]     self            DROP cavity instance
+   !> @param[in]     acc             raw surface adjoints, held fixed
+   !> @param[in]     eff             folded weights from [[prepare_surface_weights]]
+   !> @param[in]     dirs            nuclear directions of one block `(3, nsph, ndir)`
+   !> @param[in]     contracted      contracted accessor in pass 1; set by mode, not by block
+   !> @param[in]     want_curvature  prologue carries the curvature invariants
+   !> @param[in]     context         calling routine, prefixes the diagnostics
+   !> @param[out]    deff            tangent of the folded weights per direction
+   !> @param[out]    d_wbranch       branch-weight tangent `(ngrid, ndir)`
+   !> @param[out]    error           allocated on failure
+   !> @param[in,out] omega_v         surface-adjoint response of the model, optional
+   !> @param[in,out] hvp_direct      non-surface columns, added to; required with `omega_v`
+   !> @param[in,out] rt              response tangent of the whole direction set, optional
+   !> @param[in]     first           global index of the first direction; required with `rt`
+   !> @param[in]     host_jets       host's jet tangents `(40, ngrid, ndir)`, optional
    subroutine weight_tangents(self, acc, eff, dirs, contracted, want_curvature, context, &
-                              deff, error, omega_v, hvp_direct, rt, first, host_jets)
+                              deff, d_wbranch, error, omega_v, hvp_direct, rt, first, host_jets)
       !> DROP cavity instance
       class(cavity_type_drop), intent(in) :: self
       !> Raw surface adjoints
@@ -1824,6 +1621,8 @@ contains
       character(len=*), intent(in) :: context
       !> Tangent of the folded weights, one element per direction
       type(drop_surface_weights_type), allocatable, intent(out) :: deff(:)
+      !> Directional tangent of the branch weight
+      real(wp), allocatable, intent(out) :: d_wbranch(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Surface-adjoint response of the model
@@ -1834,19 +1633,16 @@ contains
       type(response_tangent_type), intent(inout), optional :: rt
       !> Global index of the block's first direction
       integer, intent(in), optional :: first
-      !> The host's jet tangents of the block
+      !> Host's jet tangents of the block
       real(wp), intent(in), optional :: host_jets(:, :, :)
 
-      !> Every channel of the surface tangent; pass 2 reads three of them, a
-      !> model response all of them
+      !> Surface tangent, every channel
       type(cavity_surface_tangent_type) :: tangent
-      !> Directional tangent of the branch weight
-      real(wp), allocatable :: d_wbranch(:, :)
-      !> Raw adjoint response of the model, one accumulator per direction, and
-      !> the fold of one of them
+      !> Raw adjoint response of the model, one accumulator per direction
       type(cavity_surface_adjoint_type), allocatable :: dacc(:)
+      !> Fold of one raw adjoint response
       type(drop_surface_weights_type) :: eff_v
-      !> Branch bookkeeping, defaulted when the cavity carries none
+      !> Branch bookkeeping, single-branch default when the cavity carries none
       integer, allocatable :: branch_count(:), anchor_id(:)
       !> Grid extent and direction index
       integer :: ngrid, ndir, idir
@@ -1855,10 +1651,8 @@ contains
       ndir = size(dirs, 3)
 
       !* -------------------------- Pass 1: forward tangent --------------------------- *!
-      ! The curvature channels are requested only for a model response, and
-      ! only when the primal adjoints carry curvature weights: that is the
-      ! configuration the prologue of the contraction walk runs with, and a
-      ! response that needs more is refused below rather than served a zero.
+      ! Curvature channels only for a model response whose primal adjoints
+      ! carry curvature weights, the configuration of the contraction walk
       call tangent%init(ngrid, ndir, present(omega_v) .and. want_curvature)
       allocate (d_wbranch(ngrid, ndir))
       call drop_surface_tangent_core(self, dirs, tangent%have_curvature, tangent, error, &
@@ -1866,8 +1660,7 @@ contains
                                      host_jets=host_jets)
       if (allocated(error)) return
 
-      ! The motion of the surface points is what the host moves its own
-      ! operators with; it is handed out for every direction of the block
+      ! Surface point motion for the host, every direction of the block
       if (present(rt)) then
          if (.not. present(first)) then
             call fatal_error(error, context//": the response tangent needs the block offset")
@@ -1876,9 +1669,8 @@ contains
          rt%xyz(:, :, first:first + ndir - 1) = tangent%d_xyz
       end if
 
-      ! `compute_branch_phi_adj` is skipped by the primal when the cavity holds
-      ! no branch bookkeeping; a single-branch stand-in reproduces that early
-      ! exit in the tangent instead of duplicating the guard.
+      ! Single-branch stand-in reproduces the primal's early exit when the
+      ! cavity holds no branch bookkeeping
       allocate (branch_count(ngrid), source=1)
       allocate (anchor_id(ngrid), source=0)
       if (allocated(self%branch_count)) branch_count = self%branch_count(1:ngrid)
@@ -1889,9 +1681,8 @@ contains
       do idir = 1, ndir
          allocate (deff(idir)%w_xi(ngrid), deff(idir)%w_f(ngrid), &
                    deff(idir)%branch_phi_adj(ngrid))
-         ! `have_wn` and `have_wk` keep their `.false.` default: the normal and
-         ! curvature adjoints are copies of the fixed raw channels, so their
-         ! tangent is identically zero.
+         ! `have_wn` and `have_wk` stay `.false.`: normal and curvature adjoints
+         ! are copies of the fixed raw channels, zero tangent
          call prepare_surface_weights_tangent(acc, eff, .true., &
                                               self%a(1:ngrid), self%wleb(1:ngrid), &
                                               self%xi0(1:ngrid), self%wbranch(1:ngrid), &
@@ -1921,9 +1712,8 @@ contains
       if (allocated(error)) return
       call tangent%destroy()
 
-      ! The fold is linear in the raw adjoints, so the response folded at the
-      ! base geometry adds to the tangent of the fold of the fixed adjoints;
-      ! the copied channels come over whole, they had no tangent before.
+      ! Fold is linear in the raw adjoints: the response folded at the base
+      ! geometry adds to `d(eff)`; copied channels come over whole
       do idir = 1, ndir
          call check_surface_adjoint(self, dacc(idir), context//" (adjoint response)", error)
          if (allocated(error)) return
@@ -1943,24 +1733,253 @@ contains
          call move_alloc(eff_v%w_k2, deff(idir)%w_k2)
          deff(idir)%have_wn = eff_v%have_wn
          deff(idir)%have_wk = eff_v%have_wk
-         ! Release the raw response as soon as it is folded; the block's peak
-         ! is what the chunk size was chosen against
+         ! Raw response released once folded, bounds the block's peak memory
          call dacc(idir)%destroy()
       end do
 
    end subroutine weight_tangents
 
    !* ================================================================================= *!
+   !*                  Branch-weight motion of the fixed channel                        *!
+   !* ================================================================================= *!
+
+   !> Compute the branch-weight tangents of one block, fixed-only traversal
+   !>
+   !> - Forward tangent run for its `d(wbranch)` channel alone
+   !> - Contracted, as in [[weight_tangents]] for the per-direction mode: same
+   !>   tangent to the bit from both sources
+   !>
+   !> @param[in]  self       DROP cavity instance
+   !> @param[in]  dirs       nuclear directions of one block `(3, nsph, ndir)`
+   !> @param[out] d_wbranch  branch-weight tangent `(ngrid, ndir)`
+   !> @param[out] error      allocated on failure
+   subroutine branch_weight_tangents(self, dirs, d_wbranch, error)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Nuclear directions
+      real(wp), intent(in) :: dirs(:, :, :)
+      !> Directional tangent of the branch weight
+      real(wp), allocatable, intent(out) :: d_wbranch(:, :)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      !> Surface tangent, filled but not read
+      type(cavity_surface_tangent_type) :: tangent
+
+      call tangent%init(self%ngrid, size(dirs, 3), .false.)
+      allocate (d_wbranch(self%ngrid, size(dirs, 3)))
+      call drop_surface_tangent_core(self, dirs, .false., tangent, error, &
+                                     d_wbranch=d_wbranch, contracted=.true.)
+      call tangent%destroy()
+   end subroutine branch_weight_tangents
+
+   !> Number the grid points of the multi-branch anchor groups
+   !>
+   !> - Membership from [[next_branch_group]], not from `branch_count > 1`:
+   !>   only a group's head is gated on the count
+   !> - Same group walk as [[branch_weight_block]]
+   !>
+   !> @param[in]  self     DROP cavity instance, branch bookkeeping allocated
+   !> @param[out] br_slot  element of every group point in `br_pts`, zero elsewhere
+   !> @param[out] br_pts   branch elements, one per group point, unfilled
+   subroutine branch_point_slots(self, br_slot, br_pts)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Element of every group point
+      integer, allocatable, intent(out) :: br_slot(:)
+      !> Branch elements
+      type(drop_branch_point_type), allocatable, intent(out) :: br_pts(:)
+
+      !> Group bookkeeping and the running element count
+      integer :: cursor, ifirst, ilast, igrid, nslot
+      !> Whether a further anchor group exists
+      logical :: found
+
+      allocate (br_slot(self%ngrid), source=0)
+      nslot = 0
+      cursor = 1
+      do
+         call next_branch_group(self%branch_count(1:self%ngrid), &
+                                self%anchor_id(1:self%ngrid), cursor, ifirst, ilast, found)
+         if (.not. found) exit
+         do igrid = ifirst, ilast
+            nslot = nslot + 1
+            br_slot(igrid) = nslot
+         end do
+      end do
+      allocate (br_pts(nslot))
+   end subroutine branch_point_slots
+
+   !> Store the two point-local factors of the branch-weight motion
+   !>
+   !> - `lrow`: chain column on a unit branch-weight tangent
+   !> - `prow`: nuclear gradient of `Phi = 0.5 alpha |r* - anchor|^2`
+   !> - Jet seeds: `phi1_r . dr`, turned into a field row off the jet tensors
+   !> - Anchor seeds: same less the rigid-motion shift on the owner, as in
+   !>   [[seed_contribution]]
+   !>
+   !> @param[in]  pt          point scratch, prologue run
+   !> @param[in]  seeds       applied basis seeds of the point
+   !> @param[in]  ft_work     jet tensors of the point
+   !> @param[in]  field_row   field row of the unit branch-weight chain
+   !> @param[in]  anchor_row  owner entries of the unit branch-weight chain
+   !> @param[out] bp          branch element of the point
+   pure subroutine fill_branch_point(pt, seeds, ft_work, field_row, anchor_row, bp)
+      !> Point scratch
+      type(drop_point_scratch_type), intent(in) :: pt
+      !> Applied basis seeds
+      type(drop_point_seeds_type), intent(in) :: seeds
+      !> Jet tensors of the point
+      type(drop_field_tangent_work_type), intent(in) :: ft_work
+      !> Column of the unit branch-weight chain
+      real(wp), intent(in) :: field_row(:, :), anchor_row(3)
+      !> Branch element of the point
+      type(drop_branch_point_type), intent(out) :: bp
+
+      !> Level-set adjoints of a unit branch adjoint
+      real(wp) :: w0, w1(3), w2(3, 3)
+      !> Row count, seed and Cartesian indices
+      integer :: nrow, ibasis, iaxis
+
+      nrow = pt%n_active + 1
+      allocate (bp%atoms(nrow), bp%lrow(3, nrow), bp%prow(3, nrow))
+      bp%atoms(1:pt%n_active) = pt%active_idx(1:pt%n_active)
+      bp%atoms(nrow) = pt%owner_idx
+
+      bp%lrow(:, 1:pt%n_active) = field_row(:, 1:pt%n_active)
+      bp%lrow(:, nrow) = anchor_row
+
+      w0 = 0.0_wp
+      w1 = 0.0_wp
+      w2 = 0.0_wp
+      do ibasis = 1, drop_n_jet_seeds
+         call scatter_jet_weight(ibasis, dot_product(pt%phi1_r, seeds%x(1:3, ibasis)), &
+                                 w0, w1, w2)
+      end do
+      bp%prow = 0.0_wp
+      call drop_field_jet_contract(ft_work, pt%n_active, w0, w1, w2, bp%prow)
+      do iaxis = 1, drop_n_anchor_seeds
+         bp%prow(iaxis, nrow) = &
+            dot_product(pt%phi1_r, seeds%x(1:3, drop_n_jet_seeds + iaxis)) - pt%phi1_r(iaxis)
+      end do
+   end subroutine fill_branch_point
+
+   !> Close the branch-weight motion of the rank-4 fixed channel over its groups
+   !>
+   !>     H(:, :, beta, B)  +=  sum_m  L_m  d(p_m)/dR_(beta, B)
+   !>
+   !> - `L_m`: chain of point `m` on a unit branch-weight tangent
+   !> - `p_m`: softmax weight of point `m`, derivative from
+   !>   [[branch_weight_type:weights_grad]]
+   !> - One parameter per Cartesian component of the atoms the group reaches,
+   !>   the union of the members' active atoms and owners
+   !> - Columns reach atoms outside a point's level set, hence the dense block
+   !> - Serial, in grid order, after the thread reduction: same additions in
+   !>   the same order whatever the thread count
+   !>
+   !> @param[in]     self        DROP cavity instance
+   !> @param[in]     br_slot     element of every group point in `br_pts`
+   !> @param[in]     br_pts      branch elements the grid loop filled
+   !> @param[in,out] hess_fixed  rank-4 fixed-adjoint accumulator `(3, nsph, 3, nsph)`
+   subroutine branch_weight_block(self, br_slot, br_pts, hess_fixed)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in) :: self
+      !> Element of every group point
+      integer, intent(in) :: br_slot(:)
+      !> Branch elements
+      type(drop_branch_point_type), intent(in) :: br_pts(:)
+      !> Rank-4 accumulator of the fixed channel
+      real(wp), intent(inout) :: hess_fixed(:, :, :, :)
+
+      !> Atoms a group reaches, and each atom's position among them
+      integer, allocatable :: union_atoms(:), union_pos(:)
+      !> Softmax scratch of one group, parameters first
+      real(wp), allocatable :: phi(:), weights(:), dphi(:, :), dweights(:, :)
+      !> Group bookkeeping
+      integer :: cursor, ifirst, ilast, group_size, nunion, nbranch_max
+      !> Grid point, group member, row, union atom, axis and parameter indices
+      integer :: igrid, m_branch, irow, katom, kaxis, kparam
+      !> Whether a further anchor group exists
+      logical :: found
+
+      nbranch_max = max_branch_group_size(self%branch_count(1:self%ngrid), &
+                                          self%anchor_id(1:self%ngrid))
+      allocate (phi(nbranch_max), weights(nbranch_max))
+      allocate (union_atoms(self%nsph))
+      allocate (union_pos(self%nsph), source=0)
+
+      cursor = 1
+      do
+         call next_branch_group(self%branch_count(1:self%ngrid), &
+                                self%anchor_id(1:self%ngrid), cursor, ifirst, ilast, found)
+         if (.not. found) exit
+         group_size = ilast - ifirst + 1
+
+         ! Atoms the group's rows reach, in order of first appearance
+         nunion = 0
+         do igrid = ifirst, ilast
+            associate (bp => br_pts(br_slot(igrid)))
+               do irow = 1, size(bp%atoms)
+                  if (union_pos(bp%atoms(irow)) == 0) then
+                     nunion = nunion + 1
+                     union_pos(bp%atoms(irow)) = nunion
+                     union_atoms(nunion) = bp%atoms(irow)
+                  end if
+               end do
+            end associate
+         end do
+
+         ! Objective gradients over that set; an owner that is active as well
+         ! has two rows on the same atom, and they add
+         allocate (dphi(ndim*nunion, group_size), source=0.0_wp)
+         allocate (dweights(ndim*nunion, group_size))
+         do igrid = ifirst, ilast
+            m_branch = igrid - ifirst + 1
+            phi(m_branch) = self%phi0(igrid)
+            associate (bp => br_pts(br_slot(igrid)))
+               do irow = 1, size(bp%atoms)
+                  kparam = ndim*(union_pos(bp%atoms(irow)) - 1)
+                  dphi(kparam + 1:kparam + ndim, m_branch) = &
+                     dphi(kparam + 1:kparam + ndim, m_branch) + bp%prow(:, irow)
+               end do
+            end associate
+         end do
+
+         call self%branch_weight%weights_grad(phi(1:group_size), dphi, &
+                                              weights=weights(1:group_size), &
+                                              dweights=dweights)
+
+         do igrid = ifirst, ilast
+            m_branch = igrid - ifirst + 1
+            associate (bp => br_pts(br_slot(igrid)))
+               do katom = 1, nunion
+                  do kaxis = 1, ndim
+                     kparam = ndim*(katom - 1) + kaxis
+                     do irow = 1, size(bp%atoms)
+                        hess_fixed(:, bp%atoms(irow), kaxis, union_atoms(katom)) = &
+                           hess_fixed(:, bp%atoms(irow), kaxis, union_atoms(katom)) &
+                           + bp%lrow(:, irow)*dweights(kparam, m_branch)
+                     end do
+                  end do
+               end do
+            end associate
+         end do
+
+         union_pos(union_atoms(1:nunion)) = 0
+         deallocate (dphi, dweights)
+      end do
+   end subroutine branch_weight_block
+
+   !* ================================================================================= *!
    !*                       Sparse per-thread Hessian accumulator                       *!
    !* ================================================================================= *!
 
-   !> Give one thread an empty accumulator
+   !> Initialise one thread's empty accumulator
    !>
-   !> Called from inside the parallel region on the thread that will own it, so
-   !> the storage is first touched by the thread that writes it.
+   !> - Call inside the parallel region on the owning thread, first touch
    !>
-   !> @param[inout] self Accumulator of one thread
-   !> @param[in]    nsph Atoms the pair indices range over
+   !> @param[in,out] self  accumulator of one thread
+   !> @param[in]     nsph  atoms the pair indices range over
    subroutine hess_sparse_new(self, nsph)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(inout) :: self
@@ -1976,9 +1995,8 @@ contains
       allocate (self%pair_i(cap), self%pair_j(cap))
       allocate (self%blocks(ndim, ndim, cap))
 
-      ! Halve the default table while the one below it would still hold `cap`
-      ! entries under the load factor, so a molecule with a handful of pairs
-      ! does not carry a kilobyte of empty buckets per thread
+      ! Halve the default table while the smaller one still holds `cap`
+      ! entries under the load factor
       ntab = hess_init_tab
       do while (ntab > 4 .and. cap*hess_load_den < (ntab/2)*hess_load_num)
          ntab = ntab/2
@@ -1989,7 +2007,7 @@ contains
 
    !> Release one thread's accumulator
    !>
-   !> @param[inout] self Accumulator of one thread
+   !> @param[in,out] self  accumulator of one thread
    subroutine hess_sparse_destroy(self)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(inout) :: self
@@ -2005,18 +2023,16 @@ contains
 
    !> FNV-1a hash of an atom pair, masked to 32 bits
    !>
-   !> Fed the two indices as whole words rather than byte by byte. Multiplying
-   !> by an odd constant is a bijection modulo any power of two, so the low bits
-   !> this hash is indexed by are a permutation of a contiguous run of atom ids
-   !> -- which is exactly the run one grid point's neighbourhood hands it.
+   !> - Indices fed as whole words, not byte by byte
+   !> - Odd multiplier is a bijection modulo a power of two: the low bits
+   !>   permute a contiguous run of atom ids
    !>
-   !> @param[in] iatom Row atom
-   !> @param[in] jatom Column atom
-   !> @return          Hash value in `[0, 2^32)`
+   !> @param[in] iatom  row atom
+   !> @param[in] jatom  column atom
    pure function hess_pair_hash(iatom, jatom) result(h)
       !> Row and column atom
       integer, intent(in) :: iatom, jatom
-      !> Hash value
+      !> Hash value in `[0, 2^32)`
       integer(int64) :: h
 
       h = ieor(fnv_offset, iand(int(iatom, int64), mask32))
@@ -2026,17 +2042,17 @@ contains
 
    end function hess_pair_hash
 
-   !> Index of the `(3, 3)` block of one atom pair, creating it if it is new
+   !> Find the `(3, 3)` block entry of one atom pair, creating it if new
    !>
-   !> A new entry is zeroed here and nowhere else, so an entry that is created
-   !> and then never written contributes an exact zero, and one that is created
-   !> twice is impossible. Both are what makes the merge a single add per
-   !> element per thread; see [[drop_hess_sparse_type]].
+   !> - New entry zeroed here and nowhere else; a never-written entry
+   !>   contributes an exact zero
+   !> - No pair is created twice
+   !> - Both make the merge one add per element, see [[drop_hess_sparse_type]]
    !>
-   !> @param[inout] self  Accumulator of one thread
-   !> @param[in]    iatom Row atom
-   !> @param[in]    jatom Column atom
-   !> @param[out]   ient  Entry index of the pair
+   !> @param[in,out] self   accumulator of one thread
+   !> @param[in]     iatom  row atom
+   !> @param[in]     jatom  column atom
+   !> @param[out]    ient   entry index of the pair
    subroutine hess_sparse_entry(self, iatom, jatom, ient)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(inout) :: self
@@ -2058,8 +2074,7 @@ contains
       self%pair_j(ient) = jatom
       self%blocks(:, :, ient) = 0.0_wp
 
-      ! The probe above found this slot on the *current* table, so it is only
-      ! valid while that table stands; a growth reinserts every entry instead.
+      ! Probed slot is valid on the current table only; growth reinserts every entry
       if (self%nent*hess_load_den >= size(self%htab)*hess_load_num) then
          call hess_grow_table(self)
       else
@@ -2070,11 +2085,9 @@ contains
 
    !> Double the entry arrays if the next entry would not fit
    !>
-   !> `move_alloc` on a copy rather than a reallocation in place: entry indices
-   !> are handed out to the caller and must not move, and the accumulated blocks
-   !> are copied verbatim, never re-derived.
+   !> - Copy and `move_alloc`: entry indices must not move, blocks copied verbatim
    !>
-   !> @param[inout] self Accumulator of one thread
+   !> @param[in,out] self  accumulator of one thread
    subroutine hess_grow_entries(self)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(inout) :: self
@@ -2088,8 +2101,7 @@ contains
 
       new_cap = min(2*cap, self%maxent)
       if (new_cap <= cap) then
-         ! Unreachable: `maxent` counts every pair that exists, and each is
-         ! entered once, so a full container is never asked for another
+         ! Unreachable: `maxent` counts every pair, each entered once
          error stop "moist DROP Hessian: the sparse accumulator was asked for more "// &
             "pairs than the molecule has"
       end if
@@ -2110,11 +2122,10 @@ contains
 
    !> Double the bucket table and reinsert every entry
    !>
-   !> Touches no block and no entry index -- only the pair-to-entry lookup is
-   !> rebuilt, so neither the accumulated values nor the order they were
-   !> accumulated in can move.
+   !> - Only the pair-to-entry lookup is rebuilt; blocks, entry indices and
+   !>   accumulation order untouched
    !>
-   !> @param[inout] self Accumulator of one thread
+   !> @param[in,out] self  accumulator of one thread
    subroutine hess_grow_table(self)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(inout) :: self
@@ -2125,7 +2136,7 @@ contains
       allocate (new_tab(size(self%htab)*2), source=0)
       call move_alloc(new_tab, self%htab)
 
-      ! Every key is unique, so the probe stops at an empty slot
+      ! Keys are unique, the probe stops at an empty slot
       do ient = 1, self%nent
          slot = hess_probe(self, self%pair_i(ient), self%pair_j(ient))
          self%htab(slot) = ient
@@ -2133,16 +2144,15 @@ contains
 
    end subroutine hess_grow_table
 
-   !> Linear probe of the open-addressing table for one pair
+   !> Slot of one pair in the open-addressing table, by linear probing
    !>
-   !> Returns the slot holding the pair's entry when it is present, else the
-   !> empty slot the probe stopped at, which is where the pair belongs on the
-   !> *current* table. The single wraparound rule the bit-reproducibility
-   !> argument of [[drop_hess_sparse_type]] rests on lives here.
+   !> - Slot of the pair's entry, else the empty slot where it belongs on the
+   !>   current table
+   !> - Single wraparound rule, see [[drop_hess_sparse_type]]
    !>
-   !> @param[in] self  Accumulator
-   !> @param[in] iatom Row atom
-   !> @param[in] jatom Column atom
+   !> @param[in] self   accumulator
+   !> @param[in] iatom  row atom
+   !> @param[in] jatom  column atom
    pure function hess_probe(self, iatom, jatom) result(slot)
       !> Accumulator
       type(drop_hess_sparse_type), intent(in) :: self
@@ -2166,12 +2176,11 @@ contains
 
    !> Add one thread's accumulator to the caller's Hessian
    !>
-   !> One add per element, on the elements this thread reached. Called in the
-   !> fixed `1 .. nthreads` order, which is the second half of the
-   !> bit-reproducibility argument in [[drop_hess_sparse_type]].
+   !> - One add per element this thread reached
+   !> - Call in the fixed `1 .. nthreads` order, see [[drop_hess_sparse_type]]
    !>
-   !> @param[in]    self    Accumulator of one thread
-   !> @param[inout] hessian Nuclear-Hessian accumulator (3, nsph, 3, nsph)
+   !> @param[in]     self     accumulator of one thread
+   !> @param[in,out] hessian  nuclear-Hessian accumulator `(3, nsph, 3, nsph)`
    subroutine hess_sparse_reduce(self, hessian)
       !> Accumulator of one thread
       type(drop_hess_sparse_type), intent(in) :: self

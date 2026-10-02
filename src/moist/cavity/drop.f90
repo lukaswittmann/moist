@@ -317,6 +317,8 @@ module moist_cavity_drop
       procedure :: get_surface_tangent => get_surface_tangent_full_drop
       !> Host-parameter derivatives of one projected Gaussian surface point
       procedure :: host_point_derivatives => drop_host_point_derivatives
+      !> Branch-weight motion of the host-parameter derivatives over the whole grid
+      procedure :: host_branch_derivatives => drop_host_branch_derivatives
       !> Internal: adjoint-response half of the surface Hessian (J^T omega_v)
       procedure :: get_surface_hessian_response => get_surface_hessian_response_drop
       !> Public: surface Hessian-vector products (both halves)
@@ -379,6 +381,7 @@ module moist_cavity_drop
       !> jet(121) through order 4, jet1(40,ndir) through order 3,
       !> jet2(13,ndir,ndir) through order 2. All are derivatives of S, not rho.
       !> Outputs contain (x,y,z,xi,f), with no density or orbital assumptions.
+      !> The branch weight is held fixed; see drop_host_branch_derivatives.
       module subroutine drop_host_point_derivatives(self, igrid, dirs, jet, jet1, jet2, d1, d2, error)
          class(cavity_type_drop), intent(in) :: self
          integer, intent(in) :: igrid
@@ -386,6 +389,18 @@ module moist_cavity_drop
          real(wp), intent(out) :: d1(:, :), d2(:, :, :)
          type(error_type), allocatable, intent(out) :: error
       end subroutine drop_host_point_derivatives
+
+      !> Add the branch-weight motion to the host derivatives of every point,
+      !> d1(5,ngrid,ndir) and d2(5,ngrid,ndir,ndir), in place. The softmax
+      !> couples the points of an anchor group, so it needs the whole grid.
+      !> Only the xi row changes; a single-branch grid is left untouched.
+      module subroutine drop_host_branch_derivatives(self, dirs, d1, d2, error)
+         class(cavity_type_drop), intent(in) :: self
+         real(wp), intent(in) :: dirs(:, :, :)
+         real(wp), intent(inout) :: d1(:, :, :)
+         real(wp), intent(inout) :: d2(:, :, :, :)
+         type(error_type), allocatable, intent(out) :: error
+      end subroutine drop_host_branch_derivatives
 
       !* ============================================================================== *!
       !*               Internal DROP routines (should not be used outside)              *!

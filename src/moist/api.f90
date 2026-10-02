@@ -229,6 +229,7 @@ module moist_api
    public :: contract_amat1_q1q2_rA_api
    public :: contract_amat1_q1q2_surface_weights_api
    public :: drop_host_point_derivatives_api, pcm_amat_host_derivatives_api
+   public :: drop_host_branch_derivatives_api
    public :: contract_surface_lsf_weights_api, contract_surface_lsf_weights_extended_api
    public :: contract_nuc_elec_qefield_rA_api
    public :: print_header_api, print_header_api_short, print_header_api_ascii, print_version_api
@@ -274,6 +275,42 @@ contains
          call api_error(error%ptr, 'drop_host_point_derivatives', 'A DROP cavity is required')
       end select
    end subroutine drop_host_point_derivatives_api
+
+   !> Branch-weight motion of the host-parameter derivatives of every DROP surface point.
+   subroutine drop_host_branch_derivatives_api(verror, vcav, ng, nat, ndir, c_dirs, c_d1, c_d2) &
+      & bind(C, name=namespace//'drop_host_branch_derivatives')
+      type(c_ptr), value :: verror, vcav, c_dirs, c_d1, c_d2
+      integer(c_int), value :: ng, nat, ndir
+      type(vp_error), pointer :: error
+      type(vp_cavity), pointer :: cav
+      real(c_double), pointer :: dirs(:, :, :), d1(:, :, :), d2(:, :, :, :)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (.not. c_associated(vcav) .or. .not. c_associated(c_dirs) .or. &
+          .not. c_associated(c_d1) .or. .not. c_associated(c_d2)) then
+         call api_error(error%ptr, 'drop_host_branch_derivatives', 'Null pointer provided')
+         return
+      end if
+      call c_f_pointer(vcav, cav)
+      if (.not. associated(cav%ptr) .or. ng < 1 .or. nat < 1 .or. ndir < 1) then
+         call api_error(error%ptr, 'drop_host_branch_derivatives', 'Invalid cavity or dimensions')
+         return
+      end if
+      select type (cavity => cav%ptr)
+      type is (cavity_type_drop)
+         if (nat /= cavity%nsph .or. ng /= cavity%ngrid) then
+            call api_error(error%ptr, 'drop_host_branch_derivatives', &
+               & 'Cavity must be updated and match ngrid and nat')
+            return
+         end if
+         call c_f_pointer(c_dirs, dirs, [3, nat, ndir])
+         call c_f_pointer(c_d1, d1, [5, ng, ndir])
+         call c_f_pointer(c_d2, d2, [5, ng, ndir, ndir])
+         call cavity%host_branch_derivatives(dirs, d1, d2, error%ptr)
+      class default
+         call api_error(error%ptr, 'drop_host_branch_derivatives', 'A DROP cavity is required')
+      end select
+   end subroutine drop_host_branch_derivatives_api
 
    !> Native PCM matrix derivatives along a host-supplied surface path.
    !> Surface components are (x,y,z,xi,f). Return A_p q and q^T A_pq q.
