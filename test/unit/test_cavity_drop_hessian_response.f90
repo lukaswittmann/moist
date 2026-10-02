@@ -85,6 +85,21 @@
 !> curvature channels are not, because the fixed half is itself noise limited
 !> on them (see its own suite's header).
 !>
+!> The fixed half is asked for in both of its forms, the rank-4 block
+!> contracted with the directions and the per-direction columns, against the
+!> one differenced reference.
+!>
+!> `both_halves_svdw_cross` is the same assertion on the branching fixture, and
+!> the only differenced reference of the fixed half's branch terms: the second
+!> derivative of the branch objective ([[seed_contribution_tangent]]) and the
+!> weight chain of every seed with the branch weight moving. The fixed suite
+!> cannot difference them, because its reference needs a fold that does not
+!> move and `branch_phi_adj` does. The two forms of the fixed half reach the
+!> branch-weight motion by different routes -- the per-direction form takes it
+!> from the forward tangent, the rank-4 form closes it over each anchor group
+!> after the grid loop -- so the case is two independent checks of it. See
+!> "The mutations that shaped the branched composite" below.
+!>
 !> The *frozen* accumulator still exists in this suite, but only as a test
 !> device: `fd_surface_gradient` differences `G(acc) - G(acc_frozen)` at each
 !> stencil geometry so the halves' common content never reaches the difference
@@ -99,9 +114,8 @@
 !>   * `FIX_CROSS`, the five-carbon cross at `proj_level = 7` with a softened
 !>     softmax (`s = 2.0`), does branch. That is the only fixture on which
 !>     `dbranch_phi_adj` is nonzero, and therefore the only one that can catch a
-!>     driver which drops the branch channel of pass 2. The composite refuses
-!>     this grid -- it is short a second-order branch term -- so only this half
-!>     is exercised here, and it is exercised on purpose.
+!>     driver which drops the branch channel of pass 2 -- or, in the composite,
+!>     a fixed half which drops its branch terms. SvdW only.
 !>
 !> ## What the softmax temperature of the branched fixture buys
 !>
@@ -178,10 +192,34 @@
 !>     zero there, so a driver that drops it is invisible to an unbranched
 !>     fixture -- which is why one branched fixture is worth its cost.
 !>
+!> ## The mutations that shaped the branched composite
+!>
+!> Four, in `derivatives/hessian_traverse.f90` and `derivatives/seeds.f90`,
+!> measured 2026-10-01 on `both_halves_svdw_cross` as the worst absolute
+!> deviation against a floor of `~1.5e-10` and a `max |Hv|` of `167`. Every one
+!> is step independent to the printed digits, the signature of a missing term:
+!>
+!> | mutation                                            | rank-4    | per direction |
+!> |-----------------------------------------------------|-----------|---------------|
+!> | branch term of `seed_contribution_tangent` dropped  | `7.73`    | `7.73`        |
+!> | anchor seeds' shift tangent dropped                 | `4.10`    | `4.10`        |
+!> | rank-4 group pass skipped                           | `13.62`   | unchanged     |
+!> | per-direction `d(wbranch)` zeroed                   | unchanged | `13.62`       |
+!>
+!> The last two rows are why the composite asks for both forms: each carries
+!> the branch-weight motion in code the other never runs. Dropping only the
+!> `d(xi0)` part of that motion reproduces the `13.62` exactly, and that is
+!> not a coincidence: a seed's width response is `-0.5 xi0 dwleb/wleb`, the
+!> ratio `dwleb/wleb` does not see the branch weight at all, and so the whole
+!> motion reaches the chain through `xi0` -- the `d(wleb)` and `d(wbranch)`
+!> inputs cancel each other identically, and dropping one of them alone
+!> doubles the miss to `27.23`. Every `FIX_PLAIN` case is unchanged by all of
+!> them, bit for bit.
+!>
 !> ## Step and grid guard
 !>
-!> `FD_STEPS` and `COMPOSITE_STEPS` are measured; the sweeps are in the comments
-!> on those parameters. The grid is guarded at every stencil geometry
+!> `FD_STEPS`, `COMPOSITE_STEPS` and `CROSS_COMPOSITE_STEPS` are measured; the
+!> sweeps are in the comments on those parameters. The grid is guarded at every stencil geometry
 !> ([[assert_grid_match]]) on `numbering`, `owner`, `branch_count` and
 !> `anchor_id`, so a step large enough to re-enumerate the grid fails loudly
 !> instead of putting a step into the reference.
@@ -346,11 +384,44 @@ module test_cavity_drop_hessian_response
    !> step.
    real(wp), parameter :: COMPOSITE_STEPS(2) = [9.0E-4_wp, 6.0E-4_wp]
 
+   !> Central-difference steps of the composite assertion on the branching fixture
+   !>
+   !> The same reference on `FIX_CROSS`, whose shipped gradient is larger --
+   !> `max |Hv| = 167` against `49` on `FIX_PLAIN` -- so the round-off wall
+   !> `~4 eps max|G| / h` sits higher and the window further up. Worst absolute
+   !> deviation over both directions, and the worst excess
+   !> `max(min(|d|/FD_ABS, |d|/(FD_REL |ref|)))` the comparison actually takes;
+   !> the two forms of the fixed half agree to three digits in every cell:
+   !>
+   !> | h      | absolute | excess |
+   !> |--------|----------|--------|
+   !> | 2.0e-3 | 5.89e-09 | 0.91   |
+   !> | 1.5e-3 | 9.60e-10 | 0.60   |
+   !> | 1.3e-3 | 3.91e-10 | 0.25   |
+   !> | 1.2e-3 | 3.36e-10 | 0.23   |
+   !> | 1.1e-3 | 2.82e-10 | 0.47   |
+   !> | 1.0e-3 | 1.35e-10 | 0.29   |
+   !> | 9.0e-4 | 2.00e-10 | 0.72   |
+   !> | 8.0e-4 | 1.17e-10 | 0.52   |
+   !> | 7.0e-4 | 2.15e-10 | 0.66   |
+   !> | 6.0e-4 | 1.36e-10 | 0.42   |
+   !> | 5.0e-4 | 2.72e-10 | 1.10   |
+   !> | 4.0e-4 | 1.77e-10 | 0.68   |
+   !>
+   !> The absolute column falls as `h^6` down to about `1.2e-3` and is a
+   !> jittery flat bottom of `1.2e-10 .. 2.7e-10` from there: this fixture never
+   !> gets under `FD_ABS` on its largest components and passes on the relative
+   !> bound, at `1e-12` of `max |Hv|`. The plain fixture's pair would pass too
+   !> (`0.72`, `0.42`) but sits on the round-off side, one step from the
+   !> `5e-4` that fails. The pair below is where truncation and round-off meet,
+   !> worst excess `0.29`.
+   real(wp), parameter :: CROSS_COMPOSITE_STEPS(2) = [1.2E-3_wp, 1.0E-3_wp]
+
    !> Finite-difference agreement bounds
    !>
    !> The project target, `1e-10` absolute and `1e-10` relative; a component
    !> fails only when it misses *both*. **Every case in this suite meets it**,
-   !> with `1.75` in hand -- the worst excess over all eight tests, both steps
+   !> with `1.75` in hand -- the worst excess over all nine tests, both steps
    !> and both directions is `0.57`, measured by the same `min` of the two
    !> ratios the comparison takes.
    !>
@@ -389,6 +460,7 @@ contains
                   new_unittest("svdw_cross_branching_fd", test_svdw_cross), &
                   new_unittest("both_halves_svdw", test_both_halves_svdw), &
                   new_unittest("both_halves_cfc", test_both_halves_cfc), &
+                  new_unittest("both_halves_svdw_cross", test_both_halves_cross), &
                   new_unittest("frozen_response_is_zero", test_frozen_response_is_zero), &
                   new_unittest("shape_guards", test_shape_guards) &
                   ]
@@ -536,7 +608,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      call run_composite_fd(LSF_SVDW, "svdw/plain", error)
+      call run_composite_fd(FIX_PLAIN, LSF_SVDW, "svdw/plain", error)
    end subroutine test_both_halves_svdw
 
    !> CFC: the fixed half plus this one reproduce the differenced gradient
@@ -546,19 +618,36 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      call run_composite_fd(LSF_CFC, "cfc/plain", error)
+      call run_composite_fd(FIX_PLAIN, LSF_CFC, "cfc/plain", error)
    end subroutine test_both_halves_cfc
+
+   !> SvdW on the branching fixture: both halves reproduce the differenced gradient
+   !>
+   !> The differenced reference of the fixed half's branch terms, in both forms
+   !> of that half; the module header has what it is the only check of, and the
+   !> mutations it was measured against.
+   !>
+   !> @param[out] error Error handle
+   subroutine test_both_halves_cross(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_composite_fd(FIX_CROSS, LSF_SVDW, "svdw/cross", error)
+   end subroutine test_both_halves_cross
 
    !> Central-difference the shipped gradient against the sum of both halves
    !>
-   !> Only on `FIX_PLAIN`: on a branched grid the composite is missing the
-   !> second-order branch term, which is why the public entry points refuse
-   !> one.
+   !> The fixed half is taken in both of its forms, against one reference. The
+   !> steps are the fixture's: the branching one has the higher round-off wall,
+   !> see `CROSS_COMPOSITE_STEPS`.
    !>
+   !> @param[in]  fix_kind Geometry of the fixture
    !> @param[in]  lsf_kind Level-set model
    !> @param[in]  label    Human-readable case description
    !> @param[out] error    Error handle
-   subroutine run_composite_fd(lsf_kind, label, error)
+   subroutine run_composite_fd(fix_kind, lsf_kind, label, error)
+      !> Geometry of the fixture
+      integer, intent(in) :: fix_kind
       !> Level-set model
       integer, intent(in) :: lsf_kind
       !> Case description
@@ -579,6 +668,8 @@ contains
       real(wp), allocatable :: eff_xi(:), eff_f(:)
       !> Fixed half, this half and their sum
       real(wp), allocatable :: hess(:, :, :, :), hvp(:, :, :), total(:, :, :)
+      !> Fixed half per direction, and its sum with this half
+      real(wp), allocatable :: cols(:, :, :), total_dir(:, :, :)
       !> Differenced reference, one block per step
       real(wp), allocatable :: fd(:, :, :, :)
       !> Nuclear directions
@@ -587,13 +678,18 @@ contains
       integer :: nsph, iatom, iaxis, idir, istep
       !> Channels driven by the composite
       integer :: channels(6)
+      !> Central-difference steps of the fixture
+      real(wp) :: steps(2)
 
       channels = moving_channels()
+      steps = COMPOSITE_STEPS
+      if (fix_kind == FIX_CROSS) steps = CROSS_COMPOSITE_STEPS
 
-      call drop_fixture_geometry(FIX_PLAIN, mol)
-      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
+      call drop_fixture_geometry(fix_kind, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                  cross_branch_s=CROSS_BRANCH_S)
       if (allocated(error)) return
-      call assert_branching(cavity, FIX_PLAIN, "base geometry", error)
+      call assert_branching(cavity, fix_kind, "base geometry", error)
       if (allocated(error)) return
 
       nsph = cavity%nsph
@@ -646,18 +742,38 @@ contains
       end if
 
       !* ------------------------- Central-difference reference ------------------------ *!
-      allocate (fd(ndim, nsph, NDIR, size(COMPOSITE_STEPS)), source=0.0_wp)
-      do istep = 1, size(COMPOSITE_STEPS)
+      allocate (fd(ndim, nsph, NDIR, size(steps)), source=0.0_wp)
+      do istep = 1, size(steps)
          do idir = 1, NDIR
-            call fd_surface_gradient(mol, cavity, FIX_PLAIN, lsf_kind, channels, &
+            call fd_surface_gradient(mol, cavity, fix_kind, lsf_kind, channels, &
                                      eff_xi, eff_f, dirs(:, :, idir), &
-                                     COMPOSITE_STEPS(istep), fd(:, :, idir, istep), &
+                                     steps(istep), fd(:, :, idir, istep), &
                                      label, error)
             if (allocated(error)) return
          end do
       end do
 
-      call compare_to_reference(total, fd, COMPOSITE_STEPS, "both halves, "//label, error)
+      call compare_to_reference(total, fd, steps, "both halves, "//label, error)
+      if (allocated(error)) return
+
+      !* ----------------------- The fixed half, per direction ------------------------ *!
+      ! The other form of the fixed half against the same reference. On the
+      ! plain fixture the fixed suite already differences it; on the branching
+      ! one this is where its branch terms are differenced, and it takes the
+      ! branch-weight tangent from the forward tangent where the rank-4 form
+      ! above closes it over the anchor groups.
+      allocate (cols(ndim, nsph, NDIR), source=0.0_wp)
+      call cavity%get_surface_hessian_fixed_dirs(eff, dirs, cols, cav_error)
+      if (allocated(cav_error)) then
+         call test_failed(error, "per-direction fixed-adjoint Hessian failed ("//label// &
+                          "): "//cav_error%message)
+         return
+      end if
+      allocate (total_dir(ndim, nsph, NDIR))
+      total_dir = hvp + cols
+
+      call compare_to_reference(total_dir, fd, steps, &
+                                "both halves per direction, "//label, error)
 
    end subroutine run_composite_fd
 

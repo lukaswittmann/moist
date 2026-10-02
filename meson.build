@@ -39,7 +39,10 @@ moist_dep = declare_dependency(
   link_with: moist_lib,
   include_directories: moist_inc,
   dependencies: lib_deps,
-  variables: {'includedir': meson.current_source_dir() / 'include'},
+  variables: {
+    'includedir': meson.current_source_dir() / 'include',
+    'libdir': get_option('prefix') / get_option('libdir'),
+  },
 )
 
 # Add applications

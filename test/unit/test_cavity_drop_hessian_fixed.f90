@@ -145,7 +145,7 @@ module test_cavity_drop_hessian_fixed
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
-                           LSF_SVDW, LSF_CFC, FIX_PLAIN
+                           LSF_SVDW, LSF_CFC, FIX_PLAIN, FIX_CROSS
 
    implicit none(type, external)
    private
@@ -314,6 +314,20 @@ module test_cavity_drop_hessian_fixed
    !> class; both sit more than a decade under the bound.
    real(wp), parameter :: PER_DIR_TOL = 1.0E-12_wp
 
+   !> Softmax scale of the branching fixture, the response suite's value
+   !>
+   !> Only the two-mode comparison runs on `FIX_CROSS` here. The differenced
+   !> reference of this suite needs a geometry-independent fold and a branched
+   !> grid does not have one -- `branch_phi_adj` moves -- so the branch terms of
+   !> this half are differenced where the fold may move: `both_halves_svdw_cross`
+   !> in the response suite. What this suite can still pin on a branched grid is
+   !> that the two forms of the half agree, and they reach the branch-weight
+   !> motion by entirely different routes: the per-direction form takes
+   !> `d(wbranch)` along the direction from the forward tangent, the rank-4 form
+   !> closes one unit-tangent chain per branched point over its anchor group
+   !> after the grid loop.
+   real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
+
 contains
 
    !> Collect the suite
@@ -332,6 +346,7 @@ contains
                   new_unittest("cfc_per_dir_multi_atom", test_cfc_per_dir_multi), &
                   new_unittest("svdw_per_dir_matches_rank4", test_svdw_per_dir_vs_rank4), &
                   new_unittest("cfc_per_dir_matches_rank4", test_cfc_per_dir_vs_rank4), &
+                  new_unittest("svdw_cross_per_dir_matches_rank4", test_cross_per_dir_vs_rank4), &
                   new_unittest("single_channels", test_single_channels), &
                   new_unittest("hessian_symmetry", test_symmetry), &
                   new_unittest("shape_guard", test_shape_guard) &
@@ -411,7 +426,7 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      call run_per_dir_vs_rank4(LSF_SVDW, "svdw", error)
+      call run_per_dir_vs_rank4(FIX_PLAIN, LSF_SVDW, "svdw", error)
    end subroutine test_svdw_per_dir_vs_rank4
 
    !> CFC: the per-direction half equals the contracted rank-4 half
@@ -421,8 +436,22 @@ contains
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
-      call run_per_dir_vs_rank4(LSF_CFC, "cfc", error)
+      call run_per_dir_vs_rank4(FIX_PLAIN, LSF_CFC, "cfc", error)
    end subroutine test_cfc_per_dir_vs_rank4
+
+   !> SvdW on the branching fixture: the two forms agree on the branch terms
+   !>
+   !> The only case of this suite with a live `branch_phi_adj` and a moving
+   !> branch weight; see `CROSS_BRANCH_S` for why it is a comparison of the two
+   !> forms and not a differenced one.
+   !>
+   !> @param[out] error Error handle
+   subroutine test_cross_per_dir_vs_rank4(error)
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_per_dir_vs_rank4(FIX_CROSS, LSF_SVDW, "svdw/cross", error)
+   end subroutine test_cross_per_dir_vs_rank4
 
    !> Each adjoint channel driven on its own
    !>
@@ -741,10 +770,17 @@ contains
    !> third that is neither, so a column-indexing error in either mode shows up
    !> against the other. Every channel is live, the switching one included.
    !>
+   !> On `FIX_CROSS` the fixture is asserted to branch, and to carry a live
+   !> branch adjoint, before anything is compared: both forms would agree
+   !> trivially on a cross that quietly stopped branching.
+   !>
+   !> @param[in]  fix_kind Geometry of the fixture
    !> @param[in]  lsf_kind Level-set model of the fixture
    !> @param[in]  label    Human-readable case description
    !> @param[out] error    Error handle
-   subroutine run_per_dir_vs_rank4(lsf_kind, label, error)
+   subroutine run_per_dir_vs_rank4(fix_kind, lsf_kind, label, error)
+      !> Geometry of the fixture
+      integer, intent(in) :: fix_kind
       !> Level-set model
       integer, intent(in) :: lsf_kind
       !> Case description
@@ -766,14 +802,27 @@ contains
       integer :: nsph, iatom, iaxis, idir
       real(wp) :: scale, worst
 
-      call drop_fixture_geometry(FIX_PLAIN, mol)
-      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, lsf_kind, error)
+      call drop_fixture_geometry(fix_kind, mol)
+      call build_drop_test_cavity(cavity, ctx, mol, fix_kind, lsf_kind, error, &
+                                  cross_branch_s=CROSS_BRANCH_S)
       if (allocated(error)) return
       nsph = cavity%nsph
 
       call frozen_adjoint(cavity, all_channels(), acc, error)
       if (allocated(error)) return
       call prepare_surface_weights(cavity, acc, .true., eff)
+
+      if (fix_kind == FIX_CROSS) then
+         if (.not. any(cavity%branch_count(1:cavity%ngrid) > 1)) then
+            call test_failed(error, "the branching fixture does not branch for "//label)
+            return
+         end if
+         if (maxval(abs(eff%branch_phi_adj)) <= VACUITY_THR) then
+            call test_failed(error, "the branch adjoint is vacuous for "//label// &
+                             " (max "//to_string(maxval(abs(eff%branch_phi_adj)))//")")
+            return
+         end if
+      end if
 
       allocate (dirs(ndim, nsph, NDIR), source=0.0_wp)
       call build_direction(DIR_SINGLE, nsph, vdir)

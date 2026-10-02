@@ -15,6 +15,12 @@
 !>
 !>   * `*_hessian_fd`: the analytic model Hessian against the differenced
 !>     model gradient, at two steps, absolute *or* relative;
+!>   * `*_cross_hessian_fd`: the same on the branching fixture `FIX_CROSS`,
+!>     whose Lebedev weights carry a softmax branch factor. The only
+!>     model-level check of the cavity Hessian's branch terms, and of the
+!>     components' adjoint response on a grid that has them: the response is
+!>     driven by a surface tangent whose weight, width and area channels all
+!>     move with the branch weight;
 !>   * `*_frozen_misses_response`: the cavity's frozen-adjoint block, built
 !>     from the same surface weights without the model's response, must miss
 !>     that reference by a wide margin. Both blocks are symmetric and both
@@ -42,7 +48,7 @@ module test_model_general_hessian
    use moist_model_general, only: solvation_model_general, new_model_general
    use moist_context, only: moist_context_type
    use test_helpers, only: drop_fixture_geometry, build_drop_test_cavity, &
-                           make_charge_coupling, LSF_SVDW, FIX_PLAIN
+                           make_charge_coupling, LSF_SVDW, FIX_PLAIN, FIX_CROSS
 
    implicit none(type, external)
    private
@@ -54,6 +60,11 @@ module test_model_general_hessian
 
    !> Component selectors of the shared fixture and reference routines
    integer, parameter :: MODEL_PV = 1, MODEL_CPCM = 2
+   !> The same two components on the branching fixture
+   integer, parameter :: MODEL_PV_CROSS = 3, MODEL_CPCM_CROSS = 4
+
+   !> Softmax scale that makes the cross branch, as the cavity suites use
+   real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
 
    !> Pressure of the component under test; large enough that the block
    !> clears the vacuity threshold by orders of magnitude
@@ -64,6 +75,8 @@ module test_model_general_hessian
    !> an order of magnitude
    real(wp), parameter :: EPSILON = 32.0_wp
    real(wp), parameter :: QAT(3) = [1.2_wp, -1.8_wp, 0.6_wp]
+   !> Point charges of the CPCM component on the five-atom branching fixture
+   real(wp), parameter :: QAT_CROSS(5) = [1.2_wp, -1.8_wp, 0.6_wp, -0.9_wp, 1.5_wp]
 
    !> Central-difference steps of the reference; two, so that a value that
    !> agrees at one step only still fails
@@ -83,6 +96,22 @@ module test_model_general_hessian
    !> round-off floor for a gradient of that size (the frozen block misses by
    !> `2.2e-2`, ten decades over the bound)
    real(wp), parameter :: HESS_TOL_CPCM = 2.0E-12_wp
+
+   !> The PV bound on the branching fixture, where the reference is ten times
+   !> noisier
+   !>
+   !> Measured, worst over the block: `2.5e-9` at both steps on a block whose
+   !> largest entry is `89`. It is the reference's round-off floor and not a
+   !> missing term: it grows as `1/h` (`5.2e-9` at `1e-4`, `1.1e-8` at `5e-5`),
+   !> and at every step it equals the differenced block's own asymmetry
+   !> (`2.7e-9`, `5.4e-9`, `1.2e-8`) while the analytic block is symmetric to
+   !> `3.0e-12`. The floor is the fixture's, see the response suite's header:
+   !> a softened softmax keeps near-dead branches alive, and their gradient
+   !> noise is what a difference quotient amplifies. Truncation takes over
+   !> above `4e-4` (`5.0e-9` at `5e-4`, `3.3e-8` at `8e-4`), so no step does
+   !> better. The CPCM block on the same fixture needs no bound of its own:
+   !> `1.7e-13` at both steps on a block of `8.6e-3`.
+   real(wp), parameter :: HESS_TOL_PV_CROSS = 8.0E-9_wp
 
    !> Symmetry bound of the analytic block, relative to its largest entry
    real(wp), parameter :: SYM_TOL = 1.0E-11_wp
@@ -120,6 +149,8 @@ contains
                   new_unittest("cpcm_hessian_fd", test_cpcm_hessian_fd), &
                   new_unittest("cpcm_frozen_misses_response", test_cpcm_teeth), &
                   new_unittest("cpcm_hvp_matches_dense", test_cpcm_hvp), &
+                  new_unittest("pv_cross_hessian_fd", test_pv_cross_fd), &
+                  new_unittest("cpcm_cross_hessian_fd", test_cpcm_cross_fd), &
                   new_unittest("hessian_guards", test_guards) &
                   ]
    end subroutine collect_model_general_hessian
@@ -135,7 +166,8 @@ contains
    !> @param[out] model     Updated model
    !> @param[out] ctx       Run context the model borrows; must outlive it
    !> @param[out] error     Error handle
-   subroutine build_pv_model(mol, pressures, model, ctx, error)
+   !> @param[in]  fix_kind  Geometry of the fixture (default `FIX_PLAIN`)
+   subroutine build_pv_model(mol, pressures, model, ctx, error, fix_kind)
       !> Structure
       type(structure_type), intent(in) :: mol
       !> Pressure of each PV component
@@ -146,14 +178,18 @@ contains
       type(moist_context_type), intent(inout), target :: ctx
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
+      !> Geometry of the fixture
+      integer, intent(in), optional :: fix_kind
 
       type(cavity_type_drop), allocatable :: cavity
       type(solvation_model_component_pv) :: pv
       type(mctc_error), allocatable :: err
-      integer :: ip
+      integer :: ip, fix_loc
 
-      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error, &
-                                  want_fine=.true.)
+      fix_loc = FIX_PLAIN
+      if (present(fix_kind)) fix_loc = fix_kind
+      call build_drop_test_cavity(cavity, ctx, mol, fix_loc, LSF_SVDW, error, &
+                                  cross_branch_s=CROSS_BRANCH_S, want_fine=.true.)
       if (allocated(error)) return
 
       call new_model_general(model, cavity, ctx, err)
@@ -179,7 +215,8 @@ contains
    !> @param[out] model Updated model
    !> @param[out] ctx   Run context the model borrows; must outlive it
    !> @param[out] error Error handle
-   subroutine build_cpcm_model(mol, model, ctx, error)
+   !> @param[in]  fix_kind Geometry of the fixture (default `FIX_PLAIN`)
+   subroutine build_cpcm_model(mol, model, ctx, error, fix_kind)
       !> Structure
       type(structure_type), intent(in) :: mol
       !> Updated model
@@ -188,13 +225,18 @@ contains
       type(moist_context_type), intent(inout), target :: ctx
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
+      !> Geometry of the fixture
+      integer, intent(in), optional :: fix_kind
 
       type(cavity_type_drop), allocatable :: cavity
       type(solvation_model_component_cpcm) :: cpcm
       type(mctc_error), allocatable :: err
+      integer :: fix_loc
 
-      call build_drop_test_cavity(cavity, ctx, mol, FIX_PLAIN, LSF_SVDW, error, &
-                                  want_fine=.true.)
+      fix_loc = FIX_PLAIN
+      if (present(fix_kind)) fix_loc = fix_kind
+      call build_drop_test_cavity(cavity, ctx, mol, fix_loc, LSF_SVDW, error, &
+                                  cross_branch_s=CROSS_BRANCH_S, want_fine=.true.)
       if (allocated(error)) return
 
       call new_component_cpcm(cpcm, ctx, EPSILON, solver=solver_type%cholesky, &
@@ -241,6 +283,15 @@ contains
          end if
          call make_charge_coupling(QAT, coupling)
          call build_cpcm_model(mol, model, ctx, error)
+      case (MODEL_PV_CROSS)
+         call build_pv_model(mol, [PRESSURE], model, ctx, error, fix_kind=FIX_CROSS)
+      case (MODEL_CPCM_CROSS)
+         if (mol%nat /= size(QAT_CROSS)) then
+            call test_failed(error, "the CPCM point charges do not match the fixture")
+            return
+         end if
+         call make_charge_coupling(QAT_CROSS, coupling)
+         call build_cpcm_model(mol, model, ctx, error, fix_kind=FIX_CROSS)
       case default
          call test_failed(error, "unknown component selector")
       end select
@@ -252,8 +303,43 @@ contains
       integer, intent(in) :: kind
 
       tol = HESS_TOL
-      if (kind == MODEL_CPCM) tol = HESS_TOL_CPCM
+      if (kind == MODEL_CPCM .or. kind == MODEL_CPCM_CROSS) tol = HESS_TOL_CPCM
+      if (kind == MODEL_PV_CROSS) tol = HESS_TOL_PV_CROSS
    end function hessian_tolerance
+
+   !> The fixture geometry of one selector
+   pure integer function fixture_of(kind) result(fix_kind)
+      integer, intent(in) :: kind
+
+      fix_kind = FIX_PLAIN
+      if (kind == MODEL_PV_CROSS .or. kind == MODEL_CPCM_CROSS) fix_kind = FIX_CROSS
+   end function fixture_of
+
+   !> Assert that the model's DROP cavity carries a multi-branch anchor group
+   !>
+   !> The precondition of the branching cases: on a cross that quietly stopped
+   !> branching they would pass for the reasons the plain ones do.
+   !>
+   !> @param[in]  model Updated model
+   !> @param[out] error Error handle
+   subroutine assert_branched(model, error)
+      !> Updated model
+      type(solvation_model_general), intent(in) :: model
+      !> Error handle
+      type(error_type), allocatable, intent(out) :: error
+
+      select type (cav => model%cavity)
+      type is (cavity_type_drop)
+         if (.not. allocated(cav%branch_count)) then
+            call test_failed(error, "the branching fixture carries no branch count")
+         else if (.not. any(cav%branch_count(1:cav%ngrid) > 1)) then
+            call test_failed(error, "the branching fixture does not branch")
+         end if
+      class default
+         call test_failed(error, "the model cavity is not a DROP cavity")
+      end select
+
+   end subroutine assert_branched
 
    !> The persistent grid identity of the model's DROP cavity
    !>
@@ -297,6 +383,20 @@ contains
       call run_fd(MODEL_PV, .false., error)
    end subroutine test_pv_teeth
 
+   !> The analytic PV model Hessian on the branching fixture
+   subroutine test_pv_cross_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_fd(MODEL_PV_CROSS, .true., error)
+   end subroutine test_pv_cross_fd
+
+   !> The analytic CPCM model Hessian on the branching fixture
+   subroutine test_cpcm_cross_fd(error)
+      type(error_type), allocatable, intent(out) :: error
+
+      call run_fd(MODEL_CPCM_CROSS, .true., error)
+   end subroutine test_cpcm_cross_fd
+
    !> The analytic CPCM model Hessian against the differenced model gradient
    subroutine test_cpcm_hessian_fd(error)
       type(error_type), allocatable, intent(out) :: error
@@ -337,9 +437,13 @@ contains
       real(wp) :: scale, sym, worst, worst_ref, tol
       integer :: nsph, istep, i1, i2, i3, i4
 
-      call drop_fixture_geometry(FIX_PLAIN, mol)
+      call drop_fixture_geometry(fixture_of(kind), mol)
       call build_model(kind, mol, model, ctx, coupling, error)
       if (allocated(error)) return
+      if (fixture_of(kind) == FIX_CROSS) then
+         call assert_branched(model, error)
+         if (allocated(error)) return
+      end if
       nsph = model%cavity%nsph
       tol = hessian_tolerance(kind)
 

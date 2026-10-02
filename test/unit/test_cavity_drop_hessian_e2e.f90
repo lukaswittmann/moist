@@ -165,7 +165,8 @@
 !>
 !> ## Mutations that shaped the assertions
 !>
-!> All three in `derivatives/hessian.f90`, all three caught:
+!> The first and the last in `derivatives/hessian.f90`, the branch ones in
+!> `derivatives/hessian_traverse.f90` and `derivatives/seeds.f90`, all caught:
 !>
 !>   * **the response half dropped** from the composition: both smooth cases
 !>     and both HVP cases fail by `1.5e+1` to `2.4e+1` absolute -- nine orders
@@ -173,11 +174,15 @@
 !>     and is the check that the two halves are being told apart. `d(eff)` has
 !>     no curvature channel, so a curvature-only accumulator has no response
 !>     half to drop;
-!>   * **the multi-branch refusal removed** from the two entry points:
-!>     `branched_grid_refused` fails outright. Measured 2026-09-08, when the
-!>     refusal moved out of the fixed half -- where it had been one of three
-!>     guards on a raw accumulator that half no longer takes -- and up to the
-!>     composition that is actually short the term;
+!>   * **a branch term of the fixed half dropped**: `branched_grid` fails on
+!>     the symmetry of the dense block, at `5.1e+0` without the second
+!>     derivative of the branch objective, `4.1e+0` without the anchor seeds'
+!>     shift tangent and `1.1e+1` without the rank-4 form's group pass, against
+!>     `2.1e-13` intact; with the per-direction form's branch-weight tangent
+!>     zeroed the block stays symmetric and the general-direction product
+!>     misses its contraction by `2.0e+0` instead. Measured 2026-10-01, when
+!>     these terms went in and the refusal of a branched grid, which this
+!>     suite used to assert, came out;
 !>   * **the dense wrapper's column index transposed** (`nsph (alpha-1) + A`
 !>     for `3 (A-1) + alpha`): caught by the analytic symmetry check at
 !>     `9.9e+0` and by the unit-direction HVP check at `1.5e+1`.
@@ -377,6 +382,21 @@ module test_cavity_drop_hessian_e2e
    real(wp), parameter :: ANALYTIC_SYM_TOL_SMOOTH = 1.0E-12_wp
    real(wp), parameter :: ANALYTIC_SYM_TOL_CURV = 1.0E-11_wp
 
+   !> Bound on the analytic Hessian's structure on the branching fixture
+   !>
+   !> The same two properties as above, on `FIX_CROSS` with the smooth six
+   !> channels driven together. Measured `2.1e-13` asymmetry and `4.8e-13`
+   !> worst column sum against `max |H| = 174`, so round-off as on the plain
+   !> fixture -- `1.2e-15` relative -- and larger in absolute terms only
+   !> because the block is. The bound leaves a factor of 20.
+   !>
+   !> Symmetry is the assertion that matters here. On a branched grid neither
+   !> half of the Hessian is symmetric on its own: the branch terms are split
+   !> between them, and the fixed half's share couples the points of an anchor
+   !> group. A dropped branch term therefore breaks the symmetry of the sum at
+   !> the size of the term, `4 .. 11` on this fixture; see the module header.
+   real(wp), parameter :: BRANCHED_SYM_TOL = 1.0E-11_wp
+
    !> Bound on `get_surface_hessian` against `get_hessian` on the unit directions
    !>
    !> Exact, and measured exact on both level sets. Any set of at least `3 nsph`
@@ -456,7 +476,7 @@ contains
                   new_unittest("hvp_direction_chunking", test_hvp_chunking), &
                   new_unittest("hvp_direction_chunking_per_dir", test_hvp_chunking_per_dir), &
                   new_unittest("shape_guards", test_shape_guards), &
-                  new_unittest("branched_grid_refused", test_branched_grid_refused) &
+                  new_unittest("branched_grid", test_branched_grid) &
                   ]
    end subroutine collect_cavity_drop_hessian_e2e
 
@@ -1567,41 +1587,52 @@ contains
 
    end subroutine test_shape_guards
 
-   !> A branched grid must be refused by both public entry points
+   !> A branched grid through both public entry points
    !>
-   !> The one restriction the composite carries. A multi-branch anchor group
-   !> makes the projected point a softmax over several anchors, and the second
-   !> derivative of that carries a term neither half supplies -- the fixed
-   !> half's second-order chain omits it and the response half only moves
-   !> `branch_phi_adj`. Returning the sum of the two halves anyway would be a
-   !> Hessian silently short a term, so `get_hessian` and `get_surface_hessian`
-   !> refuse the grid instead.
+   !> A multi-branch anchor group gives the Lebedev weight of its points a
+   !> softmax factor over the group's branch objectives, and the Hessian three
+   !> terms no unbranched fixture reaches: the response half's moving
+   !> `branch_phi_adj`, the fixed half's second derivative of the branch
+   !> objective, and the fixed half's weight chain with the branch weight
+   !> moving. The last couples the points of a group, and the two forms of the
+   !> fixed channel get it by different routes -- the per-direction form from
+   !> the forward tangent, the rank-4 form from a group pass after the grid
+   !> loop. The differenced reference of these terms is the response suite's
+   !> `both_halves_svdw_cross`; what is asserted here is what only the public
+   !> entry points can show:
    !>
-   !> The refusal used to live inside the fixed half, where it was one of three
-   !> guards on the accumulator. The other two went with the re-folding; this
-   !> one is a property of the grid, not of the adjoints, and it moved up to the
-   !> entry points that compose the halves.
+   !>  1. the dense block is symmetric and has no translational mode. Neither
+   !>     half is symmetric on its own on a branched grid -- the branch terms
+   !>     are split across the two -- so this is a property of the composition,
+   !>     and it is independent of every finite difference;
+   !>  2. `get_surface_hessian` on the Cartesian unit directions reproduces
+   !>     `get_hessian` column for column, as on the plain fixture;
+   !>  3. `get_surface_hessian` on two general directions, which runs the fixed
+   !>     channel per direction, reproduces the dense block contracted with
+   !>     them: the two routes to the branch-weight motion against each other.
    !>
-   !> The fixture is asserted to branch before anything else is checked: a cross
-   !> that quietly stopped branching would leave this test passing on a refusal
-   !> that never had to fire.
+   !> The fixture is asserted to branch before anything else is checked: on a
+   !> cross that quietly stopped branching all three would hold for the reasons
+   !> they hold on the plain fixture.
    !>
    !> @param[out] error Error handle
-   subroutine test_branched_grid_refused(error)
+   subroutine test_branched_grid(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
 
       !> Softmax scale that makes the cross branch, as the response suite uses
       real(wp), parameter :: CROSS_BRANCH_S = 2.0_wp
+      !> Case description
+      character(len=*), parameter :: label = "svdw/cross"
 
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
       type(moist_context_type), target :: ctx
-      type(cavity_surface_adjoint_type) :: acc
-      type(mctc_error), allocatable :: cav_error
       logical :: mask(NCHAN)
-      real(wp), allocatable :: hessian(:, :, :, :), hvp(:, :, :), dirs(:, :, :)
-      integer :: nsph
+      real(wp), allocatable :: dense(:, :, :, :), unit_dirs(:, :, :), gen_dirs(:, :, :)
+      real(wp), allocatable :: hvp_unit(:, :, :), hvp_gen(:, :, :), contracted(:, :, :)
+      real(wp) :: sym, sym_rel, scale, drift, worst
+      integer :: nsph, ndir, idir, iatom, iaxis, jaxis
 
       mask = .false.
       mask(smooth_channels()) = .true.
@@ -1611,9 +1642,10 @@ contains
                                   cross_branch_s=CROSS_BRANCH_S)
       if (allocated(error)) return
       nsph = cavity%nsph
+      ndir = ndim*nsph
 
-      ! The precondition, not an observation: without it the refusal below
-      ! could be satisfied by a grid that has nothing to refuse
+      ! The precondition, not an observation: without it everything below
+      ! would be satisfied by a grid that has no branch term to get wrong
       if (.not. allocated(cavity%branch_count)) then
          call test_failed(error, "the branching fixture carries no branch count")
          return
@@ -1625,31 +1657,93 @@ contains
          return
       end if
 
-      call frozen_adjoint(cavity, mask, acc, error)
+      !* ------------------------- 1. structure of the dense block ---------------------- *!
+      allocate (dense(ndim, nsph, ndim, nsph), source=0.0_wp)
+      call analytic_hessian(cavity, mask, dense, label, error)
       if (allocated(error)) return
 
-      !* ---------------------------------- Dense path ---------------------------------- *!
-      allocate (hessian(ndim, nsph, ndim, nsph), source=0.0_wp)
-      call cavity%get_hessian(acc, hessian, cav_error)
-      call expect_rejected(cav_error, "get_hessian on a branched grid", error)
-      if (allocated(error)) return
-      if (maxval(abs(hessian)) /= 0.0_wp) then
-         call test_failed(error, "get_hessian accumulated into a rejected buffer")
+      call asymmetry(dense, sym, sym_rel, scale)
+      if (scale <= VACUITY_THR) then
+         call test_failed(error, "the analytic Hessian is vacuous for "//label)
+         return
+      end if
+      if (E2E_VERBOSE) write (*, '(a,1x,a,3es12.3)') "SYM", label, sym, sym_rel, scale
+      if (sym > BRANCHED_SYM_TOL) then
+         call test_failed(error, "the analytic Hessian is asymmetric for "//label// &
+                          ": worst deviation "//to_string(sym)//" absolute, "// &
+                          to_string(sym_rel)//" relative to max |H| = "//to_string(scale))
          return
       end if
 
-      !* ----------------------------------- HVP path ----------------------------------- *!
-      call build_directions(nsph, dirs)
-      allocate (hvp(ndim, nsph, size(dirs, 3)), source=0.0_wp)
-      call cavity%get_surface_hessian(acc, dirs, hvp, cav_error)
-      call expect_rejected(cav_error, "get_surface_hessian on a branched grid", error)
-      if (allocated(error)) return
-      if (maxval(abs(hvp)) /= 0.0_wp) then
-         call test_failed(error, "get_surface_hessian accumulated into a rejected buffer")
+      drift = 0.0_wp
+      do jaxis = 1, ndim
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               drift = max(drift, abs(sum(dense(iaxis, iatom, jaxis, :))))
+            end do
+         end do
+      end do
+      if (E2E_VERBOSE) write (*, '(a,1x,a,es12.3)') "DRIFT", label, drift
+      if (drift > BRANCHED_SYM_TOL) then
+         call test_failed(error, "the analytic Hessian has a translational mode for "// &
+                          label//": worst column sum "//to_string(drift)// &
+                          " against max |H| = "//to_string(scale))
          return
       end if
 
-   end subroutine test_branched_grid_refused
+      !* -------------------- 2. unit directions against the columns -------------------- *!
+      allocate (unit_dirs(ndim, nsph, ndir), source=0.0_wp)
+      do iatom = 1, nsph
+         do iaxis = 1, ndim
+            unit_dirs(iaxis, iatom, ndim*(iatom - 1) + iaxis) = 1.0_wp
+         end do
+      end do
+      allocate (hvp_unit(ndim, nsph, ndir), source=0.0_wp)
+      call analytic_hvp(cavity, mask, unit_dirs, hvp_unit, label, error)
+      if (allocated(error)) return
+
+      worst = 0.0_wp
+      do iatom = 1, nsph
+         do iaxis = 1, ndim
+            idir = ndim*(iatom - 1) + iaxis
+            worst = max(worst, maxval(abs(hvp_unit(:, :, idir) - dense(:, :, iaxis, iatom))))
+         end do
+      end do
+      if (E2E_VERBOSE) write (*, '(a,1x,a,es12.3)') "HVP-UNIT", label, worst
+      if (worst > HVP_UNIT_TOL) then
+         call test_failed(error, "the HVP and dense paths disagree on the unit"// &
+                          " directions for "//label//": worst deviation "// &
+                          to_string(worst)//" against max |H| = "//to_string(scale))
+         return
+      end if
+
+      !* ------------------ 3. general directions against the contraction --------------- *!
+      call build_directions(nsph, gen_dirs)
+      allocate (hvp_gen(ndim, nsph, size(gen_dirs, 3)), source=0.0_wp)
+      call analytic_hvp(cavity, mask, gen_dirs, hvp_gen, label, error)
+      if (allocated(error)) return
+
+      allocate (contracted(ndim, nsph, size(gen_dirs, 3)), source=0.0_wp)
+      do idir = 1, size(gen_dirs, 3)
+         do iatom = 1, nsph
+            do iaxis = 1, ndim
+               contracted(:, :, idir) = contracted(:, :, idir) &
+                                        + dense(:, :, iaxis, iatom)*gen_dirs(iaxis, iatom, idir)
+            end do
+         end do
+      end do
+
+      worst = maxval(abs(hvp_gen - contracted))
+      if (E2E_VERBOSE) write (*, '(a,1x,a,2es12.3)') "HVP-GEN", label, worst, &
+         worst/max(maxval(abs(contracted)), tiny(1.0_wp))
+      if (worst > HVP_GEN_TOL*max(maxval(abs(contracted)), 1.0_wp)) then
+         call test_failed(error, "the HVP path and the contracted dense block disagree"// &
+                          " for "//label//": worst deviation "//to_string(worst)// &
+                          " against max |Hv| = "//to_string(maxval(abs(contracted))))
+         return
+      end if
+
+   end subroutine test_branched_grid
 
    !> A call that must fail, and must say so through the error handle
    !>
