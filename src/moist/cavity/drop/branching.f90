@@ -6,6 +6,7 @@ module moist_cavity_drop_branching
    public :: branch_weight_type
    public :: softmax_weights
    public :: softmax_weights_grad
+   public :: softmax_weights_hess
 
    !> Branch-weight model for degenerate closest-point branches
    !>
@@ -24,6 +25,8 @@ module moist_cavity_drop_branching
       procedure :: branch_weights_entropy
       !> Compute branch weights and derivatives for one branch group.
       procedure :: weights_grad => branch_weight_weights_grad
+      !> Compute branch weights with first and second derivatives for one group
+      procedure :: weights_hess => branch_weight_weights_hess
    end type branch_weight_type
 
 contains
@@ -109,6 +112,82 @@ contains
       end do
    end subroutine softmax_weights_grad
 
+   !> Compute softmax weights with first and second parameter derivatives
+   !>
+   !> - Constant softmax width, logit `g_m = -Phi_m/sigma_phi`
+   !> - `dp_m = p_m (dg_m - <dg>)`, with `<x> = sum_k p_k x_k`
+   !> - `ddp_m(k, l) = dp_m(l) (dg_m(k) - <dg(k)>)`
+   !>   `+ p_m (ddg_m(k, l) - sum_n dp_n(l) dg_n(k) - <ddg(k, l)>)`
+   !> - Symmetric in `(k, l)` for symmetric `ddphi`
+   !>
+   !> @param[in]  phi        objective values `Phi_m` (nbranch)
+   !> @param[in]  dphi       first derivatives of `Phi_m` (nparam, nbranch)
+   !> @param[in]  ddphi      second derivatives of `Phi_m` (nparam, nparam, nbranch)
+   !> @param[in]  sigma_phi  softmax width, zero derivatives on a vanishing width
+   !> @param[out] weights    softmax weights `p_m` (nbranch)
+   !> @param[out] dweights   first derivatives of `p_m` (nparam, nbranch)
+   !> @param[out] ddweights  second derivatives of `p_m` (nparam, nparam, nbranch)
+   pure subroutine softmax_weights_hess(phi, dphi, ddphi, sigma_phi, weights, dweights, ddweights)
+      !> Objective values
+      real(wp), intent(in) :: phi(:)
+      !> First derivatives of the objective
+      real(wp), intent(in) :: dphi(:, :)
+      !> Second derivatives of the objective
+      real(wp), intent(in) :: ddphi(:, :, :)
+      !> Softmax width
+      real(wp), intent(in) :: sigma_phi
+      !> Softmax weights
+      real(wp), intent(out) :: weights(:)
+      !> First derivatives of the weights
+      real(wp), intent(out) :: dweights(:, :)
+      !> Second derivatives of the weights
+      real(wp), intent(out) :: ddweights(:, :, :)
+
+      !> Branch and parameter extents
+      integer :: nbranch, nparam
+      !> Loop indices
+      integer :: kparam, lparam, ibranch
+      !> Inverse softmax width
+      real(wp) :: inv_sigma
+      !> Weighted means of the first and second logit derivatives
+      real(wp) :: mean_dg, mean_ddg
+      !> Sum over branches of `dp_n(l) dg_n(k)`
+      real(wp) :: cross
+      !> Zero width derivative of [[softmax_weights_grad]]
+      real(wp) :: dsigma_phi(size(dphi, dim=1))
+
+      nbranch = size(phi)
+      nparam = size(dphi, dim=1)
+
+      dsigma_phi = 0.0_wp
+      call softmax_weights_grad(phi, dphi, sigma_phi, dsigma_phi, weights, dweights)
+
+      if (sigma_phi <= tiny(1.0_wp)) then
+         ddweights = 0.0_wp
+         return
+      end if
+
+      inv_sigma = 1.0_wp/sigma_phi
+
+      do lparam = 1, nparam
+         do kparam = 1, nparam
+            mean_dg = 0.0_wp
+            mean_ddg = 0.0_wp
+            cross = 0.0_wp
+            do ibranch = 1, nbranch
+               mean_dg = mean_dg - weights(ibranch)*dphi(kparam, ibranch)*inv_sigma
+               mean_ddg = mean_ddg - weights(ibranch)*ddphi(kparam, lparam, ibranch)*inv_sigma
+               cross = cross - dweights(lparam, ibranch)*dphi(kparam, ibranch)*inv_sigma
+            end do
+            do ibranch = 1, nbranch
+               ddweights(kparam, lparam, ibranch) = &
+                  dweights(lparam, ibranch)*(-dphi(kparam, ibranch)*inv_sigma - mean_dg) &
+                  + weights(ibranch)*(-ddphi(kparam, lparam, ibranch)*inv_sigma - cross - mean_ddg)
+            end do
+         end do
+      end do
+   end subroutine softmax_weights_hess
+
    !> Type-bound wrapper for softmax weights
    !> @param[in]  self    Branch-weight instance
    !> @param[in]  phi     Objective values Phi_m
@@ -168,5 +247,35 @@ contains
       dsigma_phi = 0.0_wp
       call softmax_weights_grad(phi, dphi, self%s, dsigma_phi, weights, dweights)
    end subroutine branch_weight_weights_grad
+
+   !> Compute branch weights with first and second derivatives for one group
+   !>
+   !> - Softmax width `s` constant, see [[softmax_weights_hess]]
+   !>
+   !> @param[in]  self       branch-weight instance
+   !> @param[in]  phi        objective values `Phi_m` (nbranch)
+   !> @param[in]  dphi       first derivatives of `Phi_m` (nparam, nbranch)
+   !> @param[in]  ddphi      second derivatives of `Phi_m` (nparam, nparam, nbranch)
+   !> @param[out] weights    softmax weights `p_m` (nbranch)
+   !> @param[out] dweights   first derivatives of `p_m` (nparam, nbranch)
+   !> @param[out] ddweights  second derivatives of `p_m` (nparam, nparam, nbranch)
+   pure subroutine branch_weight_weights_hess(self, phi, dphi, ddphi, weights, dweights, ddweights)
+      !> Branch-weight instance
+      class(branch_weight_type), intent(in) :: self
+      !> Objective values
+      real(wp), intent(in) :: phi(:)
+      !> First derivatives of the objective
+      real(wp), intent(in) :: dphi(:, :)
+      !> Second derivatives of the objective
+      real(wp), intent(in) :: ddphi(:, :, :)
+      !> Softmax weights
+      real(wp), intent(out) :: weights(:)
+      !> First derivatives of the weights
+      real(wp), intent(out) :: dweights(:, :)
+      !> Second derivatives of the weights
+      real(wp), intent(out) :: ddweights(:, :, :)
+
+      call softmax_weights_hess(phi, dphi, ddphi, self%s, weights, dweights, ddweights)
+   end subroutine branch_weight_weights_hess
 
 end module moist_cavity_drop_branching
