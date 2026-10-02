@@ -12,7 +12,7 @@ The PySCF interface separates four roles:
 ``PySCFHost``
    Adapts a PySCF molecule and density to the density, electrostatic, Fock, and nuclear-gradient operations MOIST needs.
 
-``CavityDROPIsodensity(host, ...)``
+``CavityDROPIsodensityCallback(host, ...)``
    Constructs the cavity from the host's density.
    The cavity owns its native state and configuration while retaining the host that supplies ``density(point, order)`` and the matching ``rho_iso`` and ``scale``.
 
@@ -32,12 +32,12 @@ The :class:`~moist.interface.ModelComponentCPCM` model can be used as follows.
 
 .. code-block:: python
 
-   from moist import CavityDROPIsodensity, ModelComponentCPCM, SolvationModel
+   from moist import CavityDROPIsodensityCallback, ModelComponentCPCM, SolvationModel
    from moist.pyscf import PySCFHost
 
    host = PySCFHost(mol)
    model = SolvationModel(
-      cavity=CavityDROPIsodensity(host, nleb=194),
+      cavity=CavityDROPIsodensityCallback(host, nleb=194),
       components=[ModelComponentCPCM(80.0)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
@@ -145,7 +145,7 @@ The caller only constructs the objects and asks for one evaluation:
 .. code-block:: python
 
    from pyscf import gto, scf
-   from moist import CavityDROPIsodensity, ModelComponentCPCM, SolvationModel
+   from moist import CavityDROPIsodensityCallback, ModelComponentCPCM, SolvationModel
    from moist.pyscf import PySCFHost
 
    mol = gto.M(atom="O 0 0 -0.7357; H 1.4418 0 0.3679; H -1.4418 0 0.3679",
@@ -155,7 +155,7 @@ The caller only constructs the objects and asks for one evaluation:
 
    host = PySCFHost(mol)
    model = SolvationModel(
-      cavity=CavityDROPIsodensity(host, nleb=194),
+      cavity=CavityDROPIsodensityCallback(host, nleb=194),
       components=[ModelComponentCPCM(80.0)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
@@ -175,7 +175,7 @@ Adding a pressure term makes the cavity-shape response dominant rather than a sm
 
    pressure = 1.0e10 / 2.9421015697e13        # 10 GPa in E_h / a_0^3
    model = SolvationModel(
-      cavity=CavityDROPIsodensity(host, nleb=194),
+      cavity=CavityDROPIsodensityCallback(host, nleb=194),
       components=[ModelComponentCPCM(80.0), ModelComponentPV(pressure)]
       )
    result = model.evaluate(coupling=host.coupling(dm))
@@ -192,7 +192,7 @@ For a self-consistent calculation, :func:`~moist.pyscf.solvated_rhf` wraps the w
    mf = solvated_rhf(mol, epsilon=80.0, nleb=194)
    print(mf.e_tot)
 
-``CavityDROPIsodensity`` asks the host for the density point by point.
+``CavityDROPIsodensityCallback`` asks the host for the density point by point.
 :meth:`~moist.pyscf.PySCFHost.internal_cavity` builds a :class:`~moist.interface.CavityDROPIsodensityInternal` instead, which takes the molecule's basis once and evaluates the density inside moist, in parallel over the grid points.
 The host transforms every density matrix it is given into the cavity's cartesian layout and installs it, so a coupling keeps the surface current exactly as with the callback, and the two give the same results to rounding:
 
@@ -283,7 +283,7 @@ Use a model factory to select components consistently for SCF and Hessians:
 
    def model_factory(host):
        return SolvationModel(
-           CavityDROPIsodensity(host, nleb=50, tolerance=1.0e-13),
+           CavityDROPIsodensityCallback(host, nleb=50, tolerance=1.0e-13),
            [ModelComponentCOSMO(80.0)],
        )
 
@@ -329,7 +329,7 @@ the cavity owns ``nleb``, the component owns the pressure, and the PySCF couplin
 
    from pyscf import gto, scf
    from moist import (
-       CavityDROPIsodensity,
+       CavityDROPIsodensityCallback,
        ModelComponentCPCM,
        ModelComponentGOSTSHYP,
        SolvationModel,
@@ -343,7 +343,7 @@ the cavity owns ``nleb``, the component owns the pressure, and the PySCF couplin
 
    host = PySCFHost(mol)
    model = SolvationModel(
-       cavity=CavityDROPIsodensity(host, nleb=194),
+       cavity=CavityDROPIsodensityCallback(host, nleb=194),
        components=[ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
    )
 
@@ -360,7 +360,7 @@ coupling:
 .. code-block:: python
 
    model = SolvationModel(
-       cavity=CavityDROPIsodensity(host, nleb=194),
+       cavity=CavityDROPIsodensityCallback(host, nleb=194),
        components=[ModelComponentCPCM(80.0), ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
    )
    result = model.evaluate(coupling=host.coupling(dm))

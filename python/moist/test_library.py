@@ -6,7 +6,8 @@ import pytest
 from pytest import approx, raises
 
 from moist.interface import (
-    CavityDROPIsodensity,
+    CavityDROPIsodensityCallback,
+    CavityDROPIsodensityInternal,
     GeneralSolvationModel,
     ModelComponentPV,
     Structure,
@@ -22,7 +23,7 @@ def test_api_version_format() -> None:
 
 
 def test_callback_arity_detection() -> None:
-    """Both callback forms must be recognised without being called."""
+    """Both callback forms are recognised without being called"""
 
     def legacy(point):
         return 0.0, np.zeros(3)
@@ -38,34 +39,32 @@ def test_callback_arity_detection() -> None:
 
     assert not _callback_takes_order(legacy)
     assert _callback_takes_order(with_order)
-    # `order` is keyword-only here, so the two-positional-argument call would
-    # fail -- it must be treated as the legacy form
+    # `order` keyword-only: the two-positional call would fail, so legacy form
     assert not _callback_takes_order(keyword_order)
-    # *args could accept anything; the safe assumption is the legacy form
+    # *args could accept anything; safe assumption is the legacy form
     assert not _callback_takes_order(varargs)
-    # A bound partial that has already consumed `point` still exposes `order`
+    # Bound partial that already consumed `point` still exposes `order`
     assert _callback_takes_order(functools.partial(with_order))
-    # Builtins are not introspectable and must fall back, not raise
+    # Builtins are not introspectable: fall back, do not raise
     assert not _callback_takes_order(len)
 
 
-#: Density contour the test surfaces follow, in electrons/Bohr^3.  moist owns it
-#: now, so it has to reach the cavity constructor rather than the callback.
+#: Density contour of the test surfaces, in electrons/Bohr^3
+#: - owned by moist, so it reaches the cavity constructor, not the callback
 _RHO_ISO = 1.0e-3
 
 
 class _GaussianDensity:
-    """rho(r) = sum_A c exp(-a |r - R_A|^2), returned to moist.
+    """rho(r) = sum_A c exp(-a |r - R_A|^2), returned to moist
 
-    moist forms the level set S = scale (rho_iso - rho) from it.
-
-    Records which derivative orders it was asked for, so a test can tell that
-    moist really does skip the expensive orders during projection.
+    - moist forms the level set S = scale (rho_iso - rho) from it
+    - records the derivative orders asked for, so a test can tell that moist
+      skips the expensive orders during projection
     """
 
     def __init__(self, centers: np.ndarray, alpha: float = 0.3):
-        # Mirrors the diagonal single-s-per-atom density used by the C example
-        # in test/api/example.c, which is known to give a well-behaved surface.
+        # Diagonal single-s-per-atom density of test/api/example.c, known to
+        # give a well-behaved surface
         coeff = (2.0 * alpha / np.pi) ** 0.75
         self.centers = np.asarray(centers, dtype=np.float64)
         self.c = 2.0 * coeff**2
@@ -105,12 +104,12 @@ class _GaussianDensity:
         return self._derivatives(point, order)
 
     def legacy(self, point):
-        """The pre-order form: always computes everything."""
+        """Pre-order form, always computes everything"""
         return self._derivatives(point, 3)
 
 
 class _GaussianSource(_GaussianDensity):
-    """Density provider matching the public isodensity source interface."""
+    """Density provider matching the public isodensity source interface"""
 
     scale = 750.0
 
@@ -133,12 +132,12 @@ def water() -> tuple[np.ndarray, np.ndarray]:
 
 @pytest.fixture
 def flaky_lsf(water) -> SimpleNamespace:
-    """A density callback that can be switched to fail partway into a build.
+    """Density callback that can be switched to fail partway into a build
 
-    ``arm(True)`` makes the callback raise once moist is 50 grid points in --
-    far enough that the abort has to unwind a partly built surface -- and resets
-    the call counter, so the trip point is always measured from the start of the
-    next build rather than from the fixture's lifetime.
+    - ``arm(True)`` raises once moist is 50 grid points in, far enough that the
+      abort unwinds a partly built surface
+    - ``arm`` also resets the call counter: trip point is measured from the
+      start of the next build, not the fixture's lifetime
     """
     _, positions = water
     lsf = _GaussianDensity(positions)
@@ -161,27 +160,27 @@ def flaky_lsf(water) -> SimpleNamespace:
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
     numbers, positions = water
     structure = Structure(numbers, positions)
-    cavity = CavityDROPIsodensity(callback, rho_iso=rho_iso, nleb=26, **kwargs)
+    cavity = CavityDROPIsodensityCallback(callback, rho_iso=rho_iso, nleb=26, **kwargs)
     cavity.update(structure)
     return cavity.cavity
 
 
 def test_isodensity_cavity_accepts_a_density_source(water) -> None:
-    """The cavity constructor owns source adaptation and parameter matching."""
+    """Cavity constructor owns source adaptation and parameter matching"""
     numbers, positions = water
     source = _GaussianSource(positions)
-    cavity = CavityDROPIsodensity(source, nleb=26)
+    cavity = CavityDROPIsodensityCallback(source, nleb=26)
 
     cavity.update(Structure(numbers, positions))
 
     assert cavity.snapshot().ngrid > 0
     assert source.calls > 0
     with raises(ValueError, match="scale must match"):
-        CavityDROPIsodensity(source, nleb=26, scale=1000.0)
+        CavityDROPIsodensityCallback(source, nleb=26, scale=1000.0)
     with raises(ValueError, match="rho_iso must match"):
-        CavityDROPIsodensity(source, nleb=26, rho_iso=2.0e-3)
+        CavityDROPIsodensityCallback(source, nleb=26, rho_iso=2.0e-3)
     with raises(TypeError, match="rho_iso must be given"):
-        CavityDROPIsodensity(source.with_order, nleb=26)
+        CavityDROPIsodensityCallback(source.with_order, nleb=26)
 
 
 def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None:
@@ -189,17 +188,16 @@ def test_isodensity_cavity_retains_callback_keyword_compatibility(water) -> None
     source = _GaussianDensity(positions)
 
     with pytest.deprecated_call(match="source"):
-        cavity = CavityDROPIsodensity(callback=source.with_order, rho_iso=source.rho_iso, nleb=26)
+        cavity = CavityDROPIsodensityCallback(callback=source.with_order, rho_iso=source.rho_iso, nleb=26)
 
-    assert isinstance(cavity, CavityDROPIsodensity)
+    assert isinstance(cavity, CavityDROPIsodensityCallback)
 
 
 def test_callback_both_forms_agree(water) -> None:
-    """A legacy one-argument callback must still work and give the same cavity.
+    """Legacy one-argument callback gives the same cavity
 
-    The two forms differ only in whether moist can tell the callback to skip
-    computing derivatives it does not need, so they must describe the same
-    surface.
+    The forms differ only in whether moist can tell the callback to skip
+    unneeded derivatives, so the surface is the same
     """
     _, positions = water
 
@@ -213,28 +211,28 @@ def test_callback_both_forms_agree(water) -> None:
     assert new_cavity.area == approx(old_cavity.area, rel=1.0e-13)
     assert new_cavity.volume == approx(old_cavity.volume, rel=1.0e-13)
 
-    # The order-aware form must actually have been spared some work
+    # Order-aware form was spared some work
     assert new_lsf.orders == {1, 2}
     assert old_lsf.orders == {3}
 
 
 def test_callback_order_override(water) -> None:
-    """`pass_order` overrides introspection in both directions."""
+    """`pass_order` overrides introspection in both directions"""
     _, positions = water
 
-    # A two-argument callback forced into the legacy call form would raise
-    # TypeError inside the CFFI trampoline, so this must be rejected up front
+    # Two-argument callback forced to the legacy form would raise TypeError
+    # inside the CFFI trampoline, so it is rejected up front
     lsf = _GaussianDensity(positions)
     with raises(TypeError):
         _build(lsf.with_order, water, pass_order=False)
 
-    # Forcing the legacy form on a callback that really is legacy is a no-op
+    # Forcing legacy form on a legacy callback: no-op
     lsf = _GaussianDensity(positions)
     cavity = _build(lsf.legacy, water, pass_order=False)
     assert cavity.ngrid > 0
     assert lsf.orders == {3}
 
-    # Forcing the order form on a callback that accepts it works too
+    # Forcing order form on a callback that accepts it: works
     lsf = _GaussianDensity(positions)
     cavity = _build(lsf.with_order, water, pass_order=True)
     assert cavity.ngrid > 0
@@ -242,12 +240,12 @@ def test_callback_order_override(water) -> None:
 
 
 def test_callback_missing_derivative_is_reported(water) -> None:
-    """A callback that omits a requested derivative must say so clearly."""
+    """Callback omitting a requested derivative is reported clearly"""
     _, positions = water
     lsf = _GaussianDensity(positions)
 
     def truncated(point, order):
-        # Never returns a Hessian, whatever moist asks for
+        # Never returns a Hessian, whatever moist asks
         value, grad = lsf._derivatives(point, 1)
         return value, grad
 
@@ -256,12 +254,12 @@ def test_callback_missing_derivative_is_reported(water) -> None:
 
 
 def test_callback_failure_aborts_build(water) -> None:
-    """A raising callback must abort the build and surface the real exception.
+    """Raising callback aborts the build and surfaces the real exception
 
-    The failure is raised on the 50th evaluation rather than the first: moist
-    evaluates the level set from inside OpenMP parallel loops, so a mid-loop
-    abort is what actually exercises the failure channel. A first-call failure
-    would pass even if the parallel handling were broken.
+    - raised on the 50th evaluation, not the first
+    - moist evaluates the level set inside OpenMP parallel loops: a mid-loop
+      abort exercises the failure channel
+    - a first-call failure would pass even with broken parallel handling
     """
     _, positions = water
     lsf = _GaussianDensity(positions)
@@ -277,8 +275,8 @@ def test_callback_failure_aborts_build(water) -> None:
     with raises(Boom, match="the host density is unavailable here"):
         _build(flaky, water)
 
-    # The exception must arrive with its own traceback, not as a moist error
-    # rewrapped around a downstream symptom.
+    # Exception arrives with its own traceback, not a moist error rewrapped
+    # around a downstream symptom
     try:
         lsf.calls = 0
         _build(flaky, water)
@@ -294,7 +292,7 @@ def test_callback_failure_aborts_build(water) -> None:
 
 
 def test_callback_failure_stops_further_calls(water) -> None:
-    """Once the callback has failed, moist must stop calling it."""
+    """Failed callback is not called again"""
     _, positions = water
     lsf = _GaussianDensity(positions)
     seen = []
@@ -308,15 +306,15 @@ def test_callback_failure_stops_further_calls(water) -> None:
     with raises(RuntimeError, match="no density here"):
         _build(flaky, water)
 
-    # A build that ignored the failure would keep calling for the whole grid;
-    # the abort has to unwind promptly instead.
+    # A build ignoring the failure would keep calling for the whole grid;
+    # the abort unwinds promptly instead
     assert 50 < len(seen) < 500
 
 
 def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
-    """A cavity whose callback failed once must rebuild cleanly afterwards."""
+    """Cavity whose callback failed once rebuilds cleanly"""
     structure = Structure(*water)
-    cavity = CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
+    cavity = CavityDROPIsodensityCallback(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
     flaky_lsf.arm()
 
     with raises(RuntimeError, match="no density here"):
@@ -328,9 +326,9 @@ def test_callback_failure_is_not_sticky(water, flaky_lsf) -> None:
 
 
 def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) -> None:
-    """A failed second build must not leave the first surface readable as current."""
+    """Failed second build does not leave the first surface readable as current"""
     structure = Structure(*water)
-    cavity = CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
+    cavity = CavityDROPIsodensityCallback(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26)
     cavity.update(structure)
     assert cavity.snapshot().ngrid > 0
 
@@ -343,10 +341,10 @@ def test_failed_rebuild_invalidates_previous_cavity_results(water, flaky_lsf) ->
 
 
 def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> None:
-    """Model updates propagate callback failures and invalidate their live view."""
+    """Model updates propagate callback failures and invalidate the live view"""
     structure = Structure(*water)
     model = GeneralSolvationModel(
-        CavityDROPIsodensity(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26), [ModelComponentPV(1.0e-4)]
+        CavityDROPIsodensityCallback(flaky_lsf.callback, rho_iso=flaky_lsf.rho_iso, nleb=26), [ModelComponentPV(1.0e-4)]
     )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0
@@ -357,3 +355,184 @@ def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> N
 
     with raises(RuntimeError, match="successfully updated"):
         model.cavity.snapshot()
+
+
+# -- internal isodensity backend ----------------------------------------------
+
+_ALPHA = 0.3
+
+
+def _s_basis(natoms: int, alpha: float = _ALPHA) -> dict:
+    """One normalized s primitive per atom
+
+    With the diagonal density ``2 * eye``: exactly the density
+    :class:`_GaussianDensity` returns, as in test/api/example.c
+    """
+    return dict(
+        shell_atom=np.arange(natoms),
+        shell_l=np.zeros(natoms, dtype=int),
+        shell_nprim=np.ones(natoms, dtype=int),
+        exps=np.full(natoms, alpha),
+        coeffs=np.full(natoms, (2.0 * alpha / np.pi) ** 0.75),
+    )
+
+
+def _internal(water, **kwargs) -> CavityDROPIsodensityInternal:
+    numbers, _ = water
+    return CavityDROPIsodensityInternal(
+        **_s_basis(len(numbers)), rho_iso=_RHO_ISO, nleb=26, **kwargs
+    )
+
+
+def test_internal_isodensity_layout_matches_the_basis(water) -> None:
+    layout = _internal(water).layout
+    assert (layout.ncart, layout.nshell) == (3, 3)
+    assert layout.shell_offset.tolist() == [0, 1, 2, 3]
+    assert not layout.powers.any()
+
+    # p and d shell: lx descending, then ly descending
+    mixed = CavityDROPIsodensityInternal(
+        shell_atom=[0, 0],
+        shell_l=[1, 2],
+        shell_nprim=[1, 2],
+        exps=[0.5, 1.0, 0.2],
+        coeffs=[1.0, 0.6, 0.4],
+        rho_iso=_RHO_ISO,
+    )
+    assert mixed.ncart == 9
+    assert mixed.layout.shell_offset.tolist() == [0, 3, 9]
+    assert mixed.layout.powers.tolist() == [
+        [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        [2, 0, 0], [1, 1, 0], [1, 0, 1], [0, 2, 0], [0, 1, 1], [0, 0, 2],
+    ]
+    with raises(ValueError):
+        mixed.layout.powers[0, 0] = 3
+
+
+def test_internal_isodensity_layouts_compare_by_value(water) -> None:
+    """Layouts compare by value: equal on one basis, unequal on another"""
+    first, second = _internal(water).layout, _internal(water).layout
+    assert first is not second
+    assert first == second
+    assert hash(first) == hash(second)
+    assert len({first, second}) == 1
+
+    wider = CavityDROPIsodensityInternal(**_s_basis(4), rho_iso=_RHO_ISO).layout
+    assert first != wider
+    assert first != "not a layout"
+
+
+def test_internal_isodensity_matches_the_callback_backend(water) -> None:
+    """Same density through both backends gives the same surface"""
+    numbers, positions = water
+    structure = Structure(numbers, positions)
+
+    internal = _internal(water)
+    internal.set_density(2.0 * np.eye(internal.ncart))
+    internal.update(structure)
+
+    reference = CavityDROPIsodensityCallback(
+        _GaussianDensity(positions).with_order, rho_iso=_RHO_ISO, nleb=26
+    )
+    reference.update(structure)
+
+    got, ref = internal.snapshot(), reference.snapshot()
+    assert got.ngrid == ref.ngrid
+    assert got.area == approx(ref.area, abs=1.0e-8)
+    assert got.volume == approx(ref.volume, abs=1.0e-8)
+    assert np.allclose(got.xyz, ref.xyz, rtol=0.0, atol=1.0e-8)
+
+
+def test_internal_isodensity_refuses_to_build_without_a_density(water) -> None:
+    """No density is a clean error; installing one afterwards recovers"""
+    structure = Structure(*water)
+    cavity = _internal(water)
+    with raises(RuntimeError, match="density matrix has not been installed"):
+        cavity.update(structure)
+
+    cavity.set_density(2.0 * np.eye(cavity.ncart))
+    cavity.update(structure)
+    assert cavity.snapshot().ngrid > 0
+
+
+def test_internal_isodensity_rejects_inconsistent_input(water) -> None:
+    cavity = _internal(water)
+    with raises(RuntimeError, match="does not match the basis"):
+        cavity.set_density(np.eye(cavity.ncart + 1))
+    with raises(ValueError, match="square"):
+        cavity.set_density(np.ones((3, 2)))
+
+    basis = _s_basis(3)
+    with raises(ValueError, match="sum\\(shell_nprim\\)"):
+        CavityDROPIsodensityInternal(**{**basis, "exps": basis["exps"][:2]}, rho_iso=_RHO_ISO)
+    with raises(ValueError, match="same length"):
+        CavityDROPIsodensityInternal(**{**basis, "shell_l": [0, 0]}, rho_iso=_RHO_ISO)
+    with raises(ValueError, match="non-negative"):
+        CavityDROPIsodensityInternal(**{**basis, "shell_atom": [-1, 0, 1]}, rho_iso=_RHO_ISO)
+    with raises(RuntimeError, match="angular momentum"):
+        CavityDROPIsodensityInternal(**{**basis, "shell_l": [0, 0, 9]}, rho_iso=_RHO_ISO)
+
+    # Shells on a missing atom would be read out of bounds; moist itself
+    # refuses, so the C API is covered too
+    wide = CavityDROPIsodensityInternal(**_s_basis(4), rho_iso=_RHO_ISO, nleb=26)
+    wide.set_density(2.0 * np.eye(wide.ncart))
+    with raises(RuntimeError, match="needs 4 atoms, but the structure has only 3"):
+        wide.update(Structure(*water))
+    with raises(RuntimeError, match="needs 4 atoms, but the structure has only 3"):
+        GeneralSolvationModel(wide, [ModelComponentPV(1.0e-4)]).update(Structure(*water))
+
+
+def test_internal_isodensity_model_follows_the_latest_density(water) -> None:
+    """Model cavity copy tracks the density, whichever object received it"""
+    structure = Structure(*water)
+    pressure = 1.0e-4
+    eye = np.eye(3)
+
+    def standalone_volume(dcart):
+        cavity = _internal(water)
+        cavity.set_density(dcart)
+        cavity.update(structure)
+        return cavity.volume
+
+    volume_2 = standalone_volume(2.0 * eye)
+    volume_3 = standalone_volume(3.0 * eye)
+    assert volume_3 > volume_2
+
+    # Density installed before the model is built: carried by the copy
+    cavity = _internal(water)
+    cavity.set_density(2.0 * eye)
+    model = GeneralSolvationModel(cavity, [ModelComponentPV(pressure)])
+    assert model.cavity.density_dependent
+    assert model.cavity.layout == cavity.layout
+    model.update(structure)
+    assert model.cavity.volume == approx(volume_2, rel=1.0e-12)
+    assert model.energy == approx(pressure * volume_2, rel=1.0e-12)
+
+    # Set after the model was built, on the host-held object
+    cavity.set_density(3.0 * eye)
+    model.update(structure)
+    assert model.cavity.volume == approx(volume_3, rel=1.0e-12)
+
+    # Set through the model's own view
+    model.cavity.set_density(2.0 * eye)
+    model.update(structure)
+    assert model.cavity.volume == approx(volume_2, rel=1.0e-12)
+
+    # Model built before any density: refuses, then recovers
+    fresh = GeneralSolvationModel(_internal(water), [ModelComponentPV(pressure)])
+    with raises(RuntimeError, match="density matrix has not been installed"):
+        fresh.update(structure)
+    with raises(RuntimeError, match="successfully updated"):
+        fresh.cavity.snapshot()
+    fresh.cavity.set_density(2.0 * eye)
+    fresh.update(structure)
+    assert fresh.cavity.volume == approx(volume_2, rel=1.0e-12)
+
+    # Model built from another model's view: follows the same density
+    nested = GeneralSolvationModel(model.cavity, [ModelComponentPV(pressure)])
+    assert nested.cavity.density_owner is cavity
+    nested.cavity.set_density(3.0 * eye)
+    nested.update(structure)
+    assert nested.cavity.volume == approx(volume_3, rel=1.0e-12)
+    model.update(structure)
+    assert model.cavity.volume == approx(volume_3, rel=1.0e-12)

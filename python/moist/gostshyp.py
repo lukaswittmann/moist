@@ -62,7 +62,7 @@ import numpy as np
 from pyscf import gto
 
 from .interface import (
-    CavityDROPIsodensity,
+    CavityDROPIsodensityCallback,
     CavitySnapshot,
     CouplingTransaction,
     Evaluation,
@@ -555,7 +555,7 @@ class GostshypModel(_PySCFGostshyp):
         self.pressure = float(pressure)
         self.component = ModelComponentGOSTSHYP(self.pressure)
         self.model = SolvationModel(
-            CavityDROPIsodensity(host, **cavity_kwargs), [self.component]
+            CavityDROPIsodensityCallback(host, **cavity_kwargs), [self.component]
         )
 
     def evaluate(self, dm: np.ndarray) -> Evaluation:

@@ -35,6 +35,30 @@ moist_cffi_srcs = configure_file(
   output: '@BASENAME@.c',
 )
 
+# The build-tree rpath does not survive the move into site-packages, so the
+# installed module has to be pointed at libmoist explicitly. An external
+# libmoist stays where pkg-config found it; one built here is installed next to
+# the module's prefix, and a path relative to the module keeps that prefix
+# relocatable. A static libmoist needs no run-time path at all.
+moist_rpath = ''
+if moist_dep.type_name() == 'pkgconfig'
+  moist_rpath = moist_dep.get_variable(pkgconfig: 'libdir')
+elif moist_dep.type_name() == 'internal' and moist_dep.get_variable(
+  internal: 'shared',
+  default_value: 'false',
+) == 'true'
+  moist_libdir = moist_dep.get_variable(internal: 'libdir')
+  if meson.version().version_compare('>=1.3.0')
+    moist_origin = host_machine.system() == 'darwin' ? '@loader_path' : '$ORIGIN'
+    moist_rpath = moist_origin / import('fs').relative_to(
+      moist_libdir,
+      python.get_install_dir(pure: false) / 'moist',
+    )
+  else
+    moist_rpath = moist_libdir
+  endif
+endif
+
 moist_pyext = python.extension_module(
   '_libmoist',
   link_whole: static_library(
@@ -43,6 +67,7 @@ moist_pyext = python.extension_module(
     dependencies: [moist_dep, python_dep],
   ),
   dependencies: [moist_dep, python_dep],
+  install_rpath: moist_rpath,
   install: install,
   subdir: 'moist',
 )

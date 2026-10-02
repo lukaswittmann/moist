@@ -48,12 +48,11 @@ def positions() -> np.ndarray:
 
 @pytest.fixture
 def diatomic() -> Callable[..., Structure]:
-    """Factory for an H2 structure with the atoms ``bond`` bohr apart along z.
+    """Factory for an H2 structure, atoms ``bond`` bohr apart along z
 
-    The model and coupling tests only need *a* valid structure, and two atoms
-    keep the surface small enough that building several models per test stays
-    cheap -- the ``numbers``/``positions`` fixtures above are water, which those
-    tests would pay for without testing anything more.
+    - model and coupling tests need only *a* valid structure
+    - two atoms keep the surface small, several models per test stay cheap
+    - ``numbers``/``positions`` above are water, costlier for no extra coverage
     """
 
     def build(bond: float = 1.4) -> Structure:
@@ -69,19 +68,20 @@ def diatomic() -> Callable[..., Structure]:
 def test_default_drop_surface_matches_the_svdw_defaults(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
-    """The default cavity built through this API is the library's default surface.
+    """Default cavity of this API is the library's default surface
 
-    The C entry point takes the SvdW shape parameters as nullable pointers and
-    has to supply its own fallbacks.  Those fallbacks once drifted from the
-    defaults declared on ``moist_cavity_drop_lsf_svdw_param_type`` (k 2.0 vs
-    5.5, 2b 1.0 vs 0.0, 3b 1.0 vs 3.0), so a Fortran caller and a Python caller
-    asking for "the default cavity" got measurably different surfaces -- 23%
-    apart in total area for this molecule.
+    - C entry point takes the SvdW shape parameters as nullable pointers, with
+      its own fallbacks
+    - fallbacks once drifted from the defaults on
+      ``moist_cavity_drop_lsf_svdw_param_type`` (k 2.0 vs 5.5, 2b 1.0 vs 0.0,
+      3b 1.0 vs 3.0)
+    - Fortran and Python "default cavity" differed by 23% in total area for
+      this molecule
 
-    Nothing caught it: every other cavity test is a finite difference or an
-    internal consistency check, and those follow whichever surface is built.
-    Only an absolute value can see a changed default, which is what this is.
-    Regenerate deliberately if the default surface is ever meant to change.
+    Nothing else caught it: other cavity tests are finite differences or
+    consistency checks, which follow whichever surface is built; only an
+    absolute value sees a changed default
+    - regenerate deliberately if the default surface is meant to change
     """
     cavity = CavityDROP(nleb=26)
     cavity.update(Structure(numbers, positions))
@@ -164,11 +164,11 @@ def test_public_cavity_types_accept_their_optional_arguments(
 
 @pytest.fixture
 def branching_cross() -> Structure:
-    """Five-carbon cross whose concave seams branch at ``proj_level=7``.
+    """Five-carbon cross whose concave seams branch at ``proj_level=7``
 
-    The same fixture the Fortran suite uses (``get_test_cross``); the default
-    projection level finds no second solution on it, which is why the branching
-    tests below raise the level rather than the geometry.
+    - same fixture as the Fortran suite (``get_test_cross``)
+    - default projection level finds no second solution, so the branching tests
+      raise the level rather than change the geometry
     """
 
     aatoau = 1.8897261246257702
@@ -190,7 +190,7 @@ def branching_cross() -> Structure:
 def test_cavity_declares_its_own_results(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
-    """Every declared field describes itself well enough to be read blind."""
+    """Every declared field describes itself well enough to be read blind"""
     cavity = CavityDROPSvdW()
     cavity.update(Structure(numbers, positions))
 
@@ -210,7 +210,7 @@ def test_cavity_declares_its_own_results(
 def test_named_results_agree_with_the_snapshot(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
-    """The typed snapshot is a view of the same declarations, not a second read."""
+    """Typed snapshot is a view of the same declarations, not a second read"""
     cavity = CavityDROPSvdW()
     cavity.update(Structure(numbers, positions))
 
@@ -230,7 +230,7 @@ def test_named_results_agree_with_the_snapshot(
 def test_uncomputed_results_are_absent_rather_than_zero(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
-    """A property that was never requested must not read back as zeros."""
+    """Property never requested does not read back as zeros"""
     structure = Structure(numbers, positions)
 
     plain = CavityDROPSvdW()
@@ -250,7 +250,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
 
 
 def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
-    """Branch data comes from moist's own arrays, not from unpacking an id."""
+    """Branch data comes from moist's own arrays, not from unpacking an id"""
     cavity = CavityDROPSvdW(proj_level=7)
     cavity.update(branching_cross)
     snapshot = cavity.snapshot()
@@ -260,13 +260,13 @@ def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
     assert snapshot.branched.sum() > 0
     assert np.array_equal(snapshot.branched, snapshot.branch_count > 1)
 
-    # numbering is the packing of the two, so the arrays and the id agree.
+    # Numbering packs both, so arrays and id agree
     base = snapshot.nsph * cavity.get("num_leb")
     assert np.array_equal(
         snapshot.numbering, snapshot.anchor_id + base * (snapshot.branch - 1)
     )
 
-    # Every point in a branched group reports the same group size.
+    # Every point of a branched group reports the same group size
     for anchor in np.unique(snapshot.anchor_id[snapshot.branched]):
         group = snapshot.anchor_id == anchor
         assert snapshot.branch_count[group].min() == group.sum()
@@ -276,7 +276,7 @@ def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
 def test_named_results_reach_every_cavity_type(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
-    """The field API is a cavity feature, not a DROP one."""
+    """Field API is a cavity feature, not a DROP one"""
     cavity = CavityISwiG()
     cavity.update(Structure(numbers, positions))
 
@@ -294,7 +294,7 @@ def test_named_results_need_a_built_cavity() -> None:
 
 
 def test_cavity_drop_is_the_svdw_surface() -> None:
-    """The unqualified DROP name is the SvdW cavity, not a distinct surface."""
+    """Unqualified DROP name is the SvdW cavity, not a distinct surface"""
     assert CavityDROP is CavityDROPSvdW
     assert moist.CavityDROP is moist.CavityDROPSvdW
 
@@ -359,7 +359,7 @@ def test_structure(numbers: np.ndarray, positions: np.ndarray) -> None:
 
 
 def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
-    """A heterogeneous component list shares one authoritative live cavity."""
+    """Heterogeneous component list shares one authoritative live cavity"""
 
     structure = diatomic()
     pressure = 2.5e-4
@@ -399,7 +399,7 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     numbers: np.ndarray,
     positions: np.ndarray,
 ) -> None:
-    """COSMO composes like CPCM but applies its distinct screening factor."""
+    """COSMO composes like CPCM with its own screening factor"""
     structure = Structure(numbers, positions)
     epsilon = 32.0
     results = {}
@@ -434,8 +434,8 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
     )
     coupling = ArrayCoupling(
         structure,
-        # qefield is required by the external-potential gradient path; with
-        # phi = 0 the correct value is an explicit zero field.
+        # qefield required by the external-potential gradient path; phi = 0
+        # means an explicit zero field
         electrostatics=lambda cavity, _trace: Electrostatics(
             np.zeros(cavity.ngrid),
             qefield=np.zeros((3, cavity.ngrid), order="F"),
@@ -448,8 +448,7 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
     assert isinstance(result.cavity, CavitySnapshotDROP)
     assert isinstance(model.cavity, Cavity)
     assert result.energy == approx(pressure * result.cavity.volume, abs=2.0e-13)
-    # CPCM is present and was handed phi = 0, so zero charges is a genuine
-    # result rather than an absent channel.
+    # CPCM present with phi = 0: zero charges are a result, not an absent channel
     np.testing.assert_array_equal(result.charges, np.zeros(result.cavity.ngrid))
     assert result.fock is None
     assert result.gradient.shape == (3, len(structure))
@@ -459,12 +458,14 @@ def test_general_model_evaluates_a_complete_array_coupling(diatomic) -> None:
 
 
 def test_pv_model_hessian_differentiates_the_gradient(diatomic) -> None:
-    """The native Hessian is the derivative of the native gradient.
+    """Native Hessian is the derivative of the native gradient
 
-    PV on a DROP surface is the one component with a complete second-order
-    surface channel.  The dense block must be symmetric, the per-direction
-    products must be its columns, and a central difference of the gradient
-    along one nuclear coordinate must reproduce one column.
+    PV on a DROP surface: the one component with a complete second-order
+    surface channel
+    - dense block symmetric
+    - per-direction products are its columns
+    - central difference of the gradient along one nuclear coordinate
+      reproduces one column
     """
     pressure = 2.5
     structure = diatomic()
@@ -531,7 +532,7 @@ def test_evaluation_hessian_refuses_a_coupling_with_gradient_terms(diatomic) -> 
 
     with raises(NotImplementedError, match="Evaluation.linearize"):
         result.hessian
-    # The model block alone stays reachable, and is what the plain coupling gets
+    # Model block alone stays reachable, as for the plain coupling
     plain = model.evaluate(structure)
     assert plain.hessian.shape == (3, len(structure), 3, len(structure))
 
@@ -616,7 +617,7 @@ def test_evaluation_gradient_rejects_a_superseded_model_state(diatomic) -> None:
 
 
 def test_general_model_update_invalidates_supplied_electrostatics(diatomic) -> None:
-    """Every geometry update requires a fresh external potential trace."""
+    """Every geometry update requires a fresh external potential trace"""
 
     structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentCPCM(32.0)])
@@ -636,7 +637,7 @@ def test_general_model_update_invalidates_supplied_electrostatics(diatomic) -> N
 
 
 def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
-    """A model-owned cavity may be inspected but not rebuilt out of band."""
+    """Model-owned cavity can be inspected, not rebuilt out of band"""
 
     structure = diatomic()
     model = GeneralSolvationModel(CavityDROP(nleb=26), [ModelComponentPV(1.0e-4)])

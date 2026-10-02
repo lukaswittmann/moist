@@ -1,38 +1,36 @@
 """End-to-end tests of the moist/host chain rule against PySCF
 
-moist hands out adjoint weights and expects the host to finish the chain rule
-with its own density derivatives, so the correctness of an isodensity cavity is
-split across a language boundary.  These tests close that loop: every analytic
-quantity is checked against a finite difference of the energy that moist itself
-returns.
+moist hands out adjoint weights, the host finishes the chain rule with its own
+density derivatives: isodensity-cavity correctness spans a language boundary.
+Every analytic quantity is checked against a finite difference of the energy
+moist itself returns.
 
-The suite is layered so a failure localises:
+Layers, so a failure localises:
 
 ``L0``
-    Solute-vdW cavity, whose surface does not depend on the density.  The
-    level-set response is absent, so these tests pin the electrostatic
-    conventions (``phi``, ``qefield``, nuclear charges) on their own.
+    Solute-vdW cavity, surface independent of the density
+    - no level-set response: pins the electrostatic conventions (``phi``,
+      ``qefield``, nuclear charges) alone
 ``L1``
-    Isodensity cavity at a *fixed* density matrix, over three component sets.
-    Only the ``lsf`` routes are new relative to L0.
+    Isodensity cavity at a *fixed* density matrix, over three component sets
+    - only the ``lsf`` routes are new relative to L0
 ``L2``
-    Self-consistent solvated SCF and its total nuclear gradient.
+    Self-consistent solvated SCF and its total nuclear gradient
 
-Each layer also carries a negative control, because an FD test whose extra term
-is numerically negligible passes while testing nothing.  The PV component is
-what makes the level-set route dominant rather than a 7% correction: with PV
-alone the surface charges vanish and the *entire* Fock matrix is the level-set
-contraction.
+Each layer carries a negative control: an FD test whose extra term is
+numerically negligible passes while testing nothing.
+- PV makes the level-set route dominant, not a 7% correction
+- with PV alone the surface charges vanish and the *entire* Fock matrix is the
+  level-set contraction
 
-Tests carry one marker per concern, so each is a separate meson target under
-the ``moist_pyscf`` suite: ``host``, ``vdw``, ``isodensity`` (crossed with
-``cpcm`` / ``pv`` / ``cpcm_pv``), ``conventions`` and ``scf``.  A failure names
-the layer that broke.
+One marker per concern, each a separate meson target of the ``moist_pyscf``
+suite: ``host``, ``vdw``, ``isodensity`` (crossed with ``cpcm`` / ``pv`` /
+``cpcm_pv``), ``conventions``, ``scf``. A failure names the layer that broke.
 
-Mutation testing -- injecting sign flips, dropped terms, factor errors and index
-aliases into the analytic derivatives -- confirms this suite catches every such
-error down to ~1 part in 10^6 of the level-set term; below that the injected
-error falls under the finite-difference noise.
+Mutation testing (sign flips, dropped terms, factor errors, index aliases
+injected into the analytic derivatives) is caught down to ~1 part in 10^6 of
+the level-set term
+- below that the injected error falls under the FD noise
 """
 
 import functools
@@ -52,7 +50,8 @@ except ImportError as exc:
 from .interface import (
     CavityDROP,
     CavityDROPCFC,
-    CavityDROPIsodensity,
+    CavityDROPIsodensityCallback,
+    CavityDROPIsodensityInternal,
     CavityDROPSvdW,
     CavityISwiG,
     GeneralSolvationModel,
@@ -71,9 +70,9 @@ NLEB = 50
 #: Cavity projection tolerance
 PROJ_TOL = 1e-13
 
-#: FD step on the density matrix, in units of a unit-Frobenius-norm direction
+#: FD step on the density matrix, along a unit-Frobenius-norm direction
 STEP_DM = 1e-4
-#: FD step on nuclear coordinates in bohr; matches test_helpers.f90's tuned value
+#: FD step on nuclear coordinates, bohr; tuned value of test_helpers.f90
 STEP_R = 2.5e-4
 
 #: Tolerances
@@ -81,14 +80,13 @@ REL_THR = 1e-9
 ABS_THR = REL_THR / 10.0
 #: Converged-SCF gradient tolerances
 #:
-#: The absolute floor is deliberately not ``SCF_REL_THR / 10``.  These
-#: references are differences of total energies near -75 Ha, so each sample
-#: carries about an ULP of noise, and ``fd4`` multiplies that by ``18 / (12 h)``
-#: -- roughly 6e3 at this step.  The FD side therefore cannot be trusted below
-#: ~1e-10 no matter how tightly the SCF converges: it moves by that much merely
-#: from changing the OpenMP thread count, and neither a smaller nor a larger
-#: step reduces it.  1e-10 would be sitting on that floor, so the check would
-#: report the quadrature noise rather than the gradient.
+#: Absolute floor deliberately not ``SCF_REL_THR / 10``
+#: - references are total-energy differences near -75 Ha, ~1 ULP noise per sample
+#: - ``fd4`` multiplies it by ``18 / (12 h)``, ~6e3 at this step
+#: - FD side untrustworthy below ~1e-10 however tight the SCF
+#: - it moves by that much with the OpenMP thread count alone
+#: - neither a smaller nor a larger step reduces it
+#: - 1e-10 would sit on that floor and report quadrature noise, not the gradient
 SCF_REL_THR = 1e-10
 SCF_ABS_THR = 1e-9
 
@@ -100,7 +98,7 @@ MIN_SIGNAL = 1e-12
 
 @dataclass(frozen=True)
 class System:
-    """A test solute.  Geometries are in Angstrom."""
+    """Test solute, geometry in Angstrom"""
 
     atom: str
     charge: int = 0
@@ -114,7 +112,7 @@ SYSTEMS = {
            H  0.7629  0.0000  0.1947
            H -0.7991  0.0953  0.2223"""
     ),
-    # Glyciine zwitterion
+    # Glycine zwitterion
     "glycine_zwitterion": System(
         """C  0.000  0.000  0.000
            C  1.540  0.000  0.000
@@ -149,12 +147,12 @@ CASES = [
     # ("glycine_zwitterion", "sto-3g"),   # ~21 s  neutral, charge-separated
     # ("glycine_zwitterion", "def2-svp"), # ~35 s
 ]
-#: The case used by tests that pin a convention once rather than sweeping.
+#: Case of tests that pin a convention once, not sweep
 PRIMARY_CASE = CASES[0]
 
-#: Component sets driven on the isodensity cavity.  ``pv`` is the sharpest of
-#: the three: with no electrostatic component the surface charges are zero, so
-#: the whole Fock matrix is the level-set contraction.
+#: Component sets driven on the isodensity cavity
+#: - ``pv`` sharpest: no electrostatic component, so the surface charges are zero
+#:   and the whole Fock matrix is the level-set contraction
 COMPONENTS = {
     "cpcm": lambda: [ModelComponentCPCM(EPSILON)],
     "pv": lambda: [ModelComponentPV(PRESSURE)],
@@ -165,7 +163,7 @@ COMPONENTS = {
 CASE_PARAMS = [
     pytest.param(system, basis, id=f"{system}-{basis}") for system, basis in CASES
 ]
-#: One marker per component set so each can be its own meson target.
+#: One marker per component set, each its own meson target
 COMPONENT_PARAMS = [
     pytest.param("cpcm", id="cpcm", marks=pytest.mark.cpcm),
     pytest.param("pv", id="pv", marks=pytest.mark.pv),
@@ -174,13 +172,12 @@ COMPONENT_PARAMS = [
 
 
 def deviation(actual, reference, *, thr_abs=None, thr_rel=None) -> float:
-    """Deviation measured in units of the tolerance: ``<= 1`` passes.
+    """Deviation in units of the tolerance, ``<= 1`` passes
 
-    Combines the two thresholds the way test-drive's
-    ``check(..., thr_abs=, thr_rel=)`` does -- ``max(thr_abs, thr_rel*|ref|)`` --
-    so the absolute floor covers references near zero while the relative bound
-    scales with the magnitude.  Reporting the ratio rather than the raw
-    difference makes a failure message say how many tolerances were missed.
+    Thresholds combine as in test-drive's ``check(..., thr_abs=, thr_rel=)``:
+    ``max(thr_abs, thr_rel*|ref|)``
+    - absolute floor covers references near zero, relative bound scales with size
+    - a ratio, so a failure message says how many tolerances were missed
     """
     thr_abs = ABS_THR if thr_abs is None else thr_abs
     thr_rel = REL_THR if thr_rel is None else thr_rel
@@ -191,13 +188,13 @@ FD4_OFFSETS = (2, 1, -1, -2)
 
 
 def fd4(values, step: float) -> float:
-    """4-point central difference from samples at ``(+2, +1, -1, -2) * step``."""
+    """4-point central difference from samples at ``(+2, +1, -1, -2) * step``"""
     fpp, fp, fm, fmm = values
     return (-fpp + 8.0 * fp - 8.0 * fm + fmm) / (12.0 * step)
 
 
 # ----------------------------------------------------------------------
-# system construction (cached: every parametrised test reuses them)
+# System construction (cached, reused by every parametrised test)
 # ----------------------------------------------------------------------
 
 
@@ -211,7 +208,7 @@ def molecule(system: str, basis: str):
 
 @functools.lru_cache(maxsize=None)
 def reference_density(system: str, basis: str):
-    """Converged gas-phase RHF density, then held fixed as a free parameter."""
+    """Converged gas-phase RHF density, held fixed as a free parameter"""
     mean_field = scf.RHF(molecule(system, basis))
     mean_field.conv_tol = 1e-12
     mean_field.kernel()
@@ -220,7 +217,7 @@ def reference_density(system: str, basis: str):
 
 
 def make_host(mol, positions=None, *, dm):
-    """Host bound to ``mol`` displaced to ``positions`` (bohr), at fixed ``dm``."""
+    """Host bound to ``mol`` displaced to ``positions`` (bohr), at fixed ``dm``"""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
     host = PySCFHost(mol)
@@ -233,21 +230,21 @@ def test_pyscf_host_is_an_isodensity_cavity_source():
     mol = molecule(*PRIMARY_CASE)
     host = PySCFHost(mol)
 
-    cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
+    cavity = CavityDROPIsodensityCallback(host, nleb=NLEB, tolerance=PROJ_TOL)
 
-    assert isinstance(cavity, CavityDROPIsodensity)
+    assert isinstance(cavity, CavityDROPIsodensityCallback)
     with pytest.deprecated_call(match="PySCFHost"):
         legacy = PySCFIsodensityHost(mol)
-    with pytest.deprecated_call(match="CavityDROPIsodensity"):
+    with pytest.deprecated_call(match="CavityDROPIsodensityCallback"):
         compatibility_cavity = host.make_cavity(nleb=NLEB)
     assert isinstance(legacy, PySCFHost)
-    assert isinstance(compatibility_cavity, CavityDROPIsodensity)
+    assert isinstance(compatibility_cavity, CavityDROPIsodensityCallback)
 
 
 def solve(host, *, isodensity, components="cpcm"):
-    """Build a cavity plus components and evaluate one coherent coupling."""
+    """Build a cavity plus components and evaluate one coherent coupling"""
     if isodensity:
-        cavity = CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL)
+        cavity = CavityDROPIsodensityCallback(host, nleb=NLEB, tolerance=PROJ_TOL)
     else:
         cavity = CavityDROP(nleb=NLEB)
     model = GeneralSolvationModel(cavity, COMPONENTS[components]())
@@ -258,11 +255,11 @@ def solve(host, *, isodensity, components="cpcm"):
 @pytest.mark.isodensity
 @pytest.mark.cpcm
 def test_evaluation_exposes_complete_pyscf_results():
-    """The evaluation owns the host Fock and complete nuclear gradient."""
+    """Evaluation carries the host Fock and complete nuclear gradient"""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     host = make_host(mol, dm=dm)
     model = GeneralSolvationModel(
-        CavityDROPIsodensity(host, nleb=NLEB, tolerance=PROJ_TOL),
+        CavityDROPIsodensityCallback(host, nleb=NLEB, tolerance=PROJ_TOL),
         COMPONENTS["cpcm"](),
     )
 
@@ -287,7 +284,7 @@ def test_evaluation_exposes_complete_pyscf_results():
 
 
 def fd_density(mol, dm, direction, *, isodensity, components="cpcm"):
-    """dE/dt along ``dm + t * direction``, rebuilding the cavity each sample."""
+    """dE/dt along ``dm + t * direction``, rebuilding the cavity each sample"""
     samples, grids = [], []
     for offset in FD4_OFFSETS:
         host = make_host(mol, dm=dm + offset * STEP_DM * direction)
@@ -299,7 +296,7 @@ def fd_density(mol, dm, direction, *, isodensity, components="cpcm"):
 
 
 def fd_position(mol, positions, dm, index, *, isodensity, components="cpcm"):
-    """dE/dR along one cartesian coordinate at fixed density matrix."""
+    """dE/dR along one cartesian coordinate at fixed density matrix"""
     samples, grids = [], []
     for offset in FD4_OFFSETS:
         displaced = positions.copy()
@@ -313,7 +310,7 @@ def fd_position(mol, positions, dm, index, *, isodensity, components="cpcm"):
 
 
 def symmetric_directions(nao, count, seed=11):
-    """Unit-norm symmetric density-matrix perturbations."""
+    """Unit-norm symmetric density-matrix perturbations"""
     rng = np.random.default_rng(seed)
     for _ in range(count):
         direction = rng.standard_normal((nao, nao))
@@ -322,7 +319,7 @@ def symmetric_directions(nao, count, seed=11):
 
 
 def sampled_coordinates(natm):
-    """Cartesian coordinates to difference: all of them for a small solute."""
+    """Cartesian coordinates to difference: all for a small solute"""
     total = 3 * natm
     if total <= 9:
         return list(range(total))
@@ -349,7 +346,7 @@ def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
     cavity_type,
     component_type,
 ):
-    """Every PCM/cavity combination uses the same PySCF coupling."""
+    """Every PCM/cavity combination uses the same PySCF coupling"""
     mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
     host = PySCFHost(mol)
     model = GeneralSolvationModel(cavity_type(nleb=26), [component_type(EPSILON)])
@@ -365,7 +362,7 @@ def test_l0_pcm_components_and_cavity_types_share_the_pyscf_coupling(
 @pytest.mark.vdw
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l0_fock_matches_fd(system, basis):
-    """dE/dP through the surface potential alone, with a fixed surface."""
+    """dE/dP through the surface potential alone, with a fixed surface"""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
     _, potential, coords, _ = solve(host, isodensity=False)
@@ -380,7 +377,7 @@ def test_l0_fock_matches_fd(system, basis):
 @pytest.mark.vdw
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l0_gradient_matches_fd(system, basis):
-    """dE/dR at fixed P: moist's geometry terms plus the host's AO derivative."""
+    """dE/dR at fixed P: moist's geometry terms plus the host's AO derivative"""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     host = make_host(mol, dm=dm)
@@ -396,11 +393,11 @@ def test_l0_gradient_matches_fd(system, basis):
 
 @pytest.mark.conventions
 def test_l0_gradient_requires_qefield():
-    """Without ``qefield`` the gradient is refused rather than silently wrong.
+    """Without ``qefield`` the gradient is refused, not silently wrong
 
-    An unsupplied channel used to be read as zero, which kept only the nuclear
-    half of the surface motion and returned a plausible, wrong gradient.  The
-    external-potential gradient path now requires the channel outright.
+    An unsupplied channel used to read as zero: only the nuclear half of the
+    surface motion was kept, giving a plausible wrong gradient. The
+    external-potential gradient path now requires the channel
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -421,10 +418,10 @@ def test_l0_gradient_requires_qefield():
 @pytest.mark.host
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l1_density_callback_derivatives(system, basis):
-    """The callback's own derivative orders are mutually consistent.
+    """Callback derivative orders are mutually consistent
 
     Validates the Leibniz expansion and the PySCF derivative-component ordering
-    independently of moist, so a failure here cannot be blamed on the cavity.
+    independently of moist, so a failure is not the cavity's
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
@@ -453,12 +450,11 @@ def test_l1_density_callback_derivatives(system, basis):
 @pytest.mark.host
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_density_callback_is_finite(system, basis):
-    """Pins the suppressed BLAS status flags in the callback as false positives.
+    """Suppressed BLAS status flags in the callback are false positives
 
-    The products there raise spurious divide-by-zero and overflow, so the flags
-    are ignored; this asserts the values really are finite and identical to a
-    BLAS-free reference, both at a normal point and far into the tail where the
-    density underflows.
+    The products raise spurious divide-by-zero and overflow, so the flags are
+    ignored; values asserted finite and equal to a BLAS-free reference
+    - at a normal point and far in the tail, where the density underflows
     """
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
@@ -474,17 +470,123 @@ def test_density_callback_is_finite(system, basis):
         reference = np.einsum("cu,uv->cv", ao, dm, optimize=False)
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             product = ao @ dm
-        # Not bitwise: BLAS and the einsum loop sum in different orders. Equal to
-        # rounding is all that is needed to show the flags carry no information.
+        # Not bitwise: BLAS and the einsum loop sum in different orders
+        # Equal to rounding suffices: the flags carry no information
         assert np.isfinite(product).all()
         np.testing.assert_allclose(product, reference, rtol=5e-12, atol=1e-16)
+
+
+@pytest.mark.host
+def test_grid_integrals_are_contracted_in_place():
+    """Grid-integral contractions read PySCF's buffers in place
+
+    - at a few thousand surface points the tensors run to gigabytes, copying
+      first costs more than the integrals
+    - the copy-free view depends on PySCF's memory layout: pinned, with the pair
+      index the contractions assume
+    """
+    from .pyscf import _pair_view
+
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    nao = mol.nao
+    coords = mol.atom_coords() + np.array([1.1, -0.7, 0.9])
+    for name, lead in (("int1e_grids", ()), ("int1e_grids_ip", (3,))):
+        ints = mol.intor(name, grids=coords)
+        view = _pair_view(ints)
+        assert np.shares_memory(view, ints), f"{name} is copied"
+        assert view.shape == lead + (nao * nao, len(coords))
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            contracted = dm.T.ravel() @ view
+        assert np.isfinite(contracted).all()
+        np.testing.assert_allclose(
+            contracted,
+            np.einsum("...iuv,uv->...i", ints, dm, optimize=False),
+            rtol=1e-13,
+            atol=1e-15,
+        )
+
+
+@pytest.mark.host
+@pytest.mark.parametrize("cart", [False, True], ids=["spherical", "cartesian"])
+def test_internal_cavity_density_is_the_host_density(cart):
+    """Density the host installs on an internal cavity is its own
+
+    moist's internal evaluator sums the installed matrix over bare cartesian
+    monomials on the contracted radials it was given
+    - rebuilt here in numpy, compared with PySCF's density at random points
+    - cc-pVTZ brings f functions and general contractions
+    - cartesian basis takes another transform than spherical
+    - internal vs callback cavities compared end to end in
+      ``test_hessian_directional.py``
+    """
+    mol = gto.M(atom=SYSTEMS["water"].atom, basis="cc-pvtz", cart=cart, unit="Angstrom", verbose=0)
+    dm = scf.RHF(mol).get_init_guess()
+    host = make_host(mol, dm=dm)
+    cavity = host.internal_cavity(nleb=NLEB)
+    layout, basis = cavity.layout, host._internal_basis.arrays
+    assert max(basis["shell_l"]) == 3
+
+    points = np.random.default_rng(5).normal(scale=1.5, size=(64, 3))
+    monomials = np.empty((len(points), layout.ncart))
+    primitive = np.concatenate([[0], np.cumsum(basis["shell_nprim"])])
+    for s, atom in enumerate(basis["shell_atom"]):
+        offset = points - mol.atom_coord(atom)
+        exps = basis["exps"][primitive[s]:primitive[s + 1]]
+        coeffs = basis["coeffs"][primitive[s]:primitive[s + 1]]
+        radial = np.exp(-np.square(offset).sum(axis=1)[:, None] * exps) @ coeffs
+        for c in range(layout.shell_offset[s], layout.shell_offset[s + 1]):
+            monomials[:, c] = np.prod(offset ** layout.powers[c], axis=1) * radial
+
+    dcart = host._internal_basis.density(dm)
+    with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+        internal = np.einsum("ic,cd,id->i", monomials, dcart, monomials)
+    reference = [host.density(point, 1)[0] for point in points]
+    np.testing.assert_allclose(internal, reference, rtol=1e-12, atol=1e-16)
+
+
+@pytest.mark.conventions
+def test_internal_cavity_is_fed_only_by_its_host():
+    """Internal cavity not built by the host is refused, not silently stale"""
+    mol, dm = molecule(*PRIMARY_CASE), reference_density(*PRIMARY_CASE)
+    host = make_host(mol, dm=dm)
+
+    fed = host.internal_cavity(nleb=NLEB, tolerance=PROJ_TOL)
+    model = GeneralSolvationModel(fed, COMPONENTS["cpcm"]())
+    reference = GeneralSolvationModel(
+        CavityDROPIsodensityCallback(host, nleb=NLEB, tolerance=PROJ_TOL), COMPONENTS["cpcm"]()
+    )
+    energy = model.evaluate(coupling=host.coupling(dm)).energy
+    assert energy == pytest.approx(reference.evaluate(coupling=host.coupling(dm)).energy, rel=1e-12)
+
+    # Same basis, built by hand: the host never installs a density
+    stray = CavityDROPIsodensityInternal(
+        **host._internal_basis.arrays, rho_iso=host.rho_iso, scale=host.scale, nleb=NLEB
+    )
+    stray.set_density(host._internal_basis.density(dm))
+    unfed = GeneralSolvationModel(stray, COMPONENTS["cpcm"]())
+    with pytest.raises(ValueError, match="host.internal_cavity"):
+        unfed.evaluate(coupling=host.coupling(dm))
+
+    from .hessian import rhf_hessian
+
+    with pytest.raises(ValueError, match="host.internal_cavity"):
+        rhf_hessian(scf.RHF(mol), unfed, host)
+
+
+@pytest.mark.conventions
+def test_solvated_rhf_selects_the_isodensity_backend():
+    mol = molecule(*PRIMARY_CASE)
+    with pytest.raises(ValueError, match="isodensity backend"):
+        solvated_rhf(mol, EPSILON, isodensity="grid")
+    with pytest.raises(TypeError, match="model_factory owns"):
+        solvated_rhf(mol, model_factory=lambda host: None, isodensity="internal")
 
 
 @pytest.mark.isodensity
 @pytest.mark.parametrize("components", COMPONENT_PARAMS)
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l1_fock_matches_fd(system, basis, components):
-    """dE/dP with the surface following the density -- the headline Fock test."""
+    """dE/dP with the surface following the density, the headline Fock test"""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
     _, potential, coords, _ = solve(host, isodensity=True, components=components)
@@ -502,7 +604,7 @@ def test_l1_fock_matches_fd(system, basis, components):
 @pytest.mark.parametrize("components", COMPONENT_PARAMS)
 @pytest.mark.parametrize("system,basis", CASE_PARAMS)
 def test_l1_gradient_matches_fd(system, basis, components):
-    """dE/dR at fixed P, including the level set's own basis-center derivative."""
+    """dE/dR at fixed P, including the level set's own basis-center derivative"""
     mol, dm = molecule(system, basis), reference_density(system, basis)
     positions = mol.atom_coords()
     host = make_host(mol, dm=dm)
@@ -520,11 +622,10 @@ def test_l1_gradient_matches_fd(system, basis, components):
 
 @pytest.mark.conventions
 def test_pv_alone_makes_the_fock_purely_level_set():
-    """With no electrostatic component the whole Fock is the ``lsf`` contraction.
+    """With no electrostatic component the whole Fock is the ``lsf`` contraction
 
-    A pv-only model produces no electrostatic channel at all, so nothing
-    survives except the cavity-shape response -- the sharpest available
-    isolation of the weights.
+    A pv-only model has no electrostatic channel, so only the cavity-shape
+    response survives: the sharpest isolation of the weights
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -545,7 +646,7 @@ def test_pv_alone_makes_the_fock_purely_level_set():
 @pytest.mark.conventions
 @pytest.mark.parametrize("components", ["cpcm", "cpcm+pv"])
 def test_l1_fock_requires_lsf_term(components):
-    """Dropping the level-set response must break the Fock test outright."""
+    """Dropping the level-set response breaks the Fock test outright"""
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = make_host(mol, dm=dm)
@@ -561,10 +662,10 @@ def test_l1_fock_requires_lsf_term(components):
 @pytest.mark.conventions
 @pytest.mark.parametrize("components", ["cpcm", "cpcm+pv"])
 def test_l1_gradient_requires_lsf_term(components):
-    """The isodensity level set reports zero nuclear partials by construction.
+    """Isodensity level set reports zero nuclear partials by construction
 
-    moist therefore returns a gradient that is missing the density's own
-    dependence on the nuclei; the host has to add it.
+    moist's gradient therefore lacks the density's own dependence on the nuclei;
+    the host must add it
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -583,12 +684,12 @@ def test_l1_gradient_requires_lsf_term(components):
 
 @pytest.mark.conventions
 def test_l1_potential_requires_surface_position_weights():
-    """``w_xyz`` carries the dominant part of the cavity response.
+    """``w_xyz`` carries the dominant part of the cavity response
 
-    When the density changes the  grid points move and ``phi(r_i)`` moves with them.
-    moist cannot see that route -- ``phi`` is the host's function -- so it has to
-    arrive as ``w_xyz`` before the potential is read.  Omitting it returns
-    ``lsf`` weights that look perfectly healthy and are badly wrong.
+    - a density change moves the grid points, and ``phi(r_i)`` with them
+    - moist cannot see that route (``phi`` is the host's function), so it must
+      arrive as ``w_xyz`` before the potential is read
+    - omitted, ``lsf`` weights look healthy and are badly wrong
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -607,16 +708,15 @@ def test_l1_potential_requires_surface_position_weights():
 
 @pytest.mark.conventions
 def test_gradient_path_ignores_host_surface_weights():
-    """Documents an asymmetry between the potential and gradient paths.
+    """Gradient path ignores host surface weights, unlike the potential path
 
-    ``w_xyz`` is read when the potential is assembled but dropped when the
-    gradient is, so scaling it by a thousand leaves the gradient where it was.
-    That is what makes it safe for :meth:`PySCFHost.solve` to supply
-    ``w_xyz`` and ``qefield`` together: were the gradient path to start reading
-    ``w_xyz``, the surface-motion term would be counted twice and
-    ``test_l1_gradient_matches_fd`` would begin to fail.
-
-    The bound is tight rather than exact.
+    ``w_xyz`` is read when the potential is assembled, dropped for the gradient:
+    scaling it by a thousand leaves the gradient unchanged
+    - makes it safe for :meth:`PySCFHost.solve` to supply ``w_xyz`` and
+      ``qefield`` together
+    - were the gradient path to read ``w_xyz``, the surface-motion term would
+      count twice and ``test_l1_gradient_matches_fd`` would fail
+    - bound tight, not exact
     """
     system, basis = PRIMARY_CASE
     mol, dm = molecule(system, basis), reference_density(system, basis)
@@ -644,7 +744,7 @@ def test_gradient_path_ignores_host_surface_weights():
 
 @pytest.mark.scf
 def test_l2_scf_converges_and_stabilises():
-    """A solvated SCF converges, is stabilising, and reduces to gas phase."""
+    """Solvated SCF converges, is stabilising, and reduces to gas phase"""
     mol = molecule(*PRIMARY_CASE)
     gas = scf.RHF(mol).run()
     solvated = solvated_rhf(mol, EPSILON, nleb=NLEB, tolerance=PROJ_TOL)
@@ -657,11 +757,11 @@ def test_l2_scf_converges_and_stabilises():
 
 @pytest.mark.scf
 def test_l2_total_gradient_matches_fd():
-    """Total solvated SCF energy gradient against FD of the converged energy.
+    """Total solvated SCF gradient against FD of the converged energy
 
-    The density response drops out at convergence, so the analytic gradient is
-    the ordinary RHF gradient built from the solvated orbitals plus the explicit
-    solvation terms evaluated at the converged density.
+    Density response drops out at convergence: the analytic gradient is the
+    ordinary RHF gradient of the solvated orbitals plus the explicit solvation
+    terms at the converged density
     """
     mol = molecule(*PRIMARY_CASE)
     positions = mol.atom_coords()
@@ -689,7 +789,7 @@ def test_l2_total_gradient_matches_fd():
         assert deviation(analytic.flatten(order="F")[index], numerical,
                  thr_abs=SCF_ABS_THR, thr_rel=SCF_REL_THR) <= 1.0
 
-    # The solvated gradient must actually differ from the gas-phase one, or the
-    # solvation terms above are not being exercised.
+    # Solvated gradient must differ from gas phase, else the solvation terms
+    # above are not exercised
     gas_gradient = grad.RHF(scf.RHF(mol).run()).kernel().T
     assert np.abs(analytic - gas_gradient).max() > MIN_SIGNAL

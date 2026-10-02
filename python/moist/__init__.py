@@ -9,7 +9,8 @@ from .interface import (
     Cavity,
     CavityDROP,
     CavityDROPCFC,
-    CavityDROPIsodensity,
+    CavityDROPIsodensityCallback,
+    CavityDROPIsodensityInternal,
     CavityDROPSvdW,
     CavityField,
     CavityISwiG,
@@ -39,6 +40,7 @@ from .interface import (
     Structure,
 )
 
+from .library import IsodensityCartLayout
 from .second_order import CoupledResponse, HostDerivatives, SecondOrderTransaction
 
 __all__ = [
@@ -51,7 +53,8 @@ __all__ = [
     "Cavity",
     "CavityDROP",
     "CavityDROPCFC",
-    "CavityDROPIsodensity",
+    "CavityDROPIsodensityCallback",
+    "CavityDROPIsodensityInternal",
     "CavityDROPSvdW",
     "CavityField",
     "CavityISwiG",
@@ -69,6 +72,7 @@ __all__ = [
     "CouplingTangent",
     "GeneralSolvationModel",
     "GostshypMoments",
+    "IsodensityCartLayout",
     "IsodensitySource",
     "ModelComponentCOSMO",
     "ModelComponentCPCM",

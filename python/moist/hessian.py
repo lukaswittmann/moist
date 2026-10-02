@@ -6,6 +6,8 @@ from typing import Callable
 
 import numpy as np
 
+from .pyscf import _finite, _quiet_blas
+
 
 def _contract(subscripts, *operands):
     """``np.einsum`` with the pairwise path, and BLAS's dirty flags suppressed.
@@ -22,15 +24,17 @@ def _contract(subscripts, *operands):
     padding-lane artifact :meth:`_LevelSetFunctional._project` documents: the
     SIMD tail reads lanes that raise divide-by-zero, overflow and invalid from a
     product that performs none of them. The result is unaffected, so the flags
-    are silenced here exactly as they are there.
+    are silenced here exactly as they are there, and the result is checked for
+    the NaN or infinity they could otherwise have announced.
 
     Not every contraction wants this. A diagonal one (``i,iu,iu->u``) has no
     pairwise factorization to find, and the path search then costs more than it
     saves -- those call sites deliberately still use ``np.einsum``.
     """
 
-    with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-        return np.einsum(subscripts, *operands, optimize=True)
+    with _quiet_blas():
+        result = np.einsum(subscripts, *operands, optimize=True)
+    return _finite(result, f"the contraction {subscripts}")
 
 
 def _map_directions(body, n):
@@ -285,8 +289,8 @@ class _LevelSetFunctional:
         bit-identical to the BLAS-free einsum, so the flags are cleared rather
         than paying the einsum path's cost.
         """
-        with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
-            return left @ dm
+        with _quiet_blas():
+            return _finite(left @ dm, "the AO density projection")
 
     def _per_atom(self, per_ao):
         out = np.zeros((3, self.mol.natm))
@@ -895,8 +899,8 @@ def rhf_hessian(mean_field, model, host, *, method="dense"):
 
     Includes moving AO centers, density-defined surface motion, PCM charge
     response, and solvent terms in both the CPHF right-hand side and kernel.
-    Model and host must match the SCF settings; single-branch DROP projections
-    and a conventional real all-electron restricted reference are supported.
+    Model and host must match the SCF settings; a conventional real
+    all-electron restricted reference is supported.
     A restricted KS reference is accepted as well as RHF: the solvent terms are
     derivatives of the model energy in the nuclear coordinates and the AO
     density matrix, so they are the same either way, and PySCF's own restricted
@@ -911,12 +915,20 @@ def rhf_hessian(mean_field, model, host, *, method="dense"):
     in the number of density variables is ever stored and the coupled-perturbed
     kernel is applied direction by direction.
 
+    Both methods carry the branch weights of a multi-branch DROP projection.
+    The weights couple the points of an anchor group, so the dense method's
+    per-point surface partials are completed by one pass over the whole grid,
+    while the directional method goes through moist's surface Hessian.
+
     The returned object carries a ``kernel_callback`` attribute, ``None`` by
     default, which a host may set to observe each application of the
     coupled-perturbed kernel; see the attribute's own documentation.
     """
     from pyscf.hessian import rhf
 
+    # Every model below is evaluated through the host, so an internal cavity's
+    # surface follows the Hessian's densities only if the host feeds it
+    host._require_feeds(model.cavity.density_owner)
     base_hessian = _pyscf_hessian_base(mean_field)
     if method == "dense":
         solvent, derivatives = _solvent_response(mean_field, model, host)

@@ -438,6 +438,167 @@ def new_drop_cavity_isodensity_callback(
     return handle, c_callback
 
 
+def _basis_array(name: str, value, dtype) -> np.ndarray:
+    array = np.ascontiguousarray(value, dtype=dtype)
+    if array.ndim != 1:
+        raise ValueError(f"{name} must be one-dimensional")
+    return array
+
+
+def new_drop_cavity_isodensity_internal(
+    shell_atom: np.ndarray,
+    shell_l: np.ndarray,
+    shell_nprim: np.ndarray,
+    exps: np.ndarray,
+    coeffs: np.ndarray,
+    rho_iso: float,
+    nleb: Optional[int] = None,
+    scale: float = 1000.0,
+    debug: bool = False,
+    verbosity: int = 0,
+    do_fine: bool = False,
+    wleb_prune_level: Optional[int] = None,
+    tolerance: Optional[float] = None,
+) -> CavityHandle:
+    """Create a DROP cavity backed by moist's internal isodensity evaluator.
+
+    The basis is atom-centred cartesian-monomial Gaussians, one entry per shell:
+    ``shell_atom`` (0-based owner atom), ``shell_l`` and ``shell_nprim``.
+    ``exps`` and ``coeffs`` hold the primitives of all shells concatenated, so
+    both have length ``sum(shell_nprim)``; ``coeffs`` are the host's
+    primitive-normalized contraction coefficients. The structure the cavity is
+    built for must have at least ``max(shell_atom) + 1`` atoms.
+
+    No density is installed yet: call :func:`set_isodensity_density` before the
+    first update, in the ordering :func:`get_isodensity_cart_layout` reports.
+    """
+
+    _shell_atom = _basis_array("shell_atom", shell_atom, np.int32)
+    _shell_l = _basis_array("shell_l", shell_l, np.int32)
+    _shell_nprim = _basis_array("shell_nprim", shell_nprim, np.int32)
+    _exps = _basis_array("exps", exps, np.float64)
+    _coeffs = _basis_array("coeffs", coeffs, np.float64)
+
+    nshell = int(_shell_l.size)
+    if _shell_atom.size != nshell or _shell_nprim.size != nshell:
+        raise ValueError("shell_atom, shell_l and shell_nprim must have the same length")
+    # The native side sizes exps/coeffs from sum(shell_nprim), so a short array
+    # would be read past its end rather than rejected.
+    if np.any(_shell_nprim < 1):
+        raise ValueError("Every shell needs at least one primitive")
+    nprim_tot = int(_shell_nprim.sum())
+    if _exps.size != nprim_tot or _coeffs.size != nprim_tot:
+        raise ValueError("exps and coeffs must both have length sum(shell_nprim)")
+    if np.any(_shell_atom < 0):
+        raise ValueError("shell_atom holds 0-based atom indices and must be non-negative")
+
+    return CavityHandle.with_gc(
+        error_check(lib.moist_new_drop_cavity_isodensity_internal)(
+            nshell,
+            _cast("int*", _shell_atom),
+            _cast("int*", _shell_l),
+            _cast("int*", _shell_nprim),
+            _cast("double*", _exps),
+            _cast("double*", _coeffs),
+            float(rho_iso),
+            _ref("double", scale),
+            _ref("int", nleb),
+            _ref("bool", debug),
+            _ref("int", verbosity),
+            _ref("bool", do_fine),
+            _ref("int", wleb_prune_level),
+            _ref("double", tolerance),
+        )
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class IsodensityCartLayout:
+    """The cartesian-monomial ordering moist's internal isodensity basis uses.
+
+    ``shell_offset`` (length ``nshell + 1``, 0-based) delimits each shell's
+    components; ``powers`` has shape ``(ncart, 3)`` and gives the monomial
+    exponents ``(lx, ly, lz)`` of every component. A host density matrix must
+    be transformed into this ordering before it is installed.
+
+    Layouts compare and hash by value, so two cavities built from the same
+    basis report equal layouts.
+    """
+
+    ncart: int
+    nshell: int
+    shell_offset: np.ndarray
+    powers: np.ndarray
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, IsodensityCartLayout):
+            return NotImplemented
+        return (
+            (self.ncart, self.nshell) == (other.ncart, other.nshell)
+            and np.array_equal(self.shell_offset, other.shell_offset)
+            and np.array_equal(self.powers, other.powers)
+        )
+
+    def __hash__(self) -> int:
+        # Through lists rather than raw bytes, so equal arrays of different
+        # integer dtypes hash alike, as __eq__ requires
+        return hash((
+            self.ncart,
+            self.nshell,
+            tuple(self.shell_offset.tolist()),
+            tuple(map(tuple, self.powers.tolist())),
+        ))
+
+
+def get_isodensity_cart_layout(cavity: CavityHandle) -> IsodensityCartLayout:
+    ncart = ffi.new("int *")
+    nshell = ffi.new("int *")
+    error_check(lib.moist_get_isodensity_cart_layout)(
+        cavity.handle, ncart, nshell, ffi.NULL, ffi.NULL, ffi.NULL, ffi.NULL
+    )
+
+    shell_offset = np.zeros(nshell[0] + 1, dtype=np.int32)
+    lx = np.zeros(ncart[0], dtype=np.int32)
+    ly = np.zeros(ncart[0], dtype=np.int32)
+    lz = np.zeros(ncart[0], dtype=np.int32)
+    error_check(lib.moist_get_isodensity_cart_layout)(
+        cavity.handle,
+        ncart,
+        nshell,
+        _cast("int*", shell_offset),
+        _cast("int*", lx),
+        _cast("int*", ly),
+        _cast("int*", lz),
+    )
+
+    powers = np.stack([lx, ly, lz], axis=1)
+    shell_offset.flags.writeable = False
+    powers.flags.writeable = False
+    return IsodensityCartLayout(
+        ncart=int(ncart[0]),
+        nshell=int(nshell[0]),
+        shell_offset=shell_offset,
+        powers=powers,
+    )
+
+
+def set_isodensity_density(cavity: CavityHandle, dcart: np.ndarray) -> None:
+    """Install a cartesian-monomial density matrix on an internal isodensity cavity.
+
+    ``dcart`` is the ``(ncart, ncart)`` density in the ordering of
+    :func:`get_isodensity_cart_layout`; the native side rejects any other size.
+    """
+
+    _dcart = np.asarray(dcart, dtype=np.float64, order="F")
+    if _dcart.ndim != 2 or _dcart.shape[0] != _dcart.shape[1]:
+        raise ValueError("dcart must be a square (ncart, ncart) matrix")
+    error_check(lib.moist_set_isodensity_density)(
+        cavity.handle,
+        int(_dcart.shape[0]),
+        _cast("double*", _dcart),
+    )
+
+
 def update_model(model: ModelHandle, structure: StructureHandle) -> None:
     return error_check(lib.moist_update_solvation_model)(
         model.handle,
@@ -1283,6 +1444,27 @@ def drop_host_point_derivatives(cavity, igrid, dirs, jet, jet1, jet2):
         *[_cast("double*", x) for x in (dirs, jet, jet1, jet2, d1, d2)],
     )
     return d1, d2
+
+
+def drop_host_branch_derivatives(cavity, dirs, d1, d2):
+    """Add the branch-weight motion to the per-point derivatives, in place; see moist.h."""
+    ngrid, nat = get_cavity_sizes(cavity)
+    dirs = np.asfortranarray(dirs, dtype=np.float64)
+    if dirs.ndim != 3 or dirs.shape[:2] != (3, nat) or dirs.shape[2] < 1:
+        raise ValueError("dirs must have shape (3, natoms, ndir) with ndir > 0")
+    n = dirs.shape[2]
+    for name, array, shape in (("d1", d1, (5, ngrid, n)), ("d2", d2, (5, ngrid, n, n))):
+        if (
+            not isinstance(array, np.ndarray)
+            or array.dtype != np.float64
+            or array.shape != shape
+            or not array.flags.f_contiguous
+            or not array.flags.writeable
+        ):
+            raise ValueError(f"{name} must be a writeable Fortran-ordered float64 array of shape {shape}")
+    error_check(lib.moist_drop_host_branch_derivatives)(
+        cavity.handle, ngrid, nat, n, *[_cast("double*", x) for x in (dirs, d1, d2)]
+    )
 
 
 def pcm_amat_host_derivatives(cavity, q, d1, d2):

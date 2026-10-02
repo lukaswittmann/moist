@@ -49,11 +49,13 @@ from __future__ import annotations
 
 from typing import Optional
 import warnings
+import weakref
 
 import numpy as np
 
 from .interface import (
-    CavityDROPIsodensity,
+    CavityDROPIsodensityCallback,
+    CavityDROPIsodensityInternal,
     CavitySnapshot,
     CouplingChannel,
     CouplingTransaction,
@@ -70,6 +72,143 @@ __all__ = ["PySCFCoupling", "PySCFHost", "PySCFIsodensityHost", "solvated_rhf"]
 
 #: Default isodensity contour in electrons/bohr^3.
 DEFAULT_RHO_ISO = 4.0e-4
+
+#: Upper bound, in bytes, on one block of AO-pair integrals over grid points.
+#: The whole ``(ncomp, ngrid, nao, nao)`` tensor runs to gigabytes for a
+#: medium-sized solute, and every consumer contracts it straight away.
+_GRID_BLOCK_BYTES = 256 * 1024**2
+
+
+def _grid_blocks(ngrid: int, nao: int, ncomp: int = 1):
+    """Slices of the grid whose integral blocks stay under the byte bound."""
+    step = max(1, _GRID_BLOCK_BYTES // (8 * ncomp * nao * nao))
+    for start in range(0, ngrid, step):
+        yield slice(start, min(start + step, ngrid))
+
+
+def _quiet_blas():
+    """Ignore the floating-point status flags BLAS leaves behind.
+
+    The products of this module and :mod:`moist.hessian` raise divide-by-zero,
+    overflow and invalid from operations that perform none of them, as
+    :meth:`PySCFHost.density` describes; ``test_grid_integrals_are_contracted_in_place``
+    pins the results against a BLAS-free reference.
+
+    Silencing the flags hides no bad input: a NaN propagates through a product
+    without raising any flag, with or without this. Results that matter are
+    therefore checked with :func:`_finite` instead.
+    """
+    return np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore")
+
+
+def _finite(array: np.ndarray, what: str) -> np.ndarray:
+    """``array``, once it is known to hold no NaN or infinity."""
+    if not np.isfinite(array).all():
+        raise FloatingPointError(f"{what} is not finite")
+    return array
+
+
+def _cart_powers(l: int) -> list[tuple[int, int, int]]:
+    """Monomial exponents of a cartesian shell in PySCF's order: ``lx``, then ``ly``, descending."""
+    return [(lx, ly, l - lx - ly) for lx in range(l, -1, -1) for ly in range(l - lx, -1, -1)]
+
+
+class _InternalBasis:
+    """A PySCF basis as :class:`~moist.interface.CavityDROPIsodensityInternal` consumes it.
+
+    moist evaluates bare cartesian monomials on a contracted radial,
+    ``g_c(r) = (x-X)^lx (y-Y)^ly (z-Z)^lz sum_p c_p exp(-a_p |r-R|^2)``, so
+    the coefficients handed over carry PySCF's primitive normalization
+    ``gto_norm(l, a_p)``, which ``bas_ctr_coeff`` leaves out. Every PySCF AO is
+    then a fixed combination of one shell's monomials, ``AO = g @ M`` with
+    ``M`` block diagonal: libcint's ``cart2sph(l)`` block for a spherical
+    basis, and for a cartesian one the identity, scaled by the factor libcint
+    applies to s and p shells only. The density moist needs is ``M P M^T``.
+    A PySCF shell with several contractions becomes one moist shell each.
+    """
+
+    def __init__(self, mol) -> None:
+        from pyscf.gto import mole
+
+        shell_atom, shell_l, shell_nprim, exps, coeffs = [], [], [], [], []
+        #: Per moist shell: angular momentum, first AO, AO <- monomial block
+        self._shells: list[tuple[int, int, np.ndarray]] = []
+        ao = 0
+        for b in range(mol.nbas):
+            l = mol.bas_angular(b)
+            e = np.asarray(mol.bas_exp(b), dtype=np.float64)
+            norm = np.array([mole.gto_norm(l, a) for a in e])
+            contractions = np.asarray(mol.bas_ctr_coeff(b), dtype=np.float64)
+            if mol.cart:
+                block = np.eye((l + 1) * (l + 2) // 2) * (mole.cart2sph(l)[0, 0] if l < 2 else 1.0)
+            else:
+                block = mole.cart2sph(l)
+            for c in contractions.T:
+                shell_atom.append(mol.bas_atom(b))
+                shell_l.append(l)
+                shell_nprim.append(e.size)
+                exps.extend(e)
+                coeffs.extend(c * norm)
+                self._shells.append((l, ao, block))
+                ao += block.shape[1]
+        if ao != mol.nao:
+            raise RuntimeError(f"the basis covers {ao} AOs, the molecule has {mol.nao}")
+
+        #: Constructor arguments of the cavity
+        self.arrays = dict(
+            shell_atom=np.asarray(shell_atom, dtype=np.int32),
+            shell_l=np.asarray(shell_l, dtype=np.int32),
+            shell_nprim=np.asarray(shell_nprim, dtype=np.int32),
+            exps=np.asarray(exps, dtype=np.float64),
+            coeffs=np.asarray(coeffs, dtype=np.float64),
+        )
+        self._nao = mol.nao
+        self.layout = None
+        self.transform: Optional[np.ndarray] = None
+
+    def bind(self, layout) -> None:
+        """Build the ``(ncart, nao)`` transform for the ordering a cavity reports, once."""
+        if self.layout is not None:
+            if layout != self.layout:
+                raise RuntimeError("a cavity reports a different layout for the same basis")
+            return
+        if layout.nshell != len(self._shells):
+            raise RuntimeError(
+                f"moist reports {layout.nshell} isodensity shells, the basis has {len(self._shells)}"
+            )
+        transform = np.zeros((layout.ncart, self._nao))
+        for s, (l, ao, block) in enumerate(self._shells):
+            lo, hi = layout.shell_offset[s], layout.shell_offset[s + 1]
+            position = {powers: i for i, powers in enumerate(_cart_powers(l))}
+            try:
+                rows = [position[tuple(powers)] for powers in layout.powers[lo:hi].tolist()]
+            except KeyError:
+                rows = []
+            if len(rows) != len(position):
+                raise RuntimeError(f"moist's layout does not hold the monomials of shell {s} (l={l})")
+            transform[lo:hi, ao:ao + block.shape[1]] = block[rows]
+        self.transform = transform
+        self.layout = layout
+
+    def density(self, dm: np.ndarray) -> np.ndarray:
+        """The AO density ``dm`` in the bound cartesian-monomial layout."""
+        with _quiet_blas():
+            return _finite(self.transform @ dm @ self.transform.T, "the cartesian density")
+
+
+def _pair_view(ints: np.ndarray) -> np.ndarray:
+    """Grid integrals ``([ncomp,] ngrid, nao, nao)`` as ``([ncomp,] nao*nao, ngrid)``.
+
+    The pair index is ``v * nao + u``, so a matrix ``X`` contracts against
+    ``X.T.ravel()``.  PySCF returns these integrals as a transposed view of a
+    Fortran-ordered buffer, which this axis order makes C-contiguous again: the
+    reshape is then free and the contractions are plain BLAS products, where
+    ``einsum`` or a C-order reshape would copy gigabytes first.
+    """
+    lead = ints.ndim - 3
+    axes = tuple(range(lead)) + (lead + 2, lead + 1, lead)
+    view = np.ascontiguousarray(ints.transpose(axes))
+    return view.reshape(ints.shape[:lead] + (-1, ints.shape[lead]))
 
 
 def _component_index(axes: tuple[int, ...]) -> int:
@@ -103,7 +242,8 @@ class PySCFHost:
     :param mol: PySCF molecule.  Coordinates are read in bohr.
     :param rho_iso: Density contour defining the surface.
     :param scale: Constant multiplier moist applies to the level set; must match
-        the value passed to :class:`~moist.interface.CavityDROPIsodensity`.
+        the value passed to :class:`~moist.interface.CavityDROPIsodensityCallback`.
+        :meth:`internal_cavity` passes both on itself.
     """
 
     def __init__(
@@ -115,9 +255,71 @@ class PySCFHost:
         self.mol = mol
         self.rho_iso = float(rho_iso)
         self.scale = float(scale)
-        self.dm: Optional[np.ndarray] = None
+        self._internal_cavities = weakref.WeakSet()
+        self._internal_basis: Optional[_InternalBasis] = None
+        self._installed_dm = None
+        self.dm = None
         self._gto_prefix = "GTOval_cart_deriv" if mol.cart else "GTOval_sph_deriv"
         self._aoslice = mol.aoslice_by_atom()
+
+    @property
+    def dm(self) -> Optional[np.ndarray]:
+        """The density matrix every host operation, and the level set, reads."""
+        return self._dm
+
+    @dm.setter
+    def dm(self, value: Optional[np.ndarray]) -> None:
+        self._dm = value
+        self._install_density()
+
+    # ------------------------------------------------------------------
+    # internal isodensity cavities
+    # ------------------------------------------------------------------
+
+    def internal_cavity(self, **kwargs) -> CavityDROPIsodensityInternal:
+        """An internal isodensity cavity on this molecule that follows :attr:`dm`.
+
+        The cavity takes the molecule's basis and this host's ``rho_iso`` and
+        ``scale``. Every density assigned to :attr:`dm` from now on -- as a
+        :class:`PySCFCoupling` does before each evaluation -- is transformed into
+        its cartesian layout and installed on it, so a model built on it
+        rebuilds the surface from the current density. ``kwargs`` are the other
+        options of :class:`~moist.interface.CavityDROPIsodensityInternal`.
+        """
+        if self._internal_basis is None:
+            self._internal_basis = _InternalBasis(self.mol)
+        basis = self._internal_basis
+        cavity = CavityDROPIsodensityInternal(
+            **basis.arrays, rho_iso=self.rho_iso, scale=self.scale, **kwargs
+        )
+        basis.bind(cavity.layout)
+        self._internal_cavities.add(cavity)
+        if self.dm is not None:
+            cavity.set_density(basis.density(self._density_matrix()))
+        return cavity
+
+    def _install_density(self) -> None:
+        """Hand the current density to every internal cavity this host built."""
+        dm = self._dm
+        if dm is None or not self._internal_cavities:
+            return
+        # A coupling republishes its immutable density before every completion,
+        # and the cavities hold that one already
+        frozen = isinstance(dm, np.ndarray) and not dm.flags.writeable
+        if frozen and dm is self._installed_dm:
+            return
+        dcart = self._internal_basis.density(np.asarray(dm))
+        for cavity in self._internal_cavities:
+            cavity.set_density(dcart)
+        self._installed_dm = dm if frozen else None
+
+    def _require_feeds(self, owner: Optional[CavityDROPIsodensityInternal]) -> None:
+        """Refuse an internal isodensity cavity whose density this host does not keep."""
+        if owner is not None and owner not in self._internal_cavities:
+            raise ValueError(
+                "The internal isodensity cavity was not built by this host, so its "
+                "density would not follow the host's; build it with host.internal_cavity()"
+            )
 
     # ------------------------------------------------------------------
     # geometry
@@ -145,7 +347,7 @@ class PySCFHost:
     # ------------------------------------------------------------------
 
     def density(self, point: np.ndarray, order: int):
-        """Density callback for :class:`~moist.interface.CavityDROPIsodensity`.
+        """Density callback for :class:`~moist.interface.CavityDROPIsodensityCallback`.
 
         Returns the bare ``rho`` and its spatial derivatives up to ``order``
         only, so the projection's value+gradient phase never pays for the
@@ -166,7 +368,7 @@ class PySCFHost:
         # with a BLAS-free einsum to rounding, which `test_density_callback_is_finite`
         # pins, so the flags are suppressed here rather than paying the
         # order-of-magnitude cost of the einsum path in the hottest callback.
-        with np.errstate(divide="ignore", over="ignore", under="ignore", invalid="ignore"):
+        with _quiet_blas():
             proj = ao @ dm
             t = proj @ np.ascontiguousarray(ao.T)
 
@@ -217,14 +419,14 @@ class PySCFHost:
                         )
         return rho, drho, d2rho, d3rho, d4rho
 
-    def make_cavity(self, **kwargs) -> CavityDROPIsodensity:
-        """Deprecated compatibility factory for ``CavityDROPIsodensity(self)``."""
+    def make_cavity(self, **kwargs) -> CavityDROPIsodensityCallback:
+        """Deprecated compatibility factory for ``CavityDROPIsodensityCallback(self)``."""
         warnings.warn(
-            "host.make_cavity() is deprecated; use CavityDROPIsodensity(host, ...)",
+            "host.make_cavity() is deprecated; use CavityDROPIsodensityCallback(host, ...)",
             DeprecationWarning,
             stacklevel=2,
         )
-        return CavityDROPIsodensity(self, **kwargs)
+        return CavityDROPIsodensityCallback(self, **kwargs)
 
     def coupling(self, density_matrix: np.ndarray) -> "PySCFCoupling":
         """Bind one density matrix to this host for a coherent evaluation."""
@@ -243,8 +445,13 @@ class PySCFHost:
         delta = coords[:, None, :] - centers[None, :, :]
         dist = np.linalg.norm(delta, axis=2)
         phi_nuc = (charges[None, :] / dist).sum(axis=1)
-        vgrids = self.mol.intor("int1e_grids", grids=coords)
-        return phi_nuc - np.einsum("iuv,uv->i", vgrids, dm)
+        pair_dm = dm.T.ravel()
+        phi_elec = np.empty(len(coords))
+        for block in _grid_blocks(len(coords), self.mol.nao):
+            vgrids = self.mol.intor("int1e_grids", grids=coords[block])
+            with _quiet_blas():
+                phi_elec[block] = pair_dm @ _pair_view(vgrids)
+        return phi_nuc - _finite(phi_elec, "the electronic surface potential")
 
     def _grad_phi_elec(self, coords: np.ndarray) -> np.ndarray:
         """``grad_r phi_elec(r)`` at each grid point, ``(3, ngrid)``.
@@ -254,9 +461,13 @@ class PySCFHost:
         same as shifting both AO centers by ``-d``, giving
         ``d/dC (r_i|uv) = T_uv + T_vu`` with ``T`` the bra-derivative integral.
         """
-        dm = self._density_matrix()
-        tint = self.mol.intor("int1e_grids_ip", grids=coords)
-        return -2.0 * np.einsum("kiuv,uv->ki", tint, dm)
+        pair_dm = self._density_matrix().T.ravel()
+        field = np.empty((3, len(coords)))
+        for block in _grid_blocks(len(coords), self.mol.nao, 3):
+            tint = self.mol.intor("int1e_grids_ip", grids=coords[block])
+            with _quiet_blas():
+                field[:, block] = -2.0 * (pair_dm @ _pair_view(tint))
+        return _finite(field, "the electronic surface field")
 
     def _grad_phi_nuc(self, coords: np.ndarray) -> np.ndarray:
         """``grad_r phi_nuc(r)`` at each grid point, ``(3, ngrid)``."""
@@ -295,6 +506,19 @@ class PySCFHost:
         gradient = self._grad_phi_nuc(coords) + self._grad_phi_elec(coords)
         return np.asfortranarray(np.asarray(q)[None, :] * gradient)
 
+    def electrostatic_weights(self, coords: np.ndarray, q: np.ndarray):
+        """``(w_xyz, qefield)`` of the second electrostatic pass, together.
+
+        :meth:`surface_position_weights` and :meth:`qefield` share the
+        electronic field, the most expensive host quantity of an evaluation, so
+        a caller that needs both forms it once here.
+        """
+        coords = np.asarray(coords)
+        q = np.asarray(q)[None, :]
+        field = self._grad_phi_elec(coords)
+        w_xyz = np.asfortranarray(q * (self._grad_phi_nuc(coords) + field))
+        return w_xyz, np.asfortranarray(q * field)
+
     def solve(self, model, coords: np.ndarray):
         """Supply electrostatics in the order the two derivative paths need.
 
@@ -310,11 +534,8 @@ class PySCFHost:
         phi = self.surface_potential(coords)
         model.supply_electrostatics(phi)
         q = model.trace_response().electrostatics.surface_charge
-        model.supply_electrostatics(
-            phi,
-            w_xyz=self.surface_position_weights(coords, q),
-            qefield=self.qefield(coords, q),
-        )
+        w_xyz, qefield = self.electrostatic_weights(coords, q)
+        model.supply_electrostatics(phi, w_xyz=w_xyz, qefield=qefield)
         return model.get_energy(), model.response()
 
     # ------------------------------------------------------------------
@@ -338,8 +559,12 @@ class PySCFHost:
             fock = np.zeros((nao, nao))
         else:
             q = np.asarray(response.electrostatics.surface_charge)
-            vgrids = self.mol.intor("int1e_grids", grids=coords)
-            fock = -np.einsum("i,iuv->uv", q, vgrids)
+            fock = np.zeros((nao, nao))
+            for block in _grid_blocks(len(coords), nao):
+                vgrids = self.mol.intor("int1e_grids", grids=coords[block])
+                with _quiet_blas():
+                    fock -= (_pair_view(vgrids) @ q[block]).reshape(nao, nao).T
+            _finite(fock, "the electrostatic Fock contribution")
         if include_lsf:
             fock += self._fock_lsf(coords, response)
         return fock
@@ -356,24 +581,27 @@ class PySCFHost:
         w1 = np.asarray(response.lsf.w_gradient)
         w2 = np.asarray(response.lsf.w_hessian)
 
-        def outer(weight, left, right):
-            return np.einsum("i,iu,iv->uv", weight, left, right)
-
-        def symmetrised(weight, left, right):
-            block = outer(weight, left, right)
-            return block + block.T
-
+        # With outer(w, L, R) = sum_i w_i L_iu R_iv the matrix is
+        #
+        #   outer(w0, a0, a0) + sym sum_a outer(w1_a, d_a, a0)
+        #   + sym sum_ab [outer(w2_ab, d_ab, a0) + outer(w2_ab, d_a, d_b)]
+        #
+        # Every term sharing a right factor is one weighted block, so the whole
+        # contraction is four matrix products. The value term is symmetric
+        # already and enters the first block at half weight for that reason.
         a0 = ao[0]
-        fock = outer(w0, a0, a0)
+        first = [ao[_component_index((a,))] for a in range(3)]
+        with_value = 0.5 * w0[:, None] * a0
         for a in range(3):
-            fock += symmetrised(w1[a], ao[_component_index((a,))], a0)
-        for a in range(3):
+            with_value += w1[a][:, None] * first[a]
             for b in range(3):
-                fock += symmetrised(w2[a, b], ao[_component_index((a, b))], a0)
-                fock += symmetrised(
-                    w2[a, b], ao[_component_index((a,))], ao[_component_index((b,))]
-                )
-        return -self.scale * fock
+                with_value += w2[a, b][:, None] * ao[_component_index((a, b))]
+        with _quiet_blas():
+            fock = with_value.T @ a0
+            for b in range(3):
+                with_first = sum(w2[a, b][:, None] * first[a] for a in range(3))
+                fock += with_first.T @ first[b]
+        return -self.scale * _finite(fock + fock.T, "the level-set Fock contribution")
 
     def gradient(
         self,
@@ -405,11 +633,18 @@ class PySCFHost:
     def _gradient_phi(self, coords: np.ndarray, q: np.ndarray) -> np.ndarray:
         """``sum_i q_i d(phi_elec)_i/dR_A`` at fixed  grid points and fixed P."""
         dm = self._density_matrix()
-        tint = self.mol.intor("int1e_grids_ip", grids=coords)
+        nao = self.mol.nao
         # d(r_i|uv)/dR_A = -T[k,i,u,v] delta_{u in A} - T[k,i,v,u] delta_{v in A},
         # and phi_elec carries a further minus sign; P symmetry merges the two
         # halves into a single factor of two.
-        weighted = 2.0 * np.einsum("i,kiuv,uv->ku", q, tint, dm)
+        weighted = np.zeros((3, nao))
+        for block in _grid_blocks(len(coords), nao, 3):
+            tint = self.mol.intor("int1e_grids_ip", grids=coords[block])
+            with _quiet_blas():
+                charged = _pair_view(tint) @ q[block]
+            charged = charged.reshape(3, nao, nao).transpose(0, 2, 1)
+            weighted += 2.0 * (charged * dm).sum(axis=2)
+        _finite(weighted, "the electrostatic gradient contraction")
         gradient = np.zeros((3, self.mol.natm))
         for atom in range(self.mol.natm):
             lo, hi = self._aoslice[atom, 2:4]
@@ -435,7 +670,8 @@ class PySCFHost:
         w2 = np.asarray(response.lsf.w_hessian)
 
         # right[c, i, u] = sum_v ao[c, i, v] P_uv
-        right = np.einsum("civ,uv->ciu", ao, dm)
+        with _quiet_blas():
+            right = _finite(ao @ dm.T, "the level-set gradient contraction")
 
         gradient = np.zeros((3, self.mol.natm))
         for k in range(3):
@@ -537,6 +773,7 @@ class PySCFCoupling(SolvationCoupling):
         self._gostshyp = response
 
     def prepare(self, transaction: CouplingTransaction) -> None:
+        self.host._require_feeds(transaction.density_owner)
         self._include_lsf = transaction.density_dependent
         if transaction.requires(CouplingChannel.ELECTROSTATICS):
             cavity = transaction.cavity
@@ -549,15 +786,10 @@ class PySCFCoupling(SolvationCoupling):
             ) -> Electrostatics:
                 if trace is None:
                     return Electrostatics(phi)
-                return Electrostatics(
-                    phi,
-                    w_xyz=self.host.surface_position_weights(
-                        coords, trace.electrostatics.surface_charge
-                    ),
-                    qefield=self.host.qefield(
-                        coords, trace.electrostatics.surface_charge
-                    ),
+                w_xyz, qefield = self.host.electrostatic_weights(
+                    coords, trace.electrostatics.surface_charge
                 )
+                return Electrostatics(phi, w_xyz=w_xyz, qefield=qefield)
 
             transaction.exchange_electrostatics(electrostatics)
 
@@ -619,6 +851,7 @@ def solvated_rhf(
     conv_tol: float = 1e-13,
     conv_tol_grad: float = 1e-9,
     max_cycle: Optional[int] = None,
+    isodensity: str = "callback",
     **cavity_kwargs,
 ):
     """Restricted Hartree-Fock with a self-consistent solvation model.
@@ -627,6 +860,12 @@ def solvated_rhf(
     ``model_factory(host)`` returning a SolvationModel. The same factory is
     used for SCF and Hessian evaluation; the host does not inspect components.
 
+    ``isodensity`` selects how the default model's cavity evaluates the
+    density: ``"callback"`` asks the host point by point
+    (:class:`~moist.interface.CavityDROPIsodensityCallback`), ``"internal"``
+    hands moist the basis and the density matrix
+    (:meth:`PySCFHost.internal_cavity`).
+
     The surface follows the density, so the cavity is rebuilt from scratch on
     every SCF iteration.  Because :meth:`PySCFHost.fock` is the exact
     derivative of the solvation energy, the SCF remains a stationary-point
@@ -634,8 +873,7 @@ def solvated_rhf(
 
     Returns the converged PySCF mean-field object. ``mf.Hessian().kernel()``
     evaluates its total analytic Hessian, including the solvent contribution
-    to coupled-perturbed SCF. The dense Hessian implementation currently
-    requires a single-branch DROP projection; see :mod:`moist.hessian`.
+    to coupled-perturbed SCF; see :mod:`moist.hessian`.
     """
     from pyscf import lib, scf
 
@@ -644,12 +882,22 @@ def solvated_rhf(
         if epsilon is None:
             raise TypeError("Supply epsilon or model_factory")
 
+        if isodensity == "callback":
+            def cavity_factory(host):
+                return CavityDROPIsodensityCallback(host, **cavity_kwargs)
+        elif isodensity == "internal":
+            def cavity_factory(host):
+                return host.internal_cavity(**cavity_kwargs)
+        else:
+            raise ValueError(f"unknown isodensity backend {isodensity!r}; use 'callback' or 'internal'")
+
         def model_factory(host):
-            return SolvationModel(
-                CavityDROPIsodensity(host, **cavity_kwargs), [ModelComponentCPCM(epsilon)]
-            )
-    elif epsilon is not None or cavity_kwargs:
-        raise TypeError("model_factory owns component and cavity settings; omit epsilon and cavity options")
+            return SolvationModel(cavity_factory(host), [ModelComponentCPCM(epsilon)])
+    elif epsilon is not None or cavity_kwargs or isodensity != "callback":
+        raise TypeError(
+            "model_factory owns component and cavity settings; omit epsilon, "
+            "isodensity and cavity options"
+        )
 
     class _SolvatedRHF(scf.hf.RHF):
         """RHF carrying the solvation response as a tagged extra potential."""

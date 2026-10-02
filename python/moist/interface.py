@@ -493,6 +493,12 @@ class Cavity(ABC):
 
     density_dependent = False
 
+    #: The cavity a host installs densities on, for a cavity that takes its
+    #: density matrix from the host (:class:`CavityDROPIsodensityInternal` and
+    #: model-owned views of it); ``None`` for every other cavity. A host compares
+    #: it against the cavities it created to tell whether it feeds this one.
+    density_owner: Optional[CavityDROPIsodensityInternal] = None
+
     #: Whether this cavity kind contributes a level-set response.  Only DROP
     #: cavities differentiate a level set; a cavity with field-independent
     #: geometry produces no ``lsf`` channel at all, which is a statement about
@@ -527,6 +533,9 @@ class Cavity(ABC):
 
     def _raise_callback_failure(self) -> None:
         """Hook for callback-backed cavities."""
+
+    def _before_model_update(self, view: Cavity, structure: Structure) -> None:
+        """Hook for cavities whose model-owned copy needs host state pushed to it."""
 
     def update(self, structure: Structure) -> None:
         if not self._owned:
@@ -744,6 +753,9 @@ class _CavityDROPBase(Cavity):
         second = np.empty((5, len(coords), n, n), order="F")
         for i, jets in enumerate(parameters.level_set_jets(coords)):
             first[:, i], second[:, i] = self.host_point_derivatives(i, parameters.dirs, *jets)
+        # The softmax branch weights couple the points of an anchor group, so
+        # their motion is added once every point is known.
+        library.drop_host_branch_derivatives(self._handle, parameters.dirs, first, second)
         return first, second
 
     def host_point_derivatives(self, igrid, dirs, jet, jet1, jet2):
@@ -753,6 +765,10 @@ class _CavityDROPBase(Cavity):
         spatial orders 0..4, parameter/spatial orders 1/0..3 and 2/0..2,
         packed as full Cartesian tensors in Fortran order. Returned arrays
         have shape (5, ndir) and (5, ndir, ndir) for (x,y,z,xi,f).
+
+        The branch weight of the point is held fixed. On a multi-branch grid
+        the ``xi`` row is completed over the whole grid, which
+        :meth:`parameter_surface_derivatives` does.
         """
         self._require_updated()
         return library.drop_host_point_derivatives(self._handle, igrid, dirs, jet, jet1, jet2)
@@ -933,7 +949,7 @@ class IsodensitySource(Protocol):
         ...
 
 
-class CavityDROPIsodensity(_CavityDROPBase):
+class CavityDROPIsodensityCallback(_CavityDROPBase):
     """DROP cavity driven by an isodensity source or a raw Python callback."""
 
     density_dependent = True
@@ -962,7 +978,7 @@ class CavityDROPIsodensity(_CavityDROPBase):
             )
             source = callback
         if source is None:
-            raise TypeError("CavityDROPIsodensity requires a density source")
+            raise TypeError("CavityDROPIsodensityCallback requires a density source")
 
         provider_callback = getattr(source, "density", None)
         if callable(provider_callback):
@@ -1014,6 +1030,133 @@ class CavityDROPIsodensity(_CavityDROPBase):
 
     def _raise_callback_failure(self) -> None:
         self._handle.callback_state.raise_if_failed()
+
+
+class CavityDROPIsodensityInternal(_CavityDROPBase):
+    """DROP cavity whose isodensity level set moist evaluates from a Gaussian basis.
+
+    The internal twin of :class:`CavityDROPIsodensityCallback`: instead of
+    answering a density callback, the host hands over its basis once, here,
+    and a density matrix before every update through :meth:`set_density`.
+    moist evaluates the density, with screening, and forms
+    ``S = scale * (rho_iso - rho)`` exactly as the callback variant does.
+
+    The basis is atom-centred cartesian-monomial Gaussians, one entry per shell
+    (see :func:`moist.library.new_drop_cavity_isodensity_internal`); the density
+    matrix is expected in the component ordering of :attr:`layout`. An update
+    on a structure with fewer atoms than the basis has owners is refused.
+
+    A :class:`SolvationModel` owns a copy of the cavity. The density last given
+    to :meth:`set_density`, on this object or on ``model.cavity``, is
+    installed on that copy before each model update, so the host keeps one
+    density per cavity object whichever of the two it talks to. A PySCF host
+    builds and feeds one through :meth:`moist.pyscf.PySCFHost.internal_cavity`.
+    """
+
+    density_dependent = True
+
+    def __init__(
+        self,
+        shell_atom: np.ndarray,
+        shell_l: np.ndarray,
+        shell_nprim: np.ndarray,
+        exps: np.ndarray,
+        coeffs: np.ndarray,
+        rho_iso: float,
+        nleb: Optional[int] = None,
+        scale: Optional[float] = None,
+        debug: bool = False,
+        verbosity: int = 0,
+        do_fine: bool = False,
+        wleb_prune_level: Optional[int] = None,
+        tolerance: Optional[float] = None,
+    ) -> None:
+        handle = library.new_drop_cavity_isodensity_internal(
+            shell_atom,
+            shell_l,
+            shell_nprim,
+            exps,
+            coeffs,
+            rho_iso=rho_iso,
+            nleb=nleb,
+            scale=scale,
+            debug=debug,
+            verbosity=verbosity,
+            do_fine=do_fine,
+            wleb_prune_level=wleb_prune_level,
+            tolerance=tolerance,
+        )
+        super().__init__(handle)
+        self._layout = library.get_isodensity_cart_layout(handle)
+        self._density: Optional[np.ndarray] = None
+
+    @property
+    def density_owner(self) -> CavityDROPIsodensityInternal:
+        return self
+
+    @property
+    def layout(self) -> library.IsodensityCartLayout:
+        """The cartesian-monomial ordering :meth:`set_density` expects."""
+        return self._layout
+
+    @property
+    def ncart(self) -> int:
+        return self._layout.ncart
+
+    def set_density(self, dcart: np.ndarray) -> None:
+        """Install the ``(ncart, ncart)`` density matrix for the next update.
+
+        Call before every :meth:`update` (or model update) whose surface should
+        follow a new density; the current surface is not rebuilt until then.
+        """
+        density = np.array(dcart, dtype=np.float64, order="F")
+        library.set_isodensity_density(self._handle, density)
+        density.flags.writeable = False
+        self._density = density
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _CavityDROPIsodensityInternalBorrowed(handle, self)
+
+    def _before_model_update(self, view: Cavity, structure: Structure) -> None:
+        view._sync_density()
+
+
+class _CavityDROPIsodensityInternalBorrowed(_CavityDROPBorrowed):
+    """Model-owned copy of an internal isodensity cavity.
+
+    ``_source`` is always the cavity the host talks to, also for a model built
+    from another model's view, so every copy follows that one density.
+    """
+
+    _source: CavityDROPIsodensityInternal
+
+    @property
+    def density_owner(self) -> CavityDROPIsodensityInternal:
+        return self._source
+
+    @property
+    def layout(self) -> library.IsodensityCartLayout:
+        return self._source.layout
+
+    @property
+    def ncart(self) -> int:
+        return self._source.ncart
+
+    def set_density(self, dcart: np.ndarray) -> None:
+        """Install the density on the source cavity; the model picks it up on update."""
+        self._source.set_density(dcart)
+
+    def _sync_density(self) -> None:
+        # Installed unconditionally: an O(ncart^2) copy, next to a surface rebuild
+        density = self._source._density
+        if density is not None:
+            library.set_isodensity_density(self._handle, density)
+
+    def _model_view(self, handle: library.CavityHandle) -> Cavity:
+        return _CavityDROPIsodensityInternalBorrowed(handle, self._source)
+
+    def _before_model_update(self, view: Cavity, structure: Structure) -> None:
+        view._sync_density()
 
 
 # -----------------------------------------------------------------------------
@@ -1230,6 +1373,11 @@ class CouplingTransaction:
     @property
     def density_dependent(self) -> bool:
         return self._model.cavity.density_dependent
+
+    @property
+    def density_owner(self) -> Optional[CavityDROPIsodensityInternal]:
+        """The cavity the host must install densities on; see :attr:`Cavity.density_owner`."""
+        return self._model.cavity.density_owner
 
     def requires(self, channel: CouplingChannel) -> bool:
         return channel in self._model.required_coupling_channels
@@ -1506,6 +1654,7 @@ class SolvationModel:
 
     def update(self, structure: Structure) -> None:
         self._invalidate()
+        self._source_cavity._before_model_update(self._cavity, structure)
         _guarded_native_update(
             self._source_cavity,
             lambda: library.update_model(self._model, structure._as_handle()),

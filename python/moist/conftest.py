@@ -1,8 +1,8 @@
 """Pytest configuration shared by the moist test modules
 """
 
-#: Marker name -> description. Each is also a meson test target; see
-#: python/moist/meson.build.
+#: Marker name -> description
+#: - each is also a meson test target, see python/moist/meson.build
 MARKERS = {
     # cost
     "slow": "larger solutes and longer sweeps, kept out of the default run",
@@ -12,7 +12,7 @@ MARKERS = {
     "isodensity": "isodensity cavity: the level-set chain rule",
     "conventions": "channel semantics and negative controls",
     "scf": "self-consistent solvated SCF",
-    # Solvation model components with isodensity caivty
+    # Solvation model components with isodensity cavity
     "cpcm": "CPCM component only",
     "pv": "PV component only",
     "cpcm_pv": "CPCM and PV together",
