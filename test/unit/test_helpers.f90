@@ -31,6 +31,9 @@
 !>   * `fd4_scalar(fpp, fp, fm, fmm, h, df, error)` - 4-point central FD formula,
 !>                                         fails on a nonfinite derivative
 !>   * `fd4_offsets` - the matching stencil offsets, in units of h
+!>   * `fd6_scalar(fppp, fpp, fp, fm, fmm, fmmm, h, df, error)` - 6-point central
+!>                                         FD formula, fails on a nonfinite derivative
+!>   * `fd6_offsets` - the matching stencil offsets, in units of h
 !>   * `rel_deviation(a, b)` - |a - b| / (1 + |b|)
 !>   * `fill_legacy_radii(mol, radii, error)` - legacy per-element radius table
 !>   * `build_numbering_map(numbering, map)` - persistent grid numbering ->
@@ -107,6 +110,8 @@ module test_helpers
    public :: get_test_cross
    public :: fd4_scalar
    public :: fd4_offsets
+   public :: fd6_scalar
+   public :: fd6_offsets
    public :: rel_deviation
    public :: check_moist_error
    public :: fill_legacy_radii
@@ -125,6 +130,8 @@ module test_helpers
 
    !> Stencil offsets, in units of h, matching `fd4_scalar`'s argument order
    real(wp), parameter :: fd4_offsets(4) = [2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp]
+   !> Stencil offsets, in units of h, matching `fd6_scalar`'s argument order
+   real(wp), parameter :: fd6_offsets(6) = [3.0_wp, 2.0_wp, 1.0_wp, -1.0_wp, -2.0_wp, -3.0_wp]
 
    !> The 5 mstore collections that get_test_structures samples from
    integer, parameter :: n_datasets = 5
@@ -850,6 +857,51 @@ contains
             & ", h = "//to_string(h))
       end if
    end subroutine fd4_scalar
+
+   !> 6-point central finite-difference formula:
+   !>   f'(x) ~ (45 (f(x+h) - f(x-h)) - 9 (f(x+2h) - f(x-2h)) + (f(x+3h) - f(x-3h))) / (60 h)
+   !> Truncation O(h^6 f^(7)), for derivatives too stiff for `fd4_scalar`
+   !> Opposite samples are paired before combining; a nonfinite derivative
+   !> fails the test, and the message lists the six stencil values and h
+   !>
+   !> @param[in]  fppp   Value at x + 3h
+   !> @param[in]  fpp    Value at x + 2h
+   !> @param[in]  fp     Value at x + h
+   !> @param[in]  fm     Value at x - h
+   !> @param[in]  fmm    Value at x - 2h
+   !> @param[in]  fmmm   Value at x - 3h
+   !> @param[in]  h      Step size
+   !> @param[out] df     Finite-difference derivative
+   !> @param[out] error  Test failure, set on a nonfinite derivative
+   subroutine fd6_scalar(fppp, fpp, fp, fm, fmm, fmmm, h, df, error)
+      !> Value at x + 3h
+      real(wp), intent(in) :: fppp
+      !> Value at x + 2h
+      real(wp), intent(in) :: fpp
+      !> Value at x + h
+      real(wp), intent(in) :: fp
+      !> Value at x - h
+      real(wp), intent(in) :: fm
+      !> Value at x - 2h
+      real(wp), intent(in) :: fmm
+      !> Value at x - 3h
+      real(wp), intent(in) :: fmmm
+      !> Step size h
+      real(wp), intent(in) :: h
+      !> Finite-difference derivative
+      real(wp), intent(out) :: df
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      df = (45.0_wp*(fp - fm) - 9.0_wp*(fpp - fmm) + (fppp - fmmm))/(60.0_wp*h)
+      if (.not. ieee_is_finite(df)) then
+         call test_failed(error, "fd6_scalar: nonfinite derivative", &
+            & "f(x+3h) = "//to_string(fppp)//", f(x+2h) = "//to_string(fpp)// &
+            & ", f(x+h) = "//to_string(fp)//", f(x-h) = "//to_string(fm)// &
+            & ", f(x-2h) = "//to_string(fmm)//", f(x-3h) = "//to_string(fmmm)// &
+            & ", h = "//to_string(h))
+      end if
+   end subroutine fd6_scalar
 
    !> Deviation of `a` from reference `b`, relative but safe near zero
    !>   |a - b| / (1 + |b|)
