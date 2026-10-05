@@ -618,7 +618,9 @@ contains
    !>
    !> - the cavity is the f0=0 isosurface (negative inside)
    !> - triangle winding follows the standard table convention
-   !> - volume is summed via signed tetrahedra w.r.t. the origin
+   !> - volume is summed via signed tetrahedra spanned from the geometric center
+   !>   (mean of `xyz`), so the per-cube volumes of the refinement test and the
+   !>   total are translation invariant
    !> - screened LSF evaluation, O(N) per point
    !> - initial coarse grid vertices are cached to avoid redundant evaluations
    !>
@@ -648,6 +650,8 @@ contains
 
       real(wp) :: spacing, margin
       real(wp) :: grid_min(3), grid_max(3)
+      !> Apex of the signed volume tetrahedra: mean atomic position, bohr
+      real(wp) :: center(3)
       integer :: nx, ny, nz
       integer :: ix, iy, iz
       integer :: tri_count
@@ -717,6 +721,7 @@ contains
       ! Compute initial grid bounds from atomic radii and one padding layer
       call compute_lsf_grid_bounds(lsf, xyz, grid_min, grid_max, &
                                    margin, spacing)
+      center = sum(xyz, dim=2)/real(max(1, size(xyz, 2)), wp)
 
       min_spacing = spacing
       max_extent = maxval(grid_max - grid_min)
@@ -808,8 +813,7 @@ contains
                    "Elapsed(s)"], &
                   unit=error_unit)
          call plp_mc%blank()
-         call plp_mc%header("MARCHING CUBES")
-         call plp_mc%blank()
+         call plp_mc%header("Marching Cubes")
          write (error_unit, "(a,i0,a,i0,a,i0)") &
             " grid: ", nx, " x ", ny, " x ", nz
          write (error_unit, "(a,f10.4,a,f10.4,a,i0)") &
@@ -824,7 +828,7 @@ contains
       end if
 
       !$omp parallel default(none) &
-      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, &
+      !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, center, &
       !$omp&        max_level, min_spacing, local_stack_size, &
       !$omp&        n_coarse_total, n_coarse_done, progress_interval, &
       !$omp&        dbg, wall_start, plp_mc, export_mesh, all_tris, &
@@ -909,21 +913,21 @@ contains
                   else if (spacing_here <= min_spacing) then
                      if (export_mesh) then
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count, &
+                                               cube%vals, center, area, volume, tri_count, &
                                                tri_buf=loc_buf)
                      else
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count)
+                                               cube%vals, center, area, volume, tri_count)
                      end if
                      n_cubes_accepted = n_cubes_accepted + 1
                   else if (cube%level >= max_level) then
                      if (export_mesh) then
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count, &
+                                               cube%vals, center, area, volume, tri_count, &
                                                tri_buf=loc_buf)
                      else
                         call march_single_cube(cube%minp, spacing_here, &
-                                               cube%vals, area, volume, tri_count)
+                                               cube%vals, center, area, volume, tri_count)
                      end if
                      n_cubes_accepted = n_cubes_accepted + 1
                   else
@@ -931,7 +935,7 @@ contains
                      coarse_vol = 0.0_wp
                      coarse_tri = 0
                      call march_single_cube(cube%minp, spacing_here, &
-                                            cube%vals, coarse_area, coarse_vol, coarse_tri)
+                                            cube%vals, center, coarse_area, coarse_vol, coarse_tri)
 
                      call subdivide_cube(cube%minp, cube%maxp, mid, &
                                          cube%vals, sub_min, sub_max, sub_vals, &
@@ -955,13 +959,13 @@ contains
                         if (export_mesh) then
                            call march_single_cube(sub_min(:, child), &
                                                   spacing_here*0.5_wp, &
-                                                  sub_vals(:, child), &
+                                                  sub_vals(:, child), center, &
                                                   sub_area, sub_vol, sub_tri, &
                                                   tri_buf=loc_buf)
                         else
                            call march_single_cube(sub_min(:, child), &
                                                   spacing_here*0.5_wp, &
-                                                  sub_vals(:, child), &
+                                                  sub_vals(:, child), center, &
                                                   sub_area, sub_vol, sub_tri)
                         end if
                      end do
@@ -1071,12 +1075,15 @@ contains
 
    !> March a single cube defined by its minimum point and edge length
    !>
+   !> @param[in]    apex     Common apex of the signed volume tetrahedra, bohr
    !> @param[inout] tri_buf  Optional triangle buffer for mesh export
-   subroutine march_single_cube(origin, h, vals, area_acc, volume_acc, tri_acc, &
+   subroutine march_single_cube(origin, h, vals, apex, area_acc, volume_acc, tri_acc, &
                                 tri_buf)
       real(wp), intent(in) :: origin(3)
       real(wp), intent(in) :: h
       real(wp), intent(in) :: vals(8)
+      !> Common apex of the signed volume tetrahedra, bohr
+      real(wp), intent(in) :: apex(3)
       real(wp), intent(inout) :: area_acc, volume_acc
       integer, intent(inout) :: tri_acc
       type(mc_tri_buffer_type), intent(inout), optional :: tri_buf
@@ -1142,7 +1149,7 @@ contains
 
          area_term = sqrt(sum(tri_normal*tri_normal))
          area_acc = area_acc + 0.5_wp*area_term
-         volume_acc = volume_acc + dot_product(v0, tri_normal)/6.0_wp
+         volume_acc = volume_acc + dot_product(v0 - apex, tri_normal)/6.0_wp
          tri_acc = tri_acc + 1
          if (present(tri_buf)) call mc_tri_buffer_append(tri_buf, v0, v1, v2)
       end do
