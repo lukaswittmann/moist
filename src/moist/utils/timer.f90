@@ -780,7 +780,6 @@ contains
 
       write (iunit, "(a)")
       write (iunit, "(1x,a)") banner_line()
-      write (iunit, "(a)")
       ! column header, then a rule the full table width
       write (iunit, "(1x,a)") header_line()
       write (iunit, "(1x,a)") repeat("-", tbl_w)
@@ -1248,15 +1247,15 @@ contains
 
    end subroutine ensure_stack_capacity
 
-!> Display width (terminal columns) of a possibly-UTF-8 string
-!>
-!> - counts every byte except UTF-8 continuation bytes (10xxxxxx)
-!> - the only multibyte glyphs the report emits are the single-column
-!>   box-drawing guides, so the count equals the number of printed columns and
-!>   fixed-width alignment survives the tree guides
-!>
-!> @param[in] s  Byte string (ASCII and/or box-drawing UTF-8)
-!> @return    Number of display columns
+   !> Display width (terminal columns) of a possibly-UTF-8 string
+   !>
+   !> - counts every byte except UTF-8 continuation bytes (10xxxxxx)
+   !> - the only multibyte glyphs the report emits are the single-column
+   !>   box-drawing guides, so the count equals the number of printed columns and
+   !>   fixed-width alignment survives the tree guides
+   !>
+   !> @param[in] s  Byte string (ASCII and/or box-drawing UTF-8)
+   !> @return    Number of display columns
    pure function disp_len(s) result(n)
       !> Input string
       character(len=*), intent(in) :: s
@@ -1273,12 +1272,12 @@ contains
 
    end function disp_len
 
-!> Right-pad `s` with blanks to a display width of `w` columns, never
-!> truncating; uses `disp_len` so a UTF-8 tree prefix pads correctly
-!>
-!> @param[in] s  String to pad
-!> @param[in] w  Target display width in columns
-!> @return    Padded string
+   !> Right-pad `s` with blanks to a display width of `w` columns, never
+   !> truncating; uses `disp_len` so a UTF-8 tree prefix pads correctly
+   !>
+   !> @param[in] s  String to pad
+   !> @param[in] w  Target display width in columns
+   !> @return    Padded string
    pure function pad_disp(s, w) result(padded)
       !> Input string
       character(len=*), intent(in) :: s
@@ -1298,13 +1297,13 @@ contains
 
    end function pad_disp
 
-!> The centersd "T I M I N G S" banner, `tbl_w` columns wide
-!> @return  Banner line
+   !> The centersd banner
+   !> @return  Banner line
    pure function banner_line() result(s)
       !> Banner line
       character(len=:), allocatable :: s
 
-      character(len=*), parameter :: title = "  T I M I N G S  "
+      character(len=*), parameter :: title = " Timings "
       integer :: left
 
       left = (tbl_w - len(title))/2
@@ -1312,9 +1311,9 @@ contains
 
    end function banner_line
 
-!> The column-header row ("section  time [s]  %tot  calls"), aligned to the same
-!> fixed columns the data rows use
-!> @return  Header line
+   !> The column-header row ("section  time [s]  %tot  calls"), aligned to the same
+   !> fixed columns the data rows use
+   !> @return  Header line
    function header_line() result(s)
       !> Header line
       character(len=:), allocatable :: s

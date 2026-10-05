@@ -212,8 +212,7 @@ contains
                                      [character(len=8) :: "Point", "% done", "Elapsed (s)", "Left (s)"], &
                                      unit=self%ctx%unit)
          call plp%blank()
-         call plp%header("PROJECTOR")
-         call plp%blank()
+         call plp%header("Projector")
          call plp%print_header()
          call plp%separator()
       end if
@@ -528,7 +527,7 @@ contains
       n_branched_anchor = sum(thread_branched_anchor)
       n_branched_points = sum(thread_branched_points)
 
-      if (self%ctx%verbosity >= 1) then
+      if (self%ctx%verbosity >= 2) then
          pp = new_prettyprinter(unit=self%ctx%unit)
          call pp%blank()
          call pp%push("Projection results:")

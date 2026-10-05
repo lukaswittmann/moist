@@ -106,7 +106,7 @@ module moist_cavity_drop_parameters
 
       !* ---------------------------------- Screening --------------------------------- *!
 
-      !> Distance cutoff for grid point adj. list
+      !> Distance cutoff for grid point adj. list, derived as `4*rho_grid_h`
       real(wp) :: adj_list_grid_cutoff = 1.0_wp
       !> Below this atom count, the cell grid collapses to a single full-scan cell
       !>
