@@ -132,8 +132,10 @@ module moist_model_type
 
       !> Get the solvation energy gradient and the host part of the phase
       !>
-      !> `response` is cleared on entry and returns what the host contracts
-      !> with its own geometry derivatives (potential adjoint, Gaussian amplitudes)
+      !> `response` is cleared once the request is accepted and returns what the
+      !> host contracts with its own geometry derivatives (potential adjoint,
+      !> Gaussian amplitudes); a rejected request, including an unimplemented
+      !> theory, leaves it untouched
       !>
       !> @param[in,out] self Instance of the solvation model
       !> @param[in,out] coupling Wavefunction data
