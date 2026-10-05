@@ -2,6 +2,7 @@
 !>
 !> - Pins the ducc0 type-4 DST (`ortho` off) to FFTW's `RODFT11` convention,
 !>   which the radial grid prefactors assume
+!> - Plan lifecycle: geometry clamps, empty execution, reset and reuse
 !> - Backend: DST-IV against the defining sum with an exactly reduced phase
 !> - Identities: batched call matches single column, DST-IV is its own inverse
 !>   up to 2n
@@ -24,12 +25,13 @@ module test_math_fft_dst4
 
    public :: collect_math_fft_dst4
 
-   !> Transform lengths exercised by the kernel tests: powers of two, an odd length
+   !> Transform lengths exercised by the kernel tests: the single-point
+   !> transform, powers of two, an odd length
    !>
    !> A prime is also included -- a backend that only handled smooth sizes, or
    !> that fell back to a different algorithm for awkward ones, would show up
    !> here
-   integer, parameter :: test_lengths(7) = [8, 9, 16, 31, 64, 67, 69]
+   integer, parameter :: test_lengths(8) = [1, 8, 9, 16, 31, 64, 67, 69]
 
 contains
 
@@ -41,6 +43,7 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
+                  new_unittest("dst4_plan_lifecycle", test_dst4_plan_lifecycle), &
                   new_unittest("dst4_matches_reference", test_dst4_reference_match), &
                   new_unittest("dst4_batched_matches_single", test_dst4_batched), &
                   new_unittest("dst4_is_its_own_inverse", test_dst4_involution), &
@@ -56,9 +59,9 @@ contains
                   ]
    end subroutine collect_math_fft_dst4
 
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
    ! Helpers
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
 
    !> Deterministic, well-conditioned test signal (no RNG state to seed)
    !>
@@ -158,6 +161,8 @@ contains
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
       end if
+      call check(error, all(abs(buf - x) <= 0.0_wp), "single DST-IV changed its input")
+      if (allocated(error)) return
       call work%destroy()
       call plan%destroy()
    end subroutine dst4_once
@@ -196,15 +201,60 @@ contains
       end if
    end subroutine make_grid
 
-   ! --------------------------------------------------------------------------
-   ! Layer 1: the backend against the defining sum
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
+   !* Plan lifecycle
+   !* -------------------------------------------------------------------------- *!
+
+   !> Plan geometry clamps, empty execution, reset and reuse
+   subroutine test_dst4_plan_lifecycle(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(dst4_plan_type) :: plan
+      type(dst4_work_type) :: work
+      type(mctc_error), allocatable :: merr
+      real(wp) :: x(1), y(1), xb(1, 1), yb(1, 1)
+
+      call check(error, plan%npts == 0 .and. plan%nbatch == 0, "default plan geometry")
+      if (allocated(error)) return
+      call plan%init(-3, -2)
+      call plan%new_work(work)
+      call check(error, plan%npts == 0 .and. plan%nbatch == 0, "negative plan geometry")
+      if (allocated(error)) return
+      x = 2.0_wp
+      xb = 2.0_wp
+      call plan%execute(work, x, y, merr)
+      call check(error, .not. allocated(merr), "empty scalar plan failed")
+      if (allocated(error)) return
+      call plan%execute(work, xb, yb, merr)
+      call check(error, .not. allocated(merr), "empty batched plan failed")
+      if (allocated(error)) return
+      call plan%init(1, 0)
+      call plan%new_work(work)
+      call plan%execute(work, xb, yb, merr)
+      call check(error, .not. allocated(merr), "zero-width plan failed")
+      if (allocated(error)) return
+      call plan%init(3, 2)
+      call plan%destroy()
+      call plan%destroy()
+      call check(error, plan%npts == 0 .and. plan%nbatch == 0, "destroy did not reset plan")
+      if (allocated(error)) return
+      call plan%init(1, 1)
+      call plan%new_work(work)
+      call plan%execute(work, x, y, merr)
+      call check(error, .not. allocated(merr), "reused plan failed")
+      if (allocated(error)) return
+      call check(error, y(1), 2.0_wp*sqrt(2.0_wp), thr=1.0e-14_wp)
+      call work%destroy()
+      call plan%destroy()
+   end subroutine test_dst4_plan_lifecycle
+
+   !* -------------------------------------------------------------------------- *!
+   !* Layer 1: the backend against the defining sum                               *!
+   !* -------------------------------------------------------------------------- *!
 
    !> The backend's DST-IV must be the unnormalised RODFT11 convention
    !>
    !> The radial prefactors assume this, for even, odd and prime lengths alike
-   !>
-   !> @param[out] error  Test failure
    subroutine test_dst4_reference_match(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -226,16 +276,14 @@ contains
       end do
    end subroutine test_dst4_reference_match
 
-   ! --------------------------------------------------------------------------
-   ! Layer 2: structural identities
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
+   !* Layer 2: structural identities                                             *!
+   !* -------------------------------------------------------------------------- *!
 
    !> The batched call the radial trafo uses must reproduce the single-column one
    !>
    !> A mismatch would silently change results whenever a caller switches to
    !> the batched entry points
-   !>
-   !> @param[out] error  Test failure
    subroutine test_dst4_batched(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -262,6 +310,9 @@ contains
       call work%destroy()
       call plan%destroy()
 
+      call check(error, all(abs(xin - xall) <= 0.0_wp), "batched DST-IV changed its input")
+      if (allocated(error)) return
+
       do ic = 1, nb
          col = xall(:, ic)
          call dst4_reference(col, yref)
@@ -274,8 +325,6 @@ contains
    !>
    !> The radial grid relies on exactly this when it uses one transform for
    !> both directions
-   !>
-   !> @param[out] error  Test failure
    subroutine test_dst4_involution(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -295,9 +344,9 @@ contains
       call check(error, relerr(z, scaled), 0.0_wp, thr=1.0e-14_wp)
    end subroutine test_dst4_involution
 
-   ! --------------------------------------------------------------------------
-   ! Uniform radial pair constructor: invalid parameters
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
+   !* Uniform radial pair constructor: invalid parameters                        *!
+   !* -------------------------------------------------------------------------- *!
 
    !> Fail an expected-failure test only on the targeted library error
    !>
@@ -322,10 +371,8 @@ contains
    end subroutine expect_error
 
    !> A grid without nodes is refused
-   !>
-   !> @param[out] error  Test failure, set on the expected error
    subroutine test_bad_uniform_npts_zero(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
@@ -335,10 +382,8 @@ contains
    end subroutine test_bad_uniform_npts_zero
 
    !> A zero spacing is refused
-   !>
-   !> @param[out] error  Test failure, set on the expected error
    subroutine test_bad_uniform_dr_zero(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
@@ -350,10 +395,8 @@ contains
    !> A NaN spacing is refused rather than building NaN nodes
    !>
    !> `dr <= 0` is false for NaN, so only an explicit finiteness guard catches it
-   !>
-   !> @param[out] error  Test failure, set on the expected error
    subroutine test_bad_uniform_dr_nan(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
@@ -363,10 +406,8 @@ contains
    end subroutine test_bad_uniform_dr_nan
 
    !> An infinite spacing is refused rather than building Inf nodes
-   !>
-   !> @param[out] error  Test failure, set on the expected error
    subroutine test_bad_uniform_dr_inf(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_radial_type) :: rgrid, kgrid
       type(mctc_error), allocatable :: merr
@@ -375,9 +416,9 @@ contains
       call expect_error(error, merr, "finite spacing")
    end subroutine test_bad_uniform_dr_inf
 
-   ! --------------------------------------------------------------------------
-   ! Layer 3: the radial trafo built on the DST-IV
-   ! --------------------------------------------------------------------------
+   !* -------------------------------------------------------------------------- *!
+   !* Layer 3: the radial trafo built on the DST-IV                              *!
+   !* -------------------------------------------------------------------------- *!
 
    !> `fbt_k2r . fbt_r2k` is the identity, not merely an approximation
    !>
@@ -385,8 +426,6 @@ contains
    !> (dk*dr*2n)/(2*pi), which is exactly 1 for dk = pi/(n*dr); this is a
    !> machine-precision check on the whole radial pipeline, and it fails if
    !> the backend's normalisation drifts by any factor at all
-   !>
-   !> @param[out] error  Test failure
    subroutine test_fbt_round_trip(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -418,10 +457,6 @@ contains
    end subroutine test_fbt_round_trip
 
    !> The batched `fbt_*_all` entry points must agree with the single-column ones
-   !>
-   !> The solvers use both
-   !>
-   !> @param[out] error  Test failure
    subroutine test_fbt_batched(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -470,13 +505,6 @@ contains
    end subroutine test_fbt_batched
 
    !> A zero-width batch on a freshly built trafo must not crash
-   !>
-   !> The cached batched buffers start at width 0, so the very first
-   !> `fbt_*_all` call with an empty batch used to match that cached width
-   !> and skip allocating `work_all`/`tmp_all`, which were then handed
-   !> unallocated to the non-allocatable `execute` dummies
-   !>
-   !> @param[out] error  Test failure
    subroutine test_fbt_batched_empty(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -516,8 +544,6 @@ contains
    !> bilinear form; scaling by `|<FBT a, b>|` instead would measure the
    !> cancellation in the dot product (~2e-14) rather than how well the
    !> transpose holds, which is ~3e-16
-   !>
-   !> @param[out] error  Test failure
    subroutine test_fbt_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -529,6 +555,7 @@ contains
       integer :: i
       real(wp) :: a(npts), b(npts), fa(npts), atb(npts)
       real(wp) :: lhs, rhs, scal
+      real(wp) :: xb(npts, 2), yb(npts, 2)
 
       call make_grid(error, rgrid, kgrid, trafo, npts, dr)
       if (allocated(error)) return
@@ -552,6 +579,17 @@ contains
       call check(error, abs(lhs - rhs)/scal, 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
 
+      xb(:, 1) = b
+      xb(:, 2) = 2.0_wp*b
+      call trafo%fbt_r2k_adj_all(xb, yb, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message); return
+      end if
+      call check(error, relerr(yb(:, 1), atb), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, relerr(yb(:, 2), 2.0_wp*atb), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+
       call trafo%fbt_k2r(a, fa, merr)
       if (allocated(merr)) then
          call test_failed(error, merr%message); return
@@ -564,6 +602,17 @@ contains
       rhs = dot_product(a, atb)
       scal = max(norm2(fa)*norm2(b), 1.0e-30_wp)
       call check(error, abs(lhs - rhs)/scal, 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+
+      xb(:, 1) = b
+      xb(:, 2) = 2.0_wp*b
+      call trafo%fbt_k2r_adj_all(xb, yb, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message); return
+      end if
+      call check(error, relerr(yb(:, 1), atb), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, relerr(yb(:, 2), 2.0_wp*atb), 0.0_wp, thr=1.0e-14_wp)
       if (allocated(error)) return
    end subroutine test_fbt_adjoint
 
@@ -578,7 +627,6 @@ contains
    !>   forward and 4.4e-16 backward (npts = 256, dr = 0.05, a = 0.7), the
    !>   Gaussian being resolved to round-off on both grids
    !>
-   !> @param[out] error  Test failure
    subroutine test_fbt_analytic(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

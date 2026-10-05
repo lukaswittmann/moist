@@ -9,7 +9,8 @@
 !>   divide the solid-angle integrals by 4*pi and compare sphere averages
 !> - Lebedev metadata: negative-weight list against the generated tables,
 !>   `lebedev_order_from_num` filter and error messages, raw tables with
-!>   weights summing to 1 and points on the unit sphere
+!>   weights summing to 1 and points on the unit sphere, raw-getter order and
+!>   buffer guards, greedy locality visit order
 !> - Selection: all-weights default, positive-only opt-in, exact requests,
 !>   minimum degree, target with floors and caps, incompatible constraints
 module test_math_grid_angular
@@ -20,10 +21,11 @@ module test_math_grid_angular
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_math_grid_angular_lebedev, only: grid_size, lebedev_degree_table, &
       & lebedev_negative_weight_sizes, lebedev_has_negative_weights, lebedev_order_from_num, &
-      & get_angular_grid
+      & get_angular_grid, lebedev_locality_order
    use moist_math_grid_angular_grid, only: moist_math_grid_angular_type, integrand_angular, &
       & moist_math_grid_angular_generator_type, moist_math_grid_angular_request_type, &
-      & moist_math_grid_angular_generator_lebedev_type, new_lebedev_generator, new_lebedev_grid
+      & moist_math_grid_angular_generator_lebedev_type, new_lebedev_generator, new_lebedev_grid, &
+      & validate_angular_request
    implicit none(type, external)
    private
 
@@ -85,6 +87,8 @@ contains
          new_unittest("lebedev_order_from_num_filter", test_order_from_num_filter), &
          new_unittest("angular_weights_sum_to_one", test_angular_weights_sum), &
          new_unittest("angular_points_on_unit_sphere", test_angular_unit_sphere), &
+         new_unittest("lebedev_raw_table_guards", test_raw_table_guards), &
+         new_unittest("lebedev_locality_order", test_locality_order), &
          new_unittest("lebedev_default_keeps_all_weights", test_default_all_weights), &
          new_unittest("lebedev_positive_only_opt_in", test_positive_only), &
          new_unittest("lebedev_exact_request_errors", test_exact_request_errors), &
@@ -176,8 +180,6 @@ contains
    end subroutine expect_failure
 
    !> Build the grid of an exact point count with the default generator
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  npts   Supported point count
    !> @param[out] grid   Generated grid
    subroutine build_exact(error, npts, grid)
@@ -354,8 +356,6 @@ contains
    !* ================================================================================= *!
 
    !> Nodes are Cartesian unit vectors and arrays match npts
-   !>
-   !> @param[out] error  Test failure
    subroutine test_unit_directions(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -379,8 +379,6 @@ contains
    end subroutine test_unit_directions
 
    !> Weights sum to 4*pi, directly and through both integrators
-   !>
-   !> @param[out] error  Test failure
    subroutine test_weights_four_pi(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -416,8 +414,6 @@ contains
    !> - Rules 6 to 266 points (degrees 3 to 27), including 74, 230, 266;
    !>   beyond them the monomial errors at degree d+1 approach round-off
    !> - At least one monomial of degree d+1 is not exact, so the degree is sharp
-   !>
-   !> @param[out] error  Test failure
    subroutine test_monomial_moments(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -480,8 +476,6 @@ contains
    !> - Zonal harmonics P_l(a.u) integrate to 0 for 1 <= l <= degree and not
    !>   for l = degree + 1, for two directions off the symmetry axes
    !> - Measured: at most 3.9e-15 below the degree, at least 9.6e-3 above
-   !>
-   !> @param[out] error  Test failure
    subroutine test_achieved_degree(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -532,8 +526,6 @@ contains
    end subroutine test_achieved_degree
 
    !> `integrate` and `integrate_field` agree to round-off
-   !>
-   !> @param[out] error  Test failure
    subroutine test_integrate_matches_field(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -557,8 +549,6 @@ contains
    end subroutine test_integrate_matches_field
 
    !> `destroy` is idempotent and resets the grid
-   !>
-   !> @param[out] error  Test failure
    subroutine test_destroy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -581,8 +571,6 @@ contains
    !>
    !> Checked both directly and through `integrate_field` of a unit field,
    !> each divided by 4*pi
-   !>
-   !> @param[out] error  Test failure
    subroutine test_weights_sum(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -616,8 +604,6 @@ contains
    end subroutine test_weights_sum
 
    !> Nodes must be Cartesian unit vectors
-   !>
-   !> @param[out] error  Test failure
    subroutine test_unit_vectors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -646,8 +632,6 @@ contains
    end subroutine test_unit_vectors
 
    !> Exactly one of npts= / degree= must be given
-   !>
-   !> @param[out] error  Test failure
    subroutine test_selector_validation(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -666,8 +650,6 @@ contains
    end subroutine test_selector_validation
 
    !> An unsupported point count must be rejected
-   !>
-   !> @param[out] error  Test failure
    subroutine test_unsupported_npts(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -683,8 +665,6 @@ contains
    !> degree= selects the smallest rule reaching the requested exactness
    !>
    !> %degree reports a value at least as large as the request
-   !>
-   !> @param[out] error  Test failure
    subroutine test_degree_selection(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -720,8 +700,6 @@ contains
    end subroutine test_degree_selection
 
    !> Degrees outside the supported range must be rejected
-   !>
-   !> @param[out] error  Test failure
    subroutine test_degree_out_of_range(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -743,8 +721,6 @@ contains
    !> integral divided by 4*pi is the average, so
    !>   <1>=1, <x>=<x*y>=0, <3z^2-1>=0, <x^2>=1/3,
    !>   <x^4+y^4+z^4>=3/5
-   !>
-   !> @param[out] error  Test failure
    subroutine test_polynomial_exactness(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -789,8 +765,6 @@ contains
    !> - Fixed direction `a` off every symmetry axis of the octahedral rules;
    !>   exact sphere average `1/(n+1)`, the solid-angle integral over 4*pi
    !> - Relative error; measured at most 3.6e-15 over all rules
-   !>
-   !> @param[out] error  Test failure
    subroutine test_full_degree_exactness(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -838,8 +812,6 @@ contains
    !>
    !> Analytic integrand vs. tabulated samples, on the same function;
    !> both compared as sphere averages
-   !>
-   !> @param[out] error  Test failure
    subroutine test_integrate_agreement(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -870,8 +842,6 @@ contains
    end subroutine test_integrate_agreement
 
    !> `destroy` must be idempotent and reset the grid to its empty state
-   !>
-   !> @param[out] error  Test failure
    subroutine test_destroy_idempotent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -903,8 +873,6 @@ contains
    !> The negative-weight list matches the signs of the generated tables
    !>
    !> Measured minimum weights: 74 -> -2.96e-2, 230 -> -5.52e-2, 266 -> -2.52e-3
-   !>
-   !> @param[out] error  Test failure
    subroutine test_negative_weight_list(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -936,8 +904,6 @@ contains
    end subroutine test_negative_weight_list
 
    !> `lebedev_order_from_num`: filter, error messages, order 0 on error
-   !>
-   !> @param[out] error  Test failure
    subroutine test_order_from_num_filter(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -979,8 +945,6 @@ contains
    end subroutine test_order_from_num_filter
 
    !> Lebedev weights should sum to 1 on the unit sphere
-   !>
-   !> @param[out] error  Test failure
    subroutine test_angular_weights_sum(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1005,8 +969,6 @@ contains
    end subroutine test_angular_weights_sum
 
    !> Lebedev points should lie exactly on the unit sphere
-   !>
-   !> @param[out] error  Test failure
    subroutine test_angular_unit_sphere(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1035,13 +997,68 @@ contains
       end do
    end subroutine test_angular_unit_sphere
 
+   !> Raw table getter rejects bad order indices and undersized buffers
+   !>
+   !> Order 0 and 33 must fail with the index-guard message: without that guard
+   !> both read `grid_size` out of bounds and still end in `select default`
+   !> with the look-alike "Unsupported Lebedev order index", so only the exact
+   !> text shows that the guard ran
+   subroutine test_raw_table_guards(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      real(wp) :: nodes(3, 6), weights(6), narrow(2, 6)
+      type(mctc_error), allocatable :: merr
+
+      call get_angular_grid(0, nodes, weights, merr)
+      call check(error, allocated(merr), "Raw order zero was accepted")
+      if (allocated(error)) return
+      call check(error, merr%message == "Invalid Lebedev order index", "Wrong raw order error")
+      if (allocated(error)) return
+      call get_angular_grid(33, nodes, weights, merr)
+      call check(error, allocated(merr), "Raw order 33 was accepted")
+      if (allocated(error)) return
+      call check(error, merr%message == "Invalid Lebedev order index", &
+         & "Wrong raw upper order error")
+      if (allocated(error)) return
+      call get_angular_grid(1, narrow, weights, merr)
+      call check(error, allocated(merr), "Raw two-component nodes were accepted")
+      if (allocated(error)) return
+      call get_angular_grid(1, nodes(:, :5), weights, merr)
+      call check(error, allocated(merr), "Raw short node buffer was accepted")
+      if (allocated(error)) return
+      call get_angular_grid(1, nodes, weights(:5), merr)
+      call check(error, allocated(merr), "Raw short weight buffer was accepted")
+   end subroutine test_raw_table_guards
+
+   !> Greedy nearest-neighbour visit order on a six-point unit-sphere cloud
+   !>
+   !> - Cloud: unit vectors (|r|^2 - 1 below 3e-16) with nonzero x, y, and z
+   !>   separations, so every distance component contributes
+   !> - Expected order from an independent greedy walk in exact rational
+   !>   arithmetic (Python fractions); at every step the closest and next-closest
+   !>   squared distances differ by at least 8%, far above rounding or FMA effects
+   subroutine test_locality_order(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      real(wp), parameter :: cloud(3, 6) = reshape([ &
+         & 0.6068603720217383_wp, 0.1952263358713113_wp, -0.7704590622816371_wp, &
+         & 0.3334978856729056_wp, 0.7008707538870306_wp, 0.6305230738026380_wp, &
+         & -0.4703049652836553_wp, -0.3330531988062138_wp, -0.8172446429279843_wp, &
+         & 0.7972398200539148_wp, -0.4685420864717597_wp, 0.3806270911602218_wp, &
+         & 0.3632192724947992_wp, 0.8957738701655927_wp, 0.2562438947895239_wp, &
+         & 0.8276730827731092_wp, 0.2540772451128908_wp, -0.5004018600771800_wp], [3, 6])
+      integer :: perm(6)
+
+      perm = 0
+      call lebedev_locality_order(cloud, perm)
+      call check(error, all(perm == [1, 6, 5, 2, 4, 3]), "Incorrect locality visit order")
+   end subroutine test_locality_order
+
    !* ================================================================================= *!
    !*                                 Lebedev selection                                 *!
    !* ================================================================================= *!
 
    !> The default generator admits every rule, including negative weights
-   !>
-   !> @param[out] error  Test failure
    subroutine test_default_all_weights(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1079,8 +1096,6 @@ contains
    end subroutine test_default_all_weights
 
    !> The opt-in filter rejects exact negative-weight requests and skips them otherwise
-   !>
-   !> @param[out] error  Test failure
    subroutine test_positive_only(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1130,8 +1145,6 @@ contains
    end subroutine test_positive_only
 
    !> Exact requests are strict: no substitution, hard constraints still apply
-   !>
-   !> @param[out] error  Test failure
    subroutine test_exact_request_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1171,8 +1184,6 @@ contains
    end subroutine test_exact_request_errors
 
    !> Minimum degree selects the smallest admissible rule reaching it
-   !>
-   !> @param[out] error  Test failure
    subroutine test_min_degree_selection(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1210,8 +1221,6 @@ contains
    end subroutine test_min_degree_selection
 
    !> Soft target with hard floors and caps
-   !>
-   !> @param[out] error  Test failure
    subroutine test_target_selection(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1281,13 +1290,12 @@ contains
    end subroutine test_target_selection
 
    !> Incompatible or out-of-range hard constraints are errors, never relaxed
-   !>
-   !> @param[out] error  Test failure
    subroutine test_incompatible_constraints(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_angular_generator_lebedev_type) :: gen_all, gen_pos
       type(moist_math_grid_angular_request_type) :: req
+      type(mctc_error), allocatable :: merr
 
       call new_lebedev_generator(gen_pos, positive_weights_only=.true.)
 
@@ -1324,6 +1332,11 @@ contains
       call expect_failure(error, gen_all, req, "min_points -1")
       if (allocated(error)) return
       req = moist_math_grid_angular_request_type(max_points=-1)
+      ! select rejects this cap anyway (no rule fits), so call the public
+      ! validator directly to cover its own max_points guard
+      call validate_angular_request(req, merr)
+      call check(error, allocated(merr), "Validator accepted negative max_points")
+      if (allocated(error)) return
       call expect_failure(error, gen_all, req, "max_points -1")
       if (allocated(error)) return
       req = moist_math_grid_angular_request_type(target_points=-1.0_wp)
@@ -1334,8 +1347,6 @@ contains
    end subroutine test_incompatible_constraints
 
    !> `new_lebedev_grid`: one selector, exact count or degree, filter pass-through
-   !>
-   !> @param[out] error  Test failure
    subroutine test_new_lebedev_grid(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1377,8 +1388,6 @@ contains
    end subroutine test_new_lebedev_grid
 
    !> Selection dispatches through the abstract generator
-   !>
-   !> @param[out] error  Test failure
    subroutine test_polymorphic_generator(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

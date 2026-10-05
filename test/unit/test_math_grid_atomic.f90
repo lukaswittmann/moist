@@ -14,7 +14,8 @@ module test_math_grid_atomic
    use mctc_io_constants, only: pi
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
    use moist_data_atomicrad, only: covalent_rad
-   use moist_math_grid_angular_lebedev, only: grid_size, lebedev_negative_weight_sizes
+   use moist_math_grid_angular_lebedev, only: grid_size, lebedev_negative_weight_sizes, &
+      & lebedev_degree_table
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type, &
       & moist_math_grid_radial_rule_chebyshev2_type, new_chebyshev2_rule, &
       & moist_math_grid_radial_rule_midpoint_type, new_midpoint_rule, &
@@ -45,6 +46,13 @@ module test_math_grid_atomic
    !> Center of the off-center Gaussian (bohr)
    real(wp), parameter :: off_center(3) = [0.3_wp, -0.2_wp, 0.4_wp]
 
+   !> Repeating requests exercise cache preservation after growth
+   type, extends(moist_math_grid_atomic_shell_type) :: repeating_shell_type
+   contains
+      !> Cycle through every Lebedev degree, then revisit earlier requests
+      procedure :: request => repeating_request
+   end type repeating_shell_type
+
 contains
 
    !> Collect all math_grid_atomic tests
@@ -63,6 +71,7 @@ contains
          new_unittest("shell_target_fallback", test_target_fallback), &
          new_unittest("shell_incompatible_constraints", test_incompatible_constraints), &
          new_unittest("atomic_layout", test_atomic_layout), &
+         new_unittest("atomic_cache_repeated_requests", test_cache_repeated_requests), &
          new_unittest("atomic_ball_and_shell_volume", test_ball_volume), &
          new_unittest("atomic_radial_integrals", test_radial_integrals), &
          new_unittest("atomic_off_center_gaussian", test_off_center_gaussian), &
@@ -208,8 +217,6 @@ contains
    !* ================================================================================= *!
 
    !> Forward a library error into a test failure
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  merr   Library error, ignored if unallocated
    !> @param[in]  label  Case description
    subroutine require_ok(error, merr, label)
@@ -406,8 +413,6 @@ contains
    !* ================================================================================= *!
 
    !> Constant policy: same degree and hard bounds on every shell and element
-   !>
-   !> @param[out] error  Test failure
    subroutine test_constant_request(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -441,8 +446,6 @@ contains
    end subroutine test_constant_request
 
    !> Sector policy: sector of r, shells on an edge in the inner sector
-   !>
-   !> @param[out] error  Test failure
    subroutine test_sector_edges(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -486,8 +489,6 @@ contains
    end subroutine test_sector_edges
 
    !> Arc policy: band spacing, edge membership, target spelling, default bounds
-   !>
-   !> @param[out] error  Test failure
    subroutine test_arc_request(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -533,20 +534,25 @@ contains
    end subroutine test_arc_request
 
    !> Invalid policies are rejected by their constructors and by validate
-   !>
-   !> @param[out] error  Test failure
    subroutine test_policy_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       type(moist_math_grid_atomic_shell_constant_type) :: cpol
-      type(moist_math_grid_atomic_shell_sector_type) :: spol
-      type(moist_math_grid_atomic_shell_arc_type) :: apol
+      type(moist_math_grid_atomic_shell_sector_type) :: spol, empty_sector
+      type(moist_math_grid_atomic_shell_arc_type) :: apol, empty_arc
       type(mctc_error), allocatable :: merr
       real(wp) :: nan, inf
 
       nan = ieee_value(nan, ieee_quiet_nan)
       inf = ieee_value(inf, ieee_positive_inf)
+
+      call empty_sector%validate(merr)
+      call check(error, allocated(merr), "Sector policy: missing components accepted")
+      if (allocated(error)) return
+      call empty_arc%validate(merr)
+      call check(error, allocated(merr), "Arc policy: missing components accepted")
+      if (allocated(error)) return
 
       call new_constant_shell_policy(cpol, -1, merr)
       call check(error, allocated(merr), "Constant policy: negative degree accepted")
@@ -628,8 +634,6 @@ contains
    end subroutine test_policy_errors
 
    !> Hard floors lift and caps bound the selected sizes of every policy
-   !>
-   !> @param[out] error  Test failure
    subroutine test_floor_and_cap(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -683,8 +687,6 @@ contains
    end subroutine test_floor_and_cap
 
    !> Unreachable targets fall back to the largest admissible rule; the shortfall is recorded
-   !>
-   !> @param[out] error  Test failure
    subroutine test_target_fallback(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -745,8 +747,6 @@ contains
    end subroutine test_target_fallback
 
    !> Hard constraints no rule satisfies are errors, never relaxed
-   !>
-   !> @param[out] error  Test failure
    subroutine test_incompatible_constraints(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -814,8 +814,6 @@ contains
    !>
    !> - Shells in the radial grid's order, angular points in table order
    !> - xyz is exactly r*u; each shell's weights sum to 4*pi*r^2*w_rad
-   !>
-   !> @param[out] error  Test failure
    subroutine test_atomic_layout(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -889,11 +887,76 @@ contains
       end do
    end subroutine test_atomic_layout
 
+   !> Cycle through the Lebedev degrees in consecutive unit-radius bands
+   !>
+   !> @param[in] self  Shell policy
+   !> @param[in] z     Atomic number
+   !> @param[in] r     Shell radius (bohr)
+   pure function repeating_request(self, z, r) result(request)
+      !> Shell policy
+      class(repeating_shell_type), intent(in) :: self
+      !> Atomic number
+      integer, intent(in) :: z
+      !> Shell radius (bohr)
+      real(wp), intent(in) :: r
+      !> Angular request
+      type(moist_math_grid_angular_request_type) :: request
+
+      request%min_degree = lebedev_degree_table(mod(int(r), size(lebedev_degree_table)) + 1) + 0*z
+      request%min_points = self%min_points
+      request%max_points = self%max_points
+   end function repeating_request
+
+   !> Repeated requests retain their angular rules across cache growth
+   !>
+   !> - One shell per Lebedev degree (32 distinct requests and rules), then
+   !>   every request again; the distinct-request and distinct-rule stores of
+   !>   the atomic grid start at 8 entries, so they must grow, and the second
+   !>   pass reads entries the growth copied
+   !> - Covers initial store capacities up to 31; a larger start skips growth
+   subroutine test_cache_repeated_requests(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(repeating_shell_type) :: shells
+      type(moist_math_grid_radial_mapping_linear_type) :: mapping
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_type) :: grid
+      type(moist_math_grid_angular_type) :: angular
+      type(mctc_error), allocatable :: merr
+      character(len=120) :: msg
+      integer :: ish, nshell, degree
+
+      ! Midpoint shells at r = ish - 0.5, so int(r) = ish - 1 selects the degree
+      nshell = 2*size(lebedev_degree_table)
+      call new_linear_mapping(mapping, 0.0_wp, real(nshell, wp), merr)
+      call require_ok(error, merr, "Repeating request mapping")
+      if (allocated(error)) return
+      call assemble_recipe(recipe, rule_midpoint, nshell, mapping, .false., shells)
+      call new_atomic_grid(grid, recipe, 6, merr)
+      call require_ok(error, merr, "Repeating request grid")
+      if (allocated(error)) return
+      write (msg, "(a,i0,a,i0)") "Repeating request grid: nshell ", grid%nshell, ", expected ", nshell
+      call check(error, grid%nshell == nshell, trim(msg))
+      if (allocated(error)) return
+      do ish = 1, nshell
+         degree = lebedev_degree_table(mod(ish - 1, size(lebedev_degree_table)) + 1)
+         call new_lebedev_grid(angular, merr, degree=degree)
+         call require_ok(error, merr, "Repeating request reference")
+         if (allocated(error)) return
+         write (msg, "(a,i0,a,i0,a,i0,a,i0,a,i0)") "Shell ", ish, ": degree ", &
+            & grid%shell_degree(ish), ", expected ", angular%degree, "; npts ", &
+            & grid%shell_npts(ish), ", expected ", angular%npts
+         call check(error, grid%shell_degree(ish) == angular%degree &
+            & .and. grid%shell_npts(ish) == angular%npts, &
+            & "Repeated request lost its angular rule after cache growth: "//trim(msg))
+         if (allocated(error)) return
+      end do
+   end subroutine test_cache_repeated_requests
+
    !> Ball and shell volumes and exact moments with a linear Gauss-Legendre radial grid
    !>
    !> A missing or duplicated r^2 or 4*pi changes every value by orders of magnitude
-   !>
-   !> @param[out] error  Test failure
    subroutine test_ball_volume(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -950,8 +1013,6 @@ contains
    !>
    !> - Per-element default recipes for H, C, Na, and Br (Chebyshev-II + Becke)
    !> - Fixed Becke scales 1 and 3 bohr, and midpoint + Knowles (k = 3, R = 5)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_radial_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1011,8 +1072,6 @@ contains
    end subroutine test_radial_integrals
 
    !> Check three Gaussian and two exponential integrals on one grid
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  grid   Atomic grid
    !> @param[in]  label  Case description
    !> @param[in]  tol    Relative tolerance
@@ -1047,8 +1106,6 @@ contains
    !> Off-center Gaussian with the carbon default recipe
    !>
    !> Couples radial and angular quadrature: exp(-|r - d|^2) with |d| = 0.54 bohr
-   !>
-   !> @param[out] error  Test failure
    subroutine test_off_center_gaussian(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1076,8 +1133,6 @@ contains
    end subroutine test_off_center_gaussian
 
    !> Radial cutoffs: retained shells and points follow the radial grid's counts
-   !>
-   !> @param[out] error  Test failure
    subroutine test_cutoff_counts(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1122,8 +1177,6 @@ contains
    end subroutine test_cutoff_counts
 
    !> Incomplete or invalid recipes are errors
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1180,8 +1233,6 @@ contains
    end subroutine test_recipe_errors
 
    !> `integrate` and `integrate_field` agree bit for bit
-   !>
-   !> @param[out] error  Test failure
    subroutine test_integrate_agreement(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1212,8 +1263,6 @@ contains
    end subroutine test_integrate_agreement
 
    !> `destroy` empties the grid and is idempotent
-   !>
-   !> @param[out] error  Test failure
    subroutine test_destroy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1236,7 +1285,10 @@ contains
       call check(error, grid%npts == 0 .and. grid%nshell == 0 .and. grid%z == 0 &
          & .and. .not. allocated(grid%xyz) .and. .not. allocated(grid%u) &
          & .and. .not. allocated(grid%w) .and. .not. allocated(grid%shell) &
-         & .and. .not. allocated(grid%shell_r) .and. .not. allocated(grid%shell_offset), &
+         & .and. .not. allocated(grid%shell_r) .and. .not. allocated(grid%shell_offset) &
+         & .and. .not. allocated(grid%shell_w) .and. .not. allocated(grid%shell_npts) &
+         & .and. .not. allocated(grid%shell_degree) .and. .not. allocated(grid%shell_spacing) &
+         & .and. grid%nshell_requested == 0, &
          & "Atomic grid: destroy left storage behind")
    end subroutine test_destroy
 
@@ -1245,8 +1297,6 @@ contains
    !* ================================================================================= *!
 
    !> Override lookup: first listing wins, default otherwise, unallocated list is absent
-   !>
-   !> @param[out] error  Test failure
    subroutine test_element_overrides(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1308,8 +1358,6 @@ contains
    end subroutine test_element_overrides
 
    !> Per-element default table: radial count, Becke factor, degree, filter
-   !>
-   !> @param[out] error  Test failure
    subroutine test_default_table(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1411,8 +1459,6 @@ contains
    !>
    !> The copies keep every nested polymorphic component with its dynamic
    !> type and values after the source is changed or emptied
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_copy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

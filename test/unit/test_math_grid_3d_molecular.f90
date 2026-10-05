@@ -22,6 +22,7 @@ module test_math_grid_3d_molecular
       & new_lebedev_generator
    use moist_math_grid_atomic_recipe, only: moist_math_grid_atomic_shell_type, &
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
+      & moist_math_grid_atomic_shell_sector_type, new_sector_shell_policy, &
       & moist_math_grid_atomic_recipe_type, moist_math_grid_atomic_recipe_override_type, &
       & default_element_recipes, element_override_index
    use moist_math_grid_atomic_grid, only: moist_math_grid_atomic_type, new_atomic_grid
@@ -76,8 +77,6 @@ contains
    end subroutine collect_math_grid_3d_molecular
 
    !> Integrate analytic two-center Gaussians with every partition scheme
-   !>
-   !> @param[out] error Test failure
    subroutine test_partition_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -128,8 +127,6 @@ contains
    end subroutine test_partition_integrals
 
    !> Validate scheme-specific options and exact-zero pruning settings
-   !>
-   !> @param[out] error Test failure
    subroutine test_partition_options(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -178,8 +175,6 @@ contains
    end subroutine test_partition_options
 
    !> All schemes select, prune and repartition the molecular grid correctly
-   !>
-   !> @param[out] error Test failure
    subroutine test_partition_assembly(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -272,8 +267,6 @@ contains
    !* ================================================================================= *!
 
    !> Forward a library error into a test failure
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  merr   Library error, ignored if unallocated
    !> @param[in]  label  Case description
    subroutine require_ok(error, merr, label)
@@ -569,8 +562,6 @@ contains
    !* ================================================================================= *!
 
    !> Invalid options and incomplete recipes fail construction; the grid stays unconstructed
-   !>
-   !> @param[out] error  Test failure
    subroutine test_constructor_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -640,6 +631,11 @@ contains
       call require_error(error, merr, "needs at least one radial node", "npts = 0")
       if (allocated(error)) return
       broken = recipe
+      broken%radial%rcut_lower = nan
+      call new_molecular_grid(grid, merr, recipe=broken)
+      call require_error(error, merr, "settings must be finite", "rcut_lower = NaN")
+      if (allocated(error)) return
+      broken = recipe
       broken%radial%rcut_upper = nan
       call new_molecular_grid(grid, merr, recipe=broken)
       call require_error(error, merr, "settings must be finite", "rcut_upper = NaN")
@@ -668,6 +664,10 @@ contains
       call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides)
       call require_error(error, merr, "override 1 lists no elements", "override without elements")
       if (allocated(error)) return
+      overrides(1)%elements = [integer ::]
+      call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides)
+      call require_error(error, merr, "override 1 lists no elements", "override with empty elements")
+      if (allocated(error)) return
       overrides(1)%elements = [1]
       deallocate (overrides(1)%recipe%angular)
       call new_molecular_grid(grid, merr, recipe=recipe, overrides=overrides)
@@ -688,8 +688,6 @@ contains
    end subroutine test_constructor_errors
 
    !> A never-constructed grid refuses update, validate, and rebuild
-   !>
-   !> @param[out] error  Test failure
    subroutine test_update_before_construction(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -717,8 +715,6 @@ contains
    end subroutine test_update_before_construction
 
    !> Geometry errors of a constructed grid
-   !>
-   !> @param[out] error  Test failure
    subroutine test_update_geometry_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -756,8 +752,6 @@ contains
    !>
    !> The grid built from mutated sources equals a grid built from pristine
    !> copies, point for point
-   !>
-   !> @param[out] error  Test failure
    subroutine test_private_configuration(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -817,8 +811,6 @@ contains
    end subroutine test_private_configuration
 
    !> `allocate(copy, source=grid)` gives an independent grid, before and after the first update
-   !>
-   !> @param[out] error  Test failure
    subroutine test_independent_copies(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -886,8 +878,6 @@ contains
    end subroutine test_independent_copies
 
    !> Accessors return the constructor values and the documented defaults
-   !>
-   !> @param[out] error  Test failure
    subroutine test_accessors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -929,8 +919,6 @@ contains
    !* ================================================================================= *!
 
    !> A translated atom keeps its weights and moves its points; its Gaussian integral stays exact
-   !>
-   !> @param[out] error  Test failure
    subroutine test_translated_integral(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -976,8 +964,6 @@ contains
    end subroutine test_translated_integral
 
    !> One- and two-center Gaussian integrals over a water grid with the per-element defaults
-   !>
-   !> @param[out] error  Test failure
    subroutine test_multicenter_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1012,8 +998,6 @@ contains
    end subroutine test_multicenter_integrals
 
    !> Rigidly rotating molecule and integrand changes the integral less at a higher angular degree
-   !>
-   !> @param[out] error  Test failure
    subroutine test_rotational_convergence(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1083,11 +1067,12 @@ contains
 
    !> `reciprocal = .true.` sizes the k-grid about the centroid on the first update
    !>
+   !> - Per axis the smallest even mode count whose period `N*dr` covers the
+   !>   symmetric extent about the centroid plus `kbuffer` on each side, and
+   !>   the spacings `2*pi/(N*dr)`
    !> - Modes and spacings as `molecular_grid_set_kgrid` sizes them for the
    !>   constructor's `dr` and `kbuffer`
    !> - A translating update keeps the period and recenters `kref`
-   !>
-   !> @param[out] error  Test failure
    subroutine test_reciprocal_on(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1096,11 +1081,16 @@ contains
       type(moist_math_grid_3d_molecular_type) :: grid, manual
       type(structure_type) :: mol, moved
       type(mctc_error), allocatable :: merr
+      !> Real-space spacing of the implied box (bohr)
+      real(wp), parameter :: dr = 0.6_wp
+      !> Margin per side (bohr)
+      real(wp), parameter :: kbuffer = 1.5_wp
       integer :: modes(3)
+      real(wp) :: span(3), expected_spacing(3)
 
       call make_water(mol)
       call becke_recipe(recipe, 12, 0.5_wp, 7, merr, rcut_upper=5.0_wp)
-      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, dr=0.6_wp, kbuffer=1.5_wp)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, dr=dr, kbuffer=kbuffer)
       if (.not. allocated(merr)) call grid%update(mol, merr)
       call require_ok(error, merr, "reciprocal grid")
       if (allocated(error)) return
@@ -1108,9 +1098,24 @@ contains
          & .and. grid%npts_k > 0 .and. all(grid%kref == centroid(mol)), "auto-sized reciprocal grid")
       if (allocated(error)) return
 
+      ! Smallest even N with N*dr covering the padded symmetric extent
+      span = 2.0_wp*max(abs(maxval(grid%xyz, dim=2) - centroid(mol)), &
+         & abs(minval(grid%xyz, dim=2) - centroid(mol))) + 2.0_wp*kbuffer
+      modes = [grid%nkx, grid%nky, grid%nkz]
+      call check(error, any(real(modes - 1, wp)*dr >= span), &
+         & "fixture must need the even rounding: an odd count covers some axis")
+      if (allocated(error)) return
+      call check(error, all(mod(modes, 2) == 0) .and. all(real(modes, wp)*dr >= span) &
+         & .and. all(real(modes - 2, wp)*dr < span), "smallest even reciprocal modes covering the span")
+      if (allocated(error)) return
+      expected_spacing = 2.0_wp*pi/(real(modes, wp)*dr)
+      call check(error, maxval(abs([grid%dkx, grid%dky, grid%dkz] - expected_spacing)) &
+         & < 8.0_wp*epsilon(1.0_wp), "independent reciprocal spacings")
+      if (allocated(error)) return
+
       call new_molecular_grid(manual, merr, recipe=recipe, reciprocal=.false.)
       if (.not. allocated(merr)) call manual%update(mol, merr)
-      if (.not. allocated(merr)) call molecular_grid_set_kgrid(manual, 0.6_wp, merr, buffer=1.5_wp, &
+      if (.not. allocated(merr)) call molecular_grid_set_kgrid(manual, dr, merr, buffer=kbuffer, &
          & reference=centroid(mol))
       call require_ok(error, merr, "manual reciprocal grid")
       if (allocated(error)) return
@@ -1130,8 +1135,6 @@ contains
    end subroutine test_reciprocal_on
 
    !> `reciprocal = .false.` makes no k-grid until `molecular_grid_set_kgrid`, which stores its settings
-   !>
-   !> @param[out] error  Test failure
    subroutine test_reciprocal_off(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1188,8 +1191,7 @@ contains
    !>
    !> - First override listing an element wins
    !> - Requested shells reported before the cutoff, retained shells in the CSR arrays
-   !>
-   !> @param[out] error  Test failure
+   !> - A variable shell policy reports its largest angular rule per atom
    subroutine test_element_overrides(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1197,6 +1199,7 @@ contains
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
       type(moist_math_grid_atomic_type) :: local
+      type(moist_math_grid_atomic_shell_sector_type) :: sectors
       type(moist_math_grid_3d_molecular_type) :: grid
       type(structure_type) :: mol
       type(mctc_error), allocatable :: merr
@@ -1240,6 +1243,26 @@ contains
       call check(error, grid%atom_shell_offset(3) - grid%atom_shell_offset(2) < grid%nrad_per_atom(2) &
          & .and. maxval(grid%shell_r(grid%atom_shell_offset(2):grid%atom_shell_offset(3) - 1)) <= 4.0_wp, &
          & "rcut_upper of the hydrogen override")
+      if (allocated(error)) return
+
+      ! A variable shell policy reports the largest retained angular rule
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call becke_recipe(recipe, 14, 0.5_wp, 5, merr, rcut_upper=5.0_wp)
+      if (.not. allocated(merr)) call new_sector_shell_policy(sectors, [1.0_wp], [5, 17], merr)
+      call require_ok(error, merr, "sector recipe")
+      if (allocated(error)) return
+      deallocate (recipe%shells)
+      allocate (recipe%shells, source=sectors)
+      call new_atomic_grid(local, recipe, 1, merr)
+      if (.not. allocated(merr)) call new_molecular_grid(grid, merr, recipe=recipe, reciprocal=.false.)
+      if (.not. allocated(merr)) call grid%update(mol, merr)
+      call require_ok(error, merr, "variable angular shells")
+      if (allocated(error)) return
+      ! Lebedev orders 5 and 17 are the 14- and 110-point rules
+      call check(error, minval(local%shell_npts) == 14 .and. maxval(local%shell_npts) == 110, &
+         & "sector fixture must mix the 14- and 110-point rules")
+      if (allocated(error)) return
+      call check(error, grid%nang_per_atom(1) == 110, "largest per-atom angular size")
    end subroutine test_element_overrides
 
    !* ================================================================================= *!
@@ -1252,8 +1275,6 @@ contains
    !> batched partition weights, weight `w_local*partition`, kept if
    !> `|w| >= 1e-14` and the partition weight reaches the threshold; at two
    !> geometries, the second crossing the threshold
-   !>
-   !> @param[out] error  Test failure
    subroutine test_fixed_local_quadrature(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1325,8 +1346,6 @@ contains
    !>
    !> H2 to water to H2 on one grid, each against a grid constructed and
    !> updated once; the same code builds both, so the results must be equal
-   !>
-   !> @param[out] error  Test failure
    subroutine test_update_atom_count(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1367,8 +1386,6 @@ contains
    end subroutine test_update_atom_count
 
    !> Translation keeps modes, weights, and owners; a large stretch needs rebuild
-   !>
-   !> @param[out] error  Test failure
    subroutine test_period_guard(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1424,8 +1441,6 @@ contains
    end subroutine test_period_guard
 
    !> Gaussian widths follow the weights at every geometry; point potentials publish none
-   !>
-   !> @param[out] error  Test failure
    subroutine test_gaussian_widths(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1468,7 +1483,7 @@ contains
 
    !> destroy frees the geometry and keeps the configuration; the next update equals a fresh grid
    !>
-   !> @param[out] error  Test failure
+   !> - destroy also forgets the molecule, so rebuild needs a new update
    subroutine test_destroy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1491,6 +1506,9 @@ contains
          & .and. .not. allocated(grid%shell_r) .and. .not. grid%has_kgrid, "destroy left geometry behind")
       if (allocated(error)) return
       call grid%destroy()
+      call grid%rebuild(merr)
+      call require_error(error, merr, "update before rebuild", "rebuild after destroy")
+      if (allocated(error)) return
       call grid%update(mol, merr)
       if (.not. allocated(merr)) call new_molecular_grid(fresh, merr, recipe=recipe, dr=1.0_wp)
       if (.not. allocated(merr)) call fresh%update(mol, merr)

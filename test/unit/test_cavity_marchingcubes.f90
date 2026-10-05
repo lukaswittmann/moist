@@ -22,6 +22,8 @@ module test_cavity_marchingcubes
    !> reaches roughly 0.2 % on area and 0.4 % on volume for a sphere at this
    !> setting, so the checks below allow 1 %
    real(wp), parameter :: MC_SPACING = 0.2_wp
+   !> Compiled default of the marching-cubes grid spacing, bohr
+   real(wp), parameter :: DEFAULT_SPACING = 0.2_wp
    !> Relative tolerance on the integrated area and volume
    real(wp), parameter :: REL_THR = 1.0E-2_wp
    !> Sphere radius of the single-atom fixture, bohr
@@ -32,8 +34,7 @@ module test_cavity_marchingcubes
    !> Radius of the enclosing sphere of the nested fixture, bohr
    real(wp), parameter :: ENCLOSING_RADIUS = 6.0_wp
 
-   !> One molecular reference case, integrated at the reference spacing of
-   !> 0.01 bohr by test/dev/test_cavity_drop_integration.f90
+   !> One molecular reference case, integrated at the reference spacing of 0.01 bohr
    type :: integration_case_type
       !> Blending sharpness k
       real(wp) :: blend_k
@@ -54,9 +55,7 @@ module test_cavity_marchingcubes
    !> Relative tolerance of the molecular cases
    real(wp), parameter :: MOL_REL_THR = 2.0E-3_wp
 
-   !> References taken from test/unit/test_cavity/drop/integration.f90, where they
-   !> serve as the target the DROP cavity is validated against. Here they check the
-   !> integrator that produced them, so a coarser grid must still reproduce them
+   !> MC References
    type(integration_case_type), parameter :: cases(*) = [ &
       integration_case_type(1.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 1033.798426_wp, 3088.935546_wp), &
       integration_case_type(2.0_wp, 1.0_wp, 0.0_wp, "MB16-43     ", "16     ", 739.232911_wp, 1734.806473_wp), &
@@ -76,6 +75,13 @@ module test_cavity_marchingcubes
       integration_case_type(2.0_wp, 0.0_wp, 1.0_wp, "MB16-43     ", "O2     ", 184.603535_wp, 231.274026_wp) &
       ]
 
+   !> Entry of `cases` integrated at its own position and after a rigid shift
+   integer, parameter :: TRANSLATION_CASE = 13
+   !> Rigid shift of the translated copy, bohr
+   real(wp), parameter :: TRANSLATION_SHIFT(3) = [100.0_wp, 200.0_wp, 300.0_wp]
+   !> Relative tolerance of the shifted/unshifted area and volume ratios
+   real(wp), parameter :: TRANSLATION_REL_THR = 1.0e-11_wp
+
 contains
 
    !> Collect all exported unit tests
@@ -89,6 +95,7 @@ contains
          & new_unittest("sphere_radii", test_sphere_radii), &
          & new_unittest("disjoint_spheres", test_disjoint_spheres), &
          & new_unittest("nested_spheres", test_nested_spheres), &
+         & new_unittest("translation_invariance", test_translation_invariance), &
          & new_unittest("no_grid_points", test_no_grid_points), &
          & new_unittest("no_gradient", test_gradient_unavailable), &
          & new_unittest("rejects_bad_spacing", test_rejects_bad_spacing), &
@@ -363,6 +370,65 @@ contains
 
    end subroutine test_nested_spheres
 
+   !> A rigid shift of the molecule must leave the integrated totals unchanged
+   subroutine test_translation_invariance(error)
+
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(cavity_type_marchingcubes), allocatable :: cav
+      type(mctc_error), allocatable :: cavity_error
+      type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
+      !> Local run context borrowed by the cavity built here
+      type(moist_context_type), target :: ctx
+      !> Reference case integrated at both positions
+      type(integration_case_type) :: c
+      !> Totals at the original position
+      real(wp) :: area_ref, volume_ref
+      integer :: iat
+
+      c = cases(TRANSLATION_CASE)
+      call new_context(ctx, verbosity=0)
+      call get_structure(mol, trim(c%dataset), trim(c%structure))
+
+      call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=c%blend_k, &
+         blend_2b=c%blend_2b, blend_3b=c%blend_3b))
+
+      allocate (cav)
+      call new_cavity_marchingcubes(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING))
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      area_ref = cav%total_area
+      volume_ref = cav%total_volume
+
+      do iat = 1, mol%nat
+         mol%xyz(:, iat) = mol%xyz(:, iat) + TRANSLATION_SHIFT
+      end do
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+
+      call check(error, cav%total_area/area_ref, 1.0_wp, thr=TRANSLATION_REL_THR, &
+         & more="Shifted molecule changes the area for "//case_to_string(c))
+      if (allocated(error)) return
+
+      call check(error, cav%total_volume/volume_ref, 1.0_wp, thr=TRANSLATION_REL_THR, &
+         & more="Shifted molecule changes the volume for "//case_to_string(c))
+
+   end subroutine test_translation_invariance
+
    !> Marching cubes produces no surface discretization, only the two totals
    subroutine test_no_grid_points(error)
 
@@ -394,6 +460,22 @@ contains
 
       call check(error, cav%nsph, 1, &
          & more="Marching cubes must still report the sphere count")
+      if (allocated(error)) return
+
+      deallocate (cav)
+      call build_custom_cavity(error, ctx, mol, cav, [0.25_wp], &
+         reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      if (allocated(error)) return
+      call cav%update(mol, error=cavity_error)
+      if (allocated(cavity_error)) then
+         call test_failed(error, cavity_error%message)
+         return
+      end if
+      call check(error, cav%total_area > 0.0_wp, &
+         & more="A sphere inside a coarse cube must produce a surface")
+      if (allocated(error)) return
+      call check(error, cav%total_volume > 0.0_wp, &
+         & more="A sphere inside a coarse cube must enclose positive volume")
 
    end subroutine test_no_grid_points
 
@@ -429,7 +511,8 @@ contains
 
    end subroutine test_gradient_unavailable
 
-   !> A non-positive grid spacing must be rejected at construction
+   !> Omitted parameters must construct with the compiled spacing; a non-positive
+   !> grid spacing must be rejected at construction
    subroutine test_rejects_bad_spacing(error)
 
       !> Error handling
@@ -444,6 +527,8 @@ contains
       type(moist_context_type), target :: ctx
       real(wp) :: radii(1)
       real(wp) :: xyz(3, 1)
+      !> Compiled spacing default, independent of constructor forwarding
+      type(moist_cavity_marchingcubes_parameters_type) :: defaults
 
       call new_context(ctx, verbosity=0)
 
@@ -461,10 +546,28 @@ contains
 
       allocate (cav)
       call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error)
+      call check(error, .not. allocated(cavity_error), &
+         & more="Default marching-cubes parameters must construct successfully")
+      if (allocated(error)) return
+      call check(error, defaults%spacing, DEFAULT_SPACING, &
+         & more="Compiled marching-cubes spacing must be 0.2 bohr")
+      if (allocated(error)) return
+      call check(error, cav%spacing, DEFAULT_SPACING, &
+         & more="Omitted parameters must use the compiled spacing")
+      if (allocated(error)) return
+
+      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
          error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=0.0_wp))
 
       call check(error, allocated(cavity_error), &
          & more="A zero marching-cubes spacing must be rejected")
+      if (allocated(error)) return
+
+      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=-MC_SPACING))
+      call check(error, allocated(cavity_error), &
+         & more="A negative marching-cubes spacing must be rejected")
 
    end subroutine test_rejects_bad_spacing
 

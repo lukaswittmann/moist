@@ -49,6 +49,7 @@ module test_model_component_pcm_amat_kernel
    real(wp), parameter :: r2_rel_step = 3.0e-3_wp
 
    !> 4-point central FD tolerances, matching the cfc_kernel convention
+   !> Analytic value checked as `actual` against the finite FD value, thr = atol + rtol*|FD|
    real(wp), parameter :: grad_atol = 1.0e-10_wp
    real(wp), parameter :: grad_rtol = 1.0e-9_wp
    real(wp), parameter :: hess_atol = 1.0e-10_wp
@@ -124,8 +125,6 @@ contains
    end function boys_argument
 
    !> The full kernel reproduces erf(p*r)/r on every branch
-   !>
-   !> @param[out] error  Test failure
    subroutine test_near_value_vs_erf(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -228,6 +227,8 @@ contains
       real(wp) :: p, p_i, p_j, p_ii, p_ij, p_jj
       !> Stencil buffers for the value and the first derivatives
       real(wp) :: vals(4), di(4), dj(4)
+      !> Finite-difference derivative
+      real(wp) :: fd
       !> Unused stencil outputs
       real(wp) :: dummy(3)
 
@@ -240,25 +241,35 @@ contains
             call pcm_amat_width2(xi_i + fd4_offsets(k)*xi_step, xi_j, vals(k), &
                                  di(k), dj(k), dummy(1), dummy(2), dummy(3))
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step), &
-                    p_i, thr=grad_atol + grad_rtol*abs(p_i), more="dp/dxi_i vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(di(1), di(2), di(3), di(4), xi_step), &
-                    p_ii, thr=hess_atol + hess_rtol*abs(p_ii), more="d2p/dxi_i**2 vs FD")
+         call check(error, p_i, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dp/dxi_i vs FD")
          if (allocated(error)) return
-         call check(error, fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step), &
-                    p_ij, thr=hess_atol + hess_rtol*abs(p_ij), more="d2p/dxi_i dxi_j vs FD")
+         call fd4_scalar(di(1), di(2), di(3), di(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, p_ii, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2p/dxi_i**2 vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, p_ij, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2p/dxi_i dxi_j vs FD")
          if (allocated(error)) return
 
          do k = 1, 4
             call pcm_amat_width2(xi_i, xi_j + fd4_offsets(k)*xi_step, vals(k), &
                                  di(k), dj(k), dummy(1), dummy(2), dummy(3))
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step), &
-                    p_j, thr=grad_atol + grad_rtol*abs(p_j), more="dp/dxi_j vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step), &
-                    p_jj, thr=hess_atol + hess_rtol*abs(p_jj), more="d2p/dxi_j**2 vs FD")
+         call check(error, p_j, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dp/dxi_j vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(dj(1), dj(2), dj(3), dj(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, p_jj, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2p/dxi_j**2 vs FD")
          if (allocated(error)) return
       end do
 
@@ -277,6 +288,8 @@ contains
       real(wp) :: a, a_xi_i, a_xi_j, a_r2
       !> Stencil buffer
       real(wp) :: vals(4)
+      !> Finite-difference derivative
+      real(wp) :: fd
 
       do i = 1, npts
          xi_i = pts(1, i)
@@ -287,23 +300,29 @@ contains
          do k = 1, 4
             vals(k) = reference_value(xi_i + fd4_offsets(k)*xi_step, xi_j, r2)
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step), &
-                    a_xi_i, thr=grad_atol + grad_rtol*abs(a_xi_i), more="dA/dxi_i vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_xi_i, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dA/dxi_i vs FD")
          if (allocated(error)) return
 
          do k = 1, 4
             vals(k) = reference_value(xi_i, xi_j + fd4_offsets(k)*xi_step, r2)
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step), &
-                    a_xi_j, thr=grad_atol + grad_rtol*abs(a_xi_j), more="dA/dxi_j vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_xi_j, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dA/dxi_j vs FD")
          if (allocated(error)) return
 
          step = r2_rel_step*r2
          do k = 1, 4
             vals(k) = reference_value(xi_i, xi_j, r2 + fd4_offsets(k)*step)
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), step), &
-                    a_r2, thr=grad_atol + grad_rtol*abs(a_r2), more="dA/dr2 vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_r2, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dA/dr2 vs FD")
          if (allocated(error)) return
       end do
 
@@ -323,6 +342,8 @@ contains
       real(wp) :: a_ii, a_ij, a_jj, a_ir2, a_jr2, a_r2r2
       !> Stencil buffers for the three first-derivative channels
       real(wp) :: gi(4), gj(4), gr(4)
+      !> Finite-difference derivative
+      real(wp) :: fd
       !> Unused stencil outputs
       real(wp) :: dummy
 
@@ -337,25 +358,35 @@ contains
             call pcm_amat_near_grad(xi_i + fd4_offsets(k)*xi_step, xi_j, r2, dummy, &
                                     gi(k), gj(k), gr(k))
          end do
-         call check(error, fd4_scalar(gi(1), gi(2), gi(3), gi(4), xi_step), &
-                    a_ii, thr=hess_atol + hess_rtol*abs(a_ii), more="d2A/dxi_i**2 vs FD")
+         call fd4_scalar(gi(1), gi(2), gi(3), gi(4), xi_step, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(gj(1), gj(2), gj(3), gj(4), xi_step), &
-                    a_ij, thr=hess_atol + hess_rtol*abs(a_ij), more="d2A/dxi_i dxi_j vs FD")
+         call check(error, a_ii, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dxi_i**2 vs FD")
          if (allocated(error)) return
-         call check(error, fd4_scalar(gr(1), gr(2), gr(3), gr(4), xi_step), &
-                    a_ir2, thr=hess_atol + hess_rtol*abs(a_ir2), more="d2A/dxi_i dr2 vs FD")
+         call fd4_scalar(gj(1), gj(2), gj(3), gj(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_ij, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dxi_i dxi_j vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(gr(1), gr(2), gr(3), gr(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_ir2, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dxi_i dr2 vs FD")
          if (allocated(error)) return
 
          do k = 1, 4
             call pcm_amat_near_grad(xi_i, xi_j + fd4_offsets(k)*xi_step, r2, dummy, &
                                     gi(k), gj(k), gr(k))
          end do
-         call check(error, fd4_scalar(gj(1), gj(2), gj(3), gj(4), xi_step), &
-                    a_jj, thr=hess_atol + hess_rtol*abs(a_jj), more="d2A/dxi_j**2 vs FD")
+         call fd4_scalar(gj(1), gj(2), gj(3), gj(4), xi_step, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(gr(1), gr(2), gr(3), gr(4), xi_step), &
-                    a_jr2, thr=hess_atol + hess_rtol*abs(a_jr2), more="d2A/dxi_j dr2 vs FD")
+         call check(error, a_jj, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dxi_j**2 vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(gr(1), gr(2), gr(3), gr(4), xi_step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_jr2, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dxi_j dr2 vs FD")
          if (allocated(error)) return
 
          step = r2_rel_step*r2
@@ -363,8 +394,10 @@ contains
             call pcm_amat_near_grad(xi_i, xi_j, r2 + fd4_offsets(k)*step, dummy, &
                                     gi(k), gj(k), gr(k))
          end do
-         call check(error, fd4_scalar(gr(1), gr(2), gr(3), gr(4), step), &
-                    a_r2r2, thr=hess_atol + hess_rtol*abs(a_r2r2), more="d2A/dr2**2 vs FD")
+         call fd4_scalar(gr(1), gr(2), gr(3), gr(4), step, fd, error)
+         if (allocated(error)) return
+         call check(error, a_r2r2, fd, thr=hess_atol + hess_rtol*abs(fd), &
+                    more="d2A/dr2**2 vs FD")
          if (allocated(error)) return
       end do
 
@@ -548,6 +581,8 @@ contains
       real(wp) :: a, a_xi, a_f, a_xi_xi, a_xi_f, a_f_f
       !> Stencil buffers
       real(wp) :: vals(4), gxi(4), gf(4)
+      !> Finite-difference derivative
+      real(wp) :: fd
       !> Unused stencil output
       real(wp) :: dummy
 
@@ -566,26 +601,33 @@ contains
          do k = 1, 4
             call pcm_amat_diag_grad(xi + fd4_offsets(k)*step_xi, f, vals(k), gxi(k), gf(k))
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_xi), &
-                    a_xi, thr=grad_atol + grad_rtol*abs(a_xi), more="dA_ii/dxi vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_xi, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(gxi(1), gxi(2), gxi(3), gxi(4), step_xi), &
-                    a_xi_xi, thr=hess_atol + hess_rtol*abs(a_xi_xi), &
+         call check(error, a_xi, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dA_ii/dxi vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(gxi(1), gxi(2), gxi(3), gxi(4), step_xi, fd, error)
+         if (allocated(error)) return
+         call check(error, a_xi_xi, fd, thr=hess_atol + hess_rtol*abs(fd), &
                     more="d2A_ii/dxi**2 vs FD")
          if (allocated(error)) return
-         call check(error, fd4_scalar(gf(1), gf(2), gf(3), gf(4), step_xi), &
-                    a_xi_f, thr=hess_atol + hess_rtol*abs(a_xi_f), &
+         call fd4_scalar(gf(1), gf(2), gf(3), gf(4), step_xi, fd, error)
+         if (allocated(error)) return
+         call check(error, a_xi_f, fd, thr=hess_atol + hess_rtol*abs(fd), &
                     more="d2A_ii/dxi df vs FD")
          if (allocated(error)) return
 
          do k = 1, 4
             call pcm_amat_diag_grad(xi, f + fd4_offsets(k)*step_f, vals(k), gxi(k), gf(k))
          end do
-         call check(error, fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_f), &
-                    a_f, thr=grad_atol + grad_rtol*abs(a_f), more="dA_ii/df vs FD")
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step_f, fd, error)
          if (allocated(error)) return
-         call check(error, fd4_scalar(gf(1), gf(2), gf(3), gf(4), step_f), &
-                    a_f_f, thr=hess_atol + hess_rtol*abs(a_f_f), &
+         call check(error, a_f, fd, thr=grad_atol + grad_rtol*abs(fd), &
+                    more="dA_ii/df vs FD")
+         if (allocated(error)) return
+         call fd4_scalar(gf(1), gf(2), gf(3), gf(4), step_f, fd, error)
+         if (allocated(error)) return
+         call check(error, a_f_f, fd, thr=hess_atol + hess_rtol*abs(fd), &
                     more="d2A_ii/df**2 vs FD")
          if (allocated(error)) return
 

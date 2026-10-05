@@ -41,6 +41,11 @@ module test_math_grid_3d
    !> Off-center, off-axis Gaussian center c, bohr
    real(wp), parameter :: gauss_c(3) = [0.3_wp, -0.5_wp, 0.7_wp]
 
+   !> Requested NUFFT accuracy for the copied-domain DC identities
+   real(wp), parameter :: NUFFT_COPY_TOL = 1.0e-13_wp
+   !> DC residual bound, relative to the l1 norm of the transform input
+   real(wp), parameter :: NUFFT_COPY_THR = 1.0e-12_wp
+
 contains
 
    !> Collect all math_grid_3d tests
@@ -140,10 +145,11 @@ contains
 
    !> Volume adjoint allocates, accumulates and zeroes every channel
    !>
-   !> - init sizes all channels and zeroes them
+   !> - init sizes all channels and zeroes them; a second init resizes them
    !> - add_weights sums repeated contributions channel by channel and leaves
    !>   omitted channels untouched
    !> - zero clears every channel
+   !> - A channel whose shape disagrees with the others is not initialized
    subroutine test_volume_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -173,8 +179,30 @@ contains
          & .and. all(acc%w_xi == w_xi), "add_weights did not accumulate channel by channel")
       if (allocated(error)) return
 
+      call acc%add_weights(err, w_xyz=w_xyz, w_xi=w_xi)
+      call require_success(error, err)
+      if (allocated(error)) return
+      call check(error, all(acc%w_xyz == 2.0_wp*w_xyz) .and. all(acc%w_w == 2.0_wp*w_w) &
+         & .and. all(acc%w_xi == 2.0_wp*w_xi), "position and width adjoints must sum repeated contributions")
+      if (allocated(error)) return
       call acc%zero()
       call check(error, all(acc%w_xyz == 0.0_wp) .and. all(acc%w_w == 0.0_wp) .and. all(acc%w_xi == 0.0_wp))
+      if (allocated(error)) return
+      call acc%init(2)
+      call check(error, acc%is_initialized() .and. acc%size() == 2, "reinit must resize all channels")
+      if (allocated(error)) return
+      call check(error, all(acc%w_xyz == 0.0_wp) .and. all(acc%w_w == 0.0_wp) .and. all(acc%w_xi == 0.0_wp))
+      if (allocated(error)) return
+      acc%w_xyz = w_xyz
+      call check(error, .not. acc%is_initialized(), "inconsistent position channel shape must be rejected")
+      if (allocated(error)) return
+      call acc%init(2)
+      acc%w_w = w_w
+      call check(error, .not. acc%is_initialized(), "inconsistent integration channel size must be rejected")
+      if (allocated(error)) return
+      call acc%init(2)
+      acc%w_xi = w_xi
+      call check(error, .not. acc%is_initialized(), "inconsistent width channel size must be rejected")
    end subroutine test_volume_adjoint
 
    !> Constant integrand f(r) = 1 (a volume probe)
@@ -232,7 +260,7 @@ contains
       if (allocated(merr)) call test_failed(error, merr%message)
    end subroutine backward
 
-   !> Uniform cell volume dV = dr**3 from measure(i) at any index
+   !> Uniform cell volume dV = dr**3 from measure(i) at any index; point(i) returns the stored node
    subroutine test_measure(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -246,10 +274,17 @@ contains
       call check(error, abs(grid%measure(1) - grid%dv) < epsilon(1.0_wp))
       if (allocated(error)) return
       call check(error, abs(grid%measure(grid%ngrid) - 0.3_wp**3) < 1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, all(grid%point(1) == grid%xyz(:, 1)) &
+         & .and. all(grid%point(grid%ngrid) == grid%xyz(:, grid%ngrid)), "point must return stored coordinates")
       call grid%destroy()
    end subroutine test_measure
 
    !> Integral of 1 dV over the box equals the box volume, dispatched polymorphically
+   !>
+   !> - Field integral of 1 + x^2 over the 8^3 box of spacing 0.25 bohr, nodes
+   !>   at the cell centers +-0.125 .. +-0.875 bohr: box volume 8 times
+   !>   (1 + mean x^2) = 8*(1 + 0.328125) = 10.625
    subroutine test_integrate_const(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -267,10 +302,14 @@ contains
       call check(error, abs(res - grid%vbox) < 1.0e-10_wp*grid%vbox)
       if (allocated(error)) return
       call check(error, g%ngrid == grid%ngrid)
+      if (allocated(error)) return
+      call g%integrate_field(1.0_wp + grid%xyz(1, :)**2, res)
+      call check(error, abs(res - 10.625_wp) < 1.0e-12_wp, &
+         & "Cartesian field integral must use the cell volume")
       call grid%destroy()
    end subroutine test_integrate_const
 
-   !> Repeated destroy() leaves the grid empty
+   !> Repeated destroy() leaves the grid empty and releases every geometry channel
    subroutine test_destroy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -285,7 +324,8 @@ contains
       call grid%destroy()
       call check(error, grid%ngrid == 0)
       if (allocated(error)) return
-      call check(error, .not. allocated(grid%xyz))
+      call check(error, .not. allocated(grid%xyz) .and. .not. allocated(grid%w) &
+         & .and. .not. allocated(grid%owner) .and. .not. allocated(grid%xi0), "destroy must release every geometry channel")
    end subroutine test_destroy
 
    !> Round trip fft_k2r(fft_r2k(f)) reproduces f to machine precision
@@ -615,9 +655,9 @@ contains
       call new_molecular_grid_trafo(mtrafo, mgrid)
    end subroutine molecular_trafo_fixture
 
-   !> Forward transform on an unprepared molecular engine fails, set on the expected error
+   !> Forward transform on an unprepared molecular engine fails
    subroutine test_trafo_unprepared_r2k_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(moist_math_grid_3d_molecular_trafo_type) :: mtrafo
@@ -634,9 +674,9 @@ contains
       call mtrafo%destroy()
    end subroutine test_trafo_unprepared_r2k_fails
 
-   !> Backward transform on an unprepared molecular engine fails, set on the expected error
+   !> Backward transform on an unprepared molecular engine fails
    subroutine test_trafo_unprepared_k2r_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(moist_math_grid_3d_molecular_trafo_type) :: mtrafo
@@ -653,9 +693,9 @@ contains
       call mtrafo%destroy()
    end subroutine test_trafo_unprepared_k2r_fails
 
-   !> Molecular engine prepared for one column fails on a two-column block, set on the expected error
+   !> Molecular engine prepared for one column fails on a two-column block
    subroutine test_trafo_width_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(moist_math_grid_3d_molecular_trafo_type) :: mtrafo
@@ -673,9 +713,9 @@ contains
       call mtrafo%destroy()
    end subroutine test_trafo_width_fails
 
-   !> Molecular engine fails on a real-space block longer than the grid, set on the expected error
+   !> Molecular engine fails on a real-space block longer than the grid
    subroutine test_trafo_block_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type), target :: mgrid
       type(moist_math_grid_3d_molecular_trafo_type) :: mtrafo
@@ -919,6 +959,7 @@ contains
 
    !> Molecular grids retain their recipe across geometry changes
    !>
+   !> - Every recipe: the field integral is the weighted sum over all stored nodes
    !> - Every recipe: translation moves points rigidly and keeps the weights
    !> - After a small stretch, update matches a freshly constructed grid
    !> - destroy() empties all arrays and counts
@@ -931,6 +972,7 @@ contains
       real(wp), allocatable :: xyz(:, :), weights(:)
       real(wp) :: shift(3)
       integer :: recipe
+      real(wp) :: integral, expected, scale
 
       shift = [0.2_wp, -0.3_wp, 0.1_wp]
       do recipe = 1, 5
@@ -940,6 +982,13 @@ contains
          if (allocated(error)) return
          xyz = grid%xyz
          weights = grid%w
+         expected = sum(weights*(xyz(1, :) - 0.5_wp*xyz(2, :) + 0.3_wp*xyz(3, :) + 1.0_wp))
+         ! The linear field changes sign, so scale by the sum of absolute contributions
+         scale = sum(abs(weights*(xyz(1, :) - 0.5_wp*xyz(2, :) + 0.3_wp*xyz(3, :) + 1.0_wp)))
+         call grid%integrate_field(xyz(1, :) - 0.5_wp*xyz(2, :) + 0.3_wp*xyz(3, :) + 1.0_wp, integral)
+         call check(error, abs(integral - expected) < 1.0e-12_wp*max(1.0_wp, scale), &
+            & "molecular field integral must use every stored quadrature weight")
+         if (allocated(error)) return
          call check(error, grid%natom, 2)
          if (allocated(error)) return
          call check(error, all(grid%owner >= 1 .and. grid%owner <= 2))
@@ -1251,8 +1300,9 @@ contains
    !> Copied domain owns its geometry and transforms through the fast NUFFT path
    !>
    !> - Copy keeps its kref after the source moves
-   !> - Type 1/2 NUFFT, DC mode equals the weight sum
+   !> - Type 1/2 NUFFT, DC mode equals the weighted field sum
    !> - Inverse of a DC-only spectrum restores a constant
+   !> - Both within `NUFFT_COPY_THR` of the input l1 norm
    subroutine test_molecular_trafo(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -1269,7 +1319,7 @@ contains
 
       call get_qc_handymod_recipe(recipe, err, nrad=12, rmax=4.0_wp)
       if (.not. allocated(err)) call new_molecular_grid(domain, err, recipe=recipe, dr=1.0_wp, &
-         & nufft_tol=1.0e-10_wp)
+         & nufft_tol=NUFFT_COPY_TOL)
       call require_success(error, err)
       if (allocated(error)) return
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
@@ -1304,14 +1354,15 @@ contains
       call trafo%fft_r2k(values, spectrum, err)
       call require_success(error, err)
       if (.not. allocated(error)) then
-         call check(error, abs(spectrum(zero_mode, 1) - sum(copied%w*values(:, 1))) < 1.0e-8_wp)
+         call check(error, abs(spectrum(zero_mode, 1) - sum(copied%w*values(:, 1))) &
+            & < NUFFT_COPY_THR*sum(abs(copied%w*values(:, 1))))
       end if
       if (.not. allocated(error)) then
          spectrum = cmplx(0.0_wp, 0.0_wp, wp)
          spectrum(zero_mode, 1) = cmplx(volume, 0.0_wp, wp)
          call trafo%fft_k2r(spectrum, restored, err)
          call require_success(error, err)
-         if (.not. allocated(error)) call check(error, maxval(abs(restored - 1.0_wp)) < 1.0e-8_wp)
+         if (.not. allocated(error)) call check(error, maxval(abs(restored - 1.0_wp)) < NUFFT_COPY_THR)
       end if
       call trafo%destroy()
    end subroutine test_molecular_trafo
@@ -1569,9 +1620,9 @@ contains
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
    end subroutine single_atom
 
-   !> add_weights on an uninitialized volume adjoint fails, set on the expected error
+   !> add_weights on an uninitialized volume adjoint fails
    subroutine test_volume_adjoint_uninit_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(volume_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
@@ -1580,9 +1631,9 @@ contains
       call expect_error(error, err, "not initialized")
    end subroutine test_volume_adjoint_uninit_fails
 
-   !> Position weights of the wrong shape fail, set on the expected error
+   !> Position weights of the wrong shape fail
    subroutine test_volume_adjoint_xyz_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(volume_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
@@ -1594,9 +1645,9 @@ contains
       call expect_error(error, err, "xyz weight shape mismatch")
    end subroutine test_volume_adjoint_xyz_fails
 
-   !> Integration-weight weights of the wrong length fail, set on the expected error
+   !> Integration-weight weights of the wrong length fail
    subroutine test_volume_adjoint_w_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(volume_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
@@ -1606,9 +1657,9 @@ contains
       call expect_error(error, err, "integration weight size mismatch")
    end subroutine test_volume_adjoint_w_fails
 
-   !> Gaussian-width weights of the wrong length fail, set on the expected error
+   !> Gaussian-width weights of the wrong length fail
    subroutine test_volume_adjoint_xi_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(volume_adjoint_type) :: acc
       type(mctc_error), allocatable :: err
@@ -1618,9 +1669,9 @@ contains
       call expect_error(error, err, "xi weight size mismatch")
    end subroutine test_volume_adjoint_xi_fails
 
-   !> Cartesian grid with a zero extent fails, set on the expected error
+   !> Cartesian grid with a zero extent fails
    subroutine test_cartesian_size_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1629,9 +1680,9 @@ contains
       call expect_error(error, err, "must be positive")
    end subroutine test_cartesian_size_fails
 
-   !> Cartesian point count beyond the default integer range fails, set on the expected error
+   !> Cartesian point count beyond the default integer range fails
    subroutine test_cartesian_count_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1641,9 +1692,9 @@ contains
       call expect_error(error, err, "exceeds the integer range")
    end subroutine test_cartesian_count_fails
 
-   !> Negative Cartesian spacing fails, set on the expected error
+   !> Negative Cartesian spacing fails
    subroutine test_cartesian_dr_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1652,9 +1703,9 @@ contains
       call expect_error(error, err, "dr must be finite and positive")
    end subroutine test_cartesian_dr_fails
 
-   !> NaN Cartesian spacing fails, set on the expected error
+   !> NaN Cartesian spacing fails
    subroutine test_cartesian_dr_nan_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1664,9 +1715,9 @@ contains
       call expect_error(error, err, "dr and xi0_factor must be finite")
    end subroutine test_cartesian_dr_nan_fails
 
-   !> Non-positive Cartesian Gaussian-width factor fails, set on the expected error
+   !> Non-positive Cartesian Gaussian-width factor fails
    subroutine test_cartesian_xi0_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1676,9 +1727,9 @@ contains
       call expect_error(error, err, "xi0_factor must be finite and positive")
    end subroutine test_cartesian_xi0_fails
 
-   !> Non-finite Cartesian origin fails, set on the expected error
+   !> Non-finite Cartesian origin fails
    subroutine test_cartesian_origin_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1689,9 +1740,9 @@ contains
       call expect_error(error, err, "origin must be finite")
    end subroutine test_cartesian_origin_fails
 
-   !> Cartesian update on a structure without atoms fails, set on the expected error
+   !> Cartesian update on a structure without atoms fails
    subroutine test_cartesian_no_atoms_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1701,9 +1752,9 @@ contains
       call expect_error(error, err, "at least one solute atom")
    end subroutine test_cartesian_no_atoms_fails
 
-   !> Cartesian update on non-finite coordinates fails, set on the expected error
+   !> Cartesian update on non-finite coordinates fails
    subroutine test_cartesian_coords_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1715,9 +1766,9 @@ contains
       call expect_error(error, err, "coordinates must be finite")
    end subroutine test_cartesian_coords_fails
 
-   !> Cartesian rebuild before any update fails, set on the expected error
+   !> Cartesian rebuild before any update fails
    subroutine test_cartesian_rebuild_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1726,9 +1777,9 @@ contains
       call expect_error(error, err, "before rebuild")
    end subroutine test_cartesian_rebuild_fails
 
-   !> Cartesian transform engine before any update fails, set on the expected error
+   !> Cartesian transform engine before any update fails
    subroutine test_cartesian_trafo_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_cartesian_type), target :: grid
       class(moist_math_grid_3d_trafo_type), allocatable :: trafo
@@ -1738,9 +1789,9 @@ contains
       call expect_error(error, err, "before new_trafo")
    end subroutine test_cartesian_trafo_fails
 
-   !> Zero Becke-SSF parameter fails molecular construction, set on the expected error
+   !> Zero Becke-SSF parameter fails molecular construction
    subroutine test_molecular_ssf_a_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1749,9 +1800,9 @@ contains
       call expect_error(error, err, "ssf_a must be in (0, 1]")
    end subroutine test_molecular_ssf_a_fails
 
-   !> Pruning threshold of one fails molecular construction, set on the expected error
+   !> Pruning threshold of one fails molecular construction
    subroutine test_molecular_pruning_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1760,9 +1811,9 @@ contains
       call expect_error(error, err, "pruning_threshold must be in [0, 1)")
    end subroutine test_molecular_pruning_fails
 
-   !> Molecular rebuild of a constructed grid before any update fails, set on the expected error
+   !> Molecular rebuild of a constructed grid before any update fails
    subroutine test_molecular_rebuild_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(mctc_error), allocatable :: err
@@ -1773,9 +1824,9 @@ contains
       call expect_error(error, err, "update before rebuild")
    end subroutine test_molecular_rebuild_fails
 
-   !> Molecular update on non-finite coordinates fails, set on the expected error
+   !> Molecular update on non-finite coordinates fails
    subroutine test_molecular_coords_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(moist_math_grid_atomic_recipe_type) :: recipe
@@ -1791,9 +1842,9 @@ contains
       call expect_error(error, err, "coordinates must be finite")
    end subroutine test_molecular_coords_fails
 
-   !> Reciprocal mode count overflow fails before the integer conversion, set on the expected error
+   !> Reciprocal mode count overflow fails before the integer conversion
    subroutine test_molecular_kcount_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(moist_math_grid_atomic_recipe_type) :: recipe
@@ -1810,9 +1861,9 @@ contains
 
    !> Per-atom point count beyond the default integer range fails
    !>
-   !> - Fails before the raw-buffer allocation is attempted, set on the expected error
+   !> - Fails before the raw-buffer allocation is attempted
    subroutine test_point_count_overflow_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_3d_molecular_type) :: grid
       type(moist_math_grid_atomic_recipe_type) :: recipe
@@ -1829,9 +1880,9 @@ contains
       call expect_error(error, err, "point count exceeds")
    end subroutine test_point_count_overflow_fails
 
-   !> Non-positive HandyMod parameter fails the recipe, set on the expected error
+   !> Non-positive HandyMod parameter fails the recipe
    subroutine test_handymod_nonpositive_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err
@@ -1840,11 +1891,11 @@ contains
       call expect_error(error, err, "HandyMod mapping: m must be > 0")
    end subroutine test_handymod_nonpositive_fails
 
-   !> HandyMod parameter too large for the radial interval fails the recipe, set on the expected error
+   !> HandyMod parameter too large for the radial interval fails the recipe
    !>
    !> - 2**m - 1 must stay below rmax - rmin; m = 1000 keeps 2**m finite
    subroutine test_handymod_huge_fails(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(mctc_error), allocatable :: err

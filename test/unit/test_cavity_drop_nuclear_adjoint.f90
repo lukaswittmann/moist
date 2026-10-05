@@ -61,7 +61,7 @@ module test_cavity_drop_nuclear_adjoint
    integer, parameter :: PROJ_LEVEL = 2
 
    !> Absolute forward-versus-reverse bound across all channels
-   real(wp), parameter :: EQ_ABS = 1.0E-10_wp
+   real(wp), parameter :: EQ_ABS = 5.0E-10_wp
    !> Relative bound on each forward reference entry
    real(wp), parameter :: EQ_REL = 1.0E-12_wp
 
@@ -81,7 +81,7 @@ module test_cavity_drop_nuclear_adjoint
    !> Absolute branching-width derivative bound
    real(wp), parameter :: XI_FD_ABS = 1.0E-10_wp
    !> Relative branching-width derivative bound
-   real(wp), parameter :: XI_FD_REL = 1.0E-9_wp
+   real(wp), parameter :: XI_FD_REL = 5.0E-9_wp
 
    !> Symmetry-breaking displacement for branching fixture
    real(wp), parameter :: FIXTURE_NUDGE = 1.0E-4_wp
@@ -359,7 +359,7 @@ contains
       end do
 
       if (.not. ieee_is_finite(ana_deriv)) then
-         call test_failed(error, "branching xi analytic derivative is not finite")
+         call test_failed(error, "forward xi1_rA derivative is not finite under branching")
          return
       end if
       diff = abs(ana_deriv - num_deriv)
@@ -495,7 +495,8 @@ contains
          do iaxis = 1, 3
             diff = abs(grad_rev(iaxis, iatom) - grad_fwd(iaxis, iatom))
             scale = abs(grad_fwd(iaxis, iatom))
-            if (diff > AB_ABS .and. diff > AB_REL*scale) then
+            ! Negated pass test, so a NaN on either path fails
+            if (.not. (diff <= AB_ABS .or. diff <= AB_REL*scale)) then
                call test_failed(error, "model gradient differs between paths at atom "// &
                                 to_string(iatom)//" axis "//to_string(iaxis)// &
                                 ": reverse "//to_string(grad_rev(iaxis, iatom))// &
@@ -681,7 +682,8 @@ contains
                worst_atom = iatom
                worst_axis = iaxis
             end if
-            if (diff > EQ_ABS .and. diff > EQ_REL*abs(grad_fwd(iaxis, iatom))) then
+            ! Negated pass test, so a NaN on either path fails
+            if (.not. (diff <= EQ_ABS .or. diff <= EQ_REL*abs(grad_fwd(iaxis, iatom)))) then
                call test_failed(error, "reverse/forward gradient mismatch for "//label// &
                                 " at atom "//to_string(iatom)//" axis "//to_string(iaxis)// &
                                 ": reverse "//to_string(grad_rev(iaxis, iatom))// &

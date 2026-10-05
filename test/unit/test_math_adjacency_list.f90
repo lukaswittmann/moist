@@ -150,6 +150,8 @@ contains
       type(adjacency_list_type) :: nlist
       real(wp) :: xyz(3, 8)
       integer :: i, k
+      integer, allocatable :: ids(:)
+      real(wp) :: previous, current
 
       call star_cluster(xyz)
 
@@ -166,6 +168,16 @@ contains
       if (allocated(error)) return
 
       do i = 1, size(xyz, 2)
+         ids = nlist%get_neighbours(i)
+         call check(error, size(ids) == nlist%nnl(i), "Getter must return the complete row")
+         if (allocated(error)) return
+         do k = 2, size(ids)
+            previous = norm2(xyz(:, i) - xyz(:, ids(k - 1)))
+            current = norm2(xyz(:, i) - xyz(:, ids(k)))
+            call check(error, previous <= current, &
+                       "Sorted getter must preserve ascending distance order")
+            if (allocated(error)) return
+         end do
          do k = nlist%inl(i) + 2, nlist%inl(i) + nlist%nnl(i)
             call check(error, nlist%dist(k - 1) <= nlist%dist(k), &
                        "Sorted neighbour distances must be non-decreasing")
@@ -298,7 +310,7 @@ contains
          if (allocated(error)) return
       end do
 
-      call check_all_rows_bruteforce(error, nlist, xyz)
+      call check_all_rows_bruteforce(error, nlist, xyz, 2.05_wp)
       if (allocated(error)) return
 
       call nlist%destroy()
@@ -383,7 +395,7 @@ contains
                  "Fixture is too sparse to exercise the cell stencil")
       if (allocated(error)) return
 
-      call check_all_rows_bruteforce(error, nlist, xyz)
+      call check_all_rows_bruteforce(error, nlist, xyz, 1.0_wp)
       if (allocated(error)) return
 
       call nlist%destroy()
@@ -438,7 +450,7 @@ contains
 
       call check_csr_invariants(error, nlist, size(plane, 2))
       if (allocated(error)) return
-      call check_all_rows_bruteforce(error, nlist, plane)
+      call check_all_rows_bruteforce(error, nlist, plane, 1.2_wp)
       if (allocated(error)) return
 
       ! Six collinear points along x, spacing 0.7
@@ -451,7 +463,7 @@ contains
 
       call check_csr_invariants(error, nlist, size(line, 2))
       if (allocated(error)) return
-      call check_all_rows_bruteforce(error, nlist, line)
+      call check_all_rows_bruteforce(error, nlist, line, 1.5_wp)
       if (allocated(error)) return
 
       call nlist%destroy()
@@ -626,6 +638,14 @@ contains
       call check_lists_identical(error, reused, fresh, "after shrinking")
       if (allocated(error)) return
 
+      ! Move a point across the cutoff without changing the array shape
+      tiny(:, 2) = [2.0_wp, 0.0_wp, 0.0_wp]
+      call reused%update(tiny)
+      call check_csr_invariants(error, reused, size(tiny, 2))
+      if (allocated(error)) return
+      call check_all_rows_bruteforce(error, reused, tiny, 1.0_wp)
+      if (allocated(error)) return
+
       call reused%destroy()
       call fresh%destroy()
    end subroutine test_rebuild_grow_and_shrink
@@ -649,6 +669,10 @@ contains
       call nlist%destroy()
       call nlist%destroy()
 
+      call check(error, nlist%cutoff == 1.0_wp, "destroy must preserve the configured cutoff")
+      if (allocated(error)) return
+      call check(error, nlist%sorted, "destroy must preserve the configured sorting flag")
+      if (allocated(error)) return
       call check(error, nlist%n == 0, "destroy must reset the point count")
       if (allocated(error)) return
       call check(error,.not. allocated(nlist%inl), "destroy must release inl")
@@ -660,11 +684,12 @@ contains
       call check(error,.not. allocated(nlist%dist), "destroy must release dist")
       if (allocated(error)) return
 
-      ! The cutoff survives destroy by design, so update alone rebuilds the list
+      ! The configuration (cutoff, sorted) survives destroy by design, so update
+      ! alone rebuilds the list
       call nlist%update(xyz)
       call check_csr_invariants(error, nlist, size(xyz, 2))
       if (allocated(error)) return
-      call check_all_rows_bruteforce(error, nlist, xyz)
+      call check_all_rows_bruteforce(error, nlist, xyz, 1.0_wp)
       if (allocated(error)) return
 
       call nlist%destroy()
@@ -686,6 +711,8 @@ contains
 
       ! Re-init without the optional argument
       call reused%init(cutoff=1.6_wp)
+      call check(error, reused%n == 0, "init must clear the previous point count")
+      if (allocated(error)) return
       call reused%update(xyz)
 
       call check(error,.not. reused%sorted, "init without sorted must reset the flag")
@@ -844,19 +871,23 @@ contains
    end subroutine check_csr_invariants
 
    !> Compare every row against the brute-force reference set
-   subroutine check_all_rows_bruteforce(error, nlist, xyz)
+   !>
+   !> The cutoff is the configured value, not read back from the list under test
+   subroutine check_all_rows_bruteforce(error, nlist, xyz, cutoff)
       type(error_type), allocatable, intent(inout) :: error
       !> List under test
       type(adjacency_list_type), intent(in) :: nlist
       !> Coordinates the list was built from
       real(wp), intent(in) :: xyz(:, :)
+      !> Cutoff the list was configured with
+      real(wp), intent(in) :: cutoff
 
       integer, allocatable :: ref_ids(:)
       real(wp), allocatable :: ref_dist(:)
       integer :: i, k, start, cnt
 
       do i = 1, size(xyz, 2)
-         call brute_force_row(xyz, i, nlist%cutoff, ref_ids, ref_dist)
+         call brute_force_row(xyz, i, cutoff, ref_ids, ref_dist)
          start = nlist%inl(i)
          cnt = nlist%nnl(i)
 

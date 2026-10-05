@@ -8,7 +8,7 @@ module test_finufft
    use iso_fortran_env, only: int64
    use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr
    use finufft_mod, only: finufft_opts
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, to_string
    implicit none(type, external)
    private
 
@@ -26,6 +26,12 @@ module test_finufft
    real(wp), parameter :: thr = 5.0e-9_wp
    !> pi = acos(-1.0_wp)
    real(wp), parameter :: pi = 3.14159265358979323846_wp
+   !> `finufft_opts%modeord` for centered output, frequencies -N/2 .. N/2-1
+   integer, parameter :: centered_modes = 0
+   !> `finufft_opts%modeord` for FFT-ordered output, frequencies 0 .. N/2-1, -N/2 .. -1
+   integer, parameter :: fft_modes = 1
+   !> `FINUFFT_ERR_EPS_TOO_SMALL` in `finufft_errors.h` of the vendored FINUFFT
+   integer, parameter :: finufft_err_eps_too_small = 26
 
    !> FINUFFT entry points with the options argument as a C pointer, so a null
    !> pointer (default options) is passed without an unassociated Fortran pointer
@@ -77,7 +83,8 @@ contains
 
    !> 1D type-1 transform with default options, checked against a direct DFT
    !>
-   !> @param[out] error  Test failure
+   !> - Both signs of the exponent, `iflag = 1` and `iflag = -1`
+   !> - Default options give centered mode ordering
    subroutine test_1d1_default(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -91,12 +98,22 @@ contains
 
       call check(error, ier == 0, "finufft1d1 (default opts) returned nonzero status")
       if (allocated(error)) return
-      call check_mode(error, xj, cj, fk, iflag)
+      call check_mode(error, xj, cj, fk, iflag, centered_modes)
+      if (allocated(error)) return
+
+      iflag = -1
+      call finufft1d1_default(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
+      call check(error, ier == 0, "finufft1d1 (negative sign) returned nonzero status")
+      if (allocated(error)) return
+      call check_mode(error, xj, cj, fk, iflag, centered_modes)
    end subroutine test_1d1_default
 
    !> Same transform, but driving the finufft_opts derived type explicitly
    !>
-   !> @param[out] error  Test failure
+   !> - `finufft_default_opts` selects centered mode ordering
+   !> - Requested FFT ordering and `upsampfac = 1.25` must reach the transform;
+   !>   the expected ordering is the requested constant, not read back from
+   !>   the options the library received
    subroutine test_1d1_custom(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -110,14 +127,18 @@ contains
       call make_problem(xj, cj, fk, iflag)
 
       call finufft_default_opts(opts)
+      call check(error, opts%modeord == centered_modes, &
+         & "FINUFFT default modes must use centered ordering")
+      if (allocated(error)) return
       opts%debug = 0
       opts%upsampfac = 1.25_wp
+      opts%modeord = fft_modes
 
       call finufft1d1(npts, xj, cj, iflag, tol, nmodes, fk, opts, ier)
 
       call check(error, ier == 0, "finufft1d1 (custom opts) returned nonzero status")
       if (allocated(error)) return
-      call check_mode(error, xj, cj, fk, iflag)
+      call check_mode(error, xj, cj, fk, iflag, fft_modes)
    end subroutine test_1d1_custom
 
    !> Guru makeplan with an unreasonably small tolerance must fail cleanly
@@ -128,8 +149,6 @@ contains
    !> GCC's own _Unwind_Resume, which aborted every C++ exception
    !> FINUFFT/ducc0 threw across a frame with cleanup handlers (see
    !> config/meson.build and CMakeLists.txt, the heapt_w fix)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_makeplan_eps_too_small(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -151,8 +170,9 @@ contains
 
       call finufft_makeplan_default(ttype, dim, n_modes, iflag, ntrans, bad_tol, plan, c_null_ptr, ier)
 
-      call check(error, ier /= 0, &
-         & "finufft_makeplan with eps=1e-20 must return a nonzero status, not abort")
+      call check(error, ier == finufft_err_eps_too_small, &
+         & "finufft_makeplan with eps=1e-20 must return FINUFFT_ERR_EPS_TOO_SMALL", &
+         & "got ier = "//to_string(ier))
       if (ier == 0) call finufft_destroy(plan, ier)
    end subroutine test_makeplan_eps_too_small
 
@@ -187,12 +207,13 @@ contains
    !> Largest deviation over all `nmodes` modes, relative to the largest
    !> direct-sum mode, so a spurious output entry cannot inflate the scale
    !>
-   !> @param[out] error  Test failure
-   !> @param[in]  xj     Nonuniform source coordinates
-   !> @param[in]  cj     Complex source strengths
-   !> @param[in]  fk     Output mode coefficients
-   !> @param[in]  iflag  Sign of the imaginary unit in the transform
-   subroutine check_mode(error, xj, cj, fk, iflag)
+   !> @param[out] error    Test failure
+   !> @param[in]  xj       Nonuniform source coordinates
+   !> @param[in]  cj       Complex source strengths
+   !> @param[in]  fk       Output mode coefficients
+   !> @param[in]  iflag    Sign of the imaginary unit in the transform
+   !> @param[in]  modeord  Expected mode ordering, `centered_modes` or `fft_modes`
+   subroutine check_mode(error, xj, cj, fk, iflag, modeord)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Nonuniform source coordinates
@@ -203,6 +224,8 @@ contains
       complex(wp), intent(in) :: fk(:)
       !> Sign of the imaginary unit in the transform
       integer, intent(in) :: iflag
+      !> Expected mode ordering, `centered_modes` or `fft_modes`
+      integer, intent(in) :: modeord
       complex(wp) :: fkref
       real(wp) :: fmax, errmax
       integer(int64) :: j, k, kindex
@@ -216,8 +239,9 @@ contains
             fkref = fkref + cj(j) * cmplx(cos(k * xj(j)), &
                & sin(iflag * k * xj(j)), wp)
          end do
-         ! FINUFFT stores modes as -N/2 .. N/2-1, so frequency k is at this index
+         ! Centered ordering starts at -N/2; FFT ordering starts at zero
          kindex = k + nmodes / 2 + 1
+         if (modeord == fft_modes) kindex = modulo(k, nmodes) + 1
          errmax = max(errmax, abs(fk(kindex) - fkref))
          fmax = max(fmax, abs(fkref))
       end do

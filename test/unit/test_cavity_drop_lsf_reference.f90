@@ -257,8 +257,8 @@ contains
          call select_atoms(mol%nat, sel)
 
          do ip = 1, n_points
-            call emit_point(kind, reference_cases(icase), mol, radii, points(:, ip), ip, &
-                            sel, stream, error)
+            call emit_point(kind, reference_cases(icase), mol, radii, points(:, ip), &
+                            points(:, mod(ip, n_points) + 1), ip, sel, stream, error)
             if (allocated(error)) return
          end do
 
@@ -454,11 +454,6 @@ contains
 
       call lsf%prepare(point, err)
       call check_moist_error(error, err, "LSF prepare failed")
-      if (allocated(error)) return
-
-      ! Repeated preparation must reset the cached derivative accumulators
-      call lsf%prepare(point, err)
-      call check_moist_error(error, err, "Repeated LSF prepare failed")
    end subroutine prepare_lsf
 
    !* ================================================================================= *!
@@ -467,16 +462,21 @@ contains
 
    !> Emit screened, unscreened, then difference records at one point
    !>
+   !> The screened LSF is prepared at `prior` first, so its records also catch
+   !> state left over from a previous point (accumulators, active-set data)
+   !> The unscreened LSF is prepared once on a fresh object
+   !>
    !> @param[in]    kind    `svdw` or `cfc`
    !> @param[in]    gcase   Case descriptor
    !> @param[in]    mol     Structure
    !> @param[in]    radii   Per-atom radii
    !> @param[in]    point   Evaluation point
+   !> @param[in]    prior   Different point the screened LSF is prepared at first
    !> @param[in]    ip      Evaluation-point index
    !> @param[in]    sel     Selected atom indices
    !> @param[inout] stream  Record sink
    !> @param[out]   error   testdrive failure
-   subroutine emit_point(kind, gcase, mol, radii, point, ip, sel, stream, error)
+   subroutine emit_point(kind, gcase, mol, radii, point, prior, ip, sel, stream, error)
       !> Concrete selector
       character(len=*), intent(in) :: kind
       !> Case descriptor
@@ -487,6 +487,8 @@ contains
       real(wp), intent(in) :: radii(:)
       !> Evaluation point
       real(wp), intent(in) :: point(ndim)
+      !> Point the screened LSF is prepared at first
+      real(wp), intent(in) :: prior(ndim)
       !> Evaluation-point index
       integer, intent(in) :: ip
       !> Selected atom indices
@@ -502,6 +504,13 @@ contains
       call new_lsf(lsf_scr, kind, gcase, mol, radii, production_threshold)
       call new_lsf(lsf_ref, kind, gcase, mol, radii, 0.0_wp)
 
+      call prepare_lsf(lsf_scr, prior, error)
+      if (allocated(error)) return
+      if (lsf_scr%active_count() == 0) then
+         call test_failed(error, trim(gcase%tag)//" point "//itoa(ip)// &
+                          ": prior point leaves no active atom to go stale")
+         return
+      end if
       call prepare_lsf(lsf_scr, point, error)
       if (allocated(error)) return
       call prepare_lsf(lsf_ref, point, error)

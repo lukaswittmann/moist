@@ -15,6 +15,8 @@ module test_cavity_iswig
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
    use moist_radii, only: default_cpcm_radii, new_radii_custom_atoms, radius_type
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: fd4_scalar
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -64,8 +66,6 @@ contains
    !>   7 is no Lebedev size
    !> - All three must be reported as unsupported in iSwiG, before any grid
    !>   is built
-   !>
-   !> @param[out] error  Test failure
    subroutine test_unsupported_lebedev_size(error)
 
       !> Error handling
@@ -663,8 +663,7 @@ contains
       call check(error, cav%ngrid, ngrid_ref, &
          & more="Number of grid points does not match")
 
-      ! Scalar Gaussian and surface sums at the current geometry and angular grid
-      ! Inputs and formula: test/mutation/scripts/tolerance_iswig_identity_reference_probe.py
+      ! Independent references
       switch_ref = 1240.5362859882753_wp
       call check(error, sum(cav%f), switch_ref, thr=REFERENCE_THR, &
          & more="Switching function does not match")
@@ -804,8 +803,11 @@ contains
       real(wp) :: fwd, bwd
       ! Shorter step resolves the selected point with a two-point stencil
       real(wp), parameter :: h = 1.0E-5_wp
-      integer :: i, j, ip
-      integer, allocatable :: numbering_ref(:)
+      integer :: i, j
+      !> Selected point in the reference grid and in a displaced grid
+      integer :: ip, jp
+      !> Raw (owner, node) identity of the selected point
+      integer :: iraw
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
@@ -832,7 +834,7 @@ contains
       ! Choose a point with a nonzero nuclear switching derivative
       ip = maxloc(sum(sum(abs(cav%f1_rA), dim=1), dim=1), dim=1)
       ana2d = cav%f1_rA(:, :, ip)
-      numbering_ref = cav%numbering
+      iraw = cav%numbering(ip)
       call check(error, maxval(abs(ana2d)) > 1.0E-3_wp, &
          & more="Switching derivative fixture has no useful signal")
       if (allocated(error)) return
@@ -851,13 +853,13 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            call check(error, size(cav%numbering), size(numbering_ref), &
-               & more="Switching FD changed the surviving grid size")
-            if (allocated(error)) return
-            call check(error, all(cav%numbering == numbering_ref), &
-               & more="Switching FD changed the surviving grid identities")
-            if (allocated(error)) return
-            fwd = cav%f(ip)
+            ! Only the selected point has to survive; others may cross cut_f
+            jp = findloc(cav%numbering, iraw, dim=1)
+            if (jp == 0) then
+               call test_failed(error, "Switching FD dropped the selected grid point")
+               return
+            end if
+            fwd = cav%f(jp)
             mol%xyz(j, i) = mol%xyz(j, i) - 2*h
             if (allocated(cav)) deallocate (cav)
             allocate (cav)
@@ -871,15 +873,18 @@ contains
                call test_failed(error, cavity_error%message)
                return
             end if
-            call check(error, size(cav%numbering), size(numbering_ref), &
-               & more="Switching FD changed the surviving grid size")
-            if (allocated(error)) return
-            call check(error, all(cav%numbering == numbering_ref), &
-               & more="Switching FD changed the surviving grid identities")
-            if (allocated(error)) return
-            bwd = cav%f(ip)
+            jp = findloc(cav%numbering, iraw, dim=1)
+            if (jp == 0) then
+               call test_failed(error, "Switching FD dropped the selected grid point")
+               return
+            end if
+            bwd = cav%f(jp)
             mol%xyz(j, i) = mol%xyz(j, i) + h
             num2d(j, i) = (fwd - bwd)/(2*h)
+            if (.not. ieee_is_finite(num2d(j, i))) then
+               call test_failed(error, "Switching FD reference is not finite")
+               return
+            end if
          end do
       end do
 
@@ -998,7 +1003,8 @@ contains
                bbwd = cav%total_area
                mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*STEP_SIZE
 
-               num2d(j, i) = (-ffwd + 8.0_wp*fwd - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
+               call fd4_scalar(ffwd, fwd, bwd, bbwd, STEP_SIZE, num2d(j, i), error)
+               if (allocated(error)) return
             end do
          end do
 
@@ -1028,6 +1034,7 @@ contains
             do j = 1, 3
                call check(error, ana2d(j, i), num2d(j, i), thr_abs=ABS_THR, thr_rel=REL_THR, &
                           more="Analytical and numerical gradients do not match for area")
+               if (allocated(error)) return
             end do
          end do
 
@@ -1127,8 +1134,8 @@ contains
             bbwd = cav%total_volume
 
             mol%xyz(j, i) = mol%xyz(j, i) + 2.0_wp*h
-            num(3*(i - 1) + j) = (-ffwd + 8.0_wp*fwd &
-               & - 8.0_wp*bwd + bbwd)/(12.0_wp*h)
+            call fd4_scalar(ffwd, fwd, bwd, bbwd, h, num(3*(i - 1) + j), error)
+            if (allocated(error)) return
          end do
       end do
 
@@ -1163,6 +1170,7 @@ contains
          call check(error, ana(i), num(i), &
             & thr_abs=ABS_THR, thr_rel=REL_THR, &
             & more="Volume gradient mismatch")
+         if (allocated(error)) return
       end do
 
    end subroutine test_gradient_volume
@@ -1984,8 +1992,8 @@ contains
             mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
 
             ! 5-point stencil
-            num_grad(iax, iat) = (-ffwd + 8.0_wp*fwd &
-               & - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
+            call fd4_scalar(ffwd, fwd, bwd, bbwd, STEP_SIZE, num_grad(iax, iat), error)
+            if (allocated(error)) return
          end do
       end do
 
@@ -2185,8 +2193,8 @@ contains
 
             mol%xyz(iax, iat) = mol%xyz(iax, iat) + 2.0_wp*STEP_SIZE
 
-            num_grad(iax, iat) = (-ffwd + 8.0_wp*fwd &
-               & - 8.0_wp*bwd + bbwd)/(12.0_wp*STEP_SIZE)
+            call fd4_scalar(ffwd, fwd, bwd, bbwd, STEP_SIZE, num_grad(iax, iat), error)
+            if (allocated(error)) return
          end do
       end do
 

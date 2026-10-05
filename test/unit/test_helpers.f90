@@ -28,7 +28,8 @@
 !>                                       - the same for a continuum model
 !>   * `get_test_cross(mol)` - five-carbon cross with concave seams
 !>   * `check_moist_error(error, err, context)` - moist error -> testdrive failure
-!>   * `fd4_scalar(fpp, fp, fm, fmm, h)` - 4-point central FD formula
+!>   * `fd4_scalar(fpp, fp, fm, fmm, h, df, error)` - 4-point central FD formula,
+!>                                         fails on a nonfinite derivative
 !>   * `fd4_offsets` - the matching stencil offsets, in units of h
 !>   * `rel_deviation(a, b)` - |a - b| / (1 + |b|)
 !>   * `fill_legacy_radii(mol, radii, error)` - legacy per-element radius table
@@ -43,6 +44,7 @@
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
 module test_helpers
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use moist_cavity_iswig, only: moist_cavity_iswig_parameters_type
    use, intrinsic :: iso_fortran_env, only: int64
    use mctc_env, only: wp
@@ -84,7 +86,7 @@ module test_helpers
       & moist_math_grid_atomic_shell_constant_type, new_constant_shell_policy, &
       & moist_math_grid_atomic_shell_arc_type, new_arc_shell_policy, &
       & moist_math_grid_atomic_recipe_type, moist_math_grid_atomic_recipe_override_type
-   use testdrive, only: error_type, test_failed
+   use testdrive, only: error_type, test_failed, to_string
    implicit none(type, external)
    private
 
@@ -814,7 +816,17 @@ contains
    !> 4-point central finite-difference formula:
    !>   f'(x) ~ (-f(x+2h) + 8 f(x+h) - 8 f(x-h) + f(x-2h)) / (12 h)
    !> Truncation O(h^4 f^(5)); useful for FD-checking analytic derivatives
-   pure real(wp) function fd4_scalar(fpp, fp, fm, fmm, h) result(df)
+   !> A nonfinite derivative fails the test, so a broken stencil never
+   !> passes as a match; the message lists the four stencil values and h
+   !>
+   !> @param[in]  fpp    Value at x + 2h
+   !> @param[in]  fp     Value at x + h
+   !> @param[in]  fm     Value at x - h
+   !> @param[in]  fmm    Value at x - 2h
+   !> @param[in]  h      Step size
+   !> @param[out] df     Finite-difference derivative
+   !> @param[out] error  Test failure, set on a nonfinite derivative
+   subroutine fd4_scalar(fpp, fp, fm, fmm, h, df, error)
       !> Value at x + 2h
       real(wp), intent(in) :: fpp
       !> Value at x + h
@@ -825,9 +837,19 @@ contains
       real(wp), intent(in) :: fmm
       !> Step size h
       real(wp), intent(in) :: h
+      !> Finite-difference derivative
+      real(wp), intent(out) :: df
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
 
       df = (-fpp + 8.0_wp*fp - 8.0_wp*fm + fmm)/(12.0_wp*h)
-   end function fd4_scalar
+      if (.not. ieee_is_finite(df)) then
+         call test_failed(error, "fd4_scalar: nonfinite derivative", &
+            & "f(x+2h) = "//to_string(fpp)//", f(x+h) = "//to_string(fp)// &
+            & ", f(x-h) = "//to_string(fm)//", f(x-2h) = "//to_string(fmm)// &
+            & ", h = "//to_string(h))
+      end if
+   end subroutine fd4_scalar
 
    !> Deviation of `a` from reference `b`, relative but safe near zero
    !>   |a - b| / (1 + |b|)

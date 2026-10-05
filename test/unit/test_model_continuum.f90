@@ -13,6 +13,7 @@ module test_model_continuum
    use mctc_io, only: structure_type
    use mstore, only: get_structure
    use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type
    use moist_channels_response, only: response_type, potential_adjoint_response_type
    use moist_model_continuum_component_pcm_type, only: solver_type
@@ -33,8 +34,8 @@ module test_model_continuum
 
    !> Tolerance for values that must agree to roundoff
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
-   !> Loose tolerance for values that pass through a linear solve
-   real(wp), parameter :: thr2 = sqrt(epsilon(1.0_wp))
+   !> Absolute tolerance for equivalent energy
+   real(wp), parameter :: thr2 = 1.0e-12_wp
 
 contains
 
@@ -74,6 +75,8 @@ contains
       type(response_type) :: response
       type(potential_adjoint_response_type), allocatable :: charge
       real(wp) :: energy, reference_energy
+      !> Independent forward component gradient and model result
+      real(wp), allocatable :: gradient(:, :), reference_gradient(:, :)
 
       real(wp), parameter :: epsilon = 32.0_wp
       real(wp), parameter :: qat_vals(*) = [&
@@ -97,6 +100,9 @@ contains
          return
       end if
 
+      call check(error, .not. model%is_updated(), more="new model must start invalid")
+      if (allocated(error)) return
+
       ! An accessor must refuse to run before the first update
       ! (no coupling can be built yet, so a foreign one stands in)
       energy = 0.0_wp
@@ -118,11 +124,16 @@ contains
          return
       end if
 
+      ! Move the solute after building the cavity template to test model update
+      mol%xyz(1, :) = mol%xyz(1, :) + 0.25_wp
       call model%update(mol, err)
       if (allocated(err)) then
          call test_failed(error, "Continuum-model update failed: "//err%message)
          return
       end if
+      call check(error, maxval(abs(model%cavity%sphxyz - mol%xyz)), 0.0_wp, &
+         & thr=thr, message="model update did not move the cavity centers")
+      if (allocated(error)) return
       call stage_model_point_charge_energy(error, model, qat_vals, mol, coupling)
       if (allocated(error)) return
 
@@ -140,7 +151,8 @@ contains
          call test_failed(error, "Reference CPCM construction failed: "//err%message)
          return
       end if
-      call pcm_reference%update(mol, cavity, err)
+      call cavity%update(mol, err)
+      if (.not. allocated(err)) call pcm_reference%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Reference CPCM update failed: "//err%message)
          return
@@ -186,6 +198,53 @@ contains
          & thr=thr2, &
          & message="continuum-model CPCM charges differ from the procedural reference")
       if (allocated(error)) return
+
+      ! Repeated response calls replace the host adjoint rather than doubling it
+      call model%get_response(coupling, response, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call copy_potential_adjoint(response, charge)
+      call check(error, maxval(abs(charge%w_phi - pcm_reference%q)), 0.0_wp, thr=thr2, &
+         & message="Repeated response getter accumulated stale charges")
+      if (allocated(error)) return
+
+      call model%prepare_gradient(coupling, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call fill_point_charge_field(model%cavity, coupling, qat_vals, mol)
+      allocate (gradient(3, mol%nat), reference_gradient(3, mol%nat), source=0.0_wp)
+      call pcm_reference%get_gradient(component_view(coupling), cavity, response, reference_gradient, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call model%get_gradient(coupling, response, gradient, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient - reference_gradient)), 0.0_wp, thr=thr2, &
+         & message="model gradient differs from independent forward component")
+      if (allocated(error)) return
+      call check(error, .not. allocated(model%cavity%xyz1_rA), &
+         & more="reverse model gradient built a surface nuclear Jacobian")
+      if (allocated(error)) return
+      call copy_potential_adjoint(response, charge)
+      call check(error, allocated(charge), more="model gradient omitted host charges")
+      if (allocated(error)) return
+      call check(error, maxval(abs(charge%w_phi - pcm_reference%q)), 0.0_wp, thr=thr2, &
+         & message="model gradient retained stale response charges")
+      if (allocated(error)) return
+
+      call model%use_forward_gradient(.true.)
+      gradient = 0.0_wp
+      call model%get_gradient(coupling, response, gradient, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      ! The reverse path matches to 6e-17 as well; only the Jacobian tells the paths apart
+      call check(error, allocated(model%cavity%xyz1_rA), &
+         & more="forward selection did not take the forward path")
+      if (allocated(error)) return
+      call check(error, maxval(abs(gradient - reference_gradient)), 0.0_wp, thr=thr2, &
+         & message="forward model gradient differs from independent component")
+      if (allocated(error)) return
+      call model%use_forward_gradient(.false.)
 
       ! Components are frozen once the model has been updated
       call model%add_component(pcm_component, err)
@@ -437,7 +496,7 @@ contains
       !> Molecular structure
       type(structure_type) :: mol
       !> Owning model and a second, independent model
-      type(model_continuum_type), target :: model_a, model_b
+      type(model_continuum_type), target :: model_a, model_b, unconstructed
       !> Only component of both models
       type(model_continuum_component_pv) :: pv_component
       !> Cavity template copied into both models
@@ -452,6 +511,10 @@ contains
       real(wp), allocatable :: gradient(:, :)
       !> Density matrix offered to a model that cannot take one
       real(wp) :: density(1, 1)
+      !> Energy accumulator, must stay untouched
+      real(wp) :: energy
+      !> Named fields fetched through the public model interface
+      type(field_query_type) :: fields
 
       !> Run context owned here and borrowed by the cavity and models
       type(moist_context_type), target :: ctx
@@ -465,6 +528,9 @@ contains
          return
       end if
       call new_component_pv(pv_component, 0.5_wp)
+      call unconstructed%add_component(pv_component, err)
+      call expect_error("Construct the model", "unconstructed add")
+      if (allocated(error)) return
       call build_model(model_a)
       if (allocated(error)) return
       call build_model(model_b)
@@ -476,12 +542,49 @@ contains
          return
       end if
 
+      call check(error, model_a%atom_count() == mol%nat, more="wrong model atom count")
+      if (allocated(error)) return
+      call fields%fetch("sphxyz")
+      call model_a%list_fields(fields)
+      call check(error, fields%found, more="model did not publish cavity fields")
+      if (allocated(error)) return
+      call check(error, maxval(abs(fields%rvals - reshape(mol%xyz, [3*mol%nat]))), &
+         & 0.0_wp, thr=thr, message="model published wrong sphere centers")
+      if (allocated(error)) return
+      call model_a%use_forward_gradient(.true.)
+      call check(error, model_a%force_forward_gradient)
+      if (allocated(error)) return
+      call model_a%use_forward_gradient(.false.)
+      call check(error, .not. model_a%force_forward_gradient)
+      if (allocated(error)) return
+
+      allocate (gradient(3, mol%nat), source=0.0_wp)
+      energy = 2.0_wp
+      call model_a%get_energy(coupling, energy, err)
+      call expect_error("requires a coupling staged", "unstaged energy")
+      if (allocated(error)) return
+      call model_a%get_response(coupling, response, err)
+      call expect_error("requires a coupling staged", "unstaged response")
+      if (allocated(error)) return
+      call model_a%get_gradient(coupling, response, gradient, err)
+      call expect_error("requires a coupling staged", "unstaged gradient")
+      if (allocated(error)) return
+
+      call model_b%get_energy(coupling, energy, err)
+      call check_foreign("energy")
+      if (allocated(error)) return
+      call model_b%get_response(coupling, response, err)
+      call check_foreign("response")
+      if (allocated(error)) return
+      call check(error, energy, 2.0_wp, thr=0.0_wp, &
+         & more="refused energy wrote into the accumulator")
+      if (allocated(error)) return
+
       ! Both models are updated, so the ownership check is what refuses
       call model_b%prepare_energy(coupling, err)
       call check_foreign("staging")
       if (allocated(error)) return
 
-      allocate (gradient(3, mol%nat), source=0.0_wp)
       call model_b%get_gradient(coupling, response, gradient, err)
       call check_foreign("gradient")
       if (allocated(error)) return
@@ -495,6 +598,25 @@ contains
          call test_failed(error, "Owner staging failed: "//err%message)
          return
       end if
+      call model_a%prepare_gradient(coupling, err)
+      call check(error, .not. allocated(err))
+      if (allocated(error)) return
+      call model_a%get_gradient(coupling, response, gradient(:, :mol%nat-1), err)
+      call expect_error("shape mismatch", "gradient shape")
+      if (allocated(error)) return
+      call model_a%invalidate()
+      call model_a%get_energy(coupling, energy, err)
+      call expect_error("must be updated first", "invalidated energy")
+      if (allocated(error)) return
+      call model_a%get_response(coupling, response, err)
+      call expect_error("must be updated first", "invalidated response")
+      if (allocated(error)) return
+      call model_a%get_gradient(coupling, response, gradient, err)
+      call expect_error("must be updated first", "invalidated gradient")
+      if (allocated(error)) return
+      call check(error, energy, 2.0_wp, thr=0.0_wp, &
+         & more="invalidated energy wrote into the accumulator")
+      if (allocated(error)) return
       call model_a%release_coupling(coupling)
 
       density = 0.0_wp
@@ -510,6 +632,24 @@ contains
          & more="a refused density left the model marked usable")
 
    contains
+
+      !> Require a diagnostic and release the library error
+      !>
+      !> @param[in] text Required diagnostic fragment
+      !> @param[in] label Operation name
+      subroutine expect_error(text, label)
+         !> Required diagnostic fragment
+         character(len=*), intent(in) :: text
+         !> Operation name
+         character(len=*), intent(in) :: label
+
+         if (.not. allocated(err)) then
+            call test_failed(error, label//" was accepted")
+            return
+         end if
+         call check(error, index(err%message, text) > 0, more=label//": "//err%message)
+         deallocate (err)
+      end subroutine expect_error
 
       !> Assemble and update a PV-only continuum model
       !>

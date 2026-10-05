@@ -300,7 +300,8 @@ contains
                call displaced_energy(trial, values(k))
                if (allocated(error)) return
             end do
-            fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+            call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "PV gradient atom ", iatom, ", axis ", iaxis
             call check(error, gradient(iaxis, iatom) - sentinel, fd, &
                & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))

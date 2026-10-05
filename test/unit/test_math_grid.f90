@@ -270,16 +270,12 @@ contains
          & more=tag//": integrate_field of the modulated Gaussian deviates from pi^(3/2)/e")
    end subroutine check_3d_modulated
 
-   ! --------------------------------------------------------------------------
-   ! Radial grids
-   ! --------------------------------------------------------------------------
+   !* ---------------------------------- Radial grids --------------------------------- *!
 
    !> Uniform (equidistant) radial grid integrates a Gaussian on R^3
    !>
    !> The midpoint rule reaches machine precision once the box covers the
    !> Gaussian's support
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_uniform_radial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -299,8 +295,6 @@ contains
    !> Chebyshev-2 radial grid integrates the same Gaussian
    !>
    !> Chebyshev-II rule with a Becke mapping, the r grid of the Chebyshev pair
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_chebyshev_radial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -383,8 +377,6 @@ contains
    ! --------------------------------------------------------------------------
 
    !> Cartesian uniform box grid: integrates a centered 3D Gaussian
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_cartesian_3d(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -408,8 +400,6 @@ contains
    !> Cartesian grid integrates the anisotropic x^2 exp(-|r|^2) to pi^(3/2)/2
    !>
    !> A check the spherically symmetric Gaussian cannot catch
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_cartesian_aniso(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -434,8 +424,6 @@ contains
    !>
    !> Unit Gaussian modulated by cos(2x); the midpoint rule still converges
    !> exponentially, so the result is summation-round-off-limited (~1e-13)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_cartesian_modulated(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -456,8 +444,6 @@ contains
    !>
    !> Reference pi^(3/2) is integrand-only, so it does not depend on the
    !> carrier molecule (centered MB16-43/H2 here)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_molecular_3d(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -491,8 +477,6 @@ contains
    !> At very fine sizes (nrad=300, nang=1202), where the atom-centered
    !> product grid resolves the smooth Gaussian down to the summation
    !> round-off floor (~4e-11)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_molecular_uniform(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -525,8 +509,6 @@ contains
    !> [[test_grid_cartesian_modulated]]; unlike the uniform Cartesian box, the
    !> Becke-partitioned product grid must resolve the cos(2x) oscillation from
    !> two off-origin atomic grids, making this the stricter resolution test
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_molecular_modulated(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -564,8 +546,6 @@ contains
    !> mode is also checked against direct summation so the test validates
    !> the type-3 phase convention, explicit reciprocal targets, baked-in
    !> quadrature weights, k-grid layout, and the plan/execute chain
-   !>
-   !> @param[out] error  Test failure
    subroutine test_grid_molecular_nufft(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -649,7 +629,9 @@ contains
          call check(error, abs(aimag(fk(k0, 1))) <= 1.0e-7_wp*abs(dc_ref) + 1.0e-9_wp)
 
       !> A nonzero mode catches the type-3 source/target scaling and phase
-      call check(error, ktest > 0, "molecular k-grid has no positive x-axis mode")
+      if (.not. allocated(error)) then
+         call check(error, ktest > 0, "molecular k-grid has no positive x-axis mode")
+      end if
       if (.not. allocated(error)) then
          kvec = mgrid%kpoint(ktest)
          fk_ref = (0.0_wp, 0.0_wp)
@@ -673,8 +655,6 @@ contains
    !>
    !> In the Euclidean inner product: <F a, b> = <a, F^T b>; driven through
    !> the abstract trafo base returned by `new_radial_trafo`
-   !>
-   !> @param[out] error  Test failure
    subroutine test_cheb_radial_fbt_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -741,8 +721,6 @@ contains
    !> for all four directions; driven through the abstract trafo base so the
    !> test also exercises polymorphic dispatch onto the concrete batched
    !> overrides
-   !>
-   !> @param[out] error  Test failure
    subroutine test_cheb_radial_fbt_batched(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -872,8 +850,6 @@ contains
    !>   3.9e-15 backward (absolute) at nr = nk = 200, p_r = 1, p_k = 1.5,
    !>   a = 0.7; at the 64/80 nodes of the sibling tests the window error is
    !>   still quadrature-limited (5e-8 forward, 9e-7 backward)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_cheb_radial_fbt_analytic(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -924,8 +900,6 @@ contains
    end subroutine test_cheb_radial_fbt_analytic
 
    !> %integrate(f=1, result) should return sum(weights) on the molecular grid
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mol_grid_integrate_const(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -956,8 +930,6 @@ contains
    end subroutine test_mol_grid_integrate_const
 
    !> HandyMod molecular grid should construct finite data
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mol_grid_qc_handymod_smoke(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -997,8 +969,6 @@ contains
    end subroutine test_mol_grid_qc_handymod_smoke
 
    !> A midpoint x HandyMod grid built in between must not perturb uniform Chebyshev grids
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mol_grid_uniform_regression(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1056,8 +1026,6 @@ contains
    end subroutine test_mol_grid_uniform_regression
 
    !> destroy() must be safely callable twice on the molecular grid
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mol_grid_destroy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1087,8 +1055,6 @@ contains
    end subroutine test_mol_grid_destroy
 
    !> All retained weights should have |w| >= default threshold (1e-14)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mol_grid_pruning(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1175,9 +1141,7 @@ contains
       call expect_error(error, merr, expected)
    end subroutine run_bad_cheb
 
-   !> No r-space nodes is refused
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> No r-space nodes is refused, set on the expected error
    subroutine test_bad_cheb_nr_zero(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
@@ -1185,9 +1149,7 @@ contains
       call run_bad_cheb(error, 0, 1.0_wp, 16, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nr_zero
 
-   !> No k-space nodes is refused
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> No k-space nodes is refused, set on the expected error
    subroutine test_bad_cheb_nk_zero(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
@@ -1195,9 +1157,7 @@ contains
       call run_bad_cheb(error, 16, 1.0_wp, 0, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nk_zero
 
-   !> A zero r-space scale is refused rather than dividing by r = 0
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> A zero r-space scale is refused rather than dividing by r = 0, set on the expected error
    subroutine test_bad_cheb_p_r_zero(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
@@ -1205,9 +1165,7 @@ contains
       call run_bad_cheb(error, 16, 0.0_wp, 16, 1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_r_zero
 
-   !> A negative k-space scale is refused rather than building negative k nodes
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> A negative k-space scale is refused rather than building negative k nodes, set on the expected error
    subroutine test_bad_cheb_p_k_negative(error)
       !> Test failure, set on the expected error
       type(error_type), allocatable, intent(out) :: error
@@ -1215,9 +1173,7 @@ contains
       call run_bad_cheb(error, 16, 1.0_wp, 16, -1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_k_negative
 
-   !> A NaN r-space scale is refused; `p <= 0` is false for NaN
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> A NaN r-space scale is refused; `p <= 0` is false for NaN, set on the expected error
    subroutine test_bad_cheb_p_r_nan(error)
       use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
       !> Test failure, set on the expected error
@@ -1226,9 +1182,7 @@ contains
       call run_bad_cheb(error, 16, ieee_value(1.0_wp, ieee_quiet_nan), 16, 1.0_wp, "scale must be finite")
    end subroutine test_bad_cheb_p_r_nan
 
-   !> An infinite k-space scale is refused
-   !>
-   !> @param[out] error  test failure, set on the expected error
+   !> An infinite k-space scale is refused, set on the expected error
    subroutine test_bad_cheb_p_k_inf(error)
       use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
       !> Test failure, set on the expected error

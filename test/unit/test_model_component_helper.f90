@@ -240,7 +240,8 @@ contains
       do igrid = 1, ngrid
          if (do_xi) then
             call sample_channel(surface, evaluate, igrid, channel_xi, 1, h, vals)
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), h)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), h, fd, error)
+            if (allocated(error)) return
             write (context, '(A," xi point ",I0)') trim(label), igrid
             analytic = weights%w_xi(igrid) &
                        - 2.0_wp*areas(igrid)*weights%w_a(igrid)/surface%xi(igrid)
@@ -251,7 +252,8 @@ contains
 
          if (do_f) then
             call sample_channel(surface, evaluate, igrid, channel_f, 1, h, vals)
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), h)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), h, fd, error)
+            if (allocated(error)) return
             write (context, '(A," f point ",I0)') trim(label), igrid
             analytic = weights%w_f(igrid) &
                        + areas(igrid)*weights%w_a(igrid)/surface%f(igrid)
@@ -263,7 +265,8 @@ contains
          do axis = 1, 3
             if (do_xyz) then
                call sample_channel(surface, evaluate, igrid, channel_xyz, axis, h, vals)
-               fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), h)
+               call fd4_scalar(vals(1), vals(2), vals(3), vals(4), h, fd, error)
+               if (allocated(error)) return
                write (context, '(A," xyz(",I0,") point ",I0)') &
                   trim(label), axis, igrid
                call check(error, weights%w_xyz(axis, igrid), fd, &
@@ -273,7 +276,8 @@ contains
 
             if (do_normal) then
                call sample_channel(surface, evaluate, igrid, channel_normal, axis, h, vals)
-               fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), h)
+               call fd4_scalar(vals(1), vals(2), vals(3), vals(4), h, fd, error)
+               if (allocated(error)) return
                write (context, '(A," normal(",I0,") point ",I0)') &
                   trim(label), axis, igrid
                call check(error, weights%w_n(axis, igrid), fd, &

@@ -31,7 +31,8 @@ contains
                   new_unittest("channels_isolated", test_channels_isolated), &
                   new_unittest("rejects_invalid_shapes", test_rejects_invalid_shapes), &
                   new_unittest("direct_gradient", test_direct_gradient), &
-                  new_unittest("gaussian_zero_width", test_gaussian_zero_width) &
+                  new_unittest("gaussian_zero_width", test_gaussian_zero_width), &
+                  new_unittest("gaussian_gradient_vs_fd", test_gaussian_gradient_vs_fd) &
                   ]
    end subroutine collect_model_component_pcm_electrostatics
 
@@ -111,7 +112,8 @@ contains
                vals(k) = nuc_elec_energy(xyz, sphxyz, sphxyz_trial, xyz1_rA, &
                                          surface_q, w_xyz, za)
             end do
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "nuc/elec gradient atom ", iatom, &
                " axis ", iaxis
             call check(error, grad(iaxis, iatom), fd, &
@@ -130,8 +132,6 @@ contains
    !> would still pass if the two were swapped or if one absorbed a sign that
    !> the other cancelled, so each is switched on alone here and compared with
    !> its closed form to machine precision
-   !>
-   !> @param[out] error Test failure
    subroutine test_channels_isolated(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -243,8 +243,6 @@ contains
    end subroutine test_channels_isolated
 
    !> Inconsistent array shapes are rejected and the gradient is left defined
-   !>
-   !> @param[out] error Test failure
    subroutine test_rejects_invalid_shapes(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -442,6 +440,86 @@ contains
          energy = energy + dot_product(w_xyz(:, i), ri)
       end do
    end function nuc_elec_energy
+
+   !> Gaussian direct gradients differentiate the smeared Coulomb potential
+   subroutine test_gaussian_gradient_vs_fd(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Surface positions, nuclear positions, and displaced nuclei
+      real(wp) :: xyz(3, 2), nuclei(3, 1), trial(3, 1)
+      !> Surface response and host surface weights for a rigid surface
+      real(wp) :: response(3, 3, 1, 2), weights(3, 2)
+      !> Gaussian inverse lengths and potential adjoints
+      real(wp) :: xi(2), q(2)
+      !> Direct and forward gradients
+      real(wp) :: gradient(3, 1), forward(3, 1)
+      !> Stencil energies, derivative, distance, and tolerance
+      real(wp) :: vals(4), fd, distance, tolerance
+      !> Case, axis, stencil, and surface indices
+      integer :: icase, axis, k, i
+      !> Finite-difference step
+      real(wp), parameter :: step = 1.0e-2_wp
+
+      ! TODO: add test cases on test_helpers.f90 structures; the 0.6 and 3/14 series
+      ! coefficients and the continuity at the x = 1e-3 switch are not resolved here
+      xyz(:, 1) = [1.0_wp, 0.3_wp, -0.2_wp]
+      xyz(:, 2) = [-0.4_wp, 1.5_wp, 0.7_wp]
+      nuclei(:, 1) = [0.1_wp, -0.2_wp, 0.1_wp]
+      response = 0.0_wp
+      weights = 0.03_wp
+      do icase = 1, 2
+         xi = [0.7_wp, 1.1_wp]
+         q = [0.4_wp, -0.2_wp]
+         ! erf branch: 4-point stencil truncation h**4 f^(5)/30 ~ 2e-10 at h = 1e-2;
+         ! measured 2.1e-10 (macOS arm64 gfortran 14.3, two threads)
+         tolerance = 1.0e-9_wp
+         if (icase == 2) then
+            ! Small-argument branch, x = xi*r ~ 2e-4..6e-4 below the 1e-3 switch; the
+            ! charge scaling makes the leading 4/(3 sqrt(pi)) prefactor resolvable
+            ! (force ~5e-3), not the 0.6 x**2 term (~1e-9, at the round-off floor)
+            xi = [2.0e-4_wp, 3.0e-4_wp]
+            q = 1.0e9_wp*q
+            ! Round-off floor eps*|E|/h ~ 7e-10 with |E| ~ 3e4; measured 2.0e-9
+            tolerance = 1.0e-6_wp
+         end if
+         call pcm_electrostatic_direct_gradient(xyz, nuclei, q, [1.3_wp], &
+            & gradient, err, xi=xi)
+         if (allocated(err)) then
+            call test_failed(error, "Gaussian direct gradient failed: "//err%message)
+            return
+         end if
+         call check(error, maxval(abs(gradient)) > 1.0e-3_wp, &
+            & more="Gaussian finite-difference probe has no resolvable force")
+         if (allocated(error)) return
+         do axis = 1, 3
+            do k = 1, 4
+               trial = nuclei
+               trial(axis, 1) = trial(axis, 1) + fd4_offsets(k)*step
+               vals(k) = 0.0_wp
+               do i = 1, 2
+                  distance = norm2(xyz(:, i) - trial(:, 1))
+                  vals(k) = vals(k) + 1.3_wp*q(i)*erf(xi(i)*distance)/distance
+               end do
+            end do
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+            if (allocated(error)) return
+            call check(error, gradient(axis, 1), fd, thr=tolerance, &
+               & more="Gaussian nuclear gradient differs from the erf potential derivative")
+            if (allocated(error)) return
+         end do
+         call pcm_electrostatic_nuclear_gradient(xyz, nuclei, response, q, &
+            & weights, [1.3_wp], forward, err, xi=xi)
+         if (allocated(err)) then
+            call test_failed(error, "Gaussian forward gradient failed: "//err%message)
+            return
+         end if
+         call check(error, maxval(abs(forward - gradient)), 0.0_wp, thr=1.0e-13_wp, &
+            & more="Gaussian direct and forward gradients differ on a rigid surface")
+         if (allocated(error)) return
+      end do
+   end subroutine test_gaussian_gradient_vs_fd
 
    !> Zero Gaussian width produces no force, including under floating-point traps
    subroutine test_gaussian_zero_width(error)

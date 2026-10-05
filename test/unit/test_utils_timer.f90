@@ -1,7 +1,7 @@
 !> Test suite for the timer
 module test_utils_timer
    use mctc_env, only: wp, i8
-   use testdrive, only: new_unittest, unittest_type, error_type, check
+   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
    use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
    use moist_utils_timer, only: timer_type, cat_setup, cat_gradient
    implicit none(type, external)
@@ -80,7 +80,6 @@ contains
       call t%stop()
       call check(error, t%get("many/inner") >= t_five, "re-entry preserves all previous intervals")
       if (allocated(error)) return
-
 
       call check(error, t_once > 0.0_wp, "single interval must accrue time")
       if (allocated(error)) return
@@ -394,7 +393,6 @@ contains
 
    !> Seconds agree with independent enclosing and enclosed wall-clock intervals
    subroutine test_seconds_scale(error)
-      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
       integer(i8) :: before_new, after_new, before_start, after_start, before_stop, after_stop
@@ -402,6 +400,12 @@ contains
       real(wp) :: seconds, lower, upper
 
       call system_clock(before_new, rate)
+      ! Without a clock there is nothing to measure, and the polling loop below
+      ! would never exit
+      if (rate <= 0) then
+         call skip_test(error, "system clock reports no count rate")
+         return
+      end if
       call t%new()
       call system_clock(after_new)
       call system_clock(before_start)
@@ -432,10 +436,7 @@ contains
    end subroutine test_seconds_scale
 
    !> Growing the registry, hash table and nesting stack preserves existing nodes
-   !>
-   !> @param[out] error Test failure
    subroutine test_growth_preserves_tree(error)
-      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
       integer :: i, h, saved, ids(80)
@@ -480,7 +481,6 @@ contains
 
    !> Reset closes open frames and clears persistent imbalance while preserving handles
    subroutine test_reset_open_and_poisoned(error)
-      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
       integer :: h
@@ -503,7 +503,8 @@ contains
       call t%start(h)
       call busy()
       call t%stop(h)
-      call check(error, t%node_time(h) > 0.0_wp, "handle remains usable after reset")
+      ! >= 0, not > 0: one busy() may not advance a coarse clock; poisoning gives NaN
+      call check(error, t%node_time(h) >= 0.0_wp, "handle remains usable after reset")
       if (allocated(error)) return
       call t%new()
       call check(error, t%num_nodes() == 0 .and. t%current_depth() == 0, "new clears previous tree")
@@ -512,7 +513,6 @@ contains
 
    !> Handles distinguish equal leaf names and named mismatch restores the stack
    subroutine test_handle_and_mismatch_contracts(error)
-      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       type(timer_type) :: t
       integer :: a, b, ha, hb, i, parents(80), leaves(80)
@@ -551,6 +551,8 @@ contains
       call check(error, t%current_depth() == 0 .and. t%current() == 0, "mismatch empties skipped stack")
       if (allocated(error)) return
       call t%stop()
+      call check(error, t%current_depth() == 0, "stop on empty stack keeps it empty")
+      if (allocated(error)) return
       call check(error, .not. ieee_is_nan(t%get("outer")), "stop on empty stack is a no-op")
       call t%delete()
    end subroutine test_handle_and_mismatch_contracts

@@ -5,9 +5,9 @@
 !>
 !>   * the bare evaluator [[moist_iso_gto_type]]: the assembled density against an
 !>     independent direct monomial evaluation, and each analytic derivative order
-!>     against a 4-point central FD of the analytic previous order; plus the
-!>     radial screening, which must not perturb any evaluated quantity beyond its
-!>     own threshold
+!>     against a 4-point central FD of the analytic previous order (Richardson
+!>     extrapolated for the third order); plus the radial screening, which must not
+!>     perturb any evaluated quantity beyond its own threshold
 !>
 !>   * the two isodensity LSF backends: the internal
 !>     [[moist_cavity_drop_lsf_isodensity_internal_type]] (moist evaluates the
@@ -638,7 +638,8 @@ contains
       end do
    end subroutine test_gto_hess_fd
 
-   !> Analytic third derivative matches a 4-point central FD of the Hessian
+   !> Analytic third derivative matches a Richardson-extrapolated 4-point central
+   !> FD of the Hessian (steps h and h/2), which cancels the h^4 truncation term
    !>
    !> @param[out] error Set on mismatch
    subroutine test_gto_third_fd(error)
@@ -676,9 +677,11 @@ contains
                do jx = 1, ndim
                   do kx = 1, ndim
                      ! Richardson extrapolation cancels the leading fourth-order stencil error
-                     call fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), STEP_SIZE, fd_full, error)
+                     call fd4_scalar(hpp(jx, kx), hp(jx, kx), hm(jx, kx), hmm(jx, kx), STEP_SIZE, &
+                                     fd_full, error)
                      if (allocated(error)) return
-                     call fd4_scalar(hp(jx, kx), hph(jx, kx), hmh(jx, kx), hm(jx, kx), 0.5_wp*STEP_SIZE, fd_half, error)
+                     call fd4_scalar(hp(jx, kx), hph(jx, kx), hmh(jx, kx), hm(jx, kx), &
+                                     0.5_wp*STEP_SIZE, fd_half, error)
                      if (allocated(error)) return
                      fd = (16.0_wp*fd_half - fd_full)/15.0_wp
                      call check(error, d3(ax, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
@@ -739,8 +742,8 @@ contains
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     call fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), dm(ix, jx, kx), dmm(ix, jx, kx), STEP_SIZE, fd, &
-                                     error)
+                     call fd4_scalar(dpp(ix, jx, kx), dp(ix, jx, kx), dm(ix, jx, kx), &
+                                     dmm(ix, jx, kx), STEP_SIZE, fd, error)
                      if (allocated(error)) return
                      call check(error, d4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return
@@ -1812,6 +1815,8 @@ contains
 
       call build_molecular_internal_lsf(lsf, test_reference, 0.0_wp, mol, error)
       if (allocated(error)) return
+      ! Non-unit scale, so an f4_rrrr that drops the scale factor cannot match the FD of
+      ! f3_rrr; scale is only read at prepare, so setting it after update is safe
       lsf%param%scale = 2.3_wp
       call get_test_points(mol, pts, 8)
 
@@ -1864,8 +1869,8 @@ contains
             do ix = 1, ndim
                do jx = 1, ndim
                   do kx = 1, ndim
-                     call fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), tm(ix, jx, kx), tmm(ix, jx, kx), STEP_SIZE, fd, &
-                                     error)
+                     call fd4_scalar(tpp(ix, jx, kx), tp(ix, jx, kx), tm(ix, jx, kx), &
+                                     tmm(ix, jx, kx), STEP_SIZE, fd, error)
                      if (allocated(error)) return
                      call check(error, f4(ax, ix, jx, kx), fd, thr_abs=ABS_THR, thr_rel=REL_THR)
                      if (allocated(error)) return

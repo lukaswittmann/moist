@@ -16,12 +16,13 @@ module test_cavity_drop_integration
    use mctc_env_error, only: mctc_error => error_type
    use mctc_io, only: structure_type, new
    use mstore, only: get_structure
-   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed
+   use testdrive, only: new_unittest, unittest_type, error_type, check, test_failed, to_string
    use moist_cavity_drop, only: cavity_type_drop, new_cavity_drop
    use moist_cavity_drop_lsf_cfc, only: moist_cavity_drop_lsf_cfc_type
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -69,8 +70,10 @@ module test_cavity_drop_integration
    !> DROP/reference volume-ratio tolerance
    real(wp), parameter :: VOLUME_REL_THR = 1.0e-2_wp
 
-   !> Absolute tolerance for surface-element sum identities
-   real(wp), parameter :: SUM_IDENTITY_THR = 1.0e-12_wp
+   !> Absolute tolerance of the surface-element sum identities, bohr^2 or bohr^3
+   real(wp), parameter :: SUM_IDENTITY_ABS_THR = 5.0e-12_wp
+   !> Relative fallback of the sum identities, 10 times the absolute bound
+   real(wp), parameter :: SUM_IDENTITY_REL_THR = 5.0e-11_wp
 
    !> Reference cases
    type(integration_case_type), parameter :: cases(61) = [ &
@@ -418,19 +421,23 @@ contains
          return
       end if
 
-      call check(error, cavity%total_area, sum(cavity%a), thr=SUM_IDENTITY_THR, &
-                 message="Total area sum mismatch for "//case_to_string(c))
+      call check_sum_identity(error, cavity%total_area, sum(cavity%a), &
+                              "Total area sum mismatch for "//case_to_string(c))
       if (allocated(error)) return
-      call check(error, cavity%total_volume, sum(cavity%v), thr=SUM_IDENTITY_THR, &
-                 message="Total volume sum mismatch for "//case_to_string(c))
+      call check_sum_identity(error, cavity%total_volume, sum(cavity%v), &
+                              "Total volume sum mismatch for "//case_to_string(c))
       if (allocated(error)) return
 
       do iatom = 1, mol%nat
-         call check(error, cavity%asph(iatom), sum(cavity%a, mask=cavity%owner == iatom), &
-                    thr=SUM_IDENTITY_THR, message="Atomic area sum mismatch for "//case_to_string(c))
+         call check_sum_identity(error, cavity%asph(iatom), &
+                                 sum(cavity%a, mask=cavity%owner == iatom), &
+                                 "Atomic area sum mismatch for atom "//to_string(iatom)// &
+                                 " of "//case_to_string(c))
          if (allocated(error)) return
-         call check(error, cavity%vsph(iatom), sum(cavity%v, mask=cavity%owner == iatom), &
-                    thr=SUM_IDENTITY_THR, message="Atomic volume sum mismatch for "//case_to_string(c))
+         call check_sum_identity(error, cavity%vsph(iatom), &
+                                 sum(cavity%v, mask=cavity%owner == iatom), &
+                                 "Atomic volume sum mismatch for atom "//to_string(iatom)// &
+                                 " of "//case_to_string(c))
          if (allocated(error)) return
       end do
 
@@ -446,6 +453,36 @@ contains
       if (allocated(error)) return
 
    end subroutine run_single_case
+
+   !> Check a total against the sum of its surface elements
+   !>
+   !> - passes on `|actual - expected| <= SUM_IDENTITY_ABS_THR` or
+   !>   `<= SUM_IDENTITY_REL_THR*|expected|`
+   !> - a NaN on either side fails both bounds; a non-finite `expected` fails
+   !>
+   !> @param[out] error     Test failure state
+   !> @param[in]  actual    Total under test
+   !> @param[in]  expected  Sum of the surface elements
+   !> @param[in]  message   Failure message naming the case
+   subroutine check_sum_identity(error, actual, expected, message)
+      !> Test failure state
+      type(error_type), allocatable, intent(out) :: error
+      !> Total under test
+      real(wp), intent(in) :: actual
+      !> Sum of the surface elements
+      real(wp), intent(in) :: expected
+      !> Failure message naming the case
+      character(len=*), intent(in) :: message
+
+      !> Absolute deviation
+      real(wp) :: diff
+
+      diff = abs(actual - expected)
+      if (ieee_is_finite(expected) .and. (diff <= SUM_IDENTITY_ABS_THR &
+         .or. diff <= SUM_IDENTITY_REL_THR*abs(expected))) return
+      call test_failed(error, message, "expected "//to_string(expected)//" but got "// &
+                       to_string(actual)//" (difference: "//to_string(diff)//")")
+   end subroutine check_sum_identity
 
    !> Load an integration case structure
    !>

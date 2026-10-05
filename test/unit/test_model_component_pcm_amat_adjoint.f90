@@ -11,6 +11,8 @@
 !>  * the nuclear gradient against a contraction of the dense derivative tensor
 !>    [[assemble_pcm_amat_with_gradient]] builds entry by entry, which is a
 !>    second, independent route to the same number
+!>  * the nuclear contraction against hand-computed values, one weight channel
+!>    at a time, on manufactured derivatives for three points and two atoms
 module test_model_component_pcm_amat_adjoint
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
@@ -44,7 +46,7 @@ module test_model_component_pcm_amat_adjoint
    !> Smallest exposed surface the finite-difference tests accept
    integer, parameter :: fd_min_points = 50
 
-   !> Number of  grid points finite-differenced per structure
+   !> Number of regularly sampled points, with the final grid point also checked
    integer, parameter :: n_fd_points = 50
 
 contains
@@ -56,7 +58,8 @@ contains
 
       testsuite = [ &
                   new_unittest("surface_weights_vs_fd", test_surface_weights_vs_fd), &
-                  new_unittest("weight_paths_agree", test_weight_paths_agree) &
+                  new_unittest("weight_paths_agree", test_weight_paths_agree), &
+                  new_unittest("nuclear_gradient_channels", test_nuclear_gradient_channels) &
                   ]
 
    end subroutine collect_model_component_pcm_amat_adjoint
@@ -186,8 +189,10 @@ contains
       end if
 
       stride = max(1, ngrid/n_fd_points)
-      do ip = 1, n_fd_points
+      do ip = 1, n_fd_points + 1
          ig = 1 + (ip - 1)*stride
+         ! Include the boundary point even when the regular stride misses it
+         if (ip == n_fd_points + 1) ig = ngrid
          if (ig > ngrid) exit
 
          ! Gaussian width channel
@@ -202,7 +207,8 @@ contains
             end if
          end do
          xi(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/dxi at grid point ", ig
          call check(error, w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
@@ -221,7 +227,8 @@ contains
             end if
          end do
          f(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/df at grid point ", ig
          call check(error, w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                     more=trim(context))
@@ -240,7 +247,8 @@ contains
                end if
             end do
             xyz(iax, ig) = saved
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid point ", ig
             call check(error, w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                        more=trim(context))
@@ -358,5 +366,92 @@ contains
                  more="adjoint gradient differs from the dense-tensor contraction")
 
    end subroutine test_weight_paths_agree
+
+   !> Nuclear channels with nonzero widths and nonsymmetric Cartesian blocks
+   !>
+   !> Three points and two atoms, with blocks on and off the atom == point
+   !> diagonal and at a point index no atom shares, so a swapped point/atom
+   !> index or a transposed position block cannot reproduce the hand-computed result
+   subroutine test_nuclear_gradient_channels(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error handling
+      type(moist_error_type), allocatable :: err
+      !> Manufactured nuclear derivatives for three points and two atoms
+      real(wp) :: xi1(3, 2, 3), f1(3, 2, 3), xyz1(3, 3, 2, 3)
+      !> Independent surface weights and contracted result
+      real(wp) :: w_xi(3), w_f(3), w_xyz(3, 3), grad(3, 2), expected(3, 2)
+      !> Independent channel, atom and Cartesian indices
+      integer :: channel, iatom, iaxis
+      !> Failure context
+      character(len=96) :: context
+
+      ! TODO: use test_helpers.f90 for test structures possibly with random generated
+      ! values for f, xi
+      xi1 = 0.0_wp
+      f1 = 0.0_wp
+      xyz1 = 0.0_wp
+      xi1(:, 1, 2) = [1.0_wp, 2.0_wp, 3.0_wp]
+      xi1(:, 2, 1) = [-2.0_wp, 4.0_wp, -6.0_wp]
+      xi1(:, 2, 3) = [1.0_wp, -1.0_wp, 2.0_wp]
+      f1(:, 1, 1) = [3.0_wp, 1.0_wp, -2.0_wp]
+      f1(:, 1, 3) = [2.0_wp, -1.0_wp, 4.0_wp]
+      f1(:, 2, 2) = [2.0_wp, -3.0_wp, 1.0_wp]
+      xyz1(:, :, 1, 1) = reshape([1.0_wp, 2.0_wp, 3.0_wp, &
+                                  4.0_wp, 5.0_wp, 6.0_wp, &
+                                  7.0_wp, 8.0_wp, 10.0_wp], [3, 3])
+      xyz1(:, :, 2, 2) = reshape([2.0_wp, -1.0_wp, 3.0_wp, &
+                                  -4.0_wp, 2.0_wp, 1.0_wp, &
+                                  5.0_wp, 7.0_wp, -2.0_wp], [3, 3])
+      xyz1(:, :, 1, 3) = reshape([1.0_wp, 0.0_wp, 2.0_wp, &
+                                  0.0_wp, 3.0_wp, -1.0_wp, &
+                                  2.0_wp, 1.0_wp, 1.0_wp], [3, 3])
+      xyz1(:, :, 2, 1) = reshape([0.0_wp, 1.0_wp, 1.0_wp, &
+                                  1.0_wp, 0.0_wp, 2.0_wp, &
+                                  -1.0_wp, 2.0_wp, 0.0_wp], [3, 3])
+
+      do channel = 1, 3
+         w_xi = 0.0_wp
+         w_f = 0.0_wp
+         w_xyz = 0.0_wp
+         select case (channel)
+         case (1)
+            w_xi = [2.0_wp, -3.0_wp, 5.0_wp]
+            expected = reshape([-3.0_wp, -6.0_wp, -9.0_wp, &
+                                1.0_wp, 3.0_wp, -2.0_wp], [3, 2])
+         case (2)
+            w_f = [5.0_wp, -2.0_wp, 3.0_wp]
+            expected = reshape([21.0_wp, 2.0_wp, 2.0_wp, &
+                                -4.0_wp, 6.0_wp, -2.0_wp], [3, 2])
+         case (3)
+            w_xyz(:, 1) = [2.0_wp, -1.0_wp, 3.0_wp]
+            w_xyz(:, 2) = [-2.0_wp, 4.0_wp, 1.0_wp]
+            w_xyz(:, 3) = [1.0_wp, 1.0_wp, -1.0_wp]
+            expected = reshape([8.0_wp, 25.0_wp, 38.0_wp, &
+                                -3.0_wp, 25.0_wp, 12.0_wp], [3, 2])
+         case default
+            call test_failed(error, "unknown manufactured derivative channel")
+            return
+         end select
+
+         call pcm_amat_nuclear_gradient(xi1, f1, xyz1, w_xi, w_f, w_xyz, grad, err)
+         if (allocated(err)) then
+            call test_failed(error, "manufactured nuclear contraction failed: "// &
+                             err%message)
+            return
+         end if
+         do iatom = 1, 2
+            do iaxis = 1, 3
+               write (context, "(a,i0,a,i0,a,i0)") "channel ", channel, " atom ", iatom, &
+                  " axis ", iaxis
+               call check(error, grad(iaxis, iatom), expected(iaxis, iatom), &
+                          thr_abs=1.0e-13_wp, thr_rel=0.0_wp, &
+                          more="manufactured nuclear derivative, "//trim(context))
+               if (allocated(error)) return
+            end do
+         end do
+      end do
+
+   end subroutine test_nuclear_gradient_channels
 
 end module test_model_component_pcm_amat_adjoint

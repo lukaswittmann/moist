@@ -10,15 +10,15 @@ module test_cavity_drop_cpcm
    use moist_cavity_drop_lsf_svdw, only: moist_cavity_drop_lsf_svdw_type
    use moist_radii, only: default_cpcm_radii
    use mstore, only: get_structure
-   use test_helpers, only: fill_legacy_radii
    use moist_math_lapack, only: getrf, getri
-   use moist_model_continuum_component_pcm_amat, only: assemble_pcm_amat, &
+   use moist_model_continuum_component_pcm_amat, only: &
       & assemble_pcm_amat_with_gradient, pcm_amat_surface_weights, &
       & pcm_amat_nuclear_gradient
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
    use, intrinsic :: iso_fortran_env, only: error_unit
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
    private
 
@@ -26,23 +26,54 @@ module test_cavity_drop_cpcm
 
    integer, parameter :: ndim = 3
 
-   real(wp), parameter :: k = 1.5
-   real(wp), parameter :: gamma = 1.0
+   !> SvdW blending steepness
+   real(wp), parameter :: k = 1.5_wp
+   !> Three-body SvdW blending weight
+   real(wp), parameter :: gamma = 1.0_wp
+   !> Lebedev rule size
    integer, parameter :: NUM_LEB = 26
 
-   real(wp), parameter :: STEP_SIZE = 1.0E-4_wp
+   !> Fourth-order point-charge finite-difference step in bohr
+   real(wp), parameter :: POINTCHARGE_STEP = 4.0e-3_wp
+   !> Point-charge finite-difference absolute tolerance
+   real(wp), parameter :: POINTCHARGE_ATOL = 1.0e-10_wp
+   !> Point-charge finite-difference relative tolerance
+   real(wp), parameter :: POINTCHARGE_RTOL = 1.0e-9_wp
 
-   real(wp), parameter :: ATHR_OFFDIAG = 1.0E-9_wp
-   real(wp), parameter :: RTHR_OFFDIAG = 1.0E-8_wp
+   !> Precision of the independent CPCM reference
+   integer, parameter :: rk = wp
+   ! Quadruple precision, about 20x slower (!?); swap in with MATRIX_FLOOR and REFINE_TOL below
+   ! integer, parameter :: rk = selected_real_kind(30, 300)
 
-   real(wp), parameter :: ATHR_DIAG = 1.0E-6_wp
-   real(wp), parameter :: RTHR_DIAG = 2.0E-6_wp
+   !> Fourth-order matrix finite-difference step in bohr
+   real(wp), parameter :: MATRIX_STEP = 1.0e-4_wp
+   !> Matrix finite-difference absolute tolerance
+   real(wp), parameter :: MATRIX_ATOL = 1.0e-10_wp
+   !> Matrix finite-difference relative tolerance
+   real(wp), parameter :: MATRIX_RTOL = 1.0e-9_wp
+   !> Stencil round-off floor in units of epsilon(rk)*|A_ij|/step
+   real(wp), parameter :: MATRIX_FLOOR = 5.0e3_wp
+   ! real(wp), parameter :: MATRIX_FLOOR = 0.0_wp
 
-   !> Fraction of the quantities largest derivative
-   real(wp), parameter :: MTHR_OFFDIAG = 2.0E-10_wp
-   real(wp), parameter :: MTHR_DIAG = 2.0E-10_wp
+   !> Absolute tolerance of production against reference matrix values
+   real(wp), parameter :: VALUE_ATOL = 1.0e-10_wp
+   !> Relative tolerance of production against reference matrix values
+   real(wp), parameter :: VALUE_RTOL = 1.0e-10_wp
 
-   real(wp), parameter :: PROJ_TOL = 1E-14_wp
+   !> KKT residual at which a reference branch counts as refined
+   real(rk), parameter :: REFINE_TOL = 1.0e-13_rk
+   ! real(rk), parameter :: REFINE_TOL = 1.0e-27_rk
+
+   !> Below this switching value diagonal entries (A_ii ~ 1/f) are skipped in the
+   !> finite-difference check and compared with an eps/f-scaled value tolerance
+   real(wp), parameter :: DIAG_F_CUT = 1.0e-4_wp
+   !> Relative value tolerance of buried diagonals in units of epsilon/f
+   real(wp), parameter :: DIAG_EPS_FACTOR = 3.0_wp
+   !> Largest accepted entry of A A^-1 - 1
+   real(wp), parameter :: INVERSE_THR = 1.0e-10_wp
+
+   !> DROP projection settings
+   real(wp), parameter :: PROJ_TOL = 1.0e-14_wp
    integer, parameter :: PROJ_MAXITER = 150
    integer, parameter :: PROJ_LEVEL = 2
 
@@ -74,8 +105,6 @@ contains
    !> - At construction, where no fitted Born zeta exists for that size
    !> - In `update`, if the size is changed on a constructed cavity: the
    !>   Lebedev cache must not hand negative weights to the surface
-   !>
-   !> @param[out] error  Test failure
    subroutine test_negative_weight_lebedev(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -123,7 +152,6 @@ contains
 
       type(structure_type) :: mol
       type(cavity_type_drop), allocatable :: cavity
-      real(wp), allocatable :: radii(:)
       real(wp), allocatable :: Amat0(:, :), Amat1_rA(:, :, :, :)
       real(wp), allocatable :: q1(:), q2(:)
       real(wp), allocatable :: w_xi(:), w_f(:), w_xyz(:, :)
@@ -136,9 +164,6 @@ contains
       call new_context(ctx, verbosity=0)
 
       call get_structure(mol, "MB16-43", "04")
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
 
       allocate (cavity)
       block
@@ -203,6 +228,10 @@ contains
             end do
          end do
       end do
+      ! The dense contraction is the expected value below; check() only screens `actual`
+      call check(error, all(ieee_is_finite(grad_ref)), &
+                 "Non-finite dense A-matrix gradient contraction")
+      if (allocated(error)) return
 
       allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
       call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, q1, q2, &
@@ -230,21 +259,21 @@ contains
       end do
    end subroutine test_contract_amat1_q1q2_rA
 
-   !> Test the fused nuclear/electronic contraction against finite differences
+   !> Test the fused nuclear/electronic contraction against fourth-order finite differences
+   !>
    !> This checks the point-charge case: the host total position weight is
    !> `w_xyz(:, i) = q_i grad phi_nuc(r_i)` of the nuclear potential
    subroutine test_contract_nuc_elec_pointcharge_fd(error)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       type(structure_type) :: mol, mol_fd
       type(cavity_type_drop), allocatable :: cavity
-      real(wp), allocatable :: radii(:)
       real(wp), allocatable :: surface_q(:), w_xyz(:, :), za(:)
       real(wp), allocatable :: grad_ctr(:, :), grad_num(:, :)
       integer, allocatable :: numbering_ref(:)
-      integer :: iat, iaxis, igrid, ngrid
-      real(wp) :: e_plus, e_minus, r_vec(3), r_dist
-      real(wp), parameter :: step = 1.0e-5_wp
+      integer :: iat, iaxis, igrid, ngrid, istencil
+      real(wp) :: energies(-2:2), r_vec(3), r_dist
       type(mctc_error), allocatable :: cavity_error
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
@@ -252,9 +281,6 @@ contains
       call new_context(ctx, verbosity=0)
 
       call get_structure(mol, "MB16-43", "15")
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
 
       allocate (cavity)
       block
@@ -320,43 +346,35 @@ contains
       grad_num = 0.0_wp
       do iat = 1, mol%nat
          do iaxis = 1, 3
-            mol_fd = mol
-            mol_fd%xyz(iaxis, iat) = mol_fd%xyz(iaxis, iat) + step
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            if (cavity%ngrid /= ngrid) then
-               call test_failed(error, "contract_nuc_elec FD: ngrid changed for +step")
-               return
-            end if
-            if (any(cavity%numbering(1:ngrid) /= numbering_ref)) then
-               call test_failed(error, "contract_nuc_elec FD: numbering changed for +step")
-               return
-            end if
-            e_plus = weighted_nuclear_potential(cavity, mol_fd, surface_q, za)
-
-            mol_fd = mol
-            mol_fd%xyz(iaxis, iat) = mol_fd%xyz(iaxis, iat) - step
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            if (cavity%ngrid /= ngrid) then
-               call test_failed(error, "contract_nuc_elec FD: ngrid changed for -step")
-               return
-            end if
-            if (any(cavity%numbering(1:ngrid) /= numbering_ref)) then
-               call test_failed(error, "contract_nuc_elec FD: numbering changed for -step")
-               return
-            end if
-            e_minus = weighted_nuclear_potential(cavity, mol_fd, surface_q, za)
-
-            grad_num(iaxis, iat) = (e_plus - e_minus)/(2.0_wp*step)
+            do istencil = -2, 2
+               if (istencil == 0) cycle
+               mol_fd = mol
+               mol_fd%xyz(iaxis, iat) = mol_fd%xyz(iaxis, iat) + real(istencil, wp)*POINTCHARGE_STEP
+               call cavity%update(mol_fd, error=cavity_error)
+               if (allocated(cavity_error)) then
+                  call test_failed(error, cavity_error%message)
+                  return
+               end if
+               if (cavity%ngrid /= ngrid) then
+                  call test_failed(error, "contract_nuc_elec FD: ngrid changed for stencil point")
+                  return
+               end if
+               if (any(cavity%numbering(1:ngrid) /= numbering_ref)) then
+                  call test_failed(error, "contract_nuc_elec FD: numbering changed for stencil point")
+                  return
+               end if
+               energies(istencil) = weighted_nuclear_potential(cavity, mol_fd, surface_q, za)
+            end do
+            ! Pair opposite energy values before combining the fourth-order stencil
+            grad_num(iaxis, iat) = (8.0_wp*(energies(1) - energies(-1)) &
+               & - (energies(2) - energies(-2)))/(12.0_wp*POINTCHARGE_STEP)
          end do
       end do
+
+      if (.not. all(ieee_is_finite(grad_ctr)) .or. .not. all(ieee_is_finite(grad_num))) then
+         call test_failed(error, "contract_nuc_elec FD: nonfinite gradient")
+         return
+      end if
 
       ! Restore reference geometry
       call cavity%update(mol, error=cavity_error)
@@ -370,7 +388,7 @@ contains
             call check(error, &
                        grad_ctr(iaxis, iat), &
                        grad_num(iaxis, iat), &
-                       thr_abs=2.0e-6_wp, thr_rel=2.0e-5_wp, &
+                       thr_abs=POINTCHARGE_ATOL, thr_rel=POINTCHARGE_RTOL, &
                        more="pcm_electrostatic_nuclear_gradient point-charge FD mismatch")
             if (allocated(error)) return
          end do
@@ -403,38 +421,29 @@ contains
    subroutine test_single_atom(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       ! Create single oxygen atom
       call new(mol, [8], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_single_atom
 
    !> Test A matrix gradient for a dimer
    subroutine test_dimer(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       ! Create dimer (two oxygen atoms)
       call new(mol, [8, 8], reshape([0.0_wp, 0.0_wp, 0.0_wp, &
                                      3.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_dimer
 
    !> Test A matrix gradient for 5-argon geometry with custom blend-k
    subroutine test_ar5_blendk_09(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call new(mol, [18, 18, 18, 18, 18], reshape([ &
                                                   0.2_wp, 0.0_wp, 5.1_wp, &
@@ -443,245 +452,167 @@ contains
                                                   -2.2_wp, 2.2_wp, 0.0_wp, &
                                                   2.2_wp, 2.2_wp, 0.0_wp], [3, 5]))
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii, blend_k_override=0.8_wp)
+      call do_test(error, mol, blend_k_override=0.8_wp)
    end subroutine test_ar5_blendk_09
-
-   !> Test A matrix gradient for MB16-43 h2
-   subroutine test_mb16_43_h2(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
-
-      call get_structure(mol, "MB16-43", "H2")
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
-   end subroutine test_mb16_43_h2
 
    !> Test A matrix gradient for bih3_h2o system
    subroutine test_bih3_h2o(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "Heavy28", "bih3_h2o")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_bih3_h2o
 
    !> Test A matrix gradient for Heavy28 h2o
    subroutine test_heavy28_h2o(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "Heavy28", "h2o")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_heavy28_h2o
-
-   !> Test A matrix gradient for Heavy28 pbh4
-   subroutine test_heavy28_pbh4(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
-
-      call get_structure(mol, "Heavy28", "pbh4")
-
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
-   end subroutine test_heavy28_pbh4
 
    !> Test A matrix gradient for MB16-43 01
    subroutine test_mb16_43_01(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "MB16-43", "01")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_mb16_43_01
 
    !> Test A matrix gradient for MB16-43 19
    subroutine test_mb16_43_19(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "MB16-43", "19")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_mb16_43_19
 
    !> Test A matrix gradient for But14diol 1
    subroutine test_but14diol_1(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "But14diol", "1")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_but14diol_1
 
    !> Test A matrix gradient for But14diol 32
    subroutine test_but14diol_32(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "But14diol", "32")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_but14diol_32
 
    !> Test A matrix gradient for IL16 008
    subroutine test_il16_008(error)
       type(error_type), allocatable, intent(out) :: error
       type(structure_type) :: mol
-      real(wp), allocatable :: radii(:)
 
       call get_structure(mol, "IL16", "008")
 
-      call fill_legacy_radii(mol, radii, error)
-      if (allocated(error)) return
-
-      call do_test(error, mol, radii)
+      call do_test(error, mol)
    end subroutine test_il16_008
 
-   !> Test A matrix gradient w.r.t. atomic positions
-   subroutine do_test(error, mol, radii, blend_k_override)
-      !> Error handling
+   !> Test the A matrix and its nuclear gradient against the independent reference
+   !>
+   !> - Production matrix values match the reference at the reference geometry
+   !> - A A^-1 recovers the identity
+   !> - Analytic derivatives match fourth-order finite differences of the
+   !>   reference, on points that stay converged across the whole stencil
+   !>
+   !> @param[out] error             Test failure
+   !> @param[in]  mol               Molecular structure
+   !> @param[in]  blend_k_override  SvdW blending steepness override (optional)
+   subroutine do_test(error, mol, blend_k_override)
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
       !> Molecular structure
       type(structure_type), intent(in) :: mol
-      !> Atomic radii
-      real(wp), intent(in) :: radii(:)
-      !> Optional override for blending steepness parameter
+      !> SvdW blending steepness override
       real(wp), intent(in), optional :: blend_k_override
+
+      !> Stencil offsets in units of the step
+      real(wp), parameter :: offsets(4) = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]
 
       type(structure_type) :: mol_fd
       type(cavity_type_drop), allocatable :: cavity
+      type(mctc_error), allocatable :: cavity_error
+      !> Local run context borrowed by the cavity built here
+      type(moist_context_type), target :: ctx
+      !> Production matrix and its analytic nuclear derivative
       real(wp), allocatable :: Amat0(:, :), Amat1_rA(:, :, :, :)
-      real(wp), allocatable :: en_Amat1_rA(:, :, :, :)
-      real(wp), allocatable :: num_Amat1_rA(:, :, :, :)
-      real(wp), allocatable :: nn_Amat(:, :), n_Amat(:, :)
-      real(wp), allocatable :: p_Amat(:, :), pp_Amat(:, :)
-      integer :: iat, idir, igrid, jgrid, ngrid, num_idn, num_jdn
-      integer :: max_numbering, idx_i, idx_j
-      real(wp), allocatable :: ref_f(:)
-      integer, allocatable :: ref_numbering(:), numbering_to_idx(:)
-      logical, allocatable :: valid_gridpoint_ref(:)
-      logical, allocatable :: valid_gridpoint(:, :, :)
-      logical, allocatable :: nn_converged(:, :, :), n_converged(:, :, :), &
-                              p_converged(:, :, :), pp_converged(:, :, :)
-      integer, allocatable :: num_nn(:, :, :), num_n(:, :, :), num_p(:, :, :), num_pp(:, :, :)
-
-      real(wp), allocatable :: Amat_copy(:, :), Amat_inv(:, :), identity_test(:, :)
+      !> Production inverse and the A A^-1 - 1 residual
+      real(wp), allocatable :: Amat_inv(:, :), residual(:, :)
       integer, allocatable :: ipiv(:)
-      integer :: info
-      real(wp) :: max_err
-      real(wp) :: blend_k_local
-      !> Analytic and numeric value of the entry under inspection
-      real(wp) :: analytic, numeric
-      !> Per-channel scale, max |numeric| over the channel; sets the MTHR term
-      real(wp) :: off_scale, diag_scale
+      !> Reference matrix at the current geometry
+      real(rk), allocatable :: ref_values(:, :)
+      !> Reference matrix at the four stencil geometries, on reference grid indices
+      real(rk), allocatable :: samples(:, :, :)
+      !> Anchor offsets from their owner nuclei, at the reference and current grid
+      real(rk), allocatable :: anchor_offset(:, :), displaced_anchors(:, :)
+      !> Displaced nuclear positions
+      real(rk), allocatable :: centers(:, :)
+      !> Persistent grid numbering -> reference grid index, and its current image
+      integer, allocatable :: numbering_to_idx(:), idx(:)
+      !> Reference switching values
+      real(wp), allocatable :: ref_f(:)
+      !> Points converged at the reference geometry, and at every stencil geometry
+      logical, allocatable :: valid_ref(:), valid(:), seen(:)
+      integer :: iat, idir, istep, igrid, jgrid, ngrid, info
+      integer :: worst_loc(2)
+      real(wp) :: blend_k_local, analytic, numeric, tol
       !> Worst |deviation|/tolerance seen, and where it occurred
       real(wp) :: worst_ratio, worst_a, worst_n, worst_tol
       integer :: worst_iat, worst_idir, worst_i, worst_j
-      character(len=16) :: worst_kind
-      !> Tolerance applied to the entry under inspection
-      real(wp) :: tol
-      type(mctc_error), allocatable :: cavity_error
-      type(moist_context_type), target :: ctx
 
-      !> Initialize cavity with 26-point Lebedev grid
       blend_k_local = k
-      off_scale = 0.0_wp; diag_scale = 0.0_wp
+      if (present(blend_k_override)) blend_k_local = blend_k_override
       worst_ratio = 0.0_wp; worst_a = 0.0_wp; worst_n = 0.0_wp; worst_tol = 0.0_wp
       worst_iat = 0; worst_idir = 0; worst_i = 0; worst_j = 0
-      worst_kind = "none"
-      if (present(blend_k_override)) blend_k_local = blend_k_override
+
+      call new_context(ctx, verbosity=0, debug=.false.)
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
             blend_3b=gamma))
-         call new_context(ctx, verbosity=0, debug=.false.)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
       end block
-      if (allocated(cavity_error)) then
-         call test_failed(error, cavity_error%message)
-         return
-      end if
-      call cavity%update(mol, error=cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%update(mol, error=cavity_error)
+      if (.not. allocated(cavity_error)) call cavity%get_gradient(cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
       end if
       ngrid = cavity%ngrid
 
-      allocate (ref_numbering(ngrid))
-      if (ngrid > 0) then
-         ref_numbering = cavity%numbering(1:ngrid)
-         max_numbering = maxval(ref_numbering)
-      else
-         max_numbering = 0
-      end if
-      allocate (numbering_to_idx(max(1, max_numbering)), source=0)
+      ! Reference grid indices follow the persistent numbering
+      allocate (numbering_to_idx(max(1, maxval([0, cavity%numbering(1:ngrid)]))), source=0)
       do igrid = 1, ngrid
-         num_idn = ref_numbering(igrid)
-         if (num_idn > 0 .and. num_idn <= size(numbering_to_idx)) then
-            numbering_to_idx(num_idn) = igrid
-         end if
+         if (cavity%numbering(igrid) > 0) numbering_to_idx(cavity%numbering(igrid)) = igrid
+      end do
+      valid_ref = cavity%converged(1:ngrid)
+      ref_f = cavity%f(1:ngrid)
+      allocate (anchor_offset(3, ngrid))
+      do igrid = 1, ngrid
+         anchor_offset(:, igrid) = real(cavity%anchorxyz(:, igrid), rk) &
+                                   - real(mol%xyz(:, cavity%owner(igrid)), rk)
       end do
 
-      ! Store reference convergence status before finite differences
-      allocate (valid_gridpoint_ref(ngrid), source=.false.)
-      do jgrid = 1, cavity%ngrid
-         num_idn = cavity%numbering(jgrid)
-         if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-         idx_i = numbering_to_idx(num_idn)
-         if (idx_i <= 0) cycle
-         valid_gridpoint_ref(idx_i) = cavity%converged(jgrid)
-      end do
-
-      !> Get analytic geometry derivatives
-      call cavity%get_gradient(cavity_error)
-      if (allocated(cavity_error)) then
-         call test_failed(error, cavity_error%message)
-         return
-      end if
-
-      !> Assemble A matrix and its gradient
       allocate (Amat0(ngrid, ngrid), Amat1_rA(ndim, mol%nat, ngrid, ngrid))
       call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
                                            cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
@@ -691,357 +622,130 @@ contains
          return
       end if
 
-      !> Allocate arrays for numerical and analytical gradients (mapped to reference grid IDs)
-      allocate (num_Amat1_rA(ndim, mol%nat, ngrid, ngrid), source=0.0_wp)
-      allocate (en_Amat1_rA(ndim, mol%nat, ngrid, ngrid), source=0.0_wp)
-
-      !> Store reference grid properties for diagnostics
-      allocate (ref_f(ngrid), source=0.0_wp)
-      do igrid = 1, cavity%ngrid
-         num_idn = cavity%numbering(igrid)
-         if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-         idx_i = numbering_to_idx(num_idn)
-         if (idx_i <= 0) cycle
-         ref_f(idx_i) = cavity%f(igrid)
-      end do
-
-      ! Remap analytical gradient using numbering (do this BEFORE FD loop while cavity is at reference)
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(igrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_i = numbering_to_idx(num_idn)
-               if (idx_i <= 0) cycle
-               do jgrid = 1, cavity%ngrid
-                  num_jdn = cavity%numbering(jgrid)
-                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                  idx_j = numbering_to_idx(num_jdn)
-                  if (idx_j <= 0) cycle
-                  ! Store analytical gradient (mapped by numbering)
-                  en_Amat1_rA(idir, iat, idx_i, idx_j) = Amat1_rA(idir, iat, igrid, jgrid)
-               end do
-            end do
-         end do
-      end do
-
-      !> Test inversion of A matrix using LAPACK
-
-      ! Copy A matrix for inversion (getrf/getri overwrite the input)
-      allocate (Amat_copy(ngrid, ngrid), source=Amat0(1:ngrid, 1:ngrid))
-      allocate (Amat_inv(ngrid, ngrid))
-      allocate (identity_test(ngrid, ngrid))
-      allocate (ipiv(ngrid))
-
-      ! LU factorization
-      call getrf(Amat_copy, ipiv, info)
-      if (info /= 0) then
-         call test_failed(error, "LAPACK getrf failed with info = "//to_string(info))
-         return
-      end if
-
-      ! Compute inverse from LU factorization
-      call getri(Amat_copy, ipiv, info)
-      if (info /= 0) then
-         call test_failed(error, "LAPACK getri failed with info = "//to_string(info))
-         return
-      end if
-
-      ! Amat_copy now contains A^{-1}
-      Amat_inv = Amat_copy
-
-      ! Test: A * A^{-1} should be identity
-      ! Use explicit matrix multiplication
-      identity_test = matmul(Amat0, Amat_inv)
-
-      ! Check that result is close to identity matrix
-      max_err = 0.0_wp
-      do igrid = 1, ngrid
-         do jgrid = 1, ngrid
-            if (igrid == jgrid) then
-               max_err = max(max_err, abs(identity_test(igrid, jgrid) - 1.0_wp))
-            else
-               max_err = max(max_err, abs(identity_test(igrid, jgrid)))
-            end if
-         end do
-      end do
-
-      ! Check that max error is small (A * A^{-1} = I)
-      if (max_err >= 1.0e-10_wp) then
-         write (error_unit, "(A)") "A * A^{-1} differs from identity. Problematic entries:"
+      !> Production values against the reference at the reference geometry
+      allocate (ref_values(ngrid, ngrid))
+      call cpcm_reference_matrix(cavity, real(mol%xyz, rk), anchor_offset, real(blend_k_local, rk), &
+                                 ref_values, error)
+      if (allocated(error)) return
+      do jgrid = 1, ngrid
+         if (.not. valid_ref(jgrid)) cycle
          do igrid = 1, ngrid
-            do jgrid = 1, ngrid
-               if (igrid == jgrid) then
-                  if (abs(identity_test(igrid, jgrid) - 1.0_wp) > 1.0e-10_wp) then
-                     write (error_unit, "(A,I4,A,I4,A,ES15.6,A,ES15.6)") &
-                        "  Diagonal (", igrid, ",", jgrid, "): got ", &
-                        identity_test(igrid, jgrid), ", expected 1.0, err = ", &
-                        abs(identity_test(igrid, jgrid) - 1.0_wp)
-                  end if
-               else
-                  if (abs(identity_test(igrid, jgrid)) > 1.0e-10_wp) then
-                     write (error_unit, "(A,I4,A,I4,A,ES15.6,A,ES15.6)") &
-                        "  Off-diag (", igrid, ",", jgrid, "): got ", &
-                        identity_test(igrid, jgrid), ", expected 0.0, err = ", &
-                        abs(identity_test(igrid, jgrid))
-                  end if
-               end if
-            end do
+            if (.not. valid_ref(igrid)) cycle
+            numeric = real(ref_values(igrid, jgrid), wp)
+            analytic = Amat0(igrid, jgrid)
+            call check(error, ieee_is_finite(analytic) .and. ieee_is_finite(numeric), &
+                       "Non-finite CPCM reference matrix value")
+            if (allocated(error)) return
+            tol = max(VALUE_ATOL, VALUE_RTOL*abs(numeric))
+            ! Buried diagonals A_ii ~ 1/f lose relative accuracy as eps/f
+            if (igrid == jgrid .and. ref_f(igrid) < DIAG_F_CUT) then
+               tol = max(tol, DIAG_EPS_FACTOR*epsilon(1.0_wp)/max(ref_f(igrid), tiny(1.0_wp)) &
+                         *abs(numeric))
+            end if
+            if (abs(analytic - numeric) > tol) then
+               call test_failed(error, "CPCM reference value mismatch at ("//to_string(igrid)//", "// &
+                                to_string(jgrid)//")", "production "//to_string(analytic)// &
+                                ", reference "//to_string(numeric))
+               return
+            end if
          end do
-         call test_failed(error, "A * A^{-1} differs from identity by "//to_string(max_err))
+      end do
+
+      !> A A^-1 must recover the identity
+      allocate (Amat_inv, source=Amat0)
+      allocate (ipiv(ngrid))
+      call getrf(Amat_inv, ipiv, info)
+      if (info == 0) call getri(Amat_inv, ipiv, info)
+      if (info /= 0) then
+         call test_failed(error, "LAPACK inversion failed with info = "//to_string(info))
          return
       end if
-
-      !> Compute numerical gradients via finite differences
-
-      ! Allocate temporary arrays for FD bookkeeping
-      allocate (nn_Amat(ngrid, ngrid), source=0.0_wp)
-      allocate (n_Amat(ngrid, ngrid), source=0.0_wp)
-      allocate (p_Amat(ngrid, ngrid), source=0.0_wp)
-      allocate (pp_Amat(ngrid, ngrid), source=0.0_wp)
-
-      ! Allocate convergence and numbering tracking arrays
-      allocate (nn_converged(ndim, mol%nat, ngrid), source=.false.)
-      allocate (n_converged(ndim, mol%nat, ngrid), source=.false.)
-      allocate (p_converged(ndim, mol%nat, ngrid), source=.false.)
-      allocate (pp_converged(ndim, mol%nat, ngrid), source=.false.)
-      allocate (num_nn(ndim, mol%nat, ngrid), source=0)
-      allocate (num_n(ndim, mol%nat, ngrid), source=0)
-      allocate (num_p(ndim, mol%nat, ngrid), source=0)
-      allocate (num_pp(ndim, mol%nat, ngrid), source=0)
-
-      !> Compute numerical gradients via finite differences with bookkeeping
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            ! Initialize arrays to zero
-            nn_Amat = 0.0_wp
-            n_Amat = 0.0_wp
-            p_Amat = 0.0_wp
-            pp_Amat = 0.0_wp
-
-            ! -2h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) - 2.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, Amat0, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, "assemble_pcm_amat failed: "//cavity_error%message)
-               return
-            end if
-            ! Store using numbering for bookkeeping
-            do igrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(igrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_i = numbering_to_idx(num_idn)
-               if (idx_i <= 0) cycle
-               do jgrid = 1, cavity%ngrid
-                  num_jdn = cavity%numbering(jgrid)
-                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                  idx_j = numbering_to_idx(num_jdn)
-                  if (idx_j <= 0) cycle
-                  nn_Amat(idx_i, idx_j) = Amat0(igrid, jgrid)
-               end do
-               nn_converged(idir, iat, idx_i) = cavity%converged(igrid)
-               num_nn(idir, iat, idx_i) = num_idn
-            end do
-
-            ! -1h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) - 1.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, Amat0, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, "assemble_pcm_amat failed: "//cavity_error%message)
-               return
-            end if
-            do igrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(igrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_i = numbering_to_idx(num_idn)
-               if (idx_i <= 0) cycle
-               do jgrid = 1, cavity%ngrid
-                  num_jdn = cavity%numbering(jgrid)
-                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                  idx_j = numbering_to_idx(num_jdn)
-                  if (idx_j <= 0) cycle
-                  n_Amat(idx_i, idx_j) = Amat0(igrid, jgrid)
-               end do
-               n_converged(idir, iat, idx_i) = cavity%converged(igrid)
-               num_n(idir, iat, idx_i) = num_idn
-            end do
-
-            ! +1h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + 1.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, Amat0, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, "assemble_pcm_amat failed: "//cavity_error%message)
-               return
-            end if
-            do igrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(igrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_i = numbering_to_idx(num_idn)
-               if (idx_i <= 0) cycle
-               do jgrid = 1, cavity%ngrid
-                  num_jdn = cavity%numbering(jgrid)
-                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                  idx_j = numbering_to_idx(num_jdn)
-                  if (idx_j <= 0) cycle
-                  p_Amat(idx_i, idx_j) = Amat0(igrid, jgrid)
-               end do
-               p_converged(idir, iat, idx_i) = cavity%converged(igrid)
-               num_p(idir, iat, idx_i) = num_idn
-            end do
-
-            ! +2h step
-            mol_fd = mol
-            mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + 2.0_wp*STEP_SIZE
-            call cavity%update(mol_fd, error=cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, cavity_error%message)
-               return
-            end if
-            call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, Amat0, cavity_error)
-            if (allocated(cavity_error)) then
-               call test_failed(error, "assemble_pcm_amat failed: "//cavity_error%message)
-               return
-            end if
-            do igrid = 1, cavity%ngrid
-               num_idn = cavity%numbering(igrid)
-               if (num_idn <= 0 .or. num_idn > size(numbering_to_idx)) cycle
-               idx_i = numbering_to_idx(num_idn)
-               if (idx_i <= 0) cycle
-               do jgrid = 1, cavity%ngrid
-                  num_jdn = cavity%numbering(jgrid)
-                  if (num_jdn <= 0 .or. num_jdn > size(numbering_to_idx)) cycle
-                  idx_j = numbering_to_idx(num_jdn)
-                  if (idx_j <= 0) cycle
-                  pp_Amat(idx_i, idx_j) = Amat0(igrid, jgrid)
-               end do
-               pp_converged(idir, iat, idx_i) = cavity%converged(igrid)
-               num_pp(idir, iat, idx_i) = num_idn
-            end do
-
-            ! Central difference formula: f'(x) ~ [-f(x+2h) + 8f(x+h) - 8f(x-h) + f(x-2h)] / (12h)
-            do igrid = 1, ngrid
-               do jgrid = 1, ngrid
-                  ! Skip if any of the 4 FD steps are missing for either gridpoint
-                  if (num_nn(idir, iat, igrid) == 0 .or. num_nn(idir, iat, jgrid) == 0) cycle
-                  if (num_n(idir, iat, igrid) == 0 .or. num_n(idir, iat, jgrid) == 0) cycle
-                  if (num_p(idir, iat, igrid) == 0 .or. num_p(idir, iat, jgrid) == 0) cycle
-                  if (num_pp(idir, iat, igrid) == 0 .or. num_pp(idir, iat, jgrid) == 0) cycle
-
-                  ! Compute numerical gradient
-                  num_Amat1_rA(idir, iat, igrid, jgrid) = &
-                     (-pp_Amat(igrid, jgrid) + 8.0_wp*p_Amat(igrid, jgrid) &
-                      - 8.0_wp*n_Amat(igrid, jgrid) + nn_Amat(igrid, jgrid)) &
-                     /(12.0_wp*STEP_SIZE)
-               end do
-            end do
-         end do
+      residual = matmul(Amat0, Amat_inv)
+      do igrid = 1, ngrid
+         residual(igrid, igrid) = residual(igrid, igrid) - 1.0_wp
       end do
+      if (ngrid > 0) then
+         worst_loc = maxloc(abs(residual))
+         if (abs(residual(worst_loc(1), worst_loc(2))) >= INVERSE_THR) then
+            call test_failed(error, "A A^-1 differs from identity by "// &
+                             to_string(abs(residual(worst_loc(1), worst_loc(2))))//" at ("// &
+                             to_string(worst_loc(1))//", "//to_string(worst_loc(2))//")")
+            return
+         end if
+      end if
 
-      ! Build comprehensive validity tracking array
-      ! A gridpoint pair (igrid, jgrid) is valid only if:
-      ! 1. Both gridpoints converged in the reference configuration
-      ! 2. Both exist (numbering > 0) and converged in all 4 FD steps
-      allocate (valid_gridpoint(ndim, mol%nat, ngrid), source=.false.)
-
+      !> Analytic derivatives against finite differences of the reference
+      allocate (samples(ngrid, ngrid, 4), valid(ngrid), seen(ngrid))
+      allocate (centers(3, mol%nat))
       do iat = 1, mol%nat
          do idir = 1, ndim
-            do igrid = 1, ngrid
-               ! Start with reference convergence
-               valid_gridpoint(idir, iat, igrid) = valid_gridpoint_ref(igrid)
-
-               ! Check all 4 FD steps: must exist (numbering > 0) AND converged
-               if (valid_gridpoint(idir, iat, igrid)) then
-                  valid_gridpoint(idir, iat, igrid) = &
-                     (num_nn(idir, iat, igrid) > 0 .and. nn_converged(idir, iat, igrid)) .and. &
-                     (num_n(idir, iat, igrid) > 0 .and. n_converged(idir, iat, igrid)) .and. &
-                     (num_p(idir, iat, igrid) > 0 .and. p_converged(idir, iat, igrid)) .and. &
-                     (num_pp(idir, iat, igrid) > 0 .and. pp_converged(idir, iat, igrid))
+            valid = valid_ref
+            samples = 0.0_rk
+            do istep = 1, size(offsets)
+               mol_fd = mol
+               mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + offsets(istep)*MATRIX_STEP
+               call cavity%update(mol_fd, error=cavity_error)
+               if (allocated(cavity_error)) then
+                  call test_failed(error, cavity_error%message)
+                  return
                end if
-            end do
-         end do
-      end do
+               centers = real(mol%xyz, rk)
+               centers(idir, iat) = centers(idir, iat) + real(offsets(istep), rk)*real(MATRIX_STEP, rk)
 
-      !> Compare analytic vs numeric A matrix gradients (only valid gridpoint
-      !> pairs). Two passes over each channel: the first fixes its scale, which
-      !> the scale-relative MTHR term of the tolerance needs, the second judges
-      !> every entry against that tolerance and keeps the worst violation
-      !> The passes are plain traversals of arrays that are already complete, so
-      !> they cost nothing next to the finite differences that filled them
-
-      !> Off-diagonal elements, pass 1: channel scale
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid
-               do jgrid = 1, ngrid
-                  if (jgrid == igrid) cycle
-                  if (.not. pair_is_valid(idir, iat, igrid, jgrid)) cycle
-                  off_scale = max(off_scale, abs(num_Amat1_rA(idir, iat, igrid, jgrid)))
+               ! Surviving points keep their rigid anchor offset; new points use the production one
+               call reference_indices(cavity%numbering(1:cavity%ngrid), idx)
+               allocate (displaced_anchors(3, cavity%ngrid))
+               do igrid = 1, cavity%ngrid
+                  if (idx(igrid) > 0) then
+                     displaced_anchors(:, igrid) = anchor_offset(:, idx(igrid))
+                  else
+                     displaced_anchors(:, igrid) = real(cavity%anchorxyz(:, igrid), rk) &
+                                                   - real(mol_fd%xyz(:, cavity%owner(igrid)), rk)
+                  end if
                end do
-            end do
-         end do
-      end do
+               deallocate (ref_values)
+               allocate (ref_values(cavity%ngrid, cavity%ngrid))
+               call cpcm_reference_matrix(cavity, centers, displaced_anchors, real(blend_k_local, rk), &
+                                          ref_values, error)
+               if (allocated(error)) return
+               deallocate (displaced_anchors)
 
-      !> Off-diagonal elements, pass 2: tolerance
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid
-               do jgrid = 1, ngrid
-                  if (jgrid == igrid) cycle
-                  if (.not. pair_is_valid(idir, iat, igrid, jgrid)) cycle
-
-                  analytic = en_Amat1_rA(idir, iat, igrid, jgrid)
-                  numeric = num_Amat1_rA(idir, iat, igrid, jgrid)
-                  tol = max(ATHR_OFFDIAG, RTHR_OFFDIAG*abs(numeric), &
-                            MTHR_OFFDIAG*off_scale)
-                  call record_worst("off-diagonal", analytic, numeric, tol, &
-                                    iat, idir, igrid, jgrid)
+               seen = .false.
+               do jgrid = 1, cavity%ngrid
+                  if (idx(jgrid) == 0) cycle
+                  seen(idx(jgrid)) = cavity%converged(jgrid)
+                  do igrid = 1, cavity%ngrid
+                     if (idx(igrid) == 0) cycle
+                     samples(idx(igrid), idx(jgrid), istep) = ref_values(igrid, jgrid)
+                  end do
                end do
+               valid = valid .and. seen
             end do
-         end do
-      end do
+            call check(error, any(valid), "No grid point stays converged across the stencil")
+            if (allocated(error)) return
 
-      !> Diagonal elements, pass 1: channel scale
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid
-               if (.not. pair_is_valid(idir, iat, igrid, igrid)) cycle
-               ! Cycle if switching function (otherwise num. noise dominates as A_ii ~ 1/f)
-               if (ref_f(igrid) < 1.0e-4_wp) cycle
-               diag_scale = max(diag_scale, abs(num_Amat1_rA(idir, iat, igrid, igrid)))
-            end do
-         end do
-      end do
-
-      !> Diagonal elements, pass 2: tolerance
-      do iat = 1, mol%nat
-         do idir = 1, ndim
-            do igrid = 1, ngrid
-               if (.not. pair_is_valid(idir, iat, igrid, igrid)) cycle
-               if (ref_f(igrid) < 1.0e-4_wp) cycle
-
-               analytic = en_Amat1_rA(idir, iat, igrid, igrid)
-               numeric = num_Amat1_rA(idir, iat, igrid, igrid)
-               tol = max(ATHR_DIAG, RTHR_DIAG*abs(numeric), MTHR_DIAG*diag_scale)
-               call record_worst("diagonal", analytic, numeric, tol, &
-                                 iat, idir, igrid, igrid)
+            do jgrid = 1, ngrid
+               if (.not. valid(jgrid)) cycle
+               do igrid = 1, ngrid
+                  if (.not. valid(igrid)) cycle
+                  ! A_ii ~ 1/f: finite differences are noise-dominated at small f
+                  if (igrid == jgrid .and. ref_f(igrid) < DIAG_F_CUT) cycle
+                  ! Pair opposite samples before combining the fourth-order stencil
+                  numeric = real((8.0_rk*(samples(igrid, jgrid, 3) - samples(igrid, jgrid, 2)) &
+                                  - (samples(igrid, jgrid, 4) - samples(igrid, jgrid, 1))) &
+                                 /(12.0_rk*real(MATRIX_STEP, rk)), wp)
+                  analytic = Amat1_rA(idir, iat, igrid, jgrid)
+                  call check(error, ieee_is_finite(analytic) .and. ieee_is_finite(numeric), &
+                             "Non-finite CPCM matrix derivative")
+                  if (allocated(error)) return
+                  ! Stencil round-off scales with the differenced entry, not with its derivative
+                  tol = max(MATRIX_ATOL, MATRIX_RTOL*abs(numeric), MATRIX_FLOOR*real(epsilon(1.0_rk) &
+                            *maxval(abs(samples(igrid, jgrid, :)))/real(MATRIX_STEP, rk), wp))
+                  if (abs(analytic - numeric)/tol <= worst_ratio) cycle
+                  worst_ratio = abs(analytic - numeric)/tol
+                  worst_a = analytic; worst_n = numeric; worst_tol = tol
+                  worst_iat = iat; worst_idir = idir; worst_i = igrid; worst_j = jgrid
+               end do
             end do
          end do
       end do
@@ -1050,7 +754,6 @@ contains
       ! can name the entry that actually decided the outcome
       if (worst_ratio > 1.0_wp) then
          write (error_unit, "(a)") "A-matrix gradient exceeds its tolerance:"
-         write (error_unit, "(2x,a,a)") "channel   : ", trim(worst_kind)
          write (error_unit, "(2x,a,i0,a,i0)") "atom/axis : ", worst_iat, " / ", worst_idir
          write (error_unit, "(2x,a,i0,a,i0)") "entry     : ", worst_i, " , ", worst_j
          write (error_unit, "(2x,a,es15.6)") "analytic  : ", worst_a
@@ -1059,71 +762,386 @@ contains
          write (error_unit, "(2x,a,es15.6)") "tolerance : ", worst_tol
          call test_failed(error, "A-matrix gradient off by "// &
                           to_string(worst_ratio)//" times its tolerance")
-         return
       end if
 
    contains
 
-      !> True iff a gridpoint pair carries a usable finite difference
+      !> Reference grid index of each current point, zero for points absent at the reference
       !>
-      !> Both points must have converged in the reference configuration and
-      !> must have existed (nonzero numbering) and converged in all four
-      !> displaced ones; otherwise `num_Amat1_rA` was left at zero and there is
-      !> nothing to compare against
-      !>
-      !> @param[in] idir   Displacement axis
-      !> @param[in] iat    Displaced atom
-      !> @param[in] ig     Row gridpoint
-      !> @param[in] jg     Column gridpoint
-      !> @return    valid  Whether the pair may be compared
-      pure logical function pair_is_valid(idir, iat, ig, jg) result(valid)
-         !> Displacement axis and displaced atom
-         integer, intent(in) :: idir, iat
-         !> Row and column gridpoints
-         integer, intent(in) :: ig, jg
+      !> @param[in]  numbering  Persistent numbering of the current grid
+      !> @param[out] idx        Reference grid indices
+      subroutine reference_indices(numbering, idx)
+         !> Persistent numbering of the current grid
+         integer, intent(in) :: numbering(:)
+         !> Reference grid indices
+         integer, allocatable, intent(out) :: idx(:)
+         integer :: i
 
-         valid = valid_gridpoint(idir, iat, ig) .and. valid_gridpoint(idir, iat, jg)
-         if (.not. valid) return
-         valid = num_nn(idir, iat, ig) /= 0 .and. num_nn(idir, iat, jg) /= 0 .and. &
-                 num_n(idir, iat, ig) /= 0 .and. num_n(idir, iat, jg) /= 0 .and. &
-                 num_p(idir, iat, ig) /= 0 .and. num_p(idir, iat, jg) /= 0 .and. &
-                 num_pp(idir, iat, ig) /= 0 .and. num_pp(idir, iat, jg) /= 0
-      end function pair_is_valid
-
-      !> Keep the entry with the largest deviation measured in its own tolerance
-      !>
-      !> @param[in] kind  Channel label used in the failure report
-      !> @param[in] a     Analytic derivative
-      !> @param[in] n     Numeric derivative
-      !> @param[in] t     Tolerance applied to this entry
-      !> @param[in] iat   Displaced atom
-      !> @param[in] idir  Displacement axis
-      !> @param[in] ig    Row gridpoint
-      !> @param[in] jg    Column gridpoint
-      subroutine record_worst(kind, a, n, t, iat, idir, ig, jg)
-         !> Channel label
-         character(len=*), intent(in) :: kind
-         !> Analytic derivative, numeric derivative, and tolerance
-         real(wp), intent(in) :: a, n, t
-         !> Displaced atom, displacement axis, and the two gridpoints
-         integer, intent(in) :: iat, idir, ig, jg
-
-         !> Deviation in units of the tolerance
-         real(wp) :: ratio
-
-         ratio = abs(a - n)/t
-         if (ratio <= worst_ratio) return
-         worst_ratio = ratio
-         worst_kind = kind
-         worst_a = a
-         worst_n = n
-         worst_tol = t
-         worst_iat = iat
-         worst_idir = idir
-         worst_i = ig
-         worst_j = jg
-      end subroutine record_worst
+         allocate (idx(size(numbering)), source=0)
+         do i = 1, size(numbering)
+            if (numbering(i) > 0 .and. numbering(i) <= size(numbering_to_idx)) then
+               idx(i) = numbering_to_idx(numbering(i))
+            end if
+         end do
+      end subroutine reference_indices
 
    end subroutine do_test
+
+   !> Independent SvdW value, spatial gradient, and spatial Hessian
+   !>
+   !> @param[in] point Projected position in bohr, shape (3)
+   !> @param[in] centers Nuclear positions in bohr, shape (3, nat)
+   !> @param[in] radii Sphere radii in bohr, shape (nat)
+   !> @param[in] blend SvdW blending sharpness
+   !> @param[in] gamma_r Three-body SvdW blending weight
+   !> @param[out] s Level-set value
+   !> @param[out] g Spatial level-set gradient, shape (3)
+   !> @param[out] hess Spatial level-set Hessian, shape (3, 3)
+   subroutine ref_svdw(point, centers, radii, blend, gamma_r, s, g, hess)
+      !> Projected position in bohr, shape (3)
+      real(rk), intent(in) :: point(3)
+      !> Nuclear positions in bohr, shape (3, nat)
+      real(rk), intent(in) :: centers(:, :)
+      !> Sphere radii in bohr, shape (nat)
+      real(rk), intent(in) :: radii(:)
+      !> SvdW blending sharpness
+      real(rk), intent(in) :: blend
+      !> Three-body SvdW blending weight
+      real(rk), intent(in) :: gamma_r
+      !> Level-set value
+      real(rk), intent(out) :: s
+      !> Spatial level-set gradient, shape (3)
+      real(rk), intent(out) :: g(3)
+      !> Spatial level-set Hessian, shape (3, 3)
+      real(rk), intent(out) :: hess(3, 3)
+      real(rk) :: ps(3), pg(3, 3), ph(3, 3, 3), r, dr(3), n(3), c, v
+      real(rk) :: z, zg(3), zh(3, 3), unit(3, 3), outer(3, 3), product_hessian
+      integer :: i, j, a, m
+      unit = 0.0_rk
+      do i = 1, 3
+         unit(i, i) = 1.0_rk
+      end do
+      ps = 0.0_rk; pg = 0.0_rk; ph = 0.0_rk
+      do a = 1, size(radii)
+         dr = point - centers(:, a)
+         r = sqrt(sum(dr*dr)); n = dr/r
+         do j = 1, 3
+            do i = 1, 3
+               outer(i, j) = n(i)*n(j)
+            end do
+         end do
+         do m = 1, 3
+            c = blend*real(m, rk)/3.0_rk
+            v = exp(-c*(r - radii(a)))
+            ps(m) = ps(m) + v
+            pg(:, m) = pg(:, m) - c*v*n
+            ph(:, :, m) = ph(:, :, m) + v*(c*c*outer - c/r*(unit - outer))
+         end do
+      end do
+      z = ps(3) + gamma_r/6.0_rk*(ps(1)**3 - 3.0_rk*ps(1)*ps(2) + 2.0_rk*ps(3))
+      zg = pg(:, 3) + gamma_r/6.0_rk*(3.0_rk*ps(1)**2*pg(:, 1) &
+                                      - 3.0_rk*(pg(:, 1)*ps(2) + ps(1)*pg(:, 2)) + 2.0_rk*pg(:, 3))
+      do j = 1, 3
+         do i = 1, 3
+            product_hessian = ph(i, j, 1)*ps(2) + pg(i, 1)*pg(j, 2) &
+                              + pg(j, 1)*pg(i, 2) + ps(1)*ph(i, j, 2)
+            zh(i, j) = ph(i, j, 3) + gamma_r/6.0_rk*(6.0_rk*ps(1)*pg(i, 1)*pg(j, 1) &
+                                                     + 3.0_rk*ps(1)**2*ph(i, j, 1) - 3.0_rk*product_hessian + 2.0_rk*ph(i, j, 3))
+            hess(i, j) = -(zh(i, j)/z - zg(i)*zg(j)/(z*z))/blend
+         end do
+      end do
+      s = -log(z)/blend
+      g = -zg/(blend*z)
+   end subroutine ref_svdw
+
+   !> Independent critical or focal switching value
+   !>
+   !> @param[in] x Switching input
+   !> @param[in] sw Critical or focal switching parameters
+   function ref_bump(x, sw) result(value)
+      use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type
+      !> Switching input
+      real(rk), intent(in) :: x
+      !> Critical or focal switching parameters
+      type(moist_cavity_drop_swif_sigmoid_bump_type), intent(in) :: sw
+      !> Switching value
+      real(rk) :: value
+      real(rk) :: lo, hi, width, u, t, exponent
+      lo = real(min(sw%from, sw%to), rk); hi = real(max(sw%from, sw%to), rk)
+      width = hi - lo
+      if (x <= lo) then
+         value = 0.0_rk
+      else if (x >= hi) then
+         value = 1.0_rk
+      else
+         u = (hi - x)/width; t = 1.0_rk - u
+         exponent = -real(sw%a_hi, rk)*u**(-real(sw%p_hi, rk)) &
+                    + real(sw%a_lo, rk)*t**(-real(sw%p_lo, rk))
+         if (exponent >= 50.0_rk) then
+            value = 0.0_rk
+         else if (exponent <= -50.0_rk) then
+            value = 1.0_rk
+         else
+            value = 1.0_rk/(1.0_rk + exp(exponent))
+         end if
+      end if
+      if (sw%from > sw%to) value = 1.0_rk - value
+   end function ref_bump
+
+   !> Independent closest-point area and focus weight
+   !>
+   !> @param[in] cavity Production branch seeds, identities, and fixed cavity parameters
+   !> @param[in] igrid Production grid index
+   !> @param[in] anchor Unprojected anchor in bohr, shape (3)
+   !> @param[in] centers Nuclear positions in bohr, shape (3, nat)
+   !> @param[in] blend SvdW blending sharpness
+   !> @param[out] refined_point Refined branch position in bohr, shape (3)
+   !> @param[out] error Reference failure
+   function ref_weight(cavity, igrid, anchor, centers, blend, refined_point, error) result(weight)
+      !> Production branch seeds, identities, and fixed cavity parameters
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Production grid index
+      integer, intent(in) :: igrid
+      !> Unprojected anchor in bohr, shape (3)
+      real(rk), intent(in) :: anchor(3)
+      !> Nuclear positions in bohr, shape (3, nat)
+      real(rk), intent(in) :: centers(:, :)
+      !> SvdW blending sharpness
+      real(rk), intent(in) :: blend
+      !> Refined branch position in bohr, shape (3)
+      real(rk), intent(out), optional :: refined_point(3)
+      !> Reference failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Area, focus, and branch weight before normalization
+      real(rk) :: weight
+      real(rk) :: point(3), g(3), hess(3, 3), s, gnorm, n(3), sphere(3)
+      real(rk) :: amat(3, 3), adj(3, 3), alpha, lambda, detb, trb, beta2, area, focus
+      integer :: i
+      point = real(cavity%xyz(:, igrid), rk)
+      lambda = real(cavity%lambda0(igrid), rk)
+      alpha = real(cavity%param%phi_alpha, rk)
+      if (cavity%converged(igrid)) then
+         call ref_refine(point, lambda, anchor, centers, real(cavity%iswig%radii, rk), blend, alpha, error)
+      end if
+      if (allocated(error)) then
+         weight = 0.0_rk
+         return
+      end if
+      call ref_svdw(point, centers, real(cavity%iswig%radii, rk), blend, real(gamma, rk), s, g, hess)
+      if (present(refined_point)) refined_point = point
+      gnorm = sqrt(sum(g*g)); n = g/gnorm
+      amat = -lambda*hess
+      do i = 1, 3
+         amat(i, i) = amat(i, i) + alpha
+      end do
+      adj(1, 1) = amat(2, 2)*amat(3, 3) - amat(2, 3)**2
+      adj(2, 2) = amat(1, 1)*amat(3, 3) - amat(1, 3)**2
+      adj(3, 3) = amat(1, 1)*amat(2, 2) - amat(1, 2)**2
+      adj(1, 2) = amat(1, 3)*amat(2, 3) - amat(1, 2)*amat(3, 3)
+      adj(1, 3) = amat(1, 2)*amat(2, 3) - amat(1, 3)*amat(2, 2)
+      adj(2, 3) = amat(1, 2)*amat(1, 3) - amat(1, 1)*amat(2, 3)
+      adj(2, 1) = adj(1, 2); adj(3, 1) = adj(1, 3); adj(3, 2) = adj(2, 3)
+      ! Tangent determinant n^T adj(A) n, independent of tangent-frame choices
+      detb = dot_product(n, matmul(adj, n))
+      trb = amat(1, 1) + amat(2, 2) + amat(3, 3) - dot_product(n, matmul(amat, n))
+      beta2 = 0.5_rk*trb - sqrt(max(0.0_rk, 0.25_rk*trb*trb - detb))
+      sphere = anchor - centers(:, cavity%owner(igrid)); sphere = sphere/sqrt(sum(sphere*sphere))
+      ! Area of the closest-point map between sphere and surface tangent planes
+      area = alpha*alpha*abs(dot_product(n, sphere))/abs(detb)
+      focus = ref_bump(gnorm, cavity%f_crit)*ref_bump(beta2, cavity%f_foc)
+      weight = real(cavity%anchor_wleb0(igrid), rk)*area*focus
+   end function ref_weight
+
+   !> Refine one converged production branch with a spatial KKT solve
+   !>
+   !> @param[in,out] point Projected position in bohr, shape (3)
+   !> @param[in,out] lambda Closest-point Lagrange multiplier
+   !> @param[in] anchor Unprojected anchor in bohr, shape (3)
+   !> @param[in] centers Nuclear positions in bohr, shape (3, nat)
+   !> @param[in] radii Sphere radii in bohr, shape (nat)
+   !> @param[in] blend SvdW blending sharpness
+   !> @param[in] alpha Closest-point objective coefficient
+   !> @param[out] error Reference failure
+   subroutine ref_refine(point, lambda, anchor, centers, radii, blend, alpha, error)
+      !> Projected position in bohr, shape (3)
+      real(rk), intent(inout) :: point(3)
+      !> Closest-point Lagrange multiplier
+      real(rk), intent(inout) :: lambda
+      !> Unprojected anchor in bohr, shape (3)
+      real(rk), intent(in) :: anchor(3)
+      !> Nuclear positions in bohr, shape (3, nat)
+      real(rk), intent(in) :: centers(:, :)
+      !> Sphere radii in bohr, shape (nat)
+      real(rk), intent(in) :: radii(:)
+      !> SvdW blending sharpness
+      real(rk), intent(in) :: blend
+      !> Closest-point objective coefficient
+      real(rk), intent(in) :: alpha
+      !> Reference failure
+      type(error_type), allocatable, intent(out) :: error
+      real(rk) :: s, g(3), hess(3, 3), jac(4, 4), rhs(4), row(4), factor, delta(4)
+      integer :: iter, i, j, pivot
+      do iter = 1, 8
+         call ref_svdw(point, centers, radii, blend, real(gamma, rk), s, g, hess)
+         rhs(1:3) = -alpha*(point - anchor) + lambda*g
+         rhs(4) = s
+         if (maxval(abs(rhs)) < REFINE_TOL) return
+         jac(1:3, 1:3) = -lambda*hess
+         do i = 1, 3
+            jac(i, i) = jac(i, i) + alpha
+         end do
+         jac(1:3, 4) = -g; jac(4, 1:3) = -g; jac(4, 4) = 0.0_rk
+         do i = 1, 3
+            pivot = maxloc(abs(jac(i:4, i)), dim=1) + i - 1
+            if (pivot /= i) then
+               row = jac(i, :); jac(i, :) = jac(pivot, :); jac(pivot, :) = row
+               factor = rhs(i); rhs(i) = rhs(pivot); rhs(pivot) = factor
+            end if
+            do j = i + 1, 4
+               factor = jac(j, i)/jac(i, i)
+               jac(j, i:4) = jac(j, i:4) - factor*jac(i, i:4)
+               rhs(j) = rhs(j) - factor*rhs(i)
+            end do
+         end do
+         do i = 4, 1, -1
+            delta(i) = (rhs(i) - dot_product(jac(i, i + 1:4), delta(i + 1:4)))/jac(i, i)
+         end do
+         point = point + delta(1:3); lambda = lambda + delta(4)
+      end do
+      call test_failed(error, "CPCM reference could not refine a converged production branch")
+   end subroutine ref_refine
+
+   !> Independent surface values for the retained branches
+   !>
+   !> @param[in] cavity Production branch seeds, identities, and fixed cavity parameters
+   !> @param[in] centers Nuclear positions in bohr, shape (3, nat)
+   !> @param[in] anchors Anchor offsets from their owner nuclei in bohr, shape (3, ngrid)
+   !> @param[in] blend SvdW blending sharpness
+   !> @param[out] points Refined branch positions in bohr, shape (3, ngrid)
+   !> @param[out] widths Gaussian widths, shape (ngrid)
+   !> @param[out] switches Anchor switching values, shape (ngrid)
+   !> @param[out] error Reference failure
+   subroutine cpcm_reference_surface(cavity, centers, anchors, blend, points, widths, switches, error)
+      !> Production branch seeds, identities, and fixed cavity parameters
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Nuclear positions in bohr, shape (3, nat)
+      real(rk), intent(in) :: centers(:, :)
+      !> Anchor offsets from their owner nuclei in bohr, shape (3, ngrid)
+      real(rk), intent(in) :: anchors(:, :)
+      !> SvdW blending sharpness
+      real(rk), intent(in) :: blend
+      !> Refined branch positions in bohr, shape (3, ngrid)
+      real(rk), intent(out) :: points(:, :)
+      !> Gaussian widths, shape (ngrid)
+      real(rk), intent(out) :: widths(:)
+      !> Anchor switching values, shape (ngrid)
+      real(rk), intent(out) :: switches(:)
+      !> Reference failure
+      type(error_type), allocatable, intent(out) :: error
+      real(rk) :: weight(cavity%ngrid), phi(cavity%ngrid), branch(cavity%ngrid)
+      real(rk) :: anchor(3), width, rij, rplus, rminus, radius
+      integer :: i, a, owner, lo, hi
+      ! Full-sum oracle; production screens contributions at tolerance*0.1
+      ! The registered fixtures use tolerance=PROJ_TOL; central raw values are
+      ! compared separately before any finite-difference derivative check
+      select type (lsf => cavity%lsf_model)
+      type is (moist_cavity_drop_lsf_svdw_type)
+         if (lsf%param%blend_1b /= 1.0_wp .or. lsf%param%blend_2b /= 0.0_wp .or. &
+             lsf%param%blend_3b /= 1.0_wp .or. real(lsf%param%blend_k, rk) /= blend .or. &
+             lsf%screening_threshold > PROJ_TOL*0.1_wp .or. cavity%param%wleb_prune_level /= 0) then
+            call test_failed(error, "CPCM reference requires the tightly screened fixture SvdW parameters")
+            return
+         end if
+      class default
+         call test_failed(error, "CPCM reference requires the SvdW level set")
+         return
+      end select
+      do i = 1, cavity%ngrid
+         owner = cavity%owner(i)
+         anchor = centers(:, owner) + anchors(:, i)
+         weight(i) = ref_weight(cavity, i, anchor, centers, blend, points(:, i), error)
+         if (allocated(error)) return
+         phi(i) = 0.5_rk*real(cavity%param%phi_alpha, rk)*sum((points(:, i) - anchor)**2)
+         width = real(cavity%anchor_xi0(i), rk)
+         switches(i) = 1.0_rk
+         do a = 1, size(centers, 2)
+            if (a == owner) cycle
+            rij = sqrt(sum((anchor - centers(:, a))**2))
+            radius = real(cavity%iswig%radii(a), rk)
+            rplus = width*(radius + rij); rminus = width*(radius - rij)
+            switches(i) = switches(i)*0.5_rk*(erfc(rplus) + erfc(rminus))
+         end do
+      end do
+      branch = 1.0_rk
+      lo = 1
+      do while (lo <= cavity%ngrid)
+         hi = lo
+         do while (hi < cavity%ngrid)
+            if (cavity%anchor_id(hi + 1) /= cavity%anchor_id(lo)) exit
+            hi = hi + 1
+         end do
+         if (hi > lo) then
+            branch(lo:hi) = exp(-(phi(lo:hi) - minval(phi(lo:hi)))/real(cavity%param%branch_weight_s, rk))
+            branch(lo:hi) = branch(lo:hi)/sum(branch(lo:hi))
+         end if
+         lo = hi + 1
+      end do
+      do i = 1, cavity%ngrid
+         widths(i) = real(cavity%iswig%swx, rk)/(real(cavity%iswig%radii(cavity%owner(i)), rk)*sqrt(weight(i)*branch(i)))
+         if (.not. cavity%converged(i)) then
+            ! Unconverged points retain their seeds and remain outside the FD mask
+            points(:, i) = real(cavity%xyz(:, i), rk)
+            widths(i) = real(cavity%xi0(i), rk)
+            switches(i) = real(cavity%f(i), rk)
+         end if
+      end do
+      if (.not. all(ieee_is_finite(points)) .or. .not. all(ieee_is_finite(widths)) .or. &
+          .not. all(ieee_is_finite(switches)) .or. any(widths <= 0.0_rk) .or. any(switches <= 0.0_rk)) then
+         call test_failed(error, "CPCM reference surface contains non-finite or non-positive values")
+      end if
+   end subroutine cpcm_reference_surface
+
+   !> Independent raw Gaussian PCM matrix values
+   !>
+   !> @param[in] cavity Production branch seeds, identities, and fixed cavity parameters
+   !> @param[in] centers Nuclear positions in bohr, shape (3, nat)
+   !> @param[in] anchors Anchor offsets from their owner nuclei in bohr, shape (3, ngrid)
+   !> @param[in] blend SvdW blending sharpness
+   !> @param[out] values Raw interaction matrix, shape (ngrid, ngrid)
+   !> @param[out] error Reference failure
+   subroutine cpcm_reference_matrix(cavity, centers, anchors, blend, values, error)
+      !> Production branch seeds, identities, and fixed cavity parameters
+      type(cavity_type_drop), intent(in) :: cavity
+      !> Nuclear positions in bohr, shape (3, nat)
+      real(rk), intent(in) :: centers(:, :)
+      !> Anchor offsets from their owner nuclei in bohr, shape (3, ngrid)
+      real(rk), intent(in) :: anchors(:, :)
+      !> SvdW blending sharpness
+      real(rk), intent(in) :: blend
+      !> Raw interaction matrix, shape (ngrid, ngrid)
+      real(rk), intent(out) :: values(:, :)
+      !> Reference failure
+      type(error_type), allocatable, intent(out) :: error
+      real(rk) :: points(3, cavity%ngrid), widths(cavity%ngrid), switches(cavity%ngrid)
+      real(rk) :: r2, pair_width
+      integer :: i, j
+      call cpcm_reference_surface(cavity, centers, anchors, blend, points, widths, switches, error)
+      if (allocated(error)) return
+      do i = 1, cavity%ngrid
+         values(i, i) = sqrt(2.0_rk/acos(-1.0_rk))*widths(i)/switches(i)
+      end do
+      do j = 1, cavity%ngrid
+         do i = 1, j - 1
+            r2 = sum((points(:, i) - points(:, j))**2)
+            pair_width = widths(i)*widths(j)/sqrt(widths(i)**2 + widths(j)**2)
+            if (r2 == 0.0_rk) then
+               values(i, j) = 2.0_rk/sqrt(acos(-1.0_rk))*pair_width
+            else
+               values(i, j) = erf(pair_width*sqrt(r2))/sqrt(r2)
+            end if
+            values(j, i) = values(i, j)
+         end do
+      end do
+   end subroutine cpcm_reference_matrix
 
 end module test_cavity_drop_cpcm

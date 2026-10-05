@@ -11,6 +11,7 @@ module test_cavity_numsa
    use moist_radii, only: radius_type_static
    use moist_radii, only: new_d3_radii, new_bondi_radii, new_cosmo_radii, new_cpcm_radii
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: fd4_scalar
    implicit none(type, external)
    private
 
@@ -414,7 +415,9 @@ contains
 
             mol%xyz(ic, iat) = x0
 
-            grad(ic, iat) = (am2 - 8.0_wp*am1 + 8.0_wp*ap1 - ap2)/(12.0_wp*stepsize)
+            ! Fails on a nonfinite reference, which the absolute check would pass
+            call fd4_scalar(ap2, ap1, am1, am2, stepsize, grad(ic, iat), error)
+            if (allocated(error)) return
          end do
       end do
 

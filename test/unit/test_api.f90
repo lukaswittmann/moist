@@ -31,6 +31,7 @@ module test_api
       & get_coupling_request_field_count_api, get_coupling_request_field_info_api, &
       & get_coupling_request_field_about_api, get_coupling_request_field_real_api
    use moist_channels_fields, only: field_query_type, field_real
+   use moist_model_continuum_component_pcm_amat, only: pcm_amat_surface_weights
    use moist_cavity_type, only: cavity_type
    use moist_channels_coupling, only: coupling_type, coupling_begin_registration, coupling_snapshot, &
       & coupling_register, coupling_arm, request_require, moist_phase_energy, &
@@ -988,7 +989,8 @@ contains
    end subroutine test_cavity_field_empty_name
 
    !> A field index outside the reported count is refused, and the descriptor
-   !> outputs remain unchanged
+   !> outputs remain unchanged; an index inside it describes `xyz` with its
+   !> declared type, shape and count
    !>
    !> The index is the one field-API argument the caller derives from an earlier
    !> call, so a stale count is the realistic way to get here.  Unchecked it
@@ -999,9 +1001,10 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
       type(c_ptr) :: verror, vmol, vcav
-      integer(c_int) :: ngrid, nsph, nfield
+      integer(c_int) :: ngrid, nsph, nfield, ifield
+      logical :: found_xyz
       integer(c_int) :: dtype, rank, dims(3), count
-      character(kind=c_char), target :: name(64)
+      character(kind=c_char), target :: name(65)
 
       call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
       if (allocated(error)) return
@@ -1011,6 +1014,26 @@ contains
          call test_failed(error, "get_cavity_field_count failed: "//err%ptr%message)
       else if (nfield <= 0_c_int) then
          call test_failed(error, "A built cavity declares no fields")
+      end if
+
+      found_xyz = .false.
+      if (.not. allocated(error)) then
+         do ifield = 0, nfield - 1
+            call moist_get_cavity_field_info(verror, vcav, ifield, name, dtype, rank, dims, count)
+            if (allocated(err%ptr)) then
+               call test_failed(error, "Valid cavity descriptor failed: "//err%ptr%message)
+               exit
+            end if
+            if (name(1) == "x" .and. name(2) == "y" .and. name(3) == "z" &
+                .and. name(4) == c_null_char) then
+               found_xyz = .true.
+               call check(error, dtype == 1_c_int .and. rank == 2_c_int &
+                  .and. count == 3*ngrid .and. all(dims == [ngrid, 3_c_int, 1_c_int]), &
+                  "Cavity xyz descriptor has incorrect type, shape or count")
+               exit
+            end if
+         end do
+         if (.not. allocated(error)) call check(error, found_xyz, "Cavity xyz descriptor is absent")
       end if
 
       if (.not. allocated(error)) then
@@ -1126,7 +1149,7 @@ contains
    subroutine test_cavity_field_bool(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
-      type(c_ptr) :: verror, vmol, vcav
+      type(c_ptr) :: verror, vmol, vcav, vmodel
       integer(c_int) :: ngrid, nsph, out_ngrid, out_nsph
       real(c_double) :: area, volume
       real(c_double), allocatable :: xyz(:, :), a(:), radii(:), asph(:)
@@ -1158,6 +1181,20 @@ contains
          else if (.not. all(values .eqv. reference)) then
             call test_failed(error, "get_cavity_field_bool disagrees with get_cavity_results")
          end if
+      end if
+
+      if (.not. allocated(error)) then
+         vmodel = moist_new_model(verror, vcav, c_null_ptr)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "DROP model construction failed: "//err%ptr%message)
+         else
+            values = .not. reference
+            call get_model_field_bool_api(verror, vmodel, c_loc(name_conv), values)
+            call check(error, .not. allocated(err%ptr), "Model bool field read failed")
+            if (.not. allocated(error)) call check(error, logical(all(values .eqv. reference)), &
+               "Model bool field differs from the cavity")
+         end if
+         call delete_solvation_model_api(vmodel)
       end if
 
       !> Reading a real field through the logical accessor is refused too
@@ -1198,7 +1235,8 @@ contains
    !> A capacity below the cavity's own ngrid/nsph is refused before a single
    !> element is written.  Without the check these calls write ngrid values into
    !> buffers holding ngrid-1, which is silent heap corruption; the sentinels
-   !> below detect any write at all
+   !> below detect any write that changes a value (`converged` is seeded
+   !> `.true.`, so only a written `.false.` shows)
    subroutine test_capacity_too_small(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
@@ -1222,7 +1260,7 @@ contains
       xyz = sentinel
       a = sentinel
       owner = -1_c_int
-      converged = .false._c_bool
+      converged = .true._c_bool
       amat0 = sentinel
       xi = sentinel
       radii = sentinel
@@ -1233,7 +1271,8 @@ contains
                                     radii, asph)
       call expect_capacity_error(error, err, "get_cavity_results")
       if (.not. allocated(error)) then
-         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int)) then
+         if (any(a /= sentinel) .or. any(xyz /= sentinel) .or. any(owner /= -1_c_int) &
+             .or. any(radii /= sentinel) .or. any(asph /= sentinel) .or. .not. all(converged)) then
             call test_failed(error, "get_cavity_results wrote into a rejected buffer")
          end if
       end if
@@ -1248,26 +1287,38 @@ contains
          end if
       end if
 
-      ! A short per-sphere capacity has to be caught the same way
+      ! A short per-sphere capacity has to be caught the same way.  Every buffer
+      ! holds the full ngrid/nsph extent, so a missing nsph guard shows up as a
+      ! write instead of a heap overflow
       if (.not. allocated(error)) then
-         deallocate (radii, asph)
-         allocate (radii(nsph - 1), asph(nsph - 1))
+         deallocate (xyz, a, owner, converged)
+         allocate (xyz(3, ngrid), a(ngrid), owner(ngrid), converged(ngrid))
+         xyz = sentinel
+         a = sentinel
+         owner = -1_c_int
+         converged = .true._c_bool
          radii = sentinel
          asph = sentinel
          call moist_get_cavity_results(verror, vcav, ngrid, nsph - 1_c_int, area, &
                                        volume, out_ngrid, out_nsph, xyz, a, owner, &
                                        converged, radii, asph)
          call expect_capacity_error(error, err, "get_cavity_results (nsph)")
+         if (.not. allocated(error)) call check_untouched(error, &
+            any(radii /= sentinel) .or. any(asph /= sentinel) .or. any(xyz /= sentinel) &
+            .or. any(a /= sentinel) .or. any(owner /= -1_c_int) &
+            .or. .not. logical(all(converged)), "short sphere capacity")
       end if
 
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_capacity_too_small
 
-   !> Accept oversized capacities and preserve padding outside the logical extent
+   !> Accept oversized capacities, return the cavity's own arrays in the logical
+   !> extent and preserve padding outside it
    subroutine test_capacity_oversized(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph, ngrid_cap, nsph_cap
       integer(c_int) :: out_ngrid, out_nsph
@@ -1288,6 +1339,8 @@ contains
       a = sentinel
       radii = sentinel
       asph = sentinel
+      owner = -12345_c_int
+      converged = .false._c_bool
 
       call moist_get_cavity_results(verror, vcav, ngrid_cap, nsph_cap, area, volume, &
                                     out_ngrid, out_nsph, xyz, a, owner, converged, &
@@ -1302,6 +1355,19 @@ contains
       if (.not. allocated(error)) call check(error, all(a(ngrid + 1:) == sentinel))
       if (.not. allocated(error)) call check(error, all(xyz(:, ngrid + 1:) == sentinel))
       if (.not. allocated(error)) call check(error, all(radii(nsph + 1:) == sentinel))
+
+      if (.not. allocated(error)) then
+         call c_f_pointer(vcav, cav)
+         call check(error, all(xyz(:, :ngrid) == cav%ptr%xyz) &
+            .and. all(a(:ngrid) == cav%ptr%a) .and. all(radii(:nsph) == cav%ptr%radii) &
+            .and. all(asph(:nsph) == cav%ptr%asph) &
+            .and. all(owner(:ngrid) == cav%ptr%owner - 1) &
+            .and. area == cav%ptr%total_area .and. volume == cav%ptr%total_volume, &
+            "Cavity result payload differs from the owned arrays")
+      end if
+      if (.not. allocated(error)) call check(error, all(asph(nsph + 1:) == sentinel) &
+         .and. all(owner(ngrid + 1:) == -12345_c_int) &
+         .and. .not. logical(any(converged(ngrid + 1:))), "Cavity result padding was overwritten")
 
       call drop_water_cavity(err, vmol, vcav)
 
@@ -1565,8 +1631,6 @@ contains
    !> Response field reads write exactly the logical shape at all ranks, leave
    !> the rest of a larger buffer untouched, and name a missing current item,
    !> an array the current item does not have and a NULL buffer
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_arrays(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1650,8 +1714,6 @@ contains
 
    !> The C walk visits every item once per pass in accumulation order, rewinds
    !> after the last one, names the current item and fails by name outside a pass
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_walk(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1838,13 +1900,13 @@ contains
    !> LSF constructors refuse a missing callback, non-positive isodensity
    !> controls and every malformed basis, and return no handle
    !>
-   !> The basis cases walk the shell guard (no shells, a NULL array), both
+   !> The basis cases walk the shell guard (no shells, each NULL basis array), both
    !> halves of the primitive guard (a zero count, a sum past `huge`) and the
    !> basis constructor's own rejection of an unsupported angular momentum
    subroutine test_lsf_constructor_guards(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
-      !> Isodensity options with a negative isovalue
+      !> Isodensity options with a negative isovalue or scale
       type(iso_options), target :: options
       !> Two-shell basis, edited per case
       integer(c_int), target :: shell_atom(2), shell_l(2), shell_nprim(2)
@@ -1852,11 +1914,16 @@ contains
       !> Returned LSF handle
       type(c_ptr) :: lsf
       !> Expected diagnostics, one per case
-      character(len=48), parameter :: needles(7) = [character(len=48) :: &
+      character(len=48), parameter :: needles(12) = [character(len=48) :: &
          & "Callback is missing", "rho_iso and scale must be positive", &
          & "Missing basis arrays or invalid shell count", &
          & "Missing basis arrays or invalid shell count", "Invalid primitive counts", &
-         & "Invalid primitive counts", "angular momentum out of supported range"]
+         & "Invalid primitive counts", "angular momentum out of supported range", &
+         & "rho_iso and scale must be positive", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count", &
+         & "Missing basis arrays or invalid shell count"]
       integer :: icase
 
       allocate (err)
@@ -1866,6 +1933,7 @@ contains
       coeffs = 1.0_c_double
       do icase = 1, size(needles)
          shell_nprim = 1_c_int
+         shell_l = 0_c_int
          select case (icase)
          case (1)
             lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_null_funptr, c_null_ptr, c_null_ptr)
@@ -1892,6 +1960,22 @@ contains
             shell_l = 99_c_int
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (8)
+            options = iso_options(c_sizeof(options), 1.0e-3_c_double, -1.0_c_double)
+            lsf = moist_new_isodensity_callback_lsf(c_loc(err), c_funloc(iso_switchable_callback), &
+                                                  c_null_ptr, c_loc(options))
+         case (9)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_null_ptr, c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (10)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_null_ptr, &
+                                           c_loc(shell_nprim), c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (11)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_null_ptr, c_loc(exps), c_loc(coeffs), c_null_ptr)
+         case (12)
+            lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
+                                           c_loc(shell_nprim), c_null_ptr, c_loc(coeffs), c_null_ptr)
          case default
             error stop "test_api: unhandled icase"
          end select
@@ -3544,7 +3628,8 @@ contains
                                       a_i1_rA, v_i1_rA, A_tot1_rA, V_tot1_rA)
          call expect_error(error, err, "[moist_get_anchor_gradient] Array capacity is too small")
          call check_untouched(error, any(xyz1_rA /= sentinel) .or. any(xi1_rA /= sentinel) &
-            & .or. any(A_tot1_rA /= sentinel), "anchor gradient buffers")
+            & .or. any(a_i1_rA /= sentinel) .or. any(v_i1_rA /= sentinel) &
+            & .or. any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel), "anchor gradient buffers")
          if (allocated(error)) exit checks
          deallocate (xyz1_rA, A_tot1_rA, V_tot1_rA)
 
@@ -3559,7 +3644,9 @@ contains
          call get_cavity_gradient_api(verror, vcav, nsph, ngrid - 1_c_int, A_tot1_rA, V_tot1_rA, &
                                       asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, rho1_rA)
          call expect_error(error, err, "[moist_get_cavity_gradient] Array capacity is too small")
-         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(V_tot1_rA /= sentinel) &
+            & .or. any(asph1_rA /= sentinel) .or. any(vsph1_rA /= sentinel) &
+            & .or. any(xyz1_rA /= sentinel) .or. any(r_iI1_rA /= sentinel) &
             & .or. any(rho1_rA /= sentinel), "cavity gradient buffers")
          if (allocated(error)) exit checks
 
@@ -3598,9 +3685,15 @@ contains
    !>   w_f_i = -q1_i*q2_i*sqrt(2/pi)*xi_i/f_i**2 exactly
    !> - A depends on point separations only, so a rigid shift of every point
    !>   leaves q1^T A q2 unchanged and the position weights sum to zero
+   !> - the API forwards the cavity arrays to `pcm_amat_surface_weights`
+   !>   unchanged; each row is written by one thread without a reduction, so a
+   !>   direct kernel call reproduces it bit for bit (the kernel itself is
+   !>   checked in pcm_amat_adjoint)
    subroutine test_amat_surface_weights(error)
       type(error_type), allocatable, intent(out) :: error
       type(vp_error), pointer :: err
+      type(vp_cavity), pointer :: cav
+      type(moist_error_type), allocatable :: kernel_error
       type(c_ptr) :: verror, vmol, vcav
       integer(c_int) :: ngrid, nsph
       !> Surface data read back by name
@@ -3609,6 +3702,8 @@ contains
       real(c_double), allocatable, target :: q1(:), q2(:), w_xi(:), w_f(:), w_xyz(:, :)
       !> Closed-form switching-factor weights
       real(c_double), allocatable :: reference(:)
+      !> Direct kernel outputs for the forwarding check
+      real(c_double), allocatable :: ref_xi(:), ref_f(:), ref_xyz(:, :)
       character(kind=c_char), allocatable, target :: name_xi0(:), name_f(:)
       real(c_double), parameter :: sentinel = -12345.0_c_double
       real(c_double), parameter :: sqrt_2_over_pi = 0.7978845608028654_c_double
@@ -3654,6 +3749,20 @@ contains
             call test_failed(error, "contract_amat1_q1q2_surface_weights failed: "//err%ptr%message)
             exit checks
          end if
+
+         call c_f_pointer(vcav, cav)
+         allocate (ref_xi(ngrid), ref_f(ngrid), ref_xyz(3, ngrid))
+         call pcm_amat_surface_weights(cav%ptr%xi0, cav%ptr%f, cav%ptr%xyz, &
+            q1, q2, ref_xi, ref_f, ref_xyz, kernel_error)
+         if (allocated(kernel_error)) then
+            call test_failed(error, "Direct surface-weight kernel call failed: " &
+               //kernel_error%message)
+            exit checks
+         end if
+         call check(error, all(w_xi == ref_xi) .and. all(w_f == ref_f) &
+            .and. all(w_xyz == ref_xyz), &
+            "Surface-weight API output differs from a direct kernel call (forwarding check)")
+         if (allocated(error)) exit checks
 
          reference = -q1*q2*sqrt_2_over_pi*xi0/f**2
          if (any(abs(w_f - reference) > 1.0e-12_c_double*abs(reference))) then

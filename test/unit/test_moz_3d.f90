@@ -12,7 +12,7 @@ module test_moz_3d
    use test_helpers, only: get_qc_handymod_recipe
    use moist_channels_fields, only: field_query_type
    use moist_channels_coupling, only: coupling_type, coupling_request_type
-   use moist_channels_response, only: response_type
+   use moist_channels_response, only: response_type, atomic_charge_adjoint_response_type, response_accumulate
    implicit none(type, external)
    private
    public :: collect_moz_3d
@@ -24,6 +24,8 @@ contains
       !> Collected tests
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
       testsuite = [new_unittest("contract", check_moz_3d), &
+         & new_unittest("getter_guards", check_getter_guards), &
+         & new_unittest("update_guards", check_update_guards), &
          & new_unittest("owned_grid", test_grid_model), &
          & new_unittest("ec_requests_by_grid", check_ec_requests), &
          & new_unittest("qat_and_multipoles_requests", check_charge_sources), &
@@ -37,8 +39,6 @@ contains
    !> source through the usual coupling protocol, then reports pending theory
    !> once the mandatory outputs are answered; a wrong-shape answer is
    !> rejected first
-   !>
-   !> @param[out] error Test error
    subroutine check_moz_3d(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -137,7 +137,7 @@ contains
 
    !> Concrete grids work through the 3D MOZ model and preserve copy ownership
    !>
-   !> @param[out] error Test error
+   !> Cartesian, molecular with Gaussian widths and bare molecular grids
    subroutine test_grid_model(error)
       !> Borrowed typed model grid
       class(moist_math_grid_3d_type), pointer :: model_grid
@@ -145,7 +145,8 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
       type(moist_math_grid_3d_cartesian_type) :: cart
-      type(moist_math_grid_3d_molecular_type) :: molecular
+      !> Molecular grids with and without Gaussian widths
+      type(moist_math_grid_3d_molecular_type) :: molecular, bare
       type(moist_math_grid_atomic_recipe_type) :: recipe
       type(model_moz_3d_type), target :: model
       type(moist_context_type), target :: ctx
@@ -161,17 +162,23 @@ contains
       call require_success(error, err)
       if (allocated(error)) return
       call get_qc_handymod_recipe(recipe, err, nrad=8, degree=5, rmax=5.0_wp)
-      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe)
+      if (.not. allocated(err)) call new_molecular_grid(molecular, err, recipe=recipe, gaussian=.true.)
+      if (.not. allocated(err)) call new_molecular_grid(bare, err, recipe=recipe)
       call require_success(error, err)
       if (allocated(error)) return
-      do kind = 1, 2
-         if (kind == 1) then
+      do kind = 1, 3
+         select case (kind)
+         case (1)
             allocate (grid, source=cart)
-         else
+         case (2)
             allocate (grid, source=molecular)
-         end if
+         case default
+            allocate (grid, source=bare)
+         end select
          call new_moz_3d_model(model, grid, ctx, err)
          call require_success(error, err)
+         if (allocated(error)) return
+         call check(error, associated(model%ctx, ctx), "model must retain its borrowed context")
          if (allocated(error)) return
          template_ngrid = grid%ngrid
          call model%update(mol, err)
@@ -181,6 +188,11 @@ contains
          if (allocated(error)) return
          model_grid => model%grid
          call check(error, model_grid%natom, 1)
+         if (allocated(error)) return
+         call check(error, allocated(model_grid%xi0) .neqv. (kind == 3), &
+            & more="only the bare molecular grid has no Gaussian widths")
+         if (allocated(error)) return
+         call check_grid_fields(error, model)
          if (allocated(error)) return
          call query%fetch("w")
          call model%list_fields(query)
@@ -219,8 +231,6 @@ contains
    !> - Cartesian: Gaussian widths fixed by the spacing, no `dphi_dxi`
    !> - molecular with widths: they follow the weights, so `dphi_dxi` too
    !> - molecular without widths: a bare point potential
-   !>
-   !> @param[out] error Test error
    subroutine check_ec_requests(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -271,8 +281,6 @@ contains
 
    !> "qat" declares only the partial charges and "multipoles" only the
    !> point multipoles, every output pending in every phase
-   !>
-   !> @param[out] error Test error
    subroutine check_charge_sources(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -298,8 +306,6 @@ contains
    end subroutine check_charge_sources
 
    !> An unknown coupling source is refused by name and leaves no coupling behind
-   !>
-   !> @param[out] error Test error
    subroutine check_unknown_mode(error)
       !> Test error
       type(error_type), allocatable, intent(out) :: error
@@ -319,12 +325,26 @@ contains
       call check(error, allocated(err) .and. .not. associated(coupling), more="an unknown source was accepted")
       if (allocated(error)) return
       call check(error, index(err%message, "3D MOZ coupling_mode 'bogus' is not supported") > 0, more=err%message)
+      if (allocated(error)) return
+
+      ! A refused redeclaration must end the previously staged walk
+      model%coupling_mode = "qat"
+      call model%new_coupling(coupling, err)
+      if (.not. allocated(err)) call model%prepare_energy(coupling, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      model%coupling_mode = "bogus"
+      call model%prepare_response(coupling, err)
+      call check(error, allocated(err), more="an unknown source was staged")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="the refused declaration left a staging behind")
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+      call check(error, .not. associated(coupling), more="release left a coupling pointer")
    end subroutine check_unknown_mode
 
    !> Stage the energy, response and gradient phases of a fresh coupling and
    !> compare each walk, answering nothing, to the expected one
-   !>
-   !> @param[out] error Test error
    !> @param[in,out] model Updated model with its coupling source set
    !> @param[in] walks Expected walk summaries of the three phases
    subroutine check_phase_walks(error, model, walks)
@@ -420,8 +440,6 @@ contains
    end subroutine new_updated_model
 
    !> Forward a library error into the test framework
-   !>
-   !> @param[out] error Test error
    !> @param[in] err Library error
    subroutine require_success(error, err)
       !> Test error
@@ -430,4 +448,264 @@ contains
       type(moist_error), allocatable, intent(in) :: err
       if (allocated(err)) call test_failed(error, err%message)
    end subroutine require_success
+
+   !> Getter guards precede pending theory and preserve caller outputs
+   !>
+   !> Every getter meets a foreign coupling, a model that is not updated, an
+   !> unstaged coupling, missing charges, the wrong staging and, past every
+   !> guard, the pending theory; each refusal is named and leaves the energy,
+   !> the gradient and the seeded response untouched
+   subroutine check_getter_guards(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model, foreign
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(structure_type) :: mol
+      type(coupling_type), pointer :: coupling, other
+      type(response_type) :: response
+      type(atomic_charge_adjoint_response_type) :: seed
+      real(wp) :: energy, gradient(3, 1)
+      integer :: phase, scenario
+      !> Getter and scenario of the current case for diagnostics
+      character(len=64) :: label
+      character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
+      !> Refusal each scenario must name
+      character(len=40), parameter :: reasons(6) = [character(len=40) :: &
+         & "different model", "updated first", "not staged", "missing required outputs", &
+         & "staged for the", "is not implemented"]
+
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, foreign, err)
+      model%coupling_mode = "qat"
+      foreign%coupling_mode = "qat"
+      if (.not. allocated(err)) call model%new_coupling(coupling, err)
+      if (.not. allocated(err)) call foreign%new_coupling(other, err)
+      if (allocated(err)) then
+         call test_failed(error, err%message)
+         return
+      end if
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      seed%dg_dq = [4.0_wp]
+      do phase = 1, 3
+         do scenario = 1, 6
+            label = trim(phases(phase))//" getter, case '"//trim(reasons(scenario))//"'"
+            ! Every case starts from an updated model; the update ends every walk
+            call model%update(mol, err)
+            if (allocated(err)) then
+               call test_failed(error, err%message)
+               return
+            end if
+            select case (scenario)
+            case (2)
+               call model%invalidate()
+            case (4, 6)
+               select case (phase)
+               case (1)
+                  call model%prepare_energy(coupling, err)
+               case (2)
+                  call model%prepare_response(coupling, err)
+               case default
+                  call model%prepare_gradient(coupling, err)
+               end select
+            case (5)
+               if (phase == 1) then
+                  call model%prepare_response(coupling, err)
+               else
+                  call model%prepare_energy(coupling, err)
+               end if
+            case default
+               ! Foreign and unstaged scenarios require no preparation
+            end select
+            if (allocated(err)) then
+               call test_failed(error, err%message)
+               return
+            end if
+            if (scenario == 6) then
+               call check(error, coupling%next(), more=trim(label)//": charges not pending")
+               if (allocated(error)) return
+               call coupling%answer("q", [0.3_wp], err)
+               if (allocated(err)) then
+                  call test_failed(error, err%message)
+                  return
+               end if
+            end if
+            call response_accumulate(response, seed, err)
+            if (allocated(err)) then
+               call test_failed(error, err%message)
+               return
+            end if
+            energy = 7.0_wp
+            gradient = 3.0_wp
+            if (scenario == 1) then
+               call invoke_getter(model, other, phase, response, energy, gradient, err)
+            else
+               call invoke_getter(model, coupling, phase, response, energy, gradient, err)
+            end if
+            call check(error, allocated(err), more=trim(label)//": accepted")
+            if (allocated(error)) return
+            call check(error, index(err%message, trim(reasons(scenario))) > 0, &
+               & more=trim(label)//": "//err%message)
+            if (allocated(error)) return
+            if (scenario == 6) then
+               call check(error, index(err%message, "3D MOZ "//trim(phases(phase))) > 0, &
+                  & more=trim(label)//": "//err%message)
+               if (allocated(error)) return
+            end if
+            call check(error, energy == 7.0_wp .and. all(gradient == 3.0_wp), &
+               & more=trim(label)//": the refusal wrote the energy or gradient")
+            if (allocated(error)) return
+            ! A rejected request, including pending theory, keeps the seeded response
+            call check(error, response%next(), &
+               & more=trim(label)//": the refusal cleared the response")
+            if (allocated(error)) return
+            select type (item => response%item())
+            type is (atomic_charge_adjoint_response_type)
+               call check(error, all(item%dg_dq == real(scenario, wp)*seed%dg_dq), &
+                  & more=trim(label)//": the refusal changed the response")
+            class default
+               call test_failed(error, trim(label)//": the refusal replaced the response type")
+            end select
+            if (allocated(error)) return
+            call check(error, .not. response%next(), &
+               & more=trim(label)//": the refusal appended a response item")
+            if (allocated(error)) return
+            deallocate (err)
+         end do
+         ! Restart the seed accumulation for the next getter channel
+         block
+            type(response_type) :: empty
+            response = empty
+         end block
+      end do
+      call model%release_coupling(coupling)
+      call foreign%release_coupling(other)
+      call check(error, .not. associated(coupling) .and. .not. associated(other))
+   end subroutine check_getter_guards
+
+   !> Invoke one model getter for a common guard table
+   !>
+   !> @param[in,out] model Model under test
+   !> @param[in,out] coupling Owned or foreign coupling
+   !> @param[in] phase Getter index
+   !> @param[in,out] response Seeded response
+   !> @param[in,out] energy Seeded energy
+   !> @param[in,out] gradient Seeded gradient
+   !> @param[out] err Getter error
+   subroutine invoke_getter(model, coupling, phase, response, energy, gradient, err)
+      !> Model under test
+      type(model_moz_3d_type), intent(inout) :: model
+      !> Owned or foreign coupling
+      type(coupling_type), intent(inout), target :: coupling
+      !> Getter index
+      integer, intent(in) :: phase
+      !> Seeded response
+      type(response_type), intent(inout) :: response
+      !> Seeded energy
+      real(wp), intent(inout) :: energy
+      !> Seeded gradient
+      real(wp), intent(inout) :: gradient(:, :)
+      !> Getter error
+      type(moist_error), allocatable, intent(out) :: err
+      select case (phase)
+      case (1)
+         call model%get_energy(coupling, energy, err)
+      case (2)
+         call model%get_response(coupling, response, err)
+      case default
+         call model%get_gradient(coupling, response, gradient, err)
+      end select
+   end subroutine invoke_getter
+
+   !> Failed grid updates end the staged walk and retain an invalid model
+   subroutine check_update_guards(error)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error), allocatable :: err
+      type(moist_context_type), target :: ctx
+      type(model_moz_3d_type), target :: model
+      type(moist_math_grid_3d_cartesian_type) :: cart
+      type(structure_type) :: mol
+      type(coupling_type), pointer :: coupling
+
+      call check(error, model%atom_count(), 0)
+      if (allocated(error)) return
+      call check(error, .not. model%is_updated())
+      if (allocated(error)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call model%update(mol, err)
+      call check(error, allocated(err), more="unconstructed update accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Construct the 3D MOZ model") > 0)
+      if (allocated(error)) return
+      call new_context(ctx, verbosity=0)
+      call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
+      if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
+      model%coupling_mode = "qat"
+      if (.not. allocated(err)) call model%new_coupling(coupling, err)
+      if (.not. allocated(err)) call model%prepare_energy(coupling, err)
+      call require_success(error, err)
+      if (allocated(error)) return
+      ! q stays unanswered; the full pass rewinds, so a staged walk offers it again
+      call check(error, coupling%next(), more="atomic_charges must be pending")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="atomic_charges is the only request")
+      if (allocated(error)) return
+      call new(mol, [integer ::], reshape([real(wp) ::], [3, 0]))
+      call model%update(mol, err)
+      call check(error, allocated(err), more="empty grid update accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "at least one solute atom") > 0, more=err%message)
+      if (allocated(error)) return
+      call check(error, .not. model%is_updated(), more="failed update kept valid status")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="failed update kept the staged walk")
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+      call check(error, .not. associated(coupling))
+   end subroutine check_update_guards
+
+   !> Named model fields match the owned domain in both concrete grid types
+   !>
+   !> A grid without Gaussian widths declares no `xi0`
+   !> @param[in] model Updated model
+   subroutine check_grid_fields(error, model)
+      !> Test error
+      type(error_type), allocatable, intent(out) :: error
+      !> Updated model
+      type(model_moz_3d_type), intent(in) :: model
+      type(field_query_type) :: query
+      character(len=5), parameter :: names(6) = [character(len=5) :: "ngrid", "natom", "xyz", "w", "xi0", "owner"]
+      integer :: i
+      do i = 1, size(names)
+         call query%fetch(trim(names(i)))
+         call model%list_fields(query)
+         if (i == 5 .and. .not. allocated(model%grid%xi0)) then
+            call check(error, .not. query%found, more="unallocated xi0 was declared")
+            if (allocated(error)) return
+            cycle
+         end if
+         call check(error, query%found, more="missing grid field "//trim(names(i)))
+         if (allocated(error)) return
+         select case (i)
+         case (1)
+            call check(error, query%ivals(1), model%grid%ngrid)
+         case (2)
+            call check(error, query%ivals(1), model%grid%natom)
+         case (3)
+            call check(error, all(query%rvals == reshape(model%grid%xyz, [size(model%grid%xyz)])))
+         case (4)
+            call check(error, all(query%rvals == model%grid%w))
+         case (5)
+            call check(error, all(query%rvals == model%grid%xi0))
+         case default
+            call check(error, all(query%ivals == model%grid%owner - 1))
+         end select
+         if (allocated(error)) return
+      end do
+   end subroutine check_grid_fields
+
 end module test_moz_3d

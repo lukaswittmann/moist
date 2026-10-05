@@ -290,7 +290,8 @@ contains
                call eval_atom(shifted, R_a, a1, 2, dummy0, dummy1, h_mm, dummy3)
                do j = 1, ndim
                   do i = 1, ndim
-                     call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, numeric(i, j, axis), error)
+                     call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
+                                     numeric(i, j, axis), error)
                      if (allocated(error)) return
                   end do
                end do
@@ -655,7 +656,8 @@ contains
                            h_mm, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
             do j = 1, ndim
                do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, numeric(i, j, axis), error)
+                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
+                                  numeric(i, j, axis), error)
                   if (allocated(error)) return
                end do
             end do
@@ -709,7 +711,8 @@ contains
                            dummy_aa, dummy_ab, h_mm, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
             do j = 1, ndim
                do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, numeric(i, j, axis), error)
+                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
+                                  numeric(i, j, axis), error)
                   if (allocated(error)) return
                end do
             end do
@@ -763,7 +766,8 @@ contains
                            h_mm, dummy_ab, dummy_bb, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
             do j = 1, ndim
                do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, numeric(i, j, axis), error)
+                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
+                                  numeric(i, j, axis), error)
                   if (allocated(error)) return
                end do
             end do
@@ -817,7 +821,8 @@ contains
                            dummy_aa, dummy_ab, h_mm, t_pd3aaa, t_pd3aab, t_pd3abb, t_pd3bbb)
             do k = 1, ndim
                do j = 1, ndim
-                  call fd4_scalar(h_pp(j, k), h_p(j, k), h_m(j, k), h_mm(j, k), h, numeric(axis, j, k), error)
+                  call fd4_scalar(h_pp(j, k), h_p(j, k), h_m(j, k), h_mm(j, k), h, &
+                                  numeric(axis, j, k), error)
                   if (allocated(error)) return
                end do
             end do
@@ -1151,7 +1156,8 @@ contains
             h_mm = lpd2_s
             do j = 1, ndim
                do i = 1, ndim
-                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, numeric(i, j, axis), error)
+                  call fd4_scalar(h_pp(i, j), h_p(i, j), h_m(i, j), h_mm(i, j), h, &
+                                  numeric(i, j, axis), error)
                   if (allocated(error)) return
                end do
             end do

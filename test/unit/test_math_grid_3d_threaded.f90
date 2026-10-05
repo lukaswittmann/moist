@@ -5,7 +5,7 @@
 !> - Each test here is invoked directly (`<suite> <test>`), outside any team
 !> - Companion of `math_grid_3d` (batched FFT) and `math_grid_nufft` (NUFFT)
 !> - NUFFT: type 1/2 and type 3, both directions, one column and a batch,
-!>   against the analytic Gaussian FT and a serial run
+!>   against the analytic Gaussian FT, a direct inverse sum and a serial run
 !> - Radial transforms: one trafo per thread, cloned from a shared template
 module test_math_grid_3d_threaded
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
@@ -65,6 +65,8 @@ module test_math_grid_3d_threaded
    !> Quadrature-limited, relative to each column's peak `(pi/a)^(3/2)`;
    !> measured 1.4e-5 (one column) and 6.9e-5 (three columns) on both routes
    real(wp), parameter :: nufft_analytic_tol = 5.0e-4_wp
+   !> Acceptance bound for the backward transform against a direct inverse sum
+   real(wp), parameter :: inverse_sum_tol = 100.0_wp*default_nufft_tol
 
 contains
 
@@ -331,6 +333,9 @@ contains
    !>   center stepped 0.2 bohr per column along (1, -1, 1) from `origin`;
    !>   every column differs in width and phase
    !> - Forward against the analytic FT (see `analytic_ft_error`)
+   !> - Backward against a direct type-2 sum over all k-points of the threaded
+   !>   spectrum, at three nodes per column: the ones nearest the Gaussian
+   !>   center and nearest +-0.3 bohr from it along (1, -1, 1)
    !> - Forward and backward against a serial run of the same transform,
    !>   relative to the serial maximum, at the requested NUFFT tolerance
    !> - Serial run under `omp_set_num_threads(1)`, the host-side throttle the
@@ -357,7 +362,9 @@ contains
 
       real(wp), allocatable :: f(:, :), g_thr(:, :), g_ser(:, :)
       complex(wp), allocatable :: fk_thr(:, :), fk_ser(:, :)
-      real(wp) :: cen(3, nv), alpha(nv), scale, dev
+      real(wp) :: cen(3, nv), alpha(nv), scale, dev, phase, inverse_ref, inverse_scale
+      real(wp) :: point(3), kvec(3), probe_xyz(3)
+      integer :: probe, ik, ip
       integer :: iv, j, nthreads
 
       do iv = 1, nv
@@ -389,6 +396,27 @@ contains
       call check(error, dev <= nufft_analytic_tol, &
          & "threaded molecular forward NUFFT disagrees with the analytic Gaussian FT")
       if (allocated(error)) return
+
+      ! Direct inverse sum at the Gaussian center and +-0.3 bohr along (1, -1, 1)
+      inverse_scale = mg%dkx*mg%dky*mg%dkz/(2.0_wp*pi)**3
+      scale = maxval(abs(g_thr))
+      do iv = 1, nv
+         do probe = 1, 3
+            probe_xyz = cen(:, iv) + 0.3_wp*real(probe - 2, wp)*[1.0_wp, -1.0_wp, 1.0_wp]
+            ip = minloc(sum((mg%xyz - spread(probe_xyz, 2, mg%ngrid))**2, dim=1), dim=1)
+            point = mg%xyz(:, ip) - mg%kref
+            inverse_ref = 0.0_wp
+            do ik = 1, mg%npts_k
+               kvec = mg%kpoint(ik)
+               phase = dot_product(kvec, point)
+               inverse_ref = inverse_ref + real(fk_thr(ik, iv)*cmplx(cos(phase), sin(phase), wp), wp)
+            end do
+            dev = abs(g_thr(ip, iv) - inverse_scale*inverse_ref)/scale
+            call check(error, ieee_is_finite(dev) .and. scale > 0.0_wp .and. dev < inverse_sum_tol, &
+               & "threaded molecular backward NUFFT disagrees with a direct inverse sum")
+            if (allocated(error)) return
+         end do
+      end do
 
       scale = maxval(abs(fk_ser))
       dev = maxval(abs(fk_thr - fk_ser))/scale
@@ -583,10 +611,8 @@ contains
    !>   Chebyshev-II + Becke pair
    !> - The same trafo code runs serially and per thread, so the results
    !>   must be equal, not merely close
-   !>
-   !> @param[out] error  Test failure, or set by `skip_test`
    subroutine test_radial_trafo_per_thread(error)
-      !> Test failure, or set by `skip_test`
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       integer, parameter :: nteam = 4, nb = 12

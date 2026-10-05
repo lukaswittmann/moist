@@ -1,11 +1,14 @@
 !> Test suite for the radial Fourier-Bessel transforms and their factory
 !>
 !>   - Factory: tag dispatch and every mismatch error
+!>   - Direct constructors: invalid tags, empty or unallocated grids, node
+!>     arrays that disagree with npts, a negative spacing
 !>   - DST-IV: Gaussian against its closed-form transform, round trips
 !>   - General quadrature: convergence in the node count for r, k <= 10,
 !>     sinc(0) = 1, agreement with DST-IV on a uniform pair
-!>   - Both: adjoint dot products, batched against scalar, empty batches,
-!>     size errors, independent clones; the base default batched loops
+!>   - Both: adjoint dot products, batched against scalar, batch widths
+!>     changing on one instance, empty batches, size errors, independent
+!>     clones; the base default batched loops
 !>     through a minimal test trafo; one trafo per thread is tested in
 !>     `math_grid_3d_threaded`, outside test-drive's team
 module test_math_grid_radial_trafo
@@ -23,7 +26,7 @@ module test_math_grid_radial_trafo
       & transform_quadrature, transform_dst4
    use moist_math_grid_radial_trafo, only: moist_math_grid_radial_trafo_type, &
       & moist_math_grid_radial_trafo_dst4_type, moist_math_grid_radial_trafo_quadrature_type, &
-      & new_quadrature_trafo, new_radial_trafo
+      & new_dst4_trafo, new_quadrature_trafo, new_radial_trafo
    implicit none(type, external)
    private
 
@@ -57,6 +60,7 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
+         new_unittest("direct_constructor_errors", test_direct_constructor_errors), &
          new_unittest("factory_selects_dst4", test_factory_dst4), &
          new_unittest("factory_selects_quadrature", test_factory_quadrature), &
          new_unittest("factory_unset_tag", test_factory_unset_tag), &
@@ -71,6 +75,7 @@ contains
          new_unittest("quadrature_matches_dst4_on_uniform_pair", test_quadrature_vs_dst4), &
          new_unittest("adjoint_dot_product", test_adjoint), &
          new_unittest("batched_matches_scalar", test_batched), &
+         new_unittest("batched_width_change", test_batched_width_change), &
          new_unittest("empty_batch", test_empty_batch), &
          new_unittest("size_errors", test_size_errors), &
          new_unittest("base_default_batched_loops", test_base_default), &
@@ -197,8 +202,6 @@ contains
    end subroutine make_cheb_grid
 
    !> Build a trafo with the factory, turning a library error into a test failure
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  rgrid  r-space grid
    !> @param[in]  kgrid  k-space grid
    !> @param[out] trafo  New trafo
@@ -219,8 +222,6 @@ contains
    end subroutine make_trafo
 
    !> Uniform pair plus its trafo, or a Chebyshev-II + Becke pair plus its trafo
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  kind   transform_dst4 or transform_quadrature
    !> @param[out] rgrid  r-space grid
    !> @param[out] kgrid  k-space grid
@@ -402,8 +403,6 @@ contains
    ! --------------------------------------------------------------------------
 
    !> A uniform pair selects DST-IV and exposes the recorded spacings
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_dst4(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -433,9 +432,97 @@ contains
       end select
    end subroutine test_factory_dst4
 
+   !> Direct constructors reject invalid metadata and missing grid arrays
+   subroutine test_direct_constructor_errors(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_type) :: rgrid, kgrid, bad
+      type(moist_math_grid_radial_trafo_dst4_type) :: dst4
+      type(moist_math_grid_radial_trafo_quadrature_type) :: quad
+      type(mctc_error), allocatable :: merr
+      character(len=80) :: message
+      integer :: icase, side
+
+      do icase = 1, 5
+         call new_uniform_radial_pair(rgrid, kgrid, 16, 0.1_wp, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         select case (icase)
+         case (1)
+            rgrid%transform = transform_quadrature
+            message = "both grids must be tagged"
+         case (2)
+            rgrid%npts = 0
+            kgrid%npts = 0
+            message = "grids have no nodes"
+         case (3)
+            deallocate (rgrid%r)
+            message = "grid nodes are not allocated"
+         case (4)
+            rgrid%r = rgrid%r(:15)
+            message = "node arrays do not match npts"
+         case (5)
+            ! Negating both spacings keeps dk == pi/(npts*dr) exact, so only the
+            ! r-spacing guard can reject this pair
+            rgrid%spacing = -rgrid%spacing
+            kgrid%spacing = -kgrid%spacing
+            message = "r grid has no positive finite spacing"
+         case default
+            call test_failed(error, "Unknown DST-IV constructor case")
+            return
+         end select
+         call new_dst4_trafo(dst4, rgrid, kgrid, merr)
+         call check(error, allocated(merr), "Direct DST-IV constructor accepted invalid grid")
+         if (allocated(error)) return
+         call check(error, index(merr%message, trim(message)) > 0, &
+            & "Direct DST-IV constructor did not diagnose the invalid metadata")
+         if (allocated(error)) return
+      end do
+
+      do side = 1, 2
+         do icase = 1, 3
+            call new_uniform_radial_pair(rgrid, kgrid, 16, 0.1_wp, merr)
+            if (allocated(merr)) then
+               call test_failed(error, merr%message)
+               return
+            end if
+            bad = rgrid
+            select case (icase)
+            case (1)
+               ! Consistently empty: zero nodes and zero-size arrays
+               bad%npts = 0
+               bad%r = bad%r(:0)
+               bad%w = bad%w(:0)
+               message = "grid has no nodes"
+            case (2)
+               deallocate (bad%w)
+               message = "grid arrays are not allocated"
+            case (3)
+               bad%w = bad%w(:15)
+               message = "grid arrays do not match npts"
+            case default
+               call test_failed(error, "Unknown quadrature constructor case")
+               return
+            end select
+            if (side == 1) then
+               call new_quadrature_trafo(quad, bad, kgrid, merr)
+            else
+               call new_quadrature_trafo(quad, rgrid, bad, merr)
+            end if
+            call check(error, allocated(merr), &
+               & "Direct quadrature constructor accepted invalid grid")
+            if (allocated(error)) return
+            call check(error, index(merr%message, trim(message)) > 0, &
+               & "Direct quadrature constructor did not diagnose the invalid metadata")
+            if (allocated(error)) return
+         end do
+      end do
+   end subroutine test_direct_constructor_errors
+
    !> A Chebyshev-II + Becke pair selects the general quadrature; nr and nk may differ
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_quadrature(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -464,8 +551,6 @@ contains
    end subroutine test_factory_quadrature
 
    !> A default-initialized grid (tag 0) is refused on either side
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_unset_tag(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -486,8 +571,6 @@ contains
    end subroutine test_factory_unset_tag
 
    !> A tag that is neither transform_quadrature nor transform_dst4 is refused
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_unknown_tag(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -506,8 +589,6 @@ contains
    end subroutine test_factory_unknown_tag
 
    !> Exactly one DST-IV grid is refused, in either order
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_mixed_tags(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -529,8 +610,6 @@ contains
    end subroutine test_factory_mixed_tags
 
    !> Two DST-IV grids from pairs of different size are refused
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_dst4_npts(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -550,8 +629,6 @@ contains
    !> Two DST-IV grids whose recorded spacings do not satisfy dk = pi/(npts*dr) are refused
    !>
    !> Covers a k grid from a pair of another dr and a recorded dk off by one ULP
-   !>
-   !> @param[out] error  Test failure
    subroutine test_factory_dst4_spacing(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -580,8 +657,6 @@ contains
    !> f(r) = exp(-a r^2), F(k) = (pi/a)^(3/2) exp(-k^2/(4a)); scalar and
    !> batched, two grids that resolve the Gaussian on both sides; deviation
    !> relative to the reference maximum
-   !>
-   !> @param[out] error  Test failure
    subroutine test_dst4_gaussian(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -651,8 +726,6 @@ contains
    !>
    !> The weight diagonals telescope through the involution to exactly 1
    !> for dk = pi/(npts*dr); sizes include one node and odd lengths
-   !>
-   !> @param[out] error  Test failure
    subroutine test_dst4_round_trip(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -713,8 +786,6 @@ contains
    !> Chebyshev-II + Becke pair, p_r = 1, p_k = 1.5, exponent 0.7; forward
    !> error relative to F(0), backward error absolute (f(0) = 1), over the
    !> nodes with r, k <= 10
-   !>
-   !> @param[out] error  Test failure
    !> @param[in]  n      Number of r and k nodes
    !> @param[out] err_k  Forward window error
    !> @param[out] err_r  Backward window error
@@ -771,8 +842,6 @@ contains
    !>   1.7e-5, 9.2e-7, 9.0e-12, 3.9e-15; bounds carry about a factor 3
    !> - The error must also shrink as the node count grows
    !> - Over all nodes the error stalls near 1e-3 (outer k nodes unresolved)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_quadrature_convergence(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -801,8 +870,6 @@ contains
    !>
    !> F(0) = 4*pi sum_i f_i r_i^2 w_i and f(0) = 1/(2*pi^2) sum_j F_j k_j^2 w_j;
    !> hand-made grids, since no rule places a node at 0
-   !>
-   !> @param[out] error  Test failure
    subroutine test_quadrature_sinc_zero(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -853,8 +920,6 @@ contains
    !> it for a DST-IV pair; deviation relative to the largest output element,
    !> measured at most 9.7e-15 (the dense path reduces sin arguments up to
    !> about 300 in floating point, the DST-IV phase is exact)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_quadrature_vs_dst4(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -899,8 +964,6 @@ contains
    !>
    !> The residual is scaled by ||T a|| ||b||, the natural size of the
    !> bilinear form; DST-IV on 96 nodes, quadrature on 64 r and 80 k nodes
-   !>
-   !> @param[out] error  Test failure
    subroutine test_adjoint(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -941,8 +1004,6 @@ contains
    end subroutine test_adjoint
 
    !> Batched transforms reproduce the scalar loop for all four directions
-   !>
-   !> @param[out] error  Test failure
    subroutine test_batched(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -982,9 +1043,73 @@ contains
       end do
    end subroutine test_batched
 
-   !> A zero-width batch on a fresh trafo returns without an error
+   !> Batch widths 3, 5, 2 on one instance reproduce the scalar loop
    !>
-   !> @param[out] error  Test failure
+   !> - Every direction grows the cached width (2 or 3 to 5) and shrinks it
+   !>   (5 to 2) on the same instance; each batch is checked against the scalar
+   !>   loop, so a cache kept at a narrower width fails here
+   !> - DST-IV only, secondary: the batched plan and buffers follow the last
+   !>   width (type doc: plan rebuilt for each batch width)
+   subroutine test_batched_width_change(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      integer, parameter :: kinds(2) = [transform_dst4, transform_quadrature]
+      integer, parameter :: widths(3) = [3, 5, 2]
+      type(moist_math_grid_radial_type) :: rgrid, kgrid
+      class(moist_math_grid_radial_trafo_type), allocatable :: trafo
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: f(:, :), loop(:, :), batch(:, :)
+      integer :: ik, op, iw, nb, j, n_in, n_out
+
+      do ik = 1, size(kinds)
+         call make_case(error, kinds(ik), rgrid, kgrid, trafo)
+         if (allocated(error)) return
+         do op = op_r2k, op_k2r_adj
+            call op_sizes(trafo, op, n_in, n_out)
+            do iw = 1, size(widths)
+               nb = widths(iw)
+               call fill_fields(n_in, nb, 5*op + iw, f)
+               allocate (loop(n_out, nb), batch(n_out, nb))
+               call apply_all(trafo, op, f, batch, merr)
+               if (allocated(merr)) then
+                  call test_failed(error, merr%message)
+                  return
+               end if
+               do j = 1, nb
+                  call apply_one(trafo, op, f(:, j), loop(:, j), merr)
+                  if (allocated(merr)) then
+                     call test_failed(error, merr%message)
+                     return
+                  end if
+               end do
+               call check(error, rel_dev2(batch, loop) <= 1.0e-14_wp, &
+                  & "Batched transform after a width change disagrees with the scalar loop")
+               if (allocated(error)) return
+               deallocate (loop, batch)
+            end do
+         end do
+
+         select type (trafo)
+         type is (moist_math_grid_radial_trafo_dst4_type)
+            call check(error, trafo%nbatch == widths(size(widths)), &
+               & "DST-IV cache does not record the last batch width")
+            if (allocated(error)) return
+            ! No short-circuit in Fortran: size() only on allocated buffers
+            if (allocated(trafo%work_all) .and. allocated(trafo%tmp_all)) then
+               call check(error, size(trafo%work_all, 2) == trafo%nbatch &
+                  & .and. size(trafo%tmp_all, 2) == trafo%nbatch, &
+                  & "DST-IV batched buffers do not match the cached width")
+            else
+               call test_failed(error, "DST-IV batched buffers are not allocated")
+            end if
+            if (allocated(error)) return
+         end select
+         deallocate (trafo)
+      end do
+   end subroutine test_batched_width_change
+
+   !> A zero-width batch on a fresh trafo returns without an error
    subroutine test_empty_batch(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1011,8 +1136,6 @@ contains
    end subroutine test_empty_batch
 
    !> Wrong input or output lengths and mismatched batch widths are refused
-   !>
-   !> @param[out] error  Test failure
    subroutine test_size_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1057,8 +1180,6 @@ contains
    end subroutine test_size_errors
 
    !> The base default batched loops apply the scalar form per column and check shapes
-   !>
-   !> @param[out] error  Test failure
    subroutine test_base_default(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1102,8 +1223,6 @@ contains
    !>   cloned with allocate(source=) and deallocated
    !> - The clone reproduces the template bit for bit, scalar and batched,
    !>   first with a batch width other than the one the template cached last
-   !>
-   !> @param[out] error  Test failure
    subroutine test_clone(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

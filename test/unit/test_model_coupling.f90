@@ -77,6 +77,7 @@ contains
          new_unittest("request_free_pv", test_pv), &
          new_unittest("model_copy_owns_independent_couplings", test_model_copy), &
          new_unittest("model_staging_restarts_walk", test_model_restart), &
+         new_unittest("phase_answer_reuse_and_energy_refresh", test_phase_reuse), &
          new_unittest("model_update_ends_walk", test_model_update_walk), &
          new_unittest("model_accessors_name_the_problem", test_model_messages)]
    end subroutine collect_model_coupling
@@ -175,7 +176,9 @@ contains
       type(response_type) :: response
       !> Borrowed model cavity
       class(cavity_type), pointer :: cav
-      real(wp) :: energies(4)
+      real(wp) :: energies(4), repeated_energy
+      !> Independent accumulator for repeated calls
+      real(wp), allocatable :: repeated_gradient(:, :)
       real(wp), allocatable :: gradients(:, :, :)
       integer :: k
       call iswig_fixture(ctx, mol, radii, cavity, error)
@@ -183,6 +186,7 @@ contains
       call new_component_cpcm(pcm1, ctx, epsilon=2.0_wp, error=err)
       call new_component_cpcm(pcm2, ctx, epsilon=30.0_wp, error=err)
       allocate(gradients(3, mol%nat, 4), source=0.0_wp)
+      allocate(repeated_gradient(3, mol%nat), source=0.0_wp)
       energies = 0.0_wp
       do k = 1, 4
          call new_continuum_model(model, cavity, ctx, err)
@@ -199,10 +203,21 @@ contains
          call fill_point_charge_potential(cav, coupling, qat_vals, mol)
          call model%get_energy(coupling, energies(k), err)
          if (failed(error, err, "two PCM energy")) return
+         repeated_energy = energies(k)
+         call model%get_energy(coupling, repeated_energy, err)
+         if (failed(error, err, "repeated energy")) return
+         call check(error, repeated_energy, 2.0_wp*energies(k), thr=thr)
+         if (allocated(error)) return
          call model%prepare_gradient(coupling, err)
          call fill_point_charge_field(cav, coupling, qat_vals, mol)
          call model%get_gradient(coupling, response, gradients(:,:,k), err)
          if (failed(error, err, "two PCM gradient")) return
+         repeated_gradient = gradients(:, :, k)
+         call model%get_gradient(coupling, response, repeated_gradient, err)
+         if (failed(error, err, "repeated gradient")) return
+         call check(error, maxval(abs(repeated_gradient - 2.0_wp*gradients(:, :, k))), &
+            & 0.0_wp, thr=1.0e-12_wp)
+         if (allocated(error)) return
       end do
       call check(error, energies(1), energies(2), thr=thr)
       if (allocated(error)) return
@@ -248,11 +263,37 @@ contains
          call check(error, size(item%width), cav%ngrid)
          if (allocated(error)) return
          call check(error, all(item%width >= 0.0_wp))
+         if (allocated(error)) return
+         call check(error, maxval(abs(item%width*cav%a - pi*log(2.0_wp)), &
+            & mask=cav%a > 0.0_wp), 0.0_wp, thr=thr)
       class default
          call test_failed(error, "unexpected request "//item%name())
       end select
       if (allocated(error)) return
       call check(error, .not. coupling%next(), more="GOSTSHYP declares one request")
+      if (allocated(error)) return
+      call model%prepare_response(coupling, err)
+      if (failed(error, err, "moment response staging")) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      associate (item => coupling%request())
+         call check(error, item%is_missing("gt") .and. item%is_missing("pt"))
+         if (allocated(error)) return
+         call check(error, .not. item%is_missing("mt") .and. .not. item%is_missing("rt"))
+      end associate
+      if (allocated(error)) return
+      call check(error, .not. coupling%next())
+      if (allocated(error)) return
+      call model%prepare_gradient(coupling, err)
+      if (failed(error, err, "moment gradient staging")) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      associate (item => coupling%request())
+         call check(error, item%is_missing("gt") .and. item%is_missing("pt") .and. &
+            & item%is_missing("mt") .and. item%is_missing("rt"))
+      end associate
+      if (allocated(error)) return
+      call check(error, .not. coupling%next())
       if (allocated(error)) return
       call new_continuum_model(model, cavity, ctx, err)
       call new_component_gostshyp(component, 0.0_wp)
@@ -267,6 +308,21 @@ contains
       call model%get_energy(coupling, energy, err)
       if (failed(error, err, "disabled GOSTSHYP energy")) return
       call check(error, energy, 0.0_wp, thr=0.0_wp)
+      if (allocated(error)) return
+      call new_continuum_model(model, cavity, ctx, err)
+      call new_component_gostshyp(component, test_pressure)
+      component%scale = 0.0_wp
+      call model%add_component(component, err)
+      call model%update(mol, err)
+      call model%new_coupling(coupling, err)
+      call model%prepare_energy(coupling, err)
+      if (failed(error, err, "zero scale moment staging")) return
+      call check(error, count_visits(coupling), 0, more="zero scale still asked for moments")
+      if (allocated(error)) return
+      energy = 0.0_wp
+      call model%get_energy(coupling, energy, err)
+      if (failed(error, err, "zero scale GOSTSHYP energy")) return
+      call check(error, energy, 0.0_wp, thr=0.0_wp)
    end subroutine test_moments
 
    subroutine test_pv(error)
@@ -280,6 +336,10 @@ contains
       type(model_continuum_component_pv) :: component
       type(coupling_type), pointer :: coupling
       real(wp) :: energy
+      !> Pressure times cavity volume, the expected PV energy
+      real(wp) :: pv
+      !> Absolute tolerance on p*V, with a 10x looser relative fallback
+      real(wp), parameter :: pv_abs_thr = 1.0e-10_wp, pv_rel_thr = 1.0e-9_wp
       call iswig_fixture(ctx, mol, radii, cavity, error)
       if (allocated(error)) return
       call new_continuum_model(model, cavity, ctx, err)
@@ -295,6 +355,12 @@ contains
       call model%get_energy(coupling, energy, err)
       if (failed(error, err, "PV energy without any answer")) return
       call check(error, energy > 0.0_wp, more="PV energy must be positive at positive pressure")
+      if (allocated(error)) return
+      ! Measured |E - p*V| <= 4e-14 at E ~ 2.0e3 (below one ulp), macOS arm64
+      ! gfortran 14.3, 1-4 threads
+      pv = test_pressure*model%cavity%total_volume
+      call check(error, abs(energy - pv) <= pv_abs_thr .or. &
+         & abs(energy - pv) <= pv_rel_thr*abs(pv), more="PV energy differs from p*V")
    end subroutine test_pv
 
    logical function failed(error, err, context)
@@ -430,7 +496,8 @@ contains
 
    !> Invalid model calls leave the caller's previous response intact
    !>
-   !> @param[out] error Test failure
+   !> The foreign coupling is staged and answered by its own model, so only
+   !> the ownership guard refuses it; its owner accepts it as a control
    subroutine test_preserve_response(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -443,12 +510,17 @@ contains
       type(cavity_type_iswig) :: cavity
       type(model_continuum_type), target :: model, other
       type(coupling_type), pointer :: coupling, foreign
+      !> Cavity of the foreign coupling's owner
+      class(cavity_type), pointer :: other_cav
       !> Previous response and sentinel charge
       type(response_type) :: response
       type(potential_adjoint_response_type) :: charge
       type(potential_adjoint_response_type), allocatable :: saved
       !> Gradient accumulator, unchanged on failure
       real(wp), allocatable :: gradient(:, :)
+      !> Response and gradient of the owner's control call
+      type(response_type) :: control_response
+      real(wp), allocatable :: control_gradient(:, :)
       !> Rejection case
       integer :: scenario
       call iswig_fixture(ctx, mol, radii, cavity, error)
@@ -460,12 +532,17 @@ contains
       call model%new_coupling(coupling, err)
       call other%new_coupling(foreign, err)
       if (failed(error, err, "coupling setup")) return
+      other_cav => other%cavity
       charge%w_phi = [7.0_wp]
       call response_accumulate(response, charge, err)
       allocate (gradient(3, mol%nat), source=9.0_wp)
-      do scenario = 1, 4
+      allocate (control_gradient(3, mol%nat), source=0.0_wp)
+      do scenario = 1, 5
          select case (scenario)
          case (1)
+            call other%prepare_response(foreign, err)
+            if (failed(error, err, "foreign response staging")) return
+            call fill_point_charge_potential(other_cav, foreign, qat_vals, mol)
             call model%get_response(foreign, response, err)
          case (2)
             call model%get_gradient(coupling, response, gradient, err)
@@ -475,11 +552,21 @@ contains
          case (4)
             call model%update(mol, err)
             call model%get_gradient(coupling, response, gradient, err)
+         case (5)
+            call other%prepare_gradient(foreign, err)
+            if (failed(error, err, "foreign gradient staging")) return
+            call fill_point_charge_potential(other_cav, foreign, qat_vals, mol)
+            call fill_point_charge_field(other_cav, foreign, qat_vals, mol)
+            call model%get_gradient(foreign, response, gradient, err)
          case default
             error stop "test_model_coupling: unhandled scenario"
          end select
          call check(error, allocated(err))
          if (allocated(error)) return
+         if (scenario == 1 .or. scenario == 5) then
+            call check(error, index(err%message, "different model") > 0, more=err%message)
+            if (allocated(error)) return
+         end if
          call copy_potential_adjoint(response, saved)
          call check(error, allocated(saved))
          if (allocated(error)) return
@@ -487,14 +574,20 @@ contains
          if (allocated(error)) return
          call check(error, maxval(abs(gradient - 9.0_wp)), 0.0_wp, thr=0.0_wp)
          if (allocated(error)) return
+         ! The owner accepts the same staging, so ownership alone refused it
+         if (scenario == 1) then
+            call other%get_response(foreign, control_response, err)
+            if (failed(error, err, "owner response on its staged coupling")) return
+         else if (scenario == 5) then
+            call other%get_gradient(foreign, control_response, control_gradient, err)
+            if (failed(error, err, "owner gradient on its staged coupling")) return
+         end if
       end do
       call model%release_coupling(coupling)
       call other%release_coupling(foreign)
    end subroutine test_preserve_response
 
    !> A bare DROP cavity reports its missing level set without dereferencing it
-   !>
-   !> @param[out] error Test failure
    subroutine test_uninitialized_drop(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -532,8 +625,6 @@ contains
    end function current_name
 
    !> A new `prepare_*` restarts a half-walked pass at the first request
-   !>
-   !> @param[out] error Test failure
    subroutine test_model_restart(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -586,9 +677,75 @@ contains
       call model%release_coupling(coupling)
    end subroutine test_model_restart
 
+   !> Later phases reuse phi; a new energy evaluation discards it
+   subroutine test_phase_reuse(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Library error
+      type(moist_error_type), allocatable :: err
+      !> Fixture
+      type(moist_context_type), target :: ctx
+      type(structure_type) :: mol
+      type(radius_type_static) :: radii
+      type(cavity_type_iswig) :: cavity
+      type(model_continuum_type), target :: model
+      type(coupling_type), pointer :: coupling
+      class(cavity_type), pointer :: cav
+      !> Host response
+      type(response_type) :: response
+      type(potential_adjoint_response_type), allocatable :: charge
+      call iswig_fixture(ctx, mol, radii, cavity, error)
+      if (allocated(error)) return
+      call cpcm_model(model, cavity, ctx, mol, .false., error)
+      if (allocated(error)) return
+      cav => model%cavity
+      call model%new_coupling(coupling, err)
+      call model%prepare_energy(coupling, err)
+      if (failed(error, err, "energy staging")) return
+      call fill_point_charge_potential(cav, coupling, qat_vals, mol)
+      call model%prepare_response(coupling, err)
+      if (failed(error, err, "response staging")) return
+      call check(error, count_visits(coupling), 0, more="response discarded valid phi")
+      if (allocated(error)) return
+      call model%get_response(coupling, response, err)
+      if (failed(error, err, "response with reused phi")) return
+      call copy_potential_adjoint(response, charge)
+      call check(error, allocated(charge))
+      if (allocated(error)) return
+      call check(error, maxval(abs(charge%w_phi)) > 0.0_wp)
+      if (allocated(error)) return
+      call model%prepare_gradient(coupling, err)
+      if (failed(error, err, "gradient staging")) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      associate (item => coupling%request())
+         call check(error, .not. item%is_missing("phi"))
+         if (allocated(error)) return
+         call check(error, item%is_missing("dphi_dr") .and. item%is_missing("dphi_dxi"))
+      end associate
+      if (allocated(error)) return
+      call model%prepare_energy(coupling, err)
+      if (failed(error, err, "new energy staging")) return
+      call check(error, coupling%next(), more="new energy retained the previous phi")
+      if (allocated(error)) return
+      associate (item => coupling%request())
+         call check(error, item%is_missing("phi"))
+      end associate
+      if (allocated(error)) return
+      call model%prepare_gradient(coupling, err)
+      if (failed(error, err, "gradient without energy answers")) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      associate (item => coupling%request())
+         call check(error, item%is_missing("phi") .and. item%is_missing("dphi_dr") .and. &
+            & item%is_missing("dphi_dxi"))
+      end associate
+      if (allocated(error)) return
+      call model%release_coupling(coupling)
+      call check(error, .not. associated(coupling))
+   end subroutine test_phase_reuse
+
    !> A model update ends every walk; answering is refused until the next staging
-   !>
-   !> @param[out] error Test failure
    subroutine test_model_update_walk(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -642,8 +799,6 @@ contains
    end subroutine test_model_update_walk
 
    !> Every accessor names a wrong staging and the outputs still missing
-   !>
-   !> @param[out] error Test failure
    subroutine test_model_messages(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

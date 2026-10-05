@@ -4,6 +4,8 @@
 !>
 !> - Round-trip diagonal, forward vs analytic FT, k-space convolution
 !> - Quadrature refinement, type-1/2 vs type-3 routes, stale and recreated trafo
+!> - Preparation guards: unbound trafo, missing k-grid, empty batch keeps the
+!>   prepared plans; type-3 fallback for coordinates outside the type-1/2 window
 !> - Tolerances assume a nucleus-localised field, the cloud resolves `2*pi/k` only near the nuclei
 module test_math_grid_nufft
    use, intrinsic :: iso_fortran_env, only: output_unit
@@ -62,7 +64,11 @@ contains
                   new_unittest("nufft_type12_matches_type3_uniform", test_type12_vs_type3_uniform), &
                   new_unittest("nufft_trafo_stale_after_update", test_trafo_stale_after_update), &
                   new_unittest("nufft_trafo_stale_after_reconstruction", test_trafo_stale_after_reconstruction), &
-                  new_unittest("nufft_trafo_destroy_recreate", test_trafo_destroy_recreate) &
+                  new_unittest("nufft_trafo_destroy_recreate", test_trafo_destroy_recreate), &
+                  new_unittest("nufft_prepare_unbound", test_prepare_unbound), &
+                  new_unittest("nufft_prepare_without_kgrid", test_prepare_without_kgrid), &
+                  new_unittest("nufft_prepare_zero_batch", test_prepare_zero_batch), &
+                  new_unittest("nufft_type12_coordinate_fallback", test_coordinate_fallback) &
                   ]
    end subroutine collect_math_grid_nufft
 
@@ -177,8 +183,6 @@ contains
    !> - Composite operator `g_j = (dkx*dky*dkz/(2*pi)^3) * sum_k sum_i w_i f_i exp(i k.(r_j - r_i))`
    !> - At `j = i` the k sum is `nkx*nky*nkz`
    !> - Hence `g_i = w_i/dr^3 * f_i`, no other point contributes
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_roundtrip_diagonal(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -226,8 +230,6 @@ contains
    !> - `f(r) = exp(-a |r - c|^2)` with `r0 = point(1)`
    !> - `F(k) = (pi/a)^(3/2) exp(-k^2/(4a)) exp(-i k.(c - r0))`
    !> - Pins measure, sign, phase reference and k ordering of both backends
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_forward_analytic(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -364,8 +366,6 @@ contains
    !> - Forward transform `exp(-a1 |r - c|^2)`, multiply by the FT of `exp(-a2 |r|^2)`
    !> - Backward transform gives the convolution
    !> - Result `(pi/(a1+a2))^(3/2) exp(-a1 a2/(a1+a2)|r-c|^2)`
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_convolution(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -435,8 +435,6 @@ contains
    !> - `integrate_field` of `exp(-(|r - c| - R0)^2)`, `R0 = 6` bohr
    !> - Exact value `4*pi*integral r^2 exp(-(r-R0)^2) dr`
    !> - Sparse outer region, so a transform failure is not the quadrature rule
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_quadrature_refines(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -670,8 +668,6 @@ contains
    end subroutine compare_transform_routes
 
    !> Check type-1/2 against type-3 elementwise on the molecular probe grid
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_type12_vs_type3_molecular(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -720,8 +716,6 @@ contains
    !> Check type-1/2 against type-3 on a near-uniform point cloud
    !>
    !> - Opposite extreme to the clustered molecular cloud, every fine-grid cell equally loaded
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_type12_vs_type3_uniform(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -784,8 +778,6 @@ contains
    !> Check that a stale trafo refuses to transform after a grid update
    !>
    !> - Holds for a pure translation (`ngrid` unchanged), only the generation guard catches it
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_trafo_stale_after_update(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -830,8 +822,6 @@ contains
    !> - Same recipe, same sequence of update and `molecular_grid_set_kgrid`, one
    !>   atom moved: the point count is unchanged, so only a generation
    !>   counter that survives `new_molecular_grid` catches the stale plans
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_trafo_stale_after_reconstruction(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -879,8 +869,6 @@ contains
    end subroutine test_trafo_stale_after_reconstruction
 
    !> Check destroy of a stale trafo and fresh prepare on the updated grid
-   !>
-   !> @param[out] error  propagated test failure
    subroutine test_trafo_destroy_recreate(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
@@ -952,6 +940,125 @@ contains
       call mg%destroy()
    end subroutine test_trafo_destroy_recreate
 
-   ! No "failed prepare" test: FINUFFT aborts on bad input instead of returning `ier /= 0`
+   !> Reject preparation without a bound grid
+   subroutine test_prepare_unbound(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(mctc_error_type), allocatable :: merr
+
+      call trafo%prepare(1, merr)
+      call check(error, allocated(merr), "unbound NUFFT preparation must fail")
+      if (.not. allocated(error)) then
+         call check(error, index(merr%message, "not bound") > 0, "unbound NUFFT error must name the binding")
+      end if
+      call trafo%destroy()
+   end subroutine test_prepare_unbound
+
+   !> Reject preparation of a built grid whose reciprocal points were never configured
+   subroutine test_prepare_without_kgrid(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(mctc_error_type), allocatable :: merr
+      type(moist_math_grid_atomic_recipe_type) :: recipe
+      type(moist_math_grid_atomic_recipe_override_type), allocatable :: overrides(:)
+
+      call probe_structure(mol)
+      call get_uniform_recipe(recipe, overrides, probe_nrad, probe_nang, merr, rmax=probe_rmax)
+      if (.not. allocated(merr)) call new_molecular_grid(mg, merr, recipe=recipe, overrides=overrides, &
+                                                         reciprocal=.false.)
+      if (.not. allocated(merr)) call mg%update(mol, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+      else
+         call check(error, mg%ngrid > 0 .and. .not. mg%has_kgrid, &
+            & "fixture must be a built grid without k-grid")
+      end if
+      if (.not. allocated(error)) then
+         call new_molecular_grid_trafo(trafo, mg)
+         call trafo%prepare(1, merr)
+         call check(error, allocated(merr), "NUFFT preparation without a k-grid must fail")
+      end if
+      if (.not. allocated(error)) then
+         call check(error, index(merr%message, "set_kgrid first") > 0, "missing-k-grid error must name configuration")
+      end if
+      call trafo%destroy()
+      call mg%destroy()
+   end subroutine test_prepare_without_kgrid
+
+   !> Reject an empty batch before replacing prepared plans
+   !>
+   !> - The rejected call keeps the one-column plans: `ntrans` stays 1 and a
+   !>   one-column forward transform still runs
+   subroutine test_prepare_zero_batch(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(mctc_error_type), allocatable :: merr
+      real(wp), allocatable :: f(:, :)
+      complex(wp), allocatable :: fk(:, :)
+      logical :: ready
+
+      call setup_probe(mol, mg, trafo, ready, error)
+      if (.not. allocated(error) .and. ready) then
+         call trafo%prepare(0, merr)
+         call check(error, allocated(merr), "NUFFT preparation of zero columns must fail")
+         if (.not. allocated(error)) then
+            call check(error, trafo%ntrans == 1, "rejected empty batch dropped the plans")
+         end if
+         if (.not. allocated(error)) then
+            allocate (f(mg%ngrid, 1), fk(mg%npts_k, 1))
+            f(:, 1) = exp(-probe_alpha*sum(mg%xyz**2, dim=1))
+            call forward(error, trafo, f, fk)
+         end if
+      end if
+      call trafo%destroy()
+      call mg%destroy()
+   end subroutine test_prepare_zero_batch
+
+   !> Use type 3 when shifted coordinates exceed the type-1/2 window
+   !>
+   !> - No public setter reaches the fallback: `molecular_grid_set_kgrid` sizes
+   !>   the period so the scaled span stays within 2*pi
+   !> - Moving `kref` by 1000 bohr scales the coordinates to about 1000*dkx,
+   !>   some 160 rad on the probe grid, far beyond the [-3*pi, 3*pi] window
+   subroutine test_coordinate_fallback(error)
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+      type(moist_math_grid_3d_molecular_type), target :: mg
+      type(moist_math_grid_3d_molecular_trafo_type) :: trafo
+      type(mctc_error_type), allocatable :: merr
+      logical :: ready
+
+      call setup_probe(mol, mg, trafo, ready, error)
+      if (.not. allocated(error) .and. ready) then
+         call check(error, trafo%is_type12, "probe grid must start on the type-1/2 route")
+      end if
+      if (.not. allocated(error) .and. ready) then
+         mg%kref(1) = mg%kref(1) + 1000.0_wp
+         call check(error, minval(abs(mg%xyz(1, :) - mg%kref(1)))*mg%dkx > 3.0_wp*pi, &
+            & "shifted coordinates must leave the type-1/2 window")
+      end if
+      if (.not. allocated(error) .and. ready) then
+         call trafo%prepare(1, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+         else
+            call check(error,.not. trafo%is_type12, "large shifted coordinates must select type 3")
+         end if
+      end if
+      call trafo%destroy()
+      call mg%destroy()
+   end subroutine test_coordinate_fallback
 
 end module test_math_grid_nufft

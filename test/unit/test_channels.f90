@@ -8,7 +8,7 @@ module test_channels
       & gaussian_potential_request_type, gaussian_moment_request_type, &
       & atomic_multipole_request_type, atomic_charge_request_type, radial_potential_request_type, &
       & coupling_extent_grid, coupling_extent_atom, coupling_extent_grid_atom, &
-      & current_output_extent, answer_flat, moist_phase_energy, &
+      & current_output_extent, current_request, answer_flat, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, request_name_len, coupling_register, &
       & request_require, coupling_begin_registration, coupling_set_scope, &
       & coupling_snapshot, coupling_arm, coupling_invalidate, coupling_check_mandatory, &
@@ -18,7 +18,7 @@ module test_channels
       & gaussian_amplitude_response_type, atomic_multipole_adjoint_response_type, &
       & atomic_charge_adjoint_response_type, radial_potential_adjoint_response_type, &
       & current_response_item, response_accumulate, response_clear
-   use moist_channels_fields, only: field_query_type, field_real, field_max_rank
+   use moist_channels_fields, only: field_query_type, field_real, field_int, field_bool, field_max_rank
    use test_helpers, only: check_moist_error
    implicit none(type, external)
    private
@@ -91,7 +91,14 @@ contains
          new_unittest("response_unfilled_arrays_not_declared", test_response_list_partial), &
          new_unittest("placeholders_declare_nothing", test_placeholders_list_nothing), &
          new_unittest("request_inputs_declared", test_request_list_fields), &
-         new_unittest("field_query_add_real3", test_field_query_add_real3)]
+         new_unittest("field_query_add_real3", test_field_query_add_real3), &
+         new_unittest("gaussian_all_channels", test_gaussian_all_channels), &
+         new_unittest("multipole_all_channels", test_multipole_all_channels), &
+         new_unittest("view_expires_on_arm_and_invalidate", test_view_staging_expiry), &
+         new_unittest("field_query_types_and_growth", test_field_query_types), &
+         new_unittest("registration_resets_scope_and_masks", test_registration_resets_scope_and_masks), &
+         new_unittest("compaction_remaps_and_forgets", test_compaction_remaps_and_forgets), &
+         new_unittest("checked_walk_copies", test_checked_walk_copies)]
    end subroutine collect_channels
 
    !* ================================================================================= *!
@@ -490,6 +497,9 @@ contains
       item = first%request()
       call check(error, .not. item%is_missing("phi"), more="the copy should carry the answer state")
       if (allocated(error)) return
+      ! Fix the grid size before registering: a later change of ngrid would
+      ! invalidate every answer and hide a carried-over one
+      call coupling_snapshot(second, ngrid=2)
       call coupling_begin_registration(second)
       call coupling_set_scope(second, 1)
       call coupling_register(second, "potential", item, err)
@@ -800,8 +810,6 @@ contains
 
    !> A coupling that never began a registration pass still accepts one, and
    !> an empty local name is refused like an overlong one
-   !>
-   !> @param[out] error Test failure
    subroutine test_register_unprepared(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -848,8 +856,6 @@ contains
 
    !> The placeholder returned outside a `next()` window cannot be registered,
    !> and the refusal leaves neither a request nor a local name behind
-   !>
-   !> @param[out] error Test failure
    subroutine test_register_placeholder(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -890,8 +896,6 @@ contains
 
    !> Component reads name what went wrong: an unbound view, an invalid phase,
    !> a name another scope registered and an output the request does not declare
-   !>
-   !> @param[out] error Test failure
    subroutine test_view_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1374,6 +1378,9 @@ contains
          type is (potential_adjoint_response_type)
             call check(error, all(item%w_phi == [2.0_wp, 3.0_wp, 4.0_wp]), "two accumulations sum")
          type is (gaussian_amplitude_response_type)
+            call check(error, allocated(item%w_overlap) .and. allocated(item%w_normal_deriv), &
+               & more="Gaussian amplitude channel absent")
+            if (allocated(error)) return
             call check(error, all(item%w_overlap == 1.0_wp) &
                & .and. all(item%w_normal_deriv == [7.0_wp, 8.0_wp]), &
                & "overlap summed twice, normal derivative copied once")
@@ -1513,8 +1520,6 @@ contains
    !> Density weights of every rank accumulate independently: an array absent
    !> on the stored item is copied, one absent on the new item contributes
    !> nothing, and a rank-3 shape mismatch is refused without touching the sums
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_density_ranks(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1583,8 +1588,6 @@ contains
 
    !> A differently sized rank-1 array is refused for the potential adjoint and
    !> for the first Gaussian amplitude, and the stored item is left unchanged
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_vector_shape(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1641,8 +1644,6 @@ contains
 
    !> The "no_current_item" placeholder stands for no item, so nothing
    !> accumulates into it
-   !>
-   !> @param[out] error Test failure
    subroutine test_response_placeholder_add(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1670,8 +1671,6 @@ contains
    !* ================================================================================= *!
 
    !> Releasing middle, head and tail nodes leaves the remaining collections usable
-   !>
-   !> @param[out] error Test failure
    subroutine test_registry_release(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1713,8 +1712,6 @@ contains
 
    !> Releasing the oldest of three collections walks past the newer ones; a
    !> collection the registry never minted is left alone
-   !>
-   !> @param[out] error Test failure
    subroutine test_registry_release_tail(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1761,8 +1758,6 @@ contains
 
    !> Requests with matching inputs are shared across scopes, and a request no
    !> scope declares any more is dropped at the next grid snapshot
-   !>
-   !> @param[out] error Test failure
    subroutine test_shared_requests(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1812,8 +1807,6 @@ contains
    end subroutine test_shared_requests
 
    !> Direct potential reads return independent outputs and respect view lifetime
-   !>
-   !> @param[out] error Test failure
    subroutine test_direct_potential_read(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -2934,6 +2927,8 @@ contains
       if (allocated(error)) return
       call check_declared(error, query, 1, "vector", [2])
       if (allocated(error)) return
+      call check(error, query%index_of("tensor"), 2, "second descriptor lookup")
+      if (allocated(error)) return
       call check_declared(error, query, 2, "tensor", [2, 3, 4])
       if (allocated(error)) return
       call check(error, query%index_of("missing"), 0, "an unallocated array was listed")
@@ -2955,5 +2950,495 @@ contains
       call check(error, .not. query%found .and. .not. allocated(query%rvals), &
          & more="an undeclared name was fetched")
    end subroutine test_field_query_add_real3
+
+   !> Every Gaussian output is answered and read with independent values
+   subroutine test_gaussian_all_channels(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(gaussian_potential_request_type) :: potential
+      type(gaussian_moment_request_type) :: moments
+      real(wp), allocatable :: vector(:), matrix(:, :), tensor(:, :, :)
+      real(wp) :: expected_matrix(3, 2), expected_tensor(3, 3, 2)
+      integer :: i
+
+      expected_matrix = reshape([(real(i, wp), i=1, 6)], [3, 2])
+      expected_tensor = reshape([(real(i, wp), i=1, 18)], [3, 3, 2])
+      call request_require(potential, moist_phase_gradient, "phi", err)
+      if (.not. allocated(err)) call request_require(potential, moist_phase_gradient, "dphi_dr", err)
+      if (.not. allocated(err)) call request_require(potential, moist_phase_gradient, "dphi_dxi", err)
+      call check_moist_error(error, err, "Gaussian potential declarations")
+      if (allocated(error)) return
+      call request_require(moments, moist_phase_gradient, "gt", err)
+      if (.not. allocated(err)) call request_require(moments, moist_phase_gradient, "pt", err)
+      if (.not. allocated(err)) call request_require(moments, moist_phase_gradient, "mt", err)
+      if (.not. allocated(err)) call request_require(moments, moist_phase_gradient, "rt", err)
+      call check_moist_error(error, err, "Gaussian moment declarations")
+      if (allocated(error)) return
+      moments%width = [1.0_wp, 2.0_wp]
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 1)
+      call coupling_register(coupling, "potential", potential, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "moments", moments, err)
+      call check_moist_error(error, err, "Gaussian registrations")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "Gaussian staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "gaussian_potential"))
+      if (allocated(error)) return
+      call coupling%answer("phi", [2.0_wp, 3.0_wp], err)
+      if (.not. allocated(err)) call coupling%answer("dphi_dr", expected_matrix, err)
+      if (.not. allocated(err)) call coupling%answer("dphi_dxi", [4.0_wp, 5.0_wp], err)
+      call check_moist_error(error, err, "Gaussian potential answers")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "gaussian_moments"))
+      if (allocated(error)) return
+      call coupling%answer("gt", [6.0_wp, 7.0_wp], err)
+      if (.not. allocated(err)) call coupling%answer("pt", 2.0_wp*expected_matrix, err)
+      if (.not. allocated(err)) call coupling%answer("mt", expected_tensor, err)
+      if (.not. allocated(err)) call coupling%answer("rt", 3.0_wp*expected_matrix, err)
+      call check_moist_error(error, err, "Gaussian moment answers")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "all Gaussian outputs answered")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, view)
+      call view%read("potential", "phi", vector, err)
+      call check_moist_error(error, err, "phi read")
+      if (allocated(error)) return
+      call check(error, all(vector == [2.0_wp, 3.0_wp]))
+      if (allocated(error)) return
+      call view%read("potential", "dphi_dr", matrix, err)
+      call check_moist_error(error, err, "dphi_dr read")
+      if (allocated(error)) return
+      call check(error, all(matrix == expected_matrix))
+      if (allocated(error)) return
+      call view%read("potential", "dphi_dxi", vector, err)
+      call check_moist_error(error, err, "dphi_dxi read")
+      if (allocated(error)) return
+      call check(error, all(vector == [4.0_wp, 5.0_wp]))
+      if (allocated(error)) return
+      call view%read("moments", "gt", vector, err)
+      call check_moist_error(error, err, "gt read")
+      if (allocated(error)) return
+      call check(error, all(vector == [6.0_wp, 7.0_wp]))
+      if (allocated(error)) return
+      call view%read("moments", "pt", matrix, err)
+      call check_moist_error(error, err, "pt read")
+      if (allocated(error)) return
+      call check(error, all(matrix == 2.0_wp*expected_matrix))
+      if (allocated(error)) return
+      call view%read("moments", "mt", tensor, err)
+      call check_moist_error(error, err, "mt read")
+      if (allocated(error)) return
+      call check(error, all(tensor == expected_tensor))
+      if (allocated(error)) return
+      call view%read("moments", "rt", matrix, err)
+      call check_moist_error(error, err, "rt read")
+      if (allocated(error)) return
+      call check(error, all(matrix == 3.0_wp*expected_matrix))
+      call coupling_close_view(coupling)
+   end subroutine test_gaussian_all_channels
+
+   !> All multipole requests and adjoints retain their distinct tensor values
+   subroutine test_multipole_all_channels(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(atomic_multipole_request_type) :: request
+      type(atomic_multipole_adjoint_response_type) :: weights, bad
+      type(response_type) :: response
+      real(wp), allocatable :: q(:), mu(:, :), theta(:, :, :)
+      integer :: i
+
+      weights%dg_dq = [2.0_wp, 3.0_wp]
+      weights%dg_dmu = reshape([(real(i, wp), i=1, 6)], [3, 2])
+      weights%dg_dtheta = reshape([(real(i, wp), i=1, 18)], [3, 3, 2])
+      call request_require(request, moist_phase_gradient, "q", err)
+      if (.not. allocated(err)) call request_require(request, moist_phase_gradient, "mu", err)
+      if (.not. allocated(err)) call request_require(request, moist_phase_gradient, "theta", err)
+      call check_moist_error(error, err, "multipole declarations")
+      if (allocated(error)) return
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 1)
+      call coupling_register(coupling, "multipoles", request, err)
+      call check_moist_error(error, err, "multipole registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=5, natom=2)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "multipole staging")
+      if (allocated(error)) return
+      call check(error, next_is(coupling, "atomic_multipoles"))
+      if (allocated(error)) return
+      call coupling%answer("q", weights%dg_dq, err)
+      if (.not. allocated(err)) call coupling%answer("mu", weights%dg_dmu, err)
+      if (.not. allocated(err)) call coupling%answer("theta", weights%dg_dtheta, err)
+      call check_moist_error(error, err, "multipole answers")
+      if (allocated(error)) return
+      call coupling_check_mandatory(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "all multipoles answered")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, view)
+      call view%read("multipoles", "q", q, err)
+      call check_moist_error(error, err, "q read")
+      if (allocated(error)) return
+      call check(error, all(q == weights%dg_dq))
+      if (allocated(error)) return
+      call view%read("multipoles", "mu", mu, err)
+      call check_moist_error(error, err, "mu read")
+      if (allocated(error)) return
+      call check(error, all(mu == weights%dg_dmu))
+      if (allocated(error)) return
+      call view%read("multipoles", "theta", theta, err)
+      call check_moist_error(error, err, "theta read")
+      if (allocated(error)) return
+      call check(error, all(theta == weights%dg_dtheta))
+      if (allocated(error)) return
+      call coupling_close_view(coupling)
+      call response_accumulate(response, weights, err)
+      if (.not. allocated(err)) call response_accumulate(response, weights, err)
+      call check_moist_error(error, err, "all multipole adjoints accumulated")
+      if (allocated(error)) return
+      allocate (bad%dg_dmu(2, 3), source=0.0_wp)
+      call response_accumulate(response, bad, err)
+      call check(error, allocated(err), more="transposed dipole adjoint accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "dg_dmu") > 0)
+      if (allocated(error)) return
+      deallocate (bad%dg_dmu)
+      allocate (bad%dg_dtheta(3, 2, 3), source=0.0_wp)
+      call response_accumulate(response, bad, err)
+      call check(error, allocated(err), more="wrong quadrupole adjoint shape accepted")
+      if (allocated(error)) return
+      call check(error, index(err%message, "dg_dtheta") > 0)
+      if (allocated(error)) return
+      call check(error, response%next())
+      if (allocated(error)) return
+      select type (item => response%item())
+      type is (atomic_multipole_adjoint_response_type)
+         call check(error, all(item%dg_dq == 2.0_wp*weights%dg_dq))
+         if (allocated(error)) return
+         call check(error, all(item%dg_dmu == 2.0_wp*weights%dg_dmu))
+         if (allocated(error)) return
+         call check(error, allocated(item%dg_dtheta), more="quadrupole adjoint absent")
+         if (allocated(error)) return
+         call check(error, all(item%dg_dtheta == 2.0_wp*weights%dg_dtheta))
+      class default
+         call test_failed(error, "wrong multipole adjoint type")
+      end select
+   end subroutine test_multipole_all_channels
+
+   !> Captured component views expire on staging and invalidation
+   subroutine test_view_staging_expiry(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: captured
+      real(wp), allocatable :: values(:)
+
+      call fixture(coupling, err)
+      call check_moist_error(error, err, "view fixture")
+      if (allocated(error)) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "view answer")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, captured)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "view restaging")
+      if (allocated(error)) return
+      call captured%read("potential", "phi", values, err)
+      call check(error, allocated(err), more="restaging left an old view live")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Expired") > 0, more=err%message)
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 1, captured)
+      call coupling_invalidate(coupling)
+      call captured%read("potential", "phi", values, err)
+      call check(error, allocated(err), more="invalidation left an old view live")
+      if (allocated(error)) return
+      call check(error, index(err%message, "Expired") > 0, more=err%message)
+   end subroutine test_view_staging_expiry
+
+   !> Non-real payloads, scalar fields and descriptor growth keep their contracts
+   subroutine test_field_query_types(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(field_query_type) :: query
+      integer, allocatable :: integers(:), integer_scalar
+      logical, allocatable :: flags(:)
+      real(wp), allocatable :: scalar
+      character(len=12) :: name
+      integer :: i
+
+      integers = [2, 5, 9]
+      flags = [.true., .false., .true.]
+      scalar = 3.5_wp
+      integer_scalar = 7
+      call query%fetch("indices")
+      call query%add_int("indices", "Integer array", integers)
+      call check(error, query%found .and. allocated(query%ivals))
+      if (allocated(error)) return
+      call check(error, query%hit%dtype == field_int .and. query%hit%rank == 1 &
+         & .and. query%hit%count() == 3 .and. all(query%ivals == integers))
+      if (allocated(error)) return
+      call query%fetch("indices")
+      call query%add_int("indices", "Integer array", integers, zero_based=.true.)
+      call check(error, query%found .and. allocated(query%ivals))
+      if (allocated(error)) return
+      call check(error, all(query%ivals == integers - 1))
+      if (allocated(error)) return
+      call query%fetch("flags")
+      call query%add_bool("flags", "Logical array", flags)
+      call check(error, query%found .and. allocated(query%lvals) .and. .not. allocated(query%ivals))
+      if (allocated(error)) return
+      call check(error, query%hit%dtype == field_bool .and. query%hit%rank == 1 &
+         & .and. query%hit%count() == 3 .and. all(query%lvals .eqv. flags))
+      if (allocated(error)) return
+      call query%fetch("scalar")
+      call query%add_real_scalar("scalar", "Real scalar", scalar)
+      call check_fetched(error, query, "scalar", [integer ::], [3.5_wp])
+      if (allocated(error)) return
+      call check(error, .not. allocated(query%lvals), more="logical payload carried into real fetch")
+      if (allocated(error)) return
+      call query%fetch("integer")
+      call query%add_int_scalar("integer", "Integer scalar", integer_scalar)
+      call check(error, query%found .and. allocated(query%ivals) .and. .not. allocated(query%rvals))
+      if (allocated(error)) return
+      call check(error, query%hit%dtype == field_int .and. query%hit%rank == 0 &
+         & .and. query%hit%count() == 1 .and. all(query%ivals == [7]))
+      if (allocated(error)) return
+      call query%fetch("plain")
+      call query%add_int_value("plain", "Plain integer", 11)
+      call check(error, query%found .and. allocated(query%ivals))
+      if (allocated(error)) return
+      call check(error, query%hit%rank == 0 .and. all(query%ivals == [11]))
+      if (allocated(error)) return
+      deallocate (integers, flags, scalar, integer_scalar)
+      call query%enumerate()
+      call query%add_int("indices", "Absent integers", integers)
+      call query%add_bool("flags", "Absent logicals", flags)
+      call query%add_real_scalar("scalar", "Absent real", scalar)
+      call query%add_int_scalar("integer", "Absent integer", integer_scalar)
+      call check_listing(error, query, "absent fields", 0)
+      if (allocated(error)) return
+      call query%fetch("flags")
+      call query%add_bool("flags", "Absent logicals", flags)
+      call check(error, .not. query%found .and. .not. allocated(query%lvals))
+      if (allocated(error)) return
+      ! 70 descriptors grow the storage past every doubling up to 64 entries
+      call query%enumerate()
+      do i = 1, 70
+         write (name, '("field",i0)') i
+         call query%add_int_value(trim(name), "Growing descriptors", i)
+      end do
+      call check_listing(error, query, "grown descriptors", 70)
+      if (allocated(error)) return
+      do i = 1, 70
+         write (name, '("field",i0)') i
+         call check(error, allocated(query%info(i)%name), more="descriptor lost while growing")
+         if (allocated(error)) return
+         call check(error, query%info(i)%name, trim(name))
+         if (allocated(error)) return
+         call check(error, query%index_of(trim(name)), i)
+         if (allocated(error)) return
+         call check(error, query%info(i)%dtype == field_int .and. query%info(i)%count() == 1)
+         if (allocated(error)) return
+      end do
+   end subroutine test_field_query_types
+
+   !> A new registration resets scope and removes old phase requirements
+   subroutine test_registration_resets_scope_and_masks(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(point_potential_request_type) :: point
+      real(wp), allocatable :: values(:)
+
+      call fixture(coupling, err)
+      call check_moist_error(error, err, "registration fixture")
+      if (allocated(error)) return
+      call check(error, coupling%next())
+      if (allocated(error)) return
+      call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+      call check_moist_error(error, err, "fixture answer")
+      if (allocated(error)) return
+      call request_require(point, moist_phase_energy, "phi", err)
+      call check_moist_error(error, err, "reduced declaration")
+      if (allocated(error)) return
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "potential", point, err)
+      call check_moist_error(error, err, "reduced registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2)
+      call coupling_arm(coupling, moist_phase_gradient, err)
+      call check_moist_error(error, err, "reduced requirements")
+      if (allocated(error)) return
+      call check(error, .not. coupling%next(), more="obsolete gradient requirements retained")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 0, view)
+      call view%read("potential", "phi", values, err)
+      call check_moist_error(error, err, "default registration scope")
+      if (allocated(error)) return
+      call check(error, all(values == [1.0_wp, 2.0_wp]))
+      call coupling_close_view(coupling)
+   end subroutine test_registration_resets_scope_and_masks
+
+   !> Compaction remaps multiple live slots and forgets answers of removed slots
+   subroutine test_compaction_remaps_and_forgets(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type), target :: coupling
+      type(coupling_view_type) :: view
+      type(gaussian_potential_request_type) :: gaussian
+      type(gaussian_moment_request_type) :: moments
+      type(point_potential_request_type) :: point
+      real(wp), allocatable :: values(:)
+
+      call three_requests(coupling, err)
+      call check_moist_error(error, err, "three requests")
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "initial staging")
+      if (allocated(error)) return
+      ! Distinct answers per request, so a read from the wrong slot shows
+      do while (coupling%next())
+         select case (current_name(coupling))
+         case ("point_potential")
+            call coupling%answer("phi", [1.0_wp, 2.0_wp], err)
+         case ("gaussian_potential")
+            call coupling%answer("phi", [3.0_wp, 4.0_wp], err)
+         case ("gaussian_moments")
+            call coupling%answer("gt", [5.0_wp, 6.0_wp], err)
+         case default
+            call test_failed(error, "unexpected request "//trim(current_name(coupling)))
+            return
+         end select
+         call check_moist_error(error, err, "initial answers")
+         if (allocated(error)) return
+      end do
+      call request_require(gaussian, moist_phase_energy, "phi", err)
+      if (.not. allocated(err)) call request_require(moments, moist_phase_energy, "gt", err)
+      call check_moist_error(error, err, "compacted declarations")
+      if (allocated(error)) return
+      moments%width = [1.0_wp, 2.0_wp]
+      call coupling_begin_registration(coupling)
+      call coupling_set_scope(coupling, 2)
+      call coupling_register(coupling, "gaussian", gaussian, err)
+      if (.not. allocated(err)) call coupling_register(coupling, "moments", moments, err)
+      call check_moist_error(error, err, "compacted registrations")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "compacted registration")
+      if (allocated(error)) return
+      call coupling_make_view(coupling, 2, view)
+      call view%read("gaussian", "phi", values, err)
+      call check_moist_error(error, err, "first remapped slot")
+      if (allocated(error)) return
+      call check(error, all(values == [3.0_wp, 4.0_wp]), more="first remapped slot read another answer")
+      if (allocated(error)) return
+      call view%read("moments", "gt", values, err)
+      call check_moist_error(error, err, "second remapped slot")
+      if (allocated(error)) return
+      call check(error, all(values == [5.0_wp, 6.0_wp]), more="second remapped slot read another answer")
+      if (allocated(error)) return
+      call coupling_close_view(coupling)
+      call request_require(point, moist_phase_energy, "phi", err)
+      call check_moist_error(error, err, "point declaration")
+      if (allocated(error)) return
+      call coupling_begin_registration(coupling)
+      call coupling_register(coupling, "point", point, err)
+      call check_moist_error(error, err, "point registration")
+      if (allocated(error)) return
+      call coupling_snapshot(coupling, ngrid=2)
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "removed point reintroduced")
+      if (allocated(error)) return
+      call check(error, coupling%next(), more="removed request retained its old answer")
+      if (allocated(error)) return
+      call check(error, current_name(coupling), "point_potential")
+   end subroutine test_compaction_remaps_and_forgets
+
+   !> Checked copies follow every request and response cursor position
+   subroutine test_checked_walk_copies(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_error_type), allocatable :: err
+      type(coupling_type) :: coupling
+      type(response_type) :: response
+      class(coupling_request_type), allocatable :: request
+      class(response_item_type), allocatable :: item
+      integer :: position
+
+      call three_requests(coupling, err)
+      call check_moist_error(error, err, "three requests")
+      if (allocated(error)) return
+      call coupling_arm(coupling, moist_phase_energy, err)
+      call check_moist_error(error, err, "walk staging")
+      if (allocated(error)) return
+      call current_request(coupling, request, err)
+      call check(error, allocated(err), more="checked request readable before walk")
+      if (allocated(error)) return
+      position = 0
+      do while (coupling%next())
+         position = position + 1
+         call current_request(coupling, request, err)
+         call check_moist_error(error, err, "checked request copy")
+         if (allocated(error)) return
+         call check(error, request%name(), current_name(coupling), "checked request follows cursor")
+         if (allocated(error)) return
+      end do
+      call check(error, position, 3)
+      if (allocated(error)) return
+      call current_request(coupling, request, err)
+      call check(error, allocated(err), more="checked request readable after walk")
+      if (allocated(error)) return
+      call two_items(response, err)
+      call check_moist_error(error, err, "two response items")
+      if (allocated(error)) return
+      position = 0
+      do while (response%next())
+         position = position + 1
+         call current_response_item(response, item, err)
+         call check_moist_error(error, err, "checked response copy")
+         if (allocated(error)) return
+         call check(error, trim(item%name()), item_name(response), "checked response follows cursor")
+         if (allocated(error)) return
+         select type (item)
+         type is (potential_adjoint_response_type)
+            call check(error, all(item%w_phi == [1.0_wp, 2.0_wp]))
+            item%w_phi = -99.0_wp
+         type is (density_response_type)
+            call check(error, all(item%w_rho == [3.0_wp, 4.0_wp]))
+            item%w_rho = -99.0_wp
+         class default
+            call test_failed(error, "unexpected checked response type")
+         end select
+         if (allocated(error)) return
+         call current_response_item(response, item, err)
+         call check_moist_error(error, err, "checked response independent copy")
+         if (allocated(error)) return
+         select type (item)
+         type is (potential_adjoint_response_type)
+            call check(error, all(item%w_phi == [1.0_wp, 2.0_wp]))
+         type is (density_response_type)
+            call check(error, all(item%w_rho == [3.0_wp, 4.0_wp]))
+         end select
+         if (allocated(error)) return
+      end do
+      call check(error, position, 2)
+   end subroutine test_checked_walk_copies
 
 end module test_channels

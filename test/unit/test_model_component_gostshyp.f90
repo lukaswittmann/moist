@@ -346,6 +346,8 @@ contains
       real(wp) :: energy, rebuilt
       !> Independent reference energy
       real(wp) :: reference
+      !> Normal-projected traces and the analytic f-amplitude of one point
+      real(wp) :: ftilde(ngrid_sw), expected_normal_deriv
       !> Grid-point index
       integer :: igrid
 
@@ -405,8 +407,23 @@ contains
       if (allocated(error)) return
 
       do igrid = 1, ngrid_sw
+         ftilde(igrid) = -2.0_wp*gaussian_width(sw_areas(igrid)) &
+                        & *dot_product(normals(:, igrid), pt(:, igrid))
+      end do
+      do igrid = 1, ngrid_sw
+         ! Production deactivates points below 1e-9 max|ftilde|; the fixture keeps all active
+         call check(error, abs(ftilde(igrid)) > 1.0e-9_wp*maxval(abs(ftilde)), &
+            & more="GOSTSHYP fixture point fell below the relative overlap floor")
+         if (allocated(error)) return
          call check(error, amplitude%w_normal_deriv(igrid) < 0.0_wp, &
             & more="GOSTSHYP f-amplitude lost its sign fold")
+         if (allocated(error)) return
+         ! Analytic oracle: dE_i/dftilde_i of the summand p a_i gt_i/ftilde_i, the
+         ! closed form production uses for beta; the energy itself is checked
+         ! against the independent surface sum above
+         expected_normal_deriv = -test_pressure*sw_areas(igrid)*gt(igrid)/ftilde(igrid)**2
+         call check(error, amplitude%w_normal_deriv(igrid), expected_normal_deriv, thr=thr, &
+            & more="GOSTSHYP f-amplitude does not match the analytic dE/dftilde")
          if (allocated(error)) return
       end do
 

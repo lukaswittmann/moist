@@ -40,7 +40,8 @@ module test_model_component_pcm_cpcm
    public :: collect_model_component_pcm_cpcm
 
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
-   real(wp), parameter :: thr2 = sqrt(epsilon(1.0_wp))
+   !> Absolute tolerance for charge and energy identities
+   real(wp), parameter :: thr2 = 1.0e-12_wp
 
    !> Host surface potential driving the surface-weight test
    real(wp), parameter :: sw_phi(ngrid_sw) = [-0.31_wp, 0.22_wp, -0.17_wp, 0.41_wp, &
@@ -1997,7 +1998,8 @@ contains
             if (allocated(error)) return
          end do
          cavity%xi0(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/dxi at grid point ", ig
          call check(error, weights%w_xi(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
@@ -2011,7 +2013,8 @@ contains
             if (allocated(error)) return
          end do
          cavity%f(ig) = saved
-         fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), step)
+         call fd4_scalar(vals(1), vals(2), vals(3), vals(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "dE/df at grid point ", ig
          call check(error, weights%w_f(ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
             & more=trim(context))
@@ -2025,7 +2028,8 @@ contains
                if (allocated(error)) return
             end do
             cavity%xyz(iax, ig) = saved
-            fd = fd4_scalar(vals(1), vals(2), vals(3), vals(4), xyz_step)
+            call fd4_scalar(vals(1), vals(2), vals(3), vals(4), xyz_step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "dE/dxyz axis ", iax, " at grid point ", ig
             call check(error, weights%w_xyz(iax, ig), fd, thr=fd_atol + fd_rtol*abs(fd), &
                & more=trim(context))
@@ -2101,6 +2105,14 @@ contains
       integer :: iat
       !> Analytic PCM nuclear gradient
       real(wp), allocatable :: gradient(:, :)
+      !> Manufactured width-gradient probes and raw host width derivative
+      real(wp), allocatable :: width_gradient(:, :, :), width_derivative(:)
+      !> Surface point and probe index for the width contraction
+      integer :: width_point, iprobe
+      !> Saved cavity width derivative at the probe point and expected probe difference
+      real(wp), allocatable :: saved_xi1(:, :), width_expected(:, :)
+      !> Probe-difference residual and its tolerance
+      real(wp) :: width_residual, width_thr
       !> Energy of the reference geometry, solved to stage the gradient phase
       real(wp) :: energy
       !> Host part of the gradient phase, unused here
@@ -2181,6 +2193,55 @@ contains
          & more="CPCM nuclear gradient is zero, the test is vacuous")
       if (allocated(error)) return
 
+      ! Isolate the raw host width contraction using a manufactured cavity
+      ! derivative; the identical matrix and direct terms cancel between probes,
+      ! leaving q_i dphi/dxi_i xi1_rA(:, :, i) at the probe point
+      width_point = maxloc(abs(pcm_model%q), dim=1)
+      allocate (width_gradient(3, mols(1)%nat, 2), source=0.0_wp)
+      allocate (width_derivative(cavity%ngrid), source=0.0_wp)
+      saved_xi1 = cavity%xi1_rA(:, :, width_point)
+      cavity%xi1_rA(2, 1, width_point) = 0.37_wp
+      width_expected = pcm_model%q(width_point)*0.23_wp*cavity%xi1_rA(:, :, width_point)
+      call check(error, abs(width_expected(2, 1)) > 1.0e-8_wp, &
+         & more="manufactured CPCM width gradient is zero")
+      if (allocated(error)) return
+      do iprobe = 1, 2
+         call stage_point_charge_energy(error, pcm_model, cavity, qat, mols(1), coupling)
+         if (allocated(error)) return
+         call pcm_model%prepare_gradient(cavity, coupling, err)
+         if (allocated(err)) then
+            call test_failed(error, "Width-gradient staging failed: "//err%message)
+            return
+         end if
+         width_derivative(width_point) = real(iprobe - 1, wp)*0.23_wp
+         do while (coupling%next())
+            call coupling%answer("dphi_dr", spread(spread(0.0_wp, 1, 3), 2, cavity%ngrid), err)
+            if (.not. allocated(err)) call coupling%answer("dphi_dxi", width_derivative, err)
+            if (allocated(err)) then
+               call test_failed(error, "Width-gradient input failed: "//err%message)
+               return
+            end if
+         end do
+         call pcm_model%get_gradient(component_view(coupling), cavity, response, &
+            & width_gradient(:, :, iprobe), err)
+         if (allocated(err)) then
+            call test_failed(error, "Width-gradient probe failed: "//err%message)
+            return
+         end if
+      end do
+      ! Absolute 5e-12 with a 10x looser fallback relative to max|gradient|: the
+      ! charges are bitwise identical between probes, but the adjoint contraction
+      ! reduces over OpenMP threads in no fixed order, so a few ulp of |gradient|
+      ! may differ; measured 5.6e-17 at max|gradient| = 10 (macOS arm64 gfortran
+      ! 14.3, two and four threads)
+      width_residual = maxval(abs(width_gradient(:, :, 2) - width_gradient(:, :, 1) &
+         & - width_expected))
+      width_thr = max(5.0e-12_wp, 5.0e-11_wp*maxval(abs(width_gradient)))
+      call check(error, width_residual, 0.0_wp, thr=width_thr, &
+         & more="CPCM nuclear raw width contraction")
+      if (allocated(error)) return
+      cavity%xi1_rA(:, :, width_point) = saved_xi1
+
       do iatom = 1, min(2, mols(1)%nat)
          do iaxis = 1, 3
             saved = mols(1)%xyz(iaxis, iatom)
@@ -2190,7 +2251,8 @@ contains
                call displaced_energy(trial, values(k))
                if (allocated(error)) return
             end do
-            fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+            call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+            if (allocated(error)) return
             write (context, "(a,i0,a,i0)") "CPCM gradient atom ", iatom, &
                & ", axis ", iaxis
             call check(error, gradient(iaxis, iatom), fd, &
@@ -2405,7 +2467,8 @@ contains
             call displaced_external_energy(trial, values(k))
             if (allocated(error)) return
          end do
-         fd = fd4_scalar(values(1), values(2), values(3), values(4), step)
+         call fd4_scalar(values(1), values(2), values(3), values(4), step, fd, error)
+         if (allocated(error)) return
          write (context, "(a,i0)") "external CPCM gradient atom 1, axis ", iaxis
          call check(error, gradient(iaxis, 1), fd, &
             & thr_abs=fd_atol, thr_rel=fd_rtol, more=trim(context))

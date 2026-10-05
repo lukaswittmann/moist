@@ -18,7 +18,7 @@ module test_math_grid_radial
       & moist_math_grid_radial_rule_chebyshev2_type, new_chebyshev2_rule, &
       & moist_math_grid_radial_rule_midpoint_type, new_midpoint_rule, &
       & moist_math_grid_radial_rule_gauss_legendre_type, new_gauss_legendre_rule
-   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type, &
+   use moist_math_grid_radial_mapping, only: moist_math_grid_radial_mapping_type, check_mapping_input, &
       & moist_math_grid_radial_mapping_linear_type, new_linear_mapping, &
       & moist_math_grid_radial_mapping_becke_type, new_becke_mapping, &
       & moist_math_grid_radial_mapping_handymod_type, new_handymod_mapping, &
@@ -47,6 +47,8 @@ contains
       type(unittest_type), allocatable, intent(out) :: testsuite(:)
 
       testsuite = [ &
+         new_unittest("mapping_validation_contracts", test_mapping_validation), &
+         new_unittest("mapping_output_overflow", test_mapping_overflow), &
          new_unittest("linear_polynomial_exact", test_linear_polynomial), &
          new_unittest("linear_matches_scaled_rule", test_linear_scaled_rule), &
          new_unittest("becke_mapped_integrals", test_becke_integrals), &
@@ -69,6 +71,140 @@ contains
          new_unittest("uniform_pair_errors", test_uniform_pair_errors) &
          ]
    end subroutine collect_math_grid_radial
+
+   !> Constructor bounds, forward domains, and direct input validation
+   subroutine test_mapping_validation(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_linear_type) :: lin
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      class(moist_math_grid_radial_mapping_type), allocatable :: mapping
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: r(:), w(:)
+      real(wp) :: nan, inf, rx, x, u, ref
+      integer :: kind
+
+      nan = ieee_value(0.0_wp, ieee_quiet_nan)
+      inf = ieee_value(0.0_wp, ieee_positive_inf)
+      call new_linear_mapping(lin, 0.0_wp, inf, merr)
+      call check(error, allocated(merr), "Linear mapping: infinite upper bound")
+      if (allocated(error)) return
+      call new_linear_mapping(lin, -0.5_wp, 2.0_wp, merr)
+      call check(error, allocated(merr), "Linear mapping: negative lower bound")
+      if (allocated(error)) return
+      call new_linear_mapping(lin, 2.0_wp, 2.0_wp, merr)
+      call check(error, allocated(merr), "Linear mapping: equal bounds")
+      if (allocated(error)) return
+      call new_linear_mapping(lin, 3.0_wp, 2.0_wp, merr)
+      call check(error, allocated(merr), "Linear mapping: reversed bounds")
+      if (allocated(error)) return
+      call new_handymod_mapping(hm, 0.0_wp, inf, 2.0_wp, merr)
+      call check(error, allocated(merr), "HandyMod mapping: infinite upper bound")
+      if (allocated(error)) return
+      ! Documented constructor requirement: a = 2^m*(1 - 2^m + rmax - rmin) finite
+      call new_handymod_mapping(hm, 0.0_wp, 0.8_wp*huge(1.0_wp), 2.0_wp, merr)
+      call check(error, allocated(merr), "HandyMod mapping: denominator scale overflow")
+      if (allocated(error)) return
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=inf)
+      call check(error, allocated(merr), "Knowles mapping: infinite fixed scale")
+      if (allocated(error)) return
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=1.0_wp)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      ! -log(1 - u) = u + u^2/2 + u^3/3 + ...; at u = 1.25e-13 the cubic term is below
+      ! 1e-26 relative, so u*(1 + u/2) is within 0.44 eps of a 60-digit reference,
+      ! while the naive -log(1 - u) is off by 4e11 eps
+      x = -1.0_wp + 1.0e-4_wp
+      u = (0.5_wp*(1.0_wp + x))**3
+      ref = u*(1.0_wp + 0.5_wp*u)
+      call kn%transform(0, [x], [1.0_wp], r, w, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call check(error, abs(r(1) - ref) <= 4.0_wp*epsilon(1.0_wp)*ref, &
+         & "Knowles mapping: small radius retains relative accuracy")
+      if (allocated(error)) return
+      rx = kn%map(0, x)
+      call check(error, abs(rx - ref) <= 4.0_wp*epsilon(1.0_wp)*ref, &
+         & "Knowles map: small radius retains relative accuracy")
+      if (allocated(error)) return
+      call check_mapping_input([nan], [1.0_wp], "Direct input", r, w, merr)
+      call check(error, allocated(merr), "Mapping input: NaN node")
+      if (allocated(error)) return
+      do kind = 1, 5
+         call make_mapping(kind, mapping, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            return
+         end if
+         rx = mapping%map(6, -2.0_wp)
+         call check(error, .not. (rx == rx), "Mapping map: lower outside domain must be NaN")
+         if (allocated(error)) return
+         rx = mapping%map(6, 2.0_wp)
+         call check(error, .not. (rx == rx), "Mapping map: upper outside domain must be NaN")
+         if (allocated(error)) return
+         deallocate (mapping)
+      end do
+   end subroutine test_mapping_validation
+
+   !> Each mapping rejects a finite request whose exact output exceeds huge
+   !>
+   !> Linear, HandyMod, and Knowles take w_ref = huge at a node with |dr/dx| > 1
+   !> (1.25, 1.52, 1.46), so the exact weight is unrepresentable however it is
+   !> evaluated; Becke maps x = 0.5 with p = 0.8*huge to r = 2.4*huge
+   subroutine test_mapping_overflow(error)
+      !> Test failure
+      type(error_type), allocatable, intent(out) :: error
+
+      type(moist_math_grid_radial_mapping_linear_type) :: lin
+      type(moist_math_grid_radial_mapping_becke_type) :: becke
+      type(moist_math_grid_radial_mapping_handymod_type) :: hm
+      type(moist_math_grid_radial_mapping_knowles_type) :: kn
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: r(:), w(:)
+      real(wp) :: big
+
+      big = huge(1.0_wp)
+      ! dr/dx = (3 - 0.5)/2 = 1.25
+      call new_linear_mapping(lin, 0.5_wp, 3.0_wp, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call lin%transform(0, [0.0_wp], [big], r, w, merr)
+      call check(error, allocated(merr), "Linear mapping: non-finite mapped weight")
+      if (allocated(error)) return
+      call new_becke_mapping(becke, merr, scale=0.8_wp*big)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call becke%transform(0, [0.5_wp], [1.0_wp], r, w, merr)
+      call check(error, allocated(merr), "Becke mapping: non-finite mapped output")
+      if (allocated(error)) return
+      ! d = 5.5, c = 4, a = 10: dr/dx(0) = 5.5*2*10/8.5^2 = 1.52
+      call new_handymod_mapping(hm, 0.5_wp, 6.0_wp, 2.0_wp, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call hm%transform(0, [0.0_wp], [big], r, w, merr)
+      call check(error, allocated(merr), "HandyMod mapping: non-finite mapped weight")
+      if (allocated(error)) return
+      ! t = 0.75, u = t^3: dr/dx(0.5) = 3*t^2/(2*(1 - u)) = 1.46
+      call new_knowles_mapping(kn, 3.0_wp, merr, scale=1.0_wp)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+         return
+      end if
+      call kn%transform(0, [0.5_wp], [big], r, w, merr)
+      call check(error, allocated(merr), "Knowles mapping: non-finite mapped weight")
+   end subroutine test_mapping_overflow
 
    ! --------------------------------------------------------------------------
    ! Integrands and helpers
@@ -212,8 +348,6 @@ contains
    ! --------------------------------------------------------------------------
 
    !> Linear mapping with Gauss-Legendre integrates r^j exactly on [a, b] for j <= 2n-1
-   !>
-   !> @param[out] error  Test failure
    subroutine test_linear_polynomial(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -247,8 +381,6 @@ contains
    end subroutine test_linear_polynomial
 
    !> Linear mapping of the canonical rule equals the rule generated on [lower, upper]
-   !>
-   !> @param[out] error  Test failure
    subroutine test_linear_scaled_rule(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -292,8 +424,6 @@ contains
    !>
    !> integral r^2 exp(-r^2) dr = sqrt(pi)/4, integral r^2 exp(-2r) dr = 1/4,
    !> for several scales
-   !>
-   !> @param[out] error  Test failure
    subroutine test_becke_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -332,8 +462,6 @@ contains
    end subroutine test_becke_integrals
 
    !> Element-dependent Becke scale equals radius_factor*covalent_rad(z); fixed scale ignores z
-   !>
-   !> @param[out] error  Test failure
    subroutine test_becke_element_scale(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -409,8 +537,6 @@ contains
    end subroutine test_becke_element_scale
 
    !> Becke constructor and domain errors; x = 1 is the divergent endpoint
-   !>
-   !> @param[out] error  Test failure
    subroutine test_becke_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -488,8 +614,6 @@ contains
    ! --------------------------------------------------------------------------
 
    !> HandyMod with Gauss-Legendre reproduces finite-interval volume and exponential moments
-   !>
-   !> @param[out] error  Test failure
    subroutine test_handymod_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -531,8 +655,6 @@ contains
    end subroutine test_handymod_integrals
 
    !> HandyMod endpoints: x = -1 -> rmin, x = 1 -> rmax; x = -1 rejected for m < 1
-   !>
-   !> @param[out] error  Test failure
    subroutine test_handymod_endpoints(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -576,8 +698,6 @@ contains
    end subroutine test_handymod_endpoints
 
    !> HandyMod constructor and domain errors, including rmax - rmin <= 2^m - 1
-   !>
-   !> @param[out] error  Test failure
    subroutine test_handymod_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -640,8 +760,6 @@ contains
    !> Knowles mapping reproduces exponential and Gaussian moments on [0, inf)
    !>
    !> integral r^2 exp(-r) dr = 2, integral r^2 exp(-r^2) dr = sqrt(pi)/4
-   !>
-   !> @param[out] error  Test failure
    subroutine test_knowles_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -692,8 +810,6 @@ contains
    !> With t_i = (i - 1/2)/n: r_i = -R*log(1 - t_i^3) and
    !> w_i = 3*R*t_i^2/((1 - t_i^3)*n); the reference logarithm uses a series
    !> for small arguments so it stays accurate near the nucleus
-   !>
-   !> @param[out] error  Test failure
    subroutine test_knowles_mura_knowles(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -739,8 +855,6 @@ contains
    end subroutine test_knowles_mura_knowles
 
    !> Knowles element table: z selects R from the table; z outside the table is an error
-   !>
-   !> @param[out] error  Test failure
    subroutine test_knowles_element_table(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -788,8 +902,6 @@ contains
    end subroutine test_knowles_element_table
 
    !> Knowles constructor and domain errors; x = 1 is the divergent endpoint
-   !>
-   !> @param[out] error  Test failure
    subroutine test_knowles_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -901,8 +1013,6 @@ contains
    end subroutine make_mapping
 
    !> The forward map agrees with the radii from transform for every mapping
-   !>
-   !> @param[out] error  Test failure
    subroutine test_map_matches_transform(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -940,8 +1050,6 @@ contains
    end subroutine test_map_matches_transform
 
    !> A polymorphic copy transforms like its source after the source is gone
-   !>
-   !> @param[out] error  Test failure
    subroutine test_mapping_copy(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -991,8 +1099,6 @@ contains
    !> Cutoffs drop r < rcut_lower and r > rcut_upper; counts record the truncation
    !>
    !> Cutoffs placed exactly on nodes check the strict comparisons
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_cutoffs(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1075,8 +1181,6 @@ contains
    end subroutine test_recipe_cutoffs
 
    !> Invalid recipes and failing components are errors
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1103,6 +1207,11 @@ contains
          call test_failed(error, merr%message)
          return
       end if
+      allocate (recipe%mapping, source=becke)
+      deallocate (recipe%rule)
+      call new_radial_grid(grid, recipe, 6, merr)
+      call check(error, allocated(merr), "Radial grid: mapping alone does not replace a rule")
+      if (allocated(error)) return
       call make_recipe(recipe, rule_chebyshev2, becke, 0)
       call new_radial_grid(grid, recipe, 6, merr)
       call check(error, allocated(merr), "Radial grid: npts = 0 must be rejected")
@@ -1144,8 +1253,6 @@ contains
    !> Volume integrals through the grid apply 4*pi*r^2 to the dr weights
    !>
    !> integral exp(-r^2) dV = pi^(3/2); integral_{|r| < R} dV = 4*pi*R^3/3
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_integrals(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1212,8 +1319,6 @@ contains
    end subroutine test_recipe_integrals
 
    !> One recipe gives element-scaled grids; a copied recipe is independent
-   !>
-   !> @param[out] error  Test failure
    subroutine test_recipe_element(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1262,8 +1367,6 @@ contains
    !>
    !> integral exp(-r^2) dV = pi^(3/2) on the r-grid; its transform
    !> pi^(3/2)*exp(-k^2/4) integrates to (2*pi)^3 on the k-grid
-   !>
-   !> @param[out] error  Test failure
    subroutine test_uniform_pair(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1311,8 +1414,6 @@ contains
    end subroutine test_uniform_pair
 
    !> Uniform pair rejects invalid counts and spacings
-   !>
-   !> @param[out] error  Test failure
    subroutine test_uniform_pair_errors(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

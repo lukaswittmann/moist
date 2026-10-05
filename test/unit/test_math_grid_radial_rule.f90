@@ -1,8 +1,10 @@
 !> Test suite for the reference quadrature rules on [-1, 1]
 !>
 !>   - Chebyshev-II: exact sqrt(1-x^2)*p(x) moments through deg(p) = 2n-1,
-!>     closed-form weight sum, descending interior nodes
-!>   - Midpoint: exact through degree 1, closed-form x^2 deficit
+!>     closed-form weight sum, descending interior nodes, weights evaluated
+!>     at the stored nodes
+!>   - Midpoint: exact through degree 1, closed-form x^2 deficit, equal
+!>     weights 2/n, uniform node spacing 2/n
 !>   - Gauss-Legendre: exact through degree 2n-1, closed-form degree-2n error,
 !>     literal low-order nodes, exact symmetry
 !>   - Affine interval scaling and invalid requests for every rule
@@ -92,8 +94,6 @@ contains
    !> Chebyshev-II integrates sqrt(1-x^2)*x^j exactly for j <= 2n-1
    !>
    !> Reference B((j+1)/2, 3/2) = Gamma((j+1)/2)*Gamma(3/2)/Gamma(j/2 + 2) for even j
-   !>
-   !> @param[out] error  Test failure
    subroutine test_chebyshev2_weighted_moments(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -134,7 +134,9 @@ contains
    !> sum_{i=1..n} sin(i*pi/(n+1)) = cot(pi/(2(n+1))); the sum tends to 2 as
    !> 2 - pi^2/(6(n+1)^2)
    !>
-   !> @param[out] error  Test failure
+   !> Each weight equals pi/(n+1)*sqrt((1-x_i)*(1+x_i)) at the stored rounded
+   !> x_i to 4 eps (rule contract); weights from sin(i*pi/(n+1)) instead miss
+   !> this by 30 to 3000 eps at n = 50 to 400
    subroutine test_chebyshev2_weight_sum(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -155,6 +157,9 @@ contains
             return
          end if
          h = pi/real(n + 1, wp)
+         call check(error, all(abs(w/h/sqrt((1.0_wp - x)*(1.0_wp + x)) - 1.0_wp) &
+            & <= 4.0_wp*epsilon(1.0_wp)), "Chebyshev-II: dx weights must use the stored nodes")
+         if (allocated(error)) return
          ref = h/tan(0.5_wp*h)
          call check(error, abs(sum(w) - ref) <= 1.0e-14_wp*ref, &
             & "Chebyshev-II: weight sum differs from pi/(n+1)*cot(pi/(2(n+1)))")
@@ -171,7 +176,7 @@ contains
 
    !> Midpoint rule is exact through degree 1; the x^2 sum is 2/3 - 2/(3n^2)
    !>
-   !> @param[out] error  Test failure
+   !> Weights each equal 2/n; nodes start at -1 + 1/n with spacing 2/n
    subroutine test_midpoint_moments(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -190,6 +195,19 @@ contains
          if (allocated(merr)) then
             call test_failed(error, merr%message)
             return
+         end if
+         call check(error, size(x) == n .and. size(w) == n, "Midpoint: wrong node count")
+         if (allocated(error)) return
+         call check(error, all(abs(w - 2.0_wp/real(n, wp)) <= 4.0_wp*epsilon(1.0_wp)), &
+            & "Midpoint: weights must each equal 2/n")
+         if (allocated(error)) return
+         call check(error, abs(x(1) - (-1.0_wp + 1.0_wp/real(n, wp))) <= 4.0_wp*epsilon(1.0_wp), &
+            & "Midpoint: first node must be half a cell above -1")
+         if (allocated(error)) return
+         if (n > 1) then
+            call check(error, all(abs(x(2:) - x(:n - 1) - 2.0_wp/real(n, wp)) &
+               & <= 4.0_wp*epsilon(1.0_wp)), "Midpoint: node spacing must be 2/n")
+            if (allocated(error)) return
          end if
          call check(error, abs(sum(w) - 2.0_wp) <= 1.0e-14_wp, "Midpoint: weights must sum to 2")
          if (allocated(error)) return
@@ -210,8 +228,6 @@ contains
    end subroutine test_midpoint_moments
 
    !> Gauss-Legendre integrates x^j exactly for j <= 2n-1
-   !>
-   !> @param[out] error  Test failure
    subroutine test_gauss_legendre_exactness(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -254,8 +270,6 @@ contains
    !>
    !> For f = x^(2n): integral - sum = 2^(2n+1)*(n!)^4/((2n+1)*((2n)!)^2), so
    !> the rule is exact through 2n-1 and no further
-   !>
-   !> @param[out] error  Test failure
    subroutine test_gauss_legendre_degree_2n(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -283,8 +297,6 @@ contains
    end subroutine test_gauss_legendre_degree_2n
 
    !> Gauss-Legendre literal nodes and weights for n = 1, 2, 3
-   !>
-   !> @param[out] error  Test failure
    subroutine test_gauss_legendre_literal(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -327,8 +339,6 @@ contains
    end subroutine test_gauss_legendre_literal
 
    !> Every rule maps affinely onto [a, b]; Gauss-Legendre stays exact there
-   !>
-   !> @param[out] error  Test failure
    subroutine test_scaled_interval(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -390,8 +400,6 @@ contains
    end subroutine test_scaled_interval
 
    !> A single bound keeps the other at its default (-1 or 1)
-   !>
-   !> @param[out] error  Test failure
    subroutine test_scaled_interval_one_bound(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -427,8 +435,6 @@ contains
    end subroutine test_scaled_interval_one_bound
 
    !> Invalid counts and bounds are errors for every rule
-   !>
-   !> @param[out] error  Test failure
    subroutine test_invalid_requests(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -466,6 +472,18 @@ contains
          if (allocated(error)) return
          call rule%generate(4, x, w, merr, lower=0.0_wp, upper=inf)
          call check(error, allocated(merr), "Rule must reject an infinite bound")
+         if (allocated(error)) return
+         call rule%generate(4, x, w, merr, lower=-inf, upper=1.0_wp)
+         call check(error, allocated(merr), "Rule must reject a negative infinite lower bound")
+         if (allocated(error)) return
+         call rule%generate(4, x, w, merr, lower=0.0_wp, upper=nan)
+         call check(error, allocated(merr), "Rule must reject a NaN upper bound")
+         if (allocated(error)) return
+         call rule%generate(4, x, w, merr, lower=inf, upper=1.0_wp)
+         call check(error, allocated(merr), "Rule must reject a positive infinite lower bound")
+         if (allocated(error)) return
+         call rule%generate(4, x, w, merr, lower=0.0_wp, upper=-inf)
+         call check(error, allocated(merr), "Rule must reject a negative infinite upper bound")
          if (allocated(error)) return
       end do
    end subroutine test_invalid_requests

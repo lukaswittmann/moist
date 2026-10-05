@@ -271,9 +271,7 @@ contains
       err = relerr(cmplx(got, 0.0_wp, wp), cmplx(ref, 0.0_wp, wp))
    end function relerr_real
 
-   !> Full 3D transform through `moist_fft_c2c_3d`
-   !>
-   !> @param[out] error  test failure on a nonzero status
+   !> Full 3D transform through `moist_fft_c2c_3d` on a nonzero status
    !> @param[in]  x      input field (nx, ny, nz)
    !> @param[out] y      transformed field (nx, ny, nz)
    !> @param[in]  fwd    forward if true
@@ -367,8 +365,6 @@ contains
    !>   fct*N at zero-based index k mod n on each axis; a flipped sign lands on
    !>   -k mod n instead
    !> - Every other bin is zero to round-off
-   !>
-   !> @param[out] error  test failure
    subroutine test_plane_wave_spike(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -417,8 +413,6 @@ contains
    !>
    !> - 5 x 6 x 7 grid: odd and even, non-power-of-two, all extents distinct
    !> - fct = 1 and fct = 0.37 in each direction
-   !>
-   !> @param[out] error  test failure
    subroutine test_direct_dft(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -500,8 +494,6 @@ contains
    !>   analytic spectrum with fct = 1/Vbox against f
    !> - Aliasing error ~ exp(-(pi/dr)^2/(4a)) ~ 1e-17 of F(0); truncation error
    !>   ~ exp(-a (L/2 - |c_i|)^2), largest on the y faces (5.6 - 0.5 bohr), ~ 5e-12
-   !>
-   !> @param[out] error  test failure
    subroutine test_gaussian(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -561,8 +553,6 @@ contains
    !> backward(forward(x)) reproduces x for the normalized factor pairs
    !>
    !> - 12 x 10 x 9 grid; (1, 1/N) and the unitary (1/sqrt(N), 1/sqrt(N))
-   !>
-   !> @param[out] error  test failure
    subroutine test_round_trip(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -596,8 +586,6 @@ contains
    !> - Backward with pass_inplace on axes 0, 1, 2, each scaled by its own 1/n_axis
    !> - Only the product of the factors is visible here; the per-pass factor is
    !>   pinned by `pass_inplace_matches_pass` and `pass_strided_subblock`
-   !>
-   !> @param[out] error  test failure
    subroutine test_pass_round_trip(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -637,8 +625,6 @@ contains
    !> - Chain B runs the opposite order with three out-of-place passes, fct on the
    !>   first, so it also checks that the passes commute
    !> - Both directions, 7 x 6 x 5 grid
-   !>
-   !> @param[out] error  test failure
    subroutine test_passes_compose(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -682,8 +668,6 @@ contains
    !>
    !> - Every axis, both directions, fct = 1.3; each pass also matches a direct
    !>   1D DFT along its axis
-   !>
-   !> @param[out] error  test failure
    subroutine test_inplace_matches_pass(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -727,8 +711,6 @@ contains
    !>   bit for bit, and the in parent is unchanged bit for bit
    !> - In place: the block is transformed, everything else is unchanged bit for bit
    !> - Every axis, both directions
-   !>
-   !> @param[out] error  test failure
    subroutine test_strided_subblock(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -790,8 +772,6 @@ contains
    !> c2c_3d is linear: F(alpha x + beta y) = alpha F(x) + beta F(y)
    !>
    !> - Complex alpha, real beta, both directions, 8 x 5 x 6 grid
-   !>
-   !> @param[out] error  test failure
    subroutine test_linearity(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -823,8 +803,6 @@ contains
    !> Parseval: sum |X|^2 = N sum |x|^2 at fct = 1, equal norms at fct = 1/sqrt(N)
    !>
    !> - Both directions, 9 x 7 x 4 grid
-   !>
-   !> @param[out] error  test failure
    subroutine test_parseval(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -866,8 +844,6 @@ contains
    !>
    !> - Half spectrum along x: (nx/2 + 1, ny, nz); odd and even nx
    !> - fct = 0.9 on both
-   !>
-   !> @param[out] error  test failure
    subroutine test_r2c_half(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -908,8 +884,6 @@ contains
    !> - c2r(r2c(x)) with fct = 1/N reproduces x
    !> - c2r destroys its input, so each call gets its own copy
    !> - Odd and even nx
-   !>
-   !> @param[out] error  test failure
    subroutine test_c2r_backward(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -963,8 +937,6 @@ contains
    !>   parallel region nthreads = 4 falls back to the serial transform, the
    !>   threaded path is covered by `math_grid_3d_threaded`
    !> - c2r destroys its input, so each call gets its own copy
-   !>
-   !> @param[out] error  test failure
    subroutine test_batch(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1027,8 +999,6 @@ contains
    !>
    !> - ducc0 returns early on an empty view; one zero extent on each entry
    !>   point, output buffers prefilled with a sentinel stay bit-identical
-   !>
-   !> @param[out] error  test failure
    subroutine test_zero_extent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1067,8 +1037,6 @@ contains
    !>   otherwise wrap to a huge size_t and address far outside the buffers
    !> - One negative extent on each entry point, buffers prefilled with a
    !>   sentinel stay bit-identical
-   !>
-   !> @param[out] error  test failure
    subroutine test_negative_extent(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1107,8 +1075,6 @@ contains
    !>
    !> - Axis 3 on pass, axis -1 on pass_inplace; ducc0 validates axes before
    !>   touching data
-   !>
-   !> @param[out] error  test failure
    subroutine test_rejected_pass(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -1140,9 +1106,7 @@ contains
    !> Out-of-place pass with axis 3 fails with status 1
    !>
    !> - `should_fail`: fails the test only on that status, so a clean return is
-   !>   reported as an unexpected pass
-   !>
-   !> @param[out] error  test failure, set only on the expected status
+   !>   reported as an unexpected pass, set only on the expected status
    subroutine test_pass_axis_large_fails(error)
       !> Test failure, set only on the expected status
       type(error_type), allocatable, intent(out) :: error
@@ -1159,9 +1123,7 @@ contains
 
    !> Out-of-place pass with axis -1 fails with status 1
    !>
-   !> - Negative axis wraps to a huge size_t in the shim, caught by ducc0's axis check
-   !>
-   !> @param[out] error  test failure, set only on the expected status
+   !> - Negative axis wraps to a huge size_t in the shim, caught by ducc0's axis check, set only on the expected status
    subroutine test_pass_axis_negative_fails(error)
       !> Test failure, set only on the expected status
       type(error_type), allocatable, intent(out) :: error
@@ -1176,9 +1138,7 @@ contains
       if (status == status_error) call test_failed(error, "pass rejected axis -1 with status 1")
    end subroutine test_pass_axis_negative_fails
 
-   !> In-place pass with axis 3 fails with status 1
-   !>
-   !> @param[out] error  test failure, set only on the expected status
+   !> In-place pass with axis 3 fails with status 1, set only on the expected status
    subroutine test_pass_inplace_axis_fails(error)
       !> Test failure, set only on the expected status
       type(error_type), allocatable, intent(out) :: error

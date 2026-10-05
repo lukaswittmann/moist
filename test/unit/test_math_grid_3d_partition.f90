@@ -2,7 +2,11 @@
 !>
 !> - Partition of unity over all owners
 !> - SSF hard zeros and ones on a homonuclear bond axis and near nuclei
-!> - Closed-form weights of a homonuclear pair
+!> - Closed-form weights of a homonuclear pair, Becke stiffness, and
+!>   heteronuclear midpoint weights with the size adjustment
+!> - Closed-form switch values, tails and endpoints; explicit SSF and power widths
+!> - Nuclear derivatives: one-sided continuity and the analytic pair switch
+!> - Coincident sites share equal weights
 !> - Single atom, batch against single points, threaded against serial, and a
 !>   call from inside an enclosing parallel region
 !> - Every test runs as a selected test, outside test-drive's OpenMP team, so
@@ -10,12 +14,15 @@
 module test_math_grid_3d_partition
 !$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads, omp_in_parallel, &
 !$    & omp_get_thread_num, omp_get_num_procs
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
    use mctc_io, only: structure_type
-   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test
-   use test_helpers, only: get_test_structures, get_test_points
+   use moist_data_atomicrad, only: covalent_rad
+   use testdrive, only: new_unittest, unittest_type, error_type, check, skip_test, test_failed
+   use test_helpers, only: get_test_structures, get_test_points, fd4_scalar
    use moist_math_grid_3d_partition, only: becke_partition_weights, ssf_partition_weights, &
       & pvoronoi_partition_weights
+   use moist_math_grid_3d_partition_becke, only: becke_cell
    use moist_math_grid_3d_partition_ssf, only: ssf_cell
    use moist_math_grid_3d_partition_pvoronoi, only: bump_cell
    implicit none(type, external)
@@ -147,8 +154,6 @@ contains
    !>
    !> Bound `4*nat*eps`: one rounding per normalized weight plus the
    !> accumulated error of the normalization sum
-   !>
-   !> @param[out] error  Test failure
    subroutine test_partition_of_unity(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -188,8 +193,6 @@ contains
    !> - Exactly 1 (atom 1) and 0 (atom 2) for `nu <= -a`, the reverse for
    !>   `nu >= a`, strictly inside (0, 1) in between
    !> - Points beyond either nucleus lie outside the window as well
-   !>
-   !> @param[out] error  Test failure
    subroutine test_ssf_bond_axis(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -230,10 +233,6 @@ contains
    end subroutine test_ssf_bond_axis
 
    !> Points 0.05 bohr from a nucleus are owned outright under SSF
-   !>
-   !> The owning atom gets exactly 1 and every other atom exactly 0
-   !>
-   !> @param[out] error  Test failure
    subroutine test_ssf_near_nucleus(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -271,8 +270,6 @@ contains
    end subroutine test_ssf_near_nucleus
 
    !> A single atom owns every point with weight exactly 1
-   !>
-   !> @param[out] error  Test failure
    subroutine test_single_atom(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -299,16 +296,22 @@ contains
    !> - On the bisecting plane `mu = 0`: both atoms get 1/2 for every cell function
    !> - On the axis at `mu = 1/2` with one Becke iteration: `p = 11/16`, so
    !>   the far atom gets 5/32 and the near atom 27/32
-   !>
-   !> @param[out] error  Test failure
+   !> - Three iterations, explicit or by default, at the same point
+   !> - Heteronuclear midpoint `mu = 0`, so `nu = a`: O-H gives Becke and SSF
+   !>   an unclamped size adjustment, H-Cs one clamped to `|a| = 1/2` (Becke
+   !>   1988, App. A); both power-cell pairs saturate and pin only the sign of
+   !>   the squared-radius offset
    subroutine test_homonuclear_analytic(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       integer, parameter :: cells(5) = [cell_becke_k1, cell_becke_k3, cell_becke_default, cell_ssf, cell_power]
+      integer, parameter :: stiff_cells(2) = [cell_becke_k3, cell_becke_default]
       real(wp), parameter :: tol = 4.0_wp*epsilon(1.0_wp)
       real(wp) :: xyz(3, 2), plane(3, 3), axis(3, 1), w(3), w1(1), w2(1)
-      integer :: ic, owner
+      integer :: ic, owner, k, iter, ipair
+      integer, parameter :: pairs(2, 2) = reshape([8, 1, 1, 55], [2, 2])
+      real(wp) :: chi, u, nu, expected, x
 
       xyz(:, 1) = [0.0_wp, 0.0_wp, -1.0_wp]
       xyz(:, 2) = [0.0_wp, 0.0_wp, 1.0_wp]
@@ -330,11 +333,56 @@ contains
       call batched(cell_becke_k1, 2, axis, xyz, [8, 8], w2)
       call check(error, abs(w1(1) - 5.0_wp/32.0_wp) <= tol .and. abs(w2(1) - 27.0_wp/32.0_wp) <= tol, &
          & "one-iteration Becke weights at mu = 1/2 deviate from 5/32 and 27/32")
+      if (allocated(error)) return
+      x = 0.5_wp
+      do iter = 1, 3
+         x = (3.0_wp*x - x**3)/2.0_wp
+      end do
+      do ic = 1, size(stiff_cells)
+         call batched(stiff_cells(ic), 1, axis, xyz, [8, 8], w1)
+         call check(error, abs(w1(1) - (1.0_wp - x)/2.0_wp) < 2.0e-15_wp, &
+            & "explicit and default Becke stiffness must follow repeated cubic switches")
+         if (allocated(error)) return
+      end do
+
+      ! Midpoint weights: unclamped (O-H) and clamped (H-Cs) Becke/SSF size adjustment
+      axis = 0.0_wp
+      do ipair = 1, size(pairs, 2)
+         chi = covalent_rad(pairs(2, ipair))/covalent_rad(pairs(1, ipair))
+         u = (chi - 1.0_wp)/(chi + 1.0_wp)
+         nu = -max(-0.5_wp, min(0.5_wp, u/(u*u - 1.0_wp)))
+         do ic = 1, size(cells)
+            x = nu
+            select case (cells(ic))
+            case (cell_becke_k1, cell_becke_k3, cell_becke_default)
+               k = 3
+               if (cells(ic) == cell_becke_k1) k = 1
+               do iter = 1, k
+                  x = (3.0_wp*x - x**3)/2.0_wp
+               end do
+               expected = (1.0_wp - x)/2.0_wp
+            case (cell_ssf)
+               x = x/ssf_a
+               expected = (1.0_wp - (35.0_wp*x - 35.0_wp*x**3 + &
+                  & 21.0_wp*x**5 - 5.0_wp*x**7)/16.0_wp)/2.0_wp
+            case (cell_power)
+               x = covalent_rad(pairs(2, ipair))**2 - covalent_rad(pairs(1, ipair))**2
+               expected = 0.0_wp
+               if (abs(x) < 1.0_wp) expected = 1.0_wp/(1.0_wp + exp(2.0_wp*x/(1.0_wp - x*x)))
+               if (x <= -1.0_wp) expected = 1.0_wp
+            case default
+               call check(error, .false., "unknown analytical pair cell")
+               return
+            end select
+            call batched(cells(ic), 1, axis, xyz, pairs(:, ipair), w1)
+            call check(error, abs(w1(1) - expected) < 2.0e-15_wp, &
+               & "heteronuclear midpoint weights must follow element radii and size correction")
+            if (allocated(error)) return
+         end do
+      end do
    end subroutine test_homonuclear_analytic
 
    !> A batch gives the same numbers as its points passed one at a time
-   !>
-   !> @param[out] error  Test failure
    subroutine test_batch_matches_single(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -367,7 +415,6 @@ contains
    !>   OpenMP or on a single processor
    !> - Fails inside an enclosing team, where the routine cannot thread
    !>
-   !> @param[out] error  Test failure, or set by `skip_test`
    subroutine test_threaded_matches_serial(error)
       !> Test failure, or set by `skip_test`
       type(error_type), allocatable, intent(out) :: error
@@ -424,7 +471,6 @@ contains
    !> its own column; every column written equals the result of a call made
    !> outside the region
    !>
-   !> @param[out] error  Test failure
    subroutine test_nested_call(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -462,14 +508,29 @@ contains
 
    !> Published SSF polynomial and bump switch values, tails and exact endpoints
    !>
-   !> @param[out] error Test failure
+   !> - Becke switch: positive tail after three iterations, every iteration
+   !>   kept beyond the default stiffness
+   !> - Bump switch: logistic interior value, complement, super-polynomial tail
+   !> - Legacy SSF option and an explicit SSF width `a`
+   !>
    subroutine test_compact_switches(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       real(wp) :: x, expected, h, points(3, 1), xyz(3, 2), legacy(1), direct(1)
+      real(wp) :: tail
       integer :: i
 
+      tail = becke_cell(1.0_wp - 1.0e-3_wp, 3)
+      call check(error, tail > 0.0_wp .and. tail < 1.0e-20_wp, "Becke tail remains positive after three iterations")
+      if (allocated(error)) return
+      x = 0.2_wp
+      do i = 1, 5
+         x = (3.0_wp*x - x**3)/2.0_wp
+      end do
+      call check(error, abs(becke_cell(0.2_wp, 5) - (1.0_wp - x)/2.0_wp) < 1.0e-15_wp, &
+         & "Becke stiffness beyond the default must retain every iteration")
+      if (allocated(error)) return
       do i = -10, 10
          x = real(i, wp)/10.0_wp
          expected = (1.0_wp - (35.0_wp*x - 35.0_wp*x**3 + 21.0_wp*x**5 - 5.0_wp*x**7)/16.0_wp)/2.0_wp
@@ -485,6 +546,14 @@ contains
       call check(error, ssf_cell(1.0_wp - h) > 0.0_wp .and. ssf_cell(1.0_wp - h) < 3.0_wp*h**4, &
          & "SSF tail remains positive with fourth-order approach to zero")
       if (allocated(error)) return
+      ! Relative bound: rounding x*x at x = 0.95 (0.5 ulp, the subtraction is
+      ! exact) moves the exponent 2x/(1 - x*x) = 19.5 by up to 1.1e-14, which
+      ! carries over to the logistic tail as relative error
+      x = 0.95_wp
+      expected = 1.0_wp/(1.0_wp + exp(2.0_wp*x/(1.0_wp - x*x)))
+      call check(error, abs(bump_cell(x)/expected - 1.0_wp) < 2.0e-14_wp, &
+         & "bump switch interior tail must follow its logistic formula")
+      if (allocated(error)) return
       h = 0.02_wp
       call check(error, bump_cell(1.0_wp - h) > 0.0_wp .and. bump_cell(1.0_wp - h) < h**10, &
          & "bump tail approaches zero faster than a finite-order switch")
@@ -495,11 +564,19 @@ contains
       call becke_partition_weights(1, points, xyz, [8, 1], legacy, stiffness=1, ssf_a=ssf_a)
       call ssf_partition_weights(1, points, xyz, [8, 1], direct)
       call check(error, all(legacy == direct), "legacy SSF option selects the separate SSF routine")
+      if (allocated(error)) return
+      x = -0.3_wp/0.4_wp
+      expected = (1.0_wp - (35.0_wp*x - 35.0_wp*x**3 + 21.0_wp*x**5 - 5.0_wp*x**7)/16.0_wp)/2.0_wp
+      points(:, 1) = [0.7_wp, 0.0_wp, 0.0_wp]
+      call ssf_partition_weights(1, points, xyz, [1, 1], direct, a=0.4_wp)
+      call check(error, abs(direct(1) - expected) < 1.0e-15_wp, "explicit SSF width must set its polynomial argument")
    end subroutine test_compact_switches
 
    !> Nuclear derivatives agree from both sides at a pair distance, nucleus and SSF boundary
    !>
-   !> @param[out] error Test failure
+   !> - Central difference (`fd4_scalar`) of the weight at the off-axis point
+   !>   matches the analytic derivative of each pair switch
+   !>
    subroutine test_nuclear_derivative_continuity(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -507,7 +584,8 @@ contains
       integer, parameter :: cells(4) = [cell_becke_k1, cell_becke_k3, cell_ssf, cell_power]
       real(wp), parameter :: h = 1.0e-5_wp
       real(wp) :: xyz(3, 2), points(3, 3), w(3, -2:2), left(3), right(3)
-      integer :: ic, i
+      integer :: ic, i, iter, k
+      real(wp) :: r1, r2, mu, dmu, x, dx, sw, expected, fd
 
       points = 0.0_wp
       points(:, 1) = [2.45_wp, 0.3_wp, 0.2_wp]
@@ -524,17 +602,51 @@ contains
          call check(error, maxval(abs(left - right)) < 2.0e-8_wp, &
             & "partition nuclear derivative must be continuous")
          if (allocated(error)) return
+         r1 = norm2(points(:, 1))
+         r2 = norm2(points(:, 1) - [5.0_wp, 0.0_wp, 0.0_wp])
+         mu = (r2 - r1)/5.0_wp
+         dmu = ((5.0_wp - points(1, 1))/r2 - mu)/5.0_wp
+         select case (cells(ic))
+         case (cell_becke_k1, cell_becke_k3)
+            x = mu
+            dx = dmu
+            k = 3
+            if (cells(ic) == cell_becke_k1) k = 1
+            do iter = 1, k
+               dx = 1.5_wp*(1.0_wp - x*x)*dx
+               x = (3.0_wp*x - x**3)/2.0_wp
+            end do
+            expected = -0.5_wp*dx
+         case (cell_ssf)
+            x = mu/ssf_a
+            expected = -35.0_wp/32.0_wp*(1.0_wp - x*x)**3*dmu/ssf_a
+         case (cell_power)
+            x = (25.0_wp - 10.0_wp*points(1, 1))
+            dx = 2.0_wp*(5.0_wp - points(1, 1))
+            sw = 1.0_wp/(1.0_wp + exp(2.0_wp*x/(1.0_wp - x*x)))
+            expected = -2.0_wp*(1.0_wp + x*x)/(1.0_wp - x*x)**2*sw*(1.0_wp - sw)*dx
+         case default
+            call check(error, .false., "unknown analytical derivative cell")
+            return
+         end select
+         if (.not. ieee_is_finite(expected)) then
+            call test_failed(error, "analytic pair-switch derivative is not finite")
+            return
+         end if
+         call fd4_scalar(w(1, 2), w(1, 1), w(1, -1), w(1, -2), h, fd, error)
+         if (allocated(error)) return
+         call check(error, fd, expected, thr=1.0e-9_wp, &
+            & more="nuclear derivative must match the analytic pair switch")
+         if (allocated(error)) return
       end do
    end subroutine test_nuclear_derivative_continuity
 
    !> Power-radius boundary shift, bump values, all-space coverage and regularity at a nucleus
-   !>
-   !> @param[out] error Test failure
    subroutine test_power_geometry(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
-      real(wp) :: xyz(3, 2), points(3, 5), w(5), w2(5), expected, h, derivative
+      real(wp) :: xyz(3, 2), points(3, 5), w(5), w2(5), expected, h, derivative, fd
 
       xyz = 0.0_wp
       xyz(1, 2) = 2.0_wp
@@ -551,14 +663,17 @@ contains
       h = 1.0e-4_wp
       points(1, :) = [-2.0_wp*h, -h, 0.0_wp, h, 2.0_wp*h]
       call pvoronoi_partition_weights(1, points, xyz, [1, 1], w, width=8.0_wp, radii=[1.0_wp, 1.0_wp])
-      derivative = -0.5_wp*(40.0_wp/9.0_wp)*w(3)*(1.0_wp - w(3))
-      call check(error, abs((w(1) - 8.0_wp*w(2) + 8.0_wp*w(4) - w(5))/(12.0_wp*h) - derivative) &
-         & < 1.0e-11_wp, "power partition derivative through a nucleus must follow the smooth bump")
+      expected = 1.0_wp/(1.0_wp + exp(-4.0_wp/3.0_wp))
+      call check(error, abs(w(3) - expected) < 1.0e-15_wp, "explicit power width must set the transition scale")
+      if (allocated(error)) return
+      derivative = -0.5_wp*(40.0_wp/9.0_wp)*expected*(1.0_wp - expected)
+      call fd4_scalar(w(5), w(4), w(2), w(1), h, fd, error)
+      if (allocated(error)) return
+      call check(error, fd, derivative, thr=1.0e-11_wp, &
+         & more="power partition derivative through a nucleus must follow the smooth bump")
    end subroutine test_power_geometry
 
    !> Rotation, translation and relabeling preserve all partition schemes
-   !>
-   !> @param[out] error Test failure
    subroutine test_partition_invariance(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -589,8 +704,6 @@ contains
    end subroutine test_partition_invariance
 
    !> Log normalization retains equal weights when every direct cell product underflows
-   !>
-   !> @param[out] error Test failure
    subroutine test_large_coincident(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -602,6 +715,14 @@ contains
       xyz = 0.0_wp
       points = 0.0_wp
       numbers = 1
+      call becke_partition_weights(1, points, xyz(:, :3), numbers(:3), w)
+      call check(error, abs(w(1) - 1.0_wp/3.0_wp) < epsilon(1.0_wp), &
+         & "coincident Becke sites share equal weights")
+      if (allocated(error)) return
+      call ssf_partition_weights(1, points, xyz(:, :3), numbers(:3), w)
+      call check(error, abs(w(1) - 1.0_wp/3.0_wp) < epsilon(1.0_wp), &
+         & "coincident SSF sites share equal weights")
+      if (allocated(error)) return
       call pvoronoi_partition_weights(1, points, xyz, numbers, w)
       call check(error, abs(w(1)*real(nat, wp) - 1.0_wp) < 4.0_wp*epsilon(1.0_wp), &
          & "underflowing coincident power-cell products must still normalize")
