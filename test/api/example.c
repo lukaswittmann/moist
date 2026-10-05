@@ -201,6 +201,10 @@ static int read_drop_fields(moist_error error, moist_cavity cav, int ngrid,
         || read_field_real(error, cav, "rho", rho);
 }
 
+/* Allowances for summation, backend, and translation identities */
+static const double identity_abs_tol = 5.0e-12;
+static const double identity_rel_tol = 5.0e-11;
+
 /* Agreement between two independently summed results, relative to the
  * magnitude involved */
 static int agrees_to(double a, double b, double rel_tol)
@@ -830,6 +834,23 @@ int test_cavity_gradient(void)
         goto cleanup;
     }
 
+    /* Sphere-resolved derivatives must sum to their exported totals */
+    for (int atom = 0; atom < nsph; atom++) {
+        for (int axis = 0; axis < 3; axis++) {
+            double area_sum = 0.0, volume_sum = 0.0;
+            for (int sphere = 0; sphere < nsph; sphere++) {
+                size_t index = (size_t)axis + (size_t)3 * (sphere + nsph * atom);
+                area_sum += asph1_rA[index];
+                volume_sum += vsph1_rA[index];
+            }
+            if (!agrees_to(area_sum, A_tot1_rA[3 * atom + axis], 1e-10) ||
+                !agrees_to(volume_sum, V_tot1_rA[3 * atom + axis], 1e-10)) {
+                printf("  Error: sphere derivatives disagree with their totals\n");
+                goto cleanup;
+            }
+        }
+    }
+
     // Print some gradient values
     printf("  Area gradient (dA/dR) for atom 0:\n");
     printf("    x: %12.6f\n", A_tot1_rA[0]);
@@ -855,6 +876,40 @@ int test_cavity_gradient(void)
     moist_get_amat_gradient(error, cav, nsph, ngrid, Amat0, Amat1_rA, xi);
     if (moist_check_error(error)) {
         show_error(error);
+        goto cleanup;
+    }
+
+    /* Independent accessors must forward the same matrix and widths */
+    double *matrix_check = malloc((size_t)ngrid * ngrid * sizeof(double));
+    double *width_check = malloc((size_t)ngrid * sizeof(double));
+    if (!matrix_check || !width_check) {
+        free(matrix_check); free(width_check);
+        goto cleanup;
+    }
+    /* Every accessor clears the pending error on entry, so each failure is
+     * reported before the next call */
+    moist_assemble_amat(error, cav, ngrid, matrix_check, width_check);
+    if (moist_check_error(error)) {
+        show_error(error);
+        free(matrix_check); free(width_check);
+        goto cleanup;
+    }
+    int matrix_agrees = 1;
+    for (size_t i = 0; i < (size_t)ngrid * ngrid; i++)
+        if (!agrees_to(matrix_check[i], Amat0[i], 1e-12)) matrix_agrees = 0;
+    for (int i = 0; i < ngrid; i++)
+        if (!agrees_to(width_check[i], xi[i], 1e-12)) matrix_agrees = 0;
+    moist_get_cavity_field_real(error, cav, "xi0", width_check);
+    if (moist_check_error(error)) {
+        show_error(error);
+        free(matrix_check); free(width_check);
+        goto cleanup;
+    }
+    for (int i = 0; i < ngrid; i++)
+        if (!agrees_to(width_check[i], xi[i], 1e-12)) matrix_agrees = 0;
+    free(matrix_check); free(width_check);
+    if (!matrix_agrees) {
+        printf("  Error: A-matrix or width accessor disagrees\n");
         goto cleanup;
     }
 
@@ -962,6 +1017,22 @@ int test_cavity_gradient(void)
 
     int contract_ok = 1;
     const double contract_tol = 1e-12;
+    /* Independently sum the exported derivative tensor. Symmetry alone can
+     * hide a shared sign or normalization error in the contraction */
+    for (int atom = 0; atom < nsph; atom++) {
+        for (int axis = 0; axis < 3; axis++) {
+            double expected = 0.0;
+            for (int i = 0; i < ngrid; i++) {
+                for (int j = 0; j < ngrid; j++) {
+                    expected += q1[i] * Amat1_rA[idx_f4(axis, atom, i, j, 3, nsph, ngrid)] * q2[j];
+                }
+            }
+            if (!agrees_to(grad_contract[idx_f2(axis, atom, 3)], expected, 1e-10)) {
+                printf("  Error: A-matrix contraction disagrees with exported tensor\n");
+                contract_ok = 0;
+            }
+        }
+    }
     double contract_norm = 0.0;
     for (int iatom = 0; iatom < nsph && contract_ok; iatom++) {
         for (int iaxis = 0; iaxis < 3; iaxis++) {
@@ -1037,6 +1108,36 @@ int test_cavity_gradient(void)
         show_error(error);
         goto cleanup;
     }
+
+    /* Point-charge derivative plus the host surface-motion contraction,
+     * evaluated in C from the documented public arrays */
+    double *surface_xyz = malloc((size_t)3 * ngrid * sizeof(double));
+    if (!surface_xyz) goto cleanup;
+    moist_get_cavity_field_real(error, cav, "xyz", surface_xyz);
+    if (moist_check_error(error)) {
+        show_error(error);
+        free(surface_xyz);
+        goto cleanup;
+    }
+    for (int atom = 0; atom < nsph; atom++) {
+        for (int axis = 0; axis < 3; axis++) {
+            double expected = 0.0;
+            for (int i = 0; i < ngrid; i++) {
+                double r[3], r2 = 0.0;
+                for (int k = 0; k < 3; k++) {
+                    r[k] = surface_xyz[3 * i + k] - h2o_positions[3 * atom + k];
+                    r2 += r[k] * r[k];
+                    expected += xyz1_rA[idx_f4(k, axis, atom, i, 3, 3, nsph)] * qefield[3 * i + k];
+                }
+                if (r2 > 1e-30) expected += surface_q[i] * za[atom] * r[axis] / (sqrt(r2) * r2);
+            }
+            if (!agrees_to(grad_ne[3 * atom + axis], expected, 1e-10)) {
+                printf("  Error: nuclear contraction disagrees with public-array reference\n");
+                nuc_elec_ok = 0;
+            }
+        }
+    }
+    free(surface_xyz);
 
     const double homo_tol = 1e-12;
     for (int iatom = 0; iatom < nsph && nuc_elec_ok; iatom++) {
@@ -1298,19 +1399,37 @@ int test_isodensity_internal_cavity(void)
                 show_error(error);
                 result = 1;
             } else {
-                /* The un-summed area elements must add up to the total-area gradient */
+                /* Per-point area and volume derivatives must recover their totals,
+                 * within the absolute allowance or the relative one on the total.
+                 * Measured clean residual 5.6e-14 (the OpenMP gradient merges
+                 * partial sums in arrival order); a total off by a relative 1e-10
+                 * still exceeds the relative allowance twofold */
                 double max_dev = 0.0;
+                int sums_agree = 1;
                 for (int k = 0; k < 3 * nsph; k++) {
-                    double acc = 0.0;
+                    double acc = 0.0, volume_acc = 0.0;
                     for (int i = 0; i < ngrid; i++) {
-                        acc += a_i1_rA[(size_t)k + (size_t)3 * nsph * (size_t)i];
+                        size_t index = (size_t)k + (size_t)3 * nsph * (size_t)i;
+                        if (!isfinite(a_i1_rA[index]) || !isfinite(v_i1_rA[index]))
+                            sums_agree = 0;
+                        acc += a_i1_rA[index];
+                        volume_acc += v_i1_rA[index];
                     }
-                    double dev = fabs(acc - A_tot1_rA[k]);
+                    const double area_dev = fabs(acc - A_tot1_rA[k]);
+                    const double volume_dev = fabs(volume_acc - V_tot1_rA[k]);
+                    if (!isfinite(acc) || !isfinite(volume_acc) ||
+                        !isfinite(A_tot1_rA[k]) || !isfinite(V_tot1_rA[k]) ||
+                        !(area_dev <= identity_abs_tol ||
+                          area_dev <= identity_rel_tol * fabs(A_tot1_rA[k])) ||
+                        !(volume_dev <= identity_abs_tol ||
+                          volume_dev <= identity_rel_tol * fabs(V_tot1_rA[k])))
+                        sums_agree = 0;
+                    double dev = fmax(area_dev, volume_dev);
                     if (dev > max_dev) max_dev = dev;
                 }
-                printf("  max |sum_i a_i1_rA - A_tot1_rA| = %.3e\n", max_dev);
-                if (!(max_dev < 1.0e-8)) {
-                    printf("  Error: per-point area derivatives do not sum to the total\n");
+                printf("  max |sum_i derivative - total derivative| = %.3e\n", max_dev);
+                if (!sums_agree) {
+                    printf("  Error: per-point area/volume derivatives do not sum to the totals\n");
                     result = 1;
                 }
             }
@@ -1609,10 +1728,15 @@ int test_isodensity_callback_cavity(void)
         goto cleanup;
     }
 
+    /* Absolute allowance only: measured |dA| = 2.8e-14 on an area of 170, and a
+     * density coefficient off by a relative 1e-11 moves the area by 2.7e-10,
+     * which a relative allowance on the area would let through */
     const double area_diff = fabs(area - ref_area);
     const double volume_diff = fabs(volume - ref_volume);
     printf("  vs internal backend: |dA| = %.3e, |dV| = %.3e\n", area_diff, volume_diff);
-    if (ngrid != ref_ngrid || area_diff > 1.0e-8 || volume_diff > 1.0e-8) {
+    if (ngrid != ref_ngrid || !isfinite(area) || !isfinite(ref_area) ||
+        !isfinite(volume) || !isfinite(ref_volume) ||
+        !(area_diff <= identity_abs_tol) || !(volume_diff <= identity_abs_tol)) {
         printf("  FAIL: callback and internal backends disagree\n");
         result = 1;
     }
@@ -3186,12 +3310,21 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
                first_gradient[3 * a + 1], first_gradient[3 * a + 2]);
     /* The potential is the nuclear one, so this is the complete gradient and a
      * rigid translation leaves the energy alone. A slip in the [ngrid][3]
-     * layout of the dphi_dr answer breaks this by orders of magnitude */
+     * layout of the dphi_dr answer breaks this by orders of magnitude. Read
+     * into a zero accumulator so the sums keep full precision; subtracting the
+     * capacity sentinel above loses small gradient residuals. The reference is
+     * zero, so only the absolute allowance applies; measured residual 3.6e-15 */
+    double translation_gradient[3 * H2O_NATOMS] = {0.0};
+    moist_get_model_gradient(error, model, cpl, response, H2O_NATOMS, translation_gradient);
+    REQUIRE(!moist_check_error(error));
+    double max_net = 0.0;
     for (int k = 0; k < 3; ++k) {
         double net = 0.0;
-        for (int a = 0; a < H2O_NATOMS; ++a) net += first_gradient[3 * a + k];
-        REQUIRE(fabs(net) < 1e-8);
+        for (int a = 0; a < H2O_NATOMS; ++a) net += translation_gradient[3 * a + k];
+        REQUIRE(isfinite(net) && fabs(net) <= identity_abs_tol);
+        max_net = fmax(max_net, fabs(net));
     }
+    printf("  max |translation sum of the gradient| = %.3e\n", max_net);
     REQUIRE(response_names(error, response, visited, sizeof visited) == 1 &&
             strcmp(visited, "potential_adjoint") == 0);
 
@@ -3222,6 +3355,10 @@ cleanup:
     moist_delete_cavity(&borrowed);
     moist_delete_response(&response); moist_delete_model(&model);
     moist_delete_component(&pcm); moist_delete_structure(&mol); moist_delete_error(&error);
+    if (cpl || other || response) {
+        printf("  Error: coupling or response deletion did not reset its handle\n");
+        result = 1;
+    }
     return result;
 }
 
