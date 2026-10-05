@@ -4,6 +4,8 @@
 !> in CRC Handbook of Chemistry and Physics, 91st Edition (2010-2011),
 !> edited by W. M. Haynes (CRC Press, Boca Raton, FL, 2010), pages 9-49-9-50;
 !> corrected Nov. 17, 2010 for the 92nd edition
+!>
+!> TODO: Merge this with the other radii?
 module moist_data_atomicrad
    use mctc_env, only: wp
    use mctc_env, only: error_type, fatal_error
@@ -48,7 +50,11 @@ module moist_data_atomicrad
       & 1.49_wp, 1.43_wp, 1.41_wp, 1.34_wp, 1.29_wp, 1.28_wp, 1.21_wp, 1.22_wp, &
       & 1.36_wp, 1.43_wp, 1.62_wp, 1.75_wp, 1.65_wp, 1.57_wp]
 
-   !> Covalent radii (Alvarez 2008, doi:10.1039/b801115j)
+   !> Covalent radii from Cordero et al., Dalton Trans. 2008, 2832-2838
+   !>
+   !> - DOI: 10.1039/b801115j; published values used through Po (Z = 84)
+   !> - At and Rn: 1.50 A values from the paper
+   !> - Fr through Og: local 1.50 A fallback, not the published values
    real(wp), parameter :: covalent_rad(max_elem) = aatoau*[ &
       & 0.31_wp, 0.28_wp, 1.28_wp, 0.96_wp, 0.84_wp, 0.76_wp, 0.71_wp, 0.66_wp, &
       & 0.57_wp, 0.58_wp, 1.66_wp, 1.41_wp, 1.21_wp, 1.11_wp, 1.07_wp, 1.05_wp, &

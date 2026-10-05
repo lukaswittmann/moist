@@ -16,7 +16,10 @@ module moist_data_mass
    !> Highest atomic number this table covers
    integer, parameter :: max_elem = 118
 
-   !> Atomic masses from NIST in atomic mass units (u)
+   !> Atomic masses in atomic mass units (u)
+   !>
+   !> - NIST Atomic Weights and Isotopic Compositions with Relative Atomic Masses
+   !> - https://www.nist.gov/pml/atomic-weights-and-isotopic-compositions-relative-atomic-masses
    real(wp), parameter :: atomic_masses(max_elem) = [ &
       &   1.00794075_wp, 4.00260193_wp, 6.94003660_wp, 9.01218307_wp,&
       &  10.81102805_wp, 12.01073590_wp, 14.00670321_wp, 15.99940492_wp,&
