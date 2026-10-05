@@ -80,7 +80,6 @@ contains
 
       call plp%blank()
       call plp%header("DROP Born zeta fit")
-      call plp%blank()
       call plp%print_header()
       call plp%separator()
 
