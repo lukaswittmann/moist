@@ -567,7 +567,7 @@ contains
                                     ang_weight, zeta_born, nraw, xyz_raw, area_raw, owner_raw, &
                                     zeta_raw, weight_raw, switch_raw)
 
-      ! Compute switch_raw(iraw) = product_{j /= owner} [1 - 0.5*(erf(arg_plus)+erf(arg_minus))]
+      ! Compute switch_raw(iraw) = product_{j /= owner} 0.5*(erfc(arg_plus)+erfc(arg_minus))
       call compute_switching_function(nraw, nsph, owner_raw, xyz_raw, centers, &
                                       zeta_raw, radii, switch_raw)
 
@@ -756,7 +756,7 @@ contains
 
             arg_plus = zeta_raw(iraw)*(radii(iat) + dist)
             arg_minus = zeta_raw(iraw)*(radii(iat) - dist)
-            switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
+            switch_pair = 0.5_wp*(erfc(arg_plus) + erfc(arg_minus))
 
             switch_raw(iraw) = switch_raw(iraw)*switch_pair
          end do
@@ -850,7 +850,7 @@ contains
 
       arg_plus = zeta*(radius + dist)
       arg_minus = zeta*(radius - dist)
-      switch_pair = 1.0_wp - 0.5_wp*(erf(arg_plus) + erf(arg_minus))
+      switch_pair = 0.5_wp*(erfc(arg_plus) + erfc(arg_minus))
 
       dfdr = -f_val*zeta/(sqrt(pi)*switch_pair*dist) &
             & *(exp(-arg_plus_sq) - exp(-arg_minus_sq))

@@ -136,7 +136,7 @@ contains
       !> 2x2 tangent-restricted inverse and switch variables
       real(wp) :: n_surf(3), q1(3), q2(3)
       real(wp) :: Aq1(3), Aq2(3)
-      real(wp) :: B11, B12, B22, tr_B, det_B, disc, sqrt_disc
+      real(wp) :: B11, B12, B22, tr_B, det_B, sqrt_disc
       real(wp) :: beta1, beta2, lambda_switch
       real(wp), parameter :: det_B_guard = 1.0e-30_wp
       real(wp), parameter :: weight_tol = 1.0e-30_wp
@@ -160,21 +160,22 @@ contains
       integer :: min_axis_surf
       real(wp) :: proj_surf, v_norm_surf, n_dot_q1_surf
 
-      !> Principal-curvature gradient intermediates (frame-free invariants)
+      !> Principal-curvature gradient intermediates
       !>
-      !> - grid-level, per igrid: shape-operator invariants of the LSF Hessian H
-      !> - Hn = H n, adjH = adj(H), Cn = adj(H) n
-      !> - T = k1+k2 = 2*KM, D = k1*k2 = KG
-      real(wp) :: Hn_curv(3), Cn_curv(3), adjH(3, 3)
-      real(wp) :: trH_curv, nHn_curv, T_curv, nCn_curv, D_curv, KM_curv, disc_curv
-      !> Per-(atom,axis): total nuclear derivative of H and adj(H) and the
-      !> resulting curvature-invariant derivatives
-      real(wp) :: dH_curv(3, 3), dadjH(3, 3)
-      real(wp) :: dtrH_c, dnHn_c, dT_c, dnCn_c, dD_c, d_disc_c
+      !> - grid-level: H q_a and the shape operator S_ab = q_a^T H q_b/|g|
+      !> - k1,k2 = (S11+S22)/2 +/- disc, disc = hypot((S11-S22)/2, S12)
+      real(wp) :: Hq1_curv(3), Hq2_curv(3)
+      real(wp) :: S11_curv, S12_curv, S22_curv, half_diff_curv, disc_curv
+      !> Per-(atom,axis): total nuclear derivative of H and of S, KM and disc
+      real(wp) :: dH_curv(3, 3)
+      real(wp) :: dS11_c, dS12_c, dS22_c, dKM_c, d_disc_c
       !> Guard below which the k1/k2 split is treated as (near-)umbilic and the
       !> discriminant derivative is set to zero (individual k1/k2 derivatives are
       !> ill-defined at k1 = k2; KM and KG remain smooth)
       real(wp), parameter :: curv_disc_guard = 1.0e-10_wp
+      !> Guard below which the two eigenvalues of B count as degenerate; the
+      !> switched eigenvalue then takes the mean response tr(dB)/2 (see kernel.f90)
+      real(wp), parameter :: switch_gap_guard = 1.0e-10_wp
 
       ! Branch-weight post-pass state (serial, after main loop)
       ! Softmax weights_grad takes dphi in (nparam, nbranch) layout with
@@ -292,7 +293,7 @@ contains
       !$omp& grad_r_hat_dot_r, alpha_coeff, g_vec, g_norm_sq, g_norm, A_mat, &
       !$omp& t1_vec, t2_vec, y1, y2, cross_vec, &
       !$omp& J_val, inv_J, lsf3_rr_rA, lsf3_rrr, dA_dR, dg_dR, &
-      !$omp& n_surf, q1, q2, Aq1, Aq2, B11, B12, B22, tr_B, det_B, disc, sqrt_disc, &
+      !$omp& n_surf, q1, q2, Aq1, Aq2, B11, B12, B22, tr_B, det_B, sqrt_disc, &
       !$omp& beta1, beta2, lambda_switch, Binv11, Binv12, Binv22, tau1, tau2, w1, w2, &
       !$omp& vmin_B, vmax_B, u_switch, P_tan, dP_tan, M_tan, dM_tan, &
       !$omp& dn_dR, dy1_dR, dy2_dR, dcross_dR, dJ_dR, dlambda_val, dr_i_dR, &
@@ -305,9 +306,8 @@ contains
       !$omp& f_crit0, f_crit_dS, f_foc_f0, f_foc_dS, d_gnorm, dn_dR_buf, anchor_xi_local, &
       !$omp& w_pre_i, f_wleb_s, f_wleb_ds, wleb_prune_factor, dw_pre_dR, &
       !$omp& ai_val, vi_val, kkt_rhs_batch, AP_tan, &
-      !$omp& Hn_curv, Cn_curv, adjH, trH_curv, nHn_curv, T_curv, nCn_curv, &
-      !$omp& D_curv, KM_curv, disc_curv, dH_curv, dadjH, dtrH_c, dnHn_c, &
-      !$omp& dT_c, dnCn_c, dD_c, d_disc_c, &
+      !$omp& Hq1_curv, Hq2_curv, S11_curv, S12_curv, S22_curv, half_diff_curv, &
+      !$omp& disc_curv, dH_curv, dS11_c, dS12_c, dS22_c, dKM_c, d_disc_c, &
       !$omp& A_tot_local, V_tot_local, lsf_error, do_timing)
       thread_slot = 1
 !$    thread_slot = omp_get_thread_num() + 1
@@ -583,12 +583,10 @@ contains
          B12 = dot_product(q1, Aq2)
          B22 = dot_product(q2, Aq2)
 
-         ! Analytic 2x2 eigenvalues of B
+         ! Analytic 2x2 eigenvalues of B, gap as a sum of squares (see projection.f90)
          tr_B = B11 + B22
          det_B = B11*B22 - B12*B12
-         disc = 0.25_wp*tr_B*tr_B - det_B
-         disc = max(disc, 0.0_wp)
-         sqrt_disc = sqrt(disc)
+         sqrt_disc = hypot(0.5_wp*(B11 - B22), B12)
          beta1 = 0.5_wp*tr_B + sqrt_disc
          beta2 = 0.5_wp*tr_B - sqrt_disc
          call eig_2x2_symmetric(B11, B12, B22, lambda_switch, beta1, vmin_B, vmax_B)
@@ -664,35 +662,16 @@ contains
             wleb_prune_factor = 1.0_wp
          end if
 
-         ! Grid-level principal-curvature invariants (frame independent)
-         ! Shape operator of the level set: eigenvalues on the tangent plane are
-         ! the principal curvatures k1 >= k2, and using invariants avoids the
-         ! discontinuous tangent-frame choice of the forward compute_curvature:
-         !   T = k1 + k2 = 2*KM = (tr H - n^T H n)/|g|
-         !   D = k1 * k2 = KG   = (n^T adj(H) n)/|g|^2   (Goldman implicit-surface)
-         !   k1,k2 = KM +/- sqrt(KM^2 - KG)
+         ! Shape operator in the surface frame [q1, q2]; KM and the gap are
+         ! rotation invariants, the gap a sum of squares (accurate near umbilics)
          if (allocated(self%k1_rA)) then
-            Hn_curv = matmul(lsf2_rr, n_surf)
-            trH_curv = lsf2_rr(1, 1) + lsf2_rr(2, 2) + lsf2_rr(3, 3)
-            nHn_curv = dot_product(n_surf, Hn_curv)
-            T_curv = (trH_curv - nHn_curv)/g_norm
-
-            ! Adjugate (cofactor matrix) of the symmetric Hessian H = lsf2_rr
-            adjH(1, 1) = lsf2_rr(2, 2)*lsf2_rr(3, 3) - lsf2_rr(2, 3)*lsf2_rr(2, 3)
-            adjH(2, 2) = lsf2_rr(1, 1)*lsf2_rr(3, 3) - lsf2_rr(1, 3)*lsf2_rr(1, 3)
-            adjH(3, 3) = lsf2_rr(1, 1)*lsf2_rr(2, 2) - lsf2_rr(1, 2)*lsf2_rr(1, 2)
-            adjH(1, 2) = lsf2_rr(1, 3)*lsf2_rr(2, 3) - lsf2_rr(1, 2)*lsf2_rr(3, 3)
-            adjH(1, 3) = lsf2_rr(1, 2)*lsf2_rr(2, 3) - lsf2_rr(2, 2)*lsf2_rr(1, 3)
-            adjH(2, 3) = lsf2_rr(1, 2)*lsf2_rr(1, 3) - lsf2_rr(1, 1)*lsf2_rr(2, 3)
-            adjH(2, 1) = adjH(1, 2)
-            adjH(3, 1) = adjH(1, 3)
-            adjH(3, 2) = adjH(2, 3)
-
-            Cn_curv = matmul(adjH, n_surf)
-            nCn_curv = dot_product(n_surf, Cn_curv)
-            D_curv = nCn_curv/g_norm_sq
-            KM_curv = 0.5_wp*T_curv
-            disc_curv = sqrt(max(KM_curv*KM_curv - D_curv, 0.0_wp))
+            Hq1_curv = matmul(lsf2_rr, q1)
+            Hq2_curv = matmul(lsf2_rr, q2)
+            S11_curv = dot_product(q1, Hq1_curv)/g_norm
+            S12_curv = dot_product(q1, Hq2_curv)/g_norm
+            S22_curv = dot_product(q2, Hq2_curv)/g_norm
+            half_diff_curv = 0.5_wp*(S11_curv - S22_curv)
+            disc_curv = hypot(half_diff_curv, S12_curv)
          end if
 
          ! Loop over active atoms and axes to compute dJ/dr_A
@@ -760,7 +739,11 @@ contains
                dM_tan = matmul(dP_tan, AP_tan) &
                         + matmul(P_tan, matmul(dA_dR, P_tan)) &
                         + matmul(P_tan, matmul(A_mat, dP_tan))
-               dlambda_switch = dot_product(u_switch, matmul(dM_tan, u_switch))
+               if (sqrt_disc <= switch_gap_guard) then
+                  dlambda_switch = 0.5_wp*(dM_tan(1, 1) + dM_tan(2, 2) + dM_tan(3, 3))
+               else
+                  dlambda_switch = dot_product(u_switch, matmul(dM_tan, u_switch))
+               end if
 
                ! Sphere tangent frame is constant w.r.t. nuclear coordinates:
                ! n_sph = (anchor - R_I)/|...| has zero derivative for all atoms
@@ -827,40 +810,22 @@ contains
                                      + lsf3_rrr(:, :, jaxis)*dr_i_dR(jaxis)
                   end do
 
-                  ! dT = d[(tr H - n^T H n)/|g|]
-                  ! d(n^T H n) = 2 (dn . H n) + n^T dH n   (H symmetric)
-                  dtrH_c = dH_curv(1, 1) + dH_curv(2, 2) + dH_curv(3, 3)
-                  dnHn_c = 2.0_wp*dot_product(dn_surf_dR, Hn_curv) &
-                           + dot_product(n_surf, matmul(dH_curv, n_surf))
-                  dT_c = (dtrH_c - dnHn_c)/g_norm - T_curv*d_gnorm/g_norm
+                  ! d(q_a^T H q_b) = dq_a.H q_b + dq_b.H q_a + q_a^T dH q_b (H symmetric)
+                  dS11_c = (2.0_wp*dot_product(dq1_dR, Hq1_curv) &
+                            + dot_product(q1, matmul(dH_curv, q1)))/g_norm &
+                           - S11_curv*d_gnorm/g_norm
+                  dS12_c = (dot_product(dq1_dR, Hq2_curv) + dot_product(dq2_dR, Hq1_curv) &
+                            + dot_product(q1, matmul(dH_curv, q2)))/g_norm &
+                           - S12_curv*d_gnorm/g_norm
+                  dS22_c = (2.0_wp*dot_product(dq2_dR, Hq2_curv) &
+                            + dot_product(q2, matmul(dH_curv, q2)))/g_norm &
+                           - S22_curv*d_gnorm/g_norm
+                  dKM_c = 0.5_wp*(dS11_c + dS22_c)
 
-                  ! d(adj H) via product rule (symmetric)
-                  dadjH(1, 1) = dH_curv(2, 2)*lsf2_rr(3, 3) + lsf2_rr(2, 2)*dH_curv(3, 3) &
-                                - 2.0_wp*lsf2_rr(2, 3)*dH_curv(2, 3)
-                  dadjH(2, 2) = dH_curv(1, 1)*lsf2_rr(3, 3) + lsf2_rr(1, 1)*dH_curv(3, 3) &
-                                - 2.0_wp*lsf2_rr(1, 3)*dH_curv(1, 3)
-                  dadjH(3, 3) = dH_curv(1, 1)*lsf2_rr(2, 2) + lsf2_rr(1, 1)*dH_curv(2, 2) &
-                                - 2.0_wp*lsf2_rr(1, 2)*dH_curv(1, 2)
-                  dadjH(1, 2) = dH_curv(1, 3)*lsf2_rr(2, 3) + lsf2_rr(1, 3)*dH_curv(2, 3) &
-                                - dH_curv(1, 2)*lsf2_rr(3, 3) - lsf2_rr(1, 2)*dH_curv(3, 3)
-                  dadjH(1, 3) = dH_curv(1, 2)*lsf2_rr(2, 3) + lsf2_rr(1, 2)*dH_curv(2, 3) &
-                                - dH_curv(2, 2)*lsf2_rr(1, 3) - lsf2_rr(2, 2)*dH_curv(1, 3)
-                  dadjH(2, 3) = dH_curv(1, 2)*lsf2_rr(1, 3) + lsf2_rr(1, 2)*dH_curv(1, 3) &
-                                - dH_curv(1, 1)*lsf2_rr(2, 3) - lsf2_rr(1, 1)*dH_curv(2, 3)
-                  dadjH(2, 1) = dadjH(1, 2)
-                  dadjH(3, 1) = dadjH(1, 3)
-                  dadjH(3, 2) = dadjH(2, 3)
-
-                  ! dD = d[(n^T adj(H) n)/|g|^2]
-                  ! d(n^T adj n) = 2 (dn . adj(H) n) + n^T d(adj H) n
-                  dnCn_c = 2.0_wp*dot_product(dn_surf_dR, Cn_curv) &
-                           + dot_product(n_surf, matmul(dadjH, n_surf))
-                  dD_c = dnCn_c/g_norm_sq - 2.0_wp*D_curv*d_gnorm/g_norm
-
-                  ! Discriminant split: disc^2 = KM^2 - KG, so
-                  ! 2 disc d(disc) = 2 KM dKM - dKG = (T/2) dT - dD
+                  ! disc = hypot(half_diff, S12)
                   if (disc_curv > curv_disc_guard) then
-                     d_disc_c = (KM_curv*dT_c - dD_c)/(2.0_wp*disc_curv)
+                     d_disc_c = (half_diff_curv*0.5_wp*(dS11_c - dS22_c) &
+                                 + S12_curv*dS12_c)/disc_curv
                   else
                      d_disc_c = 0.0_wp
                   end if
@@ -868,8 +833,8 @@ contains
                   ! Principal-curvature gradients; the mean/Gaussian curvature
                   ! gradients are intentionally not stored, being downstream
                   !   dKM = (k1_rA + k2_rA)/2,  dKG = k2*k1_rA + k1*k2_rA
-                  self%k1_rA(iaxis, iatom, igrid) = 0.5_wp*dT_c + d_disc_c
-                  self%k2_rA(iaxis, iatom, igrid) = 0.5_wp*dT_c - d_disc_c
+                  self%k1_rA(iaxis, iatom, igrid) = dKM_c + d_disc_c
+                  self%k2_rA(iaxis, iatom, igrid) = dKM_c - d_disc_c
                end if
 
             end do ! iaxis

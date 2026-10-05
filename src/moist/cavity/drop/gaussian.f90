@@ -189,7 +189,7 @@ contains
    !> Compute iSwig switching function value for a single surface point
    !>
    !> The switching function is computed as:
-   !>   f = prod [1 - 0.5 * (erf(xi*(R_j+r_ij)) + erf(xi*(R_j-r_ij)))]
+   !>   f = prod 0.5 * (erfc(xi*(R_j+r_ij)) + erfc(xi*(R_j-r_ij)))
    !>
    !> When a sorted per-atom neighbor list is available (built in set_input),
    !> the loop iterates over sorted neighbors and exits early once the
@@ -227,12 +227,12 @@ contains
             i = self%adj_list%nlat(start + ii)
             rij = norm2(pos(:) - self%xyz(:, i))
 
-            ! Per-atom skip: avoid erf for atoms beyond individual cutoff
+            ! Per-atom skip: avoid erfc for atoms beyond individual cutoff
             if (xi*(rij - self%radii(i)) > erf_cutoff) cycle
 
             rplus = xi*(self%radii(i) + rij)
             rminus = xi*(self%radii(i) - rij)
-            f_tmp = 1.0_wp - 0.5_wp*(erf(rplus) + erf(rminus))
+            f_tmp = 0.5_wp*(erfc(rplus) + erfc(rminus))
             f = f*f_tmp
 
             if (f < 1.0e-14_wp) then
@@ -249,7 +249,7 @@ contains
 
             rplus = xi*(self%radii(i) + rij)
             rminus = xi*(self%radii(i) - rij)
-            f_tmp = 1.0_wp - 0.5_wp*(erf(rplus) + erf(rminus))
+            f_tmp = 0.5_wp*(erfc(rplus) + erfc(rminus))
             f = f*f_tmp
 
             if (f < 1.0e-14_wp) then
@@ -325,7 +325,7 @@ contains
 
             rplus = xi*(self%radii(k) + rij)
             rminus = xi*(self%radii(k) - rij)
-            fij = 1.0_wp - 0.5_wp*(erf(rplus) + erf(rminus))
+            fij = 0.5_wp*(erfc(rplus) + erfc(rminus))
             f_val = f_val*fij
 
             n_nb = n_nb + 1
@@ -390,7 +390,7 @@ contains
             rij = sqrt(xdif*xdif + ydif*ydif + zdif*zdif)
             rplus = xi*(self%radii(k) + rij)
             rminus = xi*(self%radii(k) - rij)
-            fij = 1.0_wp - 0.5_wp*(erf(rplus) + erf(rminus))
+            fij = 0.5_wp*(erfc(rplus) + erfc(rminus))
             f_val = f_val*fij
 
             n_nb = n_nb + 1

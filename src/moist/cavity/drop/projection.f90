@@ -703,7 +703,7 @@ contains
       ! Tangent-restricted KKT matrix B = Q^T A Q (2x2 symmetric)
       real(wp) :: B11, B12, B22
       ! Analytic 2x2 eigenvalues of B
-      real(wp) :: tr_B, det_B, disc, sqrt_disc
+      real(wp) :: tr_B, det_B, sqrt_disc
       real(wp) :: beta1, beta2   ! eigenvalues (beta1 >= beta2)
       real(wp) :: lambda_switch_i
       real(wp), parameter :: det_B_guard = 1.0e-30_wp
@@ -746,7 +746,7 @@ contains
       ! Loop over all grid points to compute Jacobian scaling
       !$omp parallel num_threads(slots%nthreads) default(shared) private(thread_slot, igrid, proj_point, &
       !$omp& anchor_point, lambda_val, lsf0, A, g_vec, g_norm_sq, g_norm, n_surf, q1, q2, &
-      !$omp& B11, B12, B22, tr_B, det_B, disc, sqrt_disc, beta1, beta2, lambda_switch_i, &
+      !$omp& B11, B12, B22, tr_B, det_B, sqrt_disc, beta1, beta2, lambda_switch_i, &
       !$omp& Binv11, Binv12, Binv22, n_sph, t1, t2, tau1, tau2, w1, w2, y1, y2, cross_prod, J_i, &
       !$omp& lsf_error)
       thread_slot = 1
@@ -814,12 +814,12 @@ contains
          B22 = dot_product(q2, matmul(A, q2))
 
          ! Analytic 2x2 eigenvalues of B
-         ! beta_{1,2} = tr(B)/2 +/- sqrt(tr(B)^2/4 - det(B))
+         ! beta_{1,2} = tr(B)/2 +/- sqrt(((B11 - B22)/2)^2 + B12^2)
+         ! Sum of squares, not tr(B)^2/4 - det(B): the difference cancels to
+         ! O(eps) at umbilics, and its square root is O(sqrt(eps)) noise in beta2
          tr_B = B11 + B22
          det_B = B11*B22 - B12*B12
-         disc = 0.25_wp*tr_B*tr_B - det_B
-         disc = max(disc, 0.0_wp)
-         sqrt_disc = sqrt(disc)
+         sqrt_disc = hypot(0.5_wp*(B11 - B22), B12)
          beta1 = 0.5_wp*tr_B + sqrt_disc ! larger eigenvalue
          beta2 = 0.5_wp*tr_B - sqrt_disc ! smaller eigenvalue
 

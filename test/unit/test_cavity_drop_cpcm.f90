@@ -17,6 +17,7 @@ module test_cavity_drop_cpcm
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient
    use moist_context, only: moist_context_type, new_context
+   use test_helpers, only: fd6_scalar, fd6_offsets
    use, intrinsic :: iso_fortran_env, only: error_unit
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    implicit none(type, external)
@@ -45,15 +46,16 @@ module test_cavity_drop_cpcm
    ! Quadruple precision, about 20x slower (!?); swap in with MATRIX_FLOOR and REFINE_TOL below
    ! integer, parameter :: rk = selected_real_kind(30, 300)
 
-   !> Fourth-order matrix finite-difference step in bohr
+   !> Sixth-order matrix finite-difference step in bohr
    real(wp), parameter :: MATRIX_STEP = 1.0e-4_wp
    !> Matrix finite-difference absolute tolerance
    real(wp), parameter :: MATRIX_ATOL = 1.0e-10_wp
    !> Matrix finite-difference relative tolerance
    real(wp), parameter :: MATRIX_RTOL = 1.0e-9_wp
-   !> Stencil round-off floor in units of epsilon(rk)*|A_ij|/step
-   real(wp), parameter :: MATRIX_FLOOR = 5.0e3_wp
-   ! real(wp), parameter :: MATRIX_FLOOR = 0.0_wp
+   !> Stencil round-off floor in units of epsilon(wp)*|A_ij|/step
+   real(wp), parameter :: MATRIX_FLOOR = 1.0e4_wp
+   ! Quadruple precision: only the rounding of the samples to wp for fd6_scalar remains
+   ! real(wp), parameter :: MATRIX_FLOOR = 4.0_wp
 
    !> Absolute tolerance of production against reference matrix values
    real(wp), parameter :: VALUE_ATOL = 1.0e-10_wp
@@ -64,11 +66,6 @@ module test_cavity_drop_cpcm
    real(rk), parameter :: REFINE_TOL = 1.0e-13_rk
    ! real(rk), parameter :: REFINE_TOL = 1.0e-27_rk
 
-   !> Below this switching value diagonal entries (A_ii ~ 1/f) are skipped in the
-   !> finite-difference check and compared with an eps/f-scaled value tolerance
-   real(wp), parameter :: DIAG_F_CUT = 1.0e-4_wp
-   !> Relative value tolerance of buried diagonals in units of epsilon/f
-   real(wp), parameter :: DIAG_EPS_FACTOR = 3.0_wp
    !> Largest accepted entry of A A^-1 - 1
    real(wp), parameter :: INVERSE_THR = 1.0e-10_wp
 
@@ -90,12 +87,12 @@ contains
                   new_unittest("dimer", test_dimer), &
                   new_unittest("ar5_blendk_09", test_ar5_blendk_09), &
                   new_unittest("bih3_h2o", test_bih3_h2o), &
-                  new_unittest("heavy28_h2o", test_heavy28_h2o), &
                   new_unittest("mb16_43_01", test_mb16_43_01), &
                   new_unittest("mb16_43_19", test_mb16_43_19), &
-                  new_unittest("but14diol_1", test_but14diol_1), &
                   new_unittest("but14diol_32", test_but14diol_32), &
                   new_unittest("il16_008", test_il16_008), &
+                  new_unittest("mb16_43_h2", test_mb16_43_h2), &
+                  new_unittest("heavy28_pbh4", test_heavy28_pbh4), &
                   new_unittest("negative_weight_lebedev_rejected", test_negative_weight_lebedev) &
                   ]
    end subroutine collect_cavity_drop_cpcm
@@ -465,16 +462,6 @@ contains
       call do_test(error, mol)
    end subroutine test_bih3_h2o
 
-   !> Test A matrix gradient for Heavy28 h2o
-   subroutine test_heavy28_h2o(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-
-      call get_structure(mol, "Heavy28", "h2o")
-
-      call do_test(error, mol)
-   end subroutine test_heavy28_h2o
-
    !> Test A matrix gradient for MB16-43 01
    subroutine test_mb16_43_01(error)
       type(error_type), allocatable, intent(out) :: error
@@ -494,16 +481,6 @@ contains
 
       call do_test(error, mol)
    end subroutine test_mb16_43_19
-
-   !> Test A matrix gradient for But14diol 1
-   subroutine test_but14diol_1(error)
-      type(error_type), allocatable, intent(out) :: error
-      type(structure_type) :: mol
-
-      call get_structure(mol, "But14diol", "1")
-
-      call do_test(error, mol)
-   end subroutine test_but14diol_1
 
    !> Test A matrix gradient for But14diol 32
    subroutine test_but14diol_32(error)
@@ -525,12 +502,41 @@ contains
       call do_test(error, mol)
    end subroutine test_il16_008
 
+   !> Test A matrix gradient for MB16-43 H2
+   subroutine test_mb16_43_h2(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+
+      call get_structure(mol, "MB16-43", "H2")
+
+      call do_test(error, mol)
+   end subroutine test_mb16_43_h2
+
+   !> Test A matrix gradient for Heavy28 PbH4, displaced off Td
+   subroutine test_heavy28_pbh4(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(structure_type) :: mol
+
+      call get_structure(mol, "Heavy28", "pbh4")
+      mol%xyz = mol%xyz + 1.0e-2_wp*reshape([ &
+                                            1.0_wp, -0.7_wp, 0.5_wp, &
+                                            0.4_wp, -0.3_wp, -0.2_wp, &
+                                            -0.8_wp, 1.0_wp, -0.8_wp, &
+                                            -0.8_wp, -0.7_wp, -1.0_wp, &
+                                            0.3_wp, -0.3_wp, -0.8_wp], [3, 5])
+
+      call do_test(error, mol)
+   end subroutine test_heavy28_pbh4
+
    !> Test the A matrix and its nuclear gradient against the independent reference
    !>
    !> - Production matrix values match the reference at the reference geometry
    !> - A A^-1 recovers the identity
-   !> - Analytic derivatives match fourth-order finite differences of the
+   !> - Analytic derivatives match sixth-order finite differences of the
    !>   reference, on points that stay converged across the whole stencil
+   !> - Sixth order because xi ~ f_foc^(-1/2) is stiff deep in the f_foc tail:
+   !>   at f_foc = 4e-9 (MB16-43 19, A_302,302) the fourth-order stencil
+   !>   truncates at 1.2e-9 relative
    !>
    !> @param[out] error             Test failure
    !> @param[in]  mol               Molecular structure
@@ -542,9 +548,6 @@ contains
       type(structure_type), intent(in) :: mol
       !> SvdW blending steepness override
       real(wp), intent(in), optional :: blend_k_override
-
-      !> Stencil offsets in units of the step
-      real(wp), parameter :: offsets(4) = [-2.0_wp, -1.0_wp, 1.0_wp, 2.0_wp]
 
       type(structure_type) :: mol_fd
       type(cavity_type_drop), allocatable :: cavity
@@ -558,7 +561,7 @@ contains
       integer, allocatable :: ipiv(:)
       !> Reference matrix at the current geometry
       real(rk), allocatable :: ref_values(:, :)
-      !> Reference matrix at the four stencil geometries, on reference grid indices
+      !> Reference matrix at the six stencil geometries, on reference grid indices
       real(rk), allocatable :: samples(:, :, :)
       !> Anchor offsets from their owner nuclei, at the reference and current grid
       real(rk), allocatable :: anchor_offset(:, :), displaced_anchors(:, :)
@@ -566,8 +569,6 @@ contains
       real(rk), allocatable :: centers(:, :)
       !> Persistent grid numbering -> reference grid index, and its current image
       integer, allocatable :: numbering_to_idx(:), idx(:)
-      !> Reference switching values
-      real(wp), allocatable :: ref_f(:)
       !> Points converged at the reference geometry, and at every stencil geometry
       logical, allocatable :: valid_ref(:), valid(:), seen(:)
       integer :: iat, idir, istep, igrid, jgrid, ngrid, info
@@ -606,7 +607,6 @@ contains
          if (cavity%numbering(igrid) > 0) numbering_to_idx(cavity%numbering(igrid)) = igrid
       end do
       valid_ref = cavity%converged(1:ngrid)
-      ref_f = cavity%f(1:ngrid)
       allocate (anchor_offset(3, ngrid))
       do igrid = 1, ngrid
          anchor_offset(:, igrid) = real(cavity%anchorxyz(:, igrid), rk) &
@@ -637,11 +637,6 @@ contains
                        "Non-finite CPCM reference matrix value")
             if (allocated(error)) return
             tol = max(VALUE_ATOL, VALUE_RTOL*abs(numeric))
-            ! Buried diagonals A_ii ~ 1/f lose relative accuracy as eps/f
-            if (igrid == jgrid .and. ref_f(igrid) < DIAG_F_CUT) then
-               tol = max(tol, DIAG_EPS_FACTOR*epsilon(1.0_wp)/max(ref_f(igrid), tiny(1.0_wp)) &
-                         *abs(numeric))
-            end if
             if (abs(analytic - numeric) > tol) then
                call test_failed(error, "CPCM reference value mismatch at ("//to_string(igrid)//", "// &
                                 to_string(jgrid)//")", "production "//to_string(analytic)// &
@@ -675,22 +670,22 @@ contains
       end if
 
       !> Analytic derivatives against finite differences of the reference
-      allocate (samples(ngrid, ngrid, 4), valid(ngrid), seen(ngrid))
+      allocate (samples(ngrid, ngrid, size(fd6_offsets)), valid(ngrid), seen(ngrid))
       allocate (centers(3, mol%nat))
       do iat = 1, mol%nat
          do idir = 1, ndim
             valid = valid_ref
             samples = 0.0_rk
-            do istep = 1, size(offsets)
+            do istep = 1, size(fd6_offsets)
                mol_fd = mol
-               mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + offsets(istep)*MATRIX_STEP
+               mol_fd%xyz(idir, iat) = mol_fd%xyz(idir, iat) + fd6_offsets(istep)*MATRIX_STEP
                call cavity%update(mol_fd, error=cavity_error)
                if (allocated(cavity_error)) then
                   call test_failed(error, cavity_error%message)
                   return
                end if
                centers = real(mol%xyz, rk)
-               centers(idir, iat) = centers(idir, iat) + real(offsets(istep), rk)*real(MATRIX_STEP, rk)
+               centers(idir, iat) = centers(idir, iat) + real(fd6_offsets(istep), rk)*real(MATRIX_STEP, rk)
 
                ! Surviving points keep their rigid anchor offset; new points use the production one
                call reference_indices(cavity%numbering(1:cavity%ngrid), idx)
@@ -728,19 +723,17 @@ contains
                if (.not. valid(jgrid)) cycle
                do igrid = 1, ngrid
                   if (.not. valid(igrid)) cycle
-                  ! A_ii ~ 1/f: finite differences are noise-dominated at small f
-                  if (igrid == jgrid .and. ref_f(igrid) < DIAG_F_CUT) cycle
-                  ! Pair opposite samples before combining the fourth-order stencil
-                  numeric = real((8.0_rk*(samples(igrid, jgrid, 3) - samples(igrid, jgrid, 2)) &
-                                  - (samples(igrid, jgrid, 4) - samples(igrid, jgrid, 1))) &
-                                 /(12.0_rk*real(MATRIX_STEP, rk)), wp)
+                  call fd6_scalar(real(samples(igrid, jgrid, 1), wp), real(samples(igrid, jgrid, 2), wp), &
+                                  real(samples(igrid, jgrid, 3), wp), real(samples(igrid, jgrid, 4), wp), &
+                                  real(samples(igrid, jgrid, 5), wp), real(samples(igrid, jgrid, 6), wp), &
+                                  MATRIX_STEP, numeric, error)
+                  if (allocated(error)) return
                   analytic = Amat1_rA(idir, iat, igrid, jgrid)
-                  call check(error, ieee_is_finite(analytic) .and. ieee_is_finite(numeric), &
-                             "Non-finite CPCM matrix derivative")
+                  call check(error, ieee_is_finite(analytic), "Non-finite CPCM matrix derivative")
                   if (allocated(error)) return
                   ! Stencil round-off scales with the differenced entry, not with its derivative
-                  tol = max(MATRIX_ATOL, MATRIX_RTOL*abs(numeric), MATRIX_FLOOR*real(epsilon(1.0_rk) &
-                            *maxval(abs(samples(igrid, jgrid, :)))/real(MATRIX_STEP, rk), wp))
+                  tol = max(MATRIX_ATOL, MATRIX_RTOL*abs(numeric), MATRIX_FLOOR*epsilon(1.0_wp) &
+                            *real(maxval(abs(samples(igrid, jgrid, :))), wp)/MATRIX_STEP)
                   if (abs(analytic - numeric)/tol <= worst_ratio) cycle
                   worst_ratio = abs(analytic - numeric)/tol
                   worst_a = analytic; worst_n = numeric; worst_tol = tol
@@ -916,7 +909,8 @@ contains
       real(rk) :: weight
       real(rk) :: point(3), g(3), hess(3, 3), s, gnorm, n(3), sphere(3)
       real(rk) :: amat(3, 3), adj(3, 3), alpha, lambda, detb, trb, beta2, area, focus
-      integer :: i
+      real(rk) :: proj(3, 3), dev(3, 3)
+      integer :: i, j
       point = real(cavity%xyz(:, igrid), rk)
       lambda = real(cavity%lambda0(igrid), rk)
       alpha = real(cavity%param%phi_alpha, rk)
@@ -944,7 +938,16 @@ contains
       ! Tangent determinant n^T adj(A) n, independent of tangent-frame choices
       detb = dot_product(n, matmul(adj, n))
       trb = amat(1, 1) + amat(2, 2) + amat(3, 3) - dot_product(n, matmul(amat, n))
-      beta2 = 0.5_rk*trb - sqrt(max(0.0_rk, 0.25_rk*trb*trb - detb))
+      ! Eigenvalue gap as a sum of squares, |P A P - trb/2 P|_F^2/2: trb^2/4 - detb
+      ! cancels at umbilics and its square root puts sqrt(eps) noise on beta2
+      do j = 1, 3
+         do i = 1, 3
+            proj(i, j) = -n(i)*n(j)
+         end do
+         proj(j, j) = proj(j, j) + 1.0_rk
+      end do
+      dev = matmul(proj, matmul(amat, proj)) - 0.5_rk*trb*proj
+      beta2 = 0.5_rk*trb - sqrt(0.5_rk*sum(dev*dev))
       sphere = anchor - centers(:, cavity%owner(igrid)); sphere = sphere/sqrt(sum(sphere*sphere))
       ! Area of the closest-point map between sphere and surface tangent planes
       area = alpha*alpha*abs(dot_product(n, sphere))/abs(detb)
