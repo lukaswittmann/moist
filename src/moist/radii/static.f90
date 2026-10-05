@@ -188,8 +188,7 @@ contains
       plp = new_prettylistprinter([6, 6, 10, 10], &
                                   [character(len=9) :: "Num", "Sym", "R (A)", "R (bohr)"], &
                                   unit=unit)
-      call plp%header("RADII")
-      call plp%blank()
+      call plp%header("Radii")
       call plp%print_header()
       call plp%separator()
 
