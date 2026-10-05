@@ -1141,51 +1141,51 @@ contains
       call expect_error(error, merr, expected)
    end subroutine run_bad_cheb
 
-   !> No r-space nodes is refused, set on the expected error
+   !> No r-space nodes is refused
    subroutine test_bad_cheb_nr_zero(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 0, 1.0_wp, 16, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nr_zero
 
-   !> No k-space nodes is refused, set on the expected error
+   !> No k-space nodes is refused
    subroutine test_bad_cheb_nk_zero(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 16, 1.0_wp, 0, 1.0_wp, "npts >= 1")
    end subroutine test_bad_cheb_nk_zero
 
-   !> A zero r-space scale is refused rather than dividing by r = 0, set on the expected error
+   !> A zero r-space scale is refused rather than dividing by r = 0
    subroutine test_bad_cheb_p_r_zero(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 16, 0.0_wp, 16, 1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_r_zero
 
-   !> A negative k-space scale is refused rather than building negative k nodes, set on the expected error
+   !> A negative k-space scale is refused rather than building negative k nodes
    subroutine test_bad_cheb_p_k_negative(error)
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 16, 1.0_wp, 16, -1.0_wp, "scale must be > 0")
    end subroutine test_bad_cheb_p_k_negative
 
-   !> A NaN r-space scale is refused; `p <= 0` is false for NaN, set on the expected error
+   !> A NaN r-space scale is refused; `p <= 0` is false for NaN
    subroutine test_bad_cheb_p_r_nan(error)
       use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 16, ieee_value(1.0_wp, ieee_quiet_nan), 16, 1.0_wp, "scale must be finite")
    end subroutine test_bad_cheb_p_r_nan
 
-   !> An infinite k-space scale is refused, set on the expected error
+   !> An infinite k-space scale is refused
    subroutine test_bad_cheb_p_k_inf(error)
       use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_positive_inf
-      !> Test failure, set on the expected error
+      !> Test failure
       type(error_type), allocatable, intent(out) :: error
 
       call run_bad_cheb(error, 16, 1.0_wp, 16, ieee_value(1.0_wp, ieee_positive_inf), "scale must be finite")

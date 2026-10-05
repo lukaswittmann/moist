@@ -578,10 +578,6 @@ contains
    end subroutine test_failed_files
 
    !> Retuning restores the first host budget and follows later host changes
-   !>
-   !> Every pin is offset from the baseline so that none can coincide with it: a
-   !> release that never restores, or a baseline recaptured on the second pin,
-   !> would otherwise pass on a host whose default matches a pin
    subroutine test_thread_runtime(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error

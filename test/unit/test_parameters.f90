@@ -53,8 +53,6 @@ contains
    end subroutine register_vector_entries
 
    !> Check vector values and escaped fixed-length strings survive serialization
-   !>
-   !> @param[out] error Test failure
    subroutine test_vector_and_string(error)
       type(error_type), allocatable, intent(out) :: error
       type(vector_parameters_type) :: param
@@ -99,8 +97,6 @@ contains
    !>
    !> A group key holding a scalar, a vector of the wrong length and an
    !> oversized fixed-length string each fail in their own registration helper
-   !>
-   !> @param[out] error Test failure
    subroutine test_invalid_fields(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -178,8 +174,6 @@ contains
    end subroutine collect_parameters
 
    !> Check copied settings, derived values, and resetting to defaults
-   !>
-   !> @param[out] error Test failure
    subroutine test_constructors(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -266,8 +260,6 @@ contains
    end subroutine test_constructors
 
    !> All concrete parameter sets support the same file and print operations
-   !>
-   !> @param[out] error Test failure
    subroutine test_roundtrip(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_cavity_drop_parameters_type) :: drop
@@ -383,8 +375,6 @@ contains
    end subroutine roundtrip
 
    !> Read handwritten TOML, reject malformed input and unsupported extensions
-   !>
-   !> @param[out] error Test failure
    subroutine test_file_formats(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -454,8 +444,6 @@ contains
    end subroutine test_file_formats
 
    !> Copies never share field bindings; malformed input returns an error
-   !>
-   !> @param[out] error Test failure
    subroutine test_copies_and_errors(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_error), allocatable :: err
@@ -523,8 +511,6 @@ contains
    end subroutine test_copies_and_errors
 
    !> Exercise DROP derivation from physical bounds and invalid boundary inputs
-   !>
-   !> @param[out] error Test failure
    subroutine test_drop_contracts(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -622,8 +608,6 @@ contains
    end subroutine test_drop_contracts
 
    !> Independently authored configuration inputs exercise public field names
-   !>
-   !> @param[out] error Test failure
    subroutine test_configuration_fields(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -807,8 +791,6 @@ contains
    end subroutine test_configuration_fields
 
    !> Reject structurally valid files whose numerical settings are invalid
-   !>
-   !> @param[out] error Test failure
    subroutine test_parameter_validation(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
@@ -887,8 +869,6 @@ contains
    end subroutine test_parameter_validation
 
    !> Partial override constructors preserve fields omitted by their callers
-   !>
-   !> @param[out] error Test failure
    subroutine test_optional_overrides(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
