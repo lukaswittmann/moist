@@ -403,7 +403,7 @@ contains
    !* ================================================================================= *!
 
    !> Copy banner text or query its length; printing belongs to the host
-   subroutine get_banner_api(verror, style, buffer, capacity, length) bind(C, name="moist_get_banner")
+   subroutine get_banner_api(verror, style, buffer, capacity, length) bind(C, name=namespace//"get_banner")
       !> Required diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Banner style selector
@@ -488,7 +488,7 @@ contains
    !* ================================================================================= *!
 
    !> Initialize drop options within the caller's allocation
-   subroutine init_drop_options_api(verror, options, bytes) bind(C, name="moist_init_drop_options")
+   subroutine init_drop_options_api(verror, options, bytes) bind(C, name=namespace//"init_drop_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -540,7 +540,7 @@ contains
    end subroutine read_drop_options
 
    !> Initialize iswig options within the caller's allocation
-   subroutine init_iswig_options_api(verror, options, bytes) bind(C, name="moist_init_iswig_options")
+   subroutine init_iswig_options_api(verror, options, bytes) bind(C, name=namespace//"init_iswig_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -586,7 +586,7 @@ contains
    end subroutine read_iswig_options
 
    !> Initialize svdw options within the caller's allocation
-   subroutine init_svdw_options_api(verror, options, bytes) bind(C, name="moist_init_svdw_options")
+   subroutine init_svdw_options_api(verror, options, bytes) bind(C, name=namespace//"init_svdw_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -631,7 +631,7 @@ contains
    end subroutine read_svdw_options
 
    !> Initialize cfc options within the caller's allocation
-   subroutine init_cfc_options_api(verror, options, bytes) bind(C, name="moist_init_cfc_options")
+   subroutine init_cfc_options_api(verror, options, bytes) bind(C, name=namespace//"init_cfc_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -677,7 +677,7 @@ contains
    end subroutine read_cfc_options
 
    !> Initialize isodensity options within the caller's allocation
-   subroutine init_isodensity_options_api(verror, options, bytes) bind(C, name="moist_init_isodensity_options")
+   subroutine init_isodensity_options_api(verror, options, bytes) bind(C, name=namespace//"init_isodensity_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -720,7 +720,7 @@ contains
    end subroutine read_isodensity_options
 
    !> Initialize model options within the caller's allocation
-   subroutine init_model_options_api(verror, options, bytes) bind(C, name="moist_init_model_options")
+   subroutine init_model_options_api(verror, options, bytes) bind(C, name=namespace//"init_model_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -762,7 +762,7 @@ contains
    end subroutine read_model_options
 
    !> Initialize pcm options within the caller's allocation
-   subroutine init_pcm_options_api(verror, options, bytes) bind(C, name="moist_init_pcm_options")
+   subroutine init_pcm_options_api(verror, options, bytes) bind(C, name=namespace//"init_pcm_options")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Caller-owned options buffer
@@ -851,7 +851,7 @@ contains
    end subroutine copy_options
 
    !> Delete an independently owned LSF handle
-   subroutine delete_lsf_api(handle) bind(C, name="moist_delete_lsf")
+   subroutine delete_lsf_api(handle) bind(C, name=namespace//"delete_lsf")
       !> Handle address, set to NULL on return
       type(c_ptr), intent(inout), optional :: handle
       !> Decoded handle
@@ -864,7 +864,7 @@ contains
    end subroutine delete_lsf_api
 
    !> Create an independent svdw level-set function
-   function new_svdw_lsf_api(verror, options) result(handle) bind(C, name="moist_new_svdw_lsf")
+   function new_svdw_lsf_api(verror, options) result(handle) bind(C, name=namespace//"new_svdw_lsf")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Optional settings
@@ -899,7 +899,7 @@ contains
    end function new_svdw_lsf_api
 
    !> Create an independent cfc level-set function
-   function new_cfc_lsf_api(verror, options) result(handle) bind(C, name="moist_new_cfc_lsf")
+   function new_cfc_lsf_api(verror, options) result(handle) bind(C, name=namespace//"new_cfc_lsf")
       !> Error handle
       type(c_ptr), value, intent(in) :: verror
       !> Optional settings
@@ -935,7 +935,7 @@ contains
 
    !> Create an LSF borrowing a host callback and its context
    function new_isodensity_callback_lsf_api(verror, callback, context, options) result(handle) &
-      bind(C, name="moist_new_isodensity_callback_lsf")
+      bind(C, name=namespace//"new_isodensity_callback_lsf")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Host density callback, borrowed for the lifetime of the LSF
@@ -994,7 +994,8 @@ contains
 
    !> Create an LSF with its own Cartesian Gaussian basis
    function new_isodensity_lsf_api(verror, nshell, c_shell_atom, c_shell_l, &
-                                   c_shell_nprim, c_exps, c_coeffs, options) result(handle) bind(C, name="moist_new_isodensity_lsf")
+                                   c_shell_nprim, c_exps, c_coeffs, options) result(handle) &
+      & bind(C, name=namespace//"new_isodensity_lsf")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Number of contracted Gaussian shells
@@ -1092,7 +1093,7 @@ contains
    end subroutine read_api_radii
 
    !> Construct a drop cavity from copied configuration
-   function create_drop_cavity_api(verror, vlsf, vradii, options) result(handle) bind(C, name="moist_new_drop_cavity")
+   function create_drop_cavity_api(verror, vlsf, vradii, options) result(handle) bind(C, name=namespace//"new_drop_cavity")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Level-set function handle, copied into the cavity
@@ -1160,7 +1161,7 @@ contains
    end function create_drop_cavity_api
 
    !> Construct a iswig cavity from copied configuration
-   function create_iswig_cavity_api(verror, vradii, options) result(handle) bind(C, name="moist_new_iswig_cavity")
+   function create_iswig_cavity_api(verror, vradii, options) result(handle) bind(C, name=namespace//"new_iswig_cavity")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Radii handle; NULL selects defaults in constructors
@@ -1209,7 +1210,7 @@ contains
    end function create_iswig_cavity_api
 
    !> Create a model with an owned cavity copy and optional logging settings
-   function create_model_api(verror, cavity, options) result(handle) bind(C, name="moist_new_model")
+   function create_model_api(verror, cavity, options) result(handle) bind(C, name=namespace//"new_model")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Cavity handle, copied into the model
@@ -1230,7 +1231,7 @@ contains
    end function create_model_api
 
    !> Create a cpcm component with optional solver settings
-   function create_cpcm_component_api(verror, epsilon, options) result(handle) bind(C, name="moist_new_cpcm_component")
+   function create_cpcm_component_api(verror, epsilon, options) result(handle) bind(C, name=namespace//"new_cpcm_component")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Relative dielectric constant
@@ -1251,7 +1252,7 @@ contains
    end function create_cpcm_component_api
 
    !> Create a cosmo component with optional solver settings
-   function create_cosmo_component_api(verror, epsilon, options) result(handle) bind(C, name="moist_new_cosmo_component")
+   function create_cosmo_component_api(verror, epsilon, options) result(handle) bind(C, name=namespace//"new_cosmo_component")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Relative dielectric constant
@@ -1311,7 +1312,7 @@ contains
    end function get_version_api
 
    !> Copy the full release version or query its length, including the prerelease suffix
-   subroutine get_version_string_api(verror, buffer, capacity, length) bind(C, name="moist_get_version_string")
+   subroutine get_version_string_api(verror, buffer, capacity, length) bind(C, name=namespace//"get_version_string")
       !> Required diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Output buffer; NULL is allowed only with zero capacity
@@ -1385,7 +1386,7 @@ contains
    end function check_error_api
 
    !> Copy a bounded diagnostic without modifying the error handle
-   subroutine get_error_api(verror, charptr, buffersize) bind(C, name="moist_get_error")
+   subroutine get_error_api(verror, charptr, buffersize) bind(C, name=namespace//"get_error")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Diagnostic buffer; always null-terminated when capacity permits
@@ -3627,7 +3628,7 @@ contains
 
    !> Copy a field description or query its full length
    subroutine get_cavity_field_about_api(verror, vcav, cname, about, capacity, length) &
-         & bind(C, name="moist_get_cavity_field_about")
+         & bind(C, name=namespace//"get_cavity_field_about")
       !> Required diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Cavity handle
