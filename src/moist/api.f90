@@ -2537,9 +2537,11 @@ contains
 
    !> Host part of the response phase of a solvation model from a staged coupling
    !>
-   !> - cleared on entry, then filled with the complete host part of the
-   !>   response phase: the potential adjoint, the density weights of a field-dependent
-   !>   cavity and the Gaussian amplitudes, whichever the model produces
+   !> - cleared once the getter accepts the request, then filled with the
+   !>   complete host part of the response phase: the potential adjoint, the
+   !>   density weights of a field-dependent cavity and the Gaussian amplitudes,
+   !>   whichever the model produces
+   !> - a rejected request, including an unimplemented theory, leaves it untouched
    !> - walk it with `moist_next_response_item` and copy the arrays of each item
    !>   with `moist_get_response_field_real`
    subroutine general_model_get_response_api(verror, vmodel, vcpl, vresp) &
@@ -2577,9 +2579,11 @@ contains
 
    !> Nuclear gradient of a solvation model from a staged coupling
    !>
-   !> The response handle is cleared on entry and returns the host part of the
-   !> gradient phase (the potential adjoint and Gaussian amplitudes, which the host
-   !> contracts with its own geometry derivatives). `gradient` is Fortran
+   !> The response handle is cleared once the getter accepts the request and
+   !> returns the host part of the gradient phase (the potential adjoint and
+   !> Gaussian amplitudes, which the host contracts with its own geometry
+   !> derivatives); a rejected request, including an unimplemented theory,
+   !> leaves it untouched. `gradient` is Fortran
    !> `(3, nat_cap)`; only the leading `nat` columns are written, after the
    !> capacity check
    subroutine general_model_get_gradient_api(verror, vmodel, vcpl, vresp, &

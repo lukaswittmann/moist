@@ -563,8 +563,9 @@ moist_add_model_component(moist_error error, moist_model model, moist_component 
  *   density-dependent cavity before preparing
  * - Release couplings before their model
  * - Response arrays are independent copies; get_response/get_gradient clear
- *   the response after input validation, which also starts a new walk over
- *   its items
+ *   the response once they accept the request, which also starts a new walk
+ *   over its items; a rejected request, including an unimplemented theory,
+ *   leaves it untouched
  */
 /// Mint a borrowed coupling after the model's first successful update
 /// Several couplings may coexist; every component declares its requests
@@ -616,7 +617,9 @@ moist_get_model_energy(moist_error error,
                        double* energy) moist_API_SUFFIX__V_1_0;
 
 /// Host part of the response phase from a staged coupling. `response` is
-/// cleared after input validation and returns every item the model produces
+/// cleared once the request is accepted and returns every item the model
+/// produces; a rejected request, including an unimplemented theory, leaves it
+/// untouched
 moist_API_ENTRY void moist_API_CALL
 moist_get_model_response(moist_error error,
                          moist_model model,
@@ -624,11 +627,12 @@ moist_get_model_response(moist_error error,
                          moist_response response) moist_API_SUFFIX__V_1_0;
 
 /// Nuclear gradient from a staged coupling, plus the host part of the gradient
-/// phase in `response` (cleared after input validation): the potential adjoint
-/// and the Gaussian amplitudes. Not the "density" item -- see HOST COUPLING
-/// PROTOCOL above for the weights a density-backed cavity carries over from
-/// the response phase. `gradient` is row-major (nat_cap, 3); capacity checked
-/// against the atom count before anything is written. Adds to gradient;
+/// phase in `response` (cleared once the request is accepted; a rejected
+/// request, including an unimplemented theory, leaves it untouched): the
+/// potential adjoint and the Gaussian amplitudes. Not the "density" item -- see
+/// HOST COUPLING PROTOCOL above for the weights a density-backed cavity carries
+/// over from the response phase. `gradient` is row-major (nat_cap, 3); capacity
+/// checked against the atom count before anything is written. Adds to gradient;
 /// initialize logical entries before the first call. On failure the gradient
 /// accumulator is unchanged; padding is untouched
 moist_API_ENTRY void moist_API_CALL

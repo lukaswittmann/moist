@@ -488,11 +488,14 @@ contains
 
    !> Create a HandyMod mapping onto [rmin, rmax]
    !>
+   !> Requires a finite denominator scale a = 2^m*(1 - 2^m + rmax - rmin);
+   !> an infinite a would collapse every mapped radius onto rmin
+   !>
    !> @param[out] mapping  New mapping
    !> @param[in]  rmin     Lower radius in bohr, finite, >= 0
    !> @param[in]  rmax     Upper radius in bohr, finite, rmax - rmin > 2^m - 1
    !> @param[in]  m        Map exponent, finite, > 0
-   !> @param[out] error    Set on invalid parameters
+   !> @param[out] error    Set on invalid parameters, including an infinite a
    subroutine new_handymod_mapping(mapping, rmin, rmax, m, error)
       !> New mapping
       type(moist_math_grid_radial_mapping_handymod_type), intent(out) :: mapping

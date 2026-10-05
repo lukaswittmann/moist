@@ -17,8 +17,10 @@
 !>
 !> - `response_accumulate` finds the item of the same dynamic type and adds to
 !>   it, or appends a copy when there is none yet
-!> - every `get_*` clears the list on entry, so the sum never leaks across
-!>   calls and every walk starts afresh
+!> - a `get_*` clears the list once it accepts the request, so the sum never
+!>   leaks across calls and every walk starts afresh
+!> - a rejected request, including an unimplemented theory, leaves the list
+!>   untouched
 module moist_channels_response
    use mctc_env, only: wp, error_type, fatal_error
    use moist_channels_fields, only: field_query_type
