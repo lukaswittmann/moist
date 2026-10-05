@@ -296,7 +296,7 @@ if(MOIST_TESTS)
 
   # Kept in sync with the `tests` list in test/unit/meson.build
   set(moist_test_suites
-    api parameters utils_timer utils_context utils_mem utils_prettylistprint
+    api parameters utils_timer utils_context utils_mem utils_prettylistprint utils_prettylistprint_threaded
     data radii
     math_linalg math_smoothing_kernels math_adjacency_list math_cell_grid
     math_solvers math_sorters math_trig math_grid
@@ -317,6 +317,7 @@ if(MOIST_TESTS)
     model_continuum channels model_coupling
   )
   # Each run as a selected test, outside test-drive's OpenMP team
+  set(moist_test_selected_utils_prettylistprint_threaded independent_rows)
   set(moist_test_selected_math_grid_3d_threaded
     batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded

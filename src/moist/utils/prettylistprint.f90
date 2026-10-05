@@ -149,9 +149,9 @@ contains
       if (present(column_gap)) plp%column_gap = max(0, column_gap)
       if (present(fmt_len)) plp%fmt_len = max(1, fmt_len)
 
-      plp%fmt_int = int_fmt(plp%fmt_len)
-      plp%fmt_real = fixed_fmt(plp%fmt_len, 4)
-      plp%fmt_exp = exp_fmt(plp%fmt_len, 4)
+      call int_fmt(plp%fmt_len, plp%fmt_int)
+      call fixed_fmt(plp%fmt_len, 4, plp%fmt_real)
+      call exp_fmt(plp%fmt_len, 4, plp%fmt_exp)
       plp%fmt_logical = "L1"
 
       if (present(fmt_int)) plp%fmt_int = trim(fmt_int)
@@ -201,12 +201,14 @@ contains
       !> Pretty list printer instance
       class(prettylistprinter), intent(inout) :: self
       integer :: i
+      character(:), allocatable :: cell
 
       if (self%offset > 0) then
          write (self%unit, "(A)", advance="no") repeat(" ", self%offset)
       end if
       do i = 1, self%ncols
-         write (self%unit, "(A)", advance="no") format_cell(self%headers(i), self%widths(i))
+         call format_cell(self%headers(i), self%widths(i), cell)
+         write (self%unit, "(A)", advance="no") cell
          if (i < self%ncols) write (self%unit, "(A)", advance="no") repeat(" ", self%column_gap)
       end do
       write (self%unit, "(A)") ""
@@ -371,7 +373,7 @@ contains
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         eff_fmt = default_real_fmt(self, real(val, kind=real64))
+         call default_real_fmt(self, real(val, kind=real64), eff_fmt)
       end if
       call add_number(self, val, eff_fmt)
    end subroutine add_r32
@@ -393,7 +395,7 @@ contains
       if (present(fmt)) then
          eff_fmt = trim(fmt)
       else
-         eff_fmt = default_real_fmt(self, val)
+         call default_real_fmt(self, val, eff_fmt)
       end if
       call add_number(self, val, eff_fmt)
    end subroutine add_r64
@@ -410,11 +412,12 @@ contains
       logical, intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
-      character(:), allocatable :: eff_fmt
+      character(:), allocatable :: eff_fmt, text
 
       eff_fmt = self%fmt_logical
       if (present(fmt)) eff_fmt = trim(fmt)
-      call add_from_string(self, value_to_string(val, eff_fmt))
+      call value_to_string(val, eff_fmt, text)
+      call add_from_string(self, text)
    end subroutine add_l
 
    !> Add a character value to current row
@@ -429,9 +432,11 @@ contains
       character(*), intent(in) :: val
       !> Optional format override
       character(*), intent(in), optional :: fmt
+      character(:), allocatable :: text
 
       if (present(fmt)) then
-         call add_from_string(self, value_to_string(val, trim(fmt)))
+         call value_to_string(val, trim(fmt), text)
+         call add_from_string(self, text)
       else
          call add_from_string(self, trim(val))
       end if
@@ -452,13 +457,14 @@ contains
       class(*), intent(in) :: val
       !> Format for this cell
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
+      character(:), allocatable :: s, wide_fmt
 
       ! The column width is read below, so the overrun check comes first
       call ensure_can_add(self)
-      s = value_to_string(val, fmt)
+      call value_to_string(val, fmt, s)
       if (index(s, "*") > 0 .or. len_trim(adjustl(s)) > self%widths(self%next_col)) then
-         s = value_to_string(val, widen_format(fmt))
+         call widen_format(fmt, wide_fmt)
+         call value_to_string(val, wide_fmt, s)
       end if
       call add_from_string(self, s)
    end subroutine add_number
@@ -472,10 +478,12 @@ contains
       class(prettylistprinter), intent(inout) :: self
       !> Cell text
       character(*), intent(in) :: s
+      character(:), allocatable :: cell
 
       call ensure_can_add(self)
       if (self%next_col > 1) self%row = self%row//repeat(" ", self%column_gap)
-      self%row = self%row//format_cell(s, self%widths(self%next_col))
+      call format_cell(s, self%widths(self%next_col), cell)
+      self%row = self%row//cell
       self%next_col = self%next_col + 1
    end subroutine add_from_string
 
@@ -501,27 +509,30 @@ contains
    !>
    !> @param[in] s     Source text
    !> @param[in] width Cell width
-   function format_cell(s, width) result(out)
+   !> @param[out] out Right-aligned output cell
+   subroutine format_cell(s, width, out)
       !> Source text
       character(*), intent(in) :: s
       !> Cell width
       integer, intent(in) :: width
       !> Right-aligned output cell
-      character(:), allocatable :: out
+      character(:), allocatable, intent(out) :: out
       character(:), allocatable :: text
 
       text = trim(adjustl(s))
       out = repeat(" ", max(0, width - len(text)))//text
-   end function format_cell
+   end subroutine format_cell
 
    !> Convert supported scalar values to string using supplied format
    !>
    !> @param[in] val Scalar value
    !> @param[in] fmt Fortran format string without outer parentheses
-   function value_to_string(val, fmt) result(s)
+   !> @param[out] s Formatted scalar text
+   subroutine value_to_string(val, fmt, s)
       class(*), intent(in) :: val
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
+      !> Formatted scalar text
+      character(:), allocatable, intent(out) :: s
       character(buffer_len) :: buf
 
       buf = ""
@@ -537,13 +548,13 @@ contains
          write (buf, "("//trim(fmt)//")") val
       type is (real(real32))
          if (val == 0.0_real32) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, "("//trim(fmt)//")") val
       type is (real(real64))
          if (val == 0.0_real64) then
-            s = zero_value_string(fmt)
+            call zero_value_string(fmt, s)
             return
          end if
          write (buf, "("//trim(fmt)//")") val
@@ -557,14 +568,16 @@ contains
       end select
 
       s = trim(buf)
-   end function value_to_string
+   end subroutine value_to_string
 
    !> Return canonical zero representation based on supplied format width
    !>
    !> @param[in] fmt Fortran format string without outer parentheses
-   function zero_value_string(fmt) result(s)
+   !> @param[out] s Formatted zero text
+   subroutine zero_value_string(fmt, s)
       character(*), intent(in) :: fmt
-      character(:), allocatable :: s
+      !> Formatted zero text
+      character(:), allocatable, intent(out) :: s
       character(buffer_len) :: buf
       integer :: idot, w
 
@@ -577,56 +590,64 @@ contains
       else
          s = "0.0"
       end if
-   end function zero_value_string
+   end subroutine zero_value_string
 
    !> Build fixed real format string
    !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
-   function fixed_fmt(width, decimals) result(fmt)
+   !> @param[out] fmt Fixed-point format
+   subroutine fixed_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      !> Fixed-point format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "F"//trim(wbuf)//"."//trim(dbuf)
-   end function fixed_fmt
+   end subroutine fixed_fmt
 
    !> Build exponential real format string
    !>
    !> @param[in] width    Total field width
    !> @param[in] decimals Digits after decimal point
-   function exp_fmt(width, decimals) result(fmt)
+   !> @param[out] fmt Exponential format
+   subroutine exp_fmt(width, decimals, fmt)
       integer, intent(in) :: width, decimals
-      character(:), allocatable :: fmt
+      !> Exponential format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf, dbuf
 
       write (wbuf, "(I0)") max(1, width)
       write (dbuf, "(I0)") max(0, decimals)
       fmt = "ES"//trim(wbuf)//"."//trim(dbuf)
-   end function exp_fmt
+   end subroutine exp_fmt
 
    !> Build integer format string
    !>
    !> @param[in] width Base width used to derive integer field width
-   function int_fmt(width) result(fmt)
+   !> @param[out] fmt Integer format
+   subroutine int_fmt(width, fmt)
       integer, intent(in) :: width
-      character(:), allocatable :: fmt
+      !> Integer format
+      character(:), allocatable, intent(out) :: fmt
       character(32) :: wbuf
 
       write (wbuf, "(I0)") max(1, width - 7)
       fmt = "I"//trim(wbuf)
-   end function int_fmt
+   end subroutine int_fmt
 
    !> Select default real format from value magnitude
    !>
    !> @param[in] self Pretty list printer instance
    !> @param[in] val  Real64 value
-   function default_real_fmt(self, val) result(fmt)
+   !> @param[out] fmt Selected real format
+   subroutine default_real_fmt(self, val, fmt)
       class(prettylistprinter), intent(in) :: self
       real(real64), intent(in) :: val
-      character(:), allocatable :: fmt
+      !> Selected real format
+      character(:), allocatable, intent(out) :: fmt
       real(real64) :: aval
 
       aval = abs(val)
@@ -637,7 +658,7 @@ contains
       else
          fmt = self%fmt_real
       end if
-   end function default_real_fmt
+   end subroutine default_real_fmt
 
    !> Raise the field width of the first numeric edit descriptor to `wide_width`
    !>
@@ -647,9 +668,11 @@ contains
    !> - literal text before the descriptor keeps the widened field's padding
    !>
    !> @param[in] fmt Fortran format string without outer parentheses
-   function widen_format(fmt) result(wide)
+   !> @param[out] wide Widened format
+   subroutine widen_format(fmt, wide)
       character(*), intent(in) :: fmt
-      character(:), allocatable :: wide
+      !> Widened format
+      character(:), allocatable, intent(out) :: wide
       character(16) :: wbuf
       character(1) :: quote
       integer :: i, istart, iend
@@ -679,7 +702,7 @@ contains
             end if
          end if
       end do
-   end function widen_format
+   end subroutine widen_format
 
    !> Compute total printable table width, including inter-column spaces
    !>

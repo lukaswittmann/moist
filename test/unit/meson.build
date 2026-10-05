@@ -16,6 +16,7 @@ tests = [
   'utils_context',
   'utils_mem',
   'utils_prettylistprint',
+  'utils_prettylistprint_threaded',
   'channels',
   'data',
   'radii',
@@ -72,6 +73,7 @@ test_timeouts = {}
 
 # threaded tests (single testdrive thread)
 test_selected = {
+  'utils_prettylistprint_threaded': ['independent_rows'],
   'math_grid_3d_threaded': [
     'batched_fft_uses_threaded_backend',
     'batched_ifft_uses_threaded_backend',

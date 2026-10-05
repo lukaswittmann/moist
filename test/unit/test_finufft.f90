@@ -6,7 +6,7 @@
 module test_finufft
    use mctc_env, only: wp
    use iso_fortran_env, only: int64
-   use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr
+   use iso_c_binding, only: c_int, c_int64_t, c_double, c_double_complex, c_ptr, c_null_ptr, c_loc
    use finufft_mod, only: finufft_opts
    use testdrive, only: new_unittest, unittest_type, error_type, check, to_string
    implicit none(type, external)
@@ -36,7 +36,7 @@ module test_finufft
    !> FINUFFT entry points with the options argument as a C pointer, so a null
    !> pointer (default options) is passed without an unassociated Fortran pointer
    interface
-      subroutine finufft1d1_default(nj, xj, cj, iflag, eps, ms, fk, opts, ier) &
+      subroutine finufft1d1_c(nj, xj, cj, iflag, eps, ms, fk, opts, ier) &
          & bind(c, name="finufft1d1_")
          import :: c_int, c_int64_t, c_double, c_double_complex, c_ptr
          integer(c_int64_t), intent(in) :: nj
@@ -48,7 +48,7 @@ module test_finufft
          complex(c_double_complex), intent(inout) :: fk(*)
          type(c_ptr), value :: opts
          integer(c_int), intent(out) :: ier
-      end subroutine finufft1d1_default
+      end subroutine finufft1d1_c
 
       subroutine finufft_makeplan_default(ttype, dim, n_modes, iflag, ntrans, eps, plan, opts, ier) &
          & bind(c, name="finufft_makeplan_")
@@ -94,7 +94,7 @@ contains
 
       call make_problem(xj, cj, fk, iflag)
       ! Null options pointer selects FINUFFT's default options
-      call finufft1d1_default(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
+      call finufft1d1_c(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
 
       call check(error, ier == 0, "finufft1d1 (default opts) returned nonzero status")
       if (allocated(error)) return
@@ -102,7 +102,7 @@ contains
       if (allocated(error)) return
 
       iflag = -1
-      call finufft1d1_default(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
+      call finufft1d1_c(npts, xj, cj, iflag, tol, nmodes, fk, c_null_ptr, ier)
       call check(error, ier == 0, "finufft1d1 (negative sign) returned nonzero status")
       if (allocated(error)) return
       call check_mode(error, xj, cj, fk, iflag, centered_modes)
@@ -117,8 +117,8 @@ contains
    subroutine test_1d1_custom(error)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
-      type(finufft_opts) :: opts
-      external :: finufft1d1, finufft_default_opts
+      type(finufft_opts), target :: opts
+      external :: finufft_default_opts
 
       real(wp), allocatable :: xj(:)
       complex(wp), allocatable :: cj(:), fk(:)
@@ -134,7 +134,7 @@ contains
       opts%upsampfac = 1.25_wp
       opts%modeord = fft_modes
 
-      call finufft1d1(npts, xj, cj, iflag, tol, nmodes, fk, opts, ier)
+      call finufft1d1_c(npts, xj, cj, iflag, tol, nmodes, fk, c_loc(opts), ier)
 
       call check(error, ier == 0, "finufft1d1 (custom opts) returned nonzero status")
       if (allocated(error)) return
@@ -246,7 +246,10 @@ contains
          fmax = max(fmax, abs(fkref))
       end do
       call check(error, fmax > 0.0_wp .and. errmax / fmax < thr, &
-         & "FINUFFT 1D type-1 mode error too large")
+         & "FINUFFT 1D type-1 mode error too large", &
+         & more="max absolute error = "//to_string(errmax)// &
+         & "; max reference magnitude = "//to_string(fmax)// &
+         & "; allowed absolute error = "//to_string(thr * fmax))
    end subroutine check_mode
 
 end module test_finufft
