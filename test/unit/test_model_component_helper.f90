@@ -21,7 +21,7 @@ module test_model_component_helper
    public :: fixture_normals_param
    public :: fixture_radial_normals
 
-   !* --------------------- The shared 7-point synthetic surface --------------------- *!
+   !* ---------------------- The shared 7-point synthetic surface --------------------- *!
 
    !> Number of points in the non-symmetric test surface
    integer, parameter :: fixture_ngrid_param = 7

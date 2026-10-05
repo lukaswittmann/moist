@@ -84,9 +84,7 @@ contains
          ]
    end subroutine collect_math_grid
 
-   ! --------------------------------------------------------------------------
-   ! Analytic integrands (module-scope so they match the procedure interfaces)
-   ! --------------------------------------------------------------------------
+   !* --- Analytic integrands (module-scope so they match the procedure interfaces) --- *!
 
    !> Spherically symmetric unit Gaussian f(r) = exp(-r^2)
    !>
@@ -149,9 +147,7 @@ contains
       val = 1.0_wp + 0.0_wp*r(1)   ! reference r to silence unused warning
    end function one_3d
 
-   ! --------------------------------------------------------------------------
-   ! Shared, fully type-agnostic checkers (operate on the abstract bases)
-   ! --------------------------------------------------------------------------
+   !* ------ Shared, fully type-agnostic checkers (operate on the abstract bases) ----- *!
 
    !> Integrate exp(-r^2) over R^3 through a radial grid
    !>
@@ -372,9 +368,7 @@ contains
       call new_radial_grid(grid, recipe, 1, merr)
    end subroutine make_chebyshev_grid
 
-   ! --------------------------------------------------------------------------
-   ! 3D volume grids
-   ! --------------------------------------------------------------------------
+   !* -------------------------------- 3D volume grids -------------------------------- *!
 
    !> Cartesian uniform box grid: integrates a centered 3D Gaussian
    subroutine test_grid_cartesian_3d(error)
@@ -647,9 +641,7 @@ contains
       deallocate (field, fk)
    end subroutine test_grid_molecular_nufft
 
-   ! --------------------------------------------------------------------------
-   ! Structural / contract tests
-   ! --------------------------------------------------------------------------
+   !* -------------------------- Structural / contract tests -------------------------- *!
 
    !> The Chebyshev FBT adjoints must be exact transposes of the forward/backward transforms
    !>
@@ -1084,9 +1076,7 @@ contains
       call grid%destroy()
    end subroutine test_mol_grid_pruning
 
-   ! --------------------------------------------------------------------------
-   ! Chebyshev radial pair: invalid parameters
-   ! --------------------------------------------------------------------------
+   !* ------------------- Chebyshev radial pair: invalid parameters ------------------- *!
 
    !> Fail an expected-failure test only on the targeted library error
    !>

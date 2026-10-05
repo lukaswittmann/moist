@@ -1745,9 +1745,7 @@ contains
       end do
    end subroutine test_internal_screening_equivalence
 
-   !* ===================================================================
-   !*                  Fourth spatial derivative (internal)
-   !* ===================================================================
+   !* ------------ *                  Fourth spatial derivative (internal) ------------ *!
 
    !> Prepare the internal LSF and translate an evaluator failure into a test one
    !>

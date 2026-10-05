@@ -59,9 +59,7 @@ contains
                   ]
    end subroutine collect_math_fft_dst4
 
-   !* -------------------------------------------------------------------------- *!
-   ! Helpers
-   !* -------------------------------------------------------------------------- *!
+   !* ------------------------------------ Helpers ------------------------------------ *!
 
    !> Deterministic, well-conditioned test signal (no RNG state to seed)
    !>
@@ -201,9 +199,7 @@ contains
       end if
    end subroutine make_grid
 
-   !* -------------------------------------------------------------------------- *!
-   !* Plan lifecycle
-   !* -------------------------------------------------------------------------- *!
+   !* -------------------------------- * Plan lifecycle ------------------------------- *!
 
    !> Plan geometry clamps, empty execution, reset and reuse
    subroutine test_dst4_plan_lifecycle(error)
@@ -248,9 +244,7 @@ contains
       call plan%destroy()
    end subroutine test_dst4_plan_lifecycle
 
-   !* -------------------------------------------------------------------------- *!
-   !* Layer 1: the backend against the defining sum                               *!
-   !* -------------------------------------------------------------------------- *!
+   !*  * Layer 1: the backend against the defining sum                               *  *!
 
    !> The backend's DST-IV must be the unnormalised RODFT11 convention
    !>
@@ -276,9 +270,7 @@ contains
       end do
    end subroutine test_dst4_reference_match
 
-   !* -------------------------------------------------------------------------- *!
-   !* Layer 2: structural identities                                             *!
-   !* -------------------------------------------------------------------------- *!
+   !* - * Layer 2: structural identities                                             *  *!
 
    !> The batched call the radial trafo uses must reproduce the single-column one
    !>
@@ -344,9 +336,7 @@ contains
       call check(error, relerr(z, scaled), 0.0_wp, thr=1.0e-14_wp)
    end subroutine test_dst4_involution
 
-   !* -------------------------------------------------------------------------- *!
-   !* Uniform radial pair constructor: invalid parameters                        *!
-   !* -------------------------------------------------------------------------- *!
+   !* - * Uniform radial pair constructor: invalid parameters                        *  *!
 
    !> Fail an expected-failure test only on the targeted library error
    !>
@@ -416,9 +406,7 @@ contains
       call expect_error(error, merr, "finite spacing")
    end subroutine test_bad_uniform_dr_inf
 
-   !* -------------------------------------------------------------------------- *!
-   !* Layer 3: the radial trafo built on the DST-IV                              *!
-   !* -------------------------------------------------------------------------- *!
+   !* - * Layer 3: the radial trafo built on the DST-IV                              *  *!
 
    !> `fbt_k2r . fbt_r2k` is the identity, not merely an approximation
    !>

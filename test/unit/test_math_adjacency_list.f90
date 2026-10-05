@@ -136,13 +136,10 @@ contains
       call nlist%destroy()
    end subroutine test_neighbour_content
 
-   !=========================================================================!
-   ! Sorted path                                                             !
-   !                                                                         !
-   ! The iSwiG switching function walks a row and terminates with exit as    !
-   ! soon as dist exceeds a per-atom break threshold, so ascending order and !
-   ! the dist/nlat pairing are load-bearing for production correctness.      !
-   !=========================================================================!
+   !* ---------------------------------- Sorted path ---------------------------------- *!
+   ! The iSwiG switching function walks a row and terminates with exit as
+   ! soon as dist exceeds a per-atom break threshold, so ascending order and
+   ! the dist/nlat pairing are load-bearing for production correctness.
 
    !> With sorted=.true. every row must be non-decreasing in distance
    subroutine test_sorted_distances_ascending(error)
@@ -367,9 +364,7 @@ contains
       call nlist%destroy()
    end subroutine test_sorted_early_exit_contract
 
-   !=========================================================================!
-   ! Cell grid                                                               !
-   !=========================================================================!
+   !* ----------------------------------- Cell grid ----------------------------------- *!
 
    !> Many-cell brute-force comparison
    !>
@@ -531,9 +526,7 @@ contains
       call nlist%destroy()
    end subroutine test_pair_symmetry
 
-   !=========================================================================!
-   ! Degenerate input and object lifecycle                                   !
-   !=========================================================================!
+   !* --------------------- Degenerate input and object lifecycle --------------------- *!
 
    !> Zero and one point must produce a valid, empty list
    subroutine test_empty_and_single_point(error)
@@ -727,9 +720,7 @@ contains
       call fresh%destroy()
    end subroutine test_init_resets_sorted
 
-   !=========================================================================!
-   ! Helpers                                                                 !
-   !=========================================================================!
+   !* ------------------------------------ Helpers ------------------------------------ *!
 
    !> Central point surrounded by seven others at pairwise distinct distances
    pure subroutine star_cluster(xyz)

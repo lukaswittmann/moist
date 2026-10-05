@@ -1687,7 +1687,7 @@ contains
             call lsf%hvp_f2_r_rA(v, h2, vrad)
             call lsf%hvp_f3_rr_rA(v, h3, vrad)
 
-            !* ------------------------- the radius row -------------------------- *!
+            !* --------------------------------- the radius row -------------------------------- *!
             do iA = 1, lsf%active_count()
                acc = 0.0_wp
                do iB = 1, lsf%active_count()
@@ -1726,7 +1726,7 @@ contains
                end do
             end do
 
-            !* --- the position row, whose radius half is the nuclear-radius block again --- *!
+            !* ----- the position row, whose radius half is the nuclear-radius block again ----- *!
             do iA = 1, lsf%active_count()
                do s_ax = 1, ndim
                   acc = 0.0_wp
@@ -2982,7 +2982,7 @@ contains
             call prim%f3_r_rArB(f3_r_rArB)
             call prim%f4_rr_rArB(f4_rr_rArB)
 
-            !* --------------------------- tangent_* ---------------------------- *!
+            !* ----------------------------------- tangent_* ----------------------------------- *!
             ref0 = 0.0_wp
             ref1 = 0.0_wp
             ref2 = 0.0_wp
@@ -3023,7 +3023,7 @@ contains
                end do
             end do
 
-            !* ----------------------------- hvp_* ------------------------------ *!
+            !* ------------------------------------- hvp_* ------------------------------------- *!
             call prim%hvp_f1_rA(v, h1)
             call prim%hvp_f2_r_rA(v, h2)
             call prim%hvp_f3_rr_rA(v, h3)
@@ -3064,7 +3064,7 @@ contains
                end do
             end do
 
-            !* ---------------------------- vjp_f1_rA --------------------------- *!
+            !* ----------------------------------- vjp_f1_rA ----------------------------------- *!
             w0_adj = 0.37_wp
             w1_adj = [0.19_wp, -0.53_wp, 0.71_wp]
             do k = 1, ndim
@@ -3085,7 +3085,7 @@ contains
                end do
             end do
 
-            !* --------------------------- vjp_f1_rad --------------------------- *!
+            !* ----------------------------------- vjp_f1_rad ---------------------------------- *!
             call prim%f3_rr_rad(rad1, rad2, rad3)
             call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
             do iA = 1, prim%active_count()
@@ -3096,7 +3096,7 @@ contains
                if (allocated(error)) return
             end do
 
-            !* ---------------- nuclear Hessian exchange symmetry ---------------- *!
+            !* ----------------------- nuclear Hessian exchange symmetry ----------------------- *!
             do iB = 1, prim%active_count()
                do iA = 1, prim%active_count()
                   do t_ax = 1, ndim
@@ -3683,7 +3683,7 @@ contains
             call prim%f3_r_rArB(f3_r_rArB)
             call prim%f4_rr_rArB(f4_rr_rArB)
 
-            !* --------------------------- tangent_* ---------------------------- *!
+            !* ----------------------------------- tangent_* ----------------------------------- *!
             ref0 = 0.0_wp
             ref1 = 0.0_wp
             ref2 = 0.0_wp
@@ -3724,7 +3724,7 @@ contains
                end do
             end do
 
-            !* ----------------------------- hvp_* ------------------------------ *!
+            !* ------------------------------------- hvp_* ------------------------------------- *!
             call prim%hvp_f1_rA(v, h1)
             call prim%hvp_f2_r_rA(v, h2)
             call prim%hvp_f3_rr_rA(v, h3)
@@ -3765,7 +3765,7 @@ contains
                end do
             end do
 
-            !* ---------------------------- vjp_f1_rA --------------------------- *!
+            !* ----------------------------------- vjp_f1_rA ----------------------------------- *!
             ! Reverse `tangent_*`: contract jet indices, retain nuclear index
             ! Asymmetric `w2` exposes folded Hessian slots
             w0_adj = 0.37_wp
@@ -3788,7 +3788,7 @@ contains
                end do
             end do
 
-            !* --------------------------- vjp_f1_rad --------------------------- *!
+            !* ----------------------------------- vjp_f1_rad ---------------------------------- *!
             ! Radius-ladder contraction; one scalar per active atom
             call prim%f3_rr_rad(rad1, rad2, rad3)
             call prim%vjp_f1_rad(w0_adj, w1_adj, w2_adj, vjp_rad)
@@ -3800,7 +3800,7 @@ contains
                if (allocated(error)) return
             end do
 
-            !* ---------------- nuclear Hessian exchange symmetry ---------------- *!
+            !* ----------------------- nuclear Hessian exchange symmetry ----------------------- *!
             ! Swap both nuclear slots in d2S/(dR_A dR_B)
             ! Compare distinct `qq` pair calls with A/B reversed
             do iB = 1, prim%active_count()

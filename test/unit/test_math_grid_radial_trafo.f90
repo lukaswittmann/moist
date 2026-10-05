@@ -83,9 +83,7 @@ contains
          ]
    end subroutine collect_math_grid_radial_trafo
 
-   ! --------------------------------------------------------------------------
-   ! Helpers
-   ! --------------------------------------------------------------------------
+   !* ------------------------------------ Helpers ------------------------------------ *!
 
    !> Deterministic, well-conditioned test signal
    !>
@@ -398,9 +396,7 @@ contains
       call check(error, .not. allocated(trafo), what//": trafo allocated despite the error")
    end subroutine expect_factory_error
 
-   ! --------------------------------------------------------------------------
-   ! Factory
-   ! --------------------------------------------------------------------------
+   !* ------------------------------------ Factory ------------------------------------ *!
 
    !> A uniform pair selects DST-IV and exposes the recorded spacings
    subroutine test_factory_dst4(error)
@@ -648,9 +644,7 @@ contains
       call expect_factory_error(error, r1, k1, "k spacing does not match", "dk one ULP off")
    end subroutine test_factory_dst4_spacing
 
-   ! --------------------------------------------------------------------------
-   ! DST-IV
-   ! --------------------------------------------------------------------------
+   !* ------------------------------------- DST-IV ------------------------------------ *!
 
    !> DST-IV transforms of Gaussians match the closed-form 3D Fourier transform
    !>
@@ -777,9 +771,7 @@ contains
       end do
    end subroutine test_dst4_round_trip
 
-   ! --------------------------------------------------------------------------
-   ! General quadrature
-   ! --------------------------------------------------------------------------
+   !* ------------------------------- General quadrature ------------------------------ *!
 
    !> Window errors of both quadrature transforms of a Gaussian at n nodes
    !>
@@ -956,9 +948,7 @@ contains
       end do
    end subroutine test_quadrature_vs_dst4
 
-   ! --------------------------------------------------------------------------
-   ! Contracts shared by both implementations
-   ! --------------------------------------------------------------------------
+   !* -------------------- Contracts shared by both implementations ------------------- *!
 
    !> Both adjoints are the transposes: <T a, b> = <a, T^T b>
    !>
@@ -1273,9 +1263,7 @@ contains
       end do
    end subroutine test_clone
 
-   ! --------------------------------------------------------------------------
-   ! Minimal scale trafo for the base defaults
-   ! --------------------------------------------------------------------------
+   !* ------------------- Minimal scale trafo for the base defaults ------------------- *!
 
    !> No implementation tag
    !>

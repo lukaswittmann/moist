@@ -34,7 +34,7 @@ module test_model_component_gostshyp
    !> Tolerance for values that must agree to roundoff
    real(wp), parameter :: thr = 100*epsilon(1.0_wp)
 
-   !* ------------------------- The model solute density ------------------------- *!
+   !* ---------------------------- The model solute density --------------------------- *!
 
    !> Number of s-Gaussians in the model density
    integer, parameter :: nprim = 2

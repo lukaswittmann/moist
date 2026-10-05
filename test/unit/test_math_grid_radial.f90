@@ -206,9 +206,7 @@ contains
       call check(error, allocated(merr), "Knowles mapping: non-finite mapped weight")
    end subroutine test_mapping_overflow
 
-   ! --------------------------------------------------------------------------
-   ! Integrands and helpers
-   ! --------------------------------------------------------------------------
+   !* ----------------------------- Integrands and helpers ---------------------------- *!
 
    !> Spherically symmetric unit Gaussian f(r) = exp(-r^2)
    !>
@@ -343,9 +341,7 @@ contains
       dev = maxval(abs(a - b)/abs(b))
    end function max_rel_dev
 
-   ! --------------------------------------------------------------------------
-   ! Linear mapping
-   ! --------------------------------------------------------------------------
+   !* --------------------------------- Linear mapping -------------------------------- *!
 
    !> Linear mapping with Gauss-Legendre integrates r^j exactly on [a, b] for j <= 2n-1
    subroutine test_linear_polynomial(error)
@@ -416,9 +412,7 @@ contains
       end do
    end subroutine test_linear_scaled_rule
 
-   ! --------------------------------------------------------------------------
-   ! Becke mapping
-   ! --------------------------------------------------------------------------
+   !* --------------------------------- Becke mapping --------------------------------- *!
 
    !> Becke mapping reproduces Gaussian and exponential moments on [0, inf)
    !>
@@ -609,9 +603,7 @@ contains
       call check(error, .not. (rx == rx), "Becke map: expected NaN outside [-1, 1]")
    end subroutine test_becke_errors
 
-   ! --------------------------------------------------------------------------
-   ! HandyMod mapping
-   ! --------------------------------------------------------------------------
+   !* -------------------------------- HandyMod mapping ------------------------------- *!
 
    !> HandyMod with Gauss-Legendre reproduces finite-interval volume and exponential moments
    subroutine test_handymod_integrals(error)
@@ -753,9 +745,7 @@ contains
       call check(error, allocated(merr), "HandyMod mapping: node and weight sizes must match")
    end subroutine test_handymod_errors
 
-   ! --------------------------------------------------------------------------
-   ! Knowles mapping
-   ! --------------------------------------------------------------------------
+   !* -------------------------------- Knowles mapping -------------------------------- *!
 
    !> Knowles mapping reproduces exponential and Gaussian moments on [0, inf)
    !>
@@ -971,9 +961,7 @@ contains
       call check(error, allocated(merr), "Knowles mapping: x = -1 must be rejected for k < 1")
    end subroutine test_knowles_errors
 
-   ! --------------------------------------------------------------------------
-   ! All mappings
-   ! --------------------------------------------------------------------------
+   !* ---------------------------------- All mappings --------------------------------- *!
 
    !> Build one of five configured mappings behind the abstract type
    !>
@@ -1092,9 +1080,7 @@ contains
       end do
    end subroutine test_mapping_copy
 
-   ! --------------------------------------------------------------------------
-   ! Radial recipe and grid
-   ! --------------------------------------------------------------------------
+   !* ----------------------------- Radial recipe and grid ---------------------------- *!
 
    !> Cutoffs drop r < rcut_lower and r > rcut_upper; counts record the truncation
    !>
@@ -1359,9 +1345,7 @@ contains
          & "Radial recipe: element grids must scale with covalent_rad(z)")
    end subroutine test_recipe_element
 
-   ! --------------------------------------------------------------------------
-   ! Uniform radial pair
-   ! --------------------------------------------------------------------------
+   !* ------------------------------ Uniform radial pair ------------------------------ *!
 
    !> Uniform pair: midpoint nodes, constant weights, DST-IV tags and spacings
    !>

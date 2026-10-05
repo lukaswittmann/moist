@@ -763,7 +763,7 @@ contains
       xi0 = query%rvals
    end function cavity_xi0
 
-   !* ------------------------ Geometry and numeric utilities ------------------------- *!
+   !* ------------------------- Geometry and numeric utilities ------------------------ *!
 
    !> Five-carbon cross, converted to bohr
    !>
@@ -865,7 +865,7 @@ contains
       dev = abs(a - b)/(1.0_wp + abs(b))
    end function rel_deviation
 
-   !* ------------------------ Dataset and sampling internals ------------------------- *!
+   !* ------------------------- Dataset and sampling internals ------------------------ *!
 
    !> Dispatch to the per-dataset records getter. Caller frees `records`
    subroutine load_dataset(name, records)
@@ -941,7 +941,7 @@ contains
       u = real(ishft(state, -33), wp)/real(2_int64**31, wp)
    end function lcg_uniform
 
-   !* -------------------------- Legacy radii and numbering --------------------------- *!
+   !* --------------------------- Legacy radii and numbering -------------------------- *!
 
    !> Fill per-atom radii from the legacy per-element table
    !>

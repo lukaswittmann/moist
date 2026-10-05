@@ -1005,9 +1005,7 @@ contains
       end do
    end function sym4_22_full_ref
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/lusol (moist_math_linalg_lusol_ez%solve)
-   !===========================================================================
+   !* ---- Raw-kernel ports: jacobwilliams/lusol (moist_math_linalg_lusol_ez%solve) --- *!
    ! Solve sparse systems supplied in coordinate (COO) form and verify a
    ! near-zero residual ||A*x - b||. Reference problems are from lusol_test.f90
 
@@ -1054,9 +1052,7 @@ contains
                  "LUSOL 3x4 residual too large")
    end subroutine test_lusol_rectangular_3x4
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/LSQR (lsqr_solver_ez)
-   !===========================================================================
+   !* ------------- Raw-kernel ports: jacobwilliams/LSQR (lsqr_solver_ez) ------------- *!
    ! Same COO systems as the LUSOL ports, driven through the object-oriented
    ! lsqr_solver_ez. The Paige-Saunders generator path is covered by the LSMR
    ! ports below
@@ -1117,9 +1113,7 @@ contains
                  "LSQR 3x4 residual too large")
    end subroutine test_lsqr_rectangular_3x4
 
-   !===========================================================================
-   ! Raw-kernel ports: jacobwilliams/LSMR (matrix-free Paige-Saunders problem)
-   !===========================================================================
+   !* --- Raw-kernel ports: jacobwilliams/LSMR (matrix-free Paige-Saunders problem) --- *!
    ! A = Y*D*Z applied matrix-free via the Aprod callbacks; lstp builds b from a
    ! known xtrue and LSMR must recover it. Three groups sweep damping values
 

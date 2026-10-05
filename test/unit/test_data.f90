@@ -79,7 +79,7 @@ contains
                   ]
    end subroutine collect_data
 
-    !* -------------------------------- Private helpers ------------------------------- *!
+    !* -------------------------------- Private helpers -------------------------------- *!
 
    !> Dispatch to one of the element-indexed accessors by tag
    subroutine lookup_num(tag, num, val, err)
