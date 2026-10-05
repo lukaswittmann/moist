@@ -112,8 +112,6 @@ contains
    end subroutine collect_cavity_drop_nuclear_adjoint
 
    !> Every surface-adjoint channel driven simultaneously
-   !>
-   !> @param[out] error  Error handle
    subroutine test_all_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -130,8 +128,6 @@ contains
    !> softmax reverse pass and its explicit owner term completely untested
    !> A near-symmetric dimer under multistart projection does branch, and
    !> [[run_equivalence]] asserts that it actually did
-   !>
-   !> @param[out] error  Error handle
    subroutine test_branching_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -156,8 +152,6 @@ contains
    !> A channel that the reverse path drops entirely would still pass the
    !> combined test if another channel dominated the sum, so each one is also
    !> checked in isolation with its own non-vacuity guard
-   !>
-   !> @param[out] error  Error handle
    subroutine test_single_channels(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -189,8 +183,6 @@ contains
    !> are keyed on the persistent `cavity%numbering` and restricted to points
    !> that survive at every stencil geometry -- otherwise a point appearing or
    !> vanishing would put a step discontinuity into L
-   !>
-   !> @param[out] error  Error handle
    subroutine test_branching_xi_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -383,8 +375,6 @@ contains
    !> The two paths are required to agree, not merely to be close: the
    !> gradient-side surface weights were chosen to reproduce exactly the set
    !> of terms the forward path assembles
-   !>
-   !> @param[out] error  Error handle
    subroutine test_model_forward_reverse(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -546,8 +536,6 @@ contains
    end subroutine build_model
 
    !> A mis-shaped gradient accumulator must be rejected, not silently ignored
-   !>
-   !> @param[out] error  Error handle
    subroutine test_shape_guard(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error

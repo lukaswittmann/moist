@@ -317,8 +317,6 @@ contains
    !> paths through the same masking, so a mask applied in one and not the other
    !> shows up as a mismatch here rather than as an unclosable finite difference
    !> three layers up
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_energy(error)
 
       !> Error handling
@@ -438,8 +436,6 @@ contains
    !> correctness. All four channels stay enabled -- the area reaches the energy
    !> twice over, explicitly and through the Gaussian width, and the harness
    !> folds `w_a` into both scalar channels
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_surface_weights(error)
 
       !> Error handling
@@ -546,8 +542,6 @@ contains
    !> that route itself. A nonzero `w_f` would double-count it. Pinned here
    !> rather than left to a comment because the harness cannot tell a genuine
    !> `w_f` from an area contribution that leaked into it
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_w_f_zero(error)
 
       !> Error handling
@@ -600,8 +594,6 @@ contains
    !>
    !> Driven with the moment request left unanswered, so a missing short
    !> circuit is observable as the error the component raises when it reads it
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_short_circuit(error)
 
       !> Error handling
@@ -781,8 +773,6 @@ contains
    !> set is the natural failure. It must be loud: silently reusing moments from
    !> the previous geometry would produce a plausible energy for a surface that
    !> no longer exists
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_guards(error)
 
       !> Error handling
@@ -908,8 +898,6 @@ contains
    !> double: the energy would look plausible while the amplitude the host folds
    !> into its Fock matrix is an infinity. Both are pinned, because only one of
    !> them shows the damage
-   !>
-   !> @param[out] error Error handling
    subroutine test_gostshyp_nonfinite(error)
 
       !> Error handling

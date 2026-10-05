@@ -534,8 +534,6 @@ contains
    end function rho_reference
 
    !> Analytic density value matches the independent direct evaluation
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_value_reference(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -559,8 +557,6 @@ contains
    end subroutine test_gto_value_reference
 
    !> Analytic gradient matches a 4-point central FD of the density
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_grad_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -598,8 +594,6 @@ contains
    end subroutine test_gto_grad_fd
 
    !> Analytic Hessian matches a 4-point central FD of the gradient
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_hess_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -640,8 +634,6 @@ contains
 
    !> Analytic third derivative matches a Richardson-extrapolated 4-point central
    !> FD of the Hessian (steps h and h/2), which cancels the h^4 truncation term
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_third_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -694,8 +686,6 @@ contains
    end subroutine test_gto_third_fd
 
    !> Analytic fourth derivative matches a 4-point central FD of the third
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_gto_fourth_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1356,8 +1346,6 @@ contains
    end subroutine build_callback_lsf
 
    !> Both isodensity backends must describe the same level set
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_vs_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1368,8 +1356,6 @@ contains
    end subroutine test_internal_vs_callback
 
    !> Body of [[test_internal_vs_callback]], run under the `cb_gto` lock
-   !>
-   !> @param[out] error Set on mismatch
    subroutine run_internal_vs_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1476,8 +1462,6 @@ contains
 
    !> max_deriv must gate what the internal backend caches, without disturbing
    !> the orders that are still requested
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_max_deriv_internal(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1529,8 +1513,6 @@ contains
    end subroutine test_max_deriv_internal
 
    !> max_deriv must gate what the callback backend requests through the ABI
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_max_deriv_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1541,8 +1523,6 @@ contains
    end subroutine test_max_deriv_callback
 
    !> Body of [[test_max_deriv_callback]], run under the `cb_gto` lock
-   !>
-   !> @param[out] error Set on contract violation
    subroutine run_max_deriv_callback(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1640,8 +1620,6 @@ contains
    !> evaluation) and neighbor_cutoff degrades the cavity cell grid to a full
    !> scan. A tight positive threshold must reproduce that exact result at both
    !> near and far points, otherwise the screening bound is not conservative
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_screening_equivalence(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1796,8 +1774,6 @@ contains
    !> This is the LSF-level counterpart of [[test_gto_fourth_fd]]: it covers the
    !> sign/scale lift, the `(3,3,3,3)` cache and the `tmm` scratch that the bare
    !> evaluator test does not touch
-   !>
-   !> @param[out] error Set on mismatch
    subroutine test_internal_fourth_fd(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1897,8 +1873,6 @@ contains
    !> its published C ABI stops at the third derivative, so `set_max_deriv(4)`
    !> must still leave `prepared_deriv` at 3 rather than claim an order it cannot
    !> deliver
-   !>
-   !> @param[out] error Set on contract violation
    subroutine test_internal_fourth_gating(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -1980,8 +1954,6 @@ contains
 
    !> Body of the callback half of [[test_internal_fourth_gating]], run under the
    !> `cb_gto` lock
-   !>
-   !> @param[out] error Set on contract violation
    subroutine run_callback_fourth_cap(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error

@@ -233,8 +233,6 @@ contains
    !> - every table case is in the data, in order, with the table's kind,
    !>   label, atom count and Lebedev count
    !> - the data holds no other case
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_data_matches_table(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -294,8 +292,6 @@ contains
    end subroutine test_data_matches_table
 
    !> Case 1, `iswig_mb16_43`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_01(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -303,8 +299,6 @@ contains
    end subroutine test_case_01
 
    !> Case 2, `iswig_heavy28`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_02(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -312,8 +306,6 @@ contains
    end subroutine test_case_02
 
    !> Case 3, `iswig_amino20x4`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_03(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -321,8 +313,6 @@ contains
    end subroutine test_case_03
 
    !> Case 4, `iswig_but14diol`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_04(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -330,8 +320,6 @@ contains
    end subroutine test_case_04
 
    !> Case 5, `iswig_upu23`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_05(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -339,8 +327,6 @@ contains
    end subroutine test_case_05
 
    !> Case 6, `numsa_mb16_43`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_06(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -348,8 +334,6 @@ contains
    end subroutine test_case_06
 
    !> Case 7, `numsa_heavy28`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_07(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -357,8 +341,6 @@ contains
    end subroutine test_case_07
 
    !> Case 8, `numsa_amino20x4`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_08(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -366,8 +348,6 @@ contains
    end subroutine test_case_08
 
    !> Case 9, `numsa_but14diol`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_09(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -375,8 +355,6 @@ contains
    end subroutine test_case_09
 
    !> Case 10, `numsa_upu23`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_10(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -384,8 +362,6 @@ contains
    end subroutine test_case_10
 
    !> Case 11, `drop_svdw_mb16_43`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_11(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -393,8 +369,6 @@ contains
    end subroutine test_case_11
 
    !> Case 12, `drop_svdw_heavy28`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_12(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -402,8 +376,6 @@ contains
    end subroutine test_case_12
 
    !> Case 13, `drop_svdw_amino20x4`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_13(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -411,8 +383,6 @@ contains
    end subroutine test_case_13
 
    !> Case 14, `drop_svdw_but14diol`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_14(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -420,8 +390,6 @@ contains
    end subroutine test_case_14
 
    !> Case 15, `drop_svdw_upu23`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_15(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -429,8 +397,6 @@ contains
    end subroutine test_case_15
 
    !> Case 16, `drop_cfc_mb16_43`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_16(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -438,8 +404,6 @@ contains
    end subroutine test_case_16
 
    !> Case 17, `drop_cfc_heavy28`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_17(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -447,8 +411,6 @@ contains
    end subroutine test_case_17
 
    !> Case 18, `drop_cfc_amino20x4`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_18(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -456,8 +418,6 @@ contains
    end subroutine test_case_18
 
    !> Case 19, `drop_cfc_but14diol`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_19(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error
@@ -465,8 +425,6 @@ contains
    end subroutine test_case_19
 
    !> Case 20, `drop_cfc_upu23`, against its data block
-   !>
-   !> @param[out] error  testdrive failure
    subroutine test_case_20(error)
       !> testdrive failure
       type(error_type), allocatable, intent(out) :: error

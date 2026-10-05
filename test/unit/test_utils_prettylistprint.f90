@@ -36,8 +36,6 @@ contains
    end subroutine collect_utils_prettylistprint
 
    !> A well-formed printer produces a header and one row
-   !>
-   !> @param[out] error Error handle
    subroutine test_healthy_printer_emits(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -153,8 +151,6 @@ contains
    end subroutine test_real_overflow_in_full
 
    !> Integer kinds and per-cell overrides retain distinct scalar values
-   !>
-   !> @param[out] error Error handle
    subroutine test_scalar_kinds(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -261,8 +257,6 @@ contains
    end subroutine test_real_formats
 
    !> Header routing, row reset and configurable gaps
-   !>
-   !> @param[out] error Error handle
    subroutine test_state_and_spacing(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error
@@ -336,8 +330,6 @@ contains
    end subroutine test_decoration_content
 
    !> Constructor formats and logical overrides are honored independently
-   !>
-   !> @param[out] error Error handle
    subroutine test_constructor_formats(error)
       !> Error handle
       type(error_type), allocatable, intent(out) :: error

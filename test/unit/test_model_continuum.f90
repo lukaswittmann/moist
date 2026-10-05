@@ -56,8 +56,6 @@ contains
    end subroutine collect_model_continuum
 
 !> Single-component coverage for the continuum list-based solvation model
-!>
-!> @param[out] error Test error
    subroutine test_continuum_model_smoke(error)
 
       !> Error handling
@@ -271,8 +269,6 @@ contains
    end subroutine test_continuum_model_smoke
 
 !> Smoke test for a two-component (CPCM + PV) continuum solvation model
-!>
-!> @param[out] error Test error
    subroutine test_continuum_model_pv_smoke(error)
 
       !> Error handling
@@ -484,8 +480,6 @@ contains
 !>
 !> A coupling minted by one model is refused by every other model, and a
 !> model without an internal isodensity cavity refuses a density
-!>
-!> @param[out] error Test error
    subroutine test_continuum_model_guards(error)
 
       !> Error handling

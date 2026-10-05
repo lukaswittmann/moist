@@ -68,8 +68,6 @@ contains
 !> contraction would show up. The pressures span ambient to extreme; one atomic
 !> unit of pressure is about 29.4 TPa, so the top of the sweep is far above any
 !> physical solvation pressure and makes the PV term dominate outright
-!>
-!> @param[out] error Error handling
    subroutine test_pv_sphere_volume(error)
 
       !> Error handling
@@ -203,8 +201,6 @@ contains
 !> where an accumulation was meant into a failure; the exact pressure scaling is
 !> then checked separately, where it can be asserted to roundoff instead of to
 !> finite-difference accuracy
-!>
-!> @param[out] error Error handling
    subroutine test_pv_nuclear_gradient(error)
 
       !> Error handling
@@ -355,8 +351,6 @@ contains
 !> being tested. Unlike CPCM, the volume depends on the normals, so all four
 !> channels stay enabled. The pressure is deliberately not one, so a dropped
 !> prefactor cannot hide
-!>
-!> @param[out] error Error handling
    subroutine test_pv_surface_weights(error)
 
       !> Error handling
@@ -499,8 +493,6 @@ contains
 !> A zero pressure must short-circuit before the cavity is asked for anything
 !> Driven on a NUMSA cavity, which never fills the per-point volume derivatives,
 !> so a missing short circuit is observable as the error PV raises without them
-!>
-!> @param[out] error Error handling
    subroutine test_pv_short_circuit(error)
 
       !> Error handling
@@ -577,8 +569,6 @@ contains
 !> The lifecycle guards: a cavity that was never updated carries no volume, a
 !> volume contribution produces no host-trace potential, and a mis-shaped
 !> gradient accumulator is rejected without being written to
-!>
-!> @param[out] error Error handling
    subroutine test_pv_guards(error)
 
       !> Error handling

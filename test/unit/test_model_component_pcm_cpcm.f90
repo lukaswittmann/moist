@@ -2081,8 +2081,6 @@ contains
 !>
 !> are active because rebuilding the iSwiG cavity moves its  grid points and changes
 !> its switching factors while the source charges move with the nuclei
-!>
-!> @param[out] error Test failure
    subroutine test_cpcm_nuclear_gradient(error)
 
       !> Test failure
@@ -2311,8 +2309,6 @@ contains
 !> construction (the direct term) and the host position weight through the
 !> complete component entry point, and pins that a mis-shaped weight answer
 !> is refused before the accumulator is touched
-!>
-!> @param[out] error Test failure
    subroutine test_cpcm_external_nuclear_gradient(error)
 
       !> Test failure

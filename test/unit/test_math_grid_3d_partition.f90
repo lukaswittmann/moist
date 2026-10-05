@@ -414,7 +414,6 @@ contains
    !>   parallel path is exercised in every environment; skips without
    !>   OpenMP or on a single processor
    !> - Fails inside an enclosing team, where the routine cannot thread
-   !>
    subroutine test_threaded_matches_serial(error)
       !> Test failure, or set by `skip_test`
       type(error_type), allocatable, intent(out) :: error
@@ -512,7 +511,6 @@ contains
    !>   kept beyond the default stiffness
    !> - Bump switch: logistic interior value, complement, super-polynomial tail
    !> - Legacy SSF option and an explicit SSF width `a`
-   !>
    subroutine test_compact_switches(error)
       !> Test failure
       type(error_type), allocatable, intent(out) :: error
