@@ -43,7 +43,6 @@ from .parameters import (
     DROPParameters,
     ISwiGParameters,
     IsodensityParameters,
-    ModelParameters,
     PCMParameters,
     SvdWParameters,
 )
@@ -58,7 +57,6 @@ __all__ = [
     "CFCParameters",
     "IsodensityParameters",
     "PCMParameters",
-    "ModelParameters",
     "Radii",
     "CPCMRadii",
     "SMDRadii",

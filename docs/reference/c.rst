@@ -6,7 +6,9 @@ C API
 Construction
 ------------
 
-Construct radii and a level-set function (LSF), then a cavity and model.
+Construct a run context, radii and a level-set function (LSF), then a cavity
+and model. The model requires the context; a cavity or component without one
+runs on its model's.
 DROP requires an LSF; iSwiG does not. NULL radii selects CPCM radii.
 NULL options selects defaults. To override settings, initialize the typed
 options with the caller's ``sizeof`` before assigning fields:
@@ -21,13 +23,13 @@ options with the caller's ``sizeof`` before assigning fields:
    options.nleb = 194;
 
    moist_lsf lsf = moist_new_svdw_lsf(error, NULL);
-   moist_cavity cavity = moist_new_drop_cavity_with_context(error, context, lsf, NULL, &options);
+   moist_cavity cavity = moist_new_drop_cavity(error, NULL, lsf, NULL, &options);  /* NULL: the model's context */
    moist_delete(lsf);  /* cavity owns a copy */
-   moist_model model = moist_new_model(error, cavity, NULL);
+   moist_model model = moist_new_model(error, context, cavity);
    moist_delete(cavity);  /* model owns a copy */
    moist_delete(context);  /* model retains the shared context */
 
-   moist_component pcm = moist_new_cpcm_component(error, 78.4, NULL);
+   moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
    moist_add_model_component(error, model, pcm);  /* model owns a copy */
    moist_delete(pcm);
    moist_structure mol = moist_new_structure(error, natoms, numbers, positions,
@@ -38,7 +40,7 @@ options with the caller's ``sizeof`` before assigning fields:
 Add every component before the first ``moist_update_model``; later additions
 are rejected.
 
-SvdW, CFC, isodensity, DROP, iSwiG, PCM, and model settings have separate
+SvdW, CFC, isodensity, DROP, iSwiG and PCM settings have separate
 options types. ``struct_size`` is set by the initializer; do not modify it.
 The complete 1.0 layout is the minimum size; existing fields keep their offsets
 and meanings, and future libraries default fields an older struct lacks.
@@ -47,13 +49,15 @@ unknown trailing fields are ignored by constructors and untouched by initializer
 
 ``moist_new_context(error, nthreads, verbosity, debug)`` mirrors the Fortran ``new_context(ctx, nthreads=, verbosity=, debug=)``; C has no optional arguments, so pass ``0, 0, false`` for the defaults.
 The thread count is fixed for the context's lifetime: a positive count is used as given, ``0`` takes the calling thread's ``omp_get_max_threads()`` at construction, and a negative count is an error.
-``verbosity`` and ``debug`` override cavity/model logging options.
+``verbosity`` and ``debug`` are the only logging settings; the options structs carry none.
 
-Pass the context to ``moist_new_drop_cavity_with_context``, ``moist_new_iswig_cavity_with_context`` or ``moist_new_model_with_context``.
-A model inherits its cavity's context unless given another, also from a cavity borrowed with ``moist_get_model_cavity``; its cavity copy and components share it.
-Existing constructors and NULL contexts retain defaults.
+Every cavity, component and model constructor takes the context as its second argument.
+``moist_new_model`` refuses a NULL context; a cavity or component accepts NULL.
+A cavity or component copied into a model keeps its own context, or runs on the model's when it has none.
+Without a context, updating a standalone cavity is an error.
+A cavity borrowed with ``moist_get_model_cavity`` retains the context its copy runs on until it is deleted.
 
-Cavities and models retain the context, so its public handle can be deleted.
+Every handle retains its context, and a model retains those of its parts, so the public context handle can be deleted.
 ``moist_get_context_num_threads`` reports the count the context was constructed with.
 The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes the host's OpenMP runtime. BLAS/LAPACK threading is the host's to configure (``OMP_NUM_THREADS``, ``MKL_NUM_THREADS``, ``OPENBLAS_NUM_THREADS`` or the vendor's API).
 Without OpenMP, MOIST's kernels are serial; the math backends may still use threads.

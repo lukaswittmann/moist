@@ -70,10 +70,6 @@ module moist_api
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Lebedev points per atom
       integer(c_int) :: nleb = 194_c_int
-      !> Enable diagnostic checks
-      logical(c_bool) :: debug = .false._c_bool
-      !> Output detail level
-      integer(c_int) :: verbosity = 0_c_int
       !> Enable fine cavity refinement
       logical(c_bool) :: do_fine = .false._c_bool
       !> Projection convergence tolerance
@@ -101,10 +97,6 @@ module moist_api
       integer(c_size_t) :: struct_size = 0_c_size_t
       !> Lebedev points per atom
       integer(c_int) :: nleb = 110_c_int
-      !> Enable diagnostic checks
-      logical(c_bool) :: debug = .false._c_bool
-      !> Output detail level
-      integer(c_int) :: verbosity = 0_c_int
       !> Surface-weight cutoff
       real(c_double) :: cut_a = 0.0_c_double
       !> Switching-factor cutoff
@@ -163,19 +155,6 @@ module moist_api
    !> Minimum valid caller size, independent of future library extensions
    integer(c_size_t), parameter :: isodensity_options_min_size = c_sizeof(api_isodensity_options_v1_0())
 
-   !> Frozen 1.0 model layout; a future addition needs a new versioned type
-   type, bind(C) :: api_model_options_v1_0
-      !> Caller allocation size in bytes
-      integer(c_size_t) :: struct_size = 0_c_size_t
-      !> Enable diagnostic checks
-      logical(c_bool) :: debug = .false._c_bool
-      !> Output detail level
-      integer(c_int) :: verbosity = 0_c_int
-   end type api_model_options_v1_0
-
-   !> Minimum valid caller size, independent of future library extensions
-   integer(c_size_t), parameter :: model_options_min_size = c_sizeof(api_model_options_v1_0())
-
    !> Frozen 1.0 pcm layout; a future addition needs a new versioned type
    type, bind(C) :: api_pcm_options_v1_0
       !> Caller allocation size in bytes
@@ -205,10 +184,15 @@ module moist_api
       type(structure_type) :: ptr
    end type vp_structure
 
+   !> One retained shared context, storable in an array
+   type :: vp_context_slot
+      !> Retained shared context
+      type(vp_context), pointer :: ptr => null()
+   end type vp_context_slot
+
    type :: vp_cavity
-      !> Run context owned by this handle; the cavity borrows a pointer to it
-      type(moist_context_type) :: ctx
-      !> Explicit shared context, retained until this owning handle is deleted
+      !> Shared run context the cavity borrows, retained until this handle is
+      !> deleted; null for a cavity created without one
       type(vp_context), pointer :: shared_ctx => null()
       class(cavity_type), pointer :: ptr => null()
       logical :: owned = .true.
@@ -219,23 +203,20 @@ module moist_api
    end type vp_radii
 
    type :: vp_model
-      !> Run context owned by this handle; the model borrows a pointer to it
-      !>
-      !> - built by a model constructor with `new_context`, then passed to the
-      !>   concrete model and on to its components, as the cavity handles below
-      !> - torn down in `delete_solvation_model_api`
-      type(moist_context_type) :: ctx
-      !> Explicit shared context, retained until this owning handle is deleted
+      !> Shared run context of the model and of every part created without one,
+      !> retained until this handle is deleted
       type(vp_context), pointer :: shared_ctx => null()
+      !> Context the cavity copy runs on, its own or the model's, retained
+      type(vp_context), pointer :: cavity_ctx => null()
+      !> Own contexts of the added components, retained
+      type(vp_context_slot), allocatable :: component_ctx(:)
       class(solvation_model_type), allocatable :: ptr
    end type vp_model
 
    type :: vp_component
-      !> Run context owned by this handle until the component is copied
-      !>
-      !> `model_continuum_type%add_component` re-points the copy at the model
-      !> context so the copy stays valid after this handle is deleted
-      type(moist_context_type) :: ctx
+      !> Shared run context the component borrows, retained until this handle
+      !> is deleted; null for a component created without one
+      type(vp_context), pointer :: shared_ctx => null()
       !> Concrete component owned by this opaque handle
       class(model_continuum_component_type), allocatable :: ptr
    end type vp_component
@@ -271,7 +252,7 @@ module moist_api
    public :: vp_error, vp_structure, vp_cavity, vp_radii, vp_model, vp_component
    public :: vp_coupling, vp_response, vp_context
    public :: new_context_api, delete_context_api, get_context_num_threads_api
-   public :: create_drop_cavity_context_api, create_iswig_cavity_context_api, create_model_context_api
+   public :: create_drop_cavity_api, create_iswig_cavity_api, create_model_api
    public :: get_version_api, get_version_string_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
    public :: new_structure_api, delete_structure_api, update_structure_api
@@ -596,39 +577,37 @@ contains
       nthreads = int(context%ctx%get_num_threads(), c_int)
    end subroutine get_context_num_threads_api
 
-   !> Resolve the run context and retain an explicit shared owner
+   !> Retain a shared run context for a new cavity, component or model
    !>
-   !> @param[in] handle    shared context handle; NULL constructs a local context
-   !> @param[in,out] local fallback context owned by the cavity or model
-   !> @param[out] shared  retained shared context wrapper
-   !> @param[in] verbosity fallback output level
-   !> @param[in] debug    fallback diagnostic flag
-   !> @param[out] ctx     context borrowed by the cavity or model
-   subroutine acquire_context(handle, local, shared, verbosity, debug, ctx)
+   !> @param[in] handle  shared context handle; NULL leaves both outputs null
+   !> @param[out] shared retained shared context wrapper
+   !> @param[out] ctx    context borrowed by the cavity, component or model
+   subroutine acquire_context(handle, shared, ctx)
       !> Shared context handle
       type(c_ptr), intent(in) :: handle
-      !> Fallback context
-      type(moist_context_type), intent(inout), target :: local
       !> Retained shared owner
       type(vp_context), pointer, intent(out) :: shared
-      !> Fallback output level
-      integer, intent(in) :: verbosity
-      !> Fallback diagnostic flag
-      logical, intent(in) :: debug
       !> Borrowed run context
       type(moist_context_type), pointer, intent(out) :: ctx
 
-      nullify (shared)
-      if (c_associated(handle)) then
-         call c_f_pointer(handle, shared)
-         !$omp atomic update
-         shared%references = shared%references + 1
-         ctx => shared%ctx
-      else
-         call new_context(local, nthreads=0, verbosity=verbosity, debug=debug)
-         ctx => local
-      end if
+      nullify (shared, ctx)
+      if (.not. c_associated(handle)) return
+      call c_f_pointer(handle, shared)
+      call retain_shared_context(shared)
+      ctx => shared%ctx
    end subroutine acquire_context
+
+   !> Take one more reference on a shared context
+   !>
+   !> @param[in] shared retained context wrapper; null is ignored
+   subroutine retain_shared_context(shared)
+      !> Retained shared owner
+      type(vp_context), pointer, intent(in) :: shared
+
+      if (.not. associated(shared)) return
+      !$omp atomic update
+      shared%references = shared%references + 1
+   end subroutine retain_shared_context
 
    !> Release a shared context when its last owner disappears
    !>
@@ -664,23 +643,6 @@ contains
       if (associated(cavity%ctx)) nthreads = cavity%ctx%get_num_threads()
    end function cavity_num_threads
 
-   !> Release either the implicit context or a retained shared owner
-   !>
-   !> @param[in,out] local  implicit context
-   !> @param[in,out] shared retained shared context
-   subroutine release_owned_context(local, shared)
-      !> Implicit context
-      type(moist_context_type), intent(inout) :: local
-      !> Retained shared owner
-      type(vp_context), pointer, intent(inout) :: shared
-
-      if (associated(shared)) then
-         call release_shared_context(shared)
-      else
-         call local%delete()
-      end if
-   end subroutine release_owned_context
-
    !> Initialize drop options within the caller's allocation
    subroutine init_drop_options_api(verror, options, bytes) bind(C, name=namespace//"init_drop_options")
       !> Error handle
@@ -702,8 +664,6 @@ contains
       call zero_options_storage(c_loc(defaults), c_sizeof(defaults))
       defaults%struct_size = bytes
       defaults%nleb = values%nleb
-      defaults%debug = values%debug
-      defaults%verbosity = values%verbosity
       defaults%do_fine = values%do_fine
       defaults%tolerance = values%tolerance
       defaults%proj_maxiter = values%proj_maxiter
@@ -754,8 +714,6 @@ contains
       call zero_options_storage(c_loc(defaults), c_sizeof(defaults))
       defaults%struct_size = bytes
       defaults%nleb = values%nleb
-      defaults%debug = values%debug
-      defaults%verbosity = values%verbosity
       defaults%cut_a = values%cut_a
       defaults%cut_f = values%cut_f
       call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, iswig_options_min_size, error%ptr)
@@ -912,48 +870,6 @@ contains
       call c_f_pointer(options, bytes)
       call copy_options(options, c_loc(value), c_sizeof(value), bytes, isodensity_options_min_size, error)
    end subroutine read_isodensity_options
-
-   !> Initialize model options within the caller's allocation
-   subroutine init_model_options_api(verror, options, bytes) bind(C, name=namespace//"init_model_options")
-      !> Error handle
-      type(c_ptr), value, intent(in) :: verror
-      !> Caller-owned options buffer
-      type(c_ptr), value, intent(in) :: options
-      !> Allocated byte count
-      integer(c_size_t), value, intent(in) :: bytes
-      !> Compiled defaults
-      type(api_model_options_v1_0), target :: defaults
-      !> Default values; only named components are copied to the wire layout
-      type(api_model_options_v1_0) :: values
-      !> Decoded error handle
-      type(vp_error), pointer :: error
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      call zero_options_storage(c_loc(defaults), c_sizeof(defaults))
-      defaults%struct_size = bytes
-      defaults%debug = values%debug
-      defaults%verbosity = values%verbosity
-      call copy_options(c_loc(defaults), options, c_sizeof(defaults), bytes, model_options_min_size, error%ptr)
-      call prefix_api_error(error%ptr, "init_model_options")
-   end subroutine init_model_options_api
-
-   !> Decode optional model options into an independent value
-   subroutine read_model_options(options, value, error)
-      !> Optional caller options; NULL selects defaults
-      type(c_ptr), intent(in) :: options
-      !> Default-initialized result
-      type(api_model_options_v1_0), intent(out), target :: value
-      !> Diagnostic on invalid size
-      type(error_type), allocatable, intent(out) :: error
-      !> Caller allocation size, the common first field
-      integer(c_size_t), pointer :: bytes
-      value = api_model_options_v1_0()
-      value%struct_size = c_sizeof(value)
-      if (.not. c_associated(options)) return
-      call c_f_pointer(options, bytes)
-      call copy_options(options, c_loc(value), c_sizeof(value), bytes, model_options_min_size, error)
-   end subroutine read_model_options
 
    !> Initialize pcm options within the caller's allocation
    subroutine init_pcm_options_api(verror, options, bytes) bind(C, name=namespace//"init_pcm_options")
@@ -1286,144 +1202,19 @@ contains
       if (stat /= 0) call fatal_error(error, "Cannot copy radii")
    end subroutine read_api_radii
 
-   !> Construct drop cavity with its default context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] vlsf constructor input
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   function create_drop_cavity_api(verror, vlsf, vradii, options) result(handle) &
-         & bind(C, name=namespace//"new_drop_cavity")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vlsf
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vradii
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_drop_cavity_api(verror, vlsf, vradii, options, c_null_ptr)
-   end function create_drop_cavity_api
-
-
-   !> Construct drop cavity with a shared context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] vcontext shared context; NULL selects the default
-   !> @param[in] vlsf constructor input
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   function create_drop_cavity_context_api(verror, vcontext, vlsf, vradii, options) result(handle) &
-         & bind(C, name=namespace//"new_drop_cavity_with_context")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Shared context handle
-      type(c_ptr), value, intent(in) :: vcontext
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vlsf
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vradii
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_drop_cavity_api(verror, vlsf, vradii, options, vcontext)
-   end function create_drop_cavity_context_api
-
-
-   !> Construct iswig cavity with its default context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   function create_iswig_cavity_api(verror, vradii, options) result(handle) &
-         & bind(C, name=namespace//"new_iswig_cavity")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vradii
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_iswig_cavity_api(verror, vradii, options, c_null_ptr)
-   end function create_iswig_cavity_api
-
-
-   !> Construct iswig cavity with a shared context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] vcontext shared context; NULL selects the default
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   function create_iswig_cavity_context_api(verror, vcontext, vradii, options) result(handle) &
-         & bind(C, name=namespace//"new_iswig_cavity_with_context")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Shared context handle
-      type(c_ptr), value, intent(in) :: vcontext
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: vradii
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_iswig_cavity_api(verror, vradii, options, vcontext)
-   end function create_iswig_cavity_context_api
-
-
-   !> Construct model with its default context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] cavity constructor input
-   !> @param[in] options constructor input
-   function create_model_api(verror, cavity, options) result(handle) &
-         & bind(C, name=namespace//"new_model")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: cavity
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_model_api(verror, cavity, options, c_null_ptr)
-   end function create_model_api
-
-
-   !> Construct model with a shared context
-   !>
-   !> @param[in] verror constructor input
-   !> @param[in] vcontext shared context; NULL selects the default
-   !> @param[in] cavity constructor input
-   !> @param[in] options constructor input
-   function create_model_context_api(verror, vcontext, cavity, options) result(handle) &
-         & bind(C, name=namespace//"new_model_with_context")
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: verror
-      !> Shared context handle
-      type(c_ptr), value, intent(in) :: vcontext
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: cavity
-      !> Constructor input
-      type(c_ptr), value, intent(in) :: options
-      !> Owning result handle; NULL on failure
-      type(c_ptr) :: handle
-      handle = construct_model_api(verror, cavity, options, vcontext)
-   end function create_model_context_api
-
    !> Construct a drop cavity from copied configuration
    !>
-   !> @param[in] verror constructor input
-   !> @param[in] vlsf constructor input
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   !> @param[in] vcontext constructor input
-   function construct_drop_cavity_api(verror, vlsf, vradii, options, vcontext) result(handle)
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context; NULL runs the cavity on its model's
+   !> @param[in] vlsf     level-set function handle, copied into the cavity
+   !> @param[in] vradii   radii handle; NULL selects CPCM radii
+   !> @param[in] options  settings; NULL selects compiled defaults
+   function create_drop_cavity_api(verror, vcontext, vlsf, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_drop_cavity")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
+      !> Shared run context retained by the cavity, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
       !> Level-set function handle, copied into the cavity
       type(c_ptr), value, intent(in) :: vlsf
       type(vp_lsf), pointer :: lsf
@@ -1431,13 +1222,11 @@ contains
       type(c_ptr), value, intent(in) :: vradii
       !> Optional settings; NULL selects compiled defaults
       type(c_ptr), value, intent(in) :: options
-      !> Optional shared context; NULL selects an implicit context
-      type(c_ptr), value, intent(in) :: vcontext
       !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
       type(vp_cavity), pointer :: cav
-      !> Context borrowed by the constructed cavity
+      !> Context borrowed by the constructed cavity; a null pointer passes as absent
       type(moist_context_type), pointer :: ctx
       type(api_drop_options_v1_0) :: o
       class(radius_type), allocatable :: radii
@@ -1474,45 +1263,46 @@ contains
          call api_error(error%ptr, "new_drop_cavity", "Cannot allocate cavity")
          return
       end if
-      call acquire_context(vcontext, cav%ctx, cav%shared_ctx, int(o%verbosity), logical(o%debug), ctx)
+      call acquire_context(vcontext, cav%shared_ctx, ctx)
       select type (item => cav%ptr)
       type is (cavity_type_drop)
-         call new_cavity_drop(item, ctx, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
+         call new_cavity_drop(item, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
                               param=moist_cavity_drop_parameters_type(num_leb=int(o%nleb), tolerance=real(o%tolerance, wp), &
                                        do_fine=logical(o%do_fine), proj_maxiter=int(o%proj_maxiter), proj_level=int(o%proj_level), &
                                                    branch_weight_s=real(o%branch_weight_s, wp), rho_grid_h=real(o%rho_grid_h, wp), &
-                                                                      wleb_prune_level=int(o%wleb_prune_level)))
+                                                                      wleb_prune_level=int(o%wleb_prune_level)), ctx=ctx)
       end select
       call prefix_api_error(error%ptr, "new_drop_cavity")
       if (allocated(error%ptr)) then
          if (associated(cav%ptr)) deallocate (cav%ptr)
-         call release_owned_context(cav%ctx, cav%shared_ctx)
+         call release_shared_context(cav%shared_ctx)
          deallocate (cav)
          return
       end if
       handle = c_loc(cav)
-   end function construct_drop_cavity_api
+   end function create_drop_cavity_api
 
-   !> Construct a iswig cavity from copied configuration
+   !> Construct an iswig cavity from copied configuration
    !>
-   !> @param[in] verror constructor input
-   !> @param[in] vradii constructor input
-   !> @param[in] options constructor input
-   !> @param[in] vcontext constructor input
-   function construct_iswig_cavity_api(verror, vradii, options, vcontext) result(handle)
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context; NULL runs the cavity on its model's
+   !> @param[in] vradii   radii handle; NULL selects CPCM radii
+   !> @param[in] options  settings; NULL selects compiled defaults
+   function create_iswig_cavity_api(verror, vcontext, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_iswig_cavity")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
+      !> Shared run context retained by the cavity, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
       !> Radii handle; NULL selects defaults in constructors
       type(c_ptr), value, intent(in) :: vradii
       !> Optional settings; NULL selects compiled defaults
       type(c_ptr), value, intent(in) :: options
-      !> Optional shared context; NULL selects an implicit context
-      type(c_ptr), value, intent(in) :: vcontext
       !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
       type(vp_cavity), pointer :: cav
-      !> Context borrowed by the constructed cavity
+      !> Context borrowed by the constructed cavity; a null pointer passes as absent
       type(moist_context_type), pointer :: ctx
       type(api_iswig_options_v1_0) :: o
       class(radius_type), allocatable :: radii
@@ -1535,56 +1325,53 @@ contains
          call api_error(error%ptr, "new_iswig_cavity", "Cannot allocate cavity")
          return
       end if
-      call acquire_context(vcontext, cav%ctx, cav%shared_ctx, int(o%verbosity), logical(o%debug), ctx)
+      call acquire_context(vcontext, cav%shared_ctx, ctx)
       select type (item => cav%ptr)
       type is (cavity_type_iswig)
-         call new_cavity_iswig(item, ctx, radius_model=radii, error=error%ptr, &
+         call new_cavity_iswig(item, radius_model=radii, error=error%ptr, &
                                param=moist_cavity_iswig_parameters_type(num_leb=int(o%nleb), cut_a=real(o%cut_a, wp), &
-                                                                        cut_f=real(o%cut_f, wp)))
+                                                                        cut_f=real(o%cut_f, wp)), ctx=ctx)
       end select
       call prefix_api_error(error%ptr, "new_iswig_cavity")
       if (allocated(error%ptr)) then
          if (associated(cav%ptr)) deallocate (cav%ptr)
-         call release_owned_context(cav%ctx, cav%shared_ctx)
+         call release_shared_context(cav%shared_ctx)
          deallocate (cav)
          return
       end if
       handle = c_loc(cav)
-   end function construct_iswig_cavity_api
+   end function create_iswig_cavity_api
 
-   !> Create a model with an owned cavity copy and optional run settings
+   !> Construct a model owning a cavity copy
    !>
-   !> @param[in] verror constructor input
-   !> @param[in] cavity constructor input
-   !> @param[in] options constructor input
-   !> @param[in] vcontext constructor input
-   function construct_model_api(verror, cavity, options, vcontext) result(handle)
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context, required
+   !> @param[in] cavity   cavity handle, copied into the model
+   function create_model_api(verror, vcontext, cavity) result(handle) &
+         & bind(C, name=namespace//"new_model")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
+      !> Shared run context, retained by the model
+      type(c_ptr), value, intent(in) :: vcontext
       !> Cavity handle, copied into the model
       type(c_ptr), value, intent(in) :: cavity
-      !> Optional settings; NULL selects compiled defaults
-      type(c_ptr), value, intent(in) :: options
-      !> Optional shared context; NULL selects an implicit context
-      type(c_ptr), value, intent(in) :: vcontext
       !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
-      type(vp_error), pointer :: error
-      type(api_model_options_v1_0) :: o
-      handle = c_null_ptr
-      if (.not. c_associated(verror)) return
-      call c_f_pointer(verror, error)
-      if (allocated(error%ptr)) deallocate (error%ptr)
-      call read_model_options(options, o, error%ptr)
-      call prefix_api_error(error%ptr, "new_model")
-      if (allocated(error%ptr)) return
-      handle = new_general_solvation_model_api(verror, cavity, o%debug, o%verbosity, vcontext)
-   end function construct_model_api
+      handle = new_general_solvation_model_api(verror, vcavity=cavity, vcontext=vcontext)
+   end function create_model_api
 
    !> Create a cpcm component with optional solver settings
-   function create_cpcm_component_api(verror, epsilon, options) result(handle) bind(C, name=namespace//"new_cpcm_component")
+   !>
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context; NULL runs the component on its model's
+   !> @param[in] epsilon  relative dielectric constant
+   !> @param[in] options  settings; NULL selects compiled defaults
+   function create_cpcm_component_api(verror, vcontext, epsilon, options) result(handle) &
+         & bind(C, name=namespace//"new_cpcm_component")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
+      !> Shared run context retained by the component, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
       !> Relative dielectric constant
       real(c_double), value, intent(in) :: epsilon
       !> Optional settings; NULL selects compiled defaults
@@ -1599,13 +1386,21 @@ contains
       call read_pcm_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_cpcm_component")
       if (allocated(error%ptr)) return
-      handle = new_cpcm_component_api(verror, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
+      handle = new_cpcm_component_api(verror, vcontext, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
    end function create_cpcm_component_api
 
    !> Create a cosmo component with optional solver settings
-   function create_cosmo_component_api(verror, epsilon, options) result(handle) bind(C, name=namespace//"new_cosmo_component")
+   !>
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcontext shared run context; NULL runs the component on its model's
+   !> @param[in] epsilon  relative dielectric constant
+   !> @param[in] options  settings; NULL selects compiled defaults
+   function create_cosmo_component_api(verror, vcontext, epsilon, options) result(handle) &
+         & bind(C, name=namespace//"new_cosmo_component")
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
+      !> Shared run context retained by the component, or NULL
+      type(c_ptr), value, intent(in) :: vcontext
       !> Relative dielectric constant
       real(c_double), value, intent(in) :: epsilon
       !> Optional settings; NULL selects compiled defaults
@@ -1620,7 +1415,7 @@ contains
       call read_pcm_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_cosmo_component")
       if (allocated(error%ptr)) return
-      handle = new_cosmo_component_api(verror, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
+      handle = new_cosmo_component_api(verror, vcontext, epsilon, o%solver, o%solver_tol, o%solver_maxiter)
    end function create_cosmo_component_api
 
    !> Build a diagnostic tagged with its calling routine
@@ -2107,13 +1902,21 @@ contains
       !> Model handle
       type(c_ptr), intent(inout), optional :: vmodel
       type(vp_model), pointer :: model
+      !> Component context index
+      integer :: i
 
       if (.not. present(vmodel)) return
       if (c_associated(vmodel)) then
          call c_f_pointer(vmodel, model)
 
          if (allocated(model%ptr)) deallocate (model%ptr)
-         call release_owned_context(model%ctx, model%shared_ctx)
+         call release_shared_context(model%shared_ctx)
+         call release_shared_context(model%cavity_ctx)
+         if (allocated(model%component_ctx)) then
+            do i = 1, size(model%component_ctx)
+               call release_shared_context(model%component_ctx(i)%ptr)
+            end do
+         end if
          deallocate (model)
          vmodel = c_null_ptr
       end if
@@ -2166,7 +1969,7 @@ contains
    !> Get a borrowed cavity handle from a solvation model
    !>
    !> - NOT owned by the caller; independent cavity-update entry points reject it
-   !> - retains the model's shared context, which a model built from it inherits
+   !> - retains the context the cavity copy runs on while the handle is alive
    !> - moist_delete_cavity releases only the borrowed wrapper and its context reference
    !> - valid as long as the parent model exists
    function get_solvation_model_cavity_api(verror, vmodel) result(vcav) &
@@ -2208,12 +2011,8 @@ contains
       allocate (cav)
       cav%ptr => cavity_ptr
       cav%owned = .false.
-      ! Retain the parent's shared context, so a model built from this handle inherits it
-      if (associated(model%shared_ctx)) then
-         cav%shared_ctx => model%shared_ctx
-         !$omp atomic update
-         cav%shared_ctx%references = cav%shared_ctx%references + 1
-      end if
+      cav%shared_ctx => model%cavity_ctx
+      call retain_shared_context(cav%shared_ctx)
       vcav = c_loc(cav)
 
    end function get_solvation_model_cavity_api
@@ -2241,10 +2040,12 @@ contains
    end subroutine borrow_continuum_cavity
 
    !> Allocate either PCM-family component behind the common opaque handle
-   subroutine new_pcm_component_common(verror, epsilon, solver, solver_tol, solver_maxiter, &
+   subroutine new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, &
                                        use_cosmo, routine_name, vcomponent)
       !> Error handle
       type(c_ptr), value :: verror
+      !> Shared run context handle, or NULL
+      type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
       !> PCM solver enumeration
@@ -2267,33 +2068,35 @@ contains
       class(model_continuum_component_type), allocatable :: item
       !> Constructor error
       type(error_type), allocatable :: component_error
+      !> Context borrowed by the component; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
 
       allocate (component)
-      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
+      call acquire_context(vcontext, component%shared_ctx, ctx)
       if (use_cosmo) then
          allocate (model_continuum_component_cosmo :: item)
          select type (pcm => item)
          type is (model_continuum_component_cosmo)
-            call new_component_cosmo(pcm, component%ctx, epsilon=real(epsilon, wp), error=component_error, &
+            call new_component_cosmo(pcm, epsilon=real(epsilon, wp), error=component_error, &
                                      param=moist_pcm_parameters_type(solver=int(solver), &
-                                     & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)))
+                                     & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)), ctx=ctx)
          end select
       else
          allocate (model_continuum_component_cpcm :: item)
          select type (pcm => item)
          type is (model_continuum_component_cpcm)
-            call new_component_cpcm(pcm, component%ctx, epsilon=real(epsilon, wp), error=component_error, &
+            call new_component_cpcm(pcm, epsilon=real(epsilon, wp), error=component_error, &
                                     param=moist_pcm_parameters_type(solver=int(solver), &
-                                    & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)))
+                                    & solver_tol=real(solver_tol, wp), solver_maxiter=int(solver_maxiter)), ctx=ctx)
          end select
       end if
       if (allocated(component_error)) then
          call api_error(error%ptr, routine_name, component_error%message)
-         call component%ctx%delete()
+         call release_shared_context(component%shared_ctx)
          deallocate (component)
          return
       end if
@@ -2303,9 +2106,11 @@ contains
    end subroutine new_pcm_component_common
 
    !> Create a CPCM component handle for use with a continuum model
-   function new_cpcm_component_api(verror, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
+   function new_cpcm_component_api(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
+      !> Shared run context handle, or NULL
+      type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
       !> PCM linear-solver selector
@@ -2316,15 +2121,17 @@ contains
       integer(c_int), value :: solver_maxiter
       type(c_ptr) :: vcomponent
 
-      call new_pcm_component_common(verror, epsilon, solver, solver_tol, solver_maxiter, .false., &
+      call new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, .false., &
                                     "new_cpcm_component", vcomponent)
 
    end function new_cpcm_component_api
 
    !> Create a COSMO component handle for use with a continuum model
-   function new_cosmo_component_api(verror, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
+   function new_cosmo_component_api(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter) result(vcomponent)
       !> Diagnostic handle
       type(c_ptr), value :: verror
+      !> Shared run context handle, or NULL
+      type(c_ptr), value :: vcontext
       !> Relative dielectric constant
       real(c_double), value :: epsilon
       !> PCM linear-solver selector
@@ -2335,16 +2142,18 @@ contains
       integer(c_int), value :: solver_maxiter
       type(c_ptr) :: vcomponent
 
-      call new_pcm_component_common(verror, epsilon, solver, solver_tol, solver_maxiter, .true., &
+      call new_pcm_component_common(verror, vcontext, epsilon, solver, solver_tol, solver_maxiter, .true., &
                                     "new_cosmo_component", vcomponent)
 
    end function new_cosmo_component_api
 
    !> Create a pressure-volume energy component handle
-   function new_pv_component_api(verror, pressure) result(vcomponent) &
+   function new_pv_component_api(verror, vcontext, pressure) result(vcomponent) &
          & bind(C, name=namespace//"new_pv_component")
       !> Error handle
       type(c_ptr), value :: verror
+      !> Shared run context retained by the component, or NULL
+      type(c_ptr), value :: vcontext
       !> Pressure multiplying the cavity volume
       real(c_double), value :: pressure
       !> New component handle
@@ -2355,6 +2164,8 @@ contains
       type(vp_component), pointer :: component
       !> Concrete pressure-volume component
       type(model_continuum_component_pv) :: item
+      !> Context borrowed by the component; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -2362,9 +2173,8 @@ contains
       if (allocated(error%ptr)) deallocate (error%ptr)
 
       allocate (component)
-      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
-      call new_component_pv(item, real(pressure, wp))
-      item%ctx => component%ctx
+      call acquire_context(vcontext, component%shared_ctx, ctx)
+      call new_component_pv(item, real(pressure, wp), ctx=ctx)
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)
 
@@ -2376,10 +2186,12 @@ contains
    !>   request (`moist_answer_coupling_request` with "gt", "pt", "mt", "rt") in every phase
    !> - amplitudes read back as the "gaussian_amplitude" item of the response
    !>   walk (`moist_next_response_item`, then `moist_get_response_field_real`)
-   function new_gostshyp_component_api(verror, pressure) result(vcomponent) &
+   function new_gostshyp_component_api(verror, vcontext, pressure) result(vcomponent) &
          & bind(C, name=namespace//"new_gostshyp_component")
       !> Error handle
       type(c_ptr), value :: verror
+      !> Shared run context retained by the component, or NULL
+      type(c_ptr), value :: vcontext
       !> Applied hydrostatic pressure in Hartree/bohr**3
       real(c_double), value :: pressure
       !> New component handle
@@ -2390,6 +2202,8 @@ contains
       type(vp_component), pointer :: component
       !> Concrete GOSTSHYP component
       type(model_continuum_component_gostshyp) :: item
+      !> Context borrowed by the component; a null pointer passes as absent
+      type(moist_context_type), pointer :: ctx
 
       vcomponent = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -2397,9 +2211,8 @@ contains
       if (allocated(error%ptr)) deallocate (error%ptr)
 
       allocate (component)
-      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
-      call new_component_gostshyp(item, real(pressure, wp))
-      item%ctx => component%ctx
+      call acquire_context(vcontext, component%shared_ctx, ctx)
+      call new_component_gostshyp(item, real(pressure, wp), ctx=ctx)
       allocate (component%ptr, source=item)
       vcomponent = c_loc(component)
 
@@ -2417,7 +2230,7 @@ contains
       if (c_associated(vcomponent)) then
          call c_f_pointer(vcomponent, component)
          if (allocated(component%ptr)) deallocate (component%ptr)
-         call component%ctx%delete()
+         call release_shared_context(component%shared_ctx)
          deallocate (component)
          vcomponent = c_null_ptr
       end if
@@ -2426,22 +2239,17 @@ contains
 
    !> Create a continuum solvation model around an owned copy of a cavity
    !>
-   !> @param[in] verror    diagnostic handle
-   !> @param[in] vcavity   cavity handle copied into the model
-   !> @param[in] c_debug  diagnostic flag
-   !> @param[in] c_verbose output level
-   !> @param[in] vcontext  shared context; NULL or absent inherits the cavity context
-   function new_general_solvation_model_api(verror, vcavity, c_debug, c_verbose, vcontext) result(vmodel)
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] vcavity  cavity handle copied into the model
+   !> @param[in] vcontext shared run context, required; a cavity copy without
+   !>                     its own runs on it
+   function new_general_solvation_model_api(verror, vcavity, vcontext) result(vmodel)
       !> Error handle
       type(c_ptr), value :: verror
       !> Source cavity handle
       type(c_ptr), value :: vcavity
-      !> Debug flag
-      logical(c_bool), value :: c_debug
-      !> Verbosity level
-      integer(c_int), value :: c_verbose
-      !> Optional shared context handle
-      type(c_ptr), value, intent(in), optional :: vcontext
+      !> Shared run context handle
+      type(c_ptr), value, intent(in) :: vcontext
       !> New model handle
       type(c_ptr) :: vmodel
       !> Decoded error wrapper
@@ -2456,13 +2264,16 @@ contains
       type(error_type), allocatable :: model_error
       !> Context borrowed by the model and its cavity copy
       type(moist_context_type), pointer :: ctx
-      !> Explicit context, or the source cavity context when one exists
-      type(c_ptr) :: chosen_context
 
       vmodel = c_null_ptr
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
 
+      if (.not. c_associated(vcontext)) then
+         call api_error(error%ptr, "new_model", "Context handle is missing")
+         return
+      end if
       if (.not. c_associated(vcavity)) then
          call api_error(error%ptr, "new_model", "Cavity handle is missing")
          return
@@ -2474,19 +2285,18 @@ contains
       end if
 
       allocate (model)
-      chosen_context = c_null_ptr
-      if (present(vcontext)) chosen_context = vcontext
-      if (.not. c_associated(chosen_context) .and. associated(cavity%shared_ctx)) then
-         chosen_context = c_loc(cavity%shared_ctx)
-      end if
-      call acquire_context(chosen_context, model%ctx, model%shared_ctx, int(c_verbose), logical(c_debug), ctx)
-      call new_continuum_model(continuum, cavity%ptr, ctx, model_error)
+      call acquire_context(vcontext, model%shared_ctx, ctx)
+      call new_continuum_model(continuum, ctx, cavity%ptr, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "new_model", model_error%message)
-         call release_owned_context(model%ctx, model%shared_ctx)
+         call release_shared_context(model%shared_ctx)
          deallocate (model)
          return
       end if
+      model%cavity_ctx => model%shared_ctx
+      if (associated(cavity%shared_ctx)) model%cavity_ctx => cavity%shared_ctx
+      call retain_shared_context(model%cavity_ctx)
+      allocate (model%component_ctx(0))
       allocate (model%ptr, source=continuum)
       vmodel = c_loc(model)
 
@@ -2509,6 +2319,8 @@ contains
       type(vp_component), pointer :: component
       !> Component-addition error
       type(error_type), allocatable :: model_error
+      !> Retained component contexts, grown by one
+      type(vp_context_slot), allocatable :: grown(:)
 
       if (.not. c_associated(verror)) return
       call c_f_pointer(verror, error)
@@ -2532,6 +2344,14 @@ contains
          call continuum%add_component(component%ptr, model_error)
          if (allocated(model_error)) then
             call api_error(error%ptr, "add_model_component", model_error%message)
+            return
+         end if
+         if (associated(component%shared_ctx)) then
+            allocate (grown(size(model%component_ctx) + 1))
+            grown(:size(model%component_ctx)) = model%component_ctx
+            grown(size(grown))%ptr => component%shared_ctx
+            call retain_shared_context(grown(size(grown))%ptr)
+            call move_alloc(grown, model%component_ctx)
          end if
       class default
          call api_error(error%ptr, "add_model_component", &
@@ -6359,7 +6179,7 @@ contains
          call c_f_pointer(vcav, cav)
          if (cav%owned .and. associated(cav%ptr)) deallocate (cav%ptr)
          nullify (cav%ptr)
-         call release_owned_context(cav%ctx, cav%shared_ctx)
+         call release_shared_context(cav%shared_ctx)
          deallocate (cav)
          vcav = c_null_ptr
       end if

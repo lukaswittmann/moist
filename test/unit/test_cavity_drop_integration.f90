@@ -405,9 +405,9 @@ contains
       end select
 
       allocate (cavity)
-      call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=lsf_template, &
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=lsf_template, &
          error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-         proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
+         proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, "new_cavity_drop failed for "//case_to_string(c)// &
                           ": "//trim(cavity_error%message))

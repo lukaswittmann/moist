@@ -37,6 +37,9 @@ from moist.interface import (
     Structure,
 )
 
+#: Run context shared by every cavity and model in this module
+CONTEXT = moist.Context()
+
 #: Shared small-grid parameters for tests that only fix ``nleb``
 _DROP_NLEB26 = DROPParameters(nleb=26)
 _ISWIG_NLEB26 = ISwiGParameters(nleb=26)
@@ -86,7 +89,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
     Checks absolute area, volume, and point count for a fixed water geometry.
     Regenerate deliberately if the default surface is meant to change.
     """
-    cavity = CavityDROP(parameters=_DROP_NLEB26)
+    cavity = CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT)
     cavity.update(Structure(numbers, positions))
     result = cavity.cavity
 
@@ -105,8 +108,6 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 )),
                 parameters=DROPParameters(
                     nleb=26,
-                    debug=False,
-                    verbosity=0,
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
@@ -115,6 +116,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshotDROP,
         ),
@@ -123,8 +125,6 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                 lsf=CFC(parameters=CFCParameters(a1=-15.0, a2=-9.0, c=5.0, m=4)),
                 parameters=DROPParameters(
                     nleb=26,
-                    debug=False,
-                    verbosity=0,
                     do_fine=True,
                     tolerance=1.0e-10,
                     proj_maxiter=200,
@@ -133,6 +133,7 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     rho_grid_h=0.8,
                     wleb_prune_level=1,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshotDROP,
         ),
@@ -142,9 +143,8 @@ def test_default_drop_surface_matches_the_svdw_defaults(
                     nleb=26,
                     cut_a=0.0,
                     cut_f=1.0e-10,
-                    debug=False,
-                    verbosity=0,
                 ),
+                context=CONTEXT,
             ),
             CavitySnapshot,
         ),
@@ -195,7 +195,7 @@ def test_cavity_declares_its_own_results(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """Every declared field describes itself well enough to be read blind."""
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     fields = cavity.fields()
@@ -215,7 +215,7 @@ def test_named_results_agree_with_the_snapshot(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """The typed snapshot is a view of the same declarations, not a second read."""
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     snapshot = cavity.snapshot()
@@ -237,13 +237,13 @@ def test_uncomputed_results_are_absent_rather_than_zero(
     """A property that was never requested must not read back as zeros."""
     structure = Structure(numbers, positions)
 
-    plain = CavityDROP()
+    plain = CavityDROP(context=CONTEXT)
     plain.update(structure)
     assert "k1" not in {field.name for field in plain.fields()}
     with raises(KeyError, match="k1"):
         plain.get("k1")
 
-    fine = CavityDROP(parameters=DROPParameters(do_fine=True))
+    fine = CavityDROP(parameters=DROPParameters(do_fine=True), context=CONTEXT)
     fine.update(structure)
     curvature = fine.get("k1")
     assert curvature.shape == (fine.ngrid,)
@@ -255,7 +255,7 @@ def test_uncomputed_results_are_absent_rather_than_zero(
 
 def test_branching_is_read_from_the_cavity(branching_cross: Structure) -> None:
     """Branch data comes from moist's own arrays, not from unpacking an id."""
-    cavity = CavityDROP(parameters=DROPParameters(proj_level=7))
+    cavity = CavityDROP(parameters=DROPParameters(proj_level=7), context=CONTEXT)
     cavity.update(branching_cross)
     snapshot = cavity.snapshot()
 
@@ -281,7 +281,7 @@ def test_named_results_reach_every_cavity_type(
     numbers: np.ndarray, positions: np.ndarray
 ) -> None:
     """The field API is a cavity feature, not a DROP one."""
-    cavity = CavityISwiG()
+    cavity = CavityISwiG(context=CONTEXT)
     cavity.update(Structure(numbers, positions))
 
     names = {field.name for field in cavity.fields()}
@@ -290,7 +290,7 @@ def test_named_results_reach_every_cavity_type(
 
 
 def test_named_results_need_a_built_cavity() -> None:
-    cavity = CavityDROP()
+    cavity = CavityDROP(context=CONTEXT)
     with raises(RuntimeError, match="not been successfully updated"):
         cavity.fields()
     with raises(RuntimeError, match="not been successfully updated"):
@@ -299,14 +299,15 @@ def test_named_results_need_a_built_cavity() -> None:
 
 def test_cavity_drop_is_the_svdw_surface() -> None:
     """Unqualified DROP retains its default surface while allowing composition."""
-    assert CavityDROP().configuration == CavityDROP(lsf=SvdW()).configuration
-    assert isinstance(moist.CavityDROP().lsf, moist.SvdW)
+    assert CavityDROP(context=CONTEXT).configuration == CavityDROP(lsf=SvdW(),
+                                                                   context=CONTEXT).configuration
+    assert isinstance(moist.CavityDROP(context=CONTEXT).lsf, moist.SvdW)
 
 
 @pytest.mark.parametrize("lsf", [SvdW(), CFC()])
 def test_drop_constructor_controls_are_validated_natively(lsf) -> None:
     with raises(RuntimeError, match="wleb_prune_level.*0-6"):
-        CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7))
+        CavityDROP(lsf=lsf, parameters=DROPParameters(wleb_prune_level=7), context=CONTEXT)
 
 
 def test_cavity_specific_options_reach_the_native_implementations(
@@ -319,21 +320,22 @@ def test_cavity_specific_options_reach_the_native_implementations(
         cavity.update(structure)
         return cavity.snapshot()
 
-    svdw_default = surface(CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26))
+    svdw_default = surface(CavityDROP(lsf=SvdW(), parameters=_DROP_NLEB26, context=CONTEXT))
     svdw_custom = surface(CavityDROP(
-        lsf=SvdW(parameters=SvdWParameters(blend_k=4.0)), parameters=_DROP_NLEB26
+        lsf=SvdW(parameters=SvdWParameters(blend_k=4.0)), parameters=_DROP_NLEB26, context=CONTEXT
     ))
     assert svdw_custom.area != approx(svdw_default.area, rel=1.0e-6)
 
-    cfc_default = surface(CavityDROP(lsf=CFC(), parameters=_DROP_NLEB26))
+    cfc_default = surface(CavityDROP(lsf=CFC(), parameters=_DROP_NLEB26, context=CONTEXT))
     cfc_custom = surface(CavityDROP(
         lsf=CFC(parameters=CFCParameters(a1=-12.0, a2=-8.0, c=4.0, m=4)),
-        parameters=_DROP_NLEB26,
+        parameters=_DROP_NLEB26, context=CONTEXT,
     ))
     assert cfc_custom.area != approx(cfc_default.area, rel=1.0e-6)
 
-    iswig_default = surface(CavityISwiG(parameters=_ISWIG_NLEB26))
-    iswig_custom = surface(CavityISwiG(parameters=ISwiGParameters(nleb=26, cut_f=1.0e-2)))
+    iswig_default = surface(CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT))
+    iswig_custom = surface(CavityISwiG(parameters=ISwiGParameters(nleb=26, cut_f=1.0e-2),
+                                       context=CONTEXT))
     assert iswig_custom.ngrid < iswig_default.ngrid
 
 
@@ -427,7 +429,7 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26),
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -463,7 +465,7 @@ def test_model_components_report_their_energies(diatomic) -> None:
     pressure = 2.5e-4
     cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(pressure)
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv, ModelComponentCPCM(4.0)]
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT), [cpcm, pv, ModelComponentCPCM(4.0)]
     )
 
     components = model.components
@@ -519,7 +521,7 @@ def test_model_components_report_their_energies(diatomic) -> None:
 def test_model_parameters_text_lists_every_section(capsys) -> None:
     """The native settings printout: cavity, then each component by position."""
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26),
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
         [ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu")), ModelComponentPV(2.5e-4)],
     )
 
@@ -549,8 +551,10 @@ def test_model_parameters_text_lists_every_section(capsys) -> None:
 def test_component_views_keep_their_model(diatomic) -> None:
     """Models built from the same configurations keep separate energies."""
     cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(2.5e-4)
-    first = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv])
-    second = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv])
+    first = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [cpcm, pv])
+    second = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                            [cpcm, pv])
     structure = diatomic()
     first.update(structure)
     second.update(structure)
@@ -563,7 +567,8 @@ def test_component_views_keep_their_model(diatomic) -> None:
     assert first.components[0].configuration is second.components[0].configuration is cpcm
 
     # A view outlives the last reference to its model
-    view = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [pv]).components[0]
+    view = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                          [pv]).components[0]
     assert view.name == "PV"
     assert view.configuration is pv
 
@@ -591,7 +596,8 @@ def test_cosmo_uses_its_own_dielectric_scaling(
     results = {}
 
     for component_type in (ModelComponentCPCM, ModelComponentCOSMO):
-        model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [component_type(epsilon)])
+        model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                               [component_type(epsilon)])
         model.update(structure)
         phi = np.linspace(-0.2, 0.3, model.cavity.ngrid)
         results[component_type] = _solve(model, phi)
@@ -616,7 +622,7 @@ def test_model_drives_the_three_phases(diatomic) -> None:
     structure = diatomic()
     pressure = 2.5e-4
     model = SolvationModel(
-        CavityDROP(parameters=_DROP_NLEB26),
+        CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(pressure)],
     )
     model.update(structure)
@@ -659,7 +665,8 @@ def test_general_model_names_the_request_no_host_answered(diatomic) -> None:
     required output left unanswered is reported by name.
     """
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -672,7 +679,8 @@ def test_staging_a_phase_drops_the_previous_answers(diatomic) -> None:
     """Staging clears the answers; nothing survives into the next phase or update."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     coupling = model.new_coupling()
@@ -702,7 +710,8 @@ def test_staging_ends_the_current_request(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -733,7 +742,8 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
     """The width is the input of one request kind, never a cavity field."""
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     coupling = model.new_coupling()
 
@@ -760,7 +770,8 @@ def test_gaussian_width_is_scoped_to_its_request(diatomic) -> None:
 def test_request_outputs_are_named_and_ordered(diatomic) -> None:
     """Outputs are the contract; answer takes them by keyword only."""
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -799,7 +810,7 @@ def test_grid_inputs_come_from_the_cavity(diatomic, cavity_type) -> None:
     """
 
     model = SolvationModel(
-        cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), [ModelComponentCPCM(32.0)]
+        CONTEXT, cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type], context=CONTEXT), [ModelComponentCPCM(32.0)]
     )
     model.update(diatomic())
     coupling = model.new_coupling()
@@ -829,7 +840,8 @@ def test_native_coupling_retains_model_until_release(diatomic) -> None:
     import gc
     import weakref
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     owner = weakref.ref(model._model)
     coupling = library.new_coupling(model._model)
@@ -854,7 +866,8 @@ def test_getters_require_the_phase_they_were_staged_for(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
 
     unstaged = model.new_coupling()
@@ -888,7 +901,8 @@ def test_each_phase_walks_what_it_still_owes(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
 
@@ -922,7 +936,8 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
     """
 
     structure = diatomic()
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(structure)
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -967,7 +982,8 @@ def test_native_cursor_queries_are_checked(diatomic) -> None:
 def test_an_empty_response_ends_the_walk_at_once(diatomic) -> None:
     """A model with no item to hand back yields none; the walk ends immediately."""
 
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentPV(1.0e-4)])
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -996,7 +1012,8 @@ def test_response_arrays_are_read_by_name(gaussian_density) -> None:
     """The cursor walks the items; each lists its arrays, read by name in the listed shape."""
 
     model = SolvationModel(
-        CavityDROP(lsf=Isodensity(), parameters=_DROP_NLEB26, source=gaussian_density),
+        CONTEXT, CavityDROP(lsf=Isodensity(),
+                   parameters=_DROP_NLEB26, source=gaussian_density, context=CONTEXT),
         [ModelComponentCPCM(32.0), ModelComponentPV(1.0e-4)],
     )
     model.update(Structure(np.array([1]), np.zeros((1, 3))))
@@ -1194,7 +1211,8 @@ def test_borrowed_model_cavity_rejects_standalone_updates(diatomic) -> None:
     """A model-owned cavity may be inspected but not rebuilt out of band."""
 
     structure = diatomic()
-    model = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [ModelComponentPV(1.0e-4)])
+    model = SolvationModel(CONTEXT, CavityDROP(parameters=_DROP_NLEB26, context=CONTEXT),
+                           [ModelComponentPV(1.0e-4)])
     model.update(structure)
     original_area = model.cavity.area
 
@@ -1225,7 +1243,8 @@ def _gaussian_answers(ngrid):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
     """A value that is no number never reaches the library, so nothing stored changes."""
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -1244,7 +1263,8 @@ def test_python_side_rejection_leaves_the_stored_answer(diatomic, output):
 @pytest.mark.parametrize("output", ["dphi_dr", "dphi_dxi"])
 def test_native_rejection_leaves_the_output_missing(diatomic, output):
     """A native rejection un-answers exactly that output; the others survive."""
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_gradient(coupling)
@@ -1268,7 +1288,8 @@ def test_native_rejection_leaves_the_output_missing(diatomic, output):
 
 
 def test_rejected_replacement_is_missing_and_retryable(diatomic):
-    model = SolvationModel(CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0)])
+    model = SolvationModel(CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT),
+                           [ModelComponentCPCM(32.0)])
     model.update(diatomic())
     coupling = model.new_coupling()
     model.prepare_energy(coupling)
@@ -1311,7 +1332,8 @@ def test_builtin_components_declare_their_requests(diatomic, cavity_type, compon
         components.append(ModelComponentGOSTSHYP(0.0 if component == "disabled" else 1e-5))
         if component != "disabled":
             expected.append("gaussian_moments")
-    model = SolvationModel(cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type]), components)
+    model = SolvationModel(CONTEXT, cavity_type(parameters=_NLEB26_PARAMETERS[cavity_type], context=CONTEXT),
+                           components)
     model.update(diatomic())
     ngrid = model.cavity.ngrid
     coupling = model.new_coupling()
@@ -1393,7 +1415,7 @@ BOTH = ["gaussian_potential", "gaussian_moments"]
 def two_requests(diatomic) -> SolvationModel:
     """ISwiG model whose phases walk a potential request, then a moment request."""
     model = SolvationModel(
-        CavityISwiG(parameters=_ISWIG_NLEB26), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
+        CONTEXT, CavityISwiG(parameters=_ISWIG_NLEB26, context=CONTEXT), [ModelComponentCPCM(32.0), ModelComponentGOSTSHYP(1.0e-5)]
     )
     model.update(diatomic())
     return model

@@ -123,26 +123,27 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radii Atomic radius model to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_numsa(self, ctx, radii, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_numsa(self, radii, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_numsa), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radii
       !> Construction error
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_numsa_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
       type(moist_cavity_numsa_parameters_type) :: settings
 
       if (present(param)) settings = param
-      self%ctx => ctx
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
       self%label = "NUMSA"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
@@ -176,6 +177,9 @@ contains
       real(wp), allocatable :: surface(:)
       real(wp), allocatable :: dsdr(:, :, :)
       integer :: iat, jatom
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       nat = mol%nat
       self%nsph = nat

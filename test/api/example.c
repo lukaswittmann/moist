@@ -7,9 +7,12 @@
 
 #include "moist.h"
 
+/* Run context shared by every fixture cavity and model; created in main */
+static moist_context fixture_context = NULL;
+
 /* Fixture builders for numerical tests; public API exercised in test_v1_contract
  * below. Each copies and releases its LSF configuration */
-static moist_cavity fixture_drop(moist_error error, const int *nleb, const bool *debug, const int *verbose, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
+static moist_cavity fixture_drop(moist_error error, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
 {
     moist_drop_options options;
     moist_svdw_options surface;
@@ -18,8 +21,6 @@ static moist_cavity fixture_drop(moist_error error, const int *nleb, const bool 
     moist_init_svdw_options(error, &surface, sizeof surface);
     if (moist_check_error(error)) return NULL;
     if (nleb) options.nleb = *nleb;
-    if (debug) options.debug = *debug;
-    if (verbose) options.verbosity = *verbose;
     if (do_fine) options.do_fine = *do_fine;
     if (tolerance) options.tolerance = *tolerance;
     if (proj_maxiter) options.proj_maxiter = *proj_maxiter;
@@ -33,12 +34,12 @@ static moist_cavity fixture_drop(moist_error error, const int *nleb, const bool 
     if (blend3b) surface.blend_3b = *blend3b;
     moist_lsf lsf = moist_new_svdw_lsf(error, &surface);
     if (moist_check_error(error)) return NULL;
-    moist_cavity cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
+    moist_cavity cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, &options);
     moist_delete(lsf);
     return cavity;
 }
 
-static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii, const int *nleb, const bool *debug, const int *verbose, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
+static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii, const int *nleb, const double *blendk, const double *blend1b, const double *blend2b, const double *blend3b, const bool *do_fine, const double *tolerance, const int *proj_maxiter, const int *proj_level, const double *branch_weight_s, const double *rho_grid_h, const int *wleb_prune_level)
 {
     moist_drop_options options;
     moist_svdw_options surface;
@@ -47,8 +48,6 @@ static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii
     moist_init_svdw_options(error, &surface, sizeof surface);
     if (moist_check_error(error)) return NULL;
     if (nleb) options.nleb = *nleb;
-    if (debug) options.debug = *debug;
-    if (verbose) options.verbosity = *verbose;
     if (do_fine) options.do_fine = *do_fine;
     if (tolerance) options.tolerance = *tolerance;
     if (proj_maxiter) options.proj_maxiter = *proj_maxiter;
@@ -62,26 +61,24 @@ static moist_cavity fixture_drop_with_radii(moist_error error, moist_radii radii
     if (blend3b) surface.blend_3b = *blend3b;
     moist_lsf lsf = moist_new_svdw_lsf(error, &surface);
     if (moist_check_error(error)) return NULL;
-    moist_cavity cavity = moist_new_drop_cavity(error, lsf, radii, &options);
+    moist_cavity cavity = moist_new_drop_cavity(error, fixture_context, lsf, radii, &options);
     moist_delete(lsf);
     return cavity;
 }
 
 static moist_cavity fixture_iswig(moist_error error, const int *nleb,
-    const bool *debug, const int *verbose, const double *cut_a, const double *cut_f)
+    const double *cut_a, const double *cut_f)
 {
     moist_iswig_options options;
     moist_init_iswig_options(error, &options, sizeof options);
     if (moist_check_error(error)) return NULL;
     if (nleb) options.nleb = *nleb;
-    if (debug) options.debug = *debug;
-    if (verbose) options.verbosity = *verbose;
     if (cut_a) options.cut_a = *cut_a;
     if (cut_f) options.cut_f = *cut_f;
-    return moist_new_iswig_cavity(error, NULL, &options);
+    return moist_new_iswig_cavity(error, fixture_context, NULL, &options);
 }
 
-static moist_cavity fixture_isodensity_internal(moist_error error, int nshell, const int *shell_atom, const int *shell_l, const int *shell_nprim, const double *exps, const double *coeffs, double rho_iso, const double *scale, const int *nleb, const bool *debug, const int *verbose, const bool *do_fine, const int *wleb_prune_level, const double *tolerance)
+static moist_cavity fixture_isodensity_internal(moist_error error, int nshell, const int *shell_atom, const int *shell_l, const int *shell_nprim, const double *exps, const double *coeffs, double rho_iso, const double *scale, const int *nleb, const bool *do_fine, const int *wleb_prune_level, const double *tolerance)
 {
     moist_drop_options options;
     moist_isodensity_options surface;
@@ -90,8 +87,6 @@ static moist_cavity fixture_isodensity_internal(moist_error error, int nshell, c
     moist_init_isodensity_options(error, &surface, sizeof surface);
     if (moist_check_error(error)) return NULL;
     if (nleb) options.nleb = *nleb;
-    if (debug) options.debug = *debug;
-    if (verbose) options.verbosity = *verbose;
     if (do_fine) options.do_fine = *do_fine;
     if (wleb_prune_level) options.wleb_prune_level = *wleb_prune_level;
     if (tolerance) options.tolerance = *tolerance;
@@ -99,12 +94,12 @@ static moist_cavity fixture_isodensity_internal(moist_error error, int nshell, c
     if (scale) surface.scale = *scale;
     moist_lsf lsf = moist_new_isodensity_lsf(error, nshell, shell_atom, shell_l, shell_nprim, exps, coeffs, &surface);
     if (moist_check_error(error)) return NULL;
-    moist_cavity cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
+    moist_cavity cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, &options);
     moist_delete(lsf);
     return cavity;
 }
 
-static moist_cavity fixture_isodensity_callback(moist_error error, moist_isodensity_lsf_callback callback, void *context, double rho_iso, const double *scale, const int *nleb, const bool *debug, const int *verbose, const bool *do_fine, const int *wleb_prune_level, const double *tolerance)
+static moist_cavity fixture_isodensity_callback(moist_error error, moist_isodensity_lsf_callback callback, void *context, double rho_iso, const double *scale, const int *nleb, const bool *do_fine, const int *wleb_prune_level, const double *tolerance)
 {
     moist_drop_options options;
     moist_isodensity_options surface;
@@ -113,8 +108,6 @@ static moist_cavity fixture_isodensity_callback(moist_error error, moist_isodens
     moist_init_isodensity_options(error, &surface, sizeof surface);
     if (moist_check_error(error)) return NULL;
     if (nleb) options.nleb = *nleb;
-    if (debug) options.debug = *debug;
-    if (verbose) options.verbosity = *verbose;
     if (do_fine) options.do_fine = *do_fine;
     if (wleb_prune_level) options.wleb_prune_level = *wleb_prune_level;
     if (tolerance) options.tolerance = *tolerance;
@@ -122,7 +115,7 @@ static moist_cavity fixture_isodensity_callback(moist_error error, moist_isodens
     if (scale) surface.scale = *scale;
     moist_lsf lsf = moist_new_isodensity_callback_lsf(error, callback, context, &surface);
     if (moist_check_error(error)) return NULL;
-    moist_cavity cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
+    moist_cavity cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, &options);
     moist_delete(lsf);
     return cavity;
 }
@@ -325,7 +318,7 @@ int test_drop_cavity(void)
     }
 
     cav = fixture_drop_with_radii(error, radii_model,
-                                           NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                           NULL, NULL, NULL, NULL, NULL, NULL,
                                            NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
@@ -466,7 +459,7 @@ int test_custom_radii(void)
     }
 
     cav = fixture_drop_with_radii(error, radii_model,
-                                           NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                           NULL, NULL, NULL, NULL, NULL, NULL,
                                            NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
@@ -523,7 +516,7 @@ int test_custom_radii(void)
     }
 
     cav = fixture_drop_with_radii(error, radii_model,
-                                           NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                                           NULL, NULL, NULL, NULL, NULL, NULL,
                                            NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
@@ -626,7 +619,7 @@ int test_h2o_cavity(void)
     }
 
     // Create DROP cavity handle (does not build yet)
-    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL,
                                 NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
@@ -780,7 +773,7 @@ int test_cavity_gradient(void)
     }
 
     // Create DROP cavity
-    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL,
                                 NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
@@ -848,7 +841,7 @@ int test_cavity_gradient(void)
     /* With do_fine both optional outputs are computed and handed out */
     {
         const bool do_fine = true;
-        fine = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, &do_fine,
+        fine = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, &do_fine,
                             NULL, NULL, NULL, NULL, NULL, NULL);
         if (!moist_check_error(error)) moist_update_cavity(error, fine, mol);
         if (!moist_check_error(error)) moist_compute_cavity_gradient(error, fine);
@@ -1299,7 +1292,7 @@ int test_isodensity_internal_cavity(void)
 
     cav = fixture_isodensity_internal(
         error, nshell_in, shell_atom, shell_l, shell_nprim, exps, coeffs,
-        rho_iso, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        rho_iso, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1668,7 +1661,7 @@ int test_isodensity_callback_cavity(void)
 
     cav = fixture_isodensity_callback(
         error, iso_gaussian_callback, &ctx, ctx.rho_iso,
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -1733,7 +1726,7 @@ int test_isodensity_callback_cavity(void)
 
     ref = fixture_isodensity_internal(
         error, nshell_in, shell_atom, shell_l, shell_nprim, exps, coeffs,
-        rho_iso, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        rho_iso, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         result = 1;
@@ -1848,7 +1841,7 @@ int test_isodensity_callback_third_derivative(void)
 
     cav = fixture_isodensity_callback(
         error, iso_gaussian_callback, &ctx, ctx.rho_iso,
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -2028,7 +2021,7 @@ int test_isodensity_callback_failure(void)
 
     cav = fixture_isodensity_callback(
         error, iso_failing_callback, &ctx, ctx.base.rho_iso,
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+        NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
         show_error(error);
         goto cleanup;
@@ -2132,7 +2125,7 @@ int test_update_drop_cavity_keeps_params(void)
         goto cleanup;
     }
 
-    cav = fixture_drop(error, &nleb, NULL, NULL, NULL, NULL,
+    cav = fixture_drop(error, &nleb, NULL, NULL,
                                 NULL, NULL, NULL, &tolerance_in,
                                 NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) {
@@ -2224,7 +2217,7 @@ int test_cavity_fields(void)
     mol = make_h2o(error);
     if (moist_check_error(error)) { show_error(error); goto cleanup; }
 
-    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL,
                                 NULL, NULL, NULL, NULL, NULL, NULL);
     if (moist_check_error(error)) { show_error(error); goto cleanup; }
 
@@ -2462,7 +2455,7 @@ int test_capacity_validation(void)
     const int natoms = H2O_NATOMS;
 
     mol = make_h2o(error);
-    cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL,
+    cav = fixture_drop(error, NULL, NULL, NULL,
                                 NULL, NULL, NULL, NULL,
                                 NULL, NULL, NULL, NULL, NULL);
     moist_update_cavity(error, cav, mol);
@@ -2762,7 +2755,6 @@ int test_error_origins(void)
     moist_svdw_options svdw = {0};
     moist_cfc_options cfc = {0};
     moist_isodensity_options iso = {0};
-    moist_model_options model_options = {0};
     moist_model model = NULL;
     moist_coupling coupling = NULL;
     char request_name[MOIST_NAME_MAX + 1];
@@ -2778,11 +2770,10 @@ int test_error_origins(void)
     CHECK_INIT(svdw);
     CHECK_INIT(cfc);
     CHECK_INIT(isodensity);
-    CHECK_INIT(model);
     CHECK_INIT(pcm);
-    component = moist_new_cpcm_component(error, 32, &pcm);
+    component = moist_new_cpcm_component(error, NULL, 32, &pcm);
     REQUIRE_ORIGIN("moist_new_cpcm_component");
-    component = moist_new_cosmo_component(error, 32, &pcm);
+    component = moist_new_cosmo_component(error, NULL, 32, &pcm);
     REQUIRE_ORIGIN("moist_new_cosmo_component");
     lsf = moist_new_svdw_lsf(error, &svdw);
     REQUIRE_ORIGIN("moist_new_svdw_lsf");
@@ -2792,11 +2783,14 @@ int test_error_origins(void)
     REQUIRE_ORIGIN("moist_new_isodensity_lsf");
     lsf = moist_new_isodensity_callback_lsf(error, NULL, NULL, &iso);
     REQUIRE_ORIGIN("moist_new_isodensity_callback_lsf");
-    cavity = moist_new_drop_cavity(error, NULL, NULL, &drop);
+    cavity = moist_new_drop_cavity(error, fixture_context, NULL, NULL, &drop);
     REQUIRE_ORIGIN("moist_new_drop_cavity");
-    cavity = moist_new_iswig_cavity(error, NULL, &iswig);
+    cavity = moist_new_iswig_cavity(error, fixture_context, NULL, &iswig);
     REQUIRE_ORIGIN("moist_new_iswig_cavity");
-    model = moist_new_model(error, NULL, &model_options);
+    model = moist_new_model(error, fixture_context, NULL);
+    REQUIRE_ORIGIN("moist_new_model");
+    /* A model refuses a missing context before any other input is read */
+    model = moist_new_model(error, NULL, NULL);
     REQUIRE_ORIGIN("moist_new_model");
     moist_init_isodensity_options(error, &iso, sizeof iso);
     iso.rho_iso = -1;
@@ -2889,14 +2883,14 @@ int test_model_density_rejection(void)
     bool missing = true;
     int failed = 1;
     cavity = fixture_isodensity_internal(error, 1, &atom, &angular, &primitives,
-        &exponent, &coefficient, 1e-3, NULL, &nleb, NULL, NULL, NULL, NULL, NULL);
+        &exponent, &coefficient, 1e-3, NULL, &nleb, NULL, NULL, NULL);
     if (!cavity || moist_check_error(error)) goto cleanup;
     moist_set_isodensity_density(error, cavity, 1, &density);
     if (moist_check_error(error)) goto cleanup;
     mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
     if (!mol || moist_check_error(error)) goto cleanup;
-    model = moist_new_model(error, cavity, NULL);
-    pcm = moist_new_cpcm_component(error, 32, NULL);
+    model = moist_new_model(error, fixture_context, cavity);
+    pcm = moist_new_cpcm_component(error, NULL, 32, NULL);
     if (!model || !pcm || moist_check_error(error)) goto cleanup;
     moist_add_model_component(error, model, pcm);
     if (moist_check_error(error)) goto cleanup;
@@ -2925,6 +2919,40 @@ cleanup:
     moist_delete_coupling(&coupling);
     moist_delete_model(&model);
     moist_delete_component(&pcm);
+    moist_delete_cavity(&cavity);
+    moist_delete_structure(&mol);
+    moist_delete_error(&error);
+    return failed;
+}
+
+/* A cavity and a component built without a context fail standalone and run
+ * on the context of the model they are copied into */
+int test_parts_without_context(void)
+{
+    moist_error error = moist_new_error();
+    moist_cavity cavity = NULL;
+    moist_component pv = NULL;
+    moist_structure mol = NULL;
+    moist_model model = NULL;
+    const int hydrogen = 1;
+    const double position[3] = {0};
+    int failed = 1;
+    mol = moist_new_structure(error, 1, &hydrogen, position, NULL, NULL);
+    cavity = moist_new_iswig_cavity(error, NULL, NULL, NULL);
+    pv = moist_new_pv_component(error, NULL, 1e-4);
+    if (!mol || !cavity || !pv || moist_check_error(error)) goto cleanup;
+    moist_update_cavity(error, cavity, mol);
+    if (expect_failure(&error, "Cavity has no context", "standalone cavity without a context")) goto cleanup;
+    model = moist_new_model(error, fixture_context, cavity);
+    if (!model || moist_check_error(error)) goto cleanup;
+    moist_add_model_component(error, model, pv);
+    moist_update_model(error, model, mol);
+    if (moist_check_error(error)) goto cleanup;
+    failed = 0;
+cleanup:
+    if (failed) show_error(error);
+    moist_delete_model(&model);
+    moist_delete_component(&pv);
     moist_delete_cavity(&cavity);
     moist_delete_structure(&mol);
     moist_delete_error(&error);
@@ -3149,8 +3177,8 @@ static int run_coupling_protocol(const char* label, moist_cavity cav)
     moist_pcm_options pcm_options;
     moist_init_pcm_options(error, &pcm_options, sizeof pcm_options);
     pcm_options.solver = moist_pcm_solver_lu;
-    moist_component pcm = moist_new_cpcm_component(error, 78.4, &pcm_options);
-    moist_model model = moist_new_model(error, cav, NULL);
+    moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_options);
+    moist_model model = moist_new_model(error, fixture_context, cav);
     moist_coupling cpl = NULL, other = NULL;
     moist_response response = NULL;
     moist_cavity borrowed = NULL;
@@ -3419,7 +3447,7 @@ cleanup:
 int test_coupling_protocol_fixed_cavity(void)
 {
     moist_error error = moist_new_error();
-    moist_cavity cav = fixture_iswig(error, NULL, NULL, NULL, NULL, NULL);
+    moist_cavity cav = fixture_iswig(error, NULL, NULL, NULL);
     int result = 1;
     if (moist_check_error(error)) {
         show_error(error);
@@ -3434,7 +3462,7 @@ int test_coupling_protocol_fixed_cavity(void)
 int test_coupling_protocol_drop_cavity(void)
 {
     moist_error error = moist_new_error();
-    moist_cavity cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+    moist_cavity cav = fixture_drop(error, NULL, NULL, NULL, NULL, NULL,
                                              NULL, NULL, NULL, NULL, NULL, NULL, NULL);
     int result = 1;
     if (moist_check_error(error)) {
@@ -3476,7 +3504,7 @@ int test_coupling_protocol_density_cavity(void)
     const double exps[3] = {alpha, alpha, alpha}, coeffs[3] = {coeff, coeff, coeff};
     REQUIRE(mol && !moist_check_error(error));
     cav = fixture_isodensity_internal(error, 3, shell_atom, shell_l, shell_nprim, exps, coeffs,
-                                      1.0e-3, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+                                      1.0e-3, NULL, NULL, NULL, NULL, NULL);
     REQUIRE(cav && !moist_check_error(error));
     moist_get_isodensity_cart_layout(error, cav, &ncart, &nshell, NULL, NULL, NULL, NULL);
     REQUIRE(!moist_check_error(error) && ncart > 0);
@@ -3487,8 +3515,8 @@ int test_coupling_protocol_density_cavity(void)
     REQUIRE(!moist_check_error(error));
     moist_init_pcm_options(error, &pcm_options, sizeof pcm_options);
     pcm_options.solver = moist_pcm_solver_lu;
-    pcm = moist_new_cpcm_component(error, 78.4, &pcm_options);
-    model = moist_new_model(error, cav, NULL);
+    pcm = moist_new_cpcm_component(error, NULL, 78.4, &pcm_options);
+    model = moist_new_model(error, fixture_context, cav);
     REQUIRE(pcm && model && !moist_check_error(error));
     moist_add_model_component(error, model, pcm);
     REQUIRE(!moist_check_error(error));
@@ -3617,9 +3645,9 @@ int test_coupling_protocol_gostshyp(void)
     const int padding = 5;
     moist_error error = moist_new_error();
     moist_structure mol = make_h2o(error);
-    moist_cavity cav = fixture_iswig(error, NULL, NULL, NULL, NULL, NULL);
-    moist_component pcm = moist_new_cpcm_component(error, 78.4, NULL);
-    moist_component gostshyp = moist_new_gostshyp_component(error, 1.0e-4);
+    moist_cavity cav = fixture_iswig(error, NULL, NULL, NULL);
+    moist_component pcm = moist_new_cpcm_component(error, NULL, 78.4, NULL);
+    moist_component gostshyp = moist_new_gostshyp_component(error, NULL, 1.0e-4);
     moist_model model = NULL;
     moist_coupling cpl = NULL;
     moist_response response = NULL;
@@ -3638,7 +3666,7 @@ int test_coupling_protocol_gostshyp(void)
     char visited[128];
     bool more = false;
     REQUIRE(mol && cav && pcm && gostshyp && !moist_check_error(error));
-    model = moist_new_model(error, cav, NULL);
+    model = moist_new_model(error, fixture_context, cav);
     REQUIRE(model && !moist_check_error(error));
     moist_add_model_component(error, model, pcm);
     REQUIRE(!moist_check_error(error));
@@ -4007,15 +4035,15 @@ int test_context(void)
         moist_get_context_num_threads(error, context, &count);
         if (moist_check_error(error) || count != pinned) goto cleanup;
         if (kind == 0)
-            cavity = moist_new_drop_cavity_with_context(error, context, lsf, NULL, NULL);
+            cavity = moist_new_drop_cavity(error, context, lsf, NULL, NULL);
         else
-            cavity = moist_new_iswig_cavity_with_context(error, context, NULL, NULL);
+            cavity = moist_new_iswig_cavity(error, context, NULL, NULL);
         if (!cavity || moist_check_error(error)) goto cleanup;
-        /* Both the explicit and inherited model paths share the same context */
-        model = kind == 0 ? moist_new_model_with_context(error, context, cavity, NULL)
-                          : moist_new_model(error, cavity, NULL);
+        /* A successful retry on the same error handle clears the earlier failure */
+        if (moist_new_model(error, NULL, cavity) || !moist_check_error(error)) goto cleanup;
+        model = moist_new_model(error, context, cavity);
         if (!model || moist_check_error(error)) goto cleanup;
-        pv = moist_new_pv_component(error, 1e-4);
+        pv = moist_new_pv_component(error, NULL, 1e-4);
         moist_add_model_component(error, model, pv);
         if (!pv || moist_check_error(error)) goto cleanup;
         moist_delete(pv);
@@ -4046,8 +4074,6 @@ cleanup:
 struct drop_options_1_0 {
     size_t struct_size;
     int nleb;
-    bool debug;
-    int verbosity;
     bool do_fine;
     double tolerance;
     int proj_maxiter;
@@ -4089,12 +4115,12 @@ int test_options_1_0_prefix(void)
         if (((unsigned char *)&future)[i] != 0x5a) goto cleanup;
     lsf = moist_new_svdw_lsf(error, NULL);
     if (!lsf || moist_check_error(error)) goto cleanup;
-    cavity = moist_new_drop_cavity(error, lsf, NULL, (const moist_drop_options *)&future.prefix);
+    cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, (const moist_drop_options *)&future.prefix);
     if (!cavity || moist_check_error(error)) goto cleanup;
     /* Reserved inputs stay ignored, including residue from pre-reservation callers */
     moist_delete(cavity);
     future.prefix.reserved0 = 123;
-    cavity = moist_new_drop_cavity(error, lsf, NULL, (const moist_drop_options *)&future.prefix);
+    cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, (const moist_drop_options *)&future.prefix);
     if (!cavity || moist_check_error(error)) goto cleanup;
 
     memset(&cfc, 0x5a, sizeof cfc);
@@ -4112,7 +4138,7 @@ int test_options_1_0_prefix(void)
     if (moist_check_error(error) || pcm_options.prefix.struct_size != sizeof pcm_options.prefix) goto cleanup;
     for (size_t i = sizeof pcm_options.prefix; i < sizeof pcm_options; ++i)
         if (((unsigned char *)&pcm_options)[i] != 0x5a) goto cleanup;
-    pcm = moist_new_cpcm_component(error, 80.0, (const moist_pcm_options *)&pcm_options.prefix);
+    pcm = moist_new_cpcm_component(error, NULL, 80.0, (const moist_pcm_options *)&pcm_options.prefix);
     if (!pcm || moist_check_error(error)) goto cleanup;
     failed = 0;
 cleanup:
@@ -4144,8 +4170,6 @@ int test_options_padding(void)
         unsigned char fields[sizeof value] = {0};
         MARK_FIELD(drop, struct_size);
         MARK_FIELD(drop, nleb);
-        MARK_FIELD(drop, debug);
-        MARK_FIELD(drop, verbosity);
         MARK_FIELD(drop, do_fine);
         MARK_FIELD(drop, tolerance);
         MARK_FIELD(drop, proj_maxiter);
@@ -4164,8 +4188,6 @@ int test_options_padding(void)
         unsigned char fields[sizeof value] = {0};
         MARK_FIELD(iswig, struct_size);
         MARK_FIELD(iswig, nleb);
-        MARK_FIELD(iswig, debug);
-        MARK_FIELD(iswig, verbosity);
         MARK_FIELD(iswig, cut_a);
         MARK_FIELD(iswig, cut_f);
         for (int pass = 0; pass < 2; ++pass) {
@@ -4215,18 +4237,6 @@ int test_options_padding(void)
         }
     }
     {
-        moist_model_options value;
-        unsigned char fields[sizeof value] = {0};
-        MARK_FIELD(model, struct_size);
-        MARK_FIELD(model, debug);
-        MARK_FIELD(model, verbosity);
-        for (int pass = 0; pass < 2; ++pass) {
-            memset(&value, pass ? 0x5a : 0xa5, sizeof value);
-            moist_init_model_options(error, &value, sizeof value);
-            if (moist_check_error(error) || !padding_is_zero(&value, fields, sizeof value)) goto cleanup;
-        }
-    }
-    {
         moist_pcm_options value;
         unsigned char fields[sizeof value] = {0};
         MARK_FIELD(pcm, struct_size);
@@ -4261,19 +4271,19 @@ int test_pcm_solver_options(void)
     options.solver = moist_pcm_solver_iterative;
     options.solver_tol = 1.0e-8;
     options.solver_maxiter = 200;
-    pcm = moist_new_cpcm_component(error, 78.4, &options);
+    pcm = moist_new_cpcm_component(error, NULL, 78.4, &options);
     if (!pcm || moist_check_error(error)) goto cleanup;
     moist_delete(pcm);
-    pcm = moist_new_cosmo_component(error, 78.4, &options);
+    pcm = moist_new_cosmo_component(error, NULL, 78.4, &options);
     if (!pcm || moist_check_error(error)) goto cleanup;
     moist_delete(pcm);
     /* A zero cap and a NaN threshold are rejected, for either variant */
     options.solver_maxiter = 0;
-    pcm = moist_new_cpcm_component(error, 78.4, &options);
+    pcm = moist_new_cpcm_component(error, NULL, 78.4, &options);
     if (pcm || !moist_check_error(error)) goto cleanup;
     options.solver_maxiter = 200;
     options.solver_tol = NAN;
-    pcm = moist_new_cosmo_component(error, 78.4, &options);
+    pcm = moist_new_cosmo_component(error, NULL, 78.4, &options);
     if (pcm || !moist_check_error(error)) goto cleanup;
     failed = 0;
 cleanup:
@@ -4333,7 +4343,6 @@ int test_v1_contract(void)
     CHECK_OPTIONS_LAYOUT(svdw);
     CHECK_OPTIONS_LAYOUT(cfc);
     CHECK_OPTIONS_LAYOUT(isodensity);
-    CHECK_OPTIONS_LAYOUT(model);
     CHECK_OPTIONS_LAYOUT(pcm);
 #undef CHECK_OPTIONS_LAYOUT
 
@@ -4351,11 +4360,11 @@ int test_v1_contract(void)
     options.struct_size = sizeof options;
     if (options.nleb != 194 || options.tolerance != 1e-10) goto cleanup;
 
-    cavity = moist_new_drop_cavity(error, NULL, NULL, NULL);
+    cavity = moist_new_drop_cavity(error, fixture_context, NULL, NULL, NULL);
     if (cavity || !moist_check_error(error)) goto cleanup;
     lsf = moist_new_svdw_lsf(error, NULL);
     if (!lsf || moist_check_error(error)) goto cleanup;
-    cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
+    cavity = moist_new_drop_cavity(error, fixture_context, lsf, NULL, &options);
     if (!cavity || moist_check_error(error)) goto cleanup;
     moist_delete(lsf);  /* The cavity owns its LSF copy */
     mol = make_h2o(error);
@@ -4414,6 +4423,7 @@ static const struct {
     {"uninitialized_error",                  test_uninitialized_error},
     {"error_origins",                        test_error_origins},
     {"model_density_rejection",              test_model_density_rejection},
+    {"parts_without_context",                test_parts_without_context},
     {"null_handle",                          test_null_handle},
     {"delete_resets_handle",                 test_delete_resets_handle},
     {"drop_cavity",                          test_drop_cavity},
@@ -4438,6 +4448,15 @@ int main(void)
     const size_t ntests = sizeof(test_registry) / sizeof(test_registry[0]);
     int failed[sizeof(test_registry) / sizeof(test_registry[0])];
     size_t nfailed = 0;
+    moist_error error = moist_new_error();
+
+    fixture_context = moist_new_context(error, 0, 0, false);
+    if (!fixture_context || moist_check_error(error)) {
+        show_error(error);
+        moist_delete_error(&error);
+        return EXIT_FAILURE;
+    }
+    moist_delete_error(&error);
 
     for (size_t i = 0; i < ntests; i++) {
         failed[i] = test_registry[i].fn() != 0;
@@ -4452,5 +4471,6 @@ int main(void)
         }
     }
 
+    moist_delete_context(&fixture_context);
     return nfailed == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

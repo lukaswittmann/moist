@@ -17,10 +17,13 @@ from moist import ModelComponentCPCM, ModelComponentPV, ModelComponentGOSTSHYP
 from moist.interface import SolvationModel
 from moist.pyscf import CFC, DROP, ISwiG, Isodensity, SvdW  # registers .MOIST()
 from moist import (
-    DROPParameters, ISwiGParameters, IsodensityParameters, ModelParameters, PCMParameters,
+    Context, DROPParameters, ISwiGParameters, IsodensityParameters, PCMParameters,
     CustomRadii,
 )
 from moist.pyscf import PySCFHost, PySCFSolvation
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 CAVITIES = {"svdw-drop": DROP(lsf=SvdW(), parameters=DROPParameters(nleb=26)),
             "cfc-drop": DROP(lsf=CFC(), parameters=DROPParameters(nleb=26)),
@@ -65,7 +68,7 @@ def mol():
 def attach(mf, cavity="svdw-drop", components=None):
     if components is None:
         components = [ModelComponentCPCM(32.0)]
-    return mf.MOIST(cavity=CAVITIES[cavity], components=components)
+    return mf.MOIST(cavity=CAVITIES[cavity], components=components, context=CONTEXT)
 
 
 @pytest.mark.parametrize("cavity", ["svdw-drop", "cfc-drop", "iswig", "rho-drop"])
@@ -251,7 +254,7 @@ def test_gostshyp_composition(mol, cavity):
 
 def test_unsupported_operations_are_explicit(mol, monkeypatch):
     with pytest.raises(TypeError, match="cavity must"):
-        mol.RHF().MOIST(cavity="invalid", components=[ModelComponentCPCM(32)])
+        mol.RHF().MOIST(cavity="invalid", components=[ModelComponentCPCM(32)], context=CONTEXT)
     with pytest.raises(TypeError, match="keyword"):
         ISwiG(rho_iso=4e-4)
     with pytest.raises(TypeError, match="keyword"):
@@ -315,8 +318,8 @@ def test_explicit_molecule_does_not_poison_gradient(mol):
 def test_reusable_cavity_and_lsf_configuration(mol):
     surface = Isodensity()
     config = DROP(lsf=surface, parameters=DROPParameters(nleb=26))
-    first = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
-    second = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)])
+    first = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)], context=CONTEXT)
+    second = mol.RHF().MOIST(cavity=config, components=[ModelComponentCPCM(32)], context=CONTEXT)
     first.with_moist.set(cavity=replace(
         config, parameters=replace(config.parameters, nleb=50)))
     assert config.parameters.nleb == 26
@@ -362,10 +365,10 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     radii = CustomRadii([3., 2.5, 2.5])
     config = DROP(lsf=surface, parameters=parameters, radii=radii)
     terms = [ModelComponentCPCM(32, parameters=PCMParameters(solver="lu"))]
-    mf = mol.RHF().MOIST(cavity=config, components=terms, parameters=ModelParameters())
+    mf = mol.RHF().MOIST(cavity=config, components=terms, context=CONTEXT)
     dm = mf.get_init_guess()
     result = mf.with_moist.evaluate(dm)
-    reference = PySCFSolvation(mol, config, terms)
+    reference = PySCFSolvation(mol, config, terms, context=CONTEXT)
     expected = reference.evaluate(dm)
     assert result.energy == pytest.approx(expected.energy, abs=1e-12)
     np.testing.assert_allclose(result.fock, expected.fock, atol=1e-12)
@@ -378,12 +381,12 @@ def test_core_configuration_is_shared_with_pyscf(mol, density_dependent):
     assert mf.copy().with_moist.cavity == updated
 
 
-def test_density_fit_preserves_model_parameters(mol):
-    parameters = ModelParameters(debug=True, verbosity=0)
+def test_density_fit_preserves_context(mol):
+    context = Context(verbosity=0, debug=True)
     mf = mol.RHF().MOIST(cavity=CAVITIES["iswig"],
-                         components=[ModelComponentPV(1e-4)], parameters=parameters)
+                         components=[ModelComponentPV(1e-4)], context=context)
     fitted = mf.density_fit()
-    assert fitted.with_moist.parameters == parameters
+    assert fitted.with_moist.context is context
     assert fitted.with_moist.cavity == mf.with_moist.cavity
     assert fitted.with_moist.components == mf.with_moist.components
 

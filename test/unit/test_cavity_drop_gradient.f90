@@ -206,9 +206,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=1.0_wp, &
             blend_3b=1.0_wp))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=110, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7))
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=7), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
 
@@ -483,9 +483,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
             blend_3b=blend_3b_local))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_local, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4))
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level_local, wleb_prune_level=4), ctx=ctx)
       end block
       if (allocated(cavity_error)) call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
       ! Raise wleb_cut; with xi~1/sqrt(wleb) and small wleb value and gradient is increased
@@ -1310,10 +1310,10 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
          call new_context(ctx, nthreads=0, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-            do_curvature=.true., do_normal=.true.))
+            do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
@@ -1566,10 +1566,10 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
          call new_context(ctx, nthreads=0, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
-            do_curvature=.true., do_normal=.true.))
+            do_curvature=.true., do_normal=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)

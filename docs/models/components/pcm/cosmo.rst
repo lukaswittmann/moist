@@ -30,8 +30,8 @@ Construction
 
          type(model_continuum_component_cosmo) :: cosmo
 
-         call new_component_cosmo(cosmo, ctx, epsilon=78.4_wp, error=error, &
-            & param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+         call new_component_cosmo(cosmo, epsilon=78.4_wp, error=error, &
+            & param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
          if (allocated(error)) error stop error%message
 
    .. tab-item:: C
@@ -43,7 +43,7 @@ Construction
          moist_init_pcm_options(error, &options, sizeof options);
          options.solver = moist_pcm_solver_cholesky;
 
-         moist_component cosmo = moist_new_cosmo_component(error, 78.4, &options);
+         moist_component cosmo = moist_new_cosmo_component(error, NULL, 78.4, &options);
          moist_add_model_component(error, model, cosmo);
          moist_delete(cosmo);  /* model owns a copy */
 

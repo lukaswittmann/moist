@@ -23,47 +23,44 @@ pressure, separate from numerical settings:
 
    context = Context(nthreads=4)  # 0: current OpenMP setting
    cavity = CavityDROP(
-       context=context,
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
        parameters=DROPParameters(nleb=194, proj_level=3),
    )
-   model = SolvationModel(cavity, [
+   model = SolvationModel(context, cavity, [
        ModelComponentCPCM(
            78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
        ),
-   ])  # inherits the cavity context
+   ])
 
 ``CavityISwiG(parameters=ISwiGParameters(...), radii=...)`` has the same
 construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``lsf=CFC()`` or ``lsf=Isodensity(...)`` and all DROP level sets share
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
-the surface independently. ``PCMParameters`` applies to both CPCM and COSMO;
-``ModelParameters`` controls model logging for implicit contexts.
+the surface independently. ``PCMParameters`` applies to both CPCM and COSMO.
 
 ``Context(nthreads=0, verbosity=0, debug=False)`` mirrors the Fortran
 ``new_context(ctx, nthreads=, verbosity=, debug=)``. The thread count is fixed for
 the context's lifetime: a positive count is used as given, ``0`` (the default)
 takes the calling thread's OpenMP setting at construction (``OMP_NUM_THREADS``
-unless the host changed it) and a negative count raises. Cavities and models
-retain the context.
+unless the host changed it) and a negative count raises. Everything built on a
+context retains it.
 
 The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes
 the host's OpenMP runtime. BLAS/LAPACK threading is the host's task to configure.
 Without OpenMP, MOIST itself is serial; the math backend may still use threads.
 
-Pass ``context=...`` to a cavity, ``configuration.build()`` or ``SolvationModel``.
-Models inherit their cavity's context unless given another; the cavity copy and
-components share it. ``cavity.context`` and ``model.context`` expose the explicit
-context; ``context.nthreads`` reports its thread count. Explicit context
-logging overrides cavity/model parameters; omitted contexts retain defaults.
+``SolvationModel(context, cavity, components)`` requires the context as its first argument.
+Cavities, components and ``configuration.build()`` take an optional ``context=...``: a part with one keeps it inside the model, a part without one runs on the model's, and updating a standalone cavity without one
+raises.
+``cavity.context``, ``component.context`` and ``model.context`` expose the contexts; ``context.nthreads`` reports its thread count. The context alone sets verbosity and debug output.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
 native. Parameter objects are immutable and keyword-only.
 Constraints are checked by the native constructor.
-Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``.
+Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters`` and ``component.parameters``.
 ``cavity.radius_model`` is the radius configuration; ``cavity.radii`` remains the computed per-sphere radii after an update.
 
 Radii and density sources
@@ -90,6 +87,7 @@ order (1, 2 or 3). See :doc:`/cavities/isodensity` for the density convention.
    from moist import Isodensity, IsodensityParameters
 
    cavity = CavityDROP(
+       context=context,
        lsf=Isodensity(parameters=IsodensityParameters(rho_iso=1e-3)),
        parameters=DROPParameters(nleb=194, proj_maxiter=200),
        source=density_provider,
@@ -113,8 +111,8 @@ PySCF. Use ``dataclasses.replace`` to derive settings for a new calculation:
 
    config = DROP(lsf=SvdW(), parameters=DROPParameters(nleb=194))
    finer = replace(config, parameters=replace(config.parameters, nleb=302))
-   first = config.build()
-   second = config.build()  # independent native state
+   first = config.build(context=context)
+   second = config.build(context=context)  # independent native state
 
 Configurations and parameters can be compared, pickled, or converted to
 dictionaries using ``dataclasses.asdict``. For reproducibility, record the
@@ -174,7 +172,7 @@ sources. Basis data and the live density are separate from those settings::
    basis = GaussianBasis(shell_atom=[0], shell_l=[0], shell_nprim=[1],
                          exponents=[0.5], coefficients=[1.0])
    source = InternalDensity(basis, [[1.0]])
-   cavity = DROP(lsf=Isodensity()).build(source=source)
+   cavity = DROP(lsf=Isodensity()).build(context=context, source=source)
    shell_offsets, powers = cavity.isodensity_layout()
 
 Shell atom indices and offsets are zero-based; ``powers`` has shape ``(ncart,3)``.

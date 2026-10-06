@@ -74,8 +74,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -127,8 +127,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -190,8 +190,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -241,8 +241,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -291,8 +291,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -340,8 +340,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)
@@ -528,8 +528,8 @@ contains
          block
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
          end block
          if (allocated(cavity_error)) call test_failed(error, cavity_error%message)
          call cavity%update(mol, error=cavity_error)

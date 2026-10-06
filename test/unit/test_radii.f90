@@ -478,8 +478,8 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=2.5_wp, &
             blend_3b=1.0_wp))
-         call new_cavity_drop(cavity, ctx, radius_model=model, lsf_model=svdw_template, error=err, &
-            param=moist_cavity_drop_parameters_type(num_leb=110))
+         call new_cavity_drop(cavity, radius_model=model, lsf_model=svdw_template, error=err, &
+            param=moist_cavity_drop_parameters_type(num_leb=110), ctx=ctx)
       end block
       if (allocated(err)) then
          call test_failed(error, "new_cavity_drop failed with custom radii model: "//trim(err%message))

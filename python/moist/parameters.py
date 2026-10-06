@@ -60,8 +60,6 @@ class DROPParameters(_Parameters):
 
     _kind = "drop"
     nleb: int = _native_default("drop", "nleb")
-    debug: bool = _native_default("drop", "debug")
-    verbosity: int = _native_default("drop", "verbosity")
     do_fine: bool = _native_default("drop", "do_fine")
     tolerance: float = _native_default("drop", "tolerance")
     proj_maxiter: int = _native_default("drop", "proj_maxiter")
@@ -77,8 +75,6 @@ class ISwiGParameters(_Parameters):
 
     _kind = "iswig"
     nleb: int = _native_default("iswig", "nleb")
-    debug: bool = _native_default("iswig", "debug")
-    verbosity: int = _native_default("iswig", "verbosity")
     cut_a: float = _native_default("iswig", "cut_a")
     cut_f: float = _native_default("iswig", "cut_f")
 
@@ -136,15 +132,6 @@ class PCMParameters(_Parameters):
         object.__setattr__(self, "solver", PCMSolver(value))
         super().__post_init__()
         object.__setattr__(self, "solver", PCMSolver(self.solver))
-
-
-@dataclass(frozen=True, kw_only=True)
-class ModelParameters(_Parameters):
-    """Logging settings for a composed solvation model."""
-
-    _kind = "model"
-    debug: bool = _native_default("model", "debug")
-    verbosity: int = _native_default("model", "verbosity")
 
 
 def _resolve(parameter_type, parameters):

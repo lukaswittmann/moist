@@ -64,6 +64,7 @@ from moist.interface import (
     Structure,
 )
 from moist.parameters import DROPParameters, IsodensityParameters
+from moist import Context
 from moist.pyscf import (
     _D_CART_ORDER,
     _F_RHO2_FIRST_MOMENT,
@@ -83,6 +84,9 @@ from moist.pyscf import (
 #: Every test in this module is a GOSTSHYP test; the second marker selects the
 #: layer, and meson turns each into its own target.
 pytestmark = pytest.mark.gostshyp
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 #: 50 GPa in Hartree / bohr^3
 PRESSURE = 50.0 * GPA_TO_AU
@@ -324,7 +328,8 @@ def make_wall(mol, positions=None, *, dm, pressure=PRESSURE, rho_iso=None):
     """Host plus an evaluated GOSTSHYP driver ("wall") at ``dm``, optionally displaced."""
     if positions is not None:
         mol = mol.set_geom_(positions, unit="Bohr", inplace=False)
-    wall = PySCFSolvation(mol, cavity_config(rho_iso), [ModelComponentGOSTSHYP(pressure)])
+    wall = PySCFSolvation(mol, cavity_config(rho_iso), [ModelComponentGOSTSHYP(pressure)],
+                          context=CONTEXT)
     wall.evaluate(dm)
     return wall.host, wall
 
@@ -750,7 +755,7 @@ def test_gostshyp_is_a_composable_model_component():
     mol, dm = molecule(system, basis), reference_density(system, basis)
 
     def evaluate(components):
-        solvation = PySCFSolvation(mol, cavity_config(), components)
+        solvation = PySCFSolvation(mol, cavity_config(), components, context=CONTEXT)
         solvation.evaluate(dm)
         return solvation
 
@@ -917,7 +922,7 @@ def test_gradient_surface_channel_matches_fd(system, basis):
 
     def anchored_energy(displaced):
         # The cavity moves; host.mol -- and hence the level set -- does not.
-        cavity = cavity_config().build(source=host)
+        cavity = cavity_config().build(source=host, context=CONTEXT)
         cavity.update(Structure(numbers, displaced))
         result = cavity.cavity
         centers = np.ascontiguousarray(result.xyz)
@@ -1121,7 +1126,7 @@ def test_conventions_anchor_area_derivatives_sum_to_the_total():
     mol, dm = molecule(system, basis), reference_density(system, basis)
     host = PySCFHost(mol)
     host.dm = dm
-    cavity = cavity_config().build(source=host)
+    cavity = cavity_config().build(source=host, context=CONTEXT)
     cavity.update(host.structure())
 
     cavity.compute_anchor_gradient()

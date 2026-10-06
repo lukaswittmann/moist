@@ -118,15 +118,15 @@ contains
       call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
 
       allocate (cavity)
-      call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74))
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=74), ctx=ctx)
       call check(error, allocated(cavity_error), "DROP was constructed with the 74-point Lebedev rule")
       if (allocated(error)) return
       deallocate (cavity, cavity_error)
 
       allocate (cavity)
-      call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB))
+      call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -166,9 +166,9 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -283,9 +283,9 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=3))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=3), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -589,9 +589,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_local, &
             blend_3b=gamma))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL), ctx=ctx)
       end block
       if (.not. allocated(cavity_error)) call cavity%update(mol, error=cavity_error)
       if (.not. allocated(cavity_error)) call cavity%get_gradient(cavity_error)

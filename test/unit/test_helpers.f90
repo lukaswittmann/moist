@@ -78,6 +78,7 @@ module test_helpers
    use moist_channels_response, only: response_type, potential_adjoint_response_type, &
       density_response_type, gaussian_amplitude_response_type
    use moist_data_radii_legacy, only: get_radius_func
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_gaussian_grid
    use moist_math_grid_angular_lebedev, only: lebedev_order_from_num, lebedev_degree_table
    use moist_math_grid_radial_rule, only: moist_math_grid_radial_rule_type, &
       & moist_math_grid_radial_rule_chebyshev2_type, new_chebyshev2_rule, &
@@ -146,7 +147,40 @@ module test_helpers
       module procedure submit_1, submit_2, submit_3
    end interface submit
 
+   public :: get_cartesian_gaussian_grid
+
 contains
+
+   !> Configure and update a Cartesian Gaussian test grid about zero
+   !>
+   !> @param[in,out] grid Test grid
+   !> @param[in] nx X point count
+   !> @param[in] ny Y point count
+   !> @param[in] nz Z point count
+   !> @param[in] dr Spacing, bohr
+   !> @param[out] error Configuration or update failure
+   subroutine get_cartesian_gaussian_grid(grid, nx, ny, nz, dr, error)
+      !> Test grid
+      type(moist_math_grid_3d_cartesian_type), intent(inout) :: grid
+      !> X point count
+      integer, intent(in) :: nx
+      !> Y point count
+      integer, intent(in) :: ny
+      !> Z point count
+      integer, intent(in) :: nz
+      !> Spacing
+      real(wp), intent(in) :: dr
+      !> Configuration or update failure
+      type(moist_error_type), allocatable, intent(out) :: error
+
+      type(structure_type) :: mol
+
+      call new_cartesian_gaussian_grid(grid, error, nx, ny, nz, dr)
+      if (allocated(error)) return
+      call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call grid%update(mol, error)
+   end subroutine get_cartesian_gaussian_grid
+
 
    !* ------------------------ Structure and sampling fixtures ------------------------ *!
 
@@ -395,8 +429,8 @@ contains
       type(moist_error_type), allocatable, intent(out) :: error
 
       call new_cosmo_radii(radius_model)
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=error, &
-         param=moist_cavity_iswig_parameters_type(num_leb=nleb))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=error, &
+         param=moist_cavity_iswig_parameters_type(num_leb=nleb), ctx=ctx)
       if (allocated(error)) return
 
       call cavity%update(mol, error=error)
@@ -1257,7 +1291,7 @@ contains
 
    !> Recipe of the midpoint x HandyMod molecular grid
    !>
-   !> - Absent arguments take the defaults of `new_molecular_grid`: 50
+   !> - Absent arguments take the defaults of `new_molecular_point_grid`: 50
    !>   nodes, degree 17, HandyMod(0, 10, 2)
    !> - Without arc bands: generator admitting every rule, constant degree
    !> - With arc bands: positive-weight generator, arc policy with the

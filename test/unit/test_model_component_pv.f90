@@ -72,6 +72,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Single-sphere and two-sphere test structures
@@ -109,6 +111,7 @@ contains
       real(wp), parameter :: vol_rtol = 1.0e-11_wp
 
       call new (mol, [6], reshape(center, [3, 1]))
+      call new_context(ctx)
 
       do irad = 1, size(test_radii)
          volume_ref = 4.0_wp/3.0_wp*pi*test_radii(irad)**3
@@ -128,7 +131,7 @@ contains
             end if
 
             do ipres = 1, size(test_pressures)
-               call new_component_pv(pv_component, test_pressures(ipres))
+               call new_component_pv(pv_component, test_pressures(ipres), ctx=ctx)
                call pv_component%update(mol, cavity, err)
                if (allocated(err)) then
                   call test_failed(error, "PV update failed: "//err%message)
@@ -174,7 +177,7 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, test_pressures(size(test_pressures)))
+      call new_component_pv(pv_component, test_pressures(size(test_pressures)), ctx=ctx)
       call pv_component%update(mol_pair, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update on the two-sphere cavity failed: "//err%message)
@@ -205,6 +208,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Sampled test structures and the displaced copy driven through the cavity
@@ -252,7 +257,8 @@ contains
          return
       end if
 
-      call new_component_pv(pv_component, unit_pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, unit_pressure, ctx=ctx)
       call pv_component%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -270,7 +276,7 @@ contains
       if (allocated(error)) return
 
       ! The pressure enters as a pure prefactor, so this holds to roundoff
-      call new_component_pv(pv_scaled, scaled_pressure)
+      call new_component_pv(pv_scaled, scaled_pressure, ctx=ctx)
       call pv_scaled%update(mols(1), cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Scaled PV update failed: "//err%message)
@@ -355,6 +361,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; PV only stores it
@@ -407,7 +415,8 @@ contains
             & + sw_areas(igrid)*dot_product(sw_xyz(:, igrid), normals(:, igrid))/3.0_wp
       end do
 
-      call new_component_pv(pv_component, pressure)
+      call new_context(ctx)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -440,7 +449,7 @@ contains
       prefilled%w_xyz = prefill
       prefilled%w_n = prefill
 
-      call new_component_pv(pv_zero, 0.0_wp)
+      call new_component_pv(pv_zero, 0.0_wp, ctx=ctx)
       call pv_zero%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -521,8 +530,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_cosmo_radii(radius_model)
-      call new_cavity_numsa(cavity, ctx, radii=radius_model, error=err, &
-         param=moist_cavity_numsa_parameters_type(num_leb=110))
+      call new_cavity_numsa(cavity, radii=radius_model, error=err, &
+         param=moist_cavity_numsa_parameters_type(num_leb=110), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "NUMSA cavity setup failed: "//err%message)
          return
@@ -536,7 +545,7 @@ contains
       allocate (gradient(3, mol%nat), source=1.5_wp)
 
       ! Zero pressure: no cavity call at all, accumulator untouched
-      call new_component_pv(pv_component, 0.0_wp)
+      call new_component_pv(pv_component, 0.0_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV(0) update failed: "//err%message)
@@ -552,7 +561,7 @@ contains
       if (allocated(error)) return
 
       ! Finite pressure: the missing cavity hook must surface as an error
-      call new_component_pv(pv_component, 0.75_wp)
+      call new_component_pv(pv_component, 0.75_wp, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "PV update failed: "//err%message)
@@ -604,15 +613,15 @@ contains
       call get_structure(mol, "MB16-43", "01")
       call new_cosmo_radii(radius_model)
 
-      call new_cavity_iswig(cavity, ctx, radius_model=radius_model, error=err, &
-         param=moist_cavity_iswig_parameters_type(num_leb=26))
+      call new_cavity_iswig(cavity, radius_model=radius_model, error=err, &
+         param=moist_cavity_iswig_parameters_type(num_leb=26), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Cavity construction failed: "//err%message)
          return
       end if
 
       ! Never updated: no total volume, so neither update nor get_energy may run
-      call new_component_pv(pv_component, pressure)
+      call new_component_pv(pv_component, pressure, ctx=ctx)
       call pv_component%update(mol, cavity, err)
       call check(error, allocated(err), &
          & more="PV accepted a cavity that was never updated")

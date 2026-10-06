@@ -215,15 +215,15 @@ def get_context_num_threads(context):
     return value[0]
 
 
-def _construct(kind, handle_type, *args, context=None):
-    if context is None:
-        value = error_check(getattr(lib, f"moist_new_{kind}"))(*args)
+def _construct(kind, handle_type, *args, context, required=False):
+    """Call ``moist_new_<kind>``; ``context=None`` passes NULL unless required."""
+    if context is None and not required:
+        native = ffi.NULL
+    elif isinstance(context, ContextHandle):
+        native = context.handle
     else:
-        if not isinstance(context, ContextHandle):
-            raise TypeError("context must be a ContextHandle")
-        value = error_check(getattr(lib, f"moist_new_{kind}_with_context"))(
-            context.handle, *args
-        )
+        raise TypeError("context must be a ContextHandle")
+    value = error_check(getattr(lib, f"moist_new_{kind}"))(native, *args)
     handle = handle_type.with_gc(value)
     handle._context_owner = context
     return handle
@@ -456,31 +456,27 @@ def get_model_cavity(model: ModelHandle) -> CavityHandle:
     return handle
 
 
-def new_cpcm_component(epsilon: float, parameters) -> ComponentHandle:
+def new_cpcm_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
     """Create a CPCM component for a general solvation model."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cpcm_component)(float(epsilon), parameters._as_options())
-    )
+    return _construct("cpcm_component", ComponentHandle, float(epsilon), parameters._as_options(),
+                      context=context)
 
 
-def new_cosmo_component(epsilon: float, parameters) -> ComponentHandle:
+def new_cosmo_component(epsilon: float, parameters, *, context=None) -> ComponentHandle:
     """Create a COSMO component for a general solvation model."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_cosmo_component)(float(epsilon), parameters._as_options())
-    )
+    return _construct("cosmo_component", ComponentHandle, float(epsilon), parameters._as_options(),
+                      context=context)
 
 
-def new_pv_component(pressure: float) -> ComponentHandle:
+def new_pv_component(pressure: float, *, context=None) -> ComponentHandle:
     """Create a pressure-volume component whose energy is pressure times volume."""
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_pv_component)(float(pressure))
-    )
+    return _construct("pv_component", ComponentHandle, float(pressure), context=context)
 
 
-def new_gostshyp_component(pressure: float) -> ComponentHandle:
+def new_gostshyp_component(pressure: float, *, context=None) -> ComponentHandle:
     """Create a GOSTSHYP hydrostatic-pressure component.
 
     ``pressure`` is in Hartree/bohr^3.  The component declares a Gaussian
@@ -489,24 +485,17 @@ def new_gostshyp_component(pressure: float) -> ComponentHandle:
     with :func:`get_response_field_real`.
     """
 
-    return ComponentHandle.with_gc(
-        error_check(lib.moist_new_gostshyp_component)(float(pressure))
-    )
+    return _construct("gostshyp_component", ComponentHandle, float(pressure), context=context)
 
 
 def new_general_model(
+    context,
     cavity: CavityHandle,
     components: list[ComponentHandle],
-    parameters,
-    *,
-    context=None,
 ) -> ModelHandle:
     """Create a general model and append copies of the requested components."""
 
-    if context is None:
-        context = getattr(cavity, "_context_owner", None)
-    model = _construct("model", ModelHandle, cavity.handle, parameters._as_options(),
-                       context=context)
+    model = _construct("model", ModelHandle, cavity.handle, context=context, required=True)
     # Native copies borrow Python callbacks; keep the owning handle alive.
     model._source_cavity = cavity
     for component in components:

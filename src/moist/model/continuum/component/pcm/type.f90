@@ -255,6 +255,9 @@ contains
       !> Timer depth on entry, restored on every early return
       integer :: d0
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM setup", category=cat_setup)
 
@@ -457,6 +460,9 @@ contains
       !> Timer depth on entry, restored on every early return
       integer :: d0
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM energy", category=cat_energy)
 
@@ -499,6 +505,9 @@ contains
       type(response_type), intent(inout) :: response
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       call self%get_trace_response(coupling, cavity, response, error)
 
@@ -581,6 +590,9 @@ contains
       real(wp), allocatable :: w_xi(:)
       !> Potential adjoint of this component
       real(wp), allocatable :: w_phi(:)
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       nat = self%mol_solu%nat
       ngrid = cavity%ngrid
@@ -817,6 +829,9 @@ contains
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       if (.not. self%charges_valid .or. .not. allocated(self%q)) then
          call fatal_error(error, "[pcm_component_amat_surface_weights] "// &
             & "surface charges are unavailable - call ensure_charges first")
@@ -860,6 +875,9 @@ contains
       real(wp), allocatable :: w_f(:)
       !> Grid point-position weights
       real(wp), allocatable :: w_xyz(:, :)
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       if (.not. allocated(cavity%xi1_rA) .or. .not. allocated(cavity%f1_rA) .or. &
           .not. allocated(cavity%xyz1_rA)) then

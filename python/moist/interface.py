@@ -18,12 +18,12 @@ import numpy as np
 
 from . import library
 from .library import FieldInfo
-from .context import Context, _resolve_context
+from .context import Context, _context_handle, _resolve_context
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
 from .radii import Radii
 from .density import InternalDensity
 from .parameters import (
-    DROPParameters, ISwiGParameters, ModelParameters, PCMParameters, PCMSolver, _resolve,
+    DROPParameters, ISwiGParameters, PCMParameters, PCMSolver, _resolve,
 )
 
 
@@ -583,8 +583,8 @@ class Cavity(ABC):
 
     @property
     def context(self) -> Context | None:
-        """Explicit run context, or None for an implicit native context."""
-        return getattr(self, "_context", None)
+        """Run context the cavity runs on; ``None`` until a model supplies one."""
+        return self._context
 
     def __init__(self, handle: library.CavityHandle, *, owned: bool = True) -> None:
         self._handle = handle
@@ -788,11 +788,10 @@ class CavityISwiG(_CavityGenericBase):
 
     def __init__(self, *, parameters: ISwiGParameters | None = None,
                  radii: Radii | None = None, context: Context | None = None) -> None:
-        self._context = _resolve_context(context)
+        self._context = _resolve_context(context, optional=True)
         self._configuration = ISwiG(parameters=parameters, radii=radii)
         super().__init__(library.new_iswig_cavity(
-            self.parameters, self.radius_model._as_handle(),
-            context=None if context is None else context._as_handle(),
+            self.parameters, self.radius_model._as_handle(), context=_context_handle(context),
         ))
 
 
@@ -932,14 +931,14 @@ class CavityDROP(_CavityDROPBase):
     def __init__(self, *, lsf: LevelSet | None = None,
                  parameters: DROPParameters | None = None, radii: Radii | None = None, source=None,
                  pass_order=None, context: Context | None = None) -> None:
-        self._context = _resolve_context(context)
+        self._context = _resolve_context(context, optional=True)
         self._configuration = DROP(
             lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
         )
         self._density_source = source
         super().__init__(self.lsf._new_cavity(
             self.parameters, self.radius_model._as_handle(), source, pass_order,
-            context=None if context is None else context._as_handle(),
+            context=_context_handle(context),
         ))
 
     @property
@@ -1187,8 +1186,14 @@ class Coupling:
 class SolvationModelComponent:
     """Immutable model-component configuration backed by a native constructor."""
 
-    def __init__(self, handle: library.ComponentHandle) -> None:
+    def __init__(self, handle: library.ComponentHandle, context: Context | None) -> None:
         self._handle = handle
+        self._context = context
+
+    @property
+    def context(self) -> Context | None:
+        """Own run context; ``None`` runs the component on its model's."""
+        return self._context
 
     def _as_handle(self) -> library.ComponentHandle:
         return self._handle
@@ -1197,10 +1202,12 @@ class SolvationModelComponent:
 class _ModelComponentPCMBase(SolvationModelComponent):
     """PCM physical input and immutable numerical parameters."""
 
-    def __init__(self, epsilon, constructor, parameters) -> None:
+    def __init__(self, epsilon, constructor, parameters, context) -> None:
+        context = _resolve_context(context, optional=True)
         self._parameters = _resolve(PCMParameters, parameters)
         self._epsilon = float(epsilon)
-        super().__init__(constructor(self._epsilon, self.parameters))
+        super().__init__(constructor(self._epsilon, self.parameters, context=_context_handle(context)),
+                         context)
 
     @property
     def parameters(self) -> PCMParameters:
@@ -1218,23 +1225,27 @@ class _ModelComponentPCMBase(SolvationModelComponent):
 class ModelComponentCPCM(_ModelComponentPCMBase):
     """Conductor-like polarizable continuum component."""
 
-    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, library.new_cpcm_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_cpcm_component, parameters, context)
 
 
 class ModelComponentCOSMO(_ModelComponentPCMBase):
     """Conductor-like screening-model component."""
 
-    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None) -> None:
-        super().__init__(epsilon, library.new_cosmo_component, parameters)
+    def __init__(self, epsilon: float, *, parameters: PCMParameters | None = None,
+                 context: Context | None = None) -> None:
+        super().__init__(epsilon, library.new_cosmo_component, parameters, context)
 
 
 class ModelComponentPV(SolvationModelComponent):
     """Pressure-volume energy component ``pressure * cavity volume``."""
 
-    def __init__(self, pressure: float) -> None:
+    def __init__(self, pressure: float, *, context: Context | None = None) -> None:
+        context = _resolve_context(context, optional=True)
         self._pressure = float(pressure)
-        super().__init__(library.new_pv_component(self._pressure))
+        super().__init__(library.new_pv_component(self._pressure, context=_context_handle(context)),
+                         context)
 
     @property
     def pressure(self) -> float:
@@ -1244,9 +1255,11 @@ class ModelComponentPV(SolvationModelComponent):
 class ModelComponentGOSTSHYP(SolvationModelComponent):
     """GOSTSHYP hydrostatic-pressure component."""
 
-    def __init__(self, pressure: float) -> None:
+    def __init__(self, pressure: float, *, context: Context | None = None) -> None:
+        context = _resolve_context(context, optional=True)
         self._pressure = float(pressure)
-        super().__init__(library.new_gostshyp_component(self._pressure))
+        super().__init__(library.new_gostshyp_component(self._pressure, context=_context_handle(context)),
+                         context)
 
     @property
     def pressure(self) -> float:
@@ -1323,11 +1336,9 @@ class SolvationModel:
 
     def __init__(
         self,
+        context: Context,
         cavity: Cavity,
         components: list[SolvationModelComponent] | tuple[SolvationModelComponent, ...],
-        *,
-        parameters: Optional[ModelParameters] = None,
-        context: Context | None = None,
     ) -> None:
         if not isinstance(cavity, Cavity):
             raise TypeError("cavity must be a moist Cavity object")
@@ -1337,8 +1348,7 @@ class SolvationModel:
         if any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must contain only SolvationModelComponent objects")
 
-        self._context = _resolve_context(context) if context is not None else cavity.context
-        self._parameters = _resolve(ModelParameters, parameters)
+        self._context = _resolve_context(context)
         self._updated = False
         self._natoms: Optional[int] = None
         self._source_cavity = cavity
@@ -1346,23 +1356,19 @@ class SolvationModel:
         #: Reusable native response handle
         self._response: Optional[library.ResponseHandle] = None
         self._model = library.new_general_model(
+            self.context._as_handle(),
             cavity._as_handle(),
             [item._as_handle() for item in items],
-            parameters=self.parameters,
-            context=None if self.context is None else self.context._as_handle(),
         )
         borrowed = library.get_model_cavity(self._model)
         self._cavity = cavity._model_view(borrowed)
-        self._cavity._context = self.context
+        # The copy keeps the source cavity's own context, else runs on the model's
+        self._cavity._context = cavity.context if cavity.context is not None else self.context
 
     @property
-    def context(self) -> Context | None:
-        """Explicit run context shared with the model's cavity and components."""
+    def context(self) -> Context:
+        """Run context of the model and of every part created without one."""
         return self._context
-
-    @property
-    def parameters(self) -> ModelParameters:
-        return self._parameters
 
     @property
     def components(self) -> tuple[ComponentView, ...]:

@@ -256,9 +256,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
             blend_3b=1.0_wp))
-         call new_cavity_drop(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, do_fine=.true., &
-            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level))
+            tolerance=PROJ_TOL, proj_maxiter=PROJ_MAXITER, proj_level=proj_level), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          write (msg, "(a,i0,a)") "cavity init at proj_level=", proj_level, ": "

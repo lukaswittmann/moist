@@ -20,6 +20,7 @@ module test_model_component_gostshyp
    use moist_channels_response, only: response_type, gaussian_amplitude_response_type
    use moist_model_continuum_component, only: model_continuum_component_gostshyp, new_component_gostshyp
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_context, only: moist_context_type, new_context
    use moist_cavity_drop, only: cavity_type_drop
    use test_model_component_helper, only: surface_fixture, &
       & new_surface_fixture, check_surface_weights, fixture_radial_normals, &
@@ -321,6 +322,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -353,7 +356,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -440,6 +444,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -484,7 +490,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -546,6 +553,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -566,7 +575,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)
@@ -598,6 +608,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -618,7 +630,8 @@ contains
 
       ! Staged for the energy phase but never answered: a component that
       ! reads the moments trips over the stale mandatory request
-      call new_component_gostshyp(component, 0.0_wp)
+      call new_context(ctx)
+      call new_component_gostshyp(component, 0.0_wp, ctx=ctx)
       call component%new_coupling(cavity, coupling, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP coupling setup failed: "//err%message)
@@ -634,7 +647,7 @@ contains
 
       ! A component scaled to zero contributes nothing either, and must reach
       ! that conclusion without asking for moments it will not use
-      call new_component_gostshyp(component, test_pressure)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       component%scale = 0.0_wp
       call check_inert(error, component, coupling, cavity, mol, "zero scale")
       if (allocated(error)) return
@@ -777,6 +790,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -799,7 +814,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
 
       ! An un-updated cavity carries no surface arrays at all
       bare%ngrid = ngrid_sw
@@ -902,6 +918,8 @@ contains
 
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Run context of the standalone component
+      type(moist_context_type), target :: ctx
       type(moist_error_type), allocatable :: err
 
       !> Dummy structure; the component only stores it
@@ -928,7 +946,8 @@ contains
       xyz_mol(:, 1) = 0.0_wp
       call new (mol, [1], xyz_mol)
 
-      call new_component_gostshyp(component, test_pressure)
+      call new_context(ctx)
+      call new_component_gostshyp(component, test_pressure, ctx=ctx)
       call component%update(mol, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "GOSTSHYP update failed: "//err%message)

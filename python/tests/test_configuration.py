@@ -11,11 +11,13 @@ import pytest
 import moist
 from moist import library
 
+#: Run context shared by cavities and models that do not test contexts
+CONTEXT = moist.Context()
+
 
 @pytest.mark.parametrize("kind", [
     moist.DROPParameters, moist.ISwiGParameters, moist.SvdWParameters,
     moist.CFCParameters, moist.IsodensityParameters, moist.PCMParameters,
-    moist.ModelParameters,
 ])
 def test_parameters_cover_native_options_and_defaults(kind):
     parameters = kind()
@@ -34,7 +36,7 @@ def test_parameters_cover_native_options_and_defaults(kind):
 
 @pytest.mark.parametrize("make", [
     lambda: moist.DROPParameters(nlebb=26),
-    lambda: moist.CavityDROP(parameters=moist.ISwiGParameters()),
+    lambda: moist.CavityDROP(parameters=moist.ISwiGParameters(), context=CONTEXT),
 ])
 def test_configuration_errors_are_explicit(make):
     with pytest.raises(TypeError):
@@ -84,9 +86,11 @@ def test_context_thread_count_is_fixed(baseline):
         moist.Context(nthreads=0, debug=1)
     with pytest.raises(RuntimeError, match="Thread count must not be negative"):
         moist.Context(nthreads=-1)
-    for parameters in (moist.DROPParameters, moist.ISwiGParameters, moist.ModelParameters):
-        with pytest.raises(TypeError):
-            parameters(nthreads=2)
+    # Threads and logging belong to the context alone
+    for parameters in (moist.DROPParameters, moist.ISwiGParameters):
+        for name in ("nthreads", "verbosity", "debug"):
+            with pytest.raises(TypeError):
+                parameters(**{name: 1})
 
 
 def test_context_leaves_the_runtime_alone(baseline):
@@ -101,11 +105,11 @@ def test_context_leaves_the_runtime_alone(baseline):
     moist.DROP(lsf=moist.SvdW(), parameters=moist.DROPParameters(nleb=26)),
     moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26)),
 ])
-def test_shared_context_inheritance_and_lifetime(config, baseline):
+def test_shared_context_lifetime(config, baseline):
     context = moist.Context(nthreads=2)
     owner = weakref.ref(context)
     cavity = config.build(context=context)
-    model = moist.SolvationModel(cavity, [moist.ModelComponentPV(1e-4)])
+    model = moist.SolvationModel(context, cavity, [moist.ModelComponentPV(1e-4)])
     assert cavity.context is context
     assert model.context is context
     assert model.cavity.context is context
@@ -122,28 +126,59 @@ def test_shared_context_inheritance_and_lifetime(config, baseline):
     assert owner() is None
 
 
-def test_model_can_use_a_separate_context(baseline):
+def test_parts_keep_their_own_context(baseline):
     context = moist.Context(nthreads=2)
     cavity = moist.CavityISwiG(context=context)
     other = moist.Context(nthreads=1)
-    model = moist.SolvationModel(cavity, [moist.ModelComponentPV(1e-4)], context=other)
-    assert cavity.context is context
+    component = moist.ModelComponentPV(1e-4, context=context)
+    model = moist.SolvationModel(other, cavity, [component])
+    assert cavity.context is context and component.context is context
     assert model.context is other
-    assert model.cavity.context is other
+    assert model.cavity.context is context
     del other
     gc.collect()
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
     assert model.context.nthreads == 1
     assert context.nthreads == 2
-    del model, cavity, context
+    del model, cavity, component, context
     gc.collect()
+
+
+@pytest.mark.parametrize("config", [
+    moist.DROP(lsf=moist.SvdW(), parameters=moist.DROPParameters(nleb=26)),
+    moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26)),
+])
+def test_parts_without_context_run_on_the_model(config):
+    cavity = config.build()
+    component = moist.ModelComponentPV(1e-4)
+    assert cavity.context is None and component.context is None
+    structure = moist.Structure([1], [[0., 0., 0.]])
+    with pytest.raises(RuntimeError, match="Cavity has no context"):
+        cavity.update(structure)
+    model = moist.SolvationModel(CONTEXT, cavity, [component])
+    assert model.cavity.context is CONTEXT
+    model.update(structure)
+    assert model.cavity.snapshot().ngrid > 0
 
 
 @pytest.mark.parametrize("make", [
     lambda: moist.CavityDROP(context=object()),
     lambda: moist.CavityISwiG(context=object()),
+    lambda: moist.ModelComponentCPCM(78.4, context=object()),
+    lambda: moist.ModelComponentPV(1e-4, context=object()),
 ])
 def test_context_type_is_checked(make):
     with pytest.raises(TypeError, match="context must be a Context"):
+        make()
+
+
+@pytest.mark.parametrize("make", [
+    lambda: moist.SolvationModel(moist.CavityISwiG(context=CONTEXT),
+                                 [moist.ModelComponentPV(1e-4)]),
+    lambda: moist.SolvationModel(None, moist.CavityISwiG(context=CONTEXT), [moist.ModelComponentPV(1e-4)]),
+])
+def test_model_requires_context(make):
+    with pytest.raises(TypeError, match="context|required positional"):
         make()
 
 
@@ -169,7 +204,7 @@ def test_all_drop_surfaces_share_parameters(lsf, gaussian_density):
     )
     config = moist.DROP(lsf=lsf, parameters=parameters)
     source = gaussian_density if config.density_dependent else None
-    cavity = config.build(source=source)
+    cavity = config.build(source=source, context=CONTEXT)
     cavity.update(moist.Structure([1], [[0., 0., 0.]]))
     assert cavity.snapshot().ngrid > 0
     assert cavity.parameters == parameters
@@ -181,7 +216,7 @@ def test_all_drop_surfaces_share_parameters(lsf, gaussian_density):
     # Invalid settings must reach the native validator for every surface.
     invalid = replace(config, parameters=replace(parameters, wleb_prune_level=7))
     with pytest.raises(RuntimeError, match="wleb_prune_level"):
-        invalid.build(source=source)
+        invalid.build(source=source, context=CONTEXT)
 
 
 @pytest.mark.parametrize("factory,params", [
@@ -194,7 +229,8 @@ def test_custom_radii_are_copied_and_control_native_surface(factory, params):
     values[:] = 7
     by_element = moist.CustomRadii([2.5], numbers=[1])
     structure = moist.Structure([1], [[0., 0., 0.]])
-    cavities = [factory(parameters=params, radii=item) for item in (radii, by_element)]
+    cavities = [factory(parameters=params,
+                        radii=item, context=CONTEXT) for item in (radii, by_element)]
     for cavity in cavities:
         cavity.update(structure)
         np.testing.assert_allclose(cavity.radii, [2.5])
@@ -208,16 +244,16 @@ def test_custom_radii_are_copied_and_control_native_surface(factory, params):
     moist.COSMORadii(), moist.BondiRadii(),
 ])
 def test_builtin_radius_models(radii):
-    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii)
+    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26),
+                               radii=radii, context=CONTEXT)
     cavity.update(moist.Structure([1], [[0., 0., 0.]]))
     assert np.isfinite(cavity.area) and cavity.area > 0
 
 
 def test_model_copy_retains_configuration_and_callback(gaussian_density):
     cavity = moist.CavityDROP(lsf=moist.Isodensity(), source=gaussian_density,
-                              parameters=moist.DROPParameters(nleb=26))
-    model = moist.SolvationModel(cavity, [moist.ModelComponentPV(1e-4)],
-                                 parameters=moist.ModelParameters(verbosity=0))
+                              parameters=moist.DROPParameters(nleb=26), context=CONTEXT)
+    model = moist.SolvationModel(CONTEXT, cavity, [moist.ModelComponentPV(1e-4)])
     del cavity
     model.update(moist.Structure([1], [[0., 0., 0.]]))
     coupling = model.new_coupling()
@@ -231,16 +267,17 @@ def test_model_copy_retains_configuration_and_callback(gaussian_density):
     assert np.isfinite(gradient).all()
     assert model.cavity.parameters.nleb == 26
     assert model.cavity.lsf == moist.Isodensity()
-    assert model.parameters == moist.ModelParameters(verbosity=0)
+    assert model.context is CONTEXT
 
 
 def test_low_level_model_retains_callback_owner(gaussian_density):
     cavity = library.new_drop_cavity_isodensity_callback(
-        gaussian_density, moist.DROPParameters(nleb=26), moist.IsodensityParameters()
+        gaussian_density, moist.DROPParameters(nleb=26), moist.IsodensityParameters(),
+        context=CONTEXT._as_handle(),
     )
     owner = weakref.ref(cavity)
     component = library.new_pv_component(1e-4)
-    model = library.new_general_model(cavity, [component], moist.ModelParameters())
+    model = library.new_general_model(CONTEXT._as_handle(), cavity, [component])
     del cavity
     gc.collect()
     assert owner() is not None
@@ -257,7 +294,7 @@ def test_parameter_replacement_creates_independent_live_state():
     finer = replace(config, parameters=replace(config.parameters, nleb=50))
     assert config.parameters.nleb == 26
     assert finer.parameters.nleb == 50
-    first, second = config.build(), config.build()
+    first, second = config.build(context=CONTEXT), config.build(context=CONTEXT)
     first.update(moist.Structure([1], [[0., 0., 0.]]))
     with pytest.raises(RuntimeError, match="not been successfully updated"):
         second.snapshot()
@@ -278,7 +315,7 @@ def test_structure_owns_input_buffers_on_construction_and_update():
     np.testing.assert_array_equal(structure.positions, [[0., 0., 0.]])
     np.testing.assert_array_equal(structure.lattice, np.eye(3) * 20)
     np.testing.assert_array_equal(structure.periodic, [False, False, False])
-    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26))
+    cavity = moist.CavityISwiG(parameters=moist.ISwiGParameters(nleb=26), context=CONTEXT)
     cavity.update(structure)
     np.testing.assert_allclose(cavity.xyz.mean(axis=0), structure.positions[0], atol=1e-14)
     updated = np.array([[2., 0., 0.]])
@@ -303,14 +340,14 @@ def test_surface_configuration_preserves_explicit_parameters(factory, parameters
     assert config.parameters == parameters
     assert pickle.loads(pickle.dumps(config)) == config
     with pytest.raises(TypeError, match="parameters must"):
-        factory(parameters=moist.ModelParameters())
+        factory(parameters=moist.PCMParameters())
 
 
 @pytest.mark.parametrize("surface", [moist.SvdW(), moist.CFC()])
 @pytest.mark.parametrize("kwargs", [{"source": object()}, {"pass_order": True}])
 def test_geometric_configuration_rejects_density_inputs(surface, kwargs):
     with pytest.raises(TypeError, match="geometric LSF"):
-        moist.DROP(lsf=surface).build(**kwargs)
+        moist.DROP(lsf=surface).build(context=CONTEXT, **kwargs)
 
 
 def test_configuration_rejects_wrong_lsf_and_radius_models():
@@ -322,7 +359,7 @@ def test_configuration_rejects_wrong_lsf_and_radius_models():
         with pytest.raises(TypeError, match="radius model"):
             factory(radii=moist.Radii())
     with pytest.raises(TypeError, match="does not accept"):
-        moist.ISwiG().build(source=object())
+        moist.ISwiG().build(source=object(), context=CONTEXT)
 
 
 @pytest.mark.parametrize("factory,parameters", [
@@ -332,7 +369,7 @@ def test_configuration_rejects_wrong_lsf_and_radius_models():
 def test_configuration_build_preserves_radii_and_parameters(factory, parameters):
     radii = moist.CustomRadii([2.5])
     config = factory(parameters=parameters, radii=radii)
-    cavity = config.build()
+    cavity = config.build(context=CONTEXT)
     assert cavity.parameters == parameters
     assert cavity.radius_model is radii
     cavity.update(moist.Structure([1], [[0., 0., 0.]]))
@@ -349,17 +386,17 @@ def test_isodensity_configuration_callback_object_and_order(monkeypatch, gaussia
     observed = {}
     original = library.new_drop_cavity_isodensity_callback
 
-    def capture(callback, drop, lsf, radii, *, pass_order, context=None):
+    def capture(callback, drop, lsf, radii, *, pass_order, context):
         observed.update(callback=callback, pass_order=pass_order)
         return original(callback, drop, lsf, radii, pass_order=pass_order, context=context)
 
     monkeypatch.setattr(library, "new_drop_cavity_isodensity_callback", capture)
-    cavity = config.build(source=source, pass_order=True)
+    cavity = config.build(source=source, pass_order=True, context=CONTEXT)
     assert observed == {"callback": gaussian_density, "pass_order": True}
     cavity.update(moist.Structure([1], [[0., 0., 0.]]))
     assert cavity.snapshot().ngrid > 0
     with pytest.raises(TypeError, match="requires a callable"):
-        config.build(source=object())
+        config.build(source=object(), context=CONTEXT)
 
 
 def test_internal_isodensity_rejects_callback_order():
@@ -367,7 +404,7 @@ def test_internal_isodensity_rejects_callback_order():
                                 exponents=[1.], coefficients=[1.])
     source = moist.InternalDensity(basis, [[1.]])
     with pytest.raises(TypeError, match="only to callbacks"):
-        moist.DROP(lsf=moist.Isodensity()).build(source=source, pass_order=True)
+        moist.DROP(lsf=moist.Isodensity()).build(source=source, pass_order=True, context=CONTEXT)
 
 
 @pytest.mark.parametrize("values,kwargs", [
@@ -384,7 +421,8 @@ def test_custom_radii_reject_invalid_data(values, kwargs):
 def test_custom_radii_element_mapping_handles_reordered_atoms():
     radii = moist.CustomRadii([2.5, 3.], numbers=[1, 8])
     assert radii.numbers == (1, 8)
-    cavity = moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii).build()
+    config = moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26), radii=radii)
+    cavity = config.build(context=CONTEXT)
     cavity.update(moist.Structure([8, 1], [[0., 0., 0.], [7., 0., 0.]]))
     np.testing.assert_array_equal(cavity.radii, [3., 2.5])
 
@@ -397,9 +435,10 @@ def test_custom_radii_element_mapping_handles_reordered_atoms():
 def test_builtin_radii_select_their_native_radius_set(radii, kind):
     parameters = moist.ISwiGParameters(nleb=26)
     structure = moist.Structure([1, 3, 8], [[0., 0., 0.], [7., 0., 0.], [14., 0., 0.]])
-    actual = moist.CavityISwiG(parameters=parameters, radii=radii)
+    actual = moist.CavityISwiG(parameters=parameters, radii=radii, context=CONTEXT)
     actual.update(structure)
-    expected = library.new_iswig_cavity(parameters, library.new_radii(kind))
+    expected = library.new_iswig_cavity(parameters,
+                                        library.new_radii(kind), context=CONTEXT._as_handle())
     library.update_cavity(expected, structure._as_handle())
     snapshot = library.get_cavity_results(expected)
     np.testing.assert_array_equal(actual.radii, snapshot["radii"])

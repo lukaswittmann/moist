@@ -86,9 +86,9 @@ contains
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
                   blend_2b=blend_2b, blend_3b=blend_3b))
-               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                   error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
-                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level))
+                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level), ctx=ctx)
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -267,8 +267,8 @@ contains
          do igrid = 1, n_grids
             if (allocated(cav)) deallocate(cav)
             allocate(cav)
-            call new_cavity_iswig(cav, ctx, radius_model=radius_model, error=cavity_error, &
-               param=moist_cavity_iswig_parameters_type(num_leb=nleb_values(igrid)))
+            call new_cavity_iswig(cav, radius_model=radius_model, error=cavity_error, &
+               param=moist_cavity_iswig_parameters_type(num_leb=nleb_values(igrid)), ctx=ctx)
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
                return
@@ -356,9 +356,9 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
             blend_2b=blend_2b, blend_3b=blend_3b))
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(n_grids), &
-            tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.))
+            tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.), ctx=ctx)
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -408,9 +408,9 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
                blend_2b=blend_2b, blend_3b=blend_3b))
-            call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+            call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
-               tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.))
+               tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level, do_fine=.true.), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, cavity_error%message)
@@ -507,9 +507,9 @@ contains
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blendk_values(ik), &
                   blend_2b=blend_2b, blend_3b=blend_3b))
-               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                   error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
-                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level))
+                  tolerance=proj_tol, proj_maxiter=proj_maxiter, proj_level=proj_level), ctx=ctx)
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)
@@ -579,9 +579,9 @@ contains
                type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
                call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k, &
                   blend_2b=blend_2b, blend_3b=blend_3b))
-               call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+               call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
                   error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_values(igrid), &
-                  tolerance=tol_values(itol), proj_maxiter=proj_maxiter, proj_level=proj_level))
+                  tolerance=tol_values(itol), proj_maxiter=proj_maxiter, proj_level=proj_level), ctx=ctx)
             end block
             if (allocated(cavity_error)) then
                call test_failed(error, cavity_error%message)

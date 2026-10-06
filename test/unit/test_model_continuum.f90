@@ -105,7 +105,7 @@ contains
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       if (allocated(err)) then
          call test_failed(error, "Continuum-model construction failed: "//err%message)
          return
@@ -123,8 +123,8 @@ contains
       if (allocated(error)) return
       if (allocated(err)) deallocate (err)
 
-      call new_component_cpcm(pcm_component, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_component, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Continuum-model CPCM construction failed: "//err%message)
          return
@@ -156,8 +156,8 @@ contains
       end if
 
       ! Procedural reference on an independently updated cavity
-      call new_component_cpcm(pcm_reference, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_reference, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Reference CPCM construction failed: "//err%message)
          return
@@ -319,8 +319,8 @@ contains
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_component_cpcm(pcm_component, ctx, epsilon=epsilon, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_component, epsilon=epsilon, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -665,7 +665,7 @@ contains
          !> Model to build
          type(model_continuum_type), intent(out) :: model
 
-         call new_continuum_model(model, cavity, ctx, err)
+         call new_continuum_model(model, ctx, cavity, err)
          if (.not. allocated(err)) call model%add_component(pv_component, err)
          if (.not. allocated(err)) call model%update(mol, err)
          if (allocated(err)) call test_failed(error, "Model setup failed: "//err%message)
@@ -749,13 +749,13 @@ contains
          call test_failed(error, "Cavity setup failed: "//err%message)
          return
       end if
-      call new_component_cpcm(pcm_high, ctx, epsilon=32.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
-      if (.not. allocated(err)) call new_component_cpcm(pcm_low, ctx, epsilon=4.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_high, epsilon=32.0_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
+      if (.not. allocated(err)) call new_component_cpcm(pcm_low, epsilon=4.0_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       call new_component_pv(pv_finite, pressure)
       call new_component_pv(pv_zero, 0.0_wp)
-      if (.not. allocated(err)) call new_continuum_model(model, cavity, ctx, err)
+      if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
       if (.not. allocated(err)) call model%add_component(pcm_high, err)
       if (.not. allocated(err)) call model%add_component(pv_finite, err)
       if (.not. allocated(err)) call model%add_component(pcm_low, err)
@@ -1067,14 +1067,14 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_cosmo_radii(radius_model)
-      call new_cavity_iswig(cavity, ctx, radius_model, err, moist_cavity_iswig_parameters_type(num_leb=50))
-      if (.not. allocated(err)) call new_component_cpcm(pcm, ctx, epsilon=4.0_wp, error=err, &
+      call new_cavity_iswig(cavity, radius_model, err, moist_cavity_iswig_parameters_type(num_leb=50), ctx=ctx)
+      if (.not. allocated(err)) call new_component_cpcm(pcm, epsilon=4.0_wp, error=err, &
          & param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-9_wp, &
-         & solver_maxiter=77))
+         & solver_maxiter=77), ctx=ctx)
       call new_component_pv(pv, 2.5e-4_wp)
       call new_component_gostshyp(gostshyp, 3.0e-5_wp)
       gostshyp%scale = 0.5_wp
-      if (.not. allocated(err)) call new_continuum_model(model, cavity, ctx, err)
+      if (.not. allocated(err)) call new_continuum_model(model, ctx, cavity, err)
       if (.not. allocated(err)) call model%add_component(pcm, err)
       if (.not. allocated(err)) call model%add_component(pv, err)
       if (.not. allocated(err)) call model%add_component(gostshyp, err)
@@ -1157,11 +1157,11 @@ contains
       if (allocated(error)) return
 
       ! DROP is labelled by its level set and prints its grouped settings, without an update
-      call new_cavity_drop(drop, ctx, radius_model, cfc, err)
+      call new_cavity_drop(drop, radius_model, cfc, err, ctx=ctx)
       if (.not. allocated(err)) then
          call check(error, drop%label == "CFC-DROP", more="CFC DROP label: "//drop%label)
          if (allocated(error)) return
-         call new_cavity_drop(drop, ctx, radius_model, lsf, err)
+         call new_cavity_drop(drop, radius_model, lsf, err, ctx=ctx)
       end if
       if (allocated(err)) then
          call test_failed(error, "DROP setup failed: "//err%message)
@@ -1182,7 +1182,7 @@ contains
       if (allocated(error)) return
 
       ! The density source tells the two isodensity models apart
-      call new_cavity_drop(drop, ctx, radius_model, rho_callback, err)
+      call new_cavity_drop(drop, radius_model, rho_callback, err, ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "Isodensity DROP setup failed: "//err%message)
          return
@@ -1270,7 +1270,7 @@ contains
 
       type(model_continuum_component_pv) :: pv_component
 
-      call new_continuum_model(model, cavity, ctx, error)
+      call new_continuum_model(model, ctx, cavity, error)
       if (allocated(error)) return
       call model%add_component(pcm_component, error)
       if (allocated(error)) return

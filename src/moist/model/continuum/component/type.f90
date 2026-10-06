@@ -1,7 +1,7 @@
 !> Typed cavity component interface and standalone coupling lifecycle
 module moist_model_continuum_component_type
    use, intrinsic :: iso_fortran_env, only: output_unit
-   use mctc_env, only: wp, error_type
+   use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use mctc_io_codata2018, only: atomic_unit_of_mass, atomic_unit_of_time, Bohr_radius
    use moist_context, only: moist_context_type
@@ -27,7 +27,8 @@ module moist_model_continuum_component_type
    type, abstract :: model_continuum_component_type
       !> Borrowed run context (verbosity/debug/timer)
       !>
-      !> Set at construction; owned by the caller, never allocated or freed here
+      !> Owned by the caller, never allocated or freed here; optional at
+      !> construction, a model points a component copy without one at its own
       type(moist_context_type), pointer :: ctx => null()
       !> Name of the component
       character(len=:), allocatable :: name
@@ -81,6 +82,8 @@ module moist_model_continuum_component_type
       procedure :: print_inputs => print_component_inputs_default
       !> Print name, description, scale, inputs and settings
       procedure :: print_parameters => print_component_parameters
+      !> Fail without a run context; called first by every `update`
+      procedure, non_overridable :: require_context => require_component_context
 
    end type model_continuum_component_type
 
@@ -328,6 +331,21 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
    end subroutine declare_component_coupling_default
+
+   !> Fail unless a run context is attached
+   !>
+   !> @param[in]  self  Solvation component
+   !> @param[out] error Missing-context error
+   subroutine require_component_context(self, error)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. associated(self%ctx)) call fatal_error(error, &
+         & "Component has no context: pass one at construction or use it through a model")
+
+   end subroutine require_component_context
 
    !* ================================================================================= *!
    !*                             Bare-component coupling                             *!

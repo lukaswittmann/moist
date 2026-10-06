@@ -23,8 +23,11 @@ module moist_cavity_type
    !>
    !> Cavities within moist are per default discretized using Gaussians
    type, abstract :: cavity_type
-      !> Borrowed run context (verbosity/debug/timer); set at construction,
-      !> owned by the top-level caller, never allocated or freed by the cavity
+      !> Borrowed run context (verbosity/debug/timer); owned by the caller,
+      !> never allocated or freed by the cavity
+      !>
+      !> - optional at construction; a model points a cavity copy without one
+      !>   at its own context
       type(moist_context_type), pointer :: ctx => null()
 
       !> Short name of the discretization, e.g. `DROP`; set by the constructor
@@ -109,6 +112,8 @@ module moist_cavity_type
       procedure :: print_parameters => print_cavity_parameters
       !> Print the radius model of the current structure; called by every `update`
       procedure, non_overridable :: print_radii => print_cavity_radii
+      !> Fail without a run context; called first by every `update`
+      procedure, non_overridable :: require_context => require_cavity_context
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -148,6 +153,21 @@ contains
       if (associated(self%ctx)) iunit = self%ctx%unit
 
    end function cavity_unit
+
+   !> Fail unless a run context is attached
+   !>
+   !> @param[in]  self  Cavity instance
+   !> @param[out] error Missing-context error
+   subroutine require_cavity_context(self, error)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+      !> Error handling
+      type(error_type), allocatable, intent(out) :: error
+
+      if (.not. associated(self%ctx)) call fatal_error(error, &
+         & "Cavity has no context: pass one at construction or use it through a model")
+
+   end subroutine require_cavity_context
 
    !> Print the radius model at verbosity 2 and above
    !>

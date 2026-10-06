@@ -70,8 +70,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -131,8 +131,8 @@ contains
       call get_structure(mol, "MB16-43", "02")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -183,8 +183,8 @@ contains
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -221,8 +221,8 @@ contains
       call get_structure(mol, "MB16-43", "01")
 
       call new_d3_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -274,8 +274,8 @@ contains
       call get_structure(mol, "MB16-43", "05")
 
       call new_bondi_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -327,8 +327,8 @@ contains
       call get_structure(mol, "MB16-43", "03")
 
       call new_cosmo_radii(radii)
-      call new_cavity_numsa(cav, ctx, radii=radii, error=cavity_error, &
-         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe))
+      call new_cavity_numsa(cav, radii=radii, error=cavity_error, &
+         param=moist_cavity_numsa_parameters_type(num_leb=nleb, probe=probe), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return

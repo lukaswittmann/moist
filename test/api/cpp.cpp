@@ -38,9 +38,8 @@ int main()
     if (!context || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_lsf lsf = moist_new_svdw_lsf(error, nullptr);
     if (!lsf || moist_check_error(error) != moist_success) return fail(__LINE__);
-    moist_cavity cavity = moist_new_drop_cavity_with_context(error, context, lsf, nullptr, nullptr);
+    moist_cavity cavity = moist_new_drop_cavity(error, context, lsf, nullptr, nullptr);
     if (!cavity || moist_check_error(error) != moist_success) return fail(__LINE__);
-    if (!delete_handle(context, "context")) return fail(__LINE__);
     const int numbers[] = {1};
     const double positions[] = {0.0, 0.0, 0.0};
     moist_structure structure = moist_new_structure(error, 1, numbers, positions,
@@ -48,9 +47,11 @@ int main()
     if (!structure || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_radii radii = moist_new_cpcm_radii(error);
     if (!radii || moist_check_error(error) != moist_success) return fail(__LINE__);
-    moist_model model = moist_new_model(error, cavity, nullptr);
+    moist_model model = moist_new_model(error, context, cavity);
     if (!model || moist_check_error(error) != moist_success) return fail(__LINE__);
-    moist_component component = moist_new_pv_component(error, 0.001);
+    // Cavity and model retain the context past its handle
+    if (!delete_handle(context, "context")) return fail(__LINE__);
+    moist_component component = moist_new_pv_component(error, nullptr, 0.001);
     if (!component || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_add_model_component(error, model, component);
     if (moist_check_error(error) != moist_success) return fail(__LINE__);
@@ -68,7 +69,7 @@ int main()
         !delete_handle(radii, "radii") ||
         !delete_handle(lsf, "lsf") ||
         !delete_handle(cavity, "cavity")) return fail(__LINE__);
-    moist_cavity failed = moist_new_drop_cavity(error, nullptr, nullptr, nullptr);
+    moist_cavity failed = moist_new_drop_cavity(error, nullptr, nullptr, nullptr, nullptr);
     if (moist_check_error(error) != moist_failure || failed != nullptr) return fail(__LINE__);
     return delete_handle(error, "error") ? 0 : 1;
 }

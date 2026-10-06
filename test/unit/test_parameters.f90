@@ -198,7 +198,7 @@ contains
       param%tolerance = 1.0e-8_wp
       param%proj_tol = -1.0_wp
       param%do_fine = .true.
-      call new_cavity_drop(drop, ctx, default_cpcm_radii(), lsf, err, param)
+      call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, param, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, drop%param%proj_tol, param%tolerance)
@@ -213,7 +213,7 @@ contains
       if (allocated(error)) return
       call check(error, drop%lsf_model%screening_threshold, 1.0e-9_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
-      call new_cavity_drop(drop, ctx, default_cpcm_radii(), lsf, err)
+      call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, drop%param%num_leb, 194)
@@ -222,8 +222,8 @@ contains
          drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho), &
          more="default DROP settings switch an optional property on")
       if (allocated(error)) return
-      call new_cavity_iswig(iswig, ctx, default_cpcm_radii(), err, &
-         moist_cavity_iswig_parameters_type(num_leb=194, cut_a=0.3_wp, cut_f=0.2_wp))
+      call new_cavity_iswig(iswig, default_cpcm_radii(), err, &
+         moist_cavity_iswig_parameters_type(num_leb=194, cut_a=0.3_wp, cut_f=0.2_wp), ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, iswig%param%num_leb, 194)
@@ -232,7 +232,7 @@ contains
       if (allocated(error)) return
       call check(error, iswig%param%cut_f, 0.2_wp)
       if (allocated(error)) return
-      call new_cavity_iswig(iswig, ctx, default_cpcm_radii(), err)
+      call new_cavity_iswig(iswig, default_cpcm_radii(), err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, iswig%param%num_leb, 110)
@@ -246,8 +246,8 @@ contains
          moist_cavity_drop_lsf_isodensity_param_type(rho_iso=0.004_wp, exclusion_cap=4.0_wp))
       call check(error, rho%param%exclusion_cap, 4.0_wp)
       if (allocated(error)) return
-      call new_component_cpcm(pcm, ctx, 80.0_wp, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-8_wp, solver_maxiter=71))
+      call new_component_cpcm(pcm, 80.0_wp, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-8_wp, solver_maxiter=71), ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, pcm%param%solver, solver_type%iterative)
@@ -256,13 +256,13 @@ contains
       if (allocated(error)) return
       call check(error, pcm%param%solver_maxiter, 71)
       if (allocated(error)) return
-      call new_component_cpcm(pcm, ctx, 80.0_wp, error=err)
+      call new_component_cpcm(pcm, 80.0_wp, error=err, ctx=ctx)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
       call check(error, pcm%param%solver, solver_type%cholesky)
       if (allocated(error)) return
       param%num_leb = 1
-      call new_cavity_drop(drop, ctx, default_cpcm_radii(), lsf, err, param)
+      call new_cavity_drop(drop, default_cpcm_radii(), lsf, err, param, ctx=ctx)
       call check(error, allocated(err))
       call ctx%delete()
    end subroutine test_constructors

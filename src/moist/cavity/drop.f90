@@ -525,16 +525,14 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[in] lsf_model Level set function to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_drop(self, ctx, radius_model, lsf_model, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_drop(self, radius_model, lsf_model, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_drop), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Atomic radius model to copy
       class(radius_type), intent(in) :: radius_model
       !> Level set function to copy
@@ -543,9 +541,13 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_drop_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
 
-      !> Borrow the shared run context (owns verbosity/debug/timer)
-      self%ctx => ctx
+      !> Borrow the shared run context (owns verbosity/debug/timer); reconstruction
+      !> without a context drops the previous one
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
 
       call self%param%init_defaults()
       if (present(param)) self%param = param
@@ -683,6 +685,9 @@ contains
 
       !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       !> Set number of spheres
       self%nsph = mol%nat
@@ -893,6 +898,9 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Timer stack depth at entry; error paths unwind back to it (below)
       integer :: d0
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("Gradients", category=cat_gradient)

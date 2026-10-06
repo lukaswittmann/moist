@@ -17,6 +17,10 @@ from moist.interface import (
     Structure,
 )
 from moist.library import _callback_takes_order, get_api_version
+from moist import Context
+
+#: Run context shared by every cavity and model in this module
+CONTEXT = Context()
 
 REQUIREMENTS_SCRIPT = Path(__file__).parents[1] / "check_requirements.py"
 
@@ -164,7 +168,8 @@ def flaky_lsf(water) -> SimpleNamespace:
 def _isodensity(source, rho_iso=_RHO_ISO, **kwargs):
     """A callback-backed DROP cavity; the contour is an LSF setting, not the source's."""
     return CavityDROP(lsf=Isodensity(parameters=IsodensityParameters(rho_iso=rho_iso)),
-                      parameters=DROPParameters(nleb=26), source=source, **kwargs)
+                      parameters=DROPParameters(nleb=26), source=source, context=CONTEXT,
+                      **kwargs)
 
 
 def _build(callback, water, rho_iso=_RHO_ISO, **kwargs):
@@ -336,7 +341,7 @@ def test_failed_model_rebuild_invalidates_its_cavity_view(water, flaky_lsf) -> N
     """Model updates propagate callback failures and invalidate their live view."""
     structure = Structure(*water)
     model = SolvationModel(
-        _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
+        CONTEXT, _isodensity(flaky_lsf.callback, flaky_lsf.rho_iso), [ModelComponentPV(1.0e-4)]
     )
     model.update(structure)
     assert model.cavity.snapshot().ngrid > 0

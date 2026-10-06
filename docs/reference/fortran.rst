@@ -3,8 +3,9 @@ Fortran API
 
 Cavity, LSF, and PCM constructors accept an optional ``param`` object.
 Omitting it uses compiled defaults; constructors copy supplied values.
-Required inputs such as radii, LSFs, context, and dielectric constant remain
-separate arguments. Individual setting keywords are not accepted.
+Required inputs such as radii, LSFs and dielectric constant, and the optional
+trailing ``ctx``, remain separate arguments. Individual setting keywords are not
+accepted.
 
 Cavity, LSF and PCM parameter types extend ``moist_model_parameters_type`` and
 support ``read_file(path, error)``, ``write_file(path, error)`` and
@@ -27,8 +28,8 @@ extend the configuration parameter base.
    call param%read_file("drop.json", error)
    if (allocated(error)) error stop error%message
    param%num_leb = 194
-   call new_cavity_drop(cavity, ctx, radius_model=radii, lsf_model=lsf, &
-      & error=error, param=param)
+   call new_cavity_drop(cavity, radius_model=radii, lsf_model=lsf, &
+      & error=error, param=param, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 A new defaulted parameter field keeps existing constructor calls valid, but a
@@ -44,8 +45,9 @@ Cavities extend ``cavity_type``; continuum components extend
 ``moist_model_continuum_component_type``). Constructors are specific to each type; evaluation uses
 the shared interfaces.
 
-``moist_context_type`` controls logging and timing and must outlive its
-components. An allocated ``mctc_env`` error signals failure.
+``moist_context_type`` controls threads, logging and timing and must outlive everything that borrows it.
+A model takes it as its first argument after ``self``; cavities and components take it as the optional trailing ``ctx=``.
+A cavity or component copied into a model keeps its own context, or runs on the model's when it has none; used standalone without one, it returns an error.
 
 .. code-block:: fortran
 
@@ -135,8 +137,8 @@ The iSwiG constructor directly combines the radii and Lebedev discretization:
 
    type(cavity_type_iswig) :: cavity
 
-   call new_cavity_iswig(cavity, ctx, radius_model=radii, error=error, &
-      & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp))
+   call new_cavity_iswig(cavity, radius_model=radii, error=error, &
+      & param=moist_cavity_iswig_parameters_type(num_leb=194, cut_f=1.0e-10_wp), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 A positive ``cut_a`` discards points with switched area ``f*a <= cut_a``;
@@ -163,8 +165,8 @@ For SvdW, pass its LSF to ``new_cavity_drop``:
    call svdw%new()
 
    ! Construct SvdW-DROP
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=svdw, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=svdw, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 See :doc:`/cavities/svdw` for the LSF parameters.
@@ -184,8 +186,8 @@ For the COSMO Fine Cavity (CFC), only the constructor changes:
    type(cavity_type_drop) :: cavity
 
    call cfc_lsf%new()
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=cfc_lsf, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=cfc_lsf, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 See :doc:`/cavities/cfc` for the CFC parameters.
@@ -216,8 +218,8 @@ The host supplies the shell layout once and a new ``dcart`` for every SCF densit
    if (allocated(error)) error stop error%message
 
    ! Construct isodensity cavity
-   call new_cavity_drop(cavity, ctx, radius_model=radii, &
-      & lsf_model=rho_lsf, error=error)
+   call new_cavity_drop(cavity, radius_model=radii, &
+      & lsf_model=rho_lsf, error=error, ctx=ctx)
    if (allocated(error)) error stop error%message
 
 Set the density at each SCF step:
@@ -294,8 +296,8 @@ CPCM
 
    type(model_continuum_component_cpcm) :: cpcm
 
-   call new_component_cpcm(cpcm, ctx, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+   call new_component_cpcm(cpcm, epsilon=80.0_wp, &
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 The host answers ``gaussian_potential`` at the grid points ``cavity%xyz`` with
@@ -318,8 +320,8 @@ with the same host requests and solver options as CPCM:
 
    type(model_continuum_component_cosmo) :: cosmo
 
-   call new_component_cosmo(cosmo, ctx, epsilon=80.0_wp, &
-      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+   call new_component_cosmo(cosmo, epsilon=80.0_wp, &
+      & error=error, param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
    if (allocated(error)) error stop error%message
 
 PV
@@ -378,7 +380,7 @@ constructed above:
 
    type(model_continuum_type), target :: model
 
-   call new_continuum_model(model, cavity, ctx, error)
+   call new_continuum_model(model, ctx, cavity, error)
    if (allocated(error)) error stop error%message
    call model%add_component(cpcm, error)
    if (allocated(error)) error stop error%message

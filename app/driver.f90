@@ -176,8 +176,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_numsa(tmp_cavity, ctx, radii=radius_model, error=error, &
-                     param=moist_cavity_numsa_parameters_type(num_leb=config%nleb))
+                  call new_cavity_numsa(tmp_cavity, radii=radius_model, error=error, &
+                     param=moist_cavity_numsa_parameters_type(num_leb=config%nleb), ctx=ctx)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -187,8 +187,8 @@ contains
                   allocate (tmp_cavity)
                   call new_radii(config%radii, radius_model, error)
                   if (allocated(error)) return
-                  call new_cavity_iswig(tmp_cavity, ctx, radius_model=radius_model, error=error, &
-                     param=moist_cavity_iswig_parameters_type(num_leb=config%nleb))
+                  call new_cavity_iswig(tmp_cavity, radius_model=radius_model, error=error, &
+                     param=moist_cavity_iswig_parameters_type(num_leb=config%nleb), ctx=ctx)
                   if (allocated(error)) return
                   call move_alloc(tmp_cavity, cavity)
                end block
@@ -207,24 +207,24 @@ contains
                         call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=config%drop_blend_k, &
                            blend_1b=config%drop_blend_1b, blend_2b=config%drop_blend_2b, &
                            blend_3b=config%drop_blend_3b))
-                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
                            lsf_model=svdw_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
                            do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                           wleb_prune_level=config%drop_wleb_prune_level))
+                           wleb_prune_level=config%drop_wleb_prune_level), ctx=ctx)
                      end block
                   else if (to_lower(config%drop_variant) == "cfc") then
                      block
                         type(moist_cavity_drop_lsf_cfc_type) :: cfc_template
                         call cfc_template%new(param=moist_cavity_drop_lsf_cfc_param_type(a1=config%cfc_a1, &
                            a2=config%cfc_a2, c=config%cfc_c, m=config%cfc_m))
-                        call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
+                        call new_cavity_drop(tmp_cavity, radius_model=radius_model, &
                            lsf_model=cfc_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
                            do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
-                           wleb_prune_level=config%drop_wleb_prune_level))
+                           wleb_prune_level=config%drop_wleb_prune_level), ctx=ctx)
                      end block
                   else
                      call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
@@ -378,12 +378,12 @@ contains
       type(error_type), allocatable, intent(out) :: error
 
       if (dump) then
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
+         call new_cavity_marchingcubes(cavity, radius_model=radius_model, lsf_model=lsf_model, &
             error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing, &
-            obj_file="cavity.obj", pqr_file="cavity.pqr"))
+            obj_file="cavity.obj", pqr_file="cavity.pqr"), ctx=ctx)
       else
-         call new_cavity_marchingcubes(cavity, ctx, radius_model=radius_model, lsf_model=lsf_model, &
-            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing))
+         call new_cavity_marchingcubes(cavity, radius_model=radius_model, lsf_model=lsf_model, &
+            error=error, param=moist_cavity_marchingcubes_parameters_type(spacing=spacing), ctx=ctx)
       end if
 
    end subroutine new_mc_cavity

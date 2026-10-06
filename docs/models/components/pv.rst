@@ -50,7 +50,7 @@ Construction
 
       .. code-block:: c
 
-         moist_component pv = moist_new_pv_component(error, 3.39893e-5);
+         moist_component pv = moist_new_pv_component(error, NULL, 3.39893e-5);
          moist_add_model_component(error, model, pv);
          moist_delete(pv);  /* model owns a copy */
 

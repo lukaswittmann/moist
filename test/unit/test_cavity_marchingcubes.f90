@@ -159,8 +159,8 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=grid_spacing))
+      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=grid_spacing), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -396,8 +396,8 @@ contains
          blend_2b=c%blend_2b, blend_3b=c%blend_3b))
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING))
+      call new_cavity_marchingcubes(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
          return
@@ -545,8 +545,8 @@ contains
       call svdw_template%new()
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error)
+      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, ctx=ctx)
       call check(error, .not. allocated(cavity_error), &
          & more="Default marching-cubes parameters must construct successfully")
       if (allocated(error)) return
@@ -557,15 +557,15 @@ contains
          & more="Omitted parameters must use the compiled spacing")
       if (allocated(error)) return
 
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=0.0_wp))
+      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=0.0_wp), ctx=ctx)
 
       call check(error, allocated(cavity_error), &
          & more="A zero marching-cubes spacing must be rejected")
       if (allocated(error)) return
 
-      call new_cavity_marchingcubes(cav, ctx, radius_model=radius_model, lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=-MC_SPACING))
+      call new_cavity_marchingcubes(cav, radius_model=radius_model, lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=-MC_SPACING), ctx=ctx)
       call check(error, allocated(cavity_error), &
          & more="A negative marching-cubes spacing must be rejected")
 
@@ -598,8 +598,8 @@ contains
          blend_2b=cases(case_idx)%blend_2b, blend_3b=cases(case_idx)%blend_3b))
 
       allocate (cav)
-      call new_cavity_marchingcubes(cav, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
-         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING))
+      call new_cavity_marchingcubes(cav, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         error=cavity_error, param=moist_cavity_marchingcubes_parameters_type(spacing=MC_SPACING), ctx=ctx)
       if (allocated(cavity_error)) then
          call test_failed(error, "new_cavity_marchingcubes failed for "// &
             & case_to_string(cases(case_idx))//": "//cavity_error%message)

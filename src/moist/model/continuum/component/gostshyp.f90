@@ -26,6 +26,7 @@ module moist_model_continuum_component_gostshyp
    use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
+   use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
    use moist_channels_response, only: response_type, gaussian_amplitude_response_type, &
@@ -79,15 +80,19 @@ contains
    !>
    !> @param[out] self     Component instance
    !> @param[in]  pressure Applied pressure in Hartree/bohr**3
-   subroutine new_component_gostshyp(self, pressure)
+   !> @param[in]  ctx      Borrowed run context; omitted, a model supplies its own
+   subroutine new_component_gostshyp(self, pressure, ctx)
       !> Component instance
       type(model_continuum_component_gostshyp), intent(out) :: self
       !> Applied pressure
       real(wp), intent(in) :: pressure
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
 
       self%name = "GOSTSHYP"
       self%description = "Gaussians on surface tesserae to simulate hydrostatic pressure"
       self%pressure = pressure
+      if (present(ctx)) self%ctx => ctx
 
    end subroutine new_component_gostshyp
 
@@ -120,6 +125,9 @@ contains
       class(cavity_type), intent(inout) :: cavity
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       self%mol_solu = mol
       if (.not. allocated(cavity%a) .or. .not. allocated(cavity%xyz) .or. &

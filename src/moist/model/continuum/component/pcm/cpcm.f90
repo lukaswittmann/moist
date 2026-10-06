@@ -27,16 +27,14 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] epsilon Solvent dielectric constant
    !> @param[in] external_matrix Optional host-supplied PCM matrix
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_component_cpcm(self, ctx, epsilon, external_matrix, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_component_cpcm(self, epsilon, external_matrix, error, param, ctx)
       !> CPCM instance to initialize
       type(model_continuum_component_cpcm), intent(out) :: self
-      !> Shared run context (verbosity/debug/timer); borrowed, must outlive self
-      type(moist_context_type), intent(in), target :: ctx
       !> Dielectric constant
       real(wp), intent(in) :: epsilon
       !> Solver configuration; omitted means compiled defaults
@@ -45,13 +43,15 @@ contains
       real(wp), intent(in), optional :: external_matrix(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
 
       !> Resolved solver configuration
       type(moist_pcm_parameters_type) :: settings
 
       if (present(param)) settings = param
       !> Borrow the shared run context (owns verbosity/debug/timer)
-      self%ctx => ctx
+      if (present(ctx)) self%ctx => ctx
 
       ! Set dielectric properties; below eps = 1 the scaling factor turns
       ! negative (and diverges at eps = 0), so the model is undefined there,

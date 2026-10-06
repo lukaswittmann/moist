@@ -411,8 +411,8 @@ contains
       if (allocated(error)) return
       nat = mol%nat
 
-      call new_component_cpcm(pcm_component, ctx, epsilon=epsilon_r, error=err, &
-         param=moist_pcm_parameters_type(solver=solver_type%cholesky))
+      call new_component_cpcm(pcm_component, epsilon=epsilon_r, error=err, &
+         param=moist_pcm_parameters_type(solver=solver_type%cholesky), ctx=ctx)
       if (allocated(err)) then
          call test_failed(error, "CPCM construction failed: "//err%message)
          return
@@ -524,7 +524,7 @@ contains
 
       type(mctc_error), allocatable :: err
 
-      call new_continuum_model(model, cavity, ctx, err)
+      call new_continuum_model(model, ctx, cavity, err)
       if (.not. allocated(err)) call model%add_component(pcmc, err)
       if (.not. allocated(err)) call model%add_component(pvc, err)
       if (.not. allocated(err)) call model%update(mol, err)
@@ -875,10 +875,10 @@ contains
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
             blend_3b=gamma_loc))
          call new_context(ctx, nthreads=0, verbosity=0)
-         call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
+         call new_cavity_drop(cavity, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc, &
-            do_fine=.true.))
+            do_fine=.true.), ctx=ctx)
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)

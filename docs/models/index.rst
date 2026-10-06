@@ -89,18 +89,18 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    
    ! Construct cavity and its level set
    call svdw%new()
-   call new_cavity_drop(cavity, ctx, &
+   call new_cavity_drop(cavity, &
       & radius_model=default_cpcm_radii(), lsf_model=svdw, error=error)
    if (allocated(error)) error stop error%message
 
    ! Construct CPCM (water)
-   call new_component_cpcm(electrostatic, ctx, epsilon=80.0_wp, error=error)
+   call new_component_cpcm(electrostatic, epsilon=80.0_wp, error=error)
    if (allocated(error)) error stop error%message
    ! Construct pressure model (1 GPa)
    call new_component_pv(pressure_volume, pressure=3.39893E-5_wp)
 
    ! Construct model
-   call new_continuum_model(model, cavity, ctx, error)
+   call new_continuum_model(model, ctx, cavity, error)
    if (allocated(error)) error stop error%message
 
    ! Add model components
@@ -108,6 +108,10 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    if (allocated(error)) error stop error%message
    call model%add_component(pressure_volume, error)
    if (allocated(error)) error stop error%message
+
+The model runs on ``ctx``. The cavity and components above have no context of
+their own, so their copies in the model use that; a part constructed with
+``ctx=`` keeps its own.
 
 Call ``model%update(mol, error)`` with the current structure, then create a host coupling with ``model%new_coupling(coupling, error)``; energies, responses and gradients are computed one phase at a time on that coupling, as described in :doc:`/reference/coupling`.
 ``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).

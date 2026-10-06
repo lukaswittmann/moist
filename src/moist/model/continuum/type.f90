@@ -73,17 +73,19 @@ contains
    !>
    !> The geometry copy must not carry state bound to its own address
    !>
+   !> - a cavity with its own context keeps it; one without runs on `ctx`
+   !>
    !> @param[out] self Instance
-   !> @param[in] cavity Live cavity
    !> @param[in] ctx Borrowed run context
+   !> @param[in] cavity Live cavity
    !> @param[out] error Error handling
-   subroutine new_continuum_model(self, cavity, ctx, error)
+   subroutine new_continuum_model(self, ctx, cavity, error)
       !> Continuum model
       type(model_continuum_type), intent(out) :: self
-      !> Cavity configuration to copy
-      class(cavity_type), intent(in) :: cavity
       !> Shared run context, which must outlive the model
       type(moist_context_type), intent(in), target :: ctx
+      !> Cavity configuration to copy
+      class(cavity_type), intent(in) :: cavity
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
 
@@ -96,7 +98,7 @@ contains
          return
       end if
       self%ctx => ctx
-      self%cavity%ctx => ctx
+      if (.not. associated(self%cavity%ctx)) self%cavity%ctx => ctx
       allocate (self%components(0))
       self%updated = .false.
       self%configured = .false.
@@ -104,6 +106,8 @@ contains
    end subroutine new_continuum_model
 
    !> Append an owned copy of a component before the first update
+   !>
+   !> - a component with its own context keeps it; one without runs on the model's
    !>
    !> @param[in,out] self Instance
    !> @param[in] component Compatible component to copy
@@ -137,7 +141,7 @@ contains
          call move_alloc(self%components(i)%energy, grown(i)%energy)
       end do
       allocate (grown(n + 1)%item, source=component)
-      grown(n + 1)%item%ctx => self%ctx
+      if (.not. associated(grown(n + 1)%item%ctx)) grown(n + 1)%item%ctx => self%ctx
       call move_alloc(grown, self%components)
 
    end subroutine add_component

@@ -180,8 +180,9 @@ typedef struct moist_lsf_s* moist_lsf;
 /// nthreads is fixed for the context's lifetime: > 0 as given, 0 takes the
 /// calling thread's omp_get_max_threads at construction, negative is an error.
 /// The count sizes MOIST's own OpenMP regions; the host's OpenMP runtime and
-/// the BLAS/LAPACK threading are left alone. verbosity and debug override
-/// cavity/model logging options. Cavities and models retain the context
+/// the BLAS/LAPACK threading are left alone. verbosity and debug are the only
+/// logging settings. Every model constructor requires a context, a cavity or
+/// component constructor takes one optionally; each retains it
 moist_API_ENTRY moist_context moist_API_CALL
 moist_new_context(moist_error error, int nthreads, int verbosity,
                   bool debug) moist_API_SUFFIX__V_1_0;
@@ -206,8 +207,6 @@ moist_get_context_num_threads(moist_error error, moist_context context,
 typedef struct {
     size_t struct_size;
     int nleb;
-    bool debug;
-    int verbosity;
     bool do_fine;
     double tolerance;
     int proj_maxiter;
@@ -226,8 +225,6 @@ moist_init_drop_options(moist_error error, moist_drop_options *options,
 typedef struct {
     size_t struct_size;
     int nleb;
-    bool debug;
-    int verbosity;
     double cut_a;
     double cut_f;
     /* --- end of 1.0 layout --- */
@@ -273,17 +270,6 @@ typedef struct {
 
 moist_API_ENTRY void moist_API_CALL
 moist_init_isodensity_options(moist_error error, moist_isodensity_options *options,
-                        size_t struct_size) moist_API_SUFFIX__V_1_0;
-
-typedef struct {
-    size_t struct_size;
-    bool debug;
-    int verbosity;
-    /* --- end of 1.0 layout --- */
-} moist_model_options;
-
-moist_API_ENTRY void moist_API_CALL
-moist_init_model_options(moist_error error, moist_model_options *options,
                         size_t struct_size) moist_API_SUFFIX__V_1_0;
 
 typedef struct {
@@ -337,44 +323,35 @@ moist_new_isodensity_lsf(moist_error error, int nshell, const int *shell_atom,
 moist_API_ENTRY void moist_API_CALL
 moist_delete_lsf(moist_lsf *lsf) moist_API_SUFFIX__V_1_0;
 
+/* A model requires a context (NULL is an error); a cavity or component
+ * takes one optionally. Every handle retains its context until deleted; the
+ * context alone sets threads, verbosity and debug. A cavity or component
+ * without one runs on its model's context and fails when used standalone */
+
 /// Construct DROP from a required LSF; LSF and radii are copied
 /// NULL radii selects CPCM radii; NULL options selects defaults
 moist_API_ENTRY moist_cavity moist_API_CALL
-moist_new_drop_cavity(moist_error error, moist_lsf lsf, moist_radii radii,
+moist_new_drop_cavity(moist_error error, moist_context context, moist_lsf lsf,
+                      moist_radii radii,
                       const moist_drop_options *options) moist_API_SUFFIX__V_1_0;
 
 /// Construct iSwiG, copying radii; NULL radii selects CPCM, NULL options defaults
 moist_API_ENTRY moist_cavity moist_API_CALL
-moist_new_iswig_cavity(moist_error error, moist_radii radii,
+moist_new_iswig_cavity(moist_error error, moist_context context, moist_radii radii,
                        const moist_iswig_options *options) moist_API_SUFFIX__V_1_0;
 
 /// Construct a model owning a cavity copy; add components before the first update
+/// A cavity or component copy keeps its own context; one without runs on this
 moist_API_ENTRY moist_model moist_API_CALL
-moist_new_model(moist_error error, moist_cavity cavity,
-                const moist_model_options *options) moist_API_SUFFIX__V_1_0;
-
-/// Construct cavities and models using a shared context; NULL selects defaults
-/// Explicit context settings take precedence over cavity/model logging options
-/// Without an explicit context, a model inherits its source cavity's shared context
-moist_API_ENTRY moist_cavity moist_API_CALL
-moist_new_drop_cavity_with_context(moist_error error, moist_context context,
-                                   moist_lsf lsf, moist_radii radii,
-                                   const moist_drop_options *options) moist_API_SUFFIX__V_1_0;
-moist_API_ENTRY moist_cavity moist_API_CALL
-moist_new_iswig_cavity_with_context(moist_error error, moist_context context,
-                                    moist_radii radii,
-                                    const moist_iswig_options *options) moist_API_SUFFIX__V_1_0;
-moist_API_ENTRY moist_model moist_API_CALL
-moist_new_model_with_context(moist_error error, moist_context context,
-                             moist_cavity cavity,
-                             const moist_model_options *options) moist_API_SUFFIX__V_1_0;
+moist_new_model(moist_error error, moist_context context,
+                moist_cavity cavity) moist_API_SUFFIX__V_1_0;
 
 /// Construct PCM components; NULL options selects the default solver
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_cpcm_component(moist_error error, double epsilon,
+moist_new_cpcm_component(moist_error error, moist_context context, double epsilon,
                          const moist_pcm_options *options) moist_API_SUFFIX__V_1_0;
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_cosmo_component(moist_error error, double epsilon,
+moist_new_cosmo_component(moist_error error, moist_context context, double epsilon,
                           const moist_pcm_options *options) moist_API_SUFFIX__V_1_0;
 
 /*
@@ -507,7 +484,7 @@ moist_delete_radii(moist_radii* radii) moist_API_SUFFIX__V_1_0;
 
 /// Create a pressure-volume energy component equal to `pressure * cavity volume`
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_pv_component(moist_error error,
+moist_new_pv_component(moist_error error, moist_context context,
                        double pressure) moist_API_SUFFIX__V_1_0;
 
 /// Create a GOSTSHYP hydrostatic-pressure component at `pressure` in
@@ -516,7 +493,7 @@ moist_new_pv_component(moist_error error,
 /// moist_answer_coupling_request in every phase, and contract the
 /// "gaussian_amplitude" item of the response walk
 moist_API_ENTRY moist_component moist_API_CALL
-moist_new_gostshyp_component(moist_error error,
+moist_new_gostshyp_component(moist_error error, moist_context context,
                              double pressure) moist_API_SUFFIX__V_1_0;
 
 /// Delete a standalone solvation-model component handle
@@ -851,7 +828,7 @@ moist_update_model(moist_error error,
 /// Valid as long as the parent model exists, but cannot be rebuilt
 /// independently: moist_update_cavity rejects borrowed handles
 /// Use moist_delete_cavity to release the handle (does NOT destroy the
-/// model's cavity)
+/// model's cavity); the handle retains the model's context until then
 moist_API_ENTRY moist_cavity moist_API_CALL
 moist_get_model_cavity(moist_error error,
                                  moist_model model) moist_API_SUFFIX__V_1_0;

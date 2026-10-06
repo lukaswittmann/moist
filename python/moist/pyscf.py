@@ -1,6 +1,6 @@
 """PySCF integration for MOIST.
 
-Import this module to register ``mf.MOIST(cavity=..., components=...)`` on
+Import this module to register ``mf.MOIST(cavity=..., components=..., context=...)`` on
 PySCF mean-field objects.  Everything the integration needs is in this one
 file, top to bottom:
 
@@ -48,7 +48,7 @@ from .interface import (
     Structure,
     _immutable_array,
 )
-from .parameters import ModelParameters, _resolve
+from .context import Context, _resolve_context
 
 __all__ = [
     "DROP", "ISwiG", "SvdW", "CFC", "Isodensity",
@@ -721,11 +721,11 @@ class PySCFSolvation:
     :param cavity: a cavity configuration, ``DROP(lsf=...)`` or ``ISwiG(...)``.
         An isodensity level set is bound to this molecule's density.
     :param components: the model components, e.g. ``[ModelComponentCPCM(80.0)]``.
-    :param parameters: model logging settings.
+    :param context: run context of the cavity and model: threads, verbosity, debug.
     """
 
     def __init__(self, mol, cavity: CavityConfiguration, components, *,
-                 parameters: ModelParameters | None = None) -> None:
+                 context: Context) -> None:
         if not isinstance(cavity, CavityConfiguration):
             raise TypeError("cavity must be DROP(lsf=...) or ISwiG(...)")
         items = tuple(components)
@@ -734,12 +734,11 @@ class PySCFSolvation:
         self.mol = mol
         self.configuration = cavity
         self.components = items
-        self.parameters = _resolve(ModelParameters, parameters)
+        self.context = _resolve_context(context)
         self.host = PySCFHost(mol)
         self.host.structure()  # Validate the molecular representation before use.
         self.model = SolvationModel(
-            cavity.build(source=self.host if cavity.density_dependent else None),
-            items, parameters=self.parameters,
+            self.context, cavity.build(source=self.host if cavity.density_dependent else None), items,
         )
         self.coupling = None
         #: The GOSTSHYP half, created the first time a moment request appears
@@ -967,11 +966,11 @@ class _MoistState:
     ``result`` is the latest :class:`Result`, or ``None`` before use.
     """
 
-    def __init__(self, mol, *, cavity, components, parameters=None):
+    def __init__(self, mol, *, cavity, components, context):
         self.mol = mol
         self._cavity = None
         self._components = ()
-        self._parameters = _resolve(ModelParameters, parameters)
+        self._context = _resolve_context(context)
         self.set(cavity=cavity, components=components)
 
     @property
@@ -983,8 +982,8 @@ class _MoistState:
         return self._components
 
     @property
-    def parameters(self):
-        return self._parameters
+    def context(self):
+        return self._context
 
     @property
     def solvation(self) -> Optional[PySCFSolvation]:
@@ -1005,16 +1004,16 @@ class _MoistState:
         result = self.result
         return None if result is None else result.fock
 
-    def set(self, *, cavity=None, components=None, parameters=None):
-        """Replace model settings or cavity configuration, clearing cached results."""
+    def set(self, *, cavity=None, components=None, context=None):
+        """Replace the cavity, components or context, clearing cached results."""
         config = self._cavity if cavity is None else cavity
         if not isinstance(config, CavityConfiguration):
             raise TypeError("cavity must be DROP(lsf=...) or ISwiG(...)")
         items = self._components if components is None else tuple(components)
         if not items or any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must be a nonempty sequence of MOIST components")
-        model_parameters = self.parameters if parameters is None else _resolve(ModelParameters, parameters)
-        self._cavity, self._components, self._parameters = config, items, model_parameters
+        run_context = self.context if context is None else _resolve_context(context)
+        self._cavity, self._components, self._context = config, items, run_context
         return self.reset()
 
     def reset(self, mol=None):
@@ -1026,7 +1025,7 @@ class _MoistState:
 
     def copy(self):
         return type(self)(self.mol, cavity=self.cavity, components=self.components,
-                          parameters=self.parameters)
+                          context=self.context)
 
     def _molecule_key(self):
         mol = self.mol
@@ -1041,7 +1040,7 @@ class _MoistState:
             if self.mol.has_ecp():
                 raise ValueError("effective core potentials are not supported")
             self._solvation = PySCFSolvation(
-                self.mol, self.cavity, self.components, parameters=self.parameters)
+                self.mol, self.cavity, self.components, context=self.context)
             self._fingerprint = key
         return self._solvation
 
@@ -1142,7 +1141,7 @@ class _MoistSCF:
     def density_fit(self, *args, **kwargs):
         base = self.undo_moist().density_fit(*args, **kwargs)
         return moist_for_scf(base, cavity=self.with_moist.cavity,
-                             components=self.with_moist.components, parameters=self.with_moist.parameters)
+                             components=self.with_moist.components, context=self.with_moist.context)
 
     def _unsupported(self, *args, **kwargs):
         raise NotImplementedError("MOIST currently supports ground-state SCF and nuclear gradients only")
@@ -1173,11 +1172,12 @@ class _MoistGrad:
         raise NotImplementedError("MOIST GPU gradients are not supported")
 
 
-def moist_for_scf(mf, *, cavity, components, parameters=None):
+def moist_for_scf(mf, *, cavity, components, context):
     """Attach MOIST to RHF/RKS/UHF/UKS without running SCF.
 
     Use ``DROP(lsf=SvdW(...))``, ``DROP(lsf=CFC(...))``,
-    ``DROP(lsf=Isodensity(...))`` or ``ISwiG(...)``.
+    ``DROP(lsf=Isodensity(...))`` or ``ISwiG(...)``. ``context`` is the
+    :class:`~moist.Context` the cavity and model run on.
     Importing :mod:`moist.pyscf` also registers this function as ``mf.MOIST``.
     """
     from pyscf import lib, scf
@@ -1191,7 +1191,7 @@ def moist_for_scf(mf, *, cavity, components, parameters=None):
         raise ValueError("Cannot attach MOIST to a calculation with an existing solvent")
     if mf.mol.has_ecp():
         raise ValueError("effective core potentials are not supported")
-    state = _MoistState(mf.mol, cavity=cavity, components=components, parameters=parameters)
+    state = _MoistState(mf.mol, cavity=cavity, components=components, context=context)
     obj = mf.copy()
     obj.with_moist = state
     # Results from an earlier gas-phase calculation are not MOIST results.

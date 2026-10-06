@@ -196,6 +196,9 @@ contains
       ! Thread-local accumulators (replace atomics for A_tot and V_tot)
       real(wp), allocatable :: A_tot_local(:, :), V_tot_local(:, :)
 
+      call self%require_context(error)
+      if (allocated(error)) return
+
       anchor_only_loc = .false.
       if (present(anchor_only)) anchor_only_loc = anchor_only
 

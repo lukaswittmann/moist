@@ -40,19 +40,21 @@ module moist_model_moz_3d_type
 
 contains
 
+
+
    !> Copy the configured spatial grid
    !>
    !> @param[out] self Model
-   !> @param[in] grid Spatial grid template
    !> @param[in] ctx Run context, borrowed for the lifetime of the model
+   !> @param[in] grid Spatial grid template
    !> @param[out] error Allocation failure
-   subroutine new_moz_3d_model(self, grid, ctx, error)
+   subroutine new_moz_3d_model(self, ctx, grid, error)
       !> Model
       type(model_moz_3d_type), intent(out) :: self
-      !> Spatial grid template, copied into the model
-      class(moist_math_grid_3d_type), intent(in) :: grid
       !> Run context, borrowed for the lifetime of the model
       type(moist_context_type), intent(in), target :: ctx
+      !> Spatial grid template, copied into the model
+      class(moist_math_grid_3d_type), intent(in) :: grid
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
       !> Allocation status of the grid copy
@@ -109,8 +111,8 @@ contains
    !>   `dphi_dr` for the gradient, plus the partial charges, `q` in every
    !>   phase, as the tail charges of the Ng split
    !>
-   !> A Cartesian grid always realizes Gaussian widths; a molecular grid does
-   !> so only when configured for it, otherwise it reports bare point values
+   !> Gaussian grid constructors select widths; point grid constructors select
+   !> bare point values for both Cartesian and molecular grids
    !> Either way, `allocated(grid%xi0)` after `update` selects the "ec"
    !> potential: present widths mean a Gaussian-probed potential, which also
    !> needs `dphi_dxi` for the gradient when the widths follow the geometry;

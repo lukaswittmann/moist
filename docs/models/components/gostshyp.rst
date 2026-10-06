@@ -58,7 +58,7 @@ Construction
 
       .. code-block:: c
 
-         moist_component gostshyp = moist_new_gostshyp_component(error, 1.699465e-3);
+         moist_component gostshyp = moist_new_gostshyp_component(error, NULL, 1.699465e-3);
          moist_add_model_component(error, model, gostshyp);
          moist_delete(gostshyp);  /* model owns a copy */
 
@@ -81,12 +81,13 @@ Given a PySCF molecule ``mol``:
 
 .. code-block:: python
 
-   from moist import DROPParameters, ModelComponentGOSTSHYP
+   from moist import Context, DROPParameters, ModelComponentGOSTSHYP
    from moist.pyscf import DROP, GPA_TO_AU, Isodensity
 
    mf = mol.RHF().MOIST(
        cavity=DROP(lsf=Isodensity(), parameters=DROPParameters(nleb=194)),
        components=[ModelComponentGOSTSHYP(50.0 * GPA_TO_AU)],
+       context=Context(),
    )
    mf.kernel()
    gradient = mf.nuc_grad_method().kernel()

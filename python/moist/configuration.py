@@ -25,12 +25,12 @@ class LevelSet(ABC):
     density_dependent = False
 
     @abstractmethod
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
         """Create independently owned native state for this surface."""
 
 
 class _GeometricLevelSet(LevelSet):
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
         if source is not None or pass_order is not None:
             raise TypeError("A geometric LSF does not accept a density source")
         return library.new_drop_cavity(parameters, self.parameters, radii, context=context)
@@ -75,7 +75,7 @@ class Isodensity(LevelSet):
     def __init__(self, *, parameters: IsodensityParameters | None = None):
         object.__setattr__(self, "parameters", _resolve(IsodensityParameters, parameters))
 
-    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context):
         if isinstance(source, InternalDensity):
             if pass_order is not None:
                 raise TypeError("pass_order applies only to callbacks")
@@ -94,8 +94,11 @@ class CavityConfiguration(ABC):
     density_dependent = False
 
     @abstractmethod
-    def build(self, *, source=None, context=None):
-        """Create a live cavity, binding host data when required."""
+    def build(self, *, context=None, source=None):
+        """Create a live cavity, binding host data when required.
+
+        Without ``context`` the cavity runs on the context of its model.
+        """
 
 
 @dataclass(frozen=True, init=False)
@@ -119,7 +122,7 @@ class DROP(CavityConfiguration):
     def density_dependent(self):
         return self.lsf.density_dependent
 
-    def build(self, *, source=None, pass_order=None, context=None):
+    def build(self, *, context=None, source=None, pass_order=None):
         from .interface import CavityDROP
 
         return CavityDROP(lsf=self.lsf, parameters=self.parameters, radii=self.radii,
@@ -141,7 +144,7 @@ class ISwiG(CavityConfiguration):
         object.__setattr__(self, "parameters", _resolve(ISwiGParameters, parameters))
         object.__setattr__(self, "radii", _resolve_radii(radii))
 
-    def build(self, *, source=None, context=None):
+    def build(self, *, context=None, source=None):
         from .interface import CavityISwiG
 
         if source is not None:

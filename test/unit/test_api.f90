@@ -12,9 +12,8 @@ module test_api
    use moist_context, only: moist_context_type, new_context
 !$ use omp_lib, only: omp_get_max_threads
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
-   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
+   use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type, new_cartesian_gaussian_grid
    use moist_api, only: vp_context, new_context_api, delete_context_api, &
-      & create_drop_cavity_context_api, create_iswig_cavity_context_api, &
       & vp_cavity, vp_error, vp_response, get_response_field_real_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
       & vp_model, update_structure_api, set_custom_radii_atoms_api, &
@@ -73,10 +72,6 @@ module test_api
       integer(c_size_t) :: struct_size
       !> Lebedev points per atom
       integer(c_int) :: nleb
-      !> Diagnostic checks
-      logical(c_bool) :: debug
-      !> Output detail level
-      integer(c_int) :: verbosity
       !> Fine cavity refinement
       logical(c_bool) :: do_fine
       !> Projection convergence tolerance
@@ -172,14 +167,17 @@ module test_api
       !> C binding for moist_new_drop_cavity
       !>
       !> @param[in] error Native error
+      !> @param[in] context Native run context
       !> @param[in] lsf Native lsf
       !> @param[in] radii Native radii
       !> @param[in] options Native options
-      function moist_new_drop_cavity(error, lsf, radii, options) result(cavity) bind(C)
+      function moist_new_drop_cavity(error, context, lsf, radii, options) result(cavity) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: error
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native lsf
          type(c_ptr), value, intent(in) :: lsf
          !> Native radii
@@ -426,22 +424,6 @@ module test_api
          integer(c_size_t), value, intent(in) :: bytes
       end subroutine moist_init_isodensity_options
 
-      !> C binding for moist_init_model_options
-      !>
-      !> @param[in] verror Native error
-      !> @param[in] options Native options buffer
-      !> @param[in] bytes Native buffer size
-      subroutine moist_init_model_options(verror, options, bytes) bind(C)
-         import :: c_ptr, c_size_t
-         implicit none(type, external)
-         !> Native error
-         type(c_ptr), value, intent(in) :: verror
-         !> Native options buffer
-         type(c_ptr), value, intent(in) :: options
-         !> Native buffer size
-         integer(c_size_t), value, intent(in) :: bytes
-      end subroutine moist_init_model_options
-
       !> C binding for moist_init_pcm_options
       !>
       !> @param[in] verror Native error
@@ -495,13 +477,16 @@ module test_api
       !> C binding for moist_new_iswig_cavity
       !>
       !> @param[in] verror Native error
+      !> @param[in] context Native run context
       !> @param[in] radii Native radii
       !> @param[in] options Native options
-      function moist_new_iswig_cavity(verror, radii, options) result(cavity) bind(C)
+      function moist_new_iswig_cavity(verror, context, radii, options) result(cavity) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: verror
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native radii
          type(c_ptr), value, intent(in) :: radii
          !> Native options
@@ -513,17 +498,17 @@ module test_api
       !> C binding for moist_new_model
       !>
       !> @param[in] verror Native error
+      !> @param[in] context Native run context
       !> @param[in] cavity Native cavity
-      !> @param[in] options Native options
-      function moist_new_model(verror, cavity, options) result(model) bind(C)
+      function moist_new_model(verror, context, cavity) result(model) bind(C)
          import :: c_ptr
          implicit none(type, external)
          !> Native error
          type(c_ptr), value, intent(in) :: verror
+         !> Native run context
+         type(c_ptr), value, intent(in) :: context
          !> Native cavity
          type(c_ptr), value, intent(in) :: cavity
-         !> Native options
-         type(c_ptr), value, intent(in) :: options
          !> Owning result handle
          type(c_ptr) :: model
       end function moist_new_model
@@ -609,6 +594,8 @@ contains
                   new_unittest("init_options_without_error_handle", test_init_options_null_error), &
                   new_unittest("shared_context_thread_budget", test_shared_context_thread_budget), &
                   new_unittest("borrowed_cavity_keeps_context", test_borrowed_cavity_keeps_context), &
+                  new_unittest("model_requires_context", test_model_requires_context), &
+                  new_unittest("parts_without_context", test_parts_without_context), &
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
@@ -796,7 +783,7 @@ contains
       block
          type(c_ptr) :: lsf
          lsf = moist_new_svdw_lsf(verror, c_null_ptr)
-         vcav = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
       call moist_update_cavity(verror, vcav, vmol)
@@ -1199,7 +1186,7 @@ contains
       end if
 
       if (.not. allocated(error)) then
-         vmodel = moist_new_model(verror, vcav, c_null_ptr)
+         vmodel = model_on_context(verror, vcav)
          if (allocated(err%ptr)) then
             call test_failed(error, "DROP model construction failed: "//err%ptr%message)
          else
@@ -1528,7 +1515,7 @@ contains
          options = iso_options(c_sizeof(options), cb_rho_iso, 1000.0_c_double)
          lsf = moist_new_isodensity_callback_lsf(verror, c_funloc(iso_switchable_callback), &
                                                c_loc(ctx), c_loc(options))
-         vcav = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+         vcav = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
          call moist_delete_lsf(lsf)
       end block
       call moist_update_cavity(verror, vcav, vmol)
@@ -1864,8 +1851,6 @@ contains
       case (5)
          call moist_init_isodensity_options(verror, c_loc(buffer), c_sizeof(buffer))
       case (6)
-         call moist_init_model_options(verror, c_loc(buffer), c_sizeof(buffer))
-      case (7)
          call moist_init_pcm_options(verror, c_loc(buffer), c_sizeof(buffer))
       case default
          error stop "test_api: unhandled ikind"
@@ -1886,8 +1871,8 @@ contains
       !> Caller-owned options storage, larger than every layout
       integer(c_int8_t) :: buffer(256)
       !> Initializer names, in the order of `init_options`
-      character(len=10), parameter :: kinds(7) = [character(len=10) :: "drop", "iswig", &
-         & "svdw", "cfc", "isodensity", "model", "pcm"]
+      character(len=10), parameter :: kinds(6) = [character(len=10) :: "drop", "iswig", &
+         & "svdw", "cfc", "isodensity", "pcm"]
       integer :: ikind
 
       allocate (err)
@@ -1964,22 +1949,22 @@ contains
                call check(error, shared%ctx%get_num_threads() == expected, "context records the requested count")
                if (allocated(error)) exit checks
                if (ikind == 1) then
-                  cavity = create_drop_cavity_context_api(c_loc(err), context, lsf, c_null_ptr, c_null_ptr)
+                  cavity = moist_new_drop_cavity(c_loc(err), context, lsf, c_null_ptr, c_null_ptr)
                else
-                  cavity = create_iswig_cavity_context_api(c_loc(err), context, c_null_ptr, c_null_ptr)
+                  cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
                end if
                call check(error, c_associated(cavity), "cavity constructor succeeds")
                if (allocated(error)) exit checks
                call c_f_pointer(cavity, cav)
                call check(error, associated(cav%ptr%ctx, shared%ctx), "cavity borrows the explicit context")
                if (allocated(error)) exit checks
-               vmodel = moist_new_model(c_loc(err), cavity, c_null_ptr)
+               vmodel = moist_new_model(c_loc(err), context, cavity)
                call check(error, c_associated(vmodel), "model constructor succeeds")
                if (allocated(error)) exit checks
                call c_f_pointer(vmodel, model)
-               call check(error, associated(model%ptr%ctx, shared%ctx), "model inherits the cavity context")
+               call check(error, associated(model%ptr%ctx, shared%ctx), "model borrows the explicit context")
                if (allocated(error)) exit checks
-               component = new_pv_component_api(c_loc(err), 1.0e-4_c_double)
+               component = new_pv_component_api(c_loc(err), c_null_ptr, 1.0e-4_c_double)
                call general_model_add_component_api(c_loc(err), vmodel, component)
                call check(error,.not. allocated(err%ptr), "component addition succeeds")
                if (allocated(error)) exit checks
@@ -1989,13 +1974,14 @@ contains
                      & associated(item%components(1)%item%ctx, shared%ctx), "model borrowers share one context")
                end select
                if (allocated(error)) exit checks
-               call check(error, shared%references == 3, "context has one public owner and two dependents")
+               call check(error, shared%references == 4, &
+                  & "context has one public owner, the cavity, and the model for itself and its cavity copy")
                if (allocated(error)) exit checks
                call delete_context_api(context)
-               call check(error,.not. c_associated(context) .and. shared%references == 2, "public release retains dependents")
+               call check(error,.not. c_associated(context) .and. shared%references == 3, "public release retains dependents")
                if (allocated(error)) exit checks
                call moist_delete_cavity(cavity)
-               call check(error, shared%references == 1, "model retains the context after the source cavity is deleted")
+               call check(error, shared%references == 2, "model retains the context after the source cavity is deleted")
                if (allocated(error)) exit checks
                runtime = baseline
 !$             runtime = omp_get_max_threads()
@@ -2017,55 +2003,174 @@ contains
       call probe%delete()
    end subroutine test_shared_context_thread_budget
 
-   !> A model built from a borrowed model cavity inherits the parent's shared
-   !> context, and the borrowed handle retains it until it is deleted
+   !> A borrowed model cavity retains the context its copy runs on until it is
+   !> deleted; a model built from it runs on its own context, but the cavity
+   !> copy keeps the borrowed cavity's
    subroutine test_borrowed_cavity_keeps_context(error)
       !> Test diagnostic
       type(error_type), allocatable, intent(out) :: error
       !> API diagnostic handle
       type(vp_error), target :: err
-      !> Shared context and model wrappers
-      type(vp_context), pointer :: shared
+      !> Parent and second shared contexts, and the second model wrapper
+      type(vp_context), pointer :: parent, other
       type(vp_model), pointer :: second_model
       !> C handles
-      type(c_ptr) :: context, cavity, first, borrowed, second
+      type(c_ptr) :: context, other_context, cavity, first, borrowed, second
 
       cavity = c_null_ptr
       first = c_null_ptr
       borrowed = c_null_ptr
       second = c_null_ptr
       context = new_context_api(c_loc(err), 0_c_int, 4_c_int, .true._c_bool)
+      other_context = new_context_api(c_loc(err), 0_c_int, 1_c_int, .false._c_bool)
       checks: block
-         call check(error, c_associated(context), "context constructor succeeds")
+         call check(error, c_associated(context) .and. c_associated(other_context), &
+            & "context constructors succeed")
          if (allocated(error)) exit checks
-         call c_f_pointer(context, shared)
-         cavity = create_iswig_cavity_context_api(c_loc(err), context, c_null_ptr, c_null_ptr)
-         if (c_associated(cavity)) first = moist_new_model(c_loc(err), cavity, c_null_ptr)
+         call c_f_pointer(context, parent)
+         call c_f_pointer(other_context, other)
+         cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
+         if (c_associated(cavity)) first = moist_new_model(c_loc(err), context, cavity)
          if (c_associated(first)) borrowed = get_solvation_model_cavity_api(c_loc(err), first)
          call check(error, c_associated(borrowed), "borrowed cavity succeeds")
          if (allocated(error)) exit checks
+         call check(error, parent%references == 5, "borrowed handle retains the parent context")
+         if (allocated(error)) exit checks
          call moist_delete_cavity(cavity)
          call delete_context_api(context)
-         call check(error, shared%references == 2, "borrowed handle retains the context")
+         call check(error, parent%references == 3, "parent model and borrowed handle retain the context")
          if (allocated(error)) exit checks
-         second = moist_new_model(c_loc(err), borrowed, c_null_ptr)
+         second = moist_new_model(c_loc(err), other_context, borrowed)
          call check(error, c_associated(second), "model from a borrowed cavity succeeds")
          if (allocated(error)) exit checks
          call c_f_pointer(second, second_model)
-         call check(error, associated(second_model%ptr%ctx, shared%ctx) .and. &
-            & second_model%ptr%ctx%verbosity == 4 .and. second_model%ptr%ctx%debug, &
-            & "model from a borrowed cavity inherits the shared context")
+         call check(error, associated(second_model%ptr%ctx, other%ctx) .and. &
+            & second_model%ptr%ctx%verbosity == 1 .and. .not. second_model%ptr%ctx%debug, &
+            & "model from a borrowed cavity uses its own context")
+         if (allocated(error)) exit checks
+         select type (item => second_model%ptr)
+         type is (model_continuum_type)
+            call check(error, associated(item%cavity%ctx, parent%ctx), "cavity copy keeps the borrowed cavity's context")
+         end select
+         if (allocated(error)) exit checks
+         call check(error, parent%references == 4 .and. other%references == 2, &
+            & "each context counts only its own dependents")
          if (allocated(error)) exit checks
          call moist_delete_cavity(borrowed)
-         call delete_solvation_model_api(first)
-         call check(error, shared%references == 1, "second model alone retains the context")
+         call check(error, parent%references == 3, "deleting the borrowed handle releases its reference")
       end block checks
       call moist_delete_cavity(borrowed)
       call delete_solvation_model_api(second)
       call delete_solvation_model_api(first)
       call moist_delete_cavity(cavity)
       call delete_context_api(context)
+      call delete_context_api(other_context)
    end subroutine test_borrowed_cavity_keeps_context
+
+   !> The model constructor refuses a missing context and returns no handle
+   subroutine test_model_requires_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> C handles
+      type(c_ptr) :: context, cavity, handle
+
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_iswig_cavity(c_loc(err), context, c_null_ptr, c_null_ptr)
+      call check(error, c_associated(cavity), "cavity setup succeeds")
+      if (.not. allocated(error)) then
+         handle = moist_new_model(c_loc(err), c_null_ptr, cavity)
+         call check(error, .not. c_associated(handle) .and. allocated(err%ptr), &
+            & "model constructor without a context fails")
+      end if
+      if (.not. allocated(error)) then
+         call check(error, err%ptr%message, "[moist_new_model] Context handle is missing")
+      end if
+      call moist_delete_cavity(cavity)
+      call delete_context_api(context)
+   end subroutine test_model_requires_context
+
+   !> A cavity and a component built without a context fail standalone and run
+   !> on the context of the model they are copied into; a component with its
+   !> own context keeps it, and the model retains it
+   subroutine test_parts_without_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Model and component contexts
+      type(vp_context), pointer :: shared, own
+      !> Model wrapper
+      type(vp_model), pointer :: model
+      !> One hydrogen atom
+      integer(c_int), parameter :: numbers(1) = [1_c_int]
+      real(c_double), parameter :: positions(3, 1) = 0.0_c_double
+      !> C handles
+      type(c_ptr) :: context, own_context, cavity, plain, owned, vmodel, borrowed, vmol
+
+      cavity = c_null_ptr
+      plain = c_null_ptr
+      owned = c_null_ptr
+      vmodel = c_null_ptr
+      borrowed = c_null_ptr
+      context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      own_context = new_context_api(c_loc(err), 0_c_int, 0_c_int, .false._c_bool)
+      vmol = moist_new_structure(c_loc(err), 1_c_int, numbers, positions)
+      checks: block
+         call c_f_pointer(context, shared)
+         call c_f_pointer(own_context, own)
+         cavity = moist_new_iswig_cavity(c_loc(err), c_null_ptr, c_null_ptr, c_null_ptr)
+         plain = new_pv_component_api(c_loc(err), c_null_ptr, 1.0e-4_c_double)
+         owned = new_pv_component_api(c_loc(err), own_context, 2.0e-4_c_double)
+         call check(error, c_associated(cavity) .and. c_associated(plain) .and. c_associated(owned), &
+            & "parts are created with and without a context")
+         if (allocated(error)) exit checks
+         call moist_update_cavity(c_loc(err), cavity, vmol)
+         call check(error, allocated(err%ptr), "standalone update without a context fails")
+         if (allocated(error)) exit checks
+         call check(error, index(err%ptr%message, "Cavity has no context") > 0, &
+            & "the error names the missing context")
+         if (allocated(error)) exit checks
+         vmodel = moist_new_model(c_loc(err), context, cavity)
+         if (c_associated(vmodel)) call general_model_add_component_api(c_loc(err), vmodel, plain)
+         if (c_associated(vmodel)) call general_model_add_component_api(c_loc(err), vmodel, owned)
+         call check(error, c_associated(vmodel) .and. .not. allocated(err%ptr), "model over the parts succeeds")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vmodel, model)
+         select type (item => model%ptr)
+         type is (model_continuum_type)
+            call check(error, associated(item%cavity%ctx, shared%ctx) .and. &
+               & associated(item%components(1)%item%ctx, shared%ctx) .and. &
+               & associated(item%components(2)%item%ctx, own%ctx), &
+               & "parts without a context run on the model's, the other keeps its own")
+         end select
+         if (allocated(error)) exit checks
+         call check(error, shared%references == 3 .and. own%references == 3, &
+            & "model retains its context for its cavity copy and the component's own")
+         if (allocated(error)) exit checks
+         call update_solvation_model_api(c_loc(err), vmodel, vmol)
+         call check(error, .not. allocated(err%ptr), "model update runs every part")
+         if (allocated(error)) exit checks
+         borrowed = get_solvation_model_cavity_api(c_loc(err), vmodel)
+         call check(error, c_associated(borrowed) .and. shared%references == 4, &
+            & "borrowed cavity retains the context its copy runs on")
+         if (allocated(error)) exit checks
+         call delete_solvation_component_api(owned)
+         call delete_context_api(own_context)
+         call check(error, own%references == 1, "model alone keeps the component's context alive")
+         if (allocated(error)) exit checks
+         call delete_solvation_model_api(vmodel)
+      end block checks
+      call moist_delete_cavity(borrowed)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(owned)
+      call delete_solvation_component_api(plain)
+      call moist_delete_cavity(cavity)
+      call moist_delete_structure(vmol)
+      call delete_context_api(own_context)
+      call delete_context_api(context)
+   end subroutine test_parts_without_context
 
    !> LSF constructors refuse a missing callback, non-positive isodensity
    !> controls and every malformed basis, and return no handle
@@ -2147,7 +2252,7 @@ contains
             lsf = moist_new_isodensity_lsf(c_loc(err), 1_c_int, c_loc(shell_atom), c_loc(shell_l), &
                                            c_loc(shell_nprim), c_null_ptr, c_loc(coeffs), c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_lsf_constructor_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(lsf), trim(needles(icase)))
@@ -2207,13 +2312,13 @@ contains
          end select
          select case (icase)
          case (1:6)
-            cavity = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_loc(options))
+            cavity = drop_on_context(verror, lsf, c_null_ptr, c_loc(options))
          case (7)
-            cavity = moist_new_drop_cavity(verror, lsf, c_loc(radii), c_null_ptr)
+            cavity = drop_on_context(verror, lsf, c_loc(radii), c_null_ptr)
          case (8)
-            cavity = moist_new_iswig_cavity(verror, c_loc(radii), c_null_ptr)
+            cavity = iswig_on_context(verror, c_loc(radii), c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_cavity_constructor_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(cavity), trim(needles(icase)))
@@ -2276,7 +2381,7 @@ contains
          case (8)
             call set_custom_radii_elements_api(verror, c_null_ptr, 2_c_int, numbers)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_structure_radii_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(vmol), "structure handle")
@@ -2481,9 +2586,9 @@ contains
       allocate (err)
       verror = c_loc(err)
       lsf = moist_new_svdw_lsf(verror, c_null_ptr)
-      vdrop = moist_new_drop_cavity(verror, lsf, c_null_ptr, c_null_ptr)
+      vdrop = drop_on_context(verror, lsf, c_null_ptr, c_null_ptr)
       call moist_delete_lsf(lsf)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
       if (allocated(err%ptr)) then
          call test_failed(error, "Cavity setup failed: "//err%ptr%message)
          deallocate (err%ptr)
@@ -2560,7 +2665,7 @@ contains
          case (6)
             call moist_assemble_amat(verror, c_loc(empty_cav), 1_c_int, amat0, xi)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_unbuilt_cavity_guards"
          end select
          wrote = area /= sentinel .or. volume /= sentinel .or. ngrid /= -1_c_int &
             & .or. nsph /= -1_c_int .or. any(amat0 /= sentinel) .or. any(xi /= sentinel)
@@ -2619,7 +2724,7 @@ contains
          case (6)
             call set_isodensity_density_api(verror, viswig, 1_c_int, c_loc(dcart))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_drop_only_entry_points"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, tolerance /= sentinel, trim(needles(icase)))
@@ -2708,7 +2813,7 @@ contains
             call contract_amat1_q1q2_surface_weights_api(verror, vdrop, c_loc(w1), c_loc(w2), &
                & c_loc(w4), c_loc(w1), c_loc(w3))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_contraction_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          if (allocated(error)) exit
@@ -2805,7 +2910,7 @@ contains
             call contract_pcm_nuclear_gradient_api(verror, vstub, c_loc(q), c_loc(w_xyz), &
                & c_loc(za), c_loc(grad))
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_stub_cavity_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, wrote, trim(needles(icase)))
@@ -2856,7 +2961,7 @@ contains
          call drop_unbuilt_cavities(err, vdrop, viswig)
          return
       end if
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
       if (allocated(err%ptr)) then
          call test_failed(error, "Model setup failed: "//err%ptr%message)
          call drop_unbuilt_cavities(err, vdrop, viswig)
@@ -2870,9 +2975,9 @@ contains
          handle = c_null_ptr
          select case (icase)
          case (1)
-            handle = moist_new_model(verror, c_null_ptr, c_null_ptr)
+            handle = model_on_context(verror, c_null_ptr)
          case (2)
-            handle = moist_new_model(verror, c_loc(empty_cav), c_null_ptr)
+            handle = model_on_context(verror, c_loc(empty_cav))
          case (3)
             call update_solvation_model_api(verror, c_loc(empty_model), c_null_ptr)
          case (4)
@@ -2894,7 +2999,7 @@ contains
          case (12)
             call moist_set_model_isodensity_density(verror, vmodel, 1_c_int, c_null_ptr)
          case default
-            error stop "test_api: unhandled icase"
+            error stop "test_api: unhandled case in test_model_handle_guards"
          end select
          call expect_error(error, err, trim(needles(icase)))
          call check_untouched(error, c_associated(handle), trim(needles(icase)))
@@ -2937,9 +3042,9 @@ contains
       vfresh = c_null_ptr
 
       vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
-      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpv)
       call update_solvation_model_api(verror, vmodel, vmol)
 
@@ -2961,7 +3066,7 @@ contains
             exit checks
          end if
 
-         vfresh = moist_new_model(verror, viswig, c_null_ptr)
+         vfresh = model_on_context(verror, viswig)
          vresp = new_response_api(verror)
          gradient = sentinel
          call general_model_get_gradient_api(verror, vfresh, vcpl, vresp, 2_c_int, c_loc(gradient))
@@ -3010,9 +3115,9 @@ contains
       vcav = c_null_ptr
 
       vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
-      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpv)
       call update_solvation_model_api(verror, vmodel, vmol)
 
@@ -3087,6 +3192,11 @@ contains
 
       call new_context(ctx, nthreads=0, verbosity=0)
       call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
+      call new_cartesian_gaussian_grid(template, model_error, nx=2, ny=2, nz=2)
+      if (allocated(model_error)) then
+         call test_failed(error, model_error%message)
+         return
+      end if
       template%nx = 2
       template%ny = 2
       template%nz = 2
@@ -3100,7 +3210,7 @@ contains
       allocate (model_moz_3d_type :: holder%ptr)
       select type (model => holder%ptr)
       type is (model_moz_3d_type)
-         call new_moz_3d_model(model, template, ctx, model_error)
+         call new_moz_3d_model(model, ctx, template, model_error)
          if (.not. allocated(model_error)) call model%update(mol, model_error)
       end select
 
@@ -3249,10 +3359,10 @@ contains
       vcpl = c_null_ptr
 
       vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
-      vlow = new_pv_component_api(verror, 1.0e-4_c_double)
-      vhigh = new_pv_component_api(verror, 3.0e-4_c_double)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vlow = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
+      vhigh = new_pv_component_api(verror, c_null_ptr, 3.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vlow)
       if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vhigh)
 
@@ -3467,10 +3577,10 @@ contains
       verror = c_loc(err)
       allocate (stub_model :: stub%ptr)
 
-      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
-      vmodel = moist_new_model(verror, viswig, c_null_ptr)
-      vpcm = new_cpcm_component_api(verror, 78.0_c_double, 3_c_int, 1.0e-10_c_double, 50_c_int)
-      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      viswig = iswig_on_context(verror, c_null_ptr, c_null_ptr)
+      vmodel = model_on_context(verror, viswig)
+      vpcm = new_cpcm_component_api(verror, c_null_ptr, 78.0_c_double, 3_c_int, 1.0e-10_c_double, 50_c_int)
+      vpv = new_pv_component_api(verror, c_null_ptr, 1.0e-4_c_double)
       call general_model_add_component_api(verror, vmodel, vpcm)
       if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vpv)
 
@@ -4447,5 +4557,69 @@ contains
       call coupling_begin_registration(coupling)
       call coupling_snapshot(coupling)
    end subroutine stub_model_declare_pass
+
+
+   !> DROP cavity on a fresh default context, which the cavity retains
+   !>
+   !> @param[in] verror  API error handle
+   !> @param[in] lsf     level-set function handle
+   !> @param[in] radii   radii handle or NULL
+   !> @param[in] options options buffer or NULL
+   function drop_on_context(verror, lsf, radii, options) result(cavity)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Level-set function handle
+      type(c_ptr), intent(in) :: lsf
+      !> Radii handle or NULL
+      type(c_ptr), intent(in) :: radii
+      !> Options buffer or NULL
+      type(c_ptr), intent(in) :: options
+      !> Owning cavity handle
+      type(c_ptr) :: cavity
+      !> Context handle, released once the cavity retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_drop_cavity(verror, context, lsf, radii, options)
+      call delete_context_api(context)
+   end function drop_on_context
+
+   !> iSwiG cavity on a fresh default context, which the cavity retains
+   !>
+   !> @param[in] verror  API error handle
+   !> @param[in] radii   radii handle or NULL
+   !> @param[in] options options buffer or NULL
+   function iswig_on_context(verror, radii, options) result(cavity)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Radii handle or NULL
+      type(c_ptr), intent(in) :: radii
+      !> Options buffer or NULL
+      type(c_ptr), intent(in) :: options
+      !> Owning cavity handle
+      type(c_ptr) :: cavity
+      !> Context handle, released once the cavity retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      cavity = moist_new_iswig_cavity(verror, context, radii, options)
+      call delete_context_api(context)
+   end function iswig_on_context
+
+   !> Model on a fresh default context, which the model retains
+   !>
+   !> @param[in] verror API error handle
+   !> @param[in] cavity cavity handle, copied into the model
+   function model_on_context(verror, cavity) result(model)
+      !> API error handle
+      type(c_ptr), intent(in) :: verror
+      !> Cavity handle
+      type(c_ptr), intent(in) :: cavity
+      !> Owning model handle
+      type(c_ptr) :: model
+      !> Context handle, released once the model retains it
+      type(c_ptr) :: context
+      context = new_context_api(verror, 0_c_int, 0_c_int, .false._c_bool)
+      model = moist_new_model(verror, context, cavity)
+      call delete_context_api(context)
+   end function model_on_context
 
 end module test_api

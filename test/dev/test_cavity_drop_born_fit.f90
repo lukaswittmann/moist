@@ -205,9 +205,9 @@ contains
             type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
             call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=3.0_wp, &
                blend_1b=1.0_wp, blend_2b=1.0_wp, blend_3b=1.0_wp))
-            call new_cavity_drop(cavities(ir), ctx, radius_model=radius_model, lsf_model=svdw_template, &
+            call new_cavity_drop(cavities(ir), radius_model=radius_model, lsf_model=svdw_template, &
                error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=nleb, &
-               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2))
+               tolerance=1.0e-10_wp, proj_maxiter=150, proj_level=2), ctx=ctx)
          end block
          if (allocated(cavity_error)) then
             call test_failed(error, "new_cavity_drop failed for nleb=" &

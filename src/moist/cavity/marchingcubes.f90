@@ -425,16 +425,14 @@ contains
    !> Construct from parameter values; omission uses compiled defaults
    !>
    !> @param[inout] self Object to initialize
-   !> @param[in] ctx Borrowed context; must outlive the object
    !> @param[in] radius_model Atomic radius model to copy
    !> @param[in] lsf_model Level set function to copy
    !> @param[out] error Construction error
    !> @param[in] param Configuration copied by value
-   subroutine new_cavity_marchingcubes(self, ctx, radius_model, lsf_model, error, param)
+   !> @param[in] ctx Borrowed run context; omitted, a model supplies its own
+   subroutine new_cavity_marchingcubes(self, radius_model, lsf_model, error, param, ctx)
       !> Cavity to initialize
       type(cavity_type_marchingcubes), intent(inout) :: self
-      !> Borrowed context; must outlive the cavity
-      type(moist_context_type), intent(in), target :: ctx
       !> Radius model to copy
       class(radius_type), intent(in) :: radius_model
       !> Level set function to copy
@@ -443,13 +441,17 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Configuration; omitted means compiled defaults
       type(moist_cavity_marchingcubes_parameters_type), intent(in), optional :: param
+      !> Borrowed run context; omitted, a model supplies its own
+      type(moist_context_type), intent(in), target, optional :: ctx
       !> Resolved configuration
       type(moist_cavity_marchingcubes_parameters_type) :: settings
 
       if (present(param)) settings = param
       call settings%validate(error)
       if (allocated(error)) return
-      self%ctx => ctx
+      !> Reconstruction without a context drops the previous one
+      nullify (self%ctx)
+      if (present(ctx)) self%ctx => ctx
       self%label = "Marching cubes"
       self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
@@ -487,6 +489,9 @@ contains
       class(cavity_type_marchingcubes), intent(inout) :: self
       type(structure_type), intent(in) :: mol
       type(error_type), allocatable, intent(out) :: error
+
+      call self%require_context(error)
+      if (allocated(error)) return
 
       !> Set number of spheres
       self%nsph = mol%nat

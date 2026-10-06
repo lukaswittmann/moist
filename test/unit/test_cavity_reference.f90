@@ -514,23 +514,23 @@ contains
       select case (kind)
       case (kind_iswig)
          allocate (iswig)
-         call new_cavity_iswig(iswig, ctx, default_cpcm_radii(), err, &
-                               param=moist_cavity_iswig_parameters_type(num_leb=reference_nleb))
+         call new_cavity_iswig(iswig, default_cpcm_radii(), err, &
+                               param=moist_cavity_iswig_parameters_type(num_leb=reference_nleb), ctx=ctx)
          call move_alloc(iswig, cavity)
       case (kind_numsa)
          allocate (numsa)
-         call new_cavity_numsa(numsa, ctx, default_cpcm_radii(), err, &
-                               param=moist_cavity_numsa_parameters_type(num_leb=reference_nleb))
+         call new_cavity_numsa(numsa, default_cpcm_radii(), err, &
+                               param=moist_cavity_numsa_parameters_type(num_leb=reference_nleb), ctx=ctx)
          call move_alloc(numsa, cavity)
       case (kind_drop_svdw)
          allocate (drop)
          call svdw%new()
-         call new_cavity_drop(drop, ctx, default_cpcm_radii(), svdw, err, param=drop_param)
+         call new_cavity_drop(drop, default_cpcm_radii(), svdw, err, param=drop_param, ctx=ctx)
          call move_alloc(drop, cavity)
       case (kind_drop_cfc)
          allocate (drop)
          call cfc%new()
-         call new_cavity_drop(drop, ctx, default_cpcm_radii(), cfc, err, param=drop_param)
+         call new_cavity_drop(drop, default_cpcm_radii(), cfc, err, param=drop_param, ctx=ctx)
          call move_alloc(drop, cavity)
       case default
          call fatal_error(err, "unknown cavity kind '"//kind//"'")
