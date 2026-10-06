@@ -211,16 +211,16 @@ contains
       if (allocated(self%lambda1_rA)) deallocate (self%lambda1_rA)
       allocate (self%lambda1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
 
-      ! Optional derivative arrays (gated by request flags)
-      if (self%request%rho) then
+      ! Optional derivative arrays (gated by the property flags)
+      if (self%param%do_rho) then
          if (allocated(self%rho1_rA)) deallocate (self%rho1_rA)
          allocate (self%rho1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
       end if
-      if (self%request%r_iI) then
+      if (self%param%do_r_iI) then
          if (allocated(self%r_iI1_rA)) deallocate (self%r_iI1_rA)
          allocate (self%r_iI1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
       end if
-      if (self%request%normal) then
+      if (self%param%do_normal) then
          if (allocated(self%normal1_rA)) deallocate (self%normal1_rA)
          allocate (self%normal1_rA(3, self%nsph, 3, self%ngrid), source=0.0_wp)
       end if
@@ -247,10 +247,10 @@ contains
       if (allocated(self%xi1_rA)) deallocate (self%xi1_rA)
       allocate (self%xi1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
 
-      ! Principal-curvature gradients, diagnostic and gated by the same request
+      ! Principal-curvature gradients, diagnostic and gated by the same property
       ! flag as the forward compute_curvature; mean/Gaussian curvature gradients
       ! are derived from these downstream, so they are not stored
-      if (self%request%curvature) then
+      if (self%param%do_curvature) then
          if (allocated(self%k1_rA)) deallocate (self%k1_rA)
          allocate (self%k1_rA(3, self%nsph, self%ngrid), source=0.0_wp)
          if (allocated(self%k2_rA)) deallocate (self%k2_rA)

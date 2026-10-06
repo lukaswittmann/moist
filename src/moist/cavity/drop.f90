@@ -1,5 +1,6 @@
 !> Main DROP (Discretization via Reference-Onto surface Projection) implementation
 module moist_cavity_drop
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new
@@ -17,6 +18,8 @@ module moist_cavity_drop
    use moist_context, only: moist_context_type
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_parameters, only: moist_cavity_drop_parameters_type
+   use moist_model_parameters, only: moist_model_parameters_type
+   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_smooth_step_type, new_swif_smooth_step
    use moist_cavity_drop_switching, only: moist_cavity_drop_swif_sigmoid_bump_type, new_swif_sigmoid_bump
    use moist_cavity_drop_gaussian, only: moist_cavity_drop_iswig, new_iswig
@@ -37,16 +40,12 @@ module moist_cavity_drop
    use moist_math_smoothing_kernels, only: smoothing_kernel_wendland_type
 
    use moist_utils_timer, only: timer_type, cat_setup, cat_solve, cat_properties, cat_gradient
-   use moist_cavity_drop_request, only: drop_property_request, &
-                                        drop_request_default, drop_request_diagnostics, drop_request_fine
 
    implicit none(type, external)
    private
 
    public :: cavity_type_drop
    public :: new_cavity_drop
-   public :: drop_property_request
-   public :: drop_request_default, drop_request_diagnostics, drop_request_fine
 
    !> DROP cavity type
    type, extends(cavity_type) :: cavity_type_drop
@@ -56,9 +55,6 @@ module moist_cavity_drop
 
       !> Level set function model
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
-
-      !> Property request flags controlling which quantities are computed
-      type(drop_property_request) :: request
 
       !* ----------------------------- Atomic sphere data ----------------------------- *!
 
@@ -216,8 +212,6 @@ module moist_cavity_drop
       real(wp), allocatable :: anchor_xi0(:)
 
    contains
-      !> Configure which optional properties to compute
-      procedure :: properties => set_properties_drop
       !> Update cavity for new geometry
       procedure :: update => update_cavity_drop
       !> Compute area gradient w.r.t. nuclear coordinates
@@ -279,6 +273,10 @@ module moist_cavity_drop
       procedure :: write_csv_debug => write_cavity_csv_debug
       !> Declare the readable results a DROP cavity holds
       procedure :: list_fields => list_cavity_fields_drop
+      !> Construction settings
+      procedure :: parameters => drop_parameters
+      !> Print the cavity kind, the level set and the grouped settings
+      procedure :: print_parameters => print_parameters_drop
 
       !> Finalizer
       final :: finalize_cavity_drop
@@ -553,8 +551,6 @@ contains
       if (present(param)) self%param = param
       call self%param%compute_derived(error)
       if (allocated(error)) return
-      self%request = drop_property_request()
-      if (self%param%do_fine) self%request = drop_request_fine()
 
       !> Radius model setup
       if (allocated(self%radius_model)) deallocate (self%radius_model)
@@ -563,15 +559,23 @@ contains
       !> LSF model setup
       if (allocated(self%lsf_model)) deallocate (self%lsf_model)
       allocate (self%lsf_model, source=lsf_model)
+      !> Label by the level-set model, e.g. `SvdW-DROP`
+      if (allocated(self%lsf_model%name)) then
+         self%label = self%lsf_model%name//"-DROP"
+      else
+         self%label = "DROP"
+      end if
       !> Push the cavity-derived screening threshold into the LSF
       self%lsf_model%screening_threshold = self%param%screening_threshold
 
       !> Set up weight switching function
       call new_swif_sigmoid_bump(self%f_crit, self%param%w_0ls_from, self%param%w_0ls_to, &
-                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, a_lo=self%param%w_0ls_a)
+                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
+                                 a_lo=self%param%w_0ls_a)
 
       call new_swif_sigmoid_bump(self%f_foc, self%param%w_0tra_from, self%param%w_0tra_to, &
-                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, a_lo=self%param%w_0ls_a)
+                                 p_hi=self%param%w_0ls_p, a_hi=self%param%w_0ls_a, p_lo=self%param%w_0ls_p, &
+                                 a_lo=self%param%w_0ls_a)
 
       !> Set up Lebedev weight switching function (optional)
       if (self%param%wleb_prune_level > 0) then
@@ -585,57 +589,81 @@ contains
       !> Set up branch weight model
       call self%branch_weight%init(self%param%branch_weight_s)
 
-      ! Print parameters and request
-      if (self%ctx%verbosity > 1) then
-         call self%param%print(unit=self%ctx%unit)
-         select type (m => self%lsf_model)
-         type is (moist_cavity_drop_lsf_svdw_type)
-            call m%param%print(unit=self%ctx%unit)
-         type is (moist_cavity_drop_lsf_cfc_type)
-            call m%param%print(unit=self%ctx%unit)
-         type is (moist_cavity_drop_lsf_isodensity_internal_type)
-            call m%param%print(unit=self%ctx%unit)
-         type is (moist_cavity_drop_lsf_isodensity_callback_type)
-            call m%param%print(unit=self%ctx%unit)
-         end select
-         call self%request%print(unit=self%ctx%unit)
-      end if
-
    end subroutine new_cavity_drop
 
-   !> Configure which optional properties to compute and store
+   !> Construction settings of the cavity
    !>
-   !> @param[inout] self              Cavity instance
-   !> @param[in]    do_fine           Enable all optional properties (optional)
-   !> @param[in]    do_curvature      Compute mean and Gaussian curvatures (optional)
-   !> @param[in]    do_grid_density   Compute local grid point density (optional)
-   !> @param[in]    do_normal         Store surface normal vectors (optional)
-   !> @param[in]    do_r_iI           Store sphere-center to grid point distances (optional)
-   !> @param[in]    do_rho            Store anchor-to-projected-point displacements (optional)
-   subroutine set_properties_drop(self, &
-                                  do_fine, do_curvature, do_grid_density, &
-                                  do_normal, do_r_iI, do_rho)
-      class(cavity_type_drop), intent(inout) :: self
-      logical, intent(in), optional :: do_fine
-      logical, intent(in), optional :: do_curvature
-      logical, intent(in), optional :: do_grid_density
-      logical, intent(in), optional :: do_normal
-      logical, intent(in), optional :: do_r_iI
-      logical, intent(in), optional :: do_rho
+   !> @param[in] self DROP cavity instance
+   function drop_parameters(self) result(param)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
 
-      !> do_fine sets everything at once
-      if (present(do_fine)) then
-         if (do_fine) self%request = drop_request_fine()
+      param => self%param
+
+   end function drop_parameters
+
+   !> Print the cavity section with the grouped DROP and level-set printers
+   !>
+   !> - headed by the label, e.g. `SvdW-DROP`
+   !> - the optional-property flags are part of the DROP settings
+   !>
+   !> @param[in] self DROP cavity instance
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   subroutine print_parameters_drop(self, unit)
+      !> DROP cavity instance
+      class(cavity_type_drop), intent(in), target :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+
+      !> Header printer
+      type(prettyprinter) :: pp
+      !> Level-set kind shown in the header
+      character(len=:), allocatable :: lsf_kind
+      !> Effective output unit
+      integer :: iu
+
+      iu = output_unit
+      if (associated(self%ctx)) iu = self%ctx%unit
+      if (present(unit)) iu = unit
+      lsf_kind = "none"
+      if (allocated(self%lsf_model)) then
+         lsf_kind = "unnamed"
+         if (allocated(self%lsf_model%name)) lsf_kind = self%lsf_model%name
+         ! The two isodensity models share a name; tell the density sources apart
+         select type (m => self%lsf_model)
+         type is (moist_cavity_drop_lsf_isodensity_internal_type)
+            lsf_kind = lsf_kind//" (internal)"
+         type is (moist_cavity_drop_lsf_isodensity_callback_type)
+            lsf_kind = lsf_kind//" (callback)"
+         end select
       end if
 
-      !> Individual flags (applied after do_fine so they can override)
-      if (present(do_curvature)) self%request%curvature = do_curvature
-      if (present(do_grid_density)) self%request%grid_point_density = do_grid_density
-      if (present(do_normal)) self%request%normal = do_normal
-      if (present(do_r_iI)) self%request%r_iI = do_r_iI
-      if (present(do_rho)) self%request%rho = do_rho
+      pp = new_prettyprinter(unit=iu)
+      call pp%blank()
+      if (allocated(self%label)) then
+         call pp%push("Cavity ("//self%label//"):")
+      else
+         call pp%push("Cavity:")
+      end if
+      call pp%kv("Level set", lsf_kind)
+      call pp%pop()
 
-   end subroutine set_properties_drop
+      call self%param%print(unit=iu)
+      if (.not. allocated(self%lsf_model)) return
+      select type (m => self%lsf_model)
+      type is (moist_cavity_drop_lsf_svdw_type)
+         call m%param%print(unit=iu)
+      type is (moist_cavity_drop_lsf_cfc_type)
+         call m%param%print(unit=iu)
+      type is (moist_cavity_drop_lsf_isodensity_internal_type)
+         call m%param%print(unit=iu)
+      type is (moist_cavity_drop_lsf_isodensity_callback_type)
+         call m%param%print(unit=iu)
+      end select
+
+   end subroutine print_parameters_drop
 
    !* ================================================================================= *!
    !*                          Update Cavity (construct cavity)                         *!
@@ -779,7 +807,7 @@ contains
 
       !> Setup grid point adjacency list for density computation
       call self%ctx%timer%start("Grid adj. list")
-      if (self%request%grid_point_density .or. self%ctx%verbosity >= 3) then
+      if (self%param%do_grid_density .or. self%ctx%verbosity >= 3) then
          call self%setup_grid_adj_list(error)
       end if
       if (allocated(error)) then
@@ -794,7 +822,7 @@ contains
       call self%ctx%timer%start("Properties", category=cat_properties)
 
       !> Compute grid point densities [optional diagnostic]
-      if (self%request%grid_point_density) then
+      if (self%param%do_grid_density) then
          call self%ctx%timer%start("Grid density")
          call self%compute_grid_point_density(error)
          if (allocated(error)) then
@@ -805,7 +833,7 @@ contains
       end if
 
       !> Compute curvatures [optional diagnostic]
-      if (self%request%curvature) then
+      if (self%param%do_curvature) then
          call self%ctx%timer%start("Curvatures")
          call self%compute_curvature(error)
          if (allocated(error)) then
@@ -1018,7 +1046,7 @@ contains
 
    !> Declare the results a DROP cavity holds, on top of the generic ones
    !>
-   !> Arrays gated by `drop_property_request` are simply not allocated when they
+   !> Arrays gated by the `do_*` property flags of `param` are simply not allocated when they
    !> were not asked for, so they are not declared and a caller asking for one
    !> gets an error rather than zeros
    !>
