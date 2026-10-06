@@ -10,6 +10,7 @@ module moist_cavity_type
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type
    use moist_channels_fields, only: field_query_type
+   use moist_model_parameters, only: moist_model_parameters_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
 
    implicit none(type, external)
@@ -25,6 +26,9 @@ module moist_cavity_type
       !> Borrowed run context (verbosity/debug/timer); set at construction,
       !> owned by the top-level caller, never allocated or freed by the cavity
       type(moist_context_type), pointer :: ctx => null()
+
+      !> Short name of the discretization, e.g. `DROP`; set by the constructor
+      character(len=:), allocatable :: label
 
       !> Sphere radii, bohr (nat)
       real(wp), allocatable :: radii(:)
@@ -99,6 +103,10 @@ module moist_cavity_type
       procedure :: write_pqr_debug => write_cavity_pqr_debug
       !> Print basic cavity information
       procedure :: print => print_cavity_info
+      !> Solvent-independent settings; null for a cavity without any
+      procedure :: parameters => cavity_parameters_default
+      !> Print the cavity kind and its registered settings
+      procedure :: print_parameters => print_cavity_parameters
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -424,5 +432,52 @@ contains
       call pp%blank()
 
    end subroutine print_cavity_info
+
+   !> Default settings hook: the cavity has no parameter object
+   !>
+   !> @param[in] self Cavity instance
+   function cavity_parameters_default(self) result(param)
+      !> Cavity instance
+      class(cavity_type), intent(in), target :: self
+      !> Settings of the cavity, never associated here
+      class(moist_model_parameters_type), pointer :: param
+
+      param => null()
+
+   end function cavity_parameters_default
+
+   !> Print the cavity section: its kind, then the registered settings of
+   !> `parameters()`
+   !>
+   !> @param[in] self Cavity instance
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   subroutine print_cavity_parameters(self, unit)
+      !> Cavity instance
+      class(cavity_type), intent(in), target :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+
+      !> Section printer
+      type(prettyprinter) :: pp
+      !> Registered settings, when the cavity has any
+      class(moist_model_parameters_type), pointer :: param
+      !> Effective output unit
+      integer :: iu
+
+      iu = cavity_unit(self)
+      if (present(unit)) iu = unit
+
+      pp = new_prettyprinter(unit=iu)
+      call pp%blank()
+      if (allocated(self%label)) then
+         call pp%push("Cavity ("//self%label//"):")
+      else
+         call pp%push("Cavity:")
+      end if
+      param => self%parameters()
+      if (associated(param)) call param%print_table(pp)
+      call pp%pop()
+
+   end subroutine print_cavity_parameters
 
 end module moist_cavity_type

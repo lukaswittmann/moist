@@ -64,19 +64,17 @@ module moist_cavity_marchingcubes
       !> integrator source-allocates one thread-local clone per OpenMP thread
       class(moist_cavity_drop_lsf_type), allocatable :: lsf_model
 
-      !> Finest marching-cubes grid spacing, bohr
-      real(wp) :: spacing = 0.2_wp
-
-      !> Wavefront OBJ mesh export path (mesh export off when unallocated)
-      character(len=:), allocatable :: obj_file
-      !> PQR triangle-centroid export path (mesh export off when unallocated)
-      character(len=:), allocatable :: pqr_file
+      !> Construction settings: finest grid spacing, bohr, and the OBJ and PQR
+      !> mesh export paths (export off when unallocated)
+      type(moist_cavity_marchingcubes_parameters_type) :: param
 
    contains
       !> Integrate the isosurface for a new geometry
       procedure :: update => update_cavity_marchingcubes
       !> Marching cubes exposes no analytic nuclear derivatives
       procedure :: get_gradient => get_gradient_marchingcubes
+      !> Construction settings
+      procedure :: parameters => marchingcubes_parameters
    end type cavity_type_marchingcubes
 
    !> Growable buffer for collecting triangle vertices from marching cubes
@@ -452,16 +450,26 @@ contains
       call settings%validate(error)
       if (allocated(error)) return
       self%ctx => ctx
-      self%spacing = settings%spacing
-      if (allocated(self%obj_file)) deallocate(self%obj_file)
-      if (allocated(settings%obj_file)) self%obj_file = settings%obj_file
-      if (allocated(self%pqr_file)) deallocate(self%pqr_file)
-      if (allocated(settings%pqr_file)) self%pqr_file = settings%pqr_file
+      self%label = "Marching cubes"
+      self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radius_model)
       if (allocated(self%lsf_model)) deallocate(self%lsf_model)
       allocate(self%lsf_model, source=lsf_model)
    end subroutine new_cavity_marchingcubes
+
+   !> Construction settings of the cavity
+   !>
+   !> @param[in] self Marching-cubes cavity instance
+   function marchingcubes_parameters(self) result(param)
+      !> Marching-cubes cavity instance
+      class(cavity_type_marchingcubes), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function marchingcubes_parameters
 
    !* ================================================================================= *!
    !*                          Update Cavity (integrate surface)                        *!
@@ -523,28 +531,28 @@ contains
       class(cavity_type_marchingcubes), intent(inout) :: self
       type(error_type), allocatable, intent(out) :: error
 
-      if (allocated(self%obj_file) .and. allocated(self%pqr_file)) then
+      if (allocated(self%param%obj_file) .and. allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
+                                               target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               obj_file=self%obj_file, pqr_file=self%pqr_file)
-      else if (allocated(self%obj_file)) then
+                                               obj_file=self%param%obj_file, pqr_file=self%param%pqr_file)
+      else if (allocated(self%param%obj_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
+                                               target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               obj_file=self%obj_file)
-      else if (allocated(self%pqr_file)) then
+                                               obj_file=self%param%obj_file)
+      else if (allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
+                                               target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
-                                               pqr_file=self%pqr_file)
+                                               pqr_file=self%param%pqr_file)
       else
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
-                                               target_spacing=self%spacing, &
+                                               target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug)
       end if
 

@@ -38,12 +38,8 @@ module moist_cavity_iswig
    !> iSwiG cavity state
    type, extends(cavity_type) :: cavity_type_iswig
 
-      !> Number of Lebedev points per sphere
-      integer :: num_leb = 110
-      !> Default area cutoff
-      real(wp) :: cut_a = 0.0_wp
-      !> Default iSwiG value cutoff
-      real(wp) :: cut_f = 1.0E-10_wp
+      !> Construction settings: Lebedev points per sphere, area and switching cutoffs
+      type(moist_cavity_iswig_parameters_type) :: param
 
       !> Raw Lebedev weights (ngrid)
       real(wp), allocatable :: wleb(:)
@@ -68,6 +64,8 @@ module moist_cavity_iswig
       procedure :: write_csv_debug => write_cavity_csv_debug
       !> Declare the readable results an iSwiG cavity holds
       procedure :: list_fields => list_cavity_fields_iswig
+      !> Construction settings
+      procedure :: parameters => iswig_parameters
    end type cavity_type_iswig
 
 contains
@@ -108,7 +106,7 @@ contains
       call list_cavity_fields_base(self, query)
 
       call query%add_int_value("num_leb", "Lebedev points per sphere the grid was built with", &
-         & self%num_leb)
+         & self%param%num_leb)
       call query%add_int("numbering", "Stable point id, kept when points are removed (ngrid)", &
          & self%numbering)
       call query%add_real("wleb", "Lebedev quadrature weight per point (ngrid)", self%wleb)
@@ -138,12 +136,24 @@ contains
 
       if (present(param)) settings = param
       self%ctx => ctx
-      self%num_leb = settings%num_leb
-      self%cut_a = settings%cut_a
-      self%cut_f = settings%cut_f
+      self%label = "vdW iSwiG"
+      self%param = settings
       if (allocated(self%radius_model)) deallocate(self%radius_model)
       allocate(self%radius_model, source=radius_model)
    end subroutine new_cavity_iswig
+
+   !> Construction settings of the cavity
+   !>
+   !> @param[in] self iSwiG cavity instance
+   function iswig_parameters(self) result(param)
+      !> iSwiG cavity instance
+      class(cavity_type_iswig), intent(in), target :: self
+      !> Settings, valid while the cavity is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function iswig_parameters
 
    !> Write grid to CSV, including numbering, Lebedev weight, and switching value
    subroutine write_cavity_csv_debug(self, filename, error)
@@ -218,8 +228,8 @@ contains
          nsph=self%nsph, &
          centers=self%sphxyz, &
          radii=self%radii, &
-         cut_a=self%cut_a, &
-         cut_f=self%cut_f, &
+         cut_a=self%param%cut_a, &
+         cut_f=self%param%cut_f, &
          zeta_born=self%cached_swx, &
          ang_grid=self%ang_grid, &
          ang_weight=self%ang_weight, &
@@ -483,27 +493,27 @@ contains
       integer, parameter :: iswig_grid_sizes(11) = [ &
                             14, 26, 50, 110, 194, 302, 434, 590, 770, 974, 1202]
 
-      if (self%cached_num_leb == self%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
+      if (self%cached_num_leb == self%param%num_leb .and. allocated(self%ang_grid) .and. allocated(self%ang_weight)) then
          return
       end if
 
-      !> Check if the self%num_leb is available for iswig (xi)
+      !> Check if the self%param%num_leb is available for iswig (xi)
       iswig_order = -1
       do isize = 1, size(iswig_grid_sizes)
-         if (self%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
+         if (self%param%num_leb == iswig_grid_sizes(isize)) iswig_order = isize
       end do
       if (iswig_order < 0) then
-         write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%num_leb, &
+         write (msg, "(a,i0,a,*(i0,:,', '))") "Unsupported Lebedev size in iSwiG ", self%param%num_leb, &
             & "; supported sizes: ", iswig_grid_sizes
          call fatal_error(error, trim(msg))
          return
       end if
 
       ! Negative weights would give negative areas and imaginary widths
-      call new_lebedev_grid(leb, error, npts=self%num_leb, positive_weights_only=.true.)
+      call new_lebedev_grid(leb, error, npts=self%param%num_leb, positive_weights_only=.true.)
       if (allocated(error)) return
 
-      self%cached_num_leb = self%num_leb
+      self%cached_num_leb = self%param%num_leb
       self%cached_swx = swig_xi_tab(iswig_order)
 
       ! Cache nodes and weights in the plain arrays the integrators consume
