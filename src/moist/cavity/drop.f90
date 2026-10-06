@@ -544,8 +544,6 @@ contains
       !> Borrowed run context; omitted, a model supplies its own
       type(moist_context_type), intent(in), target, optional :: ctx
 
-      !> Borrow the shared run context (owns verbosity/debug/timer); reconstruction
-      !> without a context drops the previous one
       nullify (self%ctx)
       if (present(ctx)) self%ctx => ctx
 
