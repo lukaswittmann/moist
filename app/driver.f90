@@ -213,6 +213,7 @@ contains
                         call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
                            lsf_model=svdw_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
                            wleb_prune_level=config%drop_wleb_prune_level))
                      end block
@@ -224,6 +225,7 @@ contains
                         call new_cavity_drop(tmp_cavity, ctx, radius_model=radius_model, &
                            lsf_model=cfc_template, error=error, &
                            param=moist_cavity_drop_parameters_type(num_leb=config%nleb, &
+                           do_fine=config%cavity_fine, &
                            tolerance=config%drop_tol, proj_level=config%drop_proj_level, &
                            wleb_prune_level=config%drop_wleb_prune_level))
                      end block
@@ -231,7 +233,6 @@ contains
                      call fatal_error(error, "Unknown DROP variant: "//trim(config%drop_variant))
                   end if
                   if (allocated(error)) return
-                  call tmp_cavity%properties(do_fine=config%cavity_fine)
                   call move_alloc(tmp_cavity, cavity)
                end block
             else if (to_lower(config%mode) == "mc") then
@@ -266,6 +267,9 @@ contains
                   call move_alloc(tmp_cavity, cavity)
                end block
             end if
+
+            ! Settings of the constructed cavity
+            if (ctx%verbosity > 1) call cavity%print_parameters()
 
             ! Use polymorphic cavity methods
             call cavity%update(mol, error=error)
