@@ -253,6 +253,7 @@ contains
       ! The screen loop indexes the base's candidate-space geometry mirror
       ! directly, so candidate ids must arrive spatially sorted
       self%candidate_space = lsf_candidate_space_sorted
+      self%name = "SvdW"
 
       self%param = moist_cavity_drop_lsf_svdw_param_type()
       if (present(param)) self%param = param

@@ -158,6 +158,8 @@ module moist_cavity_drop_lsf_base
 
    !> Abstract LSF base
    type, abstract :: moist_cavity_drop_lsf_type
+      !> Short name of the level-set model, e.g. `SvdW`; set by the constructor
+      character(len=:), allocatable :: name
       !> Number of atomic centers
       integer :: ncenters = 0
       !> Molecular structure data
