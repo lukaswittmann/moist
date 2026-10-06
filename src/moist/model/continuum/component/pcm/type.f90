@@ -226,7 +226,7 @@ contains
       !> Pretty printer inside the component section
       type(prettyprinter), intent(inout) :: pp
 
-      call pp%kv("epsilon", self%epsilon)
+      call pp%kv("Epsilon", self%epsilon)
       call pp%kv("f(eps)", self%feps)
 
    end subroutine pcm_component_print_inputs
