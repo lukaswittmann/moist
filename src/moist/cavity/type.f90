@@ -107,6 +107,8 @@ module moist_cavity_type
       procedure :: parameters => cavity_parameters_default
       !> Print the cavity kind and its registered settings
       procedure :: print_parameters => print_cavity_parameters
+      !> Print the radius model of the current structure; called by every `update`
+      procedure, non_overridable :: print_radii => print_cavity_radii
    end type cavity_type
 
    ! Abstract interfaces for deferred procedures
@@ -146,6 +148,21 @@ contains
       if (associated(self%ctx)) iunit = self%ctx%unit
 
    end function cavity_unit
+
+   !> Print the radius model at verbosity 2 and above
+   !>
+   !> Called by each cavity's `update` right after its radius model was
+   !> updated: the printout lists the radii of the current structure
+   !>
+   !> @param[in] self Cavity instance
+   subroutine print_cavity_radii(self)
+      !> Cavity instance
+      class(cavity_type), intent(in) :: self
+
+      if (.not. associated(self%ctx) .or. .not. allocated(self%radius_model)) return
+      if (self%ctx%verbosity >= 2) call self%radius_model%print(unit=self%ctx%unit)
+
+   end subroutine print_cavity_radii
 
    !* ================================================================================= *!
    !*                                 Readable results                                *!
@@ -468,7 +485,6 @@ contains
       if (present(unit)) iu = unit
 
       pp = new_prettyprinter(unit=iu)
-      call pp%blank()
       if (allocated(self%label)) then
          call pp%push("Cavity ("//self%label//"):")
       else
@@ -477,6 +493,7 @@ contains
       param => self%parameters()
       if (associated(param)) call param%print_table(pp)
       call pp%pop()
+      call pp%blank()
 
    end subroutine print_cavity_parameters
 

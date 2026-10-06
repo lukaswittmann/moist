@@ -166,6 +166,7 @@ contains
          call pp%kv("Exclusion radius cap", self%exclusion_cap, "Bohr")
       end if
       call pp%pop()
+      call pp%blank()
    end subroutine print_lsf_isodensity_param
 
 end module moist_cavity_drop_lsf_isodensity_param

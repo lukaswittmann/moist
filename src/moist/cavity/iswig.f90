@@ -203,6 +203,7 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
+      call self%print_radii()
       if (allocated(self%radii)) deallocate (self%radii)
       self%radii = self%radius_model%f0
 

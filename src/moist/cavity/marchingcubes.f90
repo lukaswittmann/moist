@@ -496,7 +496,7 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
-      if (self%ctx%verbosity >= 2) call self%radius_model%print()
+      call self%print_radii()
       if (allocated(self%radii)) deallocate (self%radii)
       allocate (self%radii(self%nsph), source=self%radius_model%f0)
 

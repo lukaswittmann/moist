@@ -606,8 +606,7 @@ contains
 
       pp = new_prettyprinter(unit=iu)
 
-      call pp%blank()
-      call pp%push("Cavity Parameters:")
+      call pp%push("DROP Parameters:")
 
       call pp%push("Discretization:")
       call pp%kv("Number of Leb. points", self%num_leb)
@@ -669,6 +668,7 @@ contains
       call pp%kv("r_iI distances", self%do_r_iI)
       call pp%kv("rho displacements", self%do_rho)
       call pp%pop()
+      call pp%blank()
 
    end subroutine print_parameters
 

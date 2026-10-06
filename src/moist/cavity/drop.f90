@@ -604,9 +604,10 @@ contains
 
    end function drop_parameters
 
-   !> Print the cavity section with the grouped DROP and level-set printers
+   !> Print the cavity section with the grouped level-set and DROP printers
    !>
    !> - headed by the label, e.g. `SvdW-DROP`
+   !> - the level-set settings come first, then the DROP settings
    !> - the optional-property flags are part of the DROP settings
    !>
    !> @param[in] self DROP cavity instance
@@ -641,7 +642,6 @@ contains
       end if
 
       pp = new_prettyprinter(unit=iu)
-      call pp%blank()
       if (allocated(self%label)) then
          call pp%push("Cavity ("//self%label//"):")
       else
@@ -649,19 +649,22 @@ contains
       end if
       call pp%kv("Level set", lsf_kind)
       call pp%pop()
+      call pp%blank()
 
+      ! The level set the cavity is built on, then the DROP settings
+      if (allocated(self%lsf_model)) then
+         select type (m => self%lsf_model)
+         type is (moist_cavity_drop_lsf_svdw_type)
+            call m%param%print(unit=iu)
+         type is (moist_cavity_drop_lsf_cfc_type)
+            call m%param%print(unit=iu)
+         type is (moist_cavity_drop_lsf_isodensity_internal_type)
+            call m%param%print(unit=iu)
+         type is (moist_cavity_drop_lsf_isodensity_callback_type)
+            call m%param%print(unit=iu)
+         end select
+      end if
       call self%param%print(unit=iu)
-      if (.not. allocated(self%lsf_model)) return
-      select type (m => self%lsf_model)
-      type is (moist_cavity_drop_lsf_svdw_type)
-         call m%param%print(unit=iu)
-      type is (moist_cavity_drop_lsf_cfc_type)
-         call m%param%print(unit=iu)
-      type is (moist_cavity_drop_lsf_isodensity_internal_type)
-         call m%param%print(unit=iu)
-      type is (moist_cavity_drop_lsf_isodensity_callback_type)
-         call m%param%print(unit=iu)
-      end select
 
    end subroutine print_parameters_drop
 
@@ -686,7 +689,7 @@ contains
 
       call self%radius_model%update(mol, error)
       if (allocated(error)) return
-      if (self%ctx%verbosity >= 2) call self%radius_model%print()
+      call self%print_radii()
       if (allocated(self%radii)) deallocate (self%radii)
       allocate (self%radii(self%nsph))
       self%radii = self%radius_model%f0
