@@ -25,15 +25,15 @@ class LevelSet(ABC):
     density_dependent = False
 
     @abstractmethod
-    def _new_cavity(self, parameters, radii, source, pass_order):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
         """Create independently owned native state for this surface."""
 
 
 class _GeometricLevelSet(LevelSet):
-    def _new_cavity(self, parameters, radii, source, pass_order):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
         if source is not None or pass_order is not None:
             raise TypeError("A geometric LSF does not accept a density source")
-        return library.new_drop_cavity(parameters, self.parameters, radii)
+        return library.new_drop_cavity(parameters, self.parameters, radii, context=context)
 
 
 @dataclass(frozen=True, init=False)
@@ -75,16 +75,16 @@ class Isodensity(LevelSet):
     def __init__(self, *, parameters: IsodensityParameters | None = None):
         object.__setattr__(self, "parameters", _resolve(IsodensityParameters, parameters))
 
-    def _new_cavity(self, parameters, radii, source, pass_order):
+    def _new_cavity(self, parameters, radii, source, pass_order, *, context=None):
         if isinstance(source, InternalDensity):
             if pass_order is not None:
                 raise TypeError("pass_order applies only to callbacks")
-            return library.new_internal_isodensity_cavity(source, parameters, self.parameters, radii)
+            return library.new_internal_isodensity_cavity(source, parameters, self.parameters, radii, context=context)
         callback = getattr(source, "density", source)
         if not callable(callback):
             raise TypeError("Isodensity requires a callable source or density(point, order)")
         return library.new_drop_cavity_isodensity_callback(
-            callback, parameters, self.parameters, radii, pass_order=pass_order
+            callback, parameters, self.parameters, radii, pass_order=pass_order, context=context
         )
 
 
@@ -94,7 +94,7 @@ class CavityConfiguration(ABC):
     density_dependent = False
 
     @abstractmethod
-    def build(self, *, source=None):
+    def build(self, *, source=None, context=None):
         """Create a live cavity, binding host data when required."""
 
 
@@ -119,11 +119,11 @@ class DROP(CavityConfiguration):
     def density_dependent(self):
         return self.lsf.density_dependent
 
-    def build(self, *, source=None, pass_order=None):
+    def build(self, *, source=None, pass_order=None, context=None):
         from .interface import CavityDROP
 
         return CavityDROP(lsf=self.lsf, parameters=self.parameters, radii=self.radii,
-                          source=source, pass_order=pass_order)
+                          source=source, pass_order=pass_order, context=context)
 
 
 @dataclass(frozen=True, init=False)
@@ -141,9 +141,9 @@ class ISwiG(CavityConfiguration):
         object.__setattr__(self, "parameters", _resolve(ISwiGParameters, parameters))
         object.__setattr__(self, "radii", _resolve_radii(radii))
 
-    def build(self, *, source=None):
+    def build(self, *, source=None, context=None):
         from .interface import CavityISwiG
 
         if source is not None:
             raise TypeError("ISwiG does not accept a density source")
-        return CavityISwiG(parameters=self.parameters, radii=self.radii)
+        return CavityISwiG(parameters=self.parameters, radii=self.radii, context=context)

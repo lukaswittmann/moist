@@ -55,6 +55,98 @@ def test_parameter_types_and_nonfinite_values():
         moist.PCMParameters(solver_maxiter=20.5)
 
 
+def _runtime_threads():
+    """Thread count a fresh unset context takes from the OpenMP runtime."""
+    return moist.Context(nthreads=0).nthreads
+
+
+@pytest.fixture
+def baseline():
+    """This thread's OpenMP setting."""
+    return _runtime_threads()
+
+
+def test_context_thread_count_is_fixed(baseline):
+    for nthreads in (2, 1, 0):
+        context = moist.Context(nthreads=nthreads)
+        expected = nthreads if nthreads > 0 else _runtime_threads()
+        assert context.nthreads == expected
+        assert _runtime_threads() == baseline
+    logged = moist.Context(nthreads=0, verbosity=2, debug=True)
+    assert logged.nthreads == baseline
+    assert moist.Context(nthreads=0, verbosity=1, debug=False).nthreads == baseline
+    assert moist.Context().nthreads == baseline
+    with pytest.raises(TypeError):
+        moist.Context(nthreads=2.5)
+    with pytest.raises(TypeError):
+        moist.Context(nthreads=True)
+    with pytest.raises(TypeError):
+        moist.Context(nthreads=0, debug=1)
+    with pytest.raises(RuntimeError, match="Thread count must not be negative"):
+        moist.Context(nthreads=-1)
+    for parameters in (moist.DROPParameters, moist.ISwiGParameters, moist.ModelParameters):
+        with pytest.raises(TypeError):
+            parameters(nthreads=2)
+
+
+def test_context_leaves_the_runtime_alone(baseline):
+    first = moist.Context(nthreads=baseline + 1)
+    second = moist.Context(nthreads=baseline + 2)
+    assert _runtime_threads() == baseline
+    assert first.nthreads == baseline + 1
+    assert second.nthreads == baseline + 2
+
+
+@pytest.mark.parametrize("config", [
+    moist.DROP(lsf=moist.SvdW(), parameters=moist.DROPParameters(nleb=26)),
+    moist.ISwiG(parameters=moist.ISwiGParameters(nleb=26)),
+])
+def test_shared_context_inheritance_and_lifetime(config, baseline):
+    context = moist.Context(nthreads=2)
+    owner = weakref.ref(context)
+    cavity = config.build(context=context)
+    model = moist.SolvationModel(cavity, [moist.ModelComponentPV(1e-4)])
+    assert cavity.context is context
+    assert model.context is context
+    assert model.cavity.context is context
+    del context
+    gc.collect()
+    assert owner() is not None
+    model.update(moist.Structure([1], [[0., 0., 0.]]))
+    assert model.cavity.snapshot().ngrid > 0
+    assert model.context.nthreads == 2
+    del model
+    gc.collect()
+    del cavity
+    gc.collect()
+    assert owner() is None
+
+
+def test_model_can_use_a_separate_context(baseline):
+    context = moist.Context(nthreads=2)
+    cavity = moist.CavityISwiG(context=context)
+    other = moist.Context(nthreads=1)
+    model = moist.SolvationModel(cavity, [moist.ModelComponentPV(1e-4)], context=other)
+    assert cavity.context is context
+    assert model.context is other
+    assert model.cavity.context is other
+    del other
+    gc.collect()
+    assert model.context.nthreads == 1
+    assert context.nthreads == 2
+    del model, cavity, context
+    gc.collect()
+
+
+@pytest.mark.parametrize("make", [
+    lambda: moist.CavityDROP(context=object()),
+    lambda: moist.CavityISwiG(context=object()),
+])
+def test_context_type_is_checked(make):
+    with pytest.raises(TypeError, match="context must be a Context"):
+        make()
+
+
 @pytest.mark.parametrize("component", [moist.ModelComponentCPCM, moist.ModelComponentCOSMO])
 def test_pcm_iterative_controls_round_trip(component):
     defaults = moist.PCMParameters()
@@ -257,9 +349,9 @@ def test_isodensity_configuration_callback_object_and_order(monkeypatch, gaussia
     observed = {}
     original = library.new_drop_cavity_isodensity_callback
 
-    def capture(callback, drop, lsf, radii, *, pass_order):
+    def capture(callback, drop, lsf, radii, *, pass_order, context=None):
         observed.update(callback=callback, pass_order=pass_order)
-        return original(callback, drop, lsf, radii, pass_order=pass_order)
+        return original(callback, drop, lsf, radii, pass_order=pass_order, context=context)
 
     monkeypatch.setattr(library, "new_drop_cavity_isodensity_callback", capture)
     cavity = config.build(source=source, pass_order=True)

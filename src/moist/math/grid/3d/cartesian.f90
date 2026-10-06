@@ -8,7 +8,6 @@ module moist_math_grid_3d_cartesian
                                       integrand_3d
    use moist_math_fft, only: moist_fft_r2c_3d, moist_fft_c2r_3d, &
       & moist_fft_r2c_3d_batch, moist_fft_c2r_3d_batch
-!$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    implicit none(type, external)
    private
@@ -519,8 +518,7 @@ contains
       integer :: nthreads, iv
 
       if (size(f_r, 2) == 0) return
-      nthreads = 1
-!$    if (.not. omp_in_parallel()) nthreads = omp_get_max_threads()
+      nthreads = self%grid%team_size()
       ! Rank-three calls avoid batched-view overhead when only one worker is available
       if (nthreads == 1) then
          do iv = 1, size(f_r, 2)
@@ -564,8 +562,7 @@ contains
       integer :: nthreads, iv
 
       if (size(f_r, 2) == 0) return
-      nthreads = 1
-!$    if (.not. omp_in_parallel()) nthreads = omp_get_max_threads()
+      nthreads = self%grid%team_size()
       ! Rank-three calls avoid batched-view overhead when only one worker is available
       if (nthreads == 1) then
          do iv = 1, size(f_k, 2)

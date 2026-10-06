@@ -296,7 +296,8 @@ contains
 
          ! Generic Gaussian surface-charge interaction matrix
          call self%ctx%timer%start("Interaction matrix")
-         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, self%amat, error)
+         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, self%amat, error, &
+            & nthreads=self%ctx%get_num_threads())
          if (allocated(error)) then
             call self%ctx%timer%unwind(d0)
             return
@@ -624,7 +625,7 @@ contains
 
       call pcm_electrostatic_nuclear_gradient(cavity%xyz, &
          & self%mol_solu%xyz, cavity%xyz1_rA, w_phi, w_xyz, &
-         & za, grad_electrostatic, error, xi=cavity%xi0)
+         & za, grad_electrostatic, error, xi=cavity%xi0, nthreads=self%ctx%get_num_threads())
       if (allocated(error)) return
 
       call coupling%read("potential", "dphi_dxi", w_xi, error)
@@ -829,7 +830,7 @@ contains
       end if
 
       call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, self%q, &
-         & self%q, w_xi, w_f, w_xyz, error)
+         & self%q, w_xi, w_f, w_xyz, error, nthreads=self%ctx%get_num_threads())
 
    end subroutine pcm_component_amat_surface_weights
 
@@ -872,7 +873,7 @@ contains
       if (allocated(error)) return
 
       call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, &
-         & cavity%xyz1_rA, w_xi, w_f, w_xyz, grad_rA, error)
+         & cavity%xyz1_rA, w_xi, w_f, w_xyz, grad_rA, error, nthreads=self%ctx%get_num_threads())
 
    end subroutine pcm_component_amat_nuclear_gradient
 

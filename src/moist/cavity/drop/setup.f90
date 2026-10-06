@@ -196,14 +196,16 @@ contains
       integer :: i
       integer :: cg_start, cg_n
       integer :: n_iswig_removed, n_anchor_additional
+      integer :: nthreads
 
+      nthreads = self%ctx%get_num_threads()
       if (allocated(self%anchor_xi0)) deallocate (self%anchor_xi0)
       allocate (self%anchor_xi0(self%nmax), source=0.0_wp)
       if (allocated(self%iswig_f0)) deallocate (self%iswig_f0)
       allocate (self%iswig_f0(self%nmax), source=1.0_wp)
       if (allocated(self%f)) deallocate (self%f)
       allocate (self%f(self%nmax), source=1.0_wp)
-      !$omp parallel default(shared) private(i, lsf, lsf0_gradnorm, cg_start, cg_n)
+      !$omp parallel num_threads(nthreads) default(shared) private(i, lsf, lsf0_gradnorm, cg_start, cg_n)
       allocate (lsf, source=self%lsf_model)
 
       !$omp do schedule(static)

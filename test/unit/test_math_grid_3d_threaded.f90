@@ -82,7 +82,8 @@ contains
                   new_unittest("batched_ifft_uses_threaded_backend", test_threaded_round_trip), &
                   new_unittest("molecular_nufft_type12_threaded", test_nufft_type12_threaded), &
                   new_unittest("molecular_nufft_type3_threaded", test_nufft_type3_threaded), &
-                  new_unittest("radial_trafo_one_per_thread", test_radial_trafo_per_thread) &
+                  new_unittest("radial_trafo_one_per_thread", test_radial_trafo_per_thread), &
+                  new_unittest("grid_thread_count_override", test_grid_thread_count) &
                   ]
    end subroutine collect_math_grid_3d_threaded
 
@@ -121,6 +122,73 @@ contains
 
 !$    call omp_set_num_threads(min(4, max_threads))
    end subroutine enter_threaded
+
+   !> A grid's `nthreads` overrides the OpenMP default outside a team and is
+   !> ignored inside one; the serial transform still matches the backend call
+   subroutine test_grid_thread_count(error)
+      !> Test failure, or set by `skip_test`
+      type(error_type), allocatable, intent(out) :: error
+      type(moist_math_grid_3d_cartesian_type), target :: grid
+      class(moist_math_grid_3d_trafo_type), allocatable :: trafo
+      type(mctc_error), allocatable :: merr
+      real(wp), allocatable :: f_r(:, :)
+      complex(wp), allocatable :: f_k(:, :), f_k_ref(:, :)
+      integer :: max_threads, team, nested, i, status
+
+      call enter_threaded(error, max_threads)
+      if (allocated(error)) return
+
+      call new_cartesian_grid_3d(grid, 15, 14, 13, 0.4_wp, error=merr)
+      if (.not. allocated(merr)) call grid%new_trafo(trafo, merr)
+      if (allocated(merr)) then
+         call test_failed(error, merr%message)
+!$       call omp_set_num_threads(max_threads)
+         return
+      end if
+
+      checks: block
+         team = 1
+!$       team = omp_get_max_threads()
+         call check(error, grid%team_size() == team, "unset count follows the OpenMP default")
+         if (allocated(error)) exit checks
+         grid%nthreads = 2
+         call check(error, grid%team_size() == 2, "explicit count overrides the OpenMP default")
+         if (allocated(error)) exit checks
+         nested = 0
+         !$omp parallel num_threads(2) shared(grid, nested)
+         !$omp master
+         nested = grid%team_size()
+         !$omp end master
+         !$omp end parallel
+         if (nested == 0) nested = 1
+         call check(error, nested == 1, "count is 1 inside an OpenMP team")
+         if (allocated(error)) exit checks
+
+         grid%nthreads = 1
+         allocate (f_r(grid%ngrid, 2), f_k(grid%npts_k, 2), f_k_ref(grid%npts_k, 2))
+         do i = 1, grid%ngrid
+            f_r(i, 1) = sin(0.013_wp*i) + cos(0.007_wp*i)
+            f_r(i, 2) = cos(0.011_wp*i)
+         end do
+         do i = 1, 2
+            status = moist_fft_r2c_3d(int(grid%nz, c_int), int(grid%ny, c_int), int(grid%nx, c_int), &
+               & f_r(:, i), f_k_ref(:, i), grid%dv)
+            call check(error, status == 0, "reference forward FFT backend call failed")
+            if (allocated(error)) exit checks
+         end do
+         call trafo%fft_r2k(f_r, f_k, merr)
+         if (allocated(merr)) then
+            call test_failed(error, merr%message)
+            exit checks
+         end if
+         call check(error, maxval(abs(f_k - f_k_ref)) < 1.0e-11_wp, &
+            & "serial batched forward transform deviates from the single-field backend call")
+      end block checks
+
+!$    call omp_set_num_threads(max_threads)
+      call trafo%destroy()
+      call grid%destroy()
+   end subroutine test_grid_thread_count
 
    !> Outside any enclosing OpenMP team, batched forward FFT matches the reference
    !>

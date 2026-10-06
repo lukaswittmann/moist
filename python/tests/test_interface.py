@@ -1,3 +1,4 @@
+import io
 from types import SimpleNamespace
 from typing import Callable
 
@@ -455,6 +456,116 @@ def test_general_model_iterates_cpcm_and_pv_components(diatomic) -> None:
     assert adjoint.w_phi.shape == (ngrid,)
     # A response is a plain value: iterating it again yields the same items.
     assert list(response) == [adjoint]
+
+
+def test_model_components_report_their_energies(diatomic) -> None:
+    """Live component views: names before an update, energies of the latest evaluation."""
+    pressure = 2.5e-4
+    cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(pressure)
+    model = SolvationModel(
+        CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv, ModelComponentCPCM(4.0)]
+    )
+
+    components = model.components
+    assert len(components) == 3
+    assert all(isinstance(component, moist.ComponentView) for component in components)
+    assert [component.name for component in components] == ["CPCM", "PV", "CPCM"]
+    assert [component.index for component in components] == [0, 1, 2]
+    assert components[0].description == (
+        "Conductor-like polarizable continuum, f(eps) = (eps - 1)/eps"
+    )
+    assert components[1].description == "Pressure-volume work, pressure times cavity volume"
+    assert components[2].description == components[0].description
+    assert components[0].configuration is cpcm
+    assert components[1].configuration.pressure == pressure
+    for component in components:
+        assert component.fields() == ()
+        with raises(KeyError, match="does not hold a field named 'energy'"):
+            component.energy
+
+    structure = diatomic()
+    model.update(structure)
+    with raises(KeyError):
+        components[0].energy
+
+    coupling = model.new_coupling()
+    model.prepare_energy(coupling)
+    _answer_potential(coupling, np.linspace(-0.2, 0.3, model.cavity.ngrid))
+    seed = 0.75
+    energy = np.array(seed)
+    model.get_energy(coupling, energy)
+    shares = [component.energy for component in components]
+    assert np.all(np.isfinite(shares))
+    assert float(energy) - seed == approx(sum(shares), abs=1.0e-14)
+    assert shares[1] == approx(pressure * model.cavity.volume, rel=1.0e-14)
+    # The two CPCM components differ only in f(epsilon) = (epsilon - 1)/epsilon
+    assert shares[0] != 0.0
+    assert shares[2] / shares[0] == approx((3.0 / 4.0) / (31.0 / 32.0), rel=1.0e-12)
+    (info,) = components[0].fields()
+    assert (info.name, info.shape, info.count) == ("energy", (), 1)
+    assert "Hartree" in components[0].describe("energy")
+    assert components[0].get("energy") == shares[0]
+
+    # Staging keeps the energies; an update clears them, never the components
+    model.prepare_energy(coupling)
+    assert [component.energy for component in components] == shares
+    model.update(structure)
+    for component in model.components:
+        with raises(KeyError):
+            component.energy
+    assert [component.name for component in components] == ["CPCM", "PV", "CPCM"]
+
+
+def test_model_parameters_text_lists_every_section(capsys) -> None:
+    """The native settings printout: cavity, then each component by position."""
+    model = SolvationModel(
+        CavityDROP(parameters=_DROP_NLEB26),
+        [ModelComponentCPCM(32.0, parameters=PCMParameters(solver="lu")), ModelComponentPV(2.5e-4)],
+    )
+
+    text = model.parameters_text()
+    assert text.endswith("\n")
+    for section in ("Cavity (SvdW-DROP):", "Component 1 (CPCM):", "Component 2 (PV):"):
+        assert section in text
+    for component in model.components:
+        assert component.description in text
+    lines = text.splitlines()
+    assert any(line.split()[:1] == ["Epsilon"] and "32.0" in line for line in lines)
+    assert any(line.split()[:1] == ["solver"] and line.split()[-1] == "2" for line in lines)
+    (pressure,) = [line.split() for line in lines if line.split()[:1] == ["Pressure"]]
+    assert pressure[2:4] == ["2.50E-04", "Eh/bohr^3"] and pressure[-1] == "GPa"
+    # 2.5e-4 Eh/bohr^3 is 7.355 GPa
+    assert float(pressure[-2]) == approx(7.355, abs=1.0e-3)
+    assert any(line.split()[:3] == ["Number", "of", "Leb."] and "26" in line for line in lines)
+
+    model.print_parameters()
+    assert capsys.readouterr().out == text
+    stream = io.StringIO()
+    model.print_parameters(file=stream)
+    assert stream.getvalue() == text
+    assert capsys.readouterr().out == ""
+
+
+def test_component_views_keep_their_model(diatomic) -> None:
+    """Models built from the same configurations keep separate energies."""
+    cpcm, pv = ModelComponentCPCM(32.0), ModelComponentPV(2.5e-4)
+    first = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv])
+    second = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [cpcm, pv])
+    structure = diatomic()
+    first.update(structure)
+    second.update(structure)
+
+    energy, _ = _solve(first, np.linspace(-0.2, 0.3, first.cavity.ngrid))
+    assert sum(component.energy for component in first.components) == approx(energy, abs=1.0e-14)
+    for component in second.components:
+        with raises(KeyError):
+            component.energy
+    assert first.components[0].configuration is second.components[0].configuration is cpcm
+
+    # A view outlives the last reference to its model
+    view = SolvationModel(CavityDROP(parameters=_DROP_NLEB26), [pv]).components[0]
+    assert view.name == "PV"
+    assert view.configuration is pv
 
 
 def test_cosmo_is_a_standalone_pcm_component() -> None:

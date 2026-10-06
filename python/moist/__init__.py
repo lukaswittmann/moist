@@ -2,6 +2,7 @@
 
 import re
 
+from .context import Context
 from .density import GaussianBasis, InternalDensity
 from .library import get_version_string, get_banner
 
@@ -14,6 +15,7 @@ from .interface import (
     CavityISwiG,
     CavitySnapshot,
     CavitySnapshotDROP,
+    ComponentView,
     Coupling,
     CouplingRequest,
     DensityResponse,
@@ -49,7 +51,7 @@ from .radii import BondiRadii, COSMORadii, CPCMRadii, CustomRadii, D3Radii, Radi
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, CavityConfiguration, LevelSet
 
 __all__ = [
-    "GaussianBasis", "InternalDensity", "get_version_string", "get_banner",
+    "Context", "GaussianBasis", "InternalDensity", "get_version_string", "get_banner",
     "DROPParameters",
     "ISwiGParameters",
     "SvdWParameters",
@@ -79,6 +81,7 @@ __all__ = [
     "CavityISwiG",
     "CavitySnapshot",
     "CavitySnapshotDROP",
+    "ComponentView",
     "Coupling",
     "CouplingRequest",
     "DensityResponse",

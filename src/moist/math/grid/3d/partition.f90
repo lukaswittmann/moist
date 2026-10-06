@@ -31,7 +31,8 @@ contains
    !> @param[out] w        Owner weights in [0,1], shape (npts)
    !> @param[in] stiffness Becke iteration count >= 1; default 3
    !> @param[in] ssf_a SSF half-width in (0,1]; takes precedence over stiffness
-   subroutine becke_partition_weights(owner, points, xyz, numbers, w, stiffness, ssf_a)
+   !> @param[in] nthreads Thread count; absent takes omp_get_max_threads
+   subroutine becke_partition_weights(owner, points, xyz, numbers, w, stiffness, ssf_a, nthreads)
       !> Owner index
       integer, intent(in) :: owner
       !> Sample points
@@ -46,11 +47,13 @@ contains
       integer, intent(in), optional :: stiffness
       !> SSF half-width
       real(wp), intent(in), optional :: ssf_a
+      !> Thread count
+      integer, intent(in), optional :: nthreads
 
       if (present(ssf_a)) then
-         call ssf_partition_weights(owner, points, xyz, numbers, w, a=ssf_a)
+         call ssf_partition_weights(owner, points, xyz, numbers, w, a=ssf_a, nthreads=nthreads)
       else
-         call becke_weights(owner, points, xyz, numbers, w, stiffness=stiffness)
+         call becke_weights(owner, points, xyz, numbers, w, stiffness=stiffness, nthreads=nthreads)
       end if
    end subroutine becke_partition_weights
 

@@ -20,7 +20,6 @@ module moist_math_grid_3d_molecular
                                       integrand_3d
    use, intrinsic :: iso_c_binding, only: c_int, c_double, c_double_complex
    use finufft_mod, only: finufft_opts
-!$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    implicit none(type, external)
    private
 
@@ -210,7 +209,7 @@ module moist_math_grid_3d_molecular
    !> `prepare(ntrans)` builds two plans and sorts points once
    !> Plans retain mutable scratch; execute each transform from one thread
    !> Batched calls handle `nv` internally
-   !> Worker count fixed at `prepare`: 1 inside OpenMP, otherwise maximum
+   !> Worker count fixed at `prepare` from the grid's `team_size`
    !> Reprepare after changing thread count
    type, extends(moist_math_grid_3d_trafo_type) :: moist_math_grid_3d_molecular_trafo_type
       !> Grid this trafo transforms on (not owned; must outlive the trafo)
@@ -802,12 +801,13 @@ contains
                select case (self%partition)
                case (partition_becke)
                   call becke_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), &
-                     & stiffness=self%becke_k)
+                     & stiffness=self%becke_k, nthreads=self%team_size())
                case (partition_ssf)
-                  call ssf_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), a=self%ssf_a)
+                  call ssf_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), a=self%ssf_a, &
+                     & nthreads=self%team_size())
                case (partition_pvoronoi)
                   call pvoronoi_partition_weights(iat, raw_xyz(:, lo:ig), mol%xyz, numbers, raw_bw(lo:ig), &
-                     & width=self%power_width)
+                     & width=self%power_width, nthreads=self%team_size())
                case default
                   call fatal_error(error, "molecular domain: unknown partition scheme")
                   return
@@ -1467,9 +1467,8 @@ contains
       call finufft_default_opts(opts)
       ! CMCL modes: -N/2 .. N/2-1, x fastest
       opts%modeord = 0
-      ! Set worker count explicitly to honor omp_set_num_threads
-      opts%nthreads = 1_c_int
-!$    if (.not. omp_in_parallel()) opts%nthreads = int(omp_get_max_threads(), c_int)
+      ! Explicit worker count: FINUFFT would otherwise take omp_get_max_threads
+      opts%nthreads = int(self%grid%team_size(), c_int)
 
       m_npts = int(ngrid, int64)
       nk_npts = int(npts_k, int64)

@@ -17,11 +17,11 @@ module moist_context
    use, intrinsic :: iso_fortran_env, only: output_unit, error_unit
    use moist_utils_timer, only: timer_type
    use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
-!$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
+!$ use omp_lib, only: omp_get_max_threads
    implicit none(type, external)
    private
 
-   public :: moist_context_type, new_context
+   public :: moist_context_type, new_context, resolve_num_threads
 
    !> Shared run context: owned at the top level, borrowed by every model/cavity
    type :: moist_context_type
@@ -40,13 +40,8 @@ module moist_context
       !>   coarse module timings, e.g. the individual gradient sub-steps in
       !>   the DROP hot loop
       logical :: do_profile = .false.
-      !> Pinned OpenMP thread count; 0 means "follow the OpenMP environment"
-      !> (the effective count is read live via `get_num_threads`)
-      integer :: nthreads_pin = 0
-      !> Thread budget observed just before the first pin was applied, used to
-      !> put the OpenMP runtime back the way it was when the pin is released;
-      !> 0 means "no pin has been applied, nothing to restore"
-      integer :: nthreads_env = 0
+      !> OpenMP thread count, fixed by `new_context`; 0 only before construction
+      integer, private :: nthreads = 0
       !> Run start timestamp, formatted `YYYY-MM-DD HH:MM:SS`
       character(:), allocatable :: start_time
       !> Name of the owned main output file, if any (for display)
@@ -70,9 +65,7 @@ module moist_context
       procedure :: message => context_message
       !> Write a debug message to the debug unit when debug is enabled
       procedure :: debug_message => context_debug_message
-      !> Set and apply the effective OpenMP thread count
-      procedure :: set_num_threads => context_set_num_threads
-      !> Effective OpenMP thread count (pinned value, or the live environment)
+      !> OpenMP thread count fixed at construction
       procedure :: get_num_threads => context_get_num_threads
       !> Render the run settings via the pretty printer
       procedure :: print_settings => context_print_settings
@@ -84,27 +77,30 @@ contains
 
    !> Initialize a run context and its timer
    !>
-   !> The effective thread count is resolved from three sources, in order of
-   !> precedence: an explicit `nthreads` argument (a host/library caller deciding
-   !> the budget), otherwise the OpenMP environment (`omp_get_max_threads`, which
-   !> honours `OMP_NUM_THREADS`), otherwise 1; a given `nthreads` is also
-   !> applied via `omp_set_num_threads` so the whole run uses it
+   !> The thread count is fixed here and never changes afterwards: a positive
+   !> `nthreads` as given, otherwise the calling thread's `omp_get_max_threads`
+   !> at construction, otherwise 1
+   !>
+   !> The count sizes MOIST's own OpenMP teams through `num_threads` clauses;
+   !> the host's OpenMP runtime and the BLAS/LAPACK threading are left alone
    !>
    !> Passing `logfile` makes the context open and own that file as its main
    !> output unit, `debugfile` likewise for the debug stream; ownership follows
    !> the single-owner contract, `delete` closes whatever `new_context` opened
    !>
    !> @param[out] self       context to initialize
+   !> @param[in]  nthreads   thread count; absent or <= 0 takes the current OpenMP setting
    !> @param[in]  verbosity  output level (default 1)
    !> @param[in]  debug      diagnostic flag (default .false.)
    !> @param[in]  unit       already-open output unit (default output_unit)
    !> @param[in]  do_profile detailed-profiling flag; defaults to verbosity >= 4
-   !> @param[in]  nthreads   explicit effective thread count (host/library control)
    !> @param[in]  logfile    path of a main output file for the context to own
    !> @param[in]  debugfile  path of a separate debug output file to own
-   subroutine new_context(self, verbosity, debug, unit, do_profile, nthreads, logfile, debugfile)
+   subroutine new_context(self, nthreads, verbosity, debug, unit, do_profile, logfile, debugfile)
       !> Context to initialize
       type(moist_context_type), intent(out) :: self
+      !> OpenMP thread count; absent or <= 0 takes the current OpenMP setting
+      integer, intent(in), optional :: nthreads
       !> Output verbosity level
       integer, intent(in), optional :: verbosity
       !> Diagnostic flag
@@ -113,8 +109,6 @@ contains
       integer, intent(in), optional :: unit
       !> Detailed-profiling flag; defaults to verbosity >= 4
       logical, intent(in), optional :: do_profile
-      !> Explicit effective OpenMP thread count
-      integer, intent(in), optional :: nthreads
       !> Path of a main output file to open and own
       character(*), intent(in), optional :: logfile
       !> Path of a separate debug output file to open and own
@@ -135,10 +129,8 @@ contains
       self%do_profile = self%verbosity >= 4
       if (present(do_profile)) self%do_profile = do_profile
 
-      !> Thread budget: an explicit request is pinned and applied here; otherwise
-      !> the pin stays 0 ("follow the OpenMP environment") and the effective count
-      !> is resolved live in `get_num_threads`
-      if (present(nthreads)) call self%set_num_threads(nthreads)
+      !> Thread count, resolved once; the OpenMP runtime itself is never changed
+      self%nthreads = resolve_num_threads(nthreads)
 
       !> Run start timestamp
       call date_and_time(date=date, time=time)
@@ -175,16 +167,11 @@ contains
    end subroutine new_context
 
    !> Release the resources owned by the context (its timer and any owned files)
-   !>
-   !> An active thread pin is a resource too: it lives in a global OpenMP control,
-   !> so it is released here rather than outliving the context that set it
    subroutine delete_context(self)
       !> Context to tear down
       class(moist_context_type), intent(inout) :: self
       !> Whether the unit is still open at teardown
       logical :: is_open
-
-      if (self%nthreads_pin > 0) call self%set_num_threads(0)
 
       if (self%owns_unit) then
          inquire (unit=self%unit, opened=is_open)
@@ -285,63 +272,36 @@ contains
 
    end subroutine context_debug_message
 
-   !> Pin (or release) the OpenMP thread budget for the run
+   !> OpenMP thread count for the run
    !>
-   !> The single place moist changes the thread budget, so a host using moist
-   !> as a library can retune it at any point, not only at construction
-   !>
-   !> - a positive `n` pins that many threads and applies it via
-   !>   `omp_set_num_threads` in an OpenMP build, so subsequent parallel
-   !>   regions honour it
-   !> - a non-positive `n` releases the pin (stored as 0), meaning "follow
-   !>   the OpenMP environment" again
-   !>
-   !> `omp_set_num_threads` mutates a global runtime control, so a pin is not
-   !> self-undoing: the budget observed just before the *first* pin is recorded in
-   !> `nthreads_env` and pushed back on release, otherwise releasing would
-   !> leave the host stuck at whatever moist last pinned; releasing without an
-   !> active pin touches nothing
-   !>
-   !> @param[in]  n  requested thread count (<= 0 releases the pin / follows env)
-   subroutine context_set_num_threads(self, n)
-      !> Context instance
-      class(moist_context_type), intent(inout) :: self
-      !> Requested thread count
-      integer, intent(in) :: n
-
-      if (n > 0) then
-         ! Capture the pre-pin budget once, before it is overwritten; a second
-         ! pin must not record moist's own value as the environment baseline
-!$       if (self%nthreads_pin <= 0) self%nthreads_env = max(1, omp_get_max_threads())
-         self%nthreads_pin = n
-!$       call omp_set_num_threads(n)
-      else
-!$       if (self%nthreads_pin > 0 .and. self%nthreads_env > 0) then
-!$          call omp_set_num_threads(self%nthreads_env)
-!$       end if
-         self%nthreads_pin = 0
-         self%nthreads_env = 0
-      end if
-
-   end subroutine context_set_num_threads
-
-   !> Effective OpenMP thread count for the run
-   !>
-   !> Returns the pinned count when one is set (via the constructor or
-   !> `set_num_threads`); otherwise it reflects the OpenMP environment *live*
-   !> (`omp_get_max_threads`, which tracks `OMP_NUM_THREADS` and any host
-   !> `omp_set_num_threads`) -- the value every kernel should size its thread
-   !> budget from; without OpenMP it is `max(1, pin)`, always >= 1
+   !> The count fixed by `new_context`; a context that was never constructed
+   !> reads the OpenMP environment, always >= 1
    function context_get_num_threads(self) result(nt)
       !> Context instance
       class(moist_context_type), intent(in) :: self
       !> Effective thread count (>= 1)
       integer :: nt
 
-      nt = max(1, self%nthreads_pin)
-!$    if (self%nthreads_pin <= 0) nt = max(1, omp_get_max_threads())
+      nt = resolve_num_threads(self%nthreads)
 
    end function context_get_num_threads
+
+   !> OpenMP team size for a kernel called with or without a context count
+   !>
+   !> @param[in] nthreads  explicit count; absent or <= 0 takes omp_get_max_threads
+   function resolve_num_threads(nthreads) result(nt)
+      !> Explicit thread count
+      integer, intent(in), optional :: nthreads
+      !> Effective thread count (>= 1)
+      integer :: nt
+
+      nt = 1
+!$    nt = max(1, omp_get_max_threads())
+      if (present(nthreads)) then
+         if (nthreads > 0) nt = nthreads
+      end if
+
+   end function resolve_num_threads
 
    !> Render the run-wide settings through the pretty printer
    !>

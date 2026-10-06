@@ -36,7 +36,9 @@ contains
       real(wp) :: xi, yi, zi, xj, yj, zj, dx, dy, dz
       real(wp) :: kval
       type(smoothing_kernel_wendland_type) :: kernel
+      integer :: nthreads
 
+      nthreads = self%ctx%get_num_threads()
       ! Allocate output arrays
       if (allocated(self%rho_grid)) deallocate (self%rho_grid)
       allocate (self%rho_grid(self%ngrid), source=0.0_wp)
@@ -62,7 +64,7 @@ contains
       ! simply accumulate all neighbour contributions into each point
       ! Self-contribution (diagonal) is added separately
 
-      !$omp parallel do default(shared) &
+      !$omp parallel do num_threads(nthreads) default(shared) &
       !$omp& private(igrid, jj, jgrid, xi, yi, zi, dx, dy, dz, d2, d, kval) &
       !$omp& schedule(dynamic)
       do igrid = 1, self%ngrid
@@ -101,7 +103,7 @@ contains
 
       ! Evaluate the anchor density at each active point against the complete
       ! (unfiltered) Lebedev grid of its owner sphere
-      !$omp parallel do default(shared) &
+      !$omp parallel do num_threads(nthreads) default(shared) &
       !$omp& private(igrid, isph, jj, xi, yi, zi, xj, yj, zj, &
       !$omp&   dx, dy, dz, d2, d, kval) &
       !$omp& schedule(dynamic)
@@ -179,7 +181,9 @@ contains
       integer :: i, isph
       real(wp) :: area_i, volume_i
       real(wp), allocatable :: asph_local(:), vsph_local(:)
+      integer :: nthreads
 
+      nthreads = self%ctx%get_num_threads()
       if (allocated(self%a)) deallocate (self%a)
       allocate (self%a(self%ngrid), source=0.0_wp)
       if (allocated(self%asph)) deallocate (self%asph)
@@ -191,7 +195,7 @@ contains
       allocate (self%vsph(self%nsph), source=0.0_wp)
       if (.not. allocated(self%total_volume)) allocate (self%total_volume)
 
-      !$omp parallel default(shared) private(i, isph, area_i, volume_i, asph_local, vsph_local)
+      !$omp parallel num_threads(nthreads) default(shared) private(i, isph, area_i, volume_i, asph_local, vsph_local)
       allocate (asph_local(self%nsph), source=0.0_wp)
       allocate (vsph_local(self%nsph), source=0.0_wp)
 

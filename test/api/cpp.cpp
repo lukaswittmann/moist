@@ -34,10 +34,13 @@ int main()
     moist_error error = moist_new_error();
     if (!error || moist_check_error(error) != moist_success ||
         moist_check_error(nullptr) != moist_invalid_error) return fail(__LINE__);
+    moist_context context = moist_new_context(error, 2, 0, false);
+    if (!context || moist_check_error(error) != moist_success) return fail(__LINE__);
     moist_lsf lsf = moist_new_svdw_lsf(error, nullptr);
     if (!lsf || moist_check_error(error) != moist_success) return fail(__LINE__);
-    moist_cavity cavity = moist_new_drop_cavity(error, lsf, nullptr, nullptr);
+    moist_cavity cavity = moist_new_drop_cavity_with_context(error, context, lsf, nullptr, nullptr);
     if (!cavity || moist_check_error(error) != moist_success) return fail(__LINE__);
+    if (!delete_handle(context, "context")) return fail(__LINE__);
     const int numbers[] = {1};
     const double positions[] = {0.0, 0.0, 0.0};
     moist_structure structure = moist_new_structure(error, 1, numbers, positions,

@@ -14,16 +14,18 @@ options with the caller's ``sizeof`` before assigning fields:
 .. code-block:: c
 
    moist_error error = moist_new_error();
+   moist_context context = moist_new_context(error, 4, 0, false);  /* nthreads, verbosity, debug */
    moist_drop_options options;
    moist_init_drop_options(error, &options, sizeof options);
    /* Check moist_check_error(error) after each fallible call. */
    options.nleb = 194;
 
    moist_lsf lsf = moist_new_svdw_lsf(error, NULL);
-   moist_cavity cavity = moist_new_drop_cavity(error, lsf, NULL, &options);
+   moist_cavity cavity = moist_new_drop_cavity_with_context(error, context, lsf, NULL, &options);
    moist_delete(lsf);  /* cavity owns a copy */
    moist_model model = moist_new_model(error, cavity, NULL);
    moist_delete(cavity);  /* model owns a copy */
+   moist_delete(context);  /* model retains the shared context */
 
    moist_component pcm = moist_new_cpcm_component(error, 78.4, NULL);
    moist_add_model_component(error, model, pcm);  /* model owns a copy */
@@ -43,6 +45,19 @@ and meanings, and future libraries default fields an older struct lacks.
 Larger structs are accepted;
 unknown trailing fields are ignored by constructors and untouched by initializers.
 
+``moist_new_context(error, nthreads, verbosity, debug)`` mirrors the Fortran ``new_context(ctx, nthreads=, verbosity=, debug=)``; C has no optional arguments, so pass ``0, 0, false`` for the defaults.
+The thread count is fixed for the context's lifetime: a positive count is used as given, ``0`` takes the calling thread's ``omp_get_max_threads()`` at construction, and a negative count is an error.
+``verbosity`` and ``debug`` override cavity/model logging options.
+
+Pass the context to ``moist_new_drop_cavity_with_context``, ``moist_new_iswig_cavity_with_context`` or ``moist_new_model_with_context``.
+A model inherits its cavity's context unless given another, also from a cavity borrowed with ``moist_get_model_cavity``; its cavity copy and components share it.
+Existing constructors and NULL contexts retain defaults.
+
+Cavities and models retain the context, so its public handle can be deleted.
+``moist_get_context_num_threads`` reports the count the context was constructed with.
+The count sizes MOIST's own OpenMP regions and FFT workers; MOIST never changes the host's OpenMP runtime. BLAS/LAPACK threading is the host's to configure (``OMP_NUM_THREADS``, ``MKL_NUM_THREADS``, ``OPENBLAS_NUM_THREADS`` or the vendor's API).
+Without OpenMP, MOIST's kernels are serial; the math backends may still use threads.
+
 Ownership
 ---------
 
@@ -61,7 +76,7 @@ Requests, outputs, response items and fields are addressed by name
 characters); there are no numeric tags. Requests and response items have no
 handles or indices: a cursor makes one current at a time.
 
-Serialize calls sharing handles, their borrowed aliases, or their parent model.
+Serialize calls sharing a context, handles, their borrowed aliases, or their parent model.
 Independent object graphs may run on separate threads. Isodensity callbacks may
 run concurrently with the same context; they must be reentrant and protect shared
 scratch data.
@@ -255,18 +270,50 @@ cavities, retain the response-phase density weights as described in
 :doc:`coupling`. See ``test/api/example.c`` for executable error-handling
 and lifetime examples.
 
+Component energies
+~~~~~~~~~~~~~~~~~~
+
+Continuum components use 0-based insertion indices; count and names need no update.
+Their real scalar ``energy`` :doc:`field <fields>` stores the latest ``moist_get_model_energy`` contribution after successful evaluation and clears on ``moist_update_model``. Other model families and out-of-range indices are errors.
+
+.. code-block:: c
+
+   int ncomponents;
+   moist_get_model_component_count(err, model, &ncomponents);
+   for (int i = 0; i < ncomponents; ++i) {
+       char name[MOIST_NAME_MAX + 1];
+       size_t length;
+       double energy;
+       moist_get_model_component_name(err, model, i, name, sizeof name, &length);
+       moist_get_model_component_field_real(err, model, i, "energy", &energy);
+       printf("%s %.10f\n", name, energy);  /* Check err after each call. */
+   }
+
+``moist_get_model_component_field_*`` provides ``_count``, ``_info``, ``_about`` and ``_real`` as for model fields. ``moist_get_model_component_description`` copies a one-line description.
+
+Settings printout
+~~~~~~~~~~~~~~~~~
+
+``moist_get_model_parameters_text`` returns continuum settings without an update:
+the cavity, then components numbered from 1, with descriptions, solvent inputs and registered settings.
+Use ``moist_get_banner`` buffer rules to retrieve and print the text.
+Other model families are errors.
+
 Contracts
 ---------
 
 ``moist_get_model_energy`` and ``moist_get_model_gradient`` **accumulate** into
 caller-owned buffers; initialize them before the first call. Failure leaves the
-accumulator unchanged.
+accumulator unchanged. If a component fails during energy evaluation, only
+earlier components' energies remain available.
 
 The full derivative tensors of ``moist_get_cavity_gradient`` and
 ``moist_get_amat_gradient`` are diagnostic facilities. Normal host integration
 uses model gradients and response weights, keeping cavity-motion contractions
 inside MOIST. Their dimensions reverse the native axes exactly; consult the
-header for each axis's meaning.
+header for each axis's meaning. The ``r_iI1_rA`` and ``rho1_rA`` outputs of
+``moist_get_cavity_gradient`` accept ``NULL`` and exist only for a cavity
+built with ``do_fine``; asking for one that was not computed is an error.
 
 For internal isodensity models, ``moist_set_model_isodensity_density`` installs
 new density data on the owned cavity and invalidates model results and every

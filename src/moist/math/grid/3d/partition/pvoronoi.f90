@@ -37,7 +37,8 @@ contains
    !> @param[out] w Owner weights in [0,1], shape (npts)
    !> @param[in] width Positive power-gap half-width in bohr**2; default 1
    !> @param[in] radii Fixed nonnegative power radii in bohr, shape (nat); default covalent
-   subroutine pvoronoi_partition_weights(owner, points, xyz, numbers, w, width, radii)
+   !> @param[in] nthreads Thread count; absent takes omp_get_max_threads
+   subroutine pvoronoi_partition_weights(owner, points, xyz, numbers, w, width, radii, nthreads)
       !> Owner index
       integer, intent(in) :: owner
       !> Sample points
@@ -52,6 +53,8 @@ contains
       real(wp), intent(in), optional :: width
       !> Fixed power radii
       real(wp), intent(in), optional :: radii(:)
+      !> Thread count
+      integer, intent(in), optional :: nthreads
 
       real(wp) :: half_width
       type(bump_partition_cell) :: cell
@@ -59,7 +62,7 @@ contains
       half_width = default_power_width
       if (present(width)) half_width = width
       call pair_partition_weights(owner, points, xyz, numbers, w, cell, &
-         & power_width=half_width, radii=radii)
+         & power_width=half_width, radii=radii, nthreads=nthreads)
    end subroutine pvoronoi_partition_weights
 
    !> Bump-function cell

@@ -54,7 +54,8 @@ contains
    !> @param[in]  cell        Pair-cell switch
    !> @param[in]  power_width Optional power-coordinate half-width in bohr**2
    !> @param[in]  radii       Optional power radii in bohr, shape (nat); default covalent radii
-   subroutine pair_partition_weights(owner, points, xyz, numbers, w, cell, power_width, radii)
+   !> @param[in]  nthreads    Optional thread count; absent takes omp_get_max_threads
+   subroutine pair_partition_weights(owner, points, xyz, numbers, w, cell, power_width, radii, nthreads)
       !> Owner index
       integer, intent(in) :: owner
       !> Sample points
@@ -71,10 +72,12 @@ contains
       real(wp), intent(in), optional :: power_width
       !> Power radii
       real(wp), intent(in), optional :: radii(:)
+      !> Thread count
+      integer, intent(in), optional :: nthreads
 
       real(wp), allocatable :: pair_r(:, :), pair_a(:, :), radius(:), dist(:), logs(:)
       real(wp) :: chi, u, width, peak
-      integer :: nat, npts, i, j, ip, nthreads
+      integer :: nat, npts, i, j, ip, nt
       logical :: power
 
       nat = size(xyz, 2)
@@ -107,9 +110,15 @@ contains
          end do
       end do
 
-      nthreads = 1
-!$    if (.not. omp_in_parallel()) nthreads = min(omp_get_max_threads(), npts)
-      !$omp parallel num_threads(nthreads) default(none) &
+      nt = 1
+!$    if (.not. omp_in_parallel()) then
+!$       nt = omp_get_max_threads()
+!$       if (present(nthreads)) then
+!$          if (nthreads > 0) nt = nthreads
+!$       end if
+!$       nt = min(nt, npts)
+!$    end if
+      !$omp parallel num_threads(nt) default(none) &
       !$omp shared(owner, points, xyz, pair_r, pair_a, cell, width, power, w, nat, npts) &
       !$omp private(ip, i, dist, logs, peak)
       allocate (dist(nat), logs(nat))

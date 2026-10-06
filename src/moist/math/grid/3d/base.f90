@@ -3,6 +3,7 @@ module moist_math_grid_3d_base
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_math_grid_3d_adjoint, only: volume_adjoint_type
+!$ use omp_lib, only: omp_get_max_threads, omp_in_parallel
    implicit none(type, external)
    private
 
@@ -49,6 +50,8 @@ module moist_math_grid_3d_base
       real(wp), allocatable :: xi0(:)
       !> Number of reciprocal-space (k-space) points
       integer :: npts_k = 0
+      !> Thread count for grid builds and transforms; 0 takes omp_get_max_threads
+      integer :: nthreads = 0
    contains
       !> Rebuild geometry for the molecule
       procedure(update_grid), deferred :: update
@@ -58,6 +61,8 @@ module moist_math_grid_3d_base
       procedure :: has_geometry_dependent_xi0 => grid_xi0_dependent_default
       !> Diagnostic grid name
       procedure :: kind_name => grid_kind_name_default
+      !> Worker count for grid builds and transforms; 1 inside an OpenMP region
+      procedure :: team_size => grid_team_size
       !> Real-space coordinate (bohr) of grid point i (1..ngrid)
       procedure :: point => grid_point
       !> Reciprocal-space coordinate (1/bohr) of k-point j (1..npts_k)
@@ -380,5 +385,25 @@ contains
       name = "generic"
 
    end function grid_kind_name_default
+
+   !> Worker count for grid builds and transforms
+   !>
+   !> - 1 inside an OpenMP region: the C++ backends do not nest
+   !> - otherwise `nthreads`, or `omp_get_max_threads` when unset
+   !>
+   !> @param[in] self Domain instance
+   function grid_team_size(self) result(nt)
+      !> Domain instance
+      class(moist_math_grid_3d_type), intent(in) :: self
+      !> Worker count (>= 1)
+      integer :: nt
+
+      nt = 1
+!$    if (.not. omp_in_parallel()) then
+!$       nt = max(1, omp_get_max_threads())
+!$       if (self%nthreads > 0) nt = self%nthreads
+!$    end if
+
+   end function grid_team_size
 
 end module moist_math_grid_3d_base

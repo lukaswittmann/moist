@@ -25,7 +25,7 @@ module moist_cavity_marchingcubes
    use mctc_io_constants, only: pi
    use moist_math_linalg, only: cross_product
    use moist_cavity_type, only: cavity_type
-   use moist_context, only: moist_context_type
+   use moist_context, only: moist_context_type, resolve_num_threads
    use moist_radius_type, only: radius_type
    use moist_cavity_drop_lsf_base, only: moist_cavity_drop_lsf_type
    use moist_utils_prettylistprint, only: prettylistprinter, new_prettylistprinter
@@ -536,24 +536,28 @@ contains
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file, pqr_file=self%param%pqr_file)
       else if (allocated(self%param%obj_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
                                                obj_file=self%param%obj_file)
       else if (allocated(self%param%pqr_file)) then
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
                                                verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads(), &
                                                pqr_file=self%param%pqr_file)
       else
          call integrate_surface_marching_cubes(self%lsf_model, self%sphxyz, &
                                                self%total_area, self%total_volume, error, &
                                                target_spacing=self%param%spacing, &
-                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug)
+                                               verbosity=self%ctx%verbosity, debug=self%ctx%debug, &
+                                               nthreads=self%ctx%get_num_threads())
       end if
 
    end subroutine integrate_marching_cubes_export
@@ -639,11 +643,12 @@ contains
    !> @param[in]  target_spacing  Finest grid spacing (optional, default 0.2)
    !> @param[in]  debug           Enable debug output (optional)
    !> @param[in]  verbosity       Verbosity level; >=2 enables progress output (optional)
+   !> @param[in]  nthreads        OpenMP team size (optional, default omp_get_max_threads)
    !> @param[in]  obj_file        Wavefront OBJ mesh output path (optional)
    !> @param[in]  pqr_file        PQR file output path with triangle centroids (optional)
    !> @param[out] error           LSF evaluation failure; area/volume are invalid
    subroutine integrate_surface_marching_cubes(lsf, xyz, area, volume, error, &
-                                               target_spacing, debug, verbosity, obj_file, pqr_file)
+                                               target_spacing, debug, verbosity, obj_file, pqr_file, nthreads)
       class(moist_cavity_drop_lsf_type), intent(in) :: lsf
       real(wp), intent(in) :: xyz(:, :)
       real(wp), intent(out) :: area, volume
@@ -655,6 +660,8 @@ contains
       character(len=*), intent(in), optional :: obj_file
       !> Output PQR file path with triangle centroids
       character(len=*), intent(in), optional :: pqr_file
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
       real(wp) :: spacing, margin
       real(wp) :: grid_min(3), grid_max(3)
@@ -715,7 +722,10 @@ contains
       !> Per-thread LSF evaluation failure and the loop-wide abort it triggers
       type(error_type), allocatable :: lsf_error
       logical :: abort_requested
+      !> Effective team size
+      integer :: nt
 
+      nt = resolve_num_threads(nthreads)
       spacing = 0.2_wp
       if (present(target_spacing)) spacing = target_spacing
       margin = 2.0_wp
@@ -753,7 +763,7 @@ contains
       ! Pre-compute LSF values on the (nx+1)*(ny+1)*(nz+1) vertex grid
       allocate (grid_vals(0:nx, 0:ny, 0:nz))
       abort_requested = .false.
-      !$omp parallel default(none) &
+      !$omp parallel num_threads(nt) default(none) &
       !$omp& shared(grid_vals, lsf, grid_min, coarse_spacing, nx, ny, nz, &
       !$omp&        abort_requested, error) &
       !$omp& private(lsf_priv, ptmp, ix, iy, iz, lsf_error)
@@ -835,7 +845,7 @@ contains
 !$       wall_start = omp_get_wtime()
       end if
 
-      !$omp parallel default(none) &
+      !$omp parallel num_threads(nt) default(none) &
       !$omp& shared(grid_vals, grid_min, coarse_spacing, lsf, nx, ny, nz, center, &
       !$omp&        max_level, min_spacing, local_stack_size, &
       !$omp&        n_coarse_total, n_coarse_done, progress_interval, &

@@ -11,6 +11,7 @@
 !> surface
 module moist_model_continuum_component_pcm_electrostatics
    use mctc_env, only: wp, error_type, fatal_error
+   use moist_context, only: resolve_num_threads
    implicit none(type, external)
    private
 
@@ -118,8 +119,9 @@ contains
    !> @param[out] grad_rA     Nuclear gradient (3, nsph)
    !> @param[in] xi          Optional Gaussian inverse lengths (ngrid)
    !> @param[out] error       Error handling
+   !> @param[in]  nthreads    OpenMP team size; absent takes omp_get_max_threads
    subroutine pcm_electrostatic_nuclear_gradient(xyz, sphxyz, xyz1_rA, &
-                                                 w_phi, w_xyz, za, grad_rA, error, xi)
+                                                 w_phi, w_xyz, za, grad_rA, error, xi, nthreads)
       !> Surface positions, sphere centers, and surface-position derivatives
       real(wp), intent(in) :: xyz(:, :)
       !> Sphxyz
@@ -138,9 +140,11 @@ contains
       type(error_type), allocatable, intent(out) :: error
       !> Gaussian inverse lengths; absent selects the point operator
       real(wp), intent(in), optional :: xi(:)
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
-      !> Surface, moving-atom, source-atom, and extent indices
-      integer :: i, iatom, ngrid, nsph
+      !> Surface, moving-atom, source-atom, and extent indices, and team size
+      integer :: i, iatom, ngrid, nsph, nt
       !> Tmp reduction target; explicit shape
       real(wp) :: acc(3, size(za))
 
@@ -160,7 +164,8 @@ contains
       call pcm_electrostatic_direct_gradient(xyz, sphxyz, w_phi, za, grad_rA, error, xi)
       if (allocated(error)) return
       acc = 0.0_wp
-      !$omp parallel do default(none) &
+      nt = resolve_num_threads(nthreads)
+      !$omp parallel do num_threads(nt) default(none) &
       !$omp shared(xyz1_rA, w_xyz, ngrid, nsph) &
       !$omp private(i, iatom) &
       !$omp reduction(+:acc) schedule(static)

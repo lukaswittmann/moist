@@ -50,13 +50,15 @@ module moist_model_continuum_component_pcm_amat
       !> @param[in]  xyz    Surface positions
       !> @param[out] amat   Interaction matrix
       !> @param[out] error  Error handling
-      module subroutine assemble_pcm_amat(xi, f, xyz, amat, error)
+      !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
+      module subroutine assemble_pcm_amat(xi, f, xyz, amat, error, nthreads)
          implicit none(type, external)
          real(wp), intent(in) :: xi(:)
          real(wp), intent(in) :: f(:)
          real(wp), intent(in) :: xyz(:, :)
          real(wp), intent(out) :: amat(:, :)
          type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: nthreads
       end subroutine assemble_pcm_amat
 
       !> Assemble the Gaussian PCM matrix and its nuclear derivative tensor
@@ -70,8 +72,9 @@ module moist_model_continuum_component_pcm_amat
       !> @param[out] amat     Interaction matrix
       !> @param[out] amat1_rA Nuclear derivative tensor
       !> @param[out] error    Error handling
+      !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
       module subroutine assemble_pcm_amat_with_gradient(xi, f, xyz, xi1_rA, f1_rA, &
-                                                        xyz1_rA, amat, amat1_rA, error)
+                                                        xyz1_rA, amat, amat1_rA, error, nthreads)
          implicit none(type, external)
          real(wp), intent(in) :: xi(:)
          real(wp), intent(in) :: f(:)
@@ -82,6 +85,7 @@ module moist_model_continuum_component_pcm_amat
          real(wp), intent(out) :: amat(:, :)
          real(wp), intent(out) :: amat1_rA(:, :, :, :)
          type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: nthreads
       end subroutine assemble_pcm_amat_with_gradient
 
       !> Contract a Gaussian PCM matrix derivative to surface-variable weights
@@ -95,8 +99,9 @@ module moist_model_continuum_component_pcm_amat
       !> @param[out] w_f    Switching-factor weights
       !> @param[out] w_xyz  Position weights
       !> @param[out] error  Error handling
+      !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
       module subroutine pcm_amat_surface_weights(xi, f, xyz, q1, q2, w_xi, w_f, &
-                                                 w_xyz, error)
+                                                 w_xyz, error, nthreads)
          implicit none(type, external)
          real(wp), intent(in) :: xi(:)
          real(wp), intent(in) :: f(:)
@@ -105,6 +110,7 @@ module moist_model_continuum_component_pcm_amat
          real(wp), intent(out) :: w_xi(:), w_f(:)
          real(wp), intent(out) :: w_xyz(:, :)
          type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: nthreads
       end subroutine pcm_amat_surface_weights
 
       !> Contract surface-variable weights with nuclear derivative arrays
@@ -117,13 +123,15 @@ module moist_model_continuum_component_pcm_amat
       !> @param[in]  w_xyz       Position weights
       !> @param[out] grad_rA     Nuclear gradient
       !> @param[out] error       Error handling
+      !> @param[in]  nthreads    OpenMP team size; absent takes omp_get_max_threads
       module subroutine pcm_amat_nuclear_gradient(xi1_rA, f1_rA, xyz1_rA, w_xi, &
-                                                   w_f, w_xyz, grad_rA, error)
+                                                   w_f, w_xyz, grad_rA, error, nthreads)
          implicit none(type, external)
          real(wp), intent(in) :: xi1_rA(:, :, :), f1_rA(:, :, :), xyz1_rA(:, :, :, :)
          real(wp), intent(in) :: w_xi(:), w_f(:), w_xyz(:, :)
          real(wp), intent(out) :: grad_rA(:, :)
          type(error_type), allocatable, intent(out) :: error
+         integer, intent(in), optional :: nthreads
       end subroutine pcm_amat_nuclear_gradient
 
    end interface

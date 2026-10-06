@@ -1,6 +1,7 @@
 !> Adjoint contractions for the Gaussian PCM interaction matrix
 submodule(moist_model_continuum_component_pcm_amat) moist_model_continuum_component_pcm_amat_adjoint
    use mctc_env, only: fatal_error
+   use moist_context, only: resolve_num_threads
    use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_near_grad, pcm_amat_diag_grad
    implicit none(type, external)
 
@@ -20,8 +21,9 @@ contains
    !> @param[out] w_f    Switching-factor weights
    !> @param[out] w_xyz  Position weights
    !> @param[out] error  Error handling
+   !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
    module subroutine pcm_amat_surface_weights(xi, f, xyz, q1, q2, w_xi, w_f, &
-                                              w_xyz, error)
+                                              w_xyz, error, nthreads)
       !> Gaussian widths
       real(wp), intent(in) :: xi(:)
       !> Gaussian switching factors
@@ -36,9 +38,11 @@ contains
       real(wp), intent(out) :: w_xyz(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
-      !> Surface-point indices and total number of points
-      integer :: i, j, ngrid
+      !> Surface-point indices, total number of points, and team size
+      integer :: i, j, ngrid, nt
       !> Row-point properties and contraction-vector entries
       real(wp) :: xi_i, xyz_i(3), bound_i, q1i, q2i
       !> Charge product, masked separation, and position factor
@@ -71,11 +75,12 @@ contains
 
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
+      nt = resolve_num_threads(nthreads)
 
       ! The scratch row is a private allocatable: each thread allocates its own
       ! copy inside the region; a block-local declaration would be cleaner, but
       ! ifx rejects it under default(none)
-      !$omp parallel default(none) &
+      !$omp parallel num_threads(nt) default(none) &
       !$omp shared(xi, f, xyz, q1, q2, w_xi, w_f, w_xyz, bound, ngrid) &
       !$omp private(i, j, xi_i, xyz_i, bound_i, q1i, q2i, qsym, r2s, scale, r2, &
       !$omp         a, a_xi_i, a_xi_j, a_r2, a_diag, a_diag_xi, a_diag_f, acc, is_far)
@@ -142,8 +147,9 @@ contains
    !> @param[in]  w_xyz       Position weights
    !> @param[out] grad_rA     Nuclear gradient
    !> @param[out] error       Error handling
+   !> @param[in]  nthreads    OpenMP team size; absent takes omp_get_max_threads
    module subroutine pcm_amat_nuclear_gradient(xi1_rA, f1_rA, xyz1_rA, w_xi, &
-                                                w_f, w_xyz, grad_rA, error)
+                                                w_f, w_xyz, grad_rA, error, nthreads)
       !> Nuclear derivatives of widths, switching factors, and positions
       real(wp), intent(in) :: xi1_rA(:, :, :), f1_rA(:, :, :), xyz1_rA(:, :, :, :)
       !> Surface-variable adjoint weights
@@ -152,9 +158,11 @@ contains
       real(wp), intent(out) :: grad_rA(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
-      !> Surface, atom, Cartesian, and extent indices
-      integer :: i, iatom, iaxis, ngrid, nsph
+      !> Surface, atom, Cartesian, and extent indices, and team size
+      integer :: i, iatom, iaxis, ngrid, nsph, nt
       !> Tmp reduction target; explicit shape
       real(wp) :: acc(3, size(xi1_rA, 2))
 
@@ -173,7 +181,8 @@ contains
       end if
 
       acc = 0.0_wp
-      !$omp parallel do default(none) &
+      nt = resolve_num_threads(nthreads)
+      !$omp parallel do num_threads(nt) default(none) &
       !$omp shared(xi1_rA, f1_rA, xyz1_rA, w_xi, w_f, w_xyz, ngrid, nsph) &
       !$omp private(i, iatom, iaxis) reduction(+:acc) schedule(static)
       do i = 1, ngrid

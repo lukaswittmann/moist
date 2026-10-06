@@ -62,6 +62,7 @@ contains
          call fatal_error(error, "Failed to copy 3D MOZ grid")
          return
       end if
+      self%grid%nthreads = ctx%get_num_threads()
       self%ctx => ctx
    end subroutine new_moz_3d_model
 

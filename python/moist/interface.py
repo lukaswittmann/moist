@@ -18,6 +18,7 @@ import numpy as np
 
 from . import library
 from .library import FieldInfo
+from .context import Context, _resolve_context
 from .configuration import CFC, DROP, ISwiG, Isodensity, SvdW, LevelSet
 from .radii import Radii
 from .density import InternalDensity
@@ -580,6 +581,11 @@ class Cavity(ABC):
 
     density_dependent = False
 
+    @property
+    def context(self) -> Context | None:
+        """Explicit run context, or None for an implicit native context."""
+        return getattr(self, "_context", None)
+
     def __init__(self, handle: library.CavityHandle, *, owned: bool = True) -> None:
         self._handle = handle
         self._owned = owned
@@ -781,10 +787,12 @@ class CavityISwiG(_CavityGenericBase):
     """iSwiG cavity built from shared parameters and a radius model."""
 
     def __init__(self, *, parameters: ISwiGParameters | None = None,
-                 radii: Radii | None = None) -> None:
+                 radii: Radii | None = None, context: Context | None = None) -> None:
+        self._context = _resolve_context(context)
         self._configuration = ISwiG(parameters=parameters, radii=radii)
         super().__init__(library.new_iswig_cavity(
-            self.parameters, self.radius_model._as_handle()
+            self.parameters, self.radius_model._as_handle(),
+            context=None if context is None else context._as_handle(),
         ))
 
 
@@ -923,13 +931,15 @@ class CavityDROP(_CavityDROPBase):
 
     def __init__(self, *, lsf: LevelSet | None = None,
                  parameters: DROPParameters | None = None, radii: Radii | None = None, source=None,
-                 pass_order=None) -> None:
+                 pass_order=None, context: Context | None = None) -> None:
+        self._context = _resolve_context(context)
         self._configuration = DROP(
             lsf=SvdW() if lsf is None else lsf, parameters=parameters, radii=radii,
         )
         self._density_source = source
         super().__init__(self.lsf._new_cavity(
-            self.parameters, self.radius_model._as_handle(), source, pass_order
+            self.parameters, self.radius_model._as_handle(), source, pass_order,
+            context=None if context is None else context._as_handle(),
         ))
 
     @property
@@ -1243,6 +1253,66 @@ class ModelComponentGOSTSHYP(SolvationModelComponent):
         return self._pressure
 
 
+class ComponentView:
+    """Live view of one component of a :class:`SolvationModel`.
+
+    Every access reads the native model, so the view always reports its latest
+    evaluation and caches nothing. The view holds its model, which keeps the
+    native model alive for as long as the view exists.
+    """
+
+    def __init__(self, model: SolvationModel, index: int) -> None:
+        self._model = model
+        self._index = index
+
+    @property
+    def index(self) -> int:
+        """Position in the model, counting from zero in construction order."""
+        return self._index
+
+    @property
+    def configuration(self) -> SolvationModelComponent:
+        """The configuration this component was built from."""
+        return self._model._components[self._index]
+
+    @property
+    def name(self) -> str:
+        """Native name, e.g. ``"CPCM"``; a component added twice repeats it."""
+        return library.get_model_component_name(self._model._model, self._index)
+
+    @property
+    def description(self) -> str:
+        """Native one-line description, e.g. of the dielectric scaling."""
+        return library.get_model_component_description(self._model._model, self._index)
+
+    @property
+    def energy(self) -> float:
+        """Contribution to the latest :meth:`SolvationModel.get_energy`, in Hartree.
+
+        Raises like :meth:`get` while unavailable: before the first evaluation,
+        after an update, and for a component that failed or was not reached
+        by a failed evaluation.
+        """
+        return float(self.get("energy"))
+
+    def fields(self) -> tuple[library.FieldInfo, ...]:
+        """Describe every result this component currently holds."""
+        return library.list_model_component_fields(self._model._model, self._index)
+
+    def get(self, name: str):
+        """Return one named result, using moist's own name for it.
+
+        A result the component does not currently hold raises; an unavailable
+        energy is absent rather than zero. A scalar comes back as a NumPy
+        scalar.
+        """
+        return library.get_model_component_field(self._model._model, self._index, name)
+
+    def describe(self, name: str) -> str:
+        """Return moist's one-line description of a named result."""
+        return library.get_model_component_field_about(self._model._model, self._index, name)
+
+
 # -----------------------------------------------------------------------------
 # Solvation models
 # -----------------------------------------------------------------------------
@@ -1257,6 +1327,7 @@ class SolvationModel:
         components: list[SolvationModelComponent] | tuple[SolvationModelComponent, ...],
         *,
         parameters: Optional[ModelParameters] = None,
+        context: Context | None = None,
     ) -> None:
         if not isinstance(cavity, Cavity):
             raise TypeError("cavity must be a moist Cavity object")
@@ -1266,6 +1337,7 @@ class SolvationModel:
         if any(not isinstance(item, SolvationModelComponent) for item in items):
             raise TypeError("components must contain only SolvationModelComponent objects")
 
+        self._context = _resolve_context(context) if context is not None else cavity.context
         self._parameters = _resolve(ModelParameters, parameters)
         self._updated = False
         self._natoms: Optional[int] = None
@@ -1277,22 +1349,47 @@ class SolvationModel:
             cavity._as_handle(),
             [item._as_handle() for item in items],
             parameters=self.parameters,
+            context=None if self.context is None else self.context._as_handle(),
         )
         borrowed = library.get_model_cavity(self._model)
         self._cavity = cavity._model_view(borrowed)
+        self._cavity._context = self.context
+
+    @property
+    def context(self) -> Context | None:
+        """Explicit run context shared with the model's cavity and components."""
+        return self._context
 
     @property
     def parameters(self) -> ModelParameters:
         return self._parameters
 
     @property
-    def components(self) -> tuple[SolvationModelComponent, ...]:
-        return self._components
+    def components(self) -> tuple[ComponentView, ...]:
+        """Live views of the native components, in construction order.
+
+        Each view reads its name and results from the native model and reaches
+        its constructor input through ``configuration``.
+        """
+        count = library.get_model_component_count(self._model)
+        return tuple(ComponentView(self, index) for index in range(count))
 
     @property
     def cavity(self) -> Cavity:
         """The authoritative model-owned live cavity; the source of every grid input."""
         return self._cavity
+
+    def parameters_text(self) -> str:
+        """Return the native settings printout: the cavity, then every component.
+
+        Component sections are headed by their 1-based position; no update is
+        needed.
+        """
+        return library.get_model_parameters_text(self._model)
+
+    def print_parameters(self, file=None) -> None:
+        """Print :meth:`parameters_text` to ``file``, standard output by default."""
+        print(self.parameters_text(), end="", file=file)
 
     def _invalidate(self) -> None:
         self._updated = False

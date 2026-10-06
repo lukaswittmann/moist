@@ -321,7 +321,7 @@ if(MOIST_TESTS)
   set(moist_test_selected_math_grid_3d_threaded
     batched_fft_uses_threaded_backend batched_ifft_uses_threaded_backend
     molecular_nufft_type12_threaded molecular_nufft_type3_threaded
-    radial_trafo_one_per_thread)
+    radial_trafo_one_per_thread grid_thread_count_override)
   set(moist_test_selected_math_grid_3d_partition
     compact_switches nuclear_derivative_continuity power_geometry partition_invariance large_coincident_partition
     partition_of_unity ssf_bond_axis_hard_zeros ssf_owned_near_nucleus

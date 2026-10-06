@@ -1,6 +1,7 @@
 !> Assembly of the Gaussian PCM interaction matrix and dense derivatives
 submodule(moist_model_continuum_component_pcm_amat) moist_model_continuum_component_pcm_amat_build
    use mctc_env, only: fatal_error
+   use moist_context, only: resolve_num_threads
    use moist_model_continuum_component_pcm_amat_kernel, only: pcm_amat_x_far, &
       pcm_amat_far_value_row, pcm_amat_near_value, pcm_amat_near_grad, &
       pcm_amat_diag_value, pcm_amat_diag_grad
@@ -54,10 +55,13 @@ contains
 
    !> Mirror the upper triangle of a square matrix onto the lower one
    !>
-   !> @param[inout] amat Matrix whose upper triangle is filled on entry
-   subroutine mirror_upper_triangle(amat)
+   !> @param[inout] amat     Matrix whose upper triangle is filled on entry
+   !> @param[in]    nthreads OpenMP team size
+   subroutine mirror_upper_triangle(amat, nthreads)
       !> Matrix whose upper triangle is filled on entry
       real(wp), intent(inout) :: amat(:, :)
+      !> OpenMP team size
+      integer, intent(in) :: nthreads
 
       !> Block indices, point ranges, and block count
       integer :: ib, jb, i0, i1, j0, j1, nblocks
@@ -67,7 +71,7 @@ contains
       ngrid = size(amat, 1)
       nblocks = (ngrid + sym_tile - 1)/sym_tile
 
-      !$omp parallel do default(none) shared(amat, ngrid, nblocks) &
+      !$omp parallel do num_threads(nthreads) default(none) shared(amat, ngrid, nblocks) &
       !$omp private(ib, jb, i0, i1, j0, j1, i, j) schedule(dynamic)
       do ib = 1, nblocks
          i0 = (ib - 1)*sym_tile + 1
@@ -92,7 +96,8 @@ contains
    !> @param[in]  xyz    Surface positions
    !> @param[out] amat   Interaction matrix
    !> @param[out] error  Error handling
-   module subroutine assemble_pcm_amat(xi, f, xyz, amat, error)
+   !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
+   module subroutine assemble_pcm_amat(xi, f, xyz, amat, error, nthreads)
       !> Gaussian widths
       real(wp), intent(in) :: xi(:)
       !> Gaussian switching factors
@@ -103,9 +108,11 @@ contains
       real(wp), intent(out) :: amat(:, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
-      !> Surface-point indices and total number of points
-      integer :: i, j, ngrid
+      !> Surface-point indices, total number of points, and team size
+      integer :: i, j, ngrid, nt
       !> Row-point width, position, and saturation bound
       real(wp) :: xi_i, xyz_i(3), bound_i
       !> Per-point saturation bounds
@@ -130,11 +137,12 @@ contains
 
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
+      nt = resolve_num_threads(nthreads)
 
       ! The scratch row is a private allocatable: each thread allocates its own
       ! copy inside the region; a block-local declaration would be cleaner, but
       ! ifx rejects it under default(none)
-      !$omp parallel default(none) shared(xi, f, xyz, amat, bound, ngrid) &
+      !$omp parallel num_threads(nt) default(none) shared(xi, f, xyz, amat, bound, ngrid) &
       !$omp private(i, j, xi_i, xyz_i, bound_i, r2)
       allocate (r2(ngrid))
       !$omp do schedule(dynamic, 8)
@@ -160,7 +168,7 @@ contains
       !$omp end do
       !$omp end parallel
 
-      call mirror_upper_triangle(amat)
+      call mirror_upper_triangle(amat, nt)
    end subroutine assemble_pcm_amat
 
    !> Assemble the Gaussian PCM matrix and its nuclear derivative tensor
@@ -174,8 +182,9 @@ contains
    !> @param[out] amat     Interaction matrix
    !> @param[out] amat1_rA Nuclear derivative tensor
    !> @param[out] error    Error handling
+   !> @param[in]  nthreads OpenMP team size; absent takes omp_get_max_threads
    module subroutine assemble_pcm_amat_with_gradient(xi, f, xyz, xi1_rA, f1_rA, &
-                                                      xyz1_rA, amat, amat1_rA, error)
+                                                      xyz1_rA, amat, amat1_rA, error, nthreads)
       !> Gaussian widths
       real(wp), intent(in) :: xi(:)
       !> Gaussian switching factors
@@ -194,9 +203,11 @@ contains
       real(wp), intent(out) :: amat1_rA(:, :, :, :)
       !> Error handling
       type(error_type), allocatable, intent(out) :: error
+      !> OpenMP team size
+      integer, intent(in), optional :: nthreads
 
-      !> Surface, atom, Cartesian, and extent indices
-      integer :: i, j, iatom, iaxis, ngrid, nsph
+      !> Surface, atom, Cartesian, and extent indices, and team size
+      integer :: i, j, iatom, iaxis, ngrid, nsph, nt
       !> Kernel value and its three derivative channels
       real(wp) :: a, a_xi_i, a_xi_j, a_r2
       !> Diagonal kernel value and its two derivative channels
@@ -233,8 +244,9 @@ contains
 
       allocate (bound(ngrid))
       call saturation_bounds(xi, bound)
+      nt = resolve_num_threads(nthreads)
 
-      !$omp parallel do default(none) &
+      !$omp parallel do num_threads(nt) default(none) &
       !$omp shared(xi, f, xyz, xi1_rA, f1_rA, xyz1_rA, amat, amat1_rA, bound, ngrid, nsph) &
       !$omp private(i, j, iatom, iaxis, a, a_xi_i, a_xi_j, a_r2, a_diag, a_diag_xi, &
       !$omp         a_diag_f, rvec, r2, dr2) schedule(dynamic, 8)

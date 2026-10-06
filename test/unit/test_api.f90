@@ -10,7 +10,7 @@ module test_api
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new_mol => new
    use moist_context, only: moist_context_type, new_context
-!$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
+!$ use omp_lib, only: omp_get_max_threads
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
    use moist_api, only: vp_context, new_context_api, delete_context_api, &
@@ -1997,19 +1997,18 @@ contains
                call moist_delete_cavity(cavity)
                call check(error, shared%references == 1, "model retains the context after the source cavity is deleted")
                if (allocated(error)) exit checks
-               runtime = expected
+               runtime = baseline
 !$             runtime = omp_get_max_threads()
-               call check(error, runtime == expected .and. shared%ctx%get_num_threads() == expected, &
-                  & "the count stays fixed and is the runtime setting")
+               call check(error, runtime == baseline .and. shared%ctx%get_num_threads() == expected, &
+                  & "the count stays fixed and leaves the runtime alone")
             end block checks
             call delete_solvation_component_api(component)
             call delete_solvation_model_api(vmodel)
             call moist_delete_cavity(cavity)
             call delete_context_api(context)
-            runtime = expected
+            runtime = baseline
 !$          runtime = omp_get_max_threads()
-            if (.not. allocated(error)) call check(error, runtime == expected, "release does not restore the runtime")
-!$          call omp_set_num_threads(baseline)
+            if (.not. allocated(error)) call check(error, runtime == baseline, "release leaves the runtime alone")
             if (allocated(error)) exit
          end do
          if (allocated(error)) exit

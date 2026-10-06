@@ -36,6 +36,7 @@
  * - No-size entries: moist_answer_coupling_request, the two name getters
  *   moist_get_coupling_request_name/moist_get_response_item_name, and the
  *   moist_get_cavity_field_*, moist_get_model_field_*,
+ *   moist_get_model_component_field_*,
  *   moist_get_coupling_request_field_* and moist_get_response_field_* entries
  * - Each reads or writes exactly the grid size of the coupling or cavity and
  *   the extents of the named output or field: a row-major (ngrid, dims...)
@@ -59,6 +60,9 @@
 
 /// Error handle class
 typedef struct moist_error_s* moist_error;
+
+/// Shared run context for cavities and models
+typedef struct moist_context_s* moist_context;
 
 /// Status returned by moist_check_error; details read with moist_get_error
 typedef enum {
@@ -120,7 +124,7 @@ typedef struct moist_response_s* moist_response;
 
 
 /* Handles and their borrowed aliases: not for concurrent use
- * - Serialize calls sharing a model, coupling, cavity, response, or error handle
+ * - Serialize calls sharing a context, model, coupling, cavity, response, or error handle
  * - Independent object graphs usable on separate threads; callbacks follow the rule below
  */
 
@@ -171,6 +175,21 @@ typedef int (*moist_isodensity_lsf_callback)(void* context,
 
 /// Level-set function, copied into a DROP cavity
 typedef struct moist_lsf_s* moist_lsf;
+
+/// Construct a shared run context
+/// nthreads is fixed for the context's lifetime: > 0 as given, 0 takes the
+/// calling thread's omp_get_max_threads at construction, negative is an error.
+/// The count sizes MOIST's own OpenMP regions; the host's OpenMP runtime and
+/// the BLAS/LAPACK threading are left alone. verbosity and debug override
+/// cavity/model logging options. Cavities and models retain the context
+moist_API_ENTRY moist_context moist_API_CALL
+moist_new_context(moist_error error, int nthreads, int verbosity,
+                  bool debug) moist_API_SUFFIX__V_1_0;
+moist_API_ENTRY void moist_API_CALL
+moist_delete_context(moist_context *context) moist_API_SUFFIX__V_1_0;
+moist_API_ENTRY void moist_API_CALL
+moist_get_context_num_threads(moist_error error, moist_context context,
+                             int *nthreads) moist_API_SUFFIX__V_1_0;
 
 /* Options: pass NULL to a constructor for defaults, or initialize with
  * moist_init_*_options(error, &options, sizeof options) before overriding fields
@@ -333,6 +352,22 @@ moist_new_iswig_cavity(moist_error error, moist_radii radii,
 moist_API_ENTRY moist_model moist_API_CALL
 moist_new_model(moist_error error, moist_cavity cavity,
                 const moist_model_options *options) moist_API_SUFFIX__V_1_0;
+
+/// Construct cavities and models using a shared context; NULL selects defaults
+/// Explicit context settings take precedence over cavity/model logging options
+/// Without an explicit context, a model inherits its source cavity's shared context
+moist_API_ENTRY moist_cavity moist_API_CALL
+moist_new_drop_cavity_with_context(moist_error error, moist_context context,
+                                   moist_lsf lsf, moist_radii radii,
+                                   const moist_drop_options *options) moist_API_SUFFIX__V_1_0;
+moist_API_ENTRY moist_cavity moist_API_CALL
+moist_new_iswig_cavity_with_context(moist_error error, moist_context context,
+                                    moist_radii radii,
+                                    const moist_iswig_options *options) moist_API_SUFFIX__V_1_0;
+moist_API_ENTRY moist_model moist_API_CALL
+moist_new_model_with_context(moist_error error, moist_context context,
+                             moist_cavity cavity,
+                             const moist_model_options *options) moist_API_SUFFIX__V_1_0;
 
 /// Construct PCM components; NULL options selects the default solver
 moist_API_ENTRY moist_component moist_API_CALL
@@ -1063,6 +1098,89 @@ moist_get_model_field_bool(moist_error error,
                            const char* name,
                            bool* values /* [count] */) moist_API_SUFFIX__V_1_0;
 
+/// Components of a continuum model and their named results (Tier 2)
+///
+/// Components are addressed by their 0-based position in the order they were
+/// added; a component added twice repeats its name. Count and names need no
+/// update. Each component lists "energy" (MOIST_FIELD_REAL, rank 0), its
+/// contribution to the latest moist_get_model_energy in Hartree, after a
+/// successful evaluation; moist_update_model clears it, and a failed
+/// evaluation leaves it unavailable for the failing and later components.
+/// A model of another family and an index outside the count are errors.
+/// See docs/reference/fields.rst
+
+/// Number of components of a continuum model
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_count(moist_error error,
+                                moist_model model,
+                                int* ncomponents) moist_API_SUFFIX__V_1_0;
+
+/// Copy a component name or query its length, following moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_name(moist_error error, moist_model model,
+                               int component /* : 0-based, below the count from
+                                                moist_get_model_component_count */,
+                               char* name, size_t capacity,
+                               size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Copy a one-line component description, e.g. "Pressure-volume work,
+/// pressure times cavity volume", or query its length, following
+/// moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_description(moist_error error, moist_model model,
+                                      int component /* : 0-based, below the count from
+                                                       moist_get_model_component_count */,
+                                      char* description, size_t capacity,
+                                      size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Number of named results the component currently holds
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_field_count(moist_error error,
+                                      moist_model model,
+                                      int component,
+                                      int* nfield) moist_API_SUFFIX__V_1_0;
+
+/// Describe one component result by position
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_field_info(moist_error error,
+                                     moist_model model,
+                                     int component,
+                                     int index /* : 0-based, below the count from
+                                                  moist_get_model_component_field_count */,
+                                     char* name /* [MOIST_FIELD_NAME_MAX + 1] */,
+                                     int* dtype /* : MOIST_FIELD_REAL */,
+                                     int* rank /* : 0 for a scalar */,
+                                     int* dims /* [MOIST_FIELD_MAX_RANK] */,
+                                     int* count /* : elements a read writes */) moist_API_SUFFIX__V_1_0;
+
+/// Copy a component result description or query its length, following
+/// moist_get_banner
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_field_about(moist_error error, moist_model model,
+                                      int component, const char* name, char* about,
+                                      size_t capacity, size_t* length) moist_API_SUFFIX__V_1_0;
+
+/// Read a MOIST_FIELD_REAL component result by name: the `count` elements
+/// moist_get_model_component_field_info reports. An error for a result the
+/// component does not hold or a NULL buffer; nothing is written then
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_component_field_real(moist_error error,
+                                     moist_model model,
+                                     int component,
+                                     const char* name,
+                                     double* values /* [count] */) moist_API_SUFFIX__V_1_0;
+
+/// Copy the settings printout of a continuum model, or query its length,
+/// following moist_get_banner
+/// The cavity section first, then one section per component headed by its
+/// 1-based position: name, description, solvent inputs and registered
+/// settings, one "key ... value" line each. Needs no update. A model of
+/// another family is an error; the host chooses where to print
+moist_API_ENTRY void moist_API_CALL
+moist_get_model_parameters_text(moist_error error, moist_model model,
+                                char* buffer, size_t capacity,
+                                size_t* length) moist_API_SUFFIX__V_1_0;
+
 /// Assemble A-matrix and compute xi values
 /// Must be called before accessing xi or using the A-matrix
 /// Call moist_get_cavity_sizes first to get ngrid for array allocation, then
@@ -1152,8 +1270,11 @@ moist_get_anchor_gradient(moist_error error,
 ///   asph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere areas (perturbed atom, owner, xyz)
 ///   vsph1_rA  row-major (nsph_cap, nsph_cap, 3) - gradient of per-sphere volumes (perturbed atom, owner, xyz)
 ///   xyz1_rA   row-major (ngrid_cap, nsph_cap, 3, 3) - grid point position derivatives (grid, atom, perturbed_xyz, xyz)
-///   r_iI1_rA  row-major (ngrid_cap, nsph_cap, 3) - gradient of grid-owner distances
-///   rho1_rA   row-major (ngrid_cap, nsph_cap, 3) - gradient of rho (anchor-to-surface distance)
+///   r_iI1_rA  row-major (ngrid_cap, nsph_cap, 3) - gradient of grid-owner distances (optional)
+///   rho1_rA   row-major (ngrid_cap, nsph_cap, 3) - gradient of rho (anchor-to-surface distance) (optional)
+/// The two optional outputs accept NULL. They are computed only for a cavity
+/// built with do_fine; a buffer for one that was not computed is an error and
+/// nothing is written
 moist_API_ENTRY void moist_API_CALL
 moist_get_cavity_gradient(moist_error error,
                           moist_cavity cavity,
@@ -1168,8 +1289,8 @@ moist_get_cavity_gradient(moist_error error,
                           double* asph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
                           double* vsph1_rA /* : row-major (nsph_cap, nsph_cap, 3) */,
                           double* xyz1_rA /* : row-major (ngrid_cap, nsph_cap, 3, 3) */,
-                          double* r_iI1_rA /* : row-major (ngrid_cap, nsph_cap, 3) */,
-                          double* rho1_rA /* : row-major (ngrid_cap, nsph_cap, 3) */) moist_API_SUFFIX__V_1_0;
+                          double* r_iI1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */,
+                          double* rho1_rA /* : row-major (ngrid_cap, nsph_cap, 3), or NULL */) moist_API_SUFFIX__V_1_0;
 
 /// Assemble a Gaussian PCM A-matrix with its nuclear derivatives
 /// Must call moist_compute_cavity_gradient first
@@ -1302,6 +1423,7 @@ moist_contract_pcm_nuclear_gradient(moist_error error,
  */
 #ifndef moist_CFFI
 #ifdef __cplusplus
+inline void moist_delete(moist_context& handle) { moist_delete_context(&handle); }
 inline void moist_delete(moist_error& handle) { moist_delete_error(&handle); }
 inline void moist_delete(moist_structure& handle) { moist_delete_structure(&handle); }
 inline void moist_delete(moist_model& handle) { moist_delete_model(&handle); }
@@ -1313,6 +1435,7 @@ inline void moist_delete(moist_coupling& handle) { moist_delete_coupling(&handle
 inline void moist_delete(moist_response& handle) { moist_delete_response(&handle); }
 #else
 #define moist_delete(handle) _Generic((handle), \
+    moist_context: moist_delete_context, \
     moist_error: moist_delete_error, \
     moist_structure: moist_delete_structure, \
     moist_model: moist_delete_model, \

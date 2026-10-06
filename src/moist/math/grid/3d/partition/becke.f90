@@ -31,7 +31,8 @@ contains
    !> @param[in]  numbers   Atomic numbers, shape (nat)
    !> @param[out] w         Owner weights in [0,1], shape (npts)
    !> @param[in]  stiffness Polynomial iterations >= 1; default 3
-   subroutine becke_partition_weights(owner, points, xyz, numbers, w, stiffness)
+   !> @param[in]  nthreads  Thread count; absent takes omp_get_max_threads
+   subroutine becke_partition_weights(owner, points, xyz, numbers, w, stiffness, nthreads)
       !> Owner index
       integer, intent(in) :: owner
       !> Sample points
@@ -44,11 +45,13 @@ contains
       real(wp), intent(out) :: w(:)
       !> Polynomial iterations
       integer, intent(in), optional :: stiffness
+      !> Thread count
+      integer, intent(in), optional :: nthreads
 
       type(becke_partition_cell) :: cell
 
       if (present(stiffness)) cell%k = stiffness
-      call pair_partition_weights(owner, points, xyz, numbers, w, cell)
+      call pair_partition_weights(owner, points, xyz, numbers, w, cell, nthreads=nthreads)
    end subroutine becke_partition_weights
 
    !> Becke cell with the configured iteration count

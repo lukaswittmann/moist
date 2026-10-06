@@ -6,6 +6,7 @@ module moist_api
    use, intrinsic :: iso_c_binding, only: c_associated, c_bool, c_char, c_double, &
       & c_f_pointer, c_funptr, c_int, c_int8_t, c_int64_t, c_loc, c_null_char, &
       & c_null_ptr, c_ptr, c_size_t, c_sizeof
+   use, intrinsic :: iso_fortran_env, only: iostat_end, iostat_eor
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_structure, only: structure_type, new
    use moist_cavity_type, only: cavity_type
@@ -54,6 +55,14 @@ module moist_api
    integer, parameter :: api_max_cstr = 4096
    !> Longest field name the API will scan for
    integer, parameter :: max_field_name_len = 64
+
+   !> Shared native context retained by its handle and dependent objects
+   type :: vp_context
+      !> Run context borrowed by cavities and models
+      type(moist_context_type) :: ctx
+      !> Owning handle plus dependent cavity and model handles (updated atomically)
+      integer :: references = 1
+   end type vp_context
 
    !> Frozen 1.0 drop layout; a future addition needs a new versioned type
    type, bind(C) :: api_drop_options_v1_0
@@ -199,6 +208,8 @@ module moist_api
    type :: vp_cavity
       !> Run context owned by this handle; the cavity borrows a pointer to it
       type(moist_context_type) :: ctx
+      !> Explicit shared context, retained until this owning handle is deleted
+      type(vp_context), pointer :: shared_ctx => null()
       class(cavity_type), pointer :: ptr => null()
       logical :: owned = .true.
    end type vp_cavity
@@ -214,6 +225,8 @@ module moist_api
       !>   concrete model and on to its components, as the cavity handles below
       !> - torn down in `delete_solvation_model_api`
       type(moist_context_type) :: ctx
+      !> Explicit shared context, retained until this owning handle is deleted
+      type(vp_context), pointer :: shared_ctx => null()
       class(solvation_model_type), allocatable :: ptr
    end type vp_model
 
@@ -256,7 +269,9 @@ module moist_api
    integer(c_int), parameter :: api_invalid_error = 2_c_int
 
    public :: vp_error, vp_structure, vp_cavity, vp_radii, vp_model, vp_component
-   public :: vp_coupling, vp_response
+   public :: vp_coupling, vp_response, vp_context
+   public :: new_context_api, delete_context_api, get_context_num_threads_api
+   public :: create_drop_cavity_context_api, create_iswig_cavity_context_api, create_model_context_api
    public :: get_version_api, get_version_string_api
    public :: new_error_api, check_error_api, get_error_api, delete_error_api
    public :: new_structure_api, delete_structure_api, update_structure_api
@@ -300,6 +315,11 @@ module moist_api
    ! Named fields of a model's evaluation domain
    public :: get_model_field_count_api, get_model_field_info_api, get_model_field_about_api
    public :: get_model_field_real_api, get_model_field_int_api, get_model_field_bool_api
+   ! Components of a continuum model and their named results
+   public :: get_model_component_count_api, get_model_component_name_api
+   public :: get_model_component_description_api, get_model_parameters_text_api
+   public :: get_model_component_field_count_api, get_model_component_field_info_api
+   public :: get_model_component_field_about_api, get_model_component_field_real_api
    ! Named arrays of the current response item and inputs of the current request
    public :: get_response_field_count_api, get_response_field_info_api
    public :: get_response_field_about_api, get_response_field_real_api
@@ -486,6 +506,180 @@ contains
    !* ================================================================================= *!
    !*                              Options and constructors                             *!
    !* ================================================================================= *!
+
+   !> Construct an independently owned run context
+   !>
+   !> @param[in] verror    diagnostic handle
+   !> @param[in] nthreads  OpenMP thread count, fixed for the context's lifetime
+   !> @param[in] verbosity output level
+   !> @param[in] debug     diagnostic flag
+   function new_context_api(verror, nthreads, verbosity, debug) result(handle) bind(C, name=namespace//"new_context")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> OpenMP thread count; 0 takes the calling thread's current OpenMP setting
+      integer(c_int), value, intent(in) :: nthreads
+      !> Output level
+      integer(c_int), value, intent(in) :: verbosity
+      !> Diagnostic flag
+      logical(c_bool), value, intent(in) :: debug
+      !> Owning context handle; NULL on failure
+      type(c_ptr) :: handle
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Constructed context wrapper
+      type(vp_context), pointer :: context
+      !> Allocation status
+      integer :: stat
+
+      handle = c_null_ptr
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (nthreads < 0) then
+         call api_error(error%ptr, "new_context", "Thread count must not be negative - pass 0 for the OpenMP environment")
+         return
+      end if
+      allocate (context, stat=stat)
+      if (stat /= 0) then
+         call api_error(error%ptr, "new_context", "Cannot allocate context")
+         return
+      end if
+      call new_context(context%ctx, nthreads=int(nthreads), verbosity=int(verbosity), debug=logical(debug))
+      handle = c_loc(context)
+   end function new_context_api
+
+   !> Release a context handle; dependent objects retain the shared context
+   !>
+   !> @param[in,out] handle owning handle, cleared on return
+   subroutine delete_context_api(handle) bind(C, name=namespace//"delete_context")
+      !> Owning handle
+      type(c_ptr), intent(inout), optional :: handle
+      !> Context wrapper whose owner reference is released
+      type(vp_context), pointer :: context
+
+      if (.not. present(handle)) return
+      if (.not. c_associated(handle)) return
+      call c_f_pointer(handle, context)
+      call release_shared_context(context)
+      handle = c_null_ptr
+   end subroutine delete_context_api
+
+   !> Read the thread count a context fixed at construction
+   !>
+   !> @param[in] verror   diagnostic handle
+   !> @param[in] handle   context handle
+   !> @param[in,out] nthreads thread count; unchanged on failure
+   subroutine get_context_num_threads_api(verror, handle, nthreads) bind(C, name=namespace//"get_context_num_threads")
+      !> Diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Context handle
+      type(c_ptr), value, intent(in) :: handle
+      !> Thread count
+      integer(c_int), intent(inout), optional :: nthreads
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Decoded context handle
+      type(vp_context), pointer :: context
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. c_associated(handle)) then
+         call api_error(error%ptr, "get_context_num_threads", "Context handle is missing")
+         return
+      end if
+      if (.not. present(nthreads)) then
+         call api_error(error%ptr, "get_context_num_threads", "Required pointer 'nthreads' is missing")
+         return
+      end if
+      call c_f_pointer(handle, context)
+      nthreads = int(context%ctx%get_num_threads(), c_int)
+   end subroutine get_context_num_threads_api
+
+   !> Resolve the run context and retain an explicit shared owner
+   !>
+   !> @param[in] handle    shared context handle; NULL constructs a local context
+   !> @param[in,out] local fallback context owned by the cavity or model
+   !> @param[out] shared  retained shared context wrapper
+   !> @param[in] verbosity fallback output level
+   !> @param[in] debug    fallback diagnostic flag
+   !> @param[out] ctx     context borrowed by the cavity or model
+   subroutine acquire_context(handle, local, shared, verbosity, debug, ctx)
+      !> Shared context handle
+      type(c_ptr), intent(in) :: handle
+      !> Fallback context
+      type(moist_context_type), intent(inout), target :: local
+      !> Retained shared owner
+      type(vp_context), pointer, intent(out) :: shared
+      !> Fallback output level
+      integer, intent(in) :: verbosity
+      !> Fallback diagnostic flag
+      logical, intent(in) :: debug
+      !> Borrowed run context
+      type(moist_context_type), pointer, intent(out) :: ctx
+
+      nullify (shared)
+      if (c_associated(handle)) then
+         call c_f_pointer(handle, shared)
+         !$omp atomic update
+         shared%references = shared%references + 1
+         ctx => shared%ctx
+      else
+         call new_context(local, nthreads=0, verbosity=verbosity, debug=debug)
+         ctx => local
+      end if
+   end subroutine acquire_context
+
+   !> Release a shared context when its last owner disappears
+   !>
+   !> @param[in,out] shared retained context wrapper, disassociated on return
+   subroutine release_shared_context(shared)
+      !> Retained shared owner
+      type(vp_context), pointer, intent(inout) :: shared
+      !> Count after this release; only the thread reaching zero frees
+      integer :: remaining
+
+      if (.not. associated(shared)) return
+      !$omp atomic capture
+      shared%references = shared%references - 1
+      remaining = shared%references
+      !$omp end atomic
+      if (remaining == 0) then
+         call shared%ctx%delete()
+         deallocate (shared)
+      end if
+      nullify (shared)
+   end subroutine release_shared_context
+
+   !> Thread count of a cavity's context; 0 (the OpenMP default) without one
+   !>
+   !> @param[in] cavity cavity whose borrowed context sizes the kernels
+   function cavity_num_threads(cavity) result(nthreads)
+      !> Cavity whose context sizes the kernels
+      class(cavity_type), intent(in) :: cavity
+      !> Thread count; 0 takes the OpenMP default
+      integer :: nthreads
+
+      nthreads = 0
+      if (associated(cavity%ctx)) nthreads = cavity%ctx%get_num_threads()
+   end function cavity_num_threads
+
+   !> Release either the implicit context or a retained shared owner
+   !>
+   !> @param[in,out] local  implicit context
+   !> @param[in,out] shared retained shared context
+   subroutine release_owned_context(local, shared)
+      !> Implicit context
+      type(moist_context_type), intent(inout) :: local
+      !> Retained shared owner
+      type(vp_context), pointer, intent(inout) :: shared
+
+      if (associated(shared)) then
+         call release_shared_context(shared)
+      else
+         call local%delete()
+      end if
+   end subroutine release_owned_context
 
    !> Initialize drop options within the caller's allocation
    subroutine init_drop_options_api(verror, options, bytes) bind(C, name=namespace//"init_drop_options")
@@ -1092,8 +1286,142 @@ contains
       if (stat /= 0) call fatal_error(error, "Cannot copy radii")
    end subroutine read_api_radii
 
+   !> Construct drop cavity with its default context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vlsf constructor input
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   function create_drop_cavity_api(verror, vlsf, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_drop_cavity")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vlsf
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vradii
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_drop_cavity_api(verror, vlsf, vradii, options, c_null_ptr)
+   end function create_drop_cavity_api
+
+
+   !> Construct drop cavity with a shared context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vcontext shared context; NULL selects the default
+   !> @param[in] vlsf constructor input
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   function create_drop_cavity_context_api(verror, vcontext, vlsf, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_drop_cavity_with_context")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Shared context handle
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vlsf
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vradii
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_drop_cavity_api(verror, vlsf, vradii, options, vcontext)
+   end function create_drop_cavity_context_api
+
+
+   !> Construct iswig cavity with its default context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   function create_iswig_cavity_api(verror, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_iswig_cavity")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vradii
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_iswig_cavity_api(verror, vradii, options, c_null_ptr)
+   end function create_iswig_cavity_api
+
+
+   !> Construct iswig cavity with a shared context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vcontext shared context; NULL selects the default
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   function create_iswig_cavity_context_api(verror, vcontext, vradii, options) result(handle) &
+         & bind(C, name=namespace//"new_iswig_cavity_with_context")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Shared context handle
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: vradii
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_iswig_cavity_api(verror, vradii, options, vcontext)
+   end function create_iswig_cavity_context_api
+
+
+   !> Construct model with its default context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] cavity constructor input
+   !> @param[in] options constructor input
+   function create_model_api(verror, cavity, options) result(handle) &
+         & bind(C, name=namespace//"new_model")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: cavity
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_model_api(verror, cavity, options, c_null_ptr)
+   end function create_model_api
+
+
+   !> Construct model with a shared context
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vcontext shared context; NULL selects the default
+   !> @param[in] cavity constructor input
+   !> @param[in] options constructor input
+   function create_model_context_api(verror, vcontext, cavity, options) result(handle) &
+         & bind(C, name=namespace//"new_model_with_context")
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: verror
+      !> Shared context handle
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: cavity
+      !> Constructor input
+      type(c_ptr), value, intent(in) :: options
+      !> Owning result handle; NULL on failure
+      type(c_ptr) :: handle
+      handle = construct_model_api(verror, cavity, options, vcontext)
+   end function create_model_context_api
+
    !> Construct a drop cavity from copied configuration
-   function create_drop_cavity_api(verror, vlsf, vradii, options) result(handle) bind(C, name=namespace//"new_drop_cavity")
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vlsf constructor input
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   !> @param[in] vcontext constructor input
+   function construct_drop_cavity_api(verror, vlsf, vradii, options, vcontext) result(handle)
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Level-set function handle, copied into the cavity
@@ -1103,9 +1431,14 @@ contains
       type(c_ptr), value, intent(in) :: vradii
       !> Optional settings; NULL selects compiled defaults
       type(c_ptr), value, intent(in) :: options
+      !> Optional shared context; NULL selects an implicit context
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
       type(vp_cavity), pointer :: cav
+      !> Context borrowed by the constructed cavity
+      type(moist_context_type), pointer :: ctx
       type(api_drop_options_v1_0) :: o
       class(radius_type), allocatable :: radii
       integer :: stat
@@ -1141,10 +1474,10 @@ contains
          call api_error(error%ptr, "new_drop_cavity", "Cannot allocate cavity")
          return
       end if
-      call new_context(cav%ctx, verbosity=int(o%verbosity), debug=logical(o%debug))
+      call acquire_context(vcontext, cav%ctx, cav%shared_ctx, int(o%verbosity), logical(o%debug), ctx)
       select type (item => cav%ptr)
       type is (cavity_type_drop)
-         call new_cavity_drop(item, cav%ctx, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
+         call new_cavity_drop(item, ctx, radius_model=radii, error=error%ptr, lsf_model=lsf%ptr, &
                               param=moist_cavity_drop_parameters_type(num_leb=int(o%nleb), tolerance=real(o%tolerance, wp), &
                                        do_fine=logical(o%do_fine), proj_maxiter=int(o%proj_maxiter), proj_level=int(o%proj_level), &
                                                    branch_weight_s=real(o%branch_weight_s, wp), rho_grid_h=real(o%rho_grid_h, wp), &
@@ -1153,24 +1486,34 @@ contains
       call prefix_api_error(error%ptr, "new_drop_cavity")
       if (allocated(error%ptr)) then
          if (associated(cav%ptr)) deallocate (cav%ptr)
-         call cav%ctx%delete()
+         call release_owned_context(cav%ctx, cav%shared_ctx)
          deallocate (cav)
          return
       end if
       handle = c_loc(cav)
-   end function create_drop_cavity_api
+   end function construct_drop_cavity_api
 
    !> Construct a iswig cavity from copied configuration
-   function create_iswig_cavity_api(verror, vradii, options) result(handle) bind(C, name=namespace//"new_iswig_cavity")
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] vradii constructor input
+   !> @param[in] options constructor input
+   !> @param[in] vcontext constructor input
+   function construct_iswig_cavity_api(verror, vradii, options, vcontext) result(handle)
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Radii handle; NULL selects defaults in constructors
       type(c_ptr), value, intent(in) :: vradii
       !> Optional settings; NULL selects compiled defaults
       type(c_ptr), value, intent(in) :: options
+      !> Optional shared context; NULL selects an implicit context
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
       type(vp_cavity), pointer :: cav
+      !> Context borrowed by the constructed cavity
+      type(moist_context_type), pointer :: ctx
       type(api_iswig_options_v1_0) :: o
       class(radius_type), allocatable :: radii
       integer :: stat
@@ -1192,31 +1535,39 @@ contains
          call api_error(error%ptr, "new_iswig_cavity", "Cannot allocate cavity")
          return
       end if
-      call new_context(cav%ctx, verbosity=int(o%verbosity), debug=logical(o%debug))
+      call acquire_context(vcontext, cav%ctx, cav%shared_ctx, int(o%verbosity), logical(o%debug), ctx)
       select type (item => cav%ptr)
       type is (cavity_type_iswig)
-         call new_cavity_iswig(item, cav%ctx, radius_model=radii, error=error%ptr, &
+         call new_cavity_iswig(item, ctx, radius_model=radii, error=error%ptr, &
                                param=moist_cavity_iswig_parameters_type(num_leb=int(o%nleb), cut_a=real(o%cut_a, wp), &
                                                                         cut_f=real(o%cut_f, wp)))
       end select
       call prefix_api_error(error%ptr, "new_iswig_cavity")
       if (allocated(error%ptr)) then
          if (associated(cav%ptr)) deallocate (cav%ptr)
-         call cav%ctx%delete()
+         call release_owned_context(cav%ctx, cav%shared_ctx)
          deallocate (cav)
          return
       end if
       handle = c_loc(cav)
-   end function create_iswig_cavity_api
+   end function construct_iswig_cavity_api
 
-   !> Create a model with an owned cavity copy and optional logging settings
-   function create_model_api(verror, cavity, options) result(handle) bind(C, name=namespace//"new_model")
+   !> Create a model with an owned cavity copy and optional run settings
+   !>
+   !> @param[in] verror constructor input
+   !> @param[in] cavity constructor input
+   !> @param[in] options constructor input
+   !> @param[in] vcontext constructor input
+   function construct_model_api(verror, cavity, options, vcontext) result(handle)
       !> Diagnostic handle
       type(c_ptr), value, intent(in) :: verror
       !> Cavity handle, copied into the model
       type(c_ptr), value, intent(in) :: cavity
       !> Optional settings; NULL selects compiled defaults
       type(c_ptr), value, intent(in) :: options
+      !> Optional shared context; NULL selects an implicit context
+      type(c_ptr), value, intent(in) :: vcontext
+      !> Owning result handle; NULL on failure
       type(c_ptr) :: handle
       type(vp_error), pointer :: error
       type(api_model_options_v1_0) :: o
@@ -1227,8 +1578,8 @@ contains
       call read_model_options(options, o, error%ptr)
       call prefix_api_error(error%ptr, "new_model")
       if (allocated(error%ptr)) return
-      handle = new_general_solvation_model_api(verror, cavity, o%debug, o%verbosity)
-   end function create_model_api
+      handle = new_general_solvation_model_api(verror, cavity, o%debug, o%verbosity, vcontext)
+   end function construct_model_api
 
    !> Create a cpcm component with optional solver settings
    function create_cpcm_component_api(verror, epsilon, options) result(handle) bind(C, name=namespace//"new_cpcm_component")
@@ -1762,7 +2113,7 @@ contains
          call c_f_pointer(vmodel, model)
 
          if (allocated(model%ptr)) deallocate (model%ptr)
-         call model%ctx%delete()
+         call release_owned_context(model%ctx, model%shared_ctx)
          deallocate (model)
          vmodel = c_null_ptr
       end if
@@ -1815,7 +2166,8 @@ contains
    !> Get a borrowed cavity handle from a solvation model
    !>
    !> - NOT owned by the caller; independent cavity-update entry points reject it
-   !> - moist_delete_cavity releases only the borrowed wrapper
+   !> - retains the model's shared context, which a model built from it inherits
+   !> - moist_delete_cavity releases only the borrowed wrapper and its context reference
    !> - valid as long as the parent model exists
    function get_solvation_model_cavity_api(verror, vmodel) result(vcav) &
          & bind(C, name=namespace//"get_model_cavity")
@@ -1856,6 +2208,12 @@ contains
       allocate (cav)
       cav%ptr => cavity_ptr
       cav%owned = .false.
+      ! Retain the parent's shared context, so a model built from this handle inherits it
+      if (associated(model%shared_ctx)) then
+         cav%shared_ctx => model%shared_ctx
+         !$omp atomic update
+         cav%shared_ctx%references = cav%shared_ctx%references + 1
+      end if
       vcav = c_loc(cav)
 
    end function get_solvation_model_cavity_api
@@ -1915,7 +2273,7 @@ contains
       call c_f_pointer(verror, error)
 
       allocate (component)
-      call new_context(component%ctx, verbosity=0, debug=.false.)
+      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
       if (use_cosmo) then
          allocate (model_continuum_component_cosmo :: item)
          select type (pcm => item)
@@ -2004,7 +2362,7 @@ contains
       if (allocated(error%ptr)) deallocate (error%ptr)
 
       allocate (component)
-      call new_context(component%ctx, verbosity=0, debug=.false.)
+      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
       call new_component_pv(item, real(pressure, wp))
       item%ctx => component%ctx
       allocate (component%ptr, source=item)
@@ -2039,7 +2397,7 @@ contains
       if (allocated(error%ptr)) deallocate (error%ptr)
 
       allocate (component)
-      call new_context(component%ctx, verbosity=0, debug=.false.)
+      call new_context(component%ctx, nthreads=0, verbosity=0, debug=.false.)
       call new_component_gostshyp(item, real(pressure, wp))
       item%ctx => component%ctx
       allocate (component%ptr, source=item)
@@ -2067,7 +2425,13 @@ contains
    end subroutine delete_solvation_component_api
 
    !> Create a continuum solvation model around an owned copy of a cavity
-   function new_general_solvation_model_api(verror, vcavity, c_debug, c_verbose) result(vmodel)
+   !>
+   !> @param[in] verror    diagnostic handle
+   !> @param[in] vcavity   cavity handle copied into the model
+   !> @param[in] c_debug  diagnostic flag
+   !> @param[in] c_verbose output level
+   !> @param[in] vcontext  shared context; NULL or absent inherits the cavity context
+   function new_general_solvation_model_api(verror, vcavity, c_debug, c_verbose, vcontext) result(vmodel)
       !> Error handle
       type(c_ptr), value :: verror
       !> Source cavity handle
@@ -2076,6 +2440,8 @@ contains
       logical(c_bool), value :: c_debug
       !> Verbosity level
       integer(c_int), value :: c_verbose
+      !> Optional shared context handle
+      type(c_ptr), value, intent(in), optional :: vcontext
       !> New model handle
       type(c_ptr) :: vmodel
       !> Decoded error wrapper
@@ -2088,6 +2454,10 @@ contains
       type(model_continuum_type) :: continuum
       !> Constructor error
       type(error_type), allocatable :: model_error
+      !> Context borrowed by the model and its cavity copy
+      type(moist_context_type), pointer :: ctx
+      !> Explicit context, or the source cavity context when one exists
+      type(c_ptr) :: chosen_context
 
       vmodel = c_null_ptr
       if (.not. c_associated(verror)) return
@@ -2104,11 +2474,16 @@ contains
       end if
 
       allocate (model)
-      call new_context(model%ctx, verbosity=int(c_verbose), debug=logical(c_debug))
-      call new_continuum_model(continuum, cavity%ptr, model%ctx, model_error)
+      chosen_context = c_null_ptr
+      if (present(vcontext)) chosen_context = vcontext
+      if (.not. c_associated(chosen_context) .and. associated(cavity%shared_ctx)) then
+         chosen_context = c_loc(cavity%shared_ctx)
+      end if
+      call acquire_context(chosen_context, model%ctx, model%shared_ctx, int(c_verbose), logical(c_debug), ctx)
+      call new_continuum_model(continuum, cavity%ptr, ctx, model_error)
       if (allocated(model_error)) then
          call api_error(error%ptr, "new_model", model_error%message)
-         call model%ctx%delete()
+         call release_owned_context(model%ctx, model%shared_ctx)
          deallocate (model)
          return
       end if
@@ -3178,7 +3553,8 @@ contains
 
          ! Generic Gaussian surface-charge interaction matrix
          allocate (amat0_local(ngrid, ngrid))
-         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat0_local, cavity_error)
+         call assemble_pcm_amat(cavity%xi0, cavity%f, cavity%xyz, amat0_local, cavity_error, &
+                                nthreads=cavity_num_threads(cavity))
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "assemble_amat", cavity_error%message)
             return
@@ -4258,6 +4634,434 @@ contains
    end function fetch_model_field
 
    !* ================================================================================= *!
+   !*                         Continuum model components (Tier 2)                       *!
+   !* ================================================================================= *!
+
+   !> Number of components of a continuum model
+   !>
+   !> - in the order they were added; no update is required
+   !> - a model of another family is refused
+   subroutine get_model_component_count_api(verror, vmodel, ncomponents) &
+         & bind(C, name=namespace//"get_model_component_count")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Number of components
+      integer(c_int), intent(inout), optional :: ncomponents
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(ncomponents)) then
+         call api_error(error%ptr, "get_model_component_count", "Required pointer 'ncomponents' is missing")
+         return
+      end if
+      call api_continuum_model(vmodel, "get_model_component_count", continuum, error%ptr)
+      if (allocated(error%ptr)) return
+      ncomponents = int(continuum%component_count(), c_int)
+
+   end subroutine get_model_component_count_api
+
+   !> Copy a component name or query its full length
+   !>
+   !> A component added twice repeats its name; the index tells them apart
+   subroutine get_model_component_name_api(verror, vmodel, icomponent, name, capacity, length) &
+         & bind(C, name=namespace//"get_model_component_name")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> Zero-based component index
+      integer(c_int), value, intent(in) :: icomponent
+      !> Caller-owned name buffer
+      character(kind=c_char), intent(inout), optional :: name(*)
+      !> Name buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Component name
+      character(len=:), allocatable :: text
+
+      if (.not. valid_string_output(verror, name, capacity, length, "get_model_component_name", error)) return
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_name", &
+         & error, continuum)) return
+      call continuum%component_name(icomponent + 1, text)
+      call copy_string_output(text, name, capacity, length)
+   end subroutine get_model_component_name_api
+
+   !> Copy a component description or query its full length
+   subroutine get_model_component_description_api(verror, vmodel, icomponent, description, capacity, length) &
+         & bind(C, name=namespace//"get_model_component_description")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> Zero-based component index
+      integer(c_int), value, intent(in) :: icomponent
+      !> Caller-owned description buffer
+      character(kind=c_char), intent(inout), optional :: description(*)
+      !> Description buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Component description
+      character(len=:), allocatable :: text
+
+      if (.not. valid_string_output(verror, description, capacity, length, &
+         & "get_model_component_description", error)) return
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_description", &
+         & error, continuum)) return
+      call continuum%component_description(icomponent + 1, text)
+      call copy_string_output(text, description, capacity, length)
+   end subroutine get_model_component_description_api
+
+   !> Number of named results of one component
+   !>
+   !> A result that was not computed is not listed: `energy` appears after a
+   !> successful evaluation and is gone again after an update
+   subroutine get_model_component_field_count_api(verror, vmodel, icomponent, nfield) &
+         & bind(C, name=namespace//"get_model_component_field_count")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Zero-based component index
+      integer(c_int), value :: icomponent
+      !> Number of available fields
+      integer(c_int), intent(inout), optional :: nfield
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(nfield)) then
+         call api_error(error%ptr, "get_model_component_field_count", "Required pointer 'nfield' is missing")
+         return
+      end if
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_field_count", &
+         & error, continuum)) return
+
+      call query%enumerate()
+      call continuum%list_component_fields(icomponent + 1, query)
+      nfield = query%nfield
+
+   end subroutine get_model_component_field_count_api
+
+   !> Describe one result of a component by position
+   !>
+   !> Same outputs as `get_cavity_field_info`
+   subroutine get_model_component_field_info_api(verror, vmodel, icomponent, ifield, name, &
+         & dtype, rank, dims, count) &
+         & bind(C, name=namespace//"get_model_component_field_info")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Zero-based component index
+      integer(c_int), value :: icomponent
+      !> Zero-based field index
+      integer(c_int), value :: ifield
+      !> Field name buffer
+      character(kind=c_char), intent(inout), optional :: name(*)
+      !> Field scalar type selector
+      integer(c_int), intent(inout), optional :: dtype
+      !> Number of field dimensions
+      integer(c_int), intent(inout), optional :: rank
+      !> Field dimensions
+      integer(c_int), intent(inout), optional :: dims(field_max_rank)
+      !> Number of available entries
+      integer(c_int), intent(inout), optional :: count
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Result staged until the operation succeeds
+      integer(c_int) :: local_dtype, local_rank, local_count
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(name)) then
+         call api_error(error%ptr, "get_model_component_field_info", "Required pointer 'name' is missing")
+         return
+      end if
+      if (.not. present(dtype)) then
+         call api_error(error%ptr, "get_model_component_field_info", "Required pointer 'dtype' is missing")
+         return
+      end if
+      if (.not. present(rank)) then
+         call api_error(error%ptr, "get_model_component_field_info", "Required pointer 'rank' is missing")
+         return
+      end if
+      if (.not. present(dims)) then
+         call api_error(error%ptr, "get_model_component_field_info", "Required pointer 'dims' is missing")
+         return
+      end if
+      if (.not. present(count)) then
+         call api_error(error%ptr, "get_model_component_field_info", "Required pointer 'count' is missing")
+         return
+      end if
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_field_info", &
+         & error, continuum)) return
+
+      call query%enumerate()
+      call continuum%list_component_fields(icomponent + 1, query)
+      if (.not. describe_field(error, query, ifield, "get_model_component_field_info", &
+         & "get_model_component_field_count", name, dims, local_dtype, local_rank, local_count)) return
+      dtype = local_dtype
+      rank = local_rank
+      count = local_count
+
+   end subroutine get_model_component_field_info_api
+
+   !> Copy a component result description or query its full length
+   subroutine get_model_component_field_about_api(verror, vmodel, icomponent, cname, about, capacity, length) &
+         & bind(C, name=namespace//"get_model_component_field_about")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> Zero-based component index
+      integer(c_int), value, intent(in) :: icomponent
+      !> NUL-terminated field name
+      type(c_ptr), value, intent(in) :: cname
+      !> Caller-owned description buffer
+      character(kind=c_char), intent(inout), optional :: about(*)
+      !> Description buffer capacity including terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Full text length excluding the terminator
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Field metadata and payload
+      type(field_query_type) :: query
+
+      if (.not. valid_string_output(verror, about, capacity, length, "get_model_component_field_about", error)) return
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_field_about", &
+         & error, continuum)) return
+      if (.not. fetch_component_field(error, continuum, icomponent, cname, &
+         & "get_model_component_field_about", query)) return
+      call copy_string_output(query%hit%about, about, capacity, length)
+   end subroutine get_model_component_field_about_api
+
+   !> Read a real-valued component result by name
+   !>
+   !> Receives the `count` elements `get_model_component_field_info` reports
+   subroutine get_model_component_field_real_api(verror, vmodel, icomponent, cname, values) &
+         & bind(C, name=namespace//"get_model_component_field_real")
+      !> Required diagnostic handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Zero-based component index
+      integer(c_int), value :: icomponent
+      !> NUL-terminated field name
+      type(c_ptr), value :: cname
+      !> Packed field values
+      real(c_double), intent(inout), optional :: values(*)
+      !> Decoded error handle for argument validation
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Field walker
+      type(field_query_type) :: query
+
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      if (allocated(error%ptr)) deallocate (error%ptr)
+      if (.not. present(values)) then
+         call api_error(error%ptr, "get_model_component_field_real", "Required pointer 'values' is missing")
+         return
+      end if
+      if (.not. resolve_model_component(verror, vmodel, icomponent, "get_model_component_field_real", &
+         & error, continuum)) return
+      if (.not. fetch_component_field(error, continuum, icomponent, cname, &
+         & "get_model_component_field_real", query)) return
+      if (.not. check_field_payload(error, query, field_real, &
+         & "get_model_component_field_real", "get_model_component_field_info")) return
+
+      values(:size(query%rvals)) = query%rvals
+
+   end subroutine get_model_component_field_real_api
+
+   !> Resolve the error and model handles and a component index
+   !>
+   !> @return Whether the model is a continuum model holding the 0-based index
+   logical function resolve_model_component(verror, vmodel, icomponent, origin, error, continuum) result(ok)
+      !> Error handle
+      type(c_ptr), value :: verror
+      !> Model handle
+      type(c_ptr), value :: vmodel
+      !> Zero-based component index
+      integer(c_int), intent(in) :: icomponent
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(out) :: error
+      !> Continuum model
+      type(model_continuum_type), pointer, intent(out) :: continuum
+
+      ok = .false.
+      nullify (error)
+      nullify (continuum)
+      if (.not. c_associated(verror)) return
+      call c_f_pointer(verror, error)
+      call api_continuum_model(vmodel, origin, continuum, error%ptr)
+      if (allocated(error%ptr)) return
+      if (icomponent < 0 .or. icomponent >= continuum%component_count()) then
+         call api_error(error%ptr, origin, "Component index out of range - use the count from get_model_component_count")
+         return
+      end if
+      ok = .true.
+
+   end function resolve_model_component
+
+   !> Look one named result up on a component
+   !>
+   !> @return Whether the component declares the result
+   logical function fetch_component_field(error, continuum, icomponent, cname, origin, query) result(ok)
+      !> Fortran error pointer
+      type(vp_error), pointer, intent(in) :: error
+      !> Continuum model
+      type(model_continuum_type), pointer, intent(in) :: continuum
+      !> Zero-based component index
+      integer(c_int), intent(in) :: icomponent
+      !> Field name as a C string
+      type(c_ptr), value :: cname
+      !> Entry point name used in error messages
+      character(len=*), intent(in) :: origin
+      !> Query walker
+      type(field_query_type), intent(inout) :: query
+      !> Decoded field name
+      character(len=:, kind=c_char), allocatable :: name
+      !> Component name for the diagnostic
+      character(len=:), allocatable :: component
+      !> Zero-based index as text
+      character(len=12) :: label
+
+      ok = .false.
+      if (.not. decode_field_name(error, cname, origin, name)) return
+      call query%fetch(name)
+      call continuum%list_component_fields(icomponent + 1, query)
+      if (.not. query%found) then
+         call continuum%component_name(icomponent + 1, component)
+         write (label, "(i0)") icomponent
+         call report_missing_field(error, origin, "Component "//trim(label)//" ("//component//")", &
+            & "model_component", name)
+         return
+      end if
+      ok = .true.
+
+   end function fetch_component_field
+
+   !* ================================================================================= *!
+   !*                           Continuum model parameter text                          *!
+   !* ================================================================================= *!
+
+   !> Copy the parameter printout of a continuum model or query its length
+   !>
+   !> The cavity section, then every component; the host decides where to print
+   subroutine get_model_parameters_text_api(verror, vmodel, buffer, capacity, length) &
+         & bind(C, name=namespace//"get_model_parameters_text")
+      !> Required diagnostic handle
+      type(c_ptr), value, intent(in) :: verror
+      !> Model handle
+      type(c_ptr), value, intent(in) :: vmodel
+      !> Output buffer; NULL is allowed only with zero capacity
+      character(kind=c_char), intent(inout), optional :: buffer(*)
+      !> Buffer capacity in bytes, including the terminator
+      integer(c_size_t), value, intent(in) :: capacity
+      !> Required text length excluding the terminator; unchanged on error
+      integer(c_size_t), intent(inout), optional :: length
+      !> Decoded diagnostic handle
+      type(vp_error), pointer :: error
+      !> Continuum model
+      type(model_continuum_type), pointer :: continuum
+      !> Rendered printout
+      character(len=:), allocatable :: text
+
+      if (.not. valid_string_output(verror, buffer, capacity, length, "get_model_parameters_text", error)) return
+      call api_continuum_model(vmodel, "get_model_parameters_text", continuum, error%ptr)
+      if (allocated(error%ptr)) return
+      call render_model_parameters(continuum, text, error%ptr)
+      call prefix_api_error(error%ptr, "get_model_parameters_text")
+      if (allocated(error%ptr)) return
+      call copy_string_output(text, buffer, capacity, length)
+   end subroutine get_model_parameters_text_api
+
+   !> Render the parameter printout of a continuum model as text
+   !>
+   !> Prints into a scratch unit, then joins its lines, each ending in a newline
+   !>
+   !> @param[in]  continuum Continuum model
+   !> @param[out] text      Printout, unallocated on error
+   !> @param[out] error     Scratch-unit failure
+   subroutine render_model_parameters(continuum, text, error)
+      !> Continuum model
+      type(model_continuum_type), intent(in), target :: continuum
+      !> Printout
+      character(len=:), allocatable, intent(out) :: text
+      !> Scratch-unit failure
+      type(error_type), allocatable, intent(out) :: error
+      !> Scratch unit, I/O status and characters of the last read
+      integer :: unit, stat, nread
+      !> Line being joined from its chunks
+      character(len=:), allocatable :: line
+      !> One chunk of a record
+      character(len=256) :: chunk
+      !> I/O diagnostic
+      character(len=256) :: message
+
+      open (newunit=unit, status="scratch", action="readwrite", form="formatted", &
+         & iostat=stat, iomsg=message)
+      if (stat /= 0) then
+         call fatal_error(error, "Cannot open a scratch unit: "//trim(message))
+         return
+      end if
+      call continuum%print_parameters(unit)
+      rewind (unit)
+      text = ""
+      records: do
+         line = ""
+         do
+            read (unit, "(a)", advance="no", iostat=stat, size=nread) chunk
+            line = line//chunk(:nread)
+            if (stat /= 0) exit
+         end do
+         if (stat == iostat_end) exit records
+         if (stat /= iostat_eor) then
+            call fatal_error(error, "Cannot read the scratch unit")
+            exit records
+         end if
+         text = text//line//new_line("a")
+      end do records
+      close (unit)
+      if (allocated(error)) deallocate (text)
+   end subroutine render_model_parameters
+
+   !* ================================================================================= *!
    !*                       Named response item and request fields                      *!
    !* ================================================================================= *!
 
@@ -4747,13 +5551,6 @@ contains
          return
       end if
 
-      ! Enable optional gradient arrays required by get_cavity_gradient
-      select type (c => cav%ptr)
-      type is (cavity_type_drop)
-         c%request%r_iI = .true.
-         c%request%rho = .true.
-      end select
-
       ! Call the deferred get_gradient procedure
       call cav%ptr%get_gradient(cavity_error)
       if (allocated(cavity_error)) then
@@ -4934,8 +5731,10 @@ contains
    !>   asph1_rA(3, nsph, nsph)      - gradient of per-sphere areas
    !>   vsph1_rA(3, nsph, nsph)      - gradient of per-sphere volumes
    !>   xyz1_rA(3, 3, nsph, ngrid) - grid point position derivatives (j, alpha, A, grid)
-   !>   r_iI1_rA(3, nsph, ngrid)     - gradient of grid-owner distances
-   !>   rho1_rA(3, nsph, ngrid)      - gradient of rho values
+   !>   r_iI1_rA(3, nsph, ngrid)     - gradient of grid-owner distances, optional
+   !>   rho1_rA(3, nsph, ngrid)      - gradient of rho values, optional
+   !> - the two optional outputs accept NULL; a buffer for one the cavity did
+   !>   not compute (no `do_fine`) is an error and nothing is written
    subroutine get_cavity_gradient_api(verror, vcav, nsph_cap, ngrid_cap, &
          & A_tot1_rA, V_tot1_rA, asph1_rA, vsph1_rA, &
          & xyz1_rA, r_iI1_rA, rho1_rA) &
@@ -4958,9 +5757,9 @@ contains
       real(c_double), intent(inout), optional :: vsph1_rA(3, nsph_cap, nsph_cap)
       !> Surface-position derivatives with respect to nuclear coordinates
       real(c_double), intent(inout), optional :: xyz1_rA(3, 3, nsph_cap, ngrid_cap)
-      !> Point-to-atom displacement derivatives
+      !> Point-to-atom displacement derivatives; NULL skips them, only computed with `do_r_iI`
       real(c_double), intent(inout), optional :: r_iI1_rA(3, nsph_cap, ngrid_cap)
-      !> Radial-distance derivatives with respect to nuclear coordinates
+      !> Radial-distance derivatives; NULL skips them, only computed with `do_rho`
       real(c_double), intent(inout), optional :: rho1_rA(3, nsph_cap, ngrid_cap)
       !> Decoded error handle for argument validation
       type(vp_error), pointer :: error
@@ -4988,14 +5787,6 @@ contains
       end if
       if (.not. present(xyz1_rA)) then
          call api_error(error%ptr, "get_cavity_gradient", "Required pointer 'xyz1_rA' is missing")
-         return
-      end if
-      if (.not. present(r_iI1_rA)) then
-         call api_error(error%ptr, "get_cavity_gradient", "Required pointer 'r_iI1_rA' is missing")
-         return
-      end if
-      if (.not. present(rho1_rA)) then
-         call api_error(error%ptr, "get_cavity_gradient", "Required pointer 'rho1_rA' is missing")
          return
       end if
       if (.not. c_associated(vcav)) then
@@ -5028,14 +5819,26 @@ contains
             return
          end if
 
+         ! The two optional outputs exist only when the cavity was asked for them
+         if (present(r_iI1_rA) .and. .not. allocated(cavity%r_iI1_rA)) then
+            call api_error(error%ptr, "get_cavity_gradient", &
+                           "r_iI1_rA was not computed - construct the cavity with do_fine, or pass NULL")
+            return
+         end if
+         if (present(rho1_rA) .and. .not. allocated(cavity%rho1_rA)) then
+            call api_error(error%ptr, "get_cavity_gradient", &
+                           "rho1_rA was not computed - construct the cavity with do_fine, or pass NULL")
+            return
+         end if
+
          ! Copy gradient arrays
          A_tot1_rA(:, :nsph) = cavity%A_tot1_rA(:, :)
          V_tot1_rA(:, :nsph) = cavity%V_tot1_rA(:, :)
          asph1_rA(:, :nsph, :nsph) = cavity%asph1_rA(:, :, :)
          vsph1_rA(:, :nsph, :nsph) = cavity%vsph1_rA(:, :, :)
          xyz1_rA(:, :, :nsph, :ngrid) = cavity%xyz1_rA(:, :, :, :)
-         r_iI1_rA(:, :nsph, :ngrid) = cavity%r_iI1_rA(:, :, :)
-         rho1_rA(:, :nsph, :ngrid) = cavity%rho1_rA(:, :, :)
+         if (present(r_iI1_rA)) r_iI1_rA(:, :nsph, :ngrid) = cavity%r_iI1_rA(:, :, :)
+         if (present(rho1_rA)) rho1_rA(:, :nsph, :ngrid) = cavity%rho1_rA(:, :, :)
 
       class default
          call api_error(error%ptr, "get_cavity_gradient", &
@@ -5129,7 +5932,8 @@ contains
          allocate (Amat0_f(ngrid, ngrid), Amat1_rA_f(3, nsph, ngrid, ngrid))
          call assemble_pcm_amat_with_gradient(cavity%xi0, cavity%f, cavity%xyz, &
                                               cavity%xi1_rA, cavity%f1_rA, cavity%xyz1_rA, &
-                                              Amat0_f, Amat1_rA_f, cavity_error)
+                                              Amat0_f, Amat1_rA_f, cavity_error, &
+                                              nthreads=cavity_num_threads(cavity))
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "get_amat_gradient", cavity_error%message)
             return
@@ -5209,11 +6013,13 @@ contains
 
             allocate (w_xi(ngrid), w_f(ngrid), w_xyz(3, ngrid))
             call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, &
-                                          q1, q2, w_xi, w_f, w_xyz, cavity_error)
+                                          q1, q2, w_xi, w_f, w_xyz, cavity_error, &
+                                          nthreads=cavity_num_threads(cavity))
             if (.not. allocated(cavity_error)) then
                call pcm_amat_nuclear_gradient(cavity%xi1_rA, cavity%f1_rA, &
                                               cavity%xyz1_rA, w_xi, w_f, w_xyz, &
-                                              grad_rA, cavity_error)
+                                              grad_rA, cavity_error, &
+                                              nthreads=cavity_num_threads(cavity))
             end if
          end block
          if (allocated(cavity_error)) then
@@ -5294,7 +6100,8 @@ contains
          call c_f_pointer(c_w_xyz, w_xyz, [3, ngrid])
 
          call pcm_amat_surface_weights(cavity%xi0, cavity%f, cavity%xyz, &
-                                       q1, q2, w_xi, w_f, w_xyz, cavity_error)
+                                       q1, q2, w_xi, w_f, w_xyz, cavity_error, &
+                                       nthreads=cavity_num_threads(cavity))
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "contract_amat1_q1q2_surface_weights", cavity_error%message)
             return
@@ -5530,7 +6337,8 @@ contains
 
          call pcm_electrostatic_nuclear_gradient(cavity%xyz, cavity%sphxyz, &
                                                  cavity%xyz1_rA, w_phi, w_xyz, za, &
-                                                 grad_rA, cavity_error)
+                                                 grad_rA, cavity_error, &
+                                                 nthreads=cavity_num_threads(cavity))
          if (allocated(cavity_error)) then
             call api_error(error%ptr, "contract_pcm_nuclear_gradient", cavity_error%message)
             return
@@ -5551,7 +6359,7 @@ contains
          call c_f_pointer(vcav, cav)
          if (cav%owned .and. associated(cav%ptr)) deallocate (cav%ptr)
          nullify (cav%ptr)
-         call cav%ctx%delete()
+         call release_owned_context(cav%ctx, cav%shared_ctx)
          deallocate (cav)
          vcav = c_null_ptr
       end if

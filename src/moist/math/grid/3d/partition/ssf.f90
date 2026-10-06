@@ -31,7 +31,8 @@ contains
    !> @param[in] numbers Atomic numbers, shape (nat)
    !> @param[out] w Owner weights in [0,1], shape (npts)
    !> @param[in] a Switching half-width in (0,1]; default 0.64
-   subroutine ssf_partition_weights(owner, points, xyz, numbers, w, a)
+   !> @param[in] nthreads Thread count; absent takes omp_get_max_threads
+   subroutine ssf_partition_weights(owner, points, xyz, numbers, w, a, nthreads)
       !> Owner index
       integer, intent(in) :: owner
       !> Sample points
@@ -44,11 +45,13 @@ contains
       real(wp), intent(out) :: w(:)
       !> Switching half-width
       real(wp), intent(in), optional :: a
+      !> Thread count
+      integer, intent(in), optional :: nthreads
 
       type(ssf_partition_cell) :: cell
 
       if (present(a)) cell%width = a
-      call pair_partition_weights(owner, points, xyz, numbers, w, cell)
+      call pair_partition_weights(owner, points, xyz, numbers, w, cell, nthreads=nthreads)
    end subroutine ssf_partition_weights
 
    !> SSF cell with the configured switching width

@@ -80,6 +80,7 @@ test_selected = {
     'molecular_nufft_type12_threaded',
     'molecular_nufft_type3_threaded',
     'radial_trafo_one_per_thread',
+    'grid_thread_count_override',
   ],
   'math_grid_3d_partition': [
     'compact_switches',

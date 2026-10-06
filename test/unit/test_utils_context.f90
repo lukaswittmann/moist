@@ -25,7 +25,7 @@ contains
                   new_unittest("threads_default", test_threads_default), &
                   new_unittest("threads_explicit", test_threads_explicit), &
                   new_unittest("threads_fixed", test_threads_fixed), &
-                  new_unittest("threads_set_runtime", test_threads_set_runtime), &
+                  new_unittest("threads_leave_runtime", test_threads_leave_runtime), &
                   new_unittest("owned_logfile", test_owned_logfile), &
                   new_unittest("print_settings_runs", test_print_settings_runs), &
                   new_unittest("debug_message_gated", test_debug_message_gated), &
@@ -187,15 +187,10 @@ contains
    subroutine test_threads_explicit(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
-      !> Environment thread budget, restored for later tests on this thread
-      integer :: baseline
 
-      baseline = 1
-!$    baseline = omp_get_max_threads()
       call new_context(ctx, nthreads=1)
       call check(error, ctx%get_num_threads() == 1, "explicit nthreads=1 applied")
       call ctx%delete()
-!$    call omp_set_num_threads(baseline)
    end subroutine test_threads_explicit
 
    !> The thread count is fixed at construction: an unset count takes the
@@ -221,10 +216,9 @@ contains
       call check(error, ok, "unset count resolved once at construction")
    end subroutine test_threads_fixed
 
-   !> An explicit count is applied to this host thread's OpenMP runtime: the
-   !> last context constructed wins, each context keeps reporting its own count,
-   !> and deleting a context does not restore the setting
-   subroutine test_threads_set_runtime(error)
+   !> Explicit counts leave the host's OpenMP runtime untouched: each context
+   !> reports its own count and the runtime keeps its setting throughout
+   subroutine test_threads_leave_runtime(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: first, second
       !> Environment thread budget and the runtime seen while contexts live
@@ -234,21 +228,15 @@ contains
       baseline = 1
 !$    baseline = omp_get_max_threads()
       call new_context(first, nthreads=baseline + 1)
-      runtime = baseline + 1
-!$    runtime = omp_get_max_threads()
-      ok = runtime == baseline + 1
       call new_context(second, nthreads=baseline + 2)
-      runtime = baseline + 2
+      runtime = baseline
 !$    runtime = omp_get_max_threads()
-      ok = ok .and. runtime == baseline + 2 .and. first%get_num_threads() == baseline + 1 .and. &
+      ok = runtime == baseline .and. first%get_num_threads() == baseline + 1 .and. &
          & second%get_num_threads() == baseline + 2
       call first%delete()
       call second%delete()
-!$    runtime = omp_get_max_threads()
-      ok = ok .and. runtime == baseline + 2
-!$    call omp_set_num_threads(baseline)
-      call check(error, ok, "explicit counts set the runtime, last wins, delete keeps it")
-   end subroutine test_threads_set_runtime
+      call check(error, ok, "explicit counts leave the runtime alone")
+   end subroutine test_threads_leave_runtime
 
    !> The context opens, writes to, and closes an owned log file
    subroutine test_owned_logfile(error)
