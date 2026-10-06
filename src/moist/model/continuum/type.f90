@@ -1,5 +1,6 @@
 !> Typed continuum model with direct accumulation and family-owned geometry
 module moist_model_continuum_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_context, only: moist_context_type
@@ -26,6 +27,8 @@ module moist_model_continuum_type
    type :: solvation_component_slot
       !> Concrete component owned by this slot
       class(model_continuum_component_type), allocatable :: item
+      !> Energy of the latest evaluation; unallocated until computed
+      real(wp), allocatable :: energy
    end type solvation_component_slot
 
    !> Typed continuum model with one cavity and an ordered component list
@@ -44,6 +47,14 @@ module moist_model_continuum_type
       procedure :: use_forward_gradient => model_use_forward_gradient
       procedure :: set_isodensity_density => set_cavity_density
       procedure :: add_component
+      !> Number of components, available before the first update
+      procedure :: component_count => continuum_component_count
+      !> Name of one component, available before the first update
+      procedure :: component_name => continuum_component_name
+      !> One-line description of one component, available before the first update
+      procedure :: component_description => continuum_component_description
+      !> Publish the results of one component, e.g. its latest energy
+      procedure :: list_component_fields => continuum_list_component_fields
       procedure :: update => continuum_update
       procedure :: get_energy => continuum_get_energy
       procedure :: get_response => continuum_get_response
@@ -52,6 +63,8 @@ module moist_model_continuum_type
       procedure :: declare_pass => declare_continuum_pass
       !> Publish the fields of the owned cavity
       procedure :: list_fields => continuum_list_fields
+      !> Print the settings of the cavity and of every component
+      procedure :: print_parameters => continuum_print_parameters
    end type model_continuum_type
 
 contains
@@ -121,12 +134,30 @@ contains
       allocate (grown(n + 1))
       do i = 1, n
          call move_alloc(self%components(i)%item, grown(i)%item)
+         call move_alloc(self%components(i)%energy, grown(i)%energy)
       end do
       allocate (grown(n + 1)%item, source=component)
       grown(n + 1)%item%ctx => self%ctx
       call move_alloc(grown, self%components)
 
    end subroutine add_component
+
+   !> Drop the stored energy of every component
+   !>
+   !> @param[in,out] self Instance
+   subroutine clear_component_energies(self)
+      !> Continuum model
+      class(model_continuum_type), intent(inout) :: self
+
+      !> Component index
+      integer :: i
+
+      if (.not. allocated(self%components)) return
+      do i = 1, size(self%components)
+         if (allocated(self%components(i)%energy)) deallocate (self%components(i)%energy)
+      end do
+
+   end subroutine clear_component_energies
 
    !> Update the cavity and every component
    !>
@@ -145,6 +176,7 @@ contains
       integer :: i
 
       call self%invalidate()
+      call clear_component_energies(self)
       self%configured = .true.
       if (.not. allocated(self%cavity)) then
          call fatal_error(error, "Continuum model has no cavity")
@@ -165,6 +197,11 @@ contains
    !> Requires a coupling staged by `prepare_energy`; reports any other staged
    !> phase, then every missing output of the energy phase, by name
    !>
+   !> - once the inputs are accepted, every component energy is cleared, then
+   !>   each component stores its own on success
+   !> - stops at the first failing component: earlier energies stay readable,
+   !>   the failing and later ones stay unavailable, `energy` is unchanged
+   !>
    !> @param[in,out] self Instance
    !> @param[in,out] coupling Host coupling
    !> @param[in,out] energy Energy accumulator
@@ -181,6 +218,8 @@ contains
 
       !> Transactional energy accumulator
       real(wp) :: local_energy
+      !> Energy of one component, accumulated from zero
+      real(wp) :: component_energy
       !> Component index
       integer :: i
       !> Component-local borrowed read interface
@@ -192,12 +231,16 @@ contains
       if (allocated(error)) return
       call coupling_check_mandatory(coupling, moist_phase_energy, error)
       if (allocated(error)) return
+      call clear_component_energies(self)
       local_energy = 0.0_wp
       do i = 1, size(self%components)
+         component_energy = 0.0_wp
          call coupling_make_view(coupling, i, view)
-         call self%components(i)%item%get_energy(view, self%cavity, local_energy, error)
+         call self%components(i)%item%get_energy(view, self%cavity, component_energy, error)
          call coupling_close_view(coupling)
          if (allocated(error)) return
+         self%components(i)%energy = component_energy
+         local_energy = local_energy + component_energy
       end do
       energy = energy + local_energy
 
@@ -421,6 +464,119 @@ contains
       type(field_query_type), intent(inout) :: query
       if (allocated(self%cavity)) call self%cavity%list_fields(query)
    end subroutine continuum_list_fields
+
+   !> Number of components in the order they were added
+   !>
+   !> @param[in] self Model
+   function continuum_component_count(self) result(ncomponent)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> Component count
+      integer :: ncomponent
+      ncomponent = 0
+      if (allocated(self%components)) ncomponent = size(self%components)
+   end function continuum_component_count
+
+   !> Name of one component; repeated names are told apart by index
+   !>
+   !> A subroutine: gfortran shares the length of a deferred-length function
+   !> result between OpenMP threads
+   !>
+   !> @param[in] self Model
+   !> @param[in] index 1-based component index
+   !> @param[out] name Component name, unallocated for an index outside the list
+   subroutine continuum_component_name(self, index, name)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> 1-based component index
+      integer, intent(in) :: index
+      !> Component name
+      character(len=:), allocatable, intent(out) :: name
+
+      if (index < 1 .or. index > self%component_count()) return
+      if (allocated(self%components(index)%item%name)) then
+         name = self%components(index)%item%name
+      else
+         name = ""
+      end if
+
+   end subroutine continuum_component_name
+
+   !> One-line description of one component
+   !>
+   !> A subroutine for the same reason as `continuum_component_name`
+   !>
+   !> @param[in] self Model
+   !> @param[in] index 1-based component index
+   !> @param[out] description Component description, unallocated for an index outside the list
+   subroutine continuum_component_description(self, index, description)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> 1-based component index
+      integer, intent(in) :: index
+      !> Component description
+      character(len=:), allocatable, intent(out) :: description
+
+      if (index < 1 .or. index > self%component_count()) return
+      if (allocated(self%components(index)%item%description)) then
+         description = self%components(index)%item%description
+      else
+         description = ""
+      end if
+
+   end subroutine continuum_component_description
+
+   !> Print the settings of the cavity and of every component
+   !>
+   !> - the cavity section first, then the components in list order, each
+   !>   headed by its 1-based index
+   !> - available before the first update
+   !>
+   !> @param[in] self Model
+   !> @param[in] unit Output unit; defaults to the run context's unit
+   subroutine continuum_print_parameters(self, unit)
+      !> Model
+      class(model_continuum_type), intent(in), target :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+
+      !> Effective output unit
+      integer :: iu
+      !> Component index
+      integer :: i
+
+      iu = output_unit
+      if (associated(self%ctx)) iu = self%ctx%unit
+      if (present(unit)) iu = unit
+      if (allocated(self%cavity)) call self%cavity%print_parameters(iu)
+      do i = 1, self%component_count()
+         call self%components(i)%item%print_parameters(iu, i)
+      end do
+
+   end subroutine continuum_print_parameters
+
+   !> Publish the results of one component
+   !>
+   !> - `energy`, the scalar of the latest evaluation; not listed before it,
+   !>   after an update and when this component failed or was not reached
+   !> - an index outside the list declares nothing
+   !>
+   !> @param[in] self Model
+   !> @param[in] index 1-based component index
+   !> @param[in,out] query Field walker
+   subroutine continuum_list_component_fields(self, index, query)
+      !> Model
+      class(model_continuum_type), intent(in) :: self
+      !> 1-based component index
+      integer, intent(in) :: index
+      !> Field walker
+      type(field_query_type), intent(inout) :: query
+
+      if (index < 1 .or. index > self%component_count()) return
+      call query%add_real_scalar("energy", "Energy contribution of the latest evaluation, in Hartree", &
+         & self%components(index)%energy)
+
+   end subroutine continuum_list_component_fields
 
    !> Select the forward gradient reference path
    !>
