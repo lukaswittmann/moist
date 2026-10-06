@@ -86,10 +86,10 @@ share the selected cavity. For example:
 Configuration and results
 -------------------------
 
-``mf.with_moist`` holds the configuration and the latest MOIST ``result``
-(energy and Fock contribution); ``e`` and ``v`` expose the two, and all three
-are ``None`` before the first evaluation. Replace the cavity configuration to
-change settings; this clears cached results:
+``mf.with_moist`` holds the configuration and the latest MOIST ``result`` (energy and Fock contribution);
+``e`` and ``v`` expose the two, and all three are ``None`` before the first evaluation.
+``mf.with_moist.components`` stays the configured tuple; after an evaluation, ``mf.with_moist.solvation.model.components`` reports each component's ``energy`` (see :doc:`python`).
+Replace the cavity configuration to change settings; this clears cached results:
 
 .. code-block:: python
 

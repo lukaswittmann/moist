@@ -55,7 +55,7 @@ The ``model_continuum_type`` owns one cavity and an ordered list of components:
 
 1. Construct the model from a cavity and add all components before the first update; the model stores copies of both.
 2. ``update`` refreshes the cavity first, then every component.
-3. ``get_energy`` sums the component energies.
+3. ``get_energy`` sums the component energies and keeps each one in the model until the next update, as the ``energy`` field of ``list_component_fields(index, query)``.
 4. ``get_response`` collects each component's direct items (``potential_adjoint``, ``gaussian_amplitude``) and its surface weights, then lets the cavity contract the accumulated weights, which adds the ``density`` item for a cavity whose surface follows the density.
 5. ``get_gradient`` adds the direct nuclear terms, contracts the gradient-side surface weights through the cavity, and refills the response with the same direct items.
 
@@ -110,6 +110,8 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    if (allocated(error)) error stop error%message
 
 Call ``model%update(mol, error)`` with the current structure, then create a host coupling with ``model%new_coupling(coupling, error)``; energies, responses and gradients are computed one phase at a time on that coupling, as described in :doc:`/reference/coupling`.
+``model%component_count()``, ``model%component_name(index, name)`` and ``model%component_description(index, description)`` describe the components before the first update; after ``get_energy``, each component's contribution is a named field (:doc:`/reference/fields`).
+``model%print_parameters(unit)`` prints the settings at any time: the cavity section followed by each component.; ``unit`` defaults to the run context's unit.
 
 Components
 ----------

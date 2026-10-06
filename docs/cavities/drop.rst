@@ -130,6 +130,7 @@ Settings can be supplied two ways:
 
 - **Parameter file**: parameters  in a JSON or TOML file, read via ``load_file`` (e.g. ``grid.num_leb``, ``projection.level``). The full key set is registered in ``register_cavity_drop_entries``.
 - **Settings object**: When constructing the ``moist_cavity_drop_parameters_type``, via the constructor ``param%new``, allows setting all parameters (``nleb``, ``tolerance``, ``proj_maxiter``, ``proj_level``, ``branch_weight_s``, ``rho_grid_h``, ``wleb_prune_level``). The C and Python options expose those seven plus ``do_fine`` (logical, default false; computes all available surface properties), ``debug`` and ``verbosity``.
+- **Optional properties**: ``do_grid_density``, ``do_curvature``, ``do_normal``, ``do_r_iI`` and ``do_rho`` switch single surface properties on (default false). ``do_fine`` switches all five on.
 
 
 Level Set Functions (LSF)
