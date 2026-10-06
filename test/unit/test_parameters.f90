@@ -16,6 +16,8 @@ module test_parameters
    use moist_model_continuum_component_pcm_type, only: solver_type
    use moist_context, only: moist_context_type, new_context
    use moist_radii, only: default_cpcm_radii
+   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
+   use test_helpers, only: read_printout, printed_entry
    implicit none(type, external)
    private
    public :: collect_parameters
@@ -203,7 +205,11 @@ contains
       if (allocated(error)) return
       call check(error, param%proj_tol, -1.0_wp)
       if (allocated(error)) return
-      call check(error, drop%request%curvature)
+      call check(error, drop%param%do_grid_density .and. drop%param%do_curvature .and. &
+         drop%param%do_normal .and. drop%param%do_r_iI .and. drop%param%do_rho, &
+         more="do_fine did not switch every optional property on")
+      if (allocated(error)) return
+      call check(error, .not. param%do_curvature, more="constructor changed the caller's settings")
       if (allocated(error)) return
       call check(error, drop%lsf_model%screening_threshold, 1.0e-9_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
@@ -212,24 +218,26 @@ contains
       if (allocated(error)) return
       call check(error, drop%param%num_leb, 194)
       if (allocated(error)) return
-      call check(error, .not. drop%request%curvature)
+      call check(error, .not. (drop%param%do_grid_density .or. drop%param%do_curvature .or. &
+         drop%param%do_normal .or. drop%param%do_r_iI .or. drop%param%do_rho), &
+         more="default DROP settings switch an optional property on")
       if (allocated(error)) return
       call new_cavity_iswig(iswig, ctx, default_cpcm_radii(), err, &
          moist_cavity_iswig_parameters_type(num_leb=194, cut_a=0.3_wp, cut_f=0.2_wp))
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call check(error, iswig%num_leb, 194)
+      call check(error, iswig%param%num_leb, 194)
       if (allocated(error)) return
-      call check(error, iswig%cut_a, 0.3_wp)
+      call check(error, iswig%param%cut_a, 0.3_wp)
       if (allocated(error)) return
-      call check(error, iswig%cut_f, 0.2_wp)
+      call check(error, iswig%param%cut_f, 0.2_wp)
       if (allocated(error)) return
       call new_cavity_iswig(iswig, ctx, default_cpcm_radii(), err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call check(error, iswig%num_leb, 110)
+      call check(error, iswig%param%num_leb, 110)
       if (allocated(error)) return
-      call check(error, iswig%cut_f, 1.0e-10_wp)
+      call check(error, iswig%param%cut_f, 1.0e-10_wp)
       if (allocated(error)) return
       call lsf%new()
       call check(error, lsf%param%blend_k, 5.5_wp)
@@ -242,16 +250,16 @@ contains
          param=moist_pcm_parameters_type(solver=solver_type%iterative, solver_tol=1.0e-8_wp, solver_maxiter=71))
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call check(error, pcm%solver, solver_type%iterative)
+      call check(error, pcm%param%solver, solver_type%iterative)
       if (allocated(error)) return
-      call check(error, pcm%solver_tol, 1.0e-8_wp, thr=1.0e-15_wp)
+      call check(error, pcm%param%solver_tol, 1.0e-8_wp, thr=1.0e-15_wp)
       if (allocated(error)) return
-      call check(error, pcm%solver_maxiter, 71)
+      call check(error, pcm%param%solver_maxiter, 71)
       if (allocated(error)) return
       call new_component_cpcm(pcm, ctx, 80.0_wp, error=err)
       call check(error, .not. allocated(err))
       if (allocated(error)) return
-      call check(error, pcm%solver, solver_type%cholesky)
+      call check(error, pcm%param%solver, solver_type%cholesky)
       if (allocated(error)) return
       param%num_leb = 1
       call new_cavity_drop(drop, ctx, default_cpcm_radii(), lsf, err, param)
@@ -641,6 +649,16 @@ contains
          drop%branch_weight_floor] - &
          [2.0e-7_wp, 2.0_wp, 0.7_wp, 0.4_wp, 0.2_wp, 0.7_wp, 0.9_wp, 1.7_wp, 0.15_wp, 0.4_wp, &
           0.8_wp, 0.04_wp, 0.2_wp])), 0.0_wp, thr=1.0e-14_wp)
+      if (allocated(error)) return
+      call check(error, drop%do_grid_density .and. drop%do_curvature .and. drop%do_normal .and. &
+         drop%do_r_iI .and. drop%do_rho, more="do_fine from a file did not switch every property on")
+      if (allocated(error)) return
+      ! A single property flag stays single
+      call configured(drop, '{"do_curvature":true}', error)
+      if (allocated(error)) return
+      call check(error, drop%do_curvature .and. .not. (drop%do_fine .or. drop%do_grid_density .or. &
+         drop%do_normal .or. drop%do_r_iI .or. drop%do_rho), &
+         more="do_curvature from a file switched other properties")
       if (allocated(error)) return
       call configured(iswig, '{"num_leb":194,"cut_a":0.3,"cut_f":0.4}', error)
       if (allocated(error)) return
