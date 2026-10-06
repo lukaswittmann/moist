@@ -24,15 +24,14 @@ contains
                   new_unittest("report_depth", test_report_depth), &
                   new_unittest("threads_default", test_threads_default), &
                   new_unittest("threads_explicit", test_threads_explicit), &
-                  new_unittest("set_num_threads", test_set_num_threads), &
-                  new_unittest("delete_releases_pin", test_delete_releases_pin), &
+                  new_unittest("threads_fixed", test_threads_fixed), &
+                  new_unittest("threads_set_runtime", test_threads_set_runtime), &
                   new_unittest("owned_logfile", test_owned_logfile), &
                   new_unittest("print_settings_runs", test_print_settings_runs), &
                   new_unittest("debug_message_gated", test_debug_message_gated), &
                   new_unittest("delete_is_safe", test_delete_is_safe), &
                   new_unittest("output_contracts", test_output_contracts), &
-                  new_unittest("failed_files", test_failed_files), &
-                  new_unittest("thread_runtime", test_thread_runtime) &
+                  new_unittest("failed_files", test_failed_files) &
                   ]
 
    end subroutine collect_utils_context
@@ -42,7 +41,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call check(error, ctx%verbosity == 1, "default verbosity is 1")
       if (allocated(error)) return
       call check(error,.not. ctx%debug, "default debug is false")
@@ -52,7 +51,7 @@ contains
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=3, debug=.true.)
+      call new_context(ctx, nthreads=0, verbosity=3, debug=.true.)
       call check(error, ctx%verbosity == 3, "explicit verbosity applied")
       if (allocated(error)) return
       call check(error, ctx%debug, "explicit debug applied")
@@ -66,7 +65,7 @@ contains
       type(moist_context_type), target :: ctx
       type(moist_context_type), pointer :: holder_a, holder_b
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! two independent holders borrow the very same context
       holder_a => ctx
@@ -92,7 +91,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      call new_context(ctx, verbosity=2)
+      call new_context(ctx, nthreads=0, verbosity=2)
       call check(error, ctx%writes(1), "level 1 writes at verbosity 2")
       if (allocated(error)) return
       call check(error, ctx%writes(2), "level 2 writes at verbosity 2")
@@ -102,7 +101,7 @@ contains
       call ctx%delete()
 
       ! debug unlocks the diagnostic band even at low verbosity
-      call new_context(ctx, verbosity=0, debug=.true.)
+      call new_context(ctx, nthreads=0, verbosity=0, debug=.true.)
       call check(error, ctx%writes(3), "debug unlocks level 3")
       if (allocated(error)) return
       call check(error,.not. ctx%writes(4), "debug does not unlock profiling band")
@@ -116,24 +115,24 @@ contains
       type(moist_context_type) :: ctx
 
       ! below the threshold: detailed profiling off
-      call new_context(ctx, verbosity=3)
+      call new_context(ctx, nthreads=0, verbosity=3)
       call check(error,.not. ctx%do_profile, "verbosity 3 disables profiling")
       if (allocated(error)) return
       call ctx%delete()
 
       ! at/above the threshold: detailed profiling on
-      call new_context(ctx, verbosity=4)
+      call new_context(ctx, nthreads=0, verbosity=4)
       call check(error, ctx%do_profile, "verbosity 4 enables profiling")
       if (allocated(error)) return
       call ctx%delete()
 
       ! explicit override wins over the verbosity default
-      call new_context(ctx, verbosity=1, do_profile=.true.)
+      call new_context(ctx, nthreads=0, verbosity=1, do_profile=.true.)
       call check(error, ctx%do_profile, "explicit do_profile overrides low verbosity")
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=5, do_profile=.false.)
+      call new_context(ctx, nthreads=0, verbosity=5, do_profile=.false.)
       call check(error,.not. ctx%do_profile, "explicit do_profile overrides high verbosity")
       call ctx%delete()
    end subroutine test_profile_flag
@@ -144,27 +143,27 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call check(error, ctx%report_depth() == 0, "silent verbosity clamps depth to zero")
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=1)
+      call new_context(ctx, nthreads=0, verbosity=1)
       call check(error, ctx%report_depth() == 0, "verbosity 1 -> depth 0")
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=2)
+      call new_context(ctx, nthreads=0, verbosity=2)
       call check(error, ctx%report_depth() == 1, "verbosity 2 -> depth 1")
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=3)
+      call new_context(ctx, nthreads=0, verbosity=3)
       call check(error, ctx%report_depth() == 2, "verbosity 3 -> depth 2")
       if (allocated(error)) return
       call ctx%delete()
 
-      call new_context(ctx, verbosity=4)
+      call new_context(ctx, nthreads=0, verbosity=4)
       call check(error, ctx%report_depth() > 1000, "verbosity 4 -> unbounded depth")
       call ctx%delete()
    end subroutine test_report_depth
@@ -175,7 +174,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call check(error, ctx%get_num_threads() >= 1, "default thread count is >= 1")
       if (allocated(error)) return
       call check(error, allocated(ctx%start_time), "start timestamp recorded")
@@ -188,65 +187,68 @@ contains
    subroutine test_threads_explicit(error)
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
+      !> Environment thread budget, restored for later tests on this thread
+      integer :: baseline
 
+      baseline = 1
+!$    baseline = omp_get_max_threads()
       call new_context(ctx, nthreads=1)
       call check(error, ctx%get_num_threads() == 1, "explicit nthreads=1 applied")
       call ctx%delete()
+!$    call omp_set_num_threads(baseline)
    end subroutine test_threads_explicit
 
-   !> set_num_threads retunes the recorded thread count after construction, and
-   !> releasing the pin puts the OpenMP runtime back where it was
-   !>
-   !> The baseline is read through `get_num_threads` with no pin active, which is
-   !> the live environment value, so the round trip is asserted exactly rather
-   !> than as ">= 1" -- the latter is satisfied by a leaked pin of 1 and would
-   !> not detect the pin failing to release
-   subroutine test_set_num_threads(error)
+   !> The thread count is fixed at construction: an unset count takes the
+   !> OpenMP environment of that moment and ignores later host changes
+   subroutine test_threads_fixed(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_context_type) :: ctx
-      !> Live environment thread budget, before moist pins anything
+      type(moist_context_type) :: ctx, later
+      !> Environment thread budget before the host changes it
       integer :: baseline
+      logical :: ok
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       baseline = ctx%get_num_threads()
-      ! an explicit positive count is honoured deterministically (OMP or not)
-      call ctx%set_num_threads(1)
-      call check(error, ctx%get_num_threads() == 1, "set_num_threads(1) records 1")
-      if (allocated(error)) return
-      call check(error, ctx%nthreads_pin == 1, "set_num_threads(1) pins 1")
-      if (allocated(error)) return
-      ! a non-positive request releases the pin -> back to the environment budget
-      call ctx%set_num_threads(0)
-      call check(error, ctx%nthreads_pin == 0, "set_num_threads(0) releases the pin")
-      if (allocated(error)) return
-      call check(error, ctx%get_num_threads() == baseline, &
-                 "released pin restores the environment thread budget")
-      if (allocated(error)) return
+      ok = .true.
+!$    ok = baseline == omp_get_max_threads()
+!$    call omp_set_num_threads(baseline + 3)
+      call new_context(later, nthreads=0)
+      ok = ok .and. ctx%get_num_threads() == baseline
+!$    ok = ok .and. later%get_num_threads() == baseline + 3
+!$    call omp_set_num_threads(baseline)
+      call later%delete()
       call ctx%delete()
-   end subroutine test_set_num_threads
+      call check(error, ok, "unset count resolved once at construction")
+   end subroutine test_threads_fixed
 
-   !> Deleting a context with an active pin restores the environment budget too:
-   !> the pin lives in a global OpenMP control, so it must not outlive its owner
-   subroutine test_delete_releases_pin(error)
+   !> An explicit count is applied to this host thread's OpenMP runtime: the
+   !> last context constructed wins, each context keeps reporting its own count,
+   !> and deleting a context does not restore the setting
+   subroutine test_threads_set_runtime(error)
       type(error_type), allocatable, intent(out) :: error
-      type(moist_context_type) :: ctx, probe
-      !> Live environment thread budget, before moist pins anything
-      integer :: baseline
+      type(moist_context_type) :: first, second
+      !> Environment thread budget and the runtime seen while contexts live
+      integer :: baseline, runtime
+      logical :: ok
 
-      call new_context(probe)
-      baseline = probe%get_num_threads()
-      call probe%delete()
-
-      call new_context(ctx, nthreads=1)
-      call check(error, ctx%get_num_threads() == 1, "constructor pin applied")
-      if (allocated(error)) return
-      call ctx%delete()
-
-      call new_context(probe)
-      call check(error, probe%get_num_threads() == baseline, &
-                 "delete restores the environment thread budget")
-      call probe%delete()
-   end subroutine test_delete_releases_pin
+      baseline = 1
+!$    baseline = omp_get_max_threads()
+      call new_context(first, nthreads=baseline + 1)
+      runtime = baseline + 1
+!$    runtime = omp_get_max_threads()
+      ok = runtime == baseline + 1
+      call new_context(second, nthreads=baseline + 2)
+      runtime = baseline + 2
+!$    runtime = omp_get_max_threads()
+      ok = ok .and. runtime == baseline + 2 .and. first%get_num_threads() == baseline + 1 .and. &
+         & second%get_num_threads() == baseline + 2
+      call first%delete()
+      call second%delete()
+!$    runtime = omp_get_max_threads()
+      ok = ok .and. runtime == baseline + 2
+!$    call omp_set_num_threads(baseline)
+      call check(error, ok, "explicit counts set the runtime, last wins, delete keeps it")
+   end subroutine test_threads_set_runtime
 
    !> The context opens, writes to, and closes an owned log file
    subroutine test_owned_logfile(error)
@@ -257,7 +259,7 @@ contains
       logical :: is_open
       character(64) :: firstline
 
-      call new_context(ctx, logfile=path)
+      call new_context(ctx, nthreads=0, logfile=path)
       call check(error, ctx%io_stat == 0, "log file opened cleanly")
       if (allocated(error)) return
       call check(error, ctx%owns_unit, "context owns the log unit")
@@ -302,7 +304,7 @@ contains
       character(16) :: expected_threads
       character(:), allocatable :: start_time
 
-      call new_context(ctx, verbosity=2, logfile=path)
+      call new_context(ctx, nthreads=0, verbosity=2, logfile=path)
       write (expected_threads, "(i0)") ctx%get_num_threads()
       start_time = ctx%start_time
       open (newunit=override, status="scratch", action="readwrite", iostat=stat)
@@ -373,7 +375,7 @@ contains
 
       ! debug off: no debug file is opened at all (no orphan file), and the
       ! debug stream falls back to the main output unit
-      call new_context(ctx, debug=.false., debugfile=path)
+      call new_context(ctx, nthreads=0, debug=.false., debugfile=path)
       call check(error,.not. ctx%owns_debug_unit, "no debug file opened when debug off")
       if (.not. allocated(error)) then
          call check(error, ctx%debug_unit == ctx%unit, "debug stream falls back to main unit")
@@ -383,7 +385,7 @@ contains
       if (allocated(error)) return
 
       ! debug on: the message lands in the debug file
-      call new_context(ctx, debug=.true., debugfile=path)
+      call new_context(ctx, nthreads=0, debug=.true., debugfile=path)
       call ctx%debug_message("diagnostic line")
       call ctx%delete()
       open (newunit=iu, file=path, status="old", action="read", iostat=stat)
@@ -403,7 +405,7 @@ contains
       type(error_type), allocatable, intent(out) :: error
       type(moist_context_type) :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call ctx%timer%start("work")
       call ctx%timer%stop()
       call ctx%delete()
@@ -426,7 +428,7 @@ contains
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat == 0, "scratch unit for the fallback stream opens")
       if (allocated(error)) return
-      call new_context(ctx, verbosity=1, unit=iu, debug=.true.)
+      call new_context(ctx, nthreads=0, verbosity=1, unit=iu, debug=.true.)
       main_routed = ctx%unit == iu
       debug_routed = ctx%debug_unit == iu
       call ctx%debug_message("fallback debug")
@@ -466,7 +468,7 @@ contains
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat == 0, "scratch unit for the silent stream opens")
       if (allocated(error)) return
-      call new_context(ctx, verbosity=0, unit=iu)
+      call new_context(ctx, nthreads=0, verbosity=0, unit=iu)
       call ctx%message("silent default")
       call ctx%debug_message("silent debug")
       call ctx%delete()
@@ -483,7 +485,7 @@ contains
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat == 0, "scratch unit for the level stream opens")
       if (allocated(error)) return
-      call new_context(ctx, verbosity=1, unit=iu)
+      call new_context(ctx, nthreads=0, verbosity=1, unit=iu)
       call ctx%message("default visible")
       call ctx%message("level suppressed", level=2)
       call ctx%delete()
@@ -502,7 +504,7 @@ contains
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat == 0, "scratch unit for the split stream opens")
       if (allocated(error)) return
-      call new_context(ctx, unit=iu, debug=.true., debugfile=split_path)
+      call new_context(ctx, nthreads=0, unit=iu, debug=.true., debugfile=split_path)
       owned = ctx%owns_debug_unit
       ! The name is only recorded once the file opened; never read it unallocated
       named = .false.
@@ -553,12 +555,12 @@ contains
       open (newunit=iu, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat == 0, "scratch unit for the fallback stream opens")
       if (allocated(error)) return
-      call new_context(ctx, unit=iu, logfile="missing_context_directory/log")
+      call new_context(ctx, nthreads=0, unit=iu, logfile="missing_context_directory/log")
       log_reported = ctx%io_stat /= 0
       log_unowned = .not. ctx%owns_unit
       log_fallback = ctx%unit == iu
       call ctx%delete()
-      call new_context(ctx, unit=iu, debug=.true., debugfile="missing_context_directory/debug")
+      call new_context(ctx, nthreads=0, unit=iu, debug=.true., debugfile="missing_context_directory/debug")
       debug_reported = ctx%io_stat /= 0
       debug_unowned = .not. ctx%owns_debug_unit
       debug_fallback = ctx%debug_unit == iu
@@ -576,41 +578,6 @@ contains
       if (allocated(error)) return
       call check(error, debug_fallback, "failed debug file keeps the borrowed unit")
    end subroutine test_failed_files
-
-   !> Retuning restores the first host budget and follows later host changes
-   subroutine test_thread_runtime(error)
-      !> Test failure
-      type(error_type), allocatable, intent(out) :: error
-      type(moist_context_type) :: ctx
-      integer :: baseline, runtime
-      logical :: ok
-
-      call new_context(ctx)
-      baseline = ctx%get_num_threads()
-      call ctx%set_num_threads(baseline + 1)
-      runtime = baseline + 1
-!$    runtime = omp_get_max_threads()
-      ok = ctx%get_num_threads() == baseline + 1 .and. runtime == baseline + 1
-      call ctx%set_num_threads(baseline + 2)
-      call ctx%set_num_threads(-1)
-      runtime = baseline
-!$    runtime = omp_get_max_threads()
-      ok = ok .and. runtime == baseline .and. ctx%get_num_threads() == baseline
-      ok = ok .and. ctx%nthreads_pin == 0
-!$    call omp_set_num_threads(baseline + 3)
-!$    ok = ok .and. ctx%get_num_threads() == baseline + 3
-      call ctx%set_num_threads(0)
-!$    ok = ok .and. omp_get_max_threads() == baseline + 3
-!$    call omp_set_num_threads(baseline)
-      call ctx%delete()
-      call new_context(ctx, nthreads=baseline + 1)
-      ok = ok .and. ctx%get_num_threads() == baseline + 1
-      call ctx%delete()
-      ok = ok .and. ctx%nthreads_pin == 0
-!$    ok = ok .and. omp_get_max_threads() == baseline
-!$    call omp_set_num_threads(baseline)
-      call check(error, ok, "pin applies, retune preserves baseline, release follows host")
-   end subroutine test_thread_runtime
 
    !> Delete a file left behind by a test that failed before its own cleanup
    !>

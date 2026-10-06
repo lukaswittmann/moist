@@ -4,14 +4,18 @@ module test_api
                                           c_funptr, c_funloc, c_associated, c_f_pointer, &
                                           c_char, c_null_char, c_size_t, c_sizeof, c_null_funptr, &
                                           c_int8_t
+   use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
    use mctc_env, only: wp
    use mctc_env_error, only: moist_error_type => error_type
    use mctc_io_structure, only: structure_type
    use mctc_io, only: new_mol => new
    use moist_context, only: moist_context_type, new_context
+!$ use omp_lib, only: omp_get_max_threads, omp_set_num_threads
    use moist_model_moz_3d_type, only: model_moz_3d_type, new_moz_3d_model
    use moist_math_grid_3d_cartesian, only: moist_math_grid_3d_cartesian_type
-   use moist_api, only: vp_cavity, vp_error, vp_response, get_response_field_real_api, &
+   use moist_api, only: vp_context, new_context_api, delete_context_api, &
+      & create_drop_cavity_context_api, create_iswig_cavity_context_api, &
+      & vp_cavity, vp_error, vp_response, get_response_field_real_api, &
       & next_response_item_api, response_item_name_api, vp_structure, vp_radii, &
       & vp_model, update_structure_api, set_custom_radii_atoms_api, &
       & set_custom_radii_elements_api, update_solvation_model_api, &
@@ -29,7 +33,13 @@ module test_api
       & vp_coupling, coupling_answer_api, next_coupling_request_api, &
       & get_response_field_count_api, get_response_field_info_api, get_response_field_about_api, &
       & get_coupling_request_field_count_api, get_coupling_request_field_info_api, &
-      & get_coupling_request_field_about_api, get_coupling_request_field_real_api
+      & get_coupling_request_field_about_api, get_coupling_request_field_real_api, &
+      & get_model_component_count_api, get_model_component_name_api, &
+      & get_model_component_field_count_api, get_model_component_field_info_api, &
+      & get_model_component_field_about_api, get_model_component_field_real_api, &
+      & general_model_prepare_energy_api, general_model_get_energy_api, &
+      & get_model_component_description_api, get_model_parameters_text_api, new_cpcm_component_api
+   use moist_model_continuum, only: model_continuum_type
    use moist_channels_fields, only: field_query_type, field_real
    use moist_model_continuum_component_pcm_amat, only: pcm_amat_surface_weights
    use moist_cavity_type, only: cavity_type
@@ -597,6 +607,8 @@ contains
                   new_unittest("isodensity_callback_fails_first_call", test_iso_callback_fails_first), &
                   new_unittest("isodensity_callback_fails_mid_loop", test_iso_callback_fails_mid_loop), &
                   new_unittest("init_options_without_error_handle", test_init_options_null_error), &
+                  new_unittest("shared_context_thread_budget", test_shared_context_thread_budget), &
+                  new_unittest("borrowed_cavity_keeps_context", test_borrowed_cavity_keeps_context), &
                   new_unittest("lsf_constructor_guards", test_lsf_constructor_guards), &
                   new_unittest("cavity_constructor_guards", test_cavity_constructor_guards), &
                   new_unittest("structure_and_radii_guards", test_structure_radii_guards), &
@@ -611,11 +623,14 @@ contains
                   new_unittest("model_fields_forward_the_cavity", test_model_fields_continuum), &
                   new_unittest("model_fields_of_a_volume_grid", test_model_fields_volume), &
                   new_unittest("model_fields_empty_domain_and_guards", test_model_fields_guards), &
+                  new_unittest("model_components_by_index", test_model_components), &
+                  new_unittest("model_parameters_text", test_model_parameters_text), &
                   new_unittest("response_unavailable_arrays", test_response_unavailable_arrays), &
                   new_unittest("site_resolved_answer_refused_adjoints_read", test_site_resolved_answer_and_adjoints), &
                   new_unittest("response_fields_describe_the_current_item", test_response_fields), &
                   new_unittest("coupling_request_fields_describe_the_inputs", test_coupling_request_fields), &
                   new_unittest("gradient_capacity_too_small", test_gradient_capacity_too_small), &
+                  new_unittest("gradient_optional_outputs", test_gradient_optional_outputs), &
                   new_unittest("amat_surface_weights", test_amat_surface_weights) &
                   ]
 
@@ -1897,6 +1912,162 @@ contains
 
    end subroutine test_init_options_null_error
 
+   !> Context ownership spans the public handle, cavity and model copies
+   subroutine test_shared_context_thread_budget(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Baseline runtime observer
+      type(moist_context_type) :: probe
+      !> Shared context, cavity and model wrappers
+      type(vp_context), pointer :: shared
+      type(vp_cavity), pointer :: cav
+      type(vp_model), pointer :: model
+      !> C handles released at the end of each case
+      type(c_ptr) :: context, lsf, cavity, vmodel, component
+      !> Requested thread counts
+      integer(c_int), parameter :: requests(3) = [0_c_int, 2_c_int, 1_c_int]
+      !> Case indices, baseline and effective runtime
+      integer :: ikind, irequest, baseline, expected, runtime
+
+      call new_context(probe, nthreads=0, verbosity=0)
+      baseline = probe%get_num_threads()
+      context = new_context_api(c_loc(err), -1_c_int, 0_c_int, .false._c_bool)
+      call check(error, .not. c_associated(context) .and. allocated(err%ptr), "negative thread count is refused")
+      if (allocated(error)) return
+      deallocate (err%ptr)
+      context = new_context_api(c_loc(err), 0_c_int, 2_c_int, .true._c_bool)
+      call check(error, c_associated(context), "context constructor succeeds")
+      if (allocated(error)) return
+      call c_f_pointer(context, shared)
+      call check(error, shared%ctx%verbosity == 2 .and. shared%ctx%debug .and. &
+         & shared%ctx%get_num_threads() == baseline, "context takes the logging arguments")
+      call delete_context_api(context)
+      if (allocated(error)) return
+      lsf = moist_new_svdw_lsf(c_loc(err), c_null_ptr)
+      call check(error, c_associated(lsf), "LSF setup succeeds")
+      if (allocated(error)) return
+      do ikind = 1, 2
+         do irequest = 1, size(requests)
+            context = c_null_ptr
+            cavity = c_null_ptr
+            vmodel = c_null_ptr
+            component = c_null_ptr
+            checks: block
+               context = new_context_api(c_loc(err), requests(irequest), 0_c_int, .false._c_bool)
+               call check(error, c_associated(context), "context constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(context, shared)
+               expected = baseline
+               if (requests(irequest) > 0) expected = requests(irequest)
+               call check(error, shared%ctx%get_num_threads() == expected, "context records the requested count")
+               if (allocated(error)) exit checks
+               if (ikind == 1) then
+                  cavity = create_drop_cavity_context_api(c_loc(err), context, lsf, c_null_ptr, c_null_ptr)
+               else
+                  cavity = create_iswig_cavity_context_api(c_loc(err), context, c_null_ptr, c_null_ptr)
+               end if
+               call check(error, c_associated(cavity), "cavity constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(cavity, cav)
+               call check(error, associated(cav%ptr%ctx, shared%ctx), "cavity borrows the explicit context")
+               if (allocated(error)) exit checks
+               vmodel = moist_new_model(c_loc(err), cavity, c_null_ptr)
+               call check(error, c_associated(vmodel), "model constructor succeeds")
+               if (allocated(error)) exit checks
+               call c_f_pointer(vmodel, model)
+               call check(error, associated(model%ptr%ctx, shared%ctx), "model inherits the cavity context")
+               if (allocated(error)) exit checks
+               component = new_pv_component_api(c_loc(err), 1.0e-4_c_double)
+               call general_model_add_component_api(c_loc(err), vmodel, component)
+               call check(error,.not. allocated(err%ptr), "component addition succeeds")
+               if (allocated(error)) exit checks
+               select type (item => model%ptr)
+               type is (model_continuum_type)
+                  call check(error, associated(item%cavity%ctx, shared%ctx) .and. &
+                     & associated(item%components(1)%item%ctx, shared%ctx), "model borrowers share one context")
+               end select
+               if (allocated(error)) exit checks
+               call check(error, shared%references == 3, "context has one public owner and two dependents")
+               if (allocated(error)) exit checks
+               call delete_context_api(context)
+               call check(error,.not. c_associated(context) .and. shared%references == 2, "public release retains dependents")
+               if (allocated(error)) exit checks
+               call moist_delete_cavity(cavity)
+               call check(error, shared%references == 1, "model retains the context after the source cavity is deleted")
+               if (allocated(error)) exit checks
+               runtime = expected
+!$             runtime = omp_get_max_threads()
+               call check(error, runtime == expected .and. shared%ctx%get_num_threads() == expected, &
+                  & "the count stays fixed and is the runtime setting")
+            end block checks
+            call delete_solvation_component_api(component)
+            call delete_solvation_model_api(vmodel)
+            call moist_delete_cavity(cavity)
+            call delete_context_api(context)
+            runtime = expected
+!$          runtime = omp_get_max_threads()
+            if (.not. allocated(error)) call check(error, runtime == expected, "release does not restore the runtime")
+!$          call omp_set_num_threads(baseline)
+            if (allocated(error)) exit
+         end do
+         if (allocated(error)) exit
+      end do
+      call moist_delete_lsf(lsf)
+      call probe%delete()
+   end subroutine test_shared_context_thread_budget
+
+   !> A model built from a borrowed model cavity inherits the parent's shared
+   !> context, and the borrowed handle retains it until it is deleted
+   subroutine test_borrowed_cavity_keeps_context(error)
+      !> Test diagnostic
+      type(error_type), allocatable, intent(out) :: error
+      !> API diagnostic handle
+      type(vp_error), target :: err
+      !> Shared context and model wrappers
+      type(vp_context), pointer :: shared
+      type(vp_model), pointer :: second_model
+      !> C handles
+      type(c_ptr) :: context, cavity, first, borrowed, second
+
+      cavity = c_null_ptr
+      first = c_null_ptr
+      borrowed = c_null_ptr
+      second = c_null_ptr
+      context = new_context_api(c_loc(err), 0_c_int, 4_c_int, .true._c_bool)
+      checks: block
+         call check(error, c_associated(context), "context constructor succeeds")
+         if (allocated(error)) exit checks
+         call c_f_pointer(context, shared)
+         cavity = create_iswig_cavity_context_api(c_loc(err), context, c_null_ptr, c_null_ptr)
+         if (c_associated(cavity)) first = moist_new_model(c_loc(err), cavity, c_null_ptr)
+         if (c_associated(first)) borrowed = get_solvation_model_cavity_api(c_loc(err), first)
+         call check(error, c_associated(borrowed), "borrowed cavity succeeds")
+         if (allocated(error)) exit checks
+         call moist_delete_cavity(cavity)
+         call delete_context_api(context)
+         call check(error, shared%references == 2, "borrowed handle retains the context")
+         if (allocated(error)) exit checks
+         second = moist_new_model(c_loc(err), borrowed, c_null_ptr)
+         call check(error, c_associated(second), "model from a borrowed cavity succeeds")
+         if (allocated(error)) exit checks
+         call c_f_pointer(second, second_model)
+         call check(error, associated(second_model%ptr%ctx, shared%ctx) .and. &
+            & second_model%ptr%ctx%verbosity == 4 .and. second_model%ptr%ctx%debug, &
+            & "model from a borrowed cavity inherits the shared context")
+         if (allocated(error)) exit checks
+         call moist_delete_cavity(borrowed)
+         call delete_solvation_model_api(first)
+         call check(error, shared%references == 1, "second model alone retains the context")
+      end block checks
+      call moist_delete_cavity(borrowed)
+      call delete_solvation_model_api(second)
+      call delete_solvation_model_api(first)
+      call moist_delete_cavity(cavity)
+      call delete_context_api(context)
+   end subroutine test_borrowed_cavity_keeps_context
+
    !> LSF constructors refuse a missing callback, non-positive isodensity
    !> controls and every malformed basis, and return no handle
    !>
@@ -2229,8 +2400,6 @@ contains
          if (omit == 3) deallocate (asph1_rA)
          if (omit == 4) deallocate (vsph1_rA)
          if (omit == 5) deallocate (xyz1_rA)
-         if (omit == 6) deallocate (r_iI1_rA)
-         if (omit == 7) deallocate (vec1_rA)
          call get_cavity_gradient_api(verror, c_null_ptr, 1_c_int, 1_c_int, A_tot1_rA, V_tot1_rA, &
                                       asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA, vec1_rA)
       case ("get_amat_gradient")
@@ -2283,8 +2452,8 @@ contains
       !> Required outputs of each reader, in argument order
       character(len=9), parameter :: anchor(6) = [character(len=9) :: "xyz1_rA", "xi1_rA", &
          & "a_i1_rA", "v_i1_rA", "A_tot1_rA", "V_tot1_rA"]
-      character(len=9), parameter :: cavity(7) = [character(len=9) :: "A_tot1_rA", "V_tot1_rA", &
-         & "asph1_rA", "vsph1_rA", "xyz1_rA", "r_iI1_rA", "rho1_rA"]
+      character(len=9), parameter :: cavity(5) = [character(len=9) :: "A_tot1_rA", "V_tot1_rA", &
+         & "asph1_rA", "vsph1_rA", "xyz1_rA"]
       character(len=8), parameter :: amat(3) = [character(len=8) :: "Amat0", "Amat1_rA", "xi"]
 
       call check_missing_pointers(error, "get_anchor_gradient", anchor)
@@ -2917,7 +3086,7 @@ contains
       character(kind=c_char) :: name(65)
       character(kind=c_char), allocatable, target :: name_ngrid(:), name_w(:), name_xyz(:)
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_mol(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       template%nx = 2
       template%ny = 2
@@ -3040,6 +3209,336 @@ contains
       deallocate (stub, empty_model, err)
 
    end subroutine test_model_fields_guards
+
+   !> Components of a continuum model by zero-based index: count and names
+   !> before any update, the energy listed only after an evaluation and gone
+   !> after an update, and every other family or index refused
+   !>
+   !> Two PV components, so the repeated name is told apart by index and no
+   !> host request has to be answered
+   subroutine test_model_components(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, viswig, vmodel, vlow, vhigh, vcpl
+      !> Model handle holding a model of another family, and the decoded model handle
+      type(vp_model), pointer :: stub, holder
+      !> H2, coordinates in Bohr
+      integer(c_int) :: numbers(2)
+      real(c_double) :: positions(3, 2)
+      !> Counts and descriptor outputs; MOIST_FIELD_NAME_MAX + 1 name characters
+      integer(c_int) :: ncomponents, nfield, dtype, rank, dims(3), count
+      character(kind=c_char) :: name(65)
+      !> Name and description buffers and their reported length
+      character(kind=c_char), allocatable :: text(:)
+      integer(c_size_t) :: length
+      !> Energy accumulator and the two component energies, each read into a
+      !> buffer one longer than the count so a write past it shows
+      real(c_double) :: energy, low(2), high(2)
+      !> Fortran-side declaration, the reference for the copied description
+      type(field_query_type) :: query
+      character(kind=c_char), allocatable, target :: name_energy(:)
+      real(c_double), parameter :: seed = 0.5_c_double, sentinel = -12345.0_c_double
+      character(len=*), parameter :: pv_about = "Pressure-volume work, pressure times cavity volume"
+
+      numbers = 1_c_int
+      positions = reshape([0.0_c_double, 0.0_c_double, 0.0_c_double, &
+                           0.0_c_double, 0.0_c_double, 1.4_c_double], [3, 2])
+      name_energy = c_string("energy")
+      allocate (err, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+      vcpl = c_null_ptr
+
+      vmol = moist_new_structure(verror, 2_c_int, numbers, positions)
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vlow = new_pv_component_api(verror, 1.0e-4_c_double)
+      vhigh = new_pv_component_api(verror, 3.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vlow)
+      if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vhigh)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         ! Count and names need no update
+         ncomponents = -1_c_int
+         call get_model_component_count_api(verror, vmodel, ncomponents)
+         call expect_success(error, err, "component count")
+         if (allocated(error)) exit checks
+         call check(error, ncomponents, 2_c_int, "component count")
+         if (allocated(error)) exit checks
+         call get_model_component_name_api(verror, vmodel, 1_c_int, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "component name length")
+         if (allocated(error)) exit checks
+         call check(error, length == 2_c_size_t, more="component name length")
+         if (allocated(error)) exit checks
+         allocate (text(length + 1))
+         text = "Z"
+         call get_model_component_name_api(verror, vmodel, 1_c_int, text, length + 1, length)
+         call expect_success(error, err, "component name copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string("PV")), more="second component name")
+         if (allocated(error)) exit checks
+
+         ! The description follows the same string convention
+         call get_model_component_description_api(verror, vmodel, 1_c_int, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "component description length")
+         if (allocated(error)) exit checks
+         call check(error, length == len(pv_about, c_size_t), more="component description length")
+         if (allocated(error)) exit checks
+         deallocate (text)
+         allocate (text(length + 1))
+         text = "Z"
+         call get_model_component_description_api(verror, vmodel, 1_c_int, text, length + 1, length)
+         call expect_success(error, err, "component description copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string(pv_about)), more="second component description")
+         if (allocated(error)) exit checks
+         call get_model_component_description_api(verror, vmodel, 2_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_component_description] Component index out of range")
+         if (allocated(error)) exit checks
+
+         ! An index outside [0, count) is refused by every indexed entry
+         call get_model_component_name_api(verror, vmodel, 2_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_component_name] Component index out of range - "// &
+            & "use the count from get_model_component_count")
+         if (allocated(error)) exit checks
+         nfield = -1_c_int
+         call get_model_component_field_count_api(verror, vmodel, -1_c_int, nfield)
+         call expect_error(error, err, "[moist_get_model_component_field_count] Component index out of range")
+         call check_untouched(error, nfield /= -1_c_int, "field count of a component past the list")
+         if (allocated(error)) exit checks
+         call seed_field_info(name, dtype, rank, dims, count)
+         call get_model_component_field_info_api(verror, vmodel, 2_c_int, 0_c_int, name, dtype, rank, dims, count)
+         call expect_error(error, err, "[moist_get_model_component_field_info] Component index out of range")
+         if (allocated(error)) exit checks
+         call check_unchanged_info(error, "component past the list", name, dtype, rank, dims, count)
+         if (allocated(error)) exit checks
+
+         ! Nothing is evaluated yet: the energy is neither listed nor readable
+         call get_model_component_field_count_api(verror, vmodel, 0_c_int, nfield)
+         call expect_success(error, err, "field count before evaluation")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 0_c_int, "fields listed before evaluation")
+         if (allocated(error)) exit checks
+         low = sentinel
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy), low)
+         call expect_error(error, err, "[moist_get_model_component_field_real] Component 0 (PV) has no field "// &
+            & "'energy' - it is either unknown or was not computed; enumerate the available fields with "// &
+            & "get_model_component_field_count/get_model_component_field_info")
+         call check_untouched(error, any(low /= sentinel), "energy read before evaluation")
+         if (allocated(error)) exit checks
+
+         call update_solvation_model_api(verror, vmodel, vmol)
+         if (.not. allocated(err%ptr)) vcpl = new_coupling_api(verror, vmodel)
+         if (.not. allocated(err%ptr)) call general_model_prepare_energy_api(verror, vmodel, vcpl)
+         energy = seed
+         if (.not. allocated(err%ptr)) call general_model_get_energy_api(verror, vmodel, vcpl, energy)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model evaluation failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         ! Each component lists its scalar energy, the description of the declaration
+         call get_model_component_field_count_api(verror, vmodel, 1_c_int, nfield)
+         call expect_success(error, err, "field count after evaluation")
+         if (allocated(error)) exit checks
+         call check(error, nfield, 1_c_int, "fields listed after evaluation")
+         if (allocated(error)) exit checks
+         call get_model_component_field_info_api(verror, vmodel, 1_c_int, 0_c_int, name, dtype, rank, dims, count)
+         call expect_success(error, err, "energy info")
+         if (allocated(error)) exit checks
+         call check_c_descriptor(error, name, dtype, rank, dims, count, "energy", [integer(c_int) ::])
+         if (allocated(error)) exit checks
+         call get_model_component_field_about_api(verror, vmodel, 1_c_int, c_loc(name_energy), &
+            & capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "energy about length")
+         if (allocated(error)) exit checks
+         call c_f_pointer(vmodel, holder)
+         select type (model => holder%ptr)
+         type is (model_continuum_type)
+            call query%fetch("energy")
+            call model%list_component_fields(2, query)
+         end select
+         call check(error, query%found, more="energy not declared by the model")
+         if (allocated(error)) exit checks
+         call check(error, length == len(query%hit%about, c_size_t), more="energy about length")
+         if (allocated(error)) exit checks
+         deallocate (text)
+         allocate (text(length + 1))
+         call get_model_component_field_about_api(verror, vmodel, 1_c_int, c_loc(name_energy), text, length + 1, length)
+         call expect_success(error, err, "energy about copy")
+         if (allocated(error)) exit checks
+         call check(error, all(text == c_string(query%hit%about)), more="energy description")
+         if (allocated(error)) exit checks
+
+         ! The values: one element each, three times apart, summing to the model energy
+         low = sentinel
+         high = sentinel
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy), low)
+         if (.not. allocated(err%ptr)) then
+            call get_model_component_field_real_api(verror, vmodel, 1_c_int, c_loc(name_energy), high)
+         end if
+         call expect_success(error, err, "energy read")
+         if (allocated(error)) exit checks
+         call check(error, low(2) == sentinel .and. high(2) == sentinel, more="energy read wrote past its count")
+         if (allocated(error)) exit checks
+         call check(error, ieee_is_finite(low(1)) .and. ieee_is_finite(high(1)) .and. low(1) > 0.0_c_double, &
+            & more="component energies are not finite and positive")
+         if (allocated(error)) exit checks
+         call check(error, high(1), 3.0_c_double*low(1), thr=1.0e-14_c_double, &
+            & message="repeated PV names were not told apart by index")
+         if (allocated(error)) exit checks
+         call check(error, energy - seed, low(1) + high(1), thr=1.0e-14_c_double, &
+            & message="component energies do not add up to the model energy")
+         if (allocated(error)) exit checks
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_null_ptr, low)
+         call expect_error(error, err, "[moist_get_model_component_field_real] Field name is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_field_real_api(verror, vmodel, 0_c_int, c_loc(name_energy))
+         call expect_error(error, err, "[moist_get_model_component_field_real] Required pointer 'values' is missing")
+         if (allocated(error)) exit checks
+
+         ! An update clears the energies, never the components
+         call update_solvation_model_api(verror, vmodel, vmol)
+         if (.not. allocated(err%ptr)) call get_model_component_field_count_api(verror, vmodel, 0_c_int, nfield)
+         if (.not. allocated(err%ptr)) call get_model_component_count_api(verror, vmodel, ncomponents)
+         call expect_success(error, err, "count after update")
+         if (allocated(error)) exit checks
+         call check(error, nfield == 0_c_int .and. ncomponents == 2_c_int, &
+            & more="update kept an energy or changed the components")
+         if (allocated(error)) exit checks
+
+         ! Other families, missing handles and missing outputs are refused by name
+         ncomponents = -1_c_int
+         call get_model_component_count_api(verror, c_loc(stub), ncomponents)
+         call expect_error(error, err, "[moist_get_model_component_count] Model is not a continuum solvation model")
+         call check_untouched(error, ncomponents /= -1_c_int, "component count of another family")
+         if (allocated(error)) exit checks
+         call get_model_component_field_count_api(verror, c_loc(stub), 0_c_int, nfield)
+         call expect_error(error, err, &
+            & "[moist_get_model_component_field_count] Model is not a continuum solvation model")
+         if (allocated(error)) exit checks
+         call get_model_component_description_api(verror, c_loc(stub), 0_c_int, text, size(text, kind=c_size_t), length)
+         call expect_error(error, err, &
+            & "[moist_get_model_component_description] Model is not a continuum solvation model")
+         if (allocated(error)) exit checks
+         call get_model_component_count_api(verror, c_null_ptr, ncomponents)
+         call expect_error(error, err, "[moist_get_model_component_count] Model handle is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_count_api(verror, vmodel)
+         call expect_error(error, err, "[moist_get_model_component_count] Required pointer 'ncomponents' is missing")
+         if (allocated(error)) exit checks
+         call get_model_component_name_api(verror, vmodel, 0_c_int, text, size(text, kind=c_size_t))
+         call expect_error(error, err, "[moist_get_model_component_name] Length output is required")
+      end block checks
+
+      call delete_coupling_api(vcpl)
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vhigh)
+      call delete_solvation_component_api(vlow)
+      call moist_delete_cavity(viswig)
+      call moist_delete_structure(vmol)
+      deallocate (stub%ptr)
+      deallocate (stub, err)
+
+   end subroutine test_model_components
+
+   !> Settings printout of a continuum model as C text, without an update:
+   !> a length query, a full copy, a truncated copy that still succeeds, and
+   !> the refusals of another family and of missing outputs
+   subroutine test_model_parameters_text(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, viswig, vmodel, vpcm, vpv
+      !> Model handle holding a model of another family
+      type(vp_model), pointer :: stub
+      !> Full copy and a buffer too small for it
+      character(kind=c_char), allocatable :: text(:)
+      character(kind=c_char) :: small(8)
+      !> Reported and full text length
+      integer(c_size_t) :: length, full, i
+      !> Full copy as Fortran text
+      character(len=:), allocatable :: printout
+
+      allocate (err, stub)
+      verror = c_loc(err)
+      allocate (stub_model :: stub%ptr)
+
+      viswig = moist_new_iswig_cavity(verror, c_null_ptr, c_null_ptr)
+      vmodel = moist_new_model(verror, viswig, c_null_ptr)
+      vpcm = new_cpcm_component_api(verror, 78.0_c_double, 3_c_int, 1.0e-10_c_double, 50_c_int)
+      vpv = new_pv_component_api(verror, 1.0e-4_c_double)
+      call general_model_add_component_api(verror, vmodel, vpcm)
+      if (.not. allocated(err%ptr)) call general_model_add_component_api(verror, vmodel, vpv)
+
+      checks: block
+         if (allocated(err%ptr)) then
+            call test_failed(error, "Model setup failed: "//err%ptr%message)
+            exit checks
+         end if
+
+         length = 0_c_size_t
+         call get_model_parameters_text_api(verror, vmodel, capacity=0_c_size_t, length=length)
+         call expect_success(error, err, "parameters text length")
+         if (allocated(error)) exit checks
+         full = length
+         call check(error, full > 0_c_size_t, more="empty parameters text")
+         if (allocated(error)) exit checks
+         allocate (text(full + 1))
+         text = "Z"
+         call get_model_parameters_text_api(verror, vmodel, text, full + 1, length)
+         call expect_success(error, err, "parameters text copy")
+         if (allocated(error)) exit checks
+         call check(error, length == full .and. text(full + 1) == c_null_char, more="full copy not terminated")
+         if (allocated(error)) exit checks
+         allocate (character(len=full) :: printout)
+         do i = 1, full
+            printout(i:i) = text(i)
+         end do
+         call check(error, index(printout, "Cavity (vdW iSwiG):") > 0 .and. index(printout, "Component 1 (CPCM):") > 0 &
+            & .and. index(printout, "Component 2 (PV):") > 0 .and. index(printout, "solver_tol") > 0, &
+            & more="parameters text lacks a section: "//printout)
+         if (allocated(error)) exit checks
+         call check(error, printout(full:full) == new_line("a"), more="parameters text does not end in a newline")
+         if (allocated(error)) exit checks
+
+         ! Truncation is success: a terminated prefix and the full length
+         small = "Z"
+         call get_model_parameters_text_api(verror, vmodel, small, size(small, kind=c_size_t), length)
+         call expect_success(error, err, "truncated parameters text")
+         if (allocated(error)) exit checks
+         call check(error, length == full .and. all(small(:7) == text(:7)) .and. small(8) == c_null_char, &
+            & more="truncated copy")
+         if (allocated(error)) exit checks
+
+         ! Other families and missing outputs are refused by name
+         small = "Z"
+         length = 7_c_size_t
+         call get_model_parameters_text_api(verror, c_loc(stub), small, size(small, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_parameters_text] Model is not a continuum solvation model")
+         call check_untouched(error, length /= 7_c_size_t, "parameters text length of another family")
+         if (allocated(error)) exit checks
+         call check(error, small(1) == c_null_char, more="refused call left the buffer unterminated")
+         if (allocated(error)) exit checks
+         call get_model_parameters_text_api(verror, c_null_ptr, small, size(small, kind=c_size_t), length)
+         call expect_error(error, err, "[moist_get_model_parameters_text] Model handle is missing")
+         if (allocated(error)) exit checks
+         call get_model_parameters_text_api(verror, vmodel, small, size(small, kind=c_size_t))
+         call expect_error(error, err, "[moist_get_model_parameters_text] Length output is required")
+      end block checks
+
+      call delete_solvation_model_api(vmodel)
+      call delete_solvation_component_api(vpv)
+      call delete_solvation_component_api(vpcm)
+      call moist_delete_cavity(viswig)
+      deallocate (stub%ptr)
+      deallocate (stub, err)
+
+   end subroutine test_model_parameters_text
 
    !> Response reads refuse an empty name, an unknown one and an array the
    !> current item was accumulated without, at every rank, and leave the
@@ -3675,6 +4174,71 @@ contains
       call drop_water_cavity(err, vmol, vcav)
 
    end subroutine test_gradient_capacity_too_small
+
+   !> The cavity-gradient reader hands out r_iI1_rA and rho1_rA only when the
+   !> cavity computed them
+   !>
+   !> - computing the gradient switches no property flag on
+   !> - without `do_fine` both outputs may be omitted (NULL from C)
+   !> - a buffer for an uncomputed one is refused by name, nothing is written
+   subroutine test_gradient_optional_outputs(error)
+      type(error_type), allocatable, intent(out) :: error
+      type(vp_error), pointer :: err
+      type(c_ptr) :: verror, vmol, vcav
+      integer(c_int) :: ngrid, nsph
+      !> Caller buffers
+      real(c_double), allocatable :: A_tot1_rA(:, :), V_tot1_rA(:, :), asph1_rA(:, :, :), &
+         & vsph1_rA(:, :, :), xyz1_rA(:, :, :, :), r_iI1_rA(:, :, :), rho1_rA(:, :, :)
+      real(c_double), parameter :: sentinel = -12345.0_c_double
+
+      call build_water_cavity(error, err, verror, vmol, vcav, ngrid, nsph)
+      if (allocated(error)) then
+         call drop_water_cavity(err, vmol, vcav)
+         return
+      end if
+
+      checks: block
+         call compute_cavity_gradient_api(verror, vcav)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "compute_cavity_gradient failed: "//err%ptr%message)
+            exit checks
+         end if
+         allocate (A_tot1_rA(3, nsph), V_tot1_rA(3, nsph), asph1_rA(3, nsph, nsph), &
+                   vsph1_rA(3, nsph, nsph), xyz1_rA(3, 3, nsph, ngrid), &
+                   r_iI1_rA(3, nsph, ngrid), rho1_rA(3, nsph, ngrid), source=sentinel)
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, r_iI1_rA=r_iI1_rA)
+         call expect_error(error, err, "[moist_get_cavity_gradient] r_iI1_rA was not computed")
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(xyz1_rA /= sentinel) &
+            & .or. any(r_iI1_rA /= sentinel), "gradient buffers with an uncomputed r_iI1_rA")
+         if (allocated(error)) exit checks
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA, rho1_rA=rho1_rA)
+         call expect_error(error, err, "[moist_get_cavity_gradient] rho1_rA was not computed")
+         call check_untouched(error, any(A_tot1_rA /= sentinel) .or. any(rho1_rA /= sentinel), &
+            & "gradient buffers with an uncomputed rho1_rA")
+         if (allocated(error)) exit checks
+
+         call get_cavity_gradient_api(verror, vcav, nsph, ngrid, A_tot1_rA, V_tot1_rA, &
+                                      asph1_rA, vsph1_rA, xyz1_rA)
+         if (allocated(err%ptr)) then
+            call test_failed(error, "get_cavity_gradient without the optional outputs failed: "// &
+               & err%ptr%message)
+            exit checks
+         end if
+         call check(error, all(ieee_is_finite(A_tot1_rA)) .and. all(ieee_is_finite(xyz1_rA)) .and. &
+            & any(A_tot1_rA /= sentinel) .and. all(xyz1_rA /= sentinel), &
+            & more="required gradient outputs were not filled")
+         if (allocated(error)) exit checks
+         call check(error, all(r_iI1_rA == sentinel) .and. all(rho1_rA == sentinel), &
+            & more="omitted optional outputs were written")
+      end block checks
+
+      call drop_water_cavity(err, vmol, vcav)
+
+   end subroutine test_gradient_optional_outputs
 
    !> The A-matrix surface weights of a built cavity carry the closed-form
    !> switching-factor channel and no net position force, a NULL output is

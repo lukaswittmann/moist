@@ -43,6 +43,8 @@
 !>     `get_qc_handymod_recipe(recipe, error, ...)` - atomic recipes of the
 !>                                         uniform, HandyMod, and midpoint
 !>                                         HandyMod molecular grids
+!>   * `read_printout(unit, lines, nline)` - lines written to a scratch unit
+!>   * `printed_entry(lines, key, value)` - whether a `key ... value` line was printed
 !>
 !> No global Fortran RNG state is touched (self-contained LCG), so the
 !> point and structure samplers are safe under parallel test execution
@@ -108,6 +110,7 @@ module test_helpers
    public :: stage_point_charge_energy
    public :: stage_model_point_charge_energy
    public :: get_test_cross
+   public :: read_printout, printed_entry
    public :: fd4_scalar
    public :: fd4_offsets
    public :: fd6_scalar
@@ -333,7 +336,7 @@ contains
       if (present(cut_f)) param%cut_f = cut_f
 
       allocate (ctx)
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       if (present(radius_model)) then
          call new_cavity_iswig( &
             self=cavity, &
@@ -1391,4 +1394,63 @@ contains
       allocate (recipe%angular, source=generator)
       allocate (recipe%shells, source=shells)
    end subroutine assemble_recipe
+
+   !* ------------------------------- Printout helpers -------------------------------- *!
+
+   !> Rewind a formatted scratch unit and read back the lines written to it
+   !>
+   !> @param[in]  unit  Open scratch unit
+   !> @param[out] lines Lines in order, blank-padded
+   !> @param[out] nline Number of lines read, at most `size(lines)`
+   subroutine read_printout(unit, lines, nline)
+      !> Open scratch unit
+      integer, intent(in) :: unit
+      !> Lines in order
+      ! allow(assumed-size-character-intent): caller-sized line buffers, longer lines are cut
+      character(len=*), intent(out) :: lines(:)
+      !> Number of lines read
+      integer, intent(out) :: nline
+      !> I/O status
+      integer :: stat
+
+      lines = ""
+      nline = 0
+      rewind (unit)
+      do while (nline < size(lines))
+         read (unit, "(a)", iostat=stat) lines(nline + 1)
+         if (stat /= 0) exit
+         nline = nline + 1
+      end do
+   end subroutine read_printout
+
+   !> Whether a pretty-printed `key ... value` line is among `lines`
+   !>
+   !> The key must open the line after its indentation and be followed by a
+   !> blank; the value may appear anywhere after it
+   !>
+   !> @param[in] lines Printed lines
+   !> @param[in] key   Entry label
+   !> @param[in] value Expected value text, including any unit
+   logical function printed_entry(lines, key, value) result(found)
+      !> Printed lines
+      character(len=*), intent(in) :: lines(:)
+      !> Entry label
+      character(len=*), intent(in) :: key
+      !> Expected value text
+      character(len=*), intent(in) :: value
+      !> Line index
+      integer :: i
+      !> Line without its indentation
+      character(len=len(lines)) :: line
+
+      found = .false.
+      do i = 1, size(lines)
+         line = adjustl(lines(i))
+         if (index(line, key//" ") /= 1) cycle
+         if (index(line(len(key) + 1:), value) > 0) then
+            found = .true.
+            return
+         end if
+      end do
+   end function printed_entry
 end module test_helpers
