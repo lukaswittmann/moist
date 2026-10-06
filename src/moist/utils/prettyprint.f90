@@ -132,13 +132,14 @@ contains
          & fmt_int=fmt_int, fmt_real=fmt_real, fmt_exp=fmt_exp, fmt_logical=fmt_logical)
    end function new_prettyprinter
 
-   !> Print a blank line
+   !> Print a blank line, then flush the unit so the finished block is written out
    !>
    !> @param[inout] self Pretty printer instance
    subroutine blank(self)
       !> Pretty printer instance
       class(prettyprinter), intent(inout) :: self
       write (self%iu, "(A)") ""
+      flush (self%iu)
    end subroutine blank
 
    !> Print a section title at current indentation

@@ -230,7 +230,7 @@ contains
       write (self%unit, "(A)") ""
    end subroutine separator
 
-   !> Print a blank line
+   !> Print a blank line, then flush the unit so the finished block is written out
    !>
    !> @param[inout] self Pretty printer instance
    subroutine blank(self)
@@ -238,6 +238,7 @@ contains
       class(prettylistprinter), intent(inout) :: self
 
       write (self%unit, "(A)") ""
+      flush (self%unit)
    end subroutine blank
 
    !> Start a new row and reset write position to first column
