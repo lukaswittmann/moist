@@ -20,6 +20,7 @@ module moist_model_continuum_component_pcm_type
    use moist_model_continuum_component_pcm_electrostatics, only: &
       & pcm_electrostatic_nuclear_gradient, pcm_electrostatic_direct_gradient
    use moist_utils_timer, only: cat_setup, cat_energy, cat_solve
+   use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
    private
 
@@ -85,20 +86,11 @@ module moist_model_continuum_component_pcm_type
       !> PCM interaction matrix A (ngrid, ngrid)
       real(wp), allocatable :: amat(:, :)
 
-
-      ! TODO: remove these parameters here and use the parameter type
-
-      !> Solver type identifier
-      integer :: solver = solver_type%lu
+      !> Linear solver settings
+      type(moist_pcm_parameters_type) :: param
 
       !> Use external matrix (bypasses assembly if .true.)
       logical :: use_external_matrix = .false.
-
-      !> Convergence tolerance for iterative solvers
-      real(wp) :: solver_tol = 1.0e-10_wp
-
-      !> Maximum iterations for iterative solvers
-      integer :: solver_maxiter = 50
 
       !> Molecular electrostatic potential at cavity grid points (ngrid)
       !>
@@ -162,6 +154,12 @@ module moist_model_continuum_component_pcm_type
       !> Solve the PCM linear system A . q = rhs using selected solver
       procedure :: solve_system => pcm_solve_system
 
+      !> Linear solver settings
+      procedure :: parameters => pcm_component_parameters
+
+      !> Print the dielectric constant and its scaling factor
+      procedure :: print_inputs => pcm_component_print_inputs
+
    end type model_continuum_component_pcm
 
 contains
@@ -204,6 +202,34 @@ contains
       call self%register_real_scalar("solver_tol", self%solver_tol)
       call self%register_int_scalar("solver_maxiter", self%solver_maxiter)
    end subroutine register_parameter_entries
+
+   !> Linear solver settings of the component
+   !>
+   !> @param[in] self PCM component instance
+   function pcm_component_parameters(self) result(param)
+      !> PCM component instance
+      class(model_continuum_component_pcm), intent(in), target :: self
+      !> Solver settings, valid while the component is
+      class(moist_model_parameters_type), pointer :: param
+
+      param => self%param
+
+   end function pcm_component_parameters
+
+   !> Print the dielectric constant and its scaling factor
+   !>
+   !> @param[in]    self PCM component instance
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine pcm_component_print_inputs(self, pp)
+      !> PCM component instance
+      class(model_continuum_component_pcm), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv("epsilon", self%epsilon)
+      call pp%kv("f(eps)", self%feps)
+
+   end subroutine pcm_component_print_inputs
 
    !> Update PCM base component
    !>
@@ -1015,7 +1041,7 @@ contains
 
    !> Solve the PCM linear system A*q = rhs
    !>
-   !> Dispatches to appropriate solver based on self%solver setting
+   !> Dispatches to appropriate solver based on self%param%solver setting
    !>
    !> @param[in] self PCM component instance
    !> @param[in] amat System matrix (ngrid, ngrid)
@@ -1045,7 +1071,7 @@ contains
       d0 = self%ctx%timer%current_depth()
       call self%ctx%timer%start("PCM solve", category=cat_solve)
 
-      select case (self%solver)
+      select case (self%param%solver)
       case (solver_type%lu)
          call solve_pcm_lu(amat, rhs, q, error, unit=self%ctx%unit)
 
@@ -1053,8 +1079,8 @@ contains
          call solve_pcm_cholesky(amat, rhs, q, error)
 
       case (solver_type%iterative)
-         call solve_pcm_iterative(amat, rhs, q, self%solver_tol, &
-            & self%solver_maxiter, error)
+         call solve_pcm_iterative(amat, rhs, q, self%param%solver_tol, &
+            & self%param%solver_maxiter, error)
 
       case (solver_type%inversion)
          call solve_pcm_inversion(amat, rhs, q, error)

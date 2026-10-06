@@ -70,17 +70,16 @@ contains
 
       call settings%validate(error)
       if (allocated(error)) return
-      self%solver = settings%solver
-      self%solver_tol = settings%solver_tol
-      self%solver_maxiter = settings%solver_maxiter
+      self%param = settings
 
       ! Handle external matrix
       if (present(external_matrix)) then
          call self%set_external_matrix(external_matrix)
       end if
 
-      ! Set component name
+      ! Set component name and description
       self%name = "CPCM"
+      self%description = "Conductor-like polarizable continuum, f(eps) = (eps - 1)/eps"
 
    end subroutine new_component_cpcm
 

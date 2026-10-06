@@ -3,10 +3,11 @@ module moist_model_continuum_component_pv
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io, only: structure_type
    use moist_cavity_type, only: cavity_type
-   use moist_model_continuum_component_type, only: model_continuum_component_type
+   use moist_model_continuum_component_type, only: model_continuum_component_type, autogpa
    use moist_channels_coupling, only: coupling_type, coupling_view_type
    use moist_channels_response, only: response_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_utils_prettyprint, only: prettyprinter
 
    implicit none(type, external)
    private
@@ -23,6 +24,8 @@ module moist_model_continuum_component_pv
       procedure :: get_response => pv_get_response
       procedure :: get_gradient => pv_get_gradient
       procedure :: get_surface_weights => pv_get_surface_weights
+      !> Print the pressure
+      procedure :: print_inputs => pv_print_inputs
    end type model_continuum_component_pv
 
 contains
@@ -39,9 +42,24 @@ contains
       real(wp), intent(in) :: pressure
 
       self%name = "PV"
+      self%description = "Pressure-volume work, pressure times cavity volume"
       self%pressure = pressure
 
    end subroutine new_component_pv
+
+   !> Print the pressure in Eh/bohr^3 and GPa
+   !>
+   !> @param[in]    self Component instance
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine pv_print_inputs(self, pp)
+      !> Component instance
+      class(model_continuum_component_pv), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+      call pp%kv2("Pressure", self%pressure, "Eh/bohr^3", self%pressure*autogpa, "GPa", use_exp1=.true.)
+
+   end subroutine pv_print_inputs
 
    !> Bind the current molecular structure
    !>

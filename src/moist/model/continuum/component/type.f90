@@ -1,10 +1,14 @@
 !> Typed cavity component interface and standalone coupling lifecycle
 module moist_model_continuum_component_type
+   use, intrinsic :: iso_fortran_env, only: output_unit
    use mctc_env, only: wp, error_type
    use mctc_io, only: structure_type
+   use mctc_io_codata2018, only: atomic_unit_of_mass, atomic_unit_of_time, Bohr_radius
    use moist_context, only: moist_context_type
    use moist_cavity_type, only: cavity_type
    use moist_cavity_surface_adjoint, only: cavity_surface_adjoint_type
+   use moist_model_parameters, only: moist_model_parameters_type
+   use moist_utils_prettyprint, only: prettyprinter, new_prettyprinter
    use moist_channels_response, only: response_type
    use moist_channels_coupling, only: coupling_type, coupling_view_type, moist_phase_energy, &
       & moist_phase_response, moist_phase_gradient, coupling_begin_registration, &
@@ -14,6 +18,10 @@ module moist_model_continuum_component_type
    private
 
    public :: model_continuum_component_type
+   public :: autogpa
+
+   !> Pressure Eh/bohr^3 -> GPa: the atomic unit of pressure m_e/(a_0 t_au^2) in Pa, times 1e-9
+   real(wp), parameter :: autogpa = atomic_unit_of_mass/(Bohr_radius*atomic_unit_of_time**2)*1.0e-9_wp
 
    !> Abstract solvation model component
    type, abstract :: model_continuum_component_type
@@ -23,6 +31,8 @@ module moist_model_continuum_component_type
       type(moist_context_type), pointer :: ctx => null()
       !> Name of the component
       character(len=:), allocatable :: name
+      !> One-line description of the component, set by its constructor
+      character(len=:), allocatable :: description
       !> Molecular structure data for the component
       type(structure_type) :: mol_solu
       !> Linear scale factor applied to this contribution
@@ -65,6 +75,12 @@ module moist_model_continuum_component_type
       procedure :: prepare_response => prepare_component_response
       !> Stage the gradient phase
       procedure :: prepare_gradient => prepare_component_gradient
+      !> Solvent-independent settings; null for a component without any
+      procedure :: parameters => component_parameters_default
+      !> Print the solvent and physical inputs (none by default)
+      procedure :: print_inputs => print_component_inputs_default
+      !> Print name, description, scale, inputs and settings
+      procedure :: print_parameters => print_component_parameters
 
    end type model_continuum_component_type
 
@@ -457,5 +473,87 @@ contains
       call self%stage(cavity, coupling, moist_phase_gradient, error)
 
    end subroutine prepare_component_gradient
+
+   !* ================================================================================= *!
+   !*                                    Printout                                     *!
+   !* ================================================================================= *!
+
+   !> Default settings hook: the component has no parameter object
+   !>
+   !> @param[in] self Solvation component
+   function component_parameters_default(self) result(param)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in), target :: self
+      !> Settings of the component, never associated here
+      class(moist_model_parameters_type), pointer :: param
+
+      param => null()
+
+   end function component_parameters_default
+
+   !> Default no-op input printer for a component without solvent inputs
+   !>
+   !> @param[in]    self Solvation component
+   !> @param[inout] pp   Pretty printer inside the component section
+   subroutine print_component_inputs_default(self, pp)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in) :: self
+      !> Pretty printer inside the component section
+      type(prettyprinter), intent(inout) :: pp
+
+   end subroutine print_component_inputs_default
+
+   !> Print one component section
+   !>
+   !> - the header is the name, or `Component <index> (<name>)` inside a model
+   !> - then the description, `scale` when it is not 1, the solvent inputs and
+   !>   the registered settings of `parameters()`
+   !>
+   !> @param[in] self  Solvation component
+   !> @param[in] unit  Output unit; defaults to the run context's unit
+   !> @param[in] index 1-based position in a model, shown in the header
+   subroutine print_component_parameters(self, unit, index)
+      !> Solvation component
+      class(model_continuum_component_type), intent(in), target :: self
+      !> Output unit
+      integer, intent(in), optional :: unit
+      !> 1-based position in a model
+      integer, intent(in), optional :: index
+
+      !> Section printer
+      type(prettyprinter) :: pp
+      !> Registered settings, when the component has any
+      class(moist_model_parameters_type), pointer :: param
+      !> Component name and section header
+      character(len=:), allocatable :: name, header
+      !> Index as text
+      character(len=12) :: label
+      !> Effective output unit
+      integer :: iu
+
+      iu = output_unit
+      if (associated(self%ctx)) iu = self%ctx%unit
+      if (present(unit)) iu = unit
+      name = ""
+      if (allocated(self%name)) name = self%name
+      if (present(index)) then
+         write (label, "(i0)") index
+         header = "Component "//trim(label)
+         if (len(name) > 0) header = header//" ("//name//")"
+      else
+         header = name
+      end if
+
+      pp = new_prettyprinter(unit=iu)
+      call pp%blank()
+      call pp%push(header//":")
+      if (allocated(self%description)) call pp%section(self%description)
+      if (self%scale /= 1.0_wp) call pp%kv("scale", self%scale)
+      call self%print_inputs(pp)
+      param => self%parameters()
+      if (associated(param)) call param%print_table(pp)
+      call pp%pop()
+
+   end subroutine print_component_parameters
 
 end module moist_model_continuum_component_type
