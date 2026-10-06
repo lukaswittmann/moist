@@ -553,7 +553,7 @@ contains
       call check(error, defaults%spacing, DEFAULT_SPACING, &
          & more="Compiled marching-cubes spacing must be 0.2 bohr")
       if (allocated(error)) return
-      call check(error, cav%spacing, DEFAULT_SPACING, &
+      call check(error, cav%param%spacing, DEFAULT_SPACING, &
          & more="Omitted parameters must use the compiled spacing")
       if (allocated(error)) return
 

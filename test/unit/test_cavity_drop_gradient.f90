@@ -1303,6 +1303,8 @@ contains
       call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
+      !> The curvature channels need the forward principal curvatures; the
+      !> normals are stored by the projection regardless
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
@@ -1310,16 +1312,13 @@ contains
          call new_context(ctx, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
+            do_curvature=.true., do_normal=.true.))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
          return
       end if
-      !> The curvature channels need the forward principal curvatures; the
-      !> normals are stored by the projection regardless
-      call cavity%properties(do_curvature=.true., do_normal=.true.)
-
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to build cavity: "//cavity_error%message)
@@ -1569,14 +1568,13 @@ contains
          call new_context(ctx, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4))
+            proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
+            do_curvature=.true., do_normal=.true.))
       end block
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to initialize cavity: "//cavity_error%message)
          return
       end if
-      call cavity%properties(do_curvature=.true., do_normal=.true.)
-
       call cavity%update(mol, error=cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, "Failed to build cavity: "//cavity_error%message)

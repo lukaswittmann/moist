@@ -17,11 +17,13 @@ pressure, separate from numerical settings:
 .. code-block:: python
 
    from moist import (
-       CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
+       Context, CavityDROP, CPCMRadii, DROPParameters, SvdW, SvdWParameters,
        ModelComponentCPCM, PCMParameters, PCMSolver, SolvationModel,
    )
 
+   context = Context(nthreads=4)
    cavity = CavityDROP(
+       context=context,
        lsf=SvdW(parameters=SvdWParameters(blend_k=5.5)),
        radii=CPCMRadii(),
        parameters=DROPParameters(nleb=194, proj_level=3),
@@ -30,7 +32,7 @@ pressure, separate from numerical settings:
        ModelComponentCPCM(
            78.4, parameters=PCMParameters(solver=PCMSolver.CHOLESKY),
        ),
-   ])
+   ])  # inherits the cavity context
 
 ``CavityISwiG(parameters=ISwiGParameters(...), radii=...)`` has the same
 construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
@@ -38,13 +40,25 @@ construction convention. ``CavityDROP`` takes its level set as ``lsf=SvdW()``,
 ``DROPParameters``.
 ``SvdWParameters``, ``CFCParameters`` and ``IsodensityParameters`` configure
 the surface independently. ``PCMParameters`` applies to both CPCM and COSMO;
-``ModelParameters`` controls model logging.
+``ModelParameters`` controls model logging for implicit contexts.
+
+``Context`` accepts ``nthreads=0``, ``verbosity=0`` and ``debug=False``. Positive
+``nthreads`` pins the calling thread's OpenMP budget; otherwise it follows
+``OMP_NUM_THREADS`` and host runtime changes. Cavities and models retain the
+context; the final native release restores the pre-pin setting. Without OpenMP,
+execution is serial.
+
+Pass ``context=...`` to a cavity, ``configuration.build()`` or ``SolvationModel``.
+Models inherit their cavity's context unless given another; the cavity copy and
+components share it. ``cavity.context`` and ``model.context`` expose the explicit
+context; ``context.nthreads`` reports its effective budget. Explicit context
+logging overrides cavity/model parameters; omitted contexts retain defaults.
 
 Parameter fields correspond to the supported C options structs; defaults come
 from the linked library's initializers and derived Fortran parameters remain
 native. Parameter objects are immutable and keyword-only.
 Constraints are checked by the native constructor.
-Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``. 
+Inspect the settings used through ``cavity.parameters``, ``cavity.lsf.parameters``, ``component.parameters`` and ``model.parameters``.
 ``cavity.radius_model`` is the radius configuration; ``cavity.radii`` remains the computed per-sphere radii after an update.
 
 Radii and density sources
@@ -116,6 +130,24 @@ symmetric. Full diagnostic derivative tensors follow the same exact reversal.
 C-contiguous float64 array of shape ``(natoms,3)`` and returns the host response.
 Both leave their accumulator unchanged on failure. ``get_response(coupling)``
 returns a fresh ``Response``.
+
+``model.components`` contains live views in construction order: ``name``,
+one-line ``description``, ``energy`` (the latest ``get_energy`` contribution in
+Hartree) and ``configuration`` (the original component). ``energy`` raises
+``KeyError`` before evaluation and after ``update``; ``fields()``, ``get(name)``
+and ``describe(name)`` work as on a cavity:
+
+.. code-block:: python
+
+   energy = np.array(0.0)
+   model.get_energy(coupling, energy)
+   for component in model.components:
+       print(component.name, component.energy)
+
+``model.parameters_text()`` returns native settings: the cavity, then components
+numbered from 1, with descriptions, solvent inputs and registered settings.
+``model.print_parameters(file=None)`` prints them to standard output by default.
+Neither needs an update.
 
 Grid inputs are cavity properties: ``model.cavity.xyz``, ``xi0``, ``normal0``,
 ``a`` and ``f`` mirror ``model%cavity`` in Fortran; every other array is one of

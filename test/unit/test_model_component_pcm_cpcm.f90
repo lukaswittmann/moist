@@ -270,8 +270,8 @@ contains
          end if
 
          ! Tighten CG tolerance
-         pcm_model%solver_tol = 1.0e-14_wp
-         pcm_model%solver_maxiter = 10000
+         pcm_model%param%solver_tol = 1.0e-14_wp
+         pcm_model%param%solver_maxiter = 10000
 
          call pcm_model%update(mol, cavity, err)
          if (allocated(err)) then
@@ -1318,8 +1318,8 @@ contains
          end if
 
          ! Set CG tolerance
-         pcm_model%solver_tol = 1.0e-14_wp
-         pcm_model%solver_maxiter = 10000
+         pcm_model%param%solver_tol = 1.0e-14_wp
+         pcm_model%param%solver_maxiter = 10000
 
          call pcm_model%update(mol, cavity, err)
          if (allocated(err)) then

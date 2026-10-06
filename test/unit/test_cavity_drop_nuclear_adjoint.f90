@@ -867,6 +867,8 @@ contains
       call fill_legacy_radii(mol, radii, error)
       if (allocated(error)) return
 
+      ! do_fine turns on curvature, normals, r_iI and rho so that every
+      ! optional *_rA array the reference contraction reads is allocated
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
@@ -875,7 +877,8 @@ contains
          call new_context(ctx, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
-            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc))
+            proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc, &
+            do_fine=.true.))
       end block
       if (allocated(cav_error)) then
          call test_failed(error, "failed to initialize cavity: "//cav_error%message)
@@ -897,10 +900,6 @@ contains
          end if
          call cavity%branch_weight%init(BRANCH_SOFTMAX_S)
       end if
-
-      ! do_fine turns on curvature, normals, r_iI and rho so that every
-      ! optional *_rA array the reference contraction reads is allocated
-      call cavity%properties(do_fine=.true.)
 
       call cavity%update(mol, error=cav_error)
       if (allocated(cav_error)) then

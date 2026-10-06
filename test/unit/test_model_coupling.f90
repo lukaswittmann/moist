@@ -437,10 +437,10 @@ contains
             blend_3b=drop_blend_3b))
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=err, param=moist_cavity_drop_parameters_type(num_leb=nleb_drop, tolerance=drop_proj_tol, &
-            proj_maxiter=drop_proj_maxiter, proj_level=drop_proj_level, wleb_prune_level=drop_prune_level))
+            proj_maxiter=drop_proj_maxiter, proj_level=drop_proj_level, wleb_prune_level=drop_prune_level, &
+            do_fine=.true.))
       end block
       if (failed(error, err, "DROP setup")) return
-      call cavity%properties(do_fine=.true.)
 
    end subroutine drop_fixture
 
