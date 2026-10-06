@@ -1,5 +1,5 @@
-!> Shared JSON/TOML file input and output, with JSON printing for native
-!> parameter objects
+!> Shared JSON/TOML file input and output, with JSON and table printing for
+!> native parameter objects
 !>
 !> Derived types declare their fields in register_entries and defaults in
 !> init_defaults
@@ -8,9 +8,11 @@ module moist_model_parameters
    use mctc_env, only: wp, error_type, fatal_error
    use mctc_io_utils, only: to_lower
    use jonquil, only: json_load, json_dump
-   use tomlf, only: toml_table, toml_value, toml_array, toml_error, &
+   use tomlf, only: toml_table, toml_value, toml_array, toml_keyval, toml_key, toml_error, &
       toml_load, toml_dump, get_value, set_value, len
+   use tomlf_constants, only: toml_type
    use tomlf_type, only: cast_to_table
+   use moist_utils_prettyprint, only: prettyprinter
    implicit none(type, external)
    private
    public :: moist_model_parameters_type
@@ -37,6 +39,8 @@ module moist_model_parameters
       procedure :: write_file
       !> Print parameter values as formatted JSON
       procedure :: print_parameters
+      !> Print parameter values as an aligned key-value table
+      procedure :: print_table
       procedure :: register_real_scalar
       procedure :: register_int_scalar
       procedure :: register_logical
@@ -239,6 +243,104 @@ contains
       call self%clear_document()
       !$omp end critical (moist_parameter_documents)
    end subroutine print_parameters
+
+   !> Print parameter values as an aligned key-value table
+   !>
+   !> - one line per registered field, in registration order; a dotted key
+   !>   group becomes a nested section
+   !> - works on a copy, so printing leaves the values untouched
+   !> - a failed collection prints one warning line instead of the table
+   !>
+   !> @param[in] self Parameter values
+   !> @param[inout] pp Pretty printer; the table continues at its indentation
+   subroutine print_table(self, pp)
+      class(moist_model_parameters_type), intent(in) :: self
+      type(prettyprinter), intent(inout) :: pp
+      !> Copy that holds the temporary document
+      class(moist_model_parameters_type), allocatable, target :: work
+      type(error_type), allocatable :: error
+      type(toml_table), pointer :: root
+
+      allocate(work, source=self)
+      !$omp critical (moist_parameter_documents)
+      call work%collect_document(error)
+      if (allocated(error)) then
+         call pp%section("[Warning] Cannot collect parameters: "//error%message)
+      else
+         root => cast_to_table(work%document)
+         if (associated(root)) call print_document_table(root, pp)
+      end if
+      call work%clear_document()
+      !$omp end critical (moist_parameter_documents)
+   end subroutine print_table
+
+   !> Print every entry of one document table, nesting subtables as sections
+   !>
+   !> @param[inout] table Document table
+   !> @param[inout] pp Pretty printer
+   recursive subroutine print_document_table(table, pp)
+      type(toml_table), intent(inout) :: table
+      type(prettyprinter), intent(inout) :: pp
+      type(toml_key), allocatable :: keys(:)
+      class(toml_value), pointer :: entry
+      character(len=:), allocatable :: text
+      real(wp) :: rval
+      integer :: ival, i, stat
+      logical :: lval
+
+      call table%get_keys(keys)
+      do i = 1, size(keys)
+         call table%get(keys(i)%key, entry)
+         if (.not. associated(entry)) cycle
+         select type (entry)
+         type is (toml_table)
+            call pp%push(keys(i)%key//":")
+            call print_document_table(entry, pp)
+            call pp%pop()
+         type is (toml_array)
+            call print_document_array(entry, keys(i)%key, pp)
+         type is (toml_keyval)
+            select case (entry%get_type())
+            case (toml_type%float)
+               call get_value(table, keys(i)%key, rval, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, rval)
+            case (toml_type%int)
+               call get_value(table, keys(i)%key, ival, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, ival)
+            case (toml_type%boolean)
+               call get_value(table, keys(i)%key, lval, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, lval)
+            case (toml_type%string)
+               call get_value(table, keys(i)%key, text, stat=stat)
+               if (stat == 0) call pp%kv(keys(i)%key, text)
+            case default
+               ! Registration helpers write no other value kinds
+               continue
+            end select
+         end select
+      end do
+   end subroutine print_document_table
+
+   !> Print a real vector one element per line, labelled `key(i)`
+   !>
+   !> @param[inout] array Document array
+   !> @param[in] key Field name
+   !> @param[inout] pp Pretty printer
+   subroutine print_document_array(array, key, pp)
+      type(toml_array), intent(inout) :: array
+      character(len=*), intent(in) :: key
+      type(prettyprinter), intent(inout) :: pp
+      character(len=12) :: label
+      real(wp) :: value
+      integer :: i, stat
+
+      do i = 1, len(array)
+         call get_value(array, i, value, stat=stat)
+         if (stat /= 0) cycle
+         write(label, "(i0)") i
+         call pp%kv(key//"("//trim(label)//")", value)
+      end do
+   end subroutine print_document_array
 
    !> Resolve a dotted key; missing input fields keep their default values
    !>
