@@ -57,7 +57,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in UPU23
       do iid = 1, size(upu23_ids)
@@ -110,7 +110,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in heavy28
       do iid = 1, size(heavy28_ids)
@@ -173,7 +173,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in amino20x4
       do iid = 1, size(amino20x4_ids)
@@ -224,7 +224,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in mb16-43
       do iid = 1, size(mb16_43_ids)
@@ -274,7 +274,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in But14diol
       do iid = 1, size(but14diol_ids)
@@ -323,7 +323,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Iterate over all IDs in IL16
       do iid = 1, size(il16_ids)
@@ -393,7 +393,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Initialize random seed for reproducibility
       seed_array = SEED_VALUE

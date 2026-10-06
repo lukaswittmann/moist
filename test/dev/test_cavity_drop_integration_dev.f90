@@ -580,7 +580,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Get radii (either from argument or compute from atomic numbers)
       if (present(radii)) then
@@ -663,7 +663,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Sanitize names (replace spaces and special chars with underscores)
       sanitized_benchmark = trim(benchmark_name)

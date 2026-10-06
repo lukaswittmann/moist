@@ -65,7 +65,7 @@ contains
       real(wp) :: t_build
       real :: c0, c1
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       radius_model = default_cpcm_radii()
 
       write (*, "(a)") ""
@@ -441,7 +441,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       nleb = 194
       blend_k = 5.5_wp
@@ -819,7 +819,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0, do_profile=.true.)
+      call new_context(ctx, nthreads=0, verbosity=0, do_profile=.true.)
 
       !> Polyalanine structures (increasing size)
       struct_names = [character(len=20) :: &
@@ -1198,7 +1198,7 @@ contains
       type(moist_context_type), target :: ctx
 
       !> Polyalanine structures (increasing size)
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       struct_names = [character(len=20) :: &
                       "polyala_04", "polyala_08", "polyala_12", "polyala_16", "polyala_20", &

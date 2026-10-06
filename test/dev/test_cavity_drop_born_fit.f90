@@ -184,7 +184,7 @@ contains
       !> Run context borrowed by the cavity returned to the caller
       type(moist_context_type), target, save :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       ! Load MB16-43/H2 and reshape it into a sphere-at-origin
       call get_structure(mol, "MB16-43", "H2")

@@ -205,7 +205,7 @@ contains
       !> One context borrowed by all the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       allocate (cavs(N_METHODS))
       allocate (stats(N_METHODS))
