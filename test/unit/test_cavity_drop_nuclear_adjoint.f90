@@ -874,7 +874,7 @@ contains
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=blend_k_loc, &
             blend_3b=gamma_loc))
-         call new_context(ctx, verbosity=0)
+         call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cav_error, param=moist_cavity_drop_parameters_type(num_leb=nleb_loc, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=proj_level_loc, wleb_prune_level=prune_loc, &

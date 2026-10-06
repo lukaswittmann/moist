@@ -113,7 +113,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 0.0_wp, 1.4_wp], [3, 2]))
       call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=gamma))
 
@@ -158,7 +158,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call get_structure(mol, "MB16-43", "04")
 
@@ -275,7 +275,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call get_structure(mol, "MB16-43", "15")
 
@@ -583,7 +583,7 @@ contains
       worst_ratio = 0.0_wp; worst_a = 0.0_wp; worst_n = 0.0_wp; worst_tol = 0.0_wp
       worst_iat = 0; worst_idir = 0; worst_i = 0; worst_j = 0
 
-      call new_context(ctx, verbosity=0, debug=.false.)
+      call new_context(ctx, nthreads=0, verbosity=0, debug=.false.)
       allocate (cavity)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template

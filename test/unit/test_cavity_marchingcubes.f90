@@ -146,7 +146,7 @@ contains
       grid_spacing = MC_SPACING
       if (present(spacing)) grid_spacing = spacing
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call new(mol, [(1, iat=1, size(radii))], xyz)
 
@@ -389,7 +389,7 @@ contains
       integer :: iat
 
       c = cases(TRANSLATION_CASE)
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call get_structure(mol, trim(c%dataset), trim(c%structure))
 
       call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=c%blend_k, &
@@ -530,7 +530,7 @@ contains
       !> Compiled spacing default, independent of constructor forwarding
       type(moist_cavity_marchingcubes_parameters_type) :: defaults
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -590,7 +590,7 @@ contains
       !> Local run context borrowed by the cavity built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call get_structure(mol, trim(cases(case_idx)%dataset), trim(cases(case_idx)%structure))
 

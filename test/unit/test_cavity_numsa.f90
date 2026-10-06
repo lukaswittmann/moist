@@ -65,7 +65,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
 
@@ -126,7 +126,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "02")
 
@@ -178,7 +178,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "03")
 
@@ -216,7 +216,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
 
@@ -269,7 +269,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "05")
 
@@ -322,7 +322,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "03")
 

@@ -401,7 +401,7 @@ contains
 
       type(moist_error_type), allocatable :: err
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, nleb_iswig, ctx, radius_model, cavity, err)
       if (failed(error, err, "iSwiG cavity setup")) return
@@ -430,7 +430,7 @@ contains
                                        0.00_wp, 0.00_wp, 0.00_wp, &
                                        0.00_wp, 0.00_wp, 4.60_wp, &
                                        2.60_wp, 0.40_wp, -1.10_wp], [3, 3]))
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=drop_blend_k, &

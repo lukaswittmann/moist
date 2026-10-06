@@ -188,7 +188,7 @@ contains
       type(cavity_type_iswig) :: iswig
       type(model_continuum_component_cpcm) :: pcm
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       shape%blend_k = 7.0_wp
       call lsf%new(shape)
       shape%blend_k = 9.0_wp

@@ -81,7 +81,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -124,7 +124,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -184,7 +184,7 @@ contains
       real(wp) :: xyz(3, 2)
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call new_radii_custom_atoms([3.0_wp, 3.0_wp], radius_model, cavity_error)
       if (allocated(cavity_error)) then
          call test_failed(error, cavity_error%message)
@@ -327,7 +327,7 @@ contains
       open (newunit=log_unit, status="scratch", action="readwrite", iostat=stat)
       call check(error, stat, 0, more="could not open the context scratch unit")
       if (allocated(error)) return
-      call new_context(ctx, unit=log_unit)
+      call new_context(ctx, nthreads=0, unit=log_unit)
 
       xyz = 0.0_wp
       xyz(3, 2) = 1.4_wp
@@ -634,7 +634,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -689,7 +689,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -739,7 +739,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       nsph = mol%nat
@@ -811,7 +811,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -912,7 +912,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       nlebs = [14, 26, 50, 110, 194]
       cut_a = 0.0_wp
@@ -1055,7 +1055,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       h = 1.0e-3_wp
       call get_structure(mol, "MB16-43", "03")
@@ -1193,7 +1193,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))
@@ -1899,7 +1899,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "13")
       allocate (radii(mol%nat))
@@ -2093,7 +2093,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       allocate (radii(mol%nat))

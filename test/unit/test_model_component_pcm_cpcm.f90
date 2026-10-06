@@ -110,7 +110,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       xyz(:, 1) = 0.0_wp
       call new(mol, [1], xyz)
@@ -232,7 +232,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
       solvers = [solver_type%inversion, solver_type%lu, &
@@ -334,7 +334,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       solvers = [solver_type%inversion, solver_type%lu, &
                  solver_type%cholesky, solver_type%iterative]
@@ -406,7 +406,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -504,7 +504,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -570,7 +570,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -651,7 +651,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! No coupling is built either: the missing matrix must be reported first
       call new_component_cpcm(pcm_model, ctx, 78.4_wp, error=err)
@@ -688,7 +688,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 50, ctx, radius_model, cavity, err)
@@ -744,7 +744,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -803,7 +803,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_small, cavity_small, err)
@@ -926,7 +926,7 @@ contains
       !> Run context owned here and borrowed by the cavities and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_small, cavity_small, err)
@@ -1036,7 +1036,7 @@ contains
       !> Run context owned here and borrowed by the cavity and component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=2)
+      call new_context(ctx, nthreads=0, verbosity=2)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -1142,7 +1142,7 @@ contains
       !> Run context owned here and borrowed by the cavity and components
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_structure(mol, "MB16-43", "01")
       call build_test_cavity(mol, 14, ctx, radius_model, cavity, err)
@@ -1285,7 +1285,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Setup solver types and names
       solvers = [solver_type%inversion, solver_type%lu, &
@@ -1385,7 +1385,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! Print header
       print "(a)", ""
@@ -1592,7 +1592,7 @@ contains
       !> Run context owned here and borrowed by the components
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       do ieps = 1, size(bad_epsilon)
          call new_component_cpcm(pcm_model, ctx, bad_epsilon(ieps), error=err)
@@ -1672,7 +1672,7 @@ contains
       type(moist_context_type), target :: ctx
 
       moving_potential = .false.
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       ! A single dummy center: with a host-supplied potential the molecular
       ! geometry never enters the energy, but update() stores it
@@ -1935,7 +1935,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
@@ -2137,7 +2137,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
@@ -2356,7 +2356,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
       call center_at_origin(mols(1))
@@ -2606,7 +2606,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
 
@@ -2717,7 +2717,7 @@ contains
       !> Run context owned here and borrowed by the component
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
 
       call get_test_structures(mols, 5)
 

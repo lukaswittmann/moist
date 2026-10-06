@@ -517,7 +517,7 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
 
       call new_cosmo_radii(radius_model)
@@ -600,7 +600,7 @@ contains
       !> Run context owned here and borrowed by the cavity
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx)
+      call new_context(ctx, nthreads=0)
       call get_structure(mol, "MB16-43", "01")
       call new_cosmo_radii(radius_model)
 

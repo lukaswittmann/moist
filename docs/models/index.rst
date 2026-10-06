@@ -85,7 +85,7 @@ This example constructs a list-based model containing :doc:`CPCM </models/compon
    type(error_type), allocatable :: error
 
    ! Global context
-   call new_context(ctx)
+   call new_context(ctx, nthreads=0)
    
    ! Construct cavity and its level set
    call svdw%new()

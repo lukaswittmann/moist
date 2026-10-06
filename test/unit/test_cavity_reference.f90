@@ -456,7 +456,7 @@ contains
       character(len=:), allocatable :: label
       character(len=256) :: msg
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call get_test_structures(mols, n_structures)
       gcase = reference_cases(icase)
 

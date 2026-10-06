@@ -194,7 +194,7 @@ contains
       !> Local run context borrowed by the cavities built here
       type(moist_context_type), target :: ctx
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       call get_test_cross(mol)
 
@@ -468,7 +468,7 @@ contains
       type(moist_context_type), target :: ctx
 
       !> Initialize cavity with configurable blending and Lebedev grid
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
 
       blend_k_local = k
       if (present(blend_k_override)) blend_k_local = blend_k_override
@@ -1309,7 +1309,7 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
-         call new_context(ctx, verbosity=0)
+         call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &
@@ -1565,7 +1565,7 @@ contains
       block
          type(moist_cavity_drop_lsf_svdw_type) :: svdw_template
          call svdw_template%new(param=moist_cavity_drop_lsf_svdw_param_type(blend_k=k, blend_3b=blend_3b))
-         call new_context(ctx, verbosity=0)
+         call new_context(ctx, nthreads=0, verbosity=0)
          call new_cavity_drop(cavity, ctx, radius_model=default_cpcm_radii(), lsf_model=svdw_template, &
             error=cavity_error, param=moist_cavity_drop_parameters_type(num_leb=NUM_LEB, tolerance=PROJ_TOL, &
             proj_maxiter=PROJ_MAXITER, proj_level=PROJ_LEVEL, wleb_prune_level=4, &

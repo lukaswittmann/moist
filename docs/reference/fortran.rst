@@ -55,7 +55,7 @@ components. An allocated ``mctc_env`` error signals failure.
    type(moist_context_type), target :: ctx
    type(error_type), allocatable :: error
 
-   call new_context(ctx, verbosity=1)
+   call new_context(ctx, nthreads=0, verbosity=1)  ! nthreads: 0 takes the current OpenMP setting
 
 Cavities
 --------

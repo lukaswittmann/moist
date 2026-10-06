@@ -42,7 +42,7 @@ contains
       type(response_type) :: response
       real(wp) :: energy, gradient(3, 2)
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_moz_1d_model(model, ctx, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
@@ -125,7 +125,7 @@ contains
       type(structure_type) :: mol
       type(coupling_type), pointer :: coupling
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_moz_1d_model(model, ctx, err)
       if (.not. allocated(err)) then
          call new(mol, [1, 1], reshape([0.0_wp, 0.0_wp, 0.0_wp, 1.0_wp, 0.0_wp, 0.0_wp], [3, 2]))
@@ -186,7 +186,7 @@ contains
       character(len=8), parameter :: phases(3) = [character(len=8) :: "energy", "response", "gradient"]
       integer :: phase
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_updated_model(ctx, model, err)
       if (.not. allocated(err)) call model%new_coupling(coupling, err)
       if (allocated(err)) then
@@ -245,7 +245,7 @@ contains
          & "coupling_mode 'bogus' is not supported"]
       integer :: i
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_updated_model(ctx, model, err)
       if (allocated(err)) then
          call test_failed(error, err%message)
@@ -308,7 +308,7 @@ contains
          & "different model", "updated first", "not staged", "missing required outputs", &
          & "staged for the", "is not implemented"]
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_updated_model(ctx, model, err)
       if (.not. allocated(err)) call new_updated_model(ctx, foreign, err)
       if (.not. allocated(err)) call model%new_coupling(coupling, err)
@@ -469,7 +469,7 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "Construct the 1D MOZ model") > 0)
       if (allocated(error)) return
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_updated_model(ctx, model, err)
       if (.not. allocated(err)) call model%new_coupling(coupling, err)
       if (.not. allocated(err)) call model%prepare_energy(coupling, err)

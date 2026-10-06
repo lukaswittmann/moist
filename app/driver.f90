@@ -77,20 +77,17 @@ contains
       real(wp) :: tmp_wp
 
       !> Open the run context; every cavity/model borrows it, so all sub-timers
-      !> started later nest under the "total" node opened here.
-      call new_context(ctx, verbosity=config%verbosity, debug=config%debug)
+      !> started later nest under the "total" node opened here. A positive
+      !> --threads is applied to the OpenMP runtime by the context.
+      call new_context(ctx, nthreads=config%num_threads, verbosity=config%verbosity, debug=config%debug)
       call ctx%timer%start("total")
 
       !* ---------------------------- Thread configuration --------------------------- *!
-      !> Routed through the context so it stays the single place the thread budget
-      !> is changed -- `get_num_threads` and `print_settings` then report what the
-      !> run is actually using, and the pin is released again on `ctx%delete`.
       if (config%num_threads > 0) then
 !$       if (.false.) then
             write (ctx%unit, "(a)") &
                "[Warn] Program compiled without OpenMP support, ignoring --threads"
 !$       else
-!$          call ctx%set_num_threads(config%num_threads)
 ! #ifdef WITH_MKL
 ! !$       call mkl_set_num_threads(config%num_threads)
 ! #endif

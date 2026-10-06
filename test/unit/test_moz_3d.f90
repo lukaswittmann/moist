@@ -53,7 +53,7 @@ contains
       real(wp), allocatable :: phi(:)
       real(wp) :: energy
       integer :: i
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       template%nx = 2
       template%ny = 2
@@ -156,7 +156,7 @@ contains
       real(wp), allocatable :: original(:, :)
       integer :: kind, template_ngrid
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new(mol, [1], reshape([0.0_wp, 0.0_wp, 0.0_wp], [3, 1]))
       call new_cartesian_grid_3d(cart, 4, 6, 8, 0.5_wp, error=err)
       call require_success(error, err)
@@ -245,7 +245,7 @@ contains
       character(len=96) :: walks(3)
       integer :: kind
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       call require_success(error, err)
       if (allocated(error)) return
@@ -291,7 +291,7 @@ contains
       !> Expected walks of the energy, response and gradient phases
       character(len=96) :: walks(3)
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       call require_success(error, err)
@@ -315,7 +315,7 @@ contains
       type(moist_math_grid_3d_cartesian_type) :: cart
       type(coupling_type), pointer :: coupling
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       call require_success(error, err)
@@ -476,7 +476,7 @@ contains
          & "different model", "updated first", "not staged", "missing required outputs", &
          & "staged for the", "is not implemented"]
 
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, foreign, err)
@@ -641,7 +641,7 @@ contains
       if (allocated(error)) return
       call check(error, index(err%message, "Construct the 3D MOZ model") > 0)
       if (allocated(error)) return
-      call new_context(ctx, verbosity=0)
+      call new_context(ctx, nthreads=0, verbosity=0)
       call new_cartesian_grid_3d(cart, 2, 2, 2, 0.5_wp, error=err)
       if (.not. allocated(err)) call new_updated_model(ctx, cart, model, err)
       model%coupling_mode = "qat"
