@@ -545,7 +545,6 @@ contains
       end if
 
       pp = new_prettyprinter(unit=iu)
-      call pp%blank()
       call pp%push(header//":")
       if (allocated(self%description)) call pp%section(self%description)
       if (self%scale /= 1.0_wp) call pp%kv("scale", self%scale)
@@ -553,6 +552,7 @@ contains
       param => self%parameters()
       if (associated(param)) call param%print_table(pp)
       call pp%pop()
+      call pp%blank()
 
    end subroutine print_component_parameters
 
